@@ -1396,7 +1396,17 @@ pub(crate) fn foldable_body_groups(module: &Module, regalloc_linear: bool) -> Ve
     let mut rows: Vec<(String, Vec<&Function>, bool)> = Vec::new();
     let mut row_of: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let emitted_body = |function: &Function| {
-        !function.flags.is_main
+        // A STATIC LOCAL's storage symbol is derived from the function's own name, and a global
+        // alias names a global by symbol: both are state whose identity the shape erasure would
+        // fold into one storage cell for two independent instantiations.
+        let stateful = function.locals.iter().any(|slot| {
+            matches!(
+                slot.kind,
+                crate::ir::LocalKind::StaticLocal | crate::ir::LocalKind::GlobalAlias
+            )
+        });
+        !stateful
+            && !function.flags.is_main
             && !function.flags.is_generator
             && !function.flags.is_synthetic
             && !function.flags.is_closure
@@ -1526,8 +1536,11 @@ pub(crate) fn generic_body_aliases(
 
 /// Emits a folded candidate's entry as a jump to the survivor's body.
 ///
-/// The exceptional-cleanup symbol is emitted too, because the unwinder tables reference it by
-/// name; the epilogue is internal to the body this replaces, so it has no external reference.
+/// The candidate KEEPS its EIR function, so a caller still resolves its parameter types and picks
+/// its own coercion from the original instantiation; only the machine code is shared. No cleanup
+/// symbol is emitted: a cleanup activation is published by the body's own prologue
+/// (`frame::emit_exception_activation_push`), and a folded body has no prologue — the survivor's
+/// body publishes the activation for the frame that actually runs.
 pub(super) fn emit_folded_body(
     function: &Function,
     survivor: &str,
@@ -1538,11 +1551,6 @@ pub(super) fn emit_folded_body(
     let survivor_entry = entry_symbol_for_name(survivor, is_static);
     emitter.raw(&format!(".globl {entry}\n{entry}:\n"));
     abi::emit_jump(emitter, &survivor_entry);
-    let cleanup = format!("{entry}__cdylib_exception_cleanup");
-    emitter.raw(&format!(
-        ".globl {cleanup}\n{cleanup}:\n"
-    ));
-    abi::emit_jump(emitter, &format!("{survivor_entry}__cdylib_exception_cleanup"));
     Ok(())
 }
 
@@ -1596,7 +1604,16 @@ fn normalized_candidate_body(
         )
     };
     lowered.ok()?;
-    Some(normalize_body_text(&emitter.output(), function))
+    // The DATA the body references is part of its meaning: two isolated pools assign the same
+    // label to literals of different contents (a seven-byte "integer" and a seven-byte "boolean"
+    // both intern as the pool's first entry), so comparing the text alone would fold bodies whose
+    // literals disagree. The pool's own emission is the missing half of the comparison.
+    let mut text = emitter.output();
+    let data_output = data.emit(module.target);
+    if !data_output.is_empty() {
+        text.push_str(&data_output);
+    }
+    Some(normalize_body_text(&text, function))
 }
 
 /// Erases every symbol that names the candidate and canonicalizes internal labels, so two
@@ -1607,18 +1624,33 @@ fn normalized_candidate_body(
 /// placeholder and renaming labels by first appearance leaves only what the body actually does.
 fn normalize_body_text(text: &str, function: &Function) -> String {
     let self_symbol = crate::names::mangle_fqn(&function.name);
-    // The source-map `@fn` marker quotes the raw name and the symbols quote the mangled one, so
-    // both spellings must go: they are the only thing two instantiations' texts disagree about.
-    let erased = text
-        .replace(&self_symbol, "<SELF>")
-        .replace(&function.name, "<SELF>");
+    let entry_symbol = entry_symbol_for_name(&function.name, function.flags.is_static);
+    // A method's symbols are NOT derived from the mangled full name: `method_symbol(class, key)`
+    // mangles the class and the method separately, so the entry symbol has to be erased on its
+    // own. Replacing it also erases its epilogue and exceptional-cleanup symbols, which are built
+    // as suffixes of it. The raw name is what the source-map `@fn` marker quotes.
+    //
+    // The erasure deliberately SKIPS `.ascii` payload lines: a body may embed its own instantiated
+    // name as data, and that data is a real difference between two instantiations — erasing it
+    // would fold bodies whose runtime output differs.
+    let erased: String = text
+        .split_inclusive('\n')
+        .map(|line| {
+            if line.trim_start().starts_with(".ascii") {
+                return line.to_string();
+            }
+            line.replace(&self_symbol, "<SELF>")
+                .replace(&entry_symbol, "<SELF>")
+                .replace(&function.name, "<SELF>")
+        })
+        .collect();
     let mut mapping: Vec<(String, String)> = Vec::new();
     for line in erased.split_inclusive('\n') {
         let trimmed = line.trim_end();
         let Some(token) = trimmed.strip_suffix(':') else {
             continue;
         };
-        if !token.starts_with("L_") {
+        if !is_internal_label(token) {
             continue;
         }
         label_map_push(&mut mapping, token);
@@ -1627,7 +1659,7 @@ fn normalize_body_text(text: &str, function: &Function) -> String {
     for line in erased.split_inclusive('\n') {
         let trimmed = line.trim_end();
         if let Some(token) = trimmed.strip_suffix(':') {
-            if token.starts_with("L_") {
+            if is_internal_label(token) {
                 out.push_str(&format!("{}:\n", label_of(&mapping, token)));
                 continue;
             }
@@ -1639,6 +1671,12 @@ fn normalize_body_text(text: &str, function: &Function) -> String {
         out.push_str(&rewritten);
     }
     out
+}
+
+/// Whether a label token is one of the body's internal labels, which carry no cross-candidate
+/// meaning. The Linux assembler spells them `.L_eir_…` where Apple spells them `L_eir_…`.
+fn is_internal_label(token: &str) -> bool {
+    token.starts_with("L_") || token.starts_with(".L")
 }
 
 /// Maps an internal label token to its canonical name by order of first appearance.

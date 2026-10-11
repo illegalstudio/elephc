@@ -327,6 +327,12 @@ fn tag_segments(line: &str) -> Vec<&str> {
             starts.push(index);
         }
     }
+    // A line that does not BEGIN with a recognized tag is prose: a description mentioning
+    // `@template T` in passing must not become an annotation. Only once a line has entered
+    // annotation syntax — at its very start — may later tags on that line be split out.
+    if starts.first() != Some(&0) {
+        return Vec::new();
+    }
     starts
         .iter()
         .enumerate()
@@ -513,6 +519,17 @@ mod tests {
             block.return_type,
             Some(TypeExpr::Named(Name::unqualified("T")))
         );
+    }
+
+    /// Prose that MENTIONS a tag is not an annotation: only a line that begins with one may
+    /// contribute tags. A description like "Demonstrates @template T syntax." used to split into
+    /// an `@template` segment and inject a stray `T` into the block.
+    #[test]
+    fn prose_mentioning_a_tag_is_not_an_annotation() {
+        let block = block_of(
+            "<?php\n/**\n * Demonstrates @template T syntax.\n * @param int $v\n */\nfunction f($v) {}\n",
+        );
+        assert_eq!(block.type_params.len(), 0, "prose must not become a template");
     }
 
     /// A one-line block may carry several tags; every tag is read, not only the first.

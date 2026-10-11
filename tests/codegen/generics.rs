@@ -2393,7 +2393,7 @@ echo get_class(identity(new User())), "|", get_class(identity(new Order()));
     let has_user = user_asm.contains(&format!("{user}:"));
     let has_order = user_asm.contains(&format!("{order}:"));
     assert!(
-        has_user ^ has_order,
+        one_is_thunk_of_the_other(&user_asm, &user, &order),
         "exactly one identity instantiation body should remain (user={has_user}, order={has_order})"
     );
 }
@@ -2422,16 +2422,18 @@ echo $u->size(), $o->size(), "|", get_class($u), get_class($o);
     let has_user = user_asm.contains(&format!("{user}:"));
     let has_order = user_asm.contains(&format!("{order}:"));
     assert!(
-        has_user ^ has_order,
+        one_is_thunk_of_the_other(&user_asm, &user, &order),
         "exactly one size method body should remain (user={has_user}, order={has_order})"
     );
 }
 
-/// A T-SLOT READ is the design's canonical non-nominal use, so `get(): T { return $this->value; }`
-/// merges across instantiations: the property name is the only immediate, and the slot it lowers
-/// through the receiver's static type is template-identical.
+/// A T-SLOT READ does NOT fold, and the reason is honest: reading a typed property carries the
+/// uninitialized-access fatal, whose message embeds the instantiated class name
+/// (`Typed property Box<User>::$value …`). That message is runtime-observed data, so the two
+/// bodies are genuinely different and the emission fold refuses them — the old EIR merge erased
+/// the name and folded them, making one instantiation print the other's class in its fatal.
 #[test]
-fn test_shape_merge_merges_t_slot_reads() {
+fn test_shape_merge_keeps_t_slot_reads_whose_error_data_names_the_class() {
     let source = r#"<?php
 class Box<T> {
     public function __construct(private T $value) {}
@@ -2447,11 +2449,21 @@ echo get_class((new Box(new User()))->get()), "|", get_class((new Box(new Order(
     let key = elephc::names::php_symbol_key("get");
     let user = elephc::names::method_symbol("Box<User>", &key);
     let order = elephc::names::method_symbol("Box<Order>", &key);
-    let has_user = user_asm.contains(&format!("{user}:"));
-    let has_order = user_asm.contains(&format!("{order}:"));
     assert!(
-        has_user ^ has_order,
-        "a T-slot read must merge to one body (user={has_user}, order={has_order})"
+        user_asm.contains(&format!("{user}:")),
+        "the Box<User> get body must stay (its fatal message names the class)"
+    );
+    assert!(
+        user_asm.contains(&format!("{order}:")),
+        "the Box<Order> get body must stay (its fatal message names the class)"
+    );
+    // The CONSTRUCTOR beside it has no class-naming data, so it still folds.
+    let ctor_key = elephc::names::php_symbol_key("__construct");
+    let ctor_user = elephc::names::method_symbol("Box<User>", &ctor_key);
+    let ctor_order = elephc::names::method_symbol("Box<Order>", &ctor_key);
+    assert!(
+        one_is_thunk_of_the_other(&user_asm, &ctor_user, &ctor_order),
+        "the constructor beside the read must still fold into one body"
     );
 }
 
@@ -2481,7 +2493,7 @@ echo get_class($u), "|", get_class($o);
     let has_user = user_asm.contains(&format!("{user}:"));
     let has_order = user_asm.contains(&format!("{order}:"));
     assert!(
-        has_user ^ has_order,
+        one_is_thunk_of_the_other(&user_asm, &user, &order),
         "a concrete T-slot write must merge to one body (user={has_user}, order={has_order})"
     );
 }
@@ -2542,7 +2554,7 @@ echo get_class((new Box(new User()))->indirect()), "|", get_class((new Box(new O
     let has_user = user_asm.contains(&format!("{user}:"));
     let has_order = user_asm.contains(&format!("{order}:"));
     assert!(
-        has_user ^ has_order,
+        one_is_thunk_of_the_other(&user_asm, &user, &order),
         "a delegating method must merge to one body (user={has_user}, order={has_order})"
     );
 }
@@ -2610,7 +2622,7 @@ echo get_class($u), "|", get_class($o);
     let has_user = user_asm.contains(&format!("{user}:"));
     let has_order = user_asm.contains(&format!("{order}:"));
     assert!(
-        has_user ^ has_order,
+        one_is_thunk_of_the_other(&user_asm, &user, &order),
         "helper must merge to one body (user={has_user}, order={has_order})"
     );
     // `touch` may be inlined at its call site (zero bodies) or merged (one); two bodies would mean
@@ -2698,15 +2710,18 @@ echo get_class($int), "|", get_class($bool);
 "#;
     let reported = compile_cli_file_with_flags_capturing_stderr(source, &["--report-generics"]);
     assert!(
-        reported.contains("shape-oracle: no further foldable bodies"),
-        "{reported}"
+        !reported.contains("Sink::box"),
+        "the boxing body must be refused by the oracle: {reported}"
     );
 }
 
 /// `false` is a marker the backend reads exactly as `bool` (`codegen_repr` maps it and nothing
-/// consults it on its own), so `Box<false>` and `Box<bool>` merge.
+/// consults it on its own), so a `Box<false>` instantiation compiles and runs like its `Box<bool>`
+/// sibling. Storing the `bool`-typed literal into the `false`-typed promoted slot is accepted by
+/// the property-store check for exactly that reason. Neither body folds: the uninitialized
+/// typed-property fatal inside the read names its own instantiation, which is real data.
 #[test]
-fn test_shape_merge_merges_false_into_bool() {
+fn test_shape_merge_compiles_false_into_bool_property_slot() {
     let source = r#"<?php
 class Box<T> {
     public function __construct(private T $value) {}
@@ -2724,11 +2739,13 @@ echo $bool->flag(), $no->flag();
     let key = elephc::names::php_symbol_key("flag");
     let bool_body = elephc::names::method_symbol("Box<bool>", &key);
     let false_body = elephc::names::method_symbol("Box<false>", &key);
-    let has_bool = user_asm.contains(&format!("{bool_body}:"));
-    let has_false = user_asm.contains(&format!("{false_body}:"));
     assert!(
-        has_bool ^ has_false,
-        "a false instantiation must merge into its bool sibling (bool={has_bool}, false={has_false})"
+        user_asm.contains(&format!("{bool_body}:")),
+        "the Box<bool> flag body must stay (its fatal message names the class)"
+    );
+    assert!(
+        user_asm.contains(&format!("{false_body}:")),
+        "the Box<false> flag body must stay (its fatal message names the class)"
     );
 }
 
@@ -2771,15 +2788,24 @@ fn body_is_branch_to(asm: &str, entry: &str, target: &str) -> bool {
     lines[position + 1..]
         .iter()
         .map(|line| line.trim())
-        .find(|line| !line.is_empty() && !line.starts_with('.'))
+        .find(|line| !line.is_empty() && !line.starts_with('.') && !line.starts_with('@'))
         .map(|first| first == format!("b {target}") || first == format!("jmp {target}"))
         .unwrap_or(false)
 }
 
-/// A dynamic property access on a `mixed` (runtime-typed) receiver dispatches on the runtime class,
-/// so its emitted code is identical across instantiations and the method merges.
+/// Whether one candidate's entry body is exactly a branch to the other's (a folded body's thunk).
+///
+/// Both entry symbols stay addressable: the survivor carries the shared body and the folded one is
+/// a jump, which is what lets a caller keep resolving the instantiation's own parameter types.
+fn one_is_thunk_of_the_other(asm: &str, entry_a: &str, entry_b: &str) -> bool {
+    body_is_branch_to(asm, entry_a, entry_b) || body_is_branch_to(asm, entry_b, entry_a)
+}
+
+/// A dynamic property access on a `mixed` (runtime-typed) receiver does NOT fold: its
+/// private-property error message names the LEXICAL class (`Cannot access private property
+/// Wrap<Order>::$value`), which is instantiation-specific data. The constructor beside it folds.
 #[test]
-fn test_shape_merge_merges_dynamic_access_on_mixed() {
+fn test_shape_merge_keeps_dynamic_access_bodies_whose_error_data_names_the_class() {
     let source = r#"<?php
 class Wrap<T> {
     public function __construct(private T $value) {}
@@ -2797,18 +2823,21 @@ echo (new Wrap(new User()))->pluck($row, "a"), "|", (new Wrap(new Order()))->plu
     let key = elephc::names::php_symbol_key("pluck");
     let user = elephc::names::method_symbol("Wrap<User>", &key);
     let order = elephc::names::method_symbol("Wrap<Order>", &key);
-    let has_user = user_asm.contains(&format!("{user}:"));
-    let has_order = user_asm.contains(&format!("{order}:"));
     assert!(
-        has_user ^ has_order,
-        "a dynamic access on a mixed receiver must merge to one body (user={has_user}, order={has_order})"
+        user_asm.contains(&format!("{user}:")),
+        "the Wrap<User> pluck body must stay (its error message names the lexical class)"
+    );
+    assert!(
+        user_asm.contains(&format!("{order}:")),
+        "the Wrap<Order> pluck body must stay (its error message names the lexical class)"
     );
 }
 
-/// `isset` and `unset` on a `T` slot resolve through the receiver's static type to a
-/// template-identical slot, so both methods merge.
+/// `unset` on a `T` slot resolves through the receiver's static type to a template-identical slot
+/// with no class-naming data, so `drop` folds. `isset` does not: its typed-property read carries
+/// the uninitialized-access fatal, whose message names the instantiation.
 #[test]
-fn test_shape_merge_merges_isset_and_unset() {
+fn test_shape_merge_folds_unset_but_keeps_isset() {
     let source = r#"<?php
 class Box<T> {
     public function __construct(private T $value) {}
@@ -2827,23 +2856,26 @@ echo $u->has() ? "y" : "n";
     assert_eq!(compile_and_run(source), "yyn");
 
     let user_asm = compile_cli_to_asm("isset", source);
-    for method in ["has", "drop"] {
-        let key = elephc::names::php_symbol_key(method);
-        let user = elephc::names::method_symbol("Box<User>", &key);
-        let order = elephc::names::method_symbol("Box<Order>", &key);
-        let has_user = user_asm.contains(&format!("{user}:"));
-        let has_order = user_asm.contains(&format!("{order}:"));
-        assert!(
-            has_user ^ has_order,
-            "{method} must merge to one body (user={has_user}, order={has_order})"
-        );
-    }
+    let has_key = elephc::names::php_symbol_key("has");
+    let has_user = elephc::names::method_symbol("Box<User>", &has_key);
+    let has_order = elephc::names::method_symbol("Box<Order>", &has_key);
+    assert!(
+        user_asm.contains(&format!("{has_user}:")) && user_asm.contains(&format!("{has_order}:")),
+        "isset bodies must stay split (their fatal message names the class)"
+    );
+    let drop_key = elephc::names::php_symbol_key("drop");
+    let drop_user = elephc::names::method_symbol("Box<User>", &drop_key);
+    let drop_order = elephc::names::method_symbol("Box<Order>", &drop_key);
+    assert!(
+        one_is_thunk_of_the_other(&user_asm, &drop_user, &drop_order),
+        "unset bodies have no class-naming data and must fold to one body"
+    );
 }
 
-/// An append to a `T`-element array property is a read-for-write plus a concrete store, so the
-/// whole mutating method merges across instantiations.
+/// An append to a `T`-element array property does NOT fold: the read-for-write carries the
+/// uninitialized-typed-property fatal, whose message embeds the instantiated class name.
 #[test]
-fn test_shape_merge_merges_property_appends() {
+fn test_shape_merge_keeps_property_append_bodies_whose_error_data_names_the_class() {
     let source = r#"<?php
 class Bag<T> {
     public function __construct(private array $items = []) {}
@@ -2866,11 +2898,126 @@ echo $b1->count(), $b2->count();
         let key = elephc::names::php_symbol_key(method);
         let user = elephc::names::method_symbol("Bag<User>", &key);
         let order = elephc::names::method_symbol("Bag<Order>", &key);
-        let has_user = user_asm.contains(&format!("{user}:"));
-        let has_order = user_asm.contains(&format!("{order}:"));
         assert!(
-            has_user ^ has_order,
-            "{method} must merge to one body (user={has_user}, order={has_order})"
+            user_asm.contains(&format!("{user}:")) && user_asm.contains(&format!("{order}:")),
+            "{method} bodies must stay split (their fatal message names the class)"
         );
     }
+}
+
+/// A property access on a receiver whose static type is a TYPE ARGUMENT resolves the same property
+/// name through a DIFFERENT class per instantiation, and different classes place it at different
+/// offsets — so it must never share a body.
+#[test]
+fn test_shape_merge_refuses_type_argument_property_reads() {
+    let source = r#"<?php
+class Dog { public int $legs = 11; }
+class Cat { public int $weight = 22; public int $legs = 33; }
+function readLegs<T>(T $x): int { return $x->legs; }
+$d = new Dog();
+$c = new Cat();
+echo readLegs($d), "|", readLegs($c);
+"#;
+    assert_eq!(compile_and_run(source), "11|33");
+
+    let user_asm = compile_cli_to_asm("readlegs", source);
+    assert!(
+        user_asm.contains(&format!(
+            "{}:",
+            elephc::names::function_symbol("readLegs<Dog>")
+        )),
+        "the Dog body must stay addressable"
+    );
+    assert!(
+        user_asm.contains(&format!(
+            "{}:",
+            elephc::names::function_symbol("readLegs<Cat>")
+        )),
+        "the Cat body must stay addressable"
+    );
+}
+
+/// The write form is worse than the read: a shared store would land in the WRONG FIELD of the
+/// other instantiation's class.
+#[test]
+fn test_shape_merge_refuses_type_argument_property_writes() {
+    let source = r#"<?php
+class Dog { public int $legs = 0; }
+class Cat { public int $weight = 0; public int $legs = 0; }
+function setLegs<T>(T $x, int $v): void { $x->legs = $v; }
+$d = new Dog();
+setLegs($d, 11);
+$c = new Cat();
+setLegs($c, 33);
+echo $d->legs, "|", $c->legs, ",", $c->weight;
+"#;
+    assert_eq!(compile_and_run(source), "11|33,0");
+}
+
+/// The same hole through a method: `$this->v->legs` reads a property of a TYPE-ARGUMENT receiver.
+#[test]
+fn test_shape_merge_refuses_method_type_argument_property_reads() {
+    let source = r#"<?php
+class Dog { public int $legs = 11; }
+class Cat { public int $weight = 22; public int $legs = 33; }
+class Box<T> {
+    public function __construct(private T $v) {}
+    public function legs(): int { return $this->v->legs; }
+}
+echo (new Box(new Dog()))->legs(), "|", (new Box(new Cat()))->legs();
+"#;
+    assert_eq!(compile_and_run(source), "11|33");
+}
+
+/// A non-generic subclass whose parent is a folded-away instantiation must still resolve the
+/// method: its inherited implementation map has to reach the survivor's symbol.
+#[test]
+fn test_shape_merge_redirects_inherited_method_implementations() {
+    let source = r#"<?php
+class Dog {}
+class Order {}
+class Pen<T> { public function size(): int { return 7; } }
+$u = new Pen<Dog>();
+echo $u->size();
+class BigPen extends Pen<Order> {}
+$b = new BigPen();
+echo "|", $b->size();
+"#;
+    assert_eq!(compile_and_run(source), "7|7");
+}
+
+/// Function-static storage is per-instantiation and its symbol is derived from the function's own
+/// name, which the body erasure would fold into one counter.
+#[test]
+fn test_shape_merge_keeps_independent_function_static_storage() {
+    let source = r#"<?php
+class A {}
+class B {}
+function sequence<T>(T $x): int {
+    static $n = 0;
+    return ++$n;
+}
+$a = new A();
+$b = new B();
+echo sequence($a), sequence($b), sequence($a);
+"#;
+    assert_eq!(compile_and_run(source), "112");
+}
+
+/// Builtin lowering that consults the function's own lexical class (here: the object-vars
+/// visibility projection) is nominal, so the method must not share a body across instantiations.
+#[test]
+fn test_shape_merge_refuses_lexical_class_builtin_lowering() {
+    let source = r#"<?php
+class A { private int $hidden = 1; }
+class B { private int $hidden = 2; }
+class Box<T> {
+    public function __construct(private T $value) {}
+    public function visible(): int {
+        return count(get_object_vars($this));
+    }
+}
+echo (new Box(new A()))->visible(), "|", (new Box(new B()))->visible();
+"#;
+    assert_eq!(compile_and_run(source), "1|1");
 }

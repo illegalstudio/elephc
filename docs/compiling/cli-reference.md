@@ -870,7 +870,7 @@ The other 36 directives of the PHP 8.5 set are runtime-overridable.
 | Flag | Values | Default | Description |
 |---|---|---|---|
 | `--timings` | — | off | Print per-phase compiler timings to stderr. |
-| `--report-generics` | — | off | Print a per-template summary of monomorphized generic instantiations to stderr: the total count, then each template's instantiation count and names (e.g. `class x2 Box [Box<int>, Box<string>]`), followed by the shape-oracle section, which lowers every surviving candidate into an isolated emitter and counts the dispatch slots whose emitted bodies are identical (the measured case for widening the merge). Diagnostic only; it changes nothing in the emitted program. |
+| `--report-generics` | — | off | Print a per-template summary of monomorphized generic instantiations to stderr: the total count, then each template's instantiation count and names (e.g. `class x2 Box [Box<int>, Box<string>]`), followed by the shape-oracle section, which lowers every surviving candidate into an isolated emitter and counts the dispatch slots whose emitted bodies are identical — the same comparison the emission-time fold uses to share one body behind a jump. Diagnostic only; it changes nothing in the emitted program. |
 | `--quiet` / `-q` | — | off | Disable progress lines and colorized compiler output. |
 | `--gc-stats` | — | off | Print allocation/free counters at exit. |
 | `--counters` | — | off | Embed one BSS call counter per PHP function (a single prologue increment) and print exact `elephc-counters: <name> <count>` lines to stderr at exit. A fully inlined call site keeps its counter at zero, which makes inlining visible by difference. |

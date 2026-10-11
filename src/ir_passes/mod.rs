@@ -42,7 +42,6 @@ mod mem2reg;
 mod peephole;
 mod regalloc;
 mod rewrite;
-mod shape_merge;
 
 #[cfg(test)]
 mod tests;
@@ -54,4 +53,3 @@ pub use intervals::{build_intervals, LiveInterval};
 pub use liveness::{compute_liveness, LivenessInfo};
 pub use loops::{compute_loops, LoopInfo, NaturalLoop};
 pub use regalloc::allocate_registers;
-pub use shape_merge::merge_shape_identical_functions;

@@ -1651,67 +1651,65 @@ in-flight scratch string argument. Call-site name resolution (`call` Data immedi
 and `function_variant_call` include-variant refs) uses snapshots taken before
 mutation, so the rewrite loop never aliases the module while holding a function.
 
-### Shape-Identical Body Merging
+### Identical Lowered-Body Folding
 
-After the module-level fixed point, `optimize_module` runs one more module-level
-transform, the shape-identical body merge (`src/ir_passes/shape_merge.rs`). It
-targets the duplication monomorphization leaves behind: a `T`-independent generic
-function instantiated once per concrete object class lowers to the same pointer
-code every time, under a different name.
+Monomorphization leaves duplication behind: a `T`-independent generic function
+instantiated once per concrete object class lowers to the same machine code every
+time, under a different name. elephc does **not** merge those bodies in EIR. An
+EIR-level merge compares a projection of the program, and every projection used so
+far — structural identity under a collapsed object shape, with nominal-use
+refusals bolted on — kept missing ways the backend consults the exact type after
+the projection claimed two bodies equal: property slot offsets keyed by the
+receiver's class, `get_object_vars` baking the lexical class id, `__toString` casts
+resolved through a `Cast`, static-local storage symbols derived from the
+instantiated name, and class-naming error strings. Getting each of those wrong is a
+silent miscompilation, so the projection approach was removed entirely.
 
-Only free functions whose name carries a type-argument list (`identity<User>`) are
-candidates, so an ordinary name — which may be `#[Export]`ed or reflected on —
-never loses its symbol. Two candidates merge when they are structurally identical
-once the object class name is collapsed to one shape: `IrType` (the storage type,
-where every object is already one `Heap(Object)`), control flow, values, locals,
-parameters, function flags, and the instruction stream must all agree. The
-instruction comparison is deliberately exact on immediates, and any body carrying a
-class-identity immediate (a class/method/property/enum/variant ref, a type name) is
-refused outright. That is the soundness guard: a nominal use of `T` (`new T()`,
-`T::class`, a method or class-typed property access the backend lowers with a class
-id) shows up as a differing immediate, so it can never be merged away.
+The active mechanism is emission-time folding (`src/codegen/block_emit.rs`). After
+the EIR is final, every candidate body — free functions and class methods whose
+name carries a type-argument list — is lowered **alone** into a fresh emitter with
+its own literal pool, so the text depends only on the body and the module's
+read-only context, never on label counters or caches the whole-module emission had
+reached. The isolated lowering's text AND its data section are shape-normalized:
 
-The merge rewrites the victim's name in the shared `function_names` data pool to the
-survivor's, then removes the victim and reindexes. Direct calls resolve through that
-pool, so no codegen change is needed.
+- every symbol naming the candidate (entry, epilogue and exceptional-cleanup
+  suffixes, the raw name the source-map marker quotes) is replaced by a
+  placeholder — except inside `.ascii` payloads, where the candidate's own name is
+  real string data whose bytes the program can print;
+- internal labels are renamed by first appearance (the Linux assembler spells them
+  `.L_eir_…` where Apple spells them `L_eir_…`);
+- the isolated data section's emitted text is appended to the comparison, so two
+  bodies whose literal pools intern different contents under the same label are
+  refused — this is what keeps a folded `gettype` from returning the wrong word.
 
-### Shape-Identical Method Merging
+Bodies whose normalized text is byte-equal share one emitted body: the survivor
+keeps the full body and each victim's entry becomes a jump to it
+(`emit_folded_body`). The victim **keeps its EIR function**, so direct calls still
+resolve the instantiation's own parameter types and pick their own coercion from
+them — the property that makes an int/bool fold sound where a name redirect would
+not be. The victim's `.globl` entry stays addressable through the thunk, so
+exports, vtables, callables and reflection all keep resolving it.
 
-The same transform runs over `module.class_methods` for instantiated owners. A
-duplicate method body is dropped and its class's `method_impl_classes` (or
-`static_method_impl_classes`) entry is redirected to the surviving class's name.
-Every codegen site — instance, static and source vtables, the callable and
-reflection tables — resolves a method symbol through that map, keyed by
-`php_symbol_key`, so the redirect is the single choke point and no symbol map has
-to be threaded through the emitter.
+Two state classes are refused up front: a body with a `StaticLocal` or
+`GlobalAlias` local (its storage symbol is derived from the instantiated name, and
+the erasure would fuse two counters into one), and the usual wrapper shapes
+(`main`, generators, closures, synthetic and invoker bodies).
 
-The soundness guard is wider for methods because method dispatch does **not** name
-its class in an immediate: `lower_method_call` resolves the callee from the
-receiver's static type at codegen time. A merged body that contained `$this->other()`
-would therefore call the survivor class's `other`, not the receiver's. The soundness guard refuses a body with any static property access, any
-class-identity immediate, or any object construction or `instanceof`. Property
-**reads** are a deliberate exception: reading a `T`-typed slot (`get(): T { return
-$this->value; }`) is the design's canonical non-nominal use — the instruction carries
-only the property name, and the slot it lowers through the receiver's static type is
-template-identical across instantiations, so the read merges. The same reasoning covers
-`isset`/`unset` on the slot and a read-for-write, whose lowering carries the property
-name and nothing else. A property WRITE with a concrete (non-`Mixed`) source merges the
-same way: no typed-property guard is emitted, so the only class-specific thing is the
-template-identical slot. A WRITE of a `Mixed` value stays refused because it runs the
-typed-property guard, whose accepted-class list is the concrete `T`. A dynamic property
-access is refused only on a statically typed object; on a `mixed` (runtime-typed)
-receiver it dispatches on the runtime class, identical across instantiations, and merges.
+Because the comparison runs on the backend's final output, it is sound by
+observation: any lowering that consults the exact type — a boxing tag, a cast's
+resolved symbol, a class id, a class-naming error string — shows up in the emitted
+text or data and refuses the fold. The guard cannot rot as the lowering grows.
+What it costs is compile time (every candidate is lowered twice) and IR memory
+(duplicate functions are not freed), while the emitted size win is what remains:
+identical bodies collapse to one body plus a jump each.
 
-Instance-method **dispatch** is handled by a transitive fixpoint rather than refused.
-Because `lower_method_call` resolves its callee from the receiver's static type, a
-merged body that called `$this->other()` would reach the survivor class's `other`. So
-two same-slot methods merge only when every call in their bodies resolves to the same
-callee given the merges accepted so far: the merge itself is a union-find whose edge is
-"bodies match under the object shape AND all calls are consistent", iterated to a fixed
-point so folding a callee unlocks its callers. A call to a callee that is not merged
-(for example one that writes a `T` slot) leaves both bodies in place. This is the
-transitivity rule the design's nominal-use analysis describes, applied at the
-instantiated bodies the backend actually emits.
+Class-naming error data makes whole method slots unfoldable in practice: a typed
+property read, `isset`, and an array append all carry the uninitialized-access
+fatal (`Typed property Box<User>::$value …`), and a dynamic property access on a
+`mixed` receiver carries the lexical-class private-property message. Constructors
+and class-independent stores carry no such data and fold. `--report-generics`
+measures the residual opportunity per slot (the assembly oracle), so a template's
+folding headroom is visible rather than guessed.
 
 ### Why scalar type arguments do not collapse
 
@@ -1759,18 +1757,18 @@ close the door on a naive widening:
   precisely because object coercion is class-independent; a scalar merge is not. Concrete
   PHP signatures must therefore be retained independently of shared machine-code
   ownership.
-- **The only sound widening is post-lowering identical-body folding**: compare the final
-  instructions, relocation targets and cleanup/unwind obligations — not bytes or
-  normalized assembly text — so the differing boxing tag and the per-function cleanup
-  symbol are both visible. That is the LLVM `MergeFunctions` analogue, and it is the path
-  to take only if a measurement ever shows scalar duplication to be material. The total
-  win is bounded to the int/bool pair: `Float` lowers to `F64` while `Int`/`Bool` lower
-  to `I64`, and `IrType` is compared exactly. That measurement exists: with
-  `--report-generics`, every surviving candidate is lowered into an isolated emitter and
-  the assembly is shape-normalized (self symbols erased, labels renamed by first
-  appearance), so the reported foldable count is measured against what the backend
-  actually emits — including every future scalar-consulting lowering, which is why the
-  oracle never rots as the lowering grows.
+- **The only sound widening is post-lowering identical-body folding**: compare what the
+  backend actually emits — not the EIR, not a projection of it — so the differing boxing
+  tag, a resolved cast symbol and the per-function cleanup obligations are all visible.
+  That is the LLVM `MergeFunctions` analogue, and it is what elephc implements (the
+  section above): candidates are lowered into isolated emitters, the emitted text and
+  data are shape-normalized, and byte-equal bodies fold into one body plus a jump while
+  the victim's EIR function — and therefore its concrete signature for caller-side
+  coercion — stays intact. The measured win is bounded to the int/bool pair: `Float`
+  lowers to `F64` while `Int`/`Bool` lower to `I64`. `--report-generics` reports the
+  foldable count measured against the emitted output, so the measurement cannot rot as
+  the lowering grows: a future scalar-consulting lowering shows up as a refusal, not as
+  a silent miscompile.
 
 ## Dominance Analysis
 

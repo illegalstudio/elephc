@@ -1446,9 +1446,14 @@ fn dedup_class_string_data(asm: String) -> String {
             }
         }
         let mut line = lines[index].to_string();
-        for (dropped, survivor) in &alias {
-            if line.contains(dropped) {
-                line = replace_symbol(&line, dropped, survivor);
+        // An `.ascii` payload is string DATA, not a symbol operand: a PHP property may legitimately
+        // be named like one of these symbols, and rewriting inside the quotes would change the
+        // metadata's bytes (and its length) instead of pointing at the shared blob.
+        if !lines[index].trim_start().starts_with(".ascii") {
+            for (dropped, survivor) in &alias {
+                if line.contains(dropped) {
+                    line = replace_symbol(&line, dropped, survivor);
+                }
             }
         }
         out.push_str(&line);
@@ -4307,5 +4312,37 @@ _class_vd_pkey_1_0:
             "SURVIVOR _a_1_00"
         );
         assert_eq!(replace_symbol(".quad _a_1_0\n", "_a_1_0", "S"), ".quad S\n");
+    }
+
+    /// A dropped symbol is never rewritten INSIDE an `.ascii` payload: the payload is string data,
+    /// and a PHP property may legitimately be named like one of these symbols. Rewriting inside
+    /// the quotes would change the metadata's bytes (and its length) instead of pointing at the
+    /// shared blob.
+    #[test]
+    fn dedup_never_rewrites_inside_ascii_payloads() {
+        let asm = "\
+.globl _class_vd_pkey_1_0
+_class_vd_pkey_1_0:
+    .ascii \"value\"
+.globl _class_vd_pkey_2_0
+_class_vd_pkey_2_0:
+    .ascii \"value\"
+.globl _class_vd_desc_2
+_class_vd_desc_2:
+    .quad _class_vd_pkey_2_0
+.globl _class_prop_pkey_9_0
+_class_prop_pkey_9_0:
+    .ascii \"_class_vd_pkey_2_0\"
+";
+        let out = dedup_class_string_data(asm.to_string());
+        assert!(
+            out.contains(".ascii \"_class_vd_pkey_2_0\""),
+            "the payload's bytes must stay: {out}"
+        );
+        assert!(
+            out.contains(".quad _class_vd_pkey_1_0"),
+            "the operand must still point at the survivor: {out}"
+        );
+        assert!(!out.contains(".quad _class_vd_pkey_2_0"), "{out}");
     }
 }
