@@ -1436,6 +1436,13 @@ fn dedup_class_string_data(asm: String) -> String {
     if alias.is_empty() {
         return asm;
     }
+    // Rewriting is per LINE: an operand names at most a handful of symbols, so a token walk
+    // against a hash map costs O(line length) instead of O(alias count) `contains` scans per
+    // line. The naive loop is quadratic in the module's symbol count, and a program that pulls
+    // the full builtin prelude (every `eval`-using program ships it) interns THOUSANDS of class
+    // blobs across tens of thousands of lines — minutes of compile time for one program.
+    let alias_map: std::collections::HashMap<&str, &str> =
+        alias.iter().map(|(dropped, survivor)| (*dropped, *survivor)).collect();
     let mut out = String::with_capacity(asm.len());
     let mut index = 0;
     while index < lines.len() {
@@ -1445,19 +1452,47 @@ fn dedup_class_string_data(asm: String) -> String {
                 continue;
             }
         }
-        let mut line = lines[index].to_string();
-        // An `.ascii` payload is string DATA, not a symbol operand: a PHP property may legitimately
-        // be named like one of these symbols, and rewriting inside the quotes would change the
-        // metadata's bytes (and its length) instead of pointing at the shared blob.
-        if !lines[index].trim_start().starts_with(".ascii") {
-            for (dropped, survivor) in &alias {
-                if line.contains(dropped) {
-                    line = replace_symbol(&line, dropped, survivor);
-                }
-            }
+        let line = lines[index];
+        // An `.ascii` payload is string DATA, not a symbol operand: a PHP property may
+        // legitimately be named like one of these symbols, and rewriting inside the quotes
+        // would change the metadata's bytes (and its length) instead of pointing at the
+        // shared blob.
+        if line.trim_start().starts_with(".ascii") || !line.contains("_class_") {
+            out.push_str(line);
+        } else {
+            out.push_str(&rewrite_symbols_via_map(line, &alias_map));
         }
-        out.push_str(&line);
         index += 1;
+    }
+    out
+}
+
+/// Rewrites every whole-symbol token in `line` that `alias_map` knows, in one pass.
+///
+/// A token is a maximal run of symbol bytes (ASCII alphanumerics and underscore), the same
+/// boundary rule the dedup has always applied; a token that merely CONTAINS an alias key never
+/// matches it. The caller keeps this off `.ascii` payload lines.
+fn rewrite_symbols_via_map(line: &str, alias_map: &std::collections::HashMap<&str, &str>) -> String {
+    let is_symbol_byte = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let bytes = line.as_bytes();
+    let mut out = String::with_capacity(line.len());
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        if is_symbol_byte(bytes[cursor]) {
+            let start = cursor;
+            while cursor < bytes.len() && is_symbol_byte(bytes[cursor]) {
+                cursor += 1;
+            }
+            let token = &line[start..cursor];
+            match alias_map.get(token) {
+                Some(survivor) => out.push_str(survivor),
+                None => out.push_str(token),
+            }
+        } else {
+            let char_len = line[cursor..].chars().next().map_or(1, |c| c.len_utf8());
+            out.push_str(&line[cursor..cursor + char_len]);
+            cursor += char_len;
+        }
     }
     out
 }
@@ -1465,32 +1500,6 @@ fn dedup_class_string_data(asm: String) -> String {
 /// Returns the symbol a `.globl <symbol>` line names, or `None` for any other line.
 fn global_definition_symbol(line: &str) -> Option<&str> {
     line.strip_prefix(".globl ").map(str::trim_end)
-}
-
-/// Replaces whole-symbol occurrences of `from` with `to`, leaving longer symbols alone.
-///
-/// A plain `str::replace` would rewrite `_class_vd_pkey_1_0` inside `_class_vd_pkey_1_0`-prefixed
-/// neighbours; the boundary check is what keeps the rewrite to the exact symbol.
-fn replace_symbol(line: &str, from: &str, to: &str) -> String {
-    let bytes = line.as_bytes();
-    let is_symbol_byte = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
-    let mut out = String::with_capacity(line.len());
-    let mut cursor = 0;
-    while let Some(offset) = line[cursor..].find(from) {
-        let start = cursor + offset;
-        let end = start + from.len();
-        let before_ok = start == 0 || !is_symbol_byte(bytes[start - 1]);
-        let after_ok = end >= bytes.len() || !is_symbol_byte(bytes[end]);
-        if before_ok && after_ok {
-            out.push_str(&line[cursor..start]);
-            out.push_str(to);
-        } else {
-            out.push_str(&line[cursor..end]);
-        }
-        cursor = end;
-    }
-    out.push_str(&line[cursor..]);
-    out
 }
 
 /// Emits a dense class-id to class-name lookup table for runtime `get_class()`.
@@ -3808,7 +3817,7 @@ mod tests {
         emit_runtime_data_user, source_instance_method_entry, source_instance_vtable_entry,
         source_static_vtable_entry, NOT_SERIALIZABLE_BUILTIN_CLASSES,
     };
-    use super::{dedup_class_string_data, replace_symbol};
+    use super::{dedup_class_string_data, rewrite_symbols_via_map};
 
     /// Builds a direct physical method signature for source-entry lookup tests.
     fn direct_method_signature() -> FunctionSig {
@@ -4304,14 +4313,19 @@ _class_vd_pkey_1_0:
         assert!(out.contains("_class_other_x:"), "{out}");
     }
 
-    /// A rewrite touches only the exact symbol, never a longer symbol that contains it.
+    /// A rewrite touches only the exact symbol token, never a longer symbol that contains it.
     #[test]
     fn replace_symbol_respects_boundaries() {
+        let mut map = std::collections::HashMap::new();
+        map.insert("_a_1_0", "SURVIVOR");
         assert_eq!(
-            replace_symbol("_a_1_0 _a_1_00", "_a_1_0", "SURVIVOR"),
+            rewrite_symbols_via_map("_a_1_0 _a_1_00", &map),
             "SURVIVOR _a_1_00"
         );
-        assert_eq!(replace_symbol(".quad _a_1_0\n", "_a_1_0", "S"), ".quad S\n");
+        assert_eq!(
+            rewrite_symbols_via_map(".quad _a_1_0\n", &map),
+            ".quad SURVIVOR\n"
+        );
     }
 
     /// A dropped symbol is never rewritten INSIDE an `.ascii` payload: the payload is string data,
