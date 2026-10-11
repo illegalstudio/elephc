@@ -1728,15 +1728,29 @@ so two bodies differing only by the scalar's static type compare equal under a c
 shape while emitting different boxing code — the survivor's tag would be applied to the
 other instantiation.
 
-The distinction is load-bearing PHP semantics, not a lowering artifact: the runtime must
-remember that a stored `false` is a bool. Not every exact-type consultation implies
-different machine code — an FFI `(Int, Bool)` pair forwards the payload, and raw int and
-bool call operands materialize identically — but the sites that DO differ are the ones
-the EIR cannot see: boxing tags, truthiness as a cast destination (`conversions.rs`),
-boolean versus integer stringification (`strings.rs`: raw `0` is `""` for `false` and
-`"0"` for integer zero), and the `Mixed`-to-scalar coercion helpers.
+The blocker is wider than the boxing tag, and it splits into two classes:
 
-Two further constraints close the door on a naive widening:
+- **Constant divergence** — the same lowering arm bakes a different constant: the boxing
+  tag above, static-store tags, a search's `expected_tag`, `array_fill` element tags.
+  `value_php_type` is read and branched on at over a hundred lowering sites, and
+  `runtime_value_tag` is baked at about ninety codegen points.
+- **Structural divergence** — a DIFFERENT lowering arm is selected from the exact type:
+  truthiness as a cast destination (`conversions.rs`: `result_php_type == Bool ⇒
+  lower_is_truthy`), and comparison-arm selection (`comparisons.rs`: a comparison is
+  lowered as truthiness when either side is `Bool`). So `clamp<T>(T $v): T { if ($v ==
+  0) … }` compares equal under a collapsed shape while emitting different comparison
+  code, with no boxing anywhere.
+
+A class-2 divergence cannot be repaired by supplying a tag at runtime: the fix would be
+to emit BOTH arms under a runtime branch, which reintroduces the dynamic-type dispatch
+the AOT thesis exists to delete. And the distinction is load-bearing PHP semantics, not a
+lowering artifact: the runtime must remember that a stored `false` is a bool, and raw `0`
+stringifies as `"0"` for an int and `""` for a bool (`strings.rs`).
+
+Not every exact-type consultation implies different machine code — an FFI `(Int, Bool)`
+pair forwards the payload, and raw int and bool call operands materialize identically —
+but the sites that DO differ are the ones the EIR cannot see. Two further constraints
+close the door on a naive widening:
 
 - **Identical bodies do not imply interchangeable signatures.** A direct call resolves
   the callee's parameter types at codegen time and picks its coercion from them, so
@@ -1749,7 +1763,9 @@ Two further constraints close the door on a naive widening:
   instructions, relocation targets and cleanup/unwind obligations — not bytes or
   normalized assembly text — so the differing boxing tag and the per-function cleanup
   symbol are both visible. That is the LLVM `MergeFunctions` analogue, and it is the path
-  to take only if a measurement ever shows scalar duplication to be material.
+  to take only if a measurement ever shows scalar duplication to be material. The total
+  win is bounded to the int/bool pair: `Float` lowers to `F64` while `Int`/`Bool` lower
+  to `I64`, and `IrType` is compared exactly.
 
 ## Dominance Analysis
 
