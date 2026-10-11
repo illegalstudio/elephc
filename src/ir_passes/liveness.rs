@@ -9,10 +9,10 @@
 //! Key details:
 //! - SSA-lite with block parameters: a block parameter is "defined" at block
 //!   entry; branch arguments at a terminator are "uses" at that terminator.
-//! - Iterates to a fixed point so loops converge; the CFG is small so a simple
-//!   worklist over blocks is sufficient.
+//! - A predecessor worklist propagates only newly live values. Each value crosses
+//!   each edge at most once, including large sets of hoisted loop materializations.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::ir::{BasicBlock, BlockId, Function, Op, Terminator, ValueId};
 
@@ -48,8 +48,6 @@ struct BlockFacts {
     defs: HashSet<ValueId>,
     /// Values used in the block that are not defined in the block.
     upward_uses: HashSet<ValueId>,
-    /// Successor blocks reached from this block's terminator.
-    successors: Vec<BlockId>,
 }
 
 /// Computes per-block liveness for `func` via backward dataflow to a fixed
@@ -60,48 +58,38 @@ struct BlockFacts {
 /// backwards through the successor's parameters. SSA single-definition lets us
 /// derive upward-exposed uses by simply excluding block-local definitions.
 pub fn compute_liveness(func: &Function) -> LivenessInfo {
-    let facts: HashMap<BlockId, BlockFacts> = func
-        .blocks
-        .iter()
-        .map(|block| (block.id, block_facts(func, block)))
-        .collect();
+    let facts: Vec<BlockFacts> = func.blocks.iter().map(|block| block_facts(func, block)).collect();
+    let predecessors = super::cfg::predecessors(func);
+    let mut live_in: Vec<HashSet<ValueId>> = facts.iter().map(|f| f.upward_uses.clone()).collect();
+    let mut live_out = vec![HashSet::new(); func.blocks.len()];
+    let mut pending: Vec<Vec<ValueId>> = live_in.iter().map(|values| values.iter().copied().collect()).collect();
+    let mut queued: Vec<bool> = pending.iter().map(|values| !values.is_empty()).collect();
+    let mut worklist: VecDeque<usize> = (0..func.blocks.len()).rev().filter(|&index| queued[index]).collect();
 
-    let mut live_in: HashMap<BlockId, HashSet<ValueId>> = func
-        .blocks
-        .iter()
-        .map(|block| (block.id, HashSet::new()))
-        .collect();
-    let mut live_out: HashMap<BlockId, HashSet<ValueId>> = live_in.clone();
-
-    // Iterate backwards over the block list until the sets stop changing. The
-    // CFG is small, so repeated full sweeps converge quickly without an
-    // explicit predecessor worklist.
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for block in func.blocks.iter().rev() {
-            let f = &facts[&block.id];
-
-            let mut new_out = HashSet::new();
-            for succ in &f.successors {
-                new_out.extend(live_in[succ].iter().copied());
-            }
-
-            let mut new_in = f.upward_uses.clone();
-            for value in new_out.iter().copied() {
-                if !f.defs.contains(&value) {
-                    new_in.insert(value);
+    // Sets grow monotonically from upward-exposed uses. Forward only the delta:
+    // a predecessor consumes a successor's newly live values once, even when
+    // back edges or block relocation make block-index sweeps converge slowly.
+    while let Some(block) = worklist.pop_front() {
+        queued[block] = false;
+        let delta = std::mem::take(&mut pending[block]);
+        for &predecessor in &predecessors[block] {
+            let pred = predecessor.as_raw() as usize;
+            for &value in &delta {
+                if live_out[pred].insert(value) && !facts[pred].defs.contains(&value)
+                    && live_in[pred].insert(value)
+                {
+                    pending[pred].push(value);
                 }
             }
-
-            if new_out != live_out[&block.id] || new_in != live_in[&block.id] {
-                changed = true;
-                live_out.insert(block.id, new_out);
-                live_in.insert(block.id, new_in);
+            if !pending[pred].is_empty() && !queued[pred] {
+                queued[pred] = true;
+                worklist.push_back(pred);
             }
         }
     }
 
+    let live_in = func.blocks.iter().map(|block| block.id).zip(live_in).collect();
+    let live_out = func.blocks.iter().map(|block| block.id).zip(live_out).collect();
     LivenessInfo { live_in, live_out }
 }
 
@@ -133,17 +121,7 @@ fn block_facts(func: &Function, block: &BasicBlock) -> BlockFacts {
     }
 
     let upward_uses = uses.difference(&defs).copied().collect();
-    let successors = block
-        .terminator
-        .as_ref()
-        .map(crate::ir_passes::cfg::successors)
-        .unwrap_or_default();
-
-    BlockFacts {
-        defs,
-        upward_uses,
-        successors,
-    }
+    BlockFacts { defs, upward_uses }
 }
 
 /// Collects every value used by a terminator: branch arguments, conditions,

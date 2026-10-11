@@ -489,13 +489,12 @@ slow-timeout = { period = "300s", terminate-after = 1 }
 filter = 'binary(php_profile_independence_tests) and test(/^eval_/)'
 slow-timeout = { period = "300s", terminate-after = 1 }
 
-# The shared macOS runners are the only place the codegen fixtures reach the 60s guard without
-# being hung: eval-linked programs (the 65MB Magician archive per link) measured 60-66s there in
-# runs that were otherwise green, and a different fixture crossed the line on each run —
+# On shared macOS runners, eval-linked programs (the 65MB Magician archive per link)
+# measured 60-66s in otherwise green runs, with a different fixture crossing the guard:
 # `xml::clone`, `xml::eval`, `nested_property_defaults`, `instanceof_operand_owners`. The per-test
 # entries below and above are the ones that crossed it first; on macOS the whole binary gets the
-# eval family's budget instead of a new exact-name entry per run. Linux x86_64 keeps the strict
-# guard, and a real hang still terminates at 180s on macOS.
+# eval family's budget instead of a new exact-name entry per run. Linux keeps scoped
+# exceptions below, and a real hang still terminates at 180s on macOS.
 [[profile.default.overrides]]
 platform = 'cfg(target_os = "macos")'
 filter = 'binary(codegen_tests)'
@@ -507,15 +506,18 @@ filter = 'binary(codegen_tests)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 # These multi-compile mbstring, eval, and ownership families reached 60s on both
-# attempts in Linux AArch64 shards. Limit the larger outer budget to the observed
-# families; unrelated codegen tests retain the strict 60s guard.
+# attempts in Linux AArch64 shards and later in x86_64 shards. Constructor, argument
+# staging, and Mixed-throw ownership comparisons each compile two eval programs;
+# the output-handler fixture compiles native, native-callback eval, and eval-declared
+# controls. Give these same families the existing eval budget on both Linux targets.
+# Unrelated codegen tests and the compiled-program watchdog retain their 60s guards.
 [[profile.default.overrides]]
-platform = 'cfg(all(target_os = "linux", target_arch = "aarch64"))'
+platform = 'cfg(target_os = "linux")'
 filter = 'binary(codegen_tests) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/) or test(/^codegen::runtime_gc::eval_/) or test(/^codegen::runtime_gc::nested_property_defaults::/) or test(=codegen::io::output_handler_exceptions::test_output_handler_exceptions_false_disables_handler))'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.ci.overrides]]
-platform = 'cfg(all(target_os = "linux", target_arch = "aarch64"))'
+platform = 'cfg(target_os = "linux")'
 filter = 'binary(codegen_tests) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/) or test(/^codegen::runtime_gc::eval_/) or test(/^codegen::runtime_gc::nested_property_defaults::/) or test(=codegen::io::output_handler_exceptions::test_output_handler_exceptions_false_disables_handler))'
 slow-timeout = { period = "60s", terminate-after = 3 }
 

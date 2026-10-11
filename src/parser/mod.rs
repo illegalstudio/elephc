@@ -32,6 +32,14 @@ use crate::lexer::{SpannedToken, Token};
 use crate::parser::ast::Stmt;
 use crate::span::Span;
 
+/// Shares class-like name token grammar with source attribution tools.
+///
+/// The compiler binary uses this library API, not its parallel private parser module.
+#[allow(dead_code)]
+pub fn name_part_from_token(token: &Token, metadata: &crate::lexer::TokenMetadata) -> Option<String> {
+    stmt::name_part_from_token(token, metadata)
+}
+
 /// Caps syntactic delimiter nesting before recursive expression parsing can
 /// consume the compiler process stack.
 const MAX_COMPILER_NESTING: usize = 1024;
