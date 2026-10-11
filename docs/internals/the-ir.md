@@ -1713,6 +1713,24 @@ point so folding a callee unlocks its callers. A call to a callee that is not me
 transitivity rule the design's nominal-use analysis describes, applied at the
 instantiated bodies the backend actually emits.
 
+### Why scalar type arguments do not collapse
+
+`Int`/`Bool`/`Float` type arguments are deliberately NOT collapsed to one shape, unlike
+object names. The backend stores scalars in raw untagged `I64` slots and bakes the
+runtime value tag only when boxing a value into a `Mixed` cell
+(`codegen_support/value_boxing.rs`), reading it from the exact `PhpType`: an int boxes
+with tag 0, a bool with tag 3. The tag is not an EIR immediate, so two bodies differing
+only by the scalar's static type compare equal under a collapsed shape while emitting
+different boxing code — the survivor's tag would be applied to the other instantiation.
+
+The distinction is load-bearing PHP semantics, not a lowering artifact: the runtime must
+remember that a stored `false` is a bool. The same exact-type consultation appears in
+truthiness lowering (`conversions.rs`), FFI boundary coercion (`externs.rs`), reference
+arguments, call operands and static property stores. The `id<int>` / `id<bool>` bodies of
+a pass-through identity happen to be byte-identical because they never box, which is
+exactly the condition the EIR cannot check. Collapsing scalars would require a
+body-wide audit of every scalar-consulting lowering, so the merge keeps scalars exact.
+
 ## Dominance Analysis
 
 `src/ir_passes/dominance.rs` is a read-only sidecar analysis (like liveness, not
