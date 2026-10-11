@@ -10,6 +10,7 @@
 //! - `crate::codegen_support` owns shared target, runtime, ABI, and metadata helpers.
 
 mod block_emit;
+pub use block_emit::generic_body_sharing_oracle;
 pub(crate) mod callable_reachability;
 mod const_default_values;
 pub(crate) mod context;

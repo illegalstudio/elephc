@@ -1765,7 +1765,12 @@ close the door on a naive widening:
   symbol are both visible. That is the LLVM `MergeFunctions` analogue, and it is the path
   to take only if a measurement ever shows scalar duplication to be material. The total
   win is bounded to the int/bool pair: `Float` lowers to `F64` while `Int`/`Bool` lower
-  to `I64`, and `IrType` is compared exactly.
+  to `I64`, and `IrType` is compared exactly. That measurement exists: with
+  `--report-generics`, every surviving candidate is lowered into an isolated emitter and
+  the assembly is shape-normalized (self symbols erased, labels renamed by first
+  appearance), so the reported foldable count is measured against what the backend
+  actually emits — including every future scalar-consulting lowering, which is why the
+  oracle never rots as the lowering grows.
 
 ## Dominance Analysis
 

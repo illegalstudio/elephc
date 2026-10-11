@@ -1348,3 +1348,219 @@ fn emit_fn_marker(emitter: &mut Emitter, name: &str, symbol: &str, synthetic: bo
 fn emit_endfn_marker(emitter: &mut Emitter, name: &str) {
     emitter.comment(&format!("@endfn name={}", name));
 }
+
+/// Reports which type-argument candidates lower to identical bodies.
+///
+/// The merge refuses a candidate when its EIR could observe a class name the shape erased, but the
+/// EIR cannot see every backend decision: the runtime value tag is baked from the exact `PhpType`
+/// at codegen, so two bodies may compare unequal while emitting the same code (a pass-through
+/// `id<int>` / `id<bool>` pair), or compare equal while emitting different code (a body boxing its
+/// scalar). This oracle lowers each surviving candidate into an isolated emitter and compares the
+/// SHAPE-NORMALIZED ASSEMBLY, which is the actual soundness oracle: it includes the frame layout,
+/// the epilogue cleanup, every baked tag and every future scalar-consulting lowering.
+///
+/// The result is the measured case for widening the merge — nothing here changes the emitted
+/// program; it is reported under `--report-generics` only.
+pub fn generic_body_sharing_oracle(module: &Module, regalloc_linear: bool) -> String {
+    // (slot, candidate bodies, is_method)
+    let mut rows: Vec<(String, Vec<&Function>, bool)> = Vec::new();
+    let mut row_of: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let emitted_body = |function: &Function| {
+        !function.flags.is_main
+            && !function.flags.is_generator
+            && !function.flags.is_synthetic
+            && !function.flags.is_closure
+            && !function.flags.is_fiber_wrapper
+            && !function.flags.is_callback_wrapper
+            && !function.flags.is_runtime_callable_invoker
+    };
+    for function in &module.functions {
+        if !function.name.contains('<') || !emitted_body(function) {
+            continue;
+        }
+        let slot = function.name.split('<').next().unwrap_or(&function.name).to_string();
+        match row_of.get(&slot).copied() {
+            Some(index) => rows[index].1.push(function),
+            None => {
+                row_of.insert(slot.clone(), rows.len());
+                rows.push((slot, vec![function], false));
+            }
+        }
+    }
+    for function in &module.class_methods {
+        if !function.name.contains('<') || !emitted_body(function) {
+            continue;
+        }
+        let Some((class, method)) = function.name.rsplit_once("::") else {
+            continue;
+        };
+        let class = class.split('<').next().unwrap_or(class).to_string();
+        let kind = if function.flags.is_static { "static" } else { "instance" };
+        let slot = format!("{class}::{method} [{kind}]");
+        match row_of.get(&slot).copied() {
+            Some(index) => rows[index].1.push(function),
+            None => {
+                row_of.insert(slot.clone(), rows.len());
+                rows.push((slot, vec![function], true));
+            }
+        }
+    }
+    let mut measured: Vec<(String, usize, usize)> = rows
+        .iter()
+        .filter(|(_, candidates, _)| candidates.len() >= 2)
+        .map(|(slot, candidates, is_method)| {
+            let lowered: Vec<Option<String>> = candidates
+                .iter()
+                .map(|function| {
+                    normalized_candidate_body(module, function, *is_method, regalloc_linear)
+                })
+                .collect();
+            let emitted = lowered.iter().filter(|entry| entry.is_some()).count();
+            let mut distinct: Vec<&String> = lowered.iter().flatten().collect();
+            distinct.sort();
+            distinct.dedup();
+            (slot.clone(), emitted, distinct.len())
+        })
+        .filter(|(_, emitted, distinct)| *emitted >= 2 && distinct < emitted)
+        .collect();
+    measured.sort_by(|a, b| (b.1 - b.2).cmp(&(a.1 - a.2)).then(a.0.cmp(&b.0)));
+    if measured.is_empty() {
+        return "shape-oracle: no further foldable bodies".to_string();
+    }
+    let total_candidates: usize = measured.iter().map(|(_, candidates, _)| candidates).sum();
+    let total_distinct: usize = measured.iter().map(|(_, _, distinct)| distinct).sum();
+    let removable = total_candidates - total_distinct;
+    let mut lines = vec![format!(
+        "shape-oracle: {} slots lower to identical bodies: {} instantiations → {} distinct bodies ({} removable)",
+        measured.len(),
+        total_candidates,
+        total_distinct,
+        removable
+    )];
+    for (slot, candidates, distinct) in measured {
+        lines.push(format!("  {slot}: {candidates} instantiations → {distinct} body"));
+    }
+    lines.join("\n")
+}
+
+/// Lowers one candidate body into an isolated emitter and returns its shape-normalized text.
+///
+/// A fresh emitter, literal pool and shared state make the text depend only on the body and the
+/// module's read-only context, so two structurally identical candidates lower to the same text
+/// instead of inheriting whatever label counters and caches the whole-module emission had reached.
+/// `None` means the body did not lower, which the oracle reports as a candidate it cannot compare.
+fn normalized_candidate_body(
+    module: &Module,
+    function: &Function,
+    is_method: bool,
+    regalloc_linear: bool,
+) -> Option<String> {
+    let mut emitter = Emitter::new(module.target);
+    let mut data = DataSection::new();
+    let mut shared = SharedCodegenState::default();
+    let lowered = if is_method {
+        emit_class_method(
+            module,
+            function,
+            &mut emitter,
+            &mut data,
+            &mut shared,
+            regalloc_linear,
+        )
+    } else {
+        emit_user_function(
+            module,
+            function,
+            &mut emitter,
+            &mut data,
+            &mut shared,
+            regalloc_linear,
+        )
+    };
+    lowered.ok()?;
+    Some(normalize_body_text(&emitter.output(), function))
+}
+
+/// Erases every symbol that names the candidate and canonicalizes internal labels, so two
+/// structurally identical bodies compare byte-equal.
+///
+/// The candidate's own mangled name reaches the text as its entry, epilogue and exceptional
+/// cleanup symbols, and reaches internal labels as part of their prefix; replacing it with a
+/// placeholder and renaming labels by first appearance leaves only what the body actually does.
+fn normalize_body_text(text: &str, function: &Function) -> String {
+    let self_symbol = crate::names::mangle_fqn(&function.name);
+    // The source-map `@fn` marker quotes the raw name and the symbols quote the mangled one, so
+    // both spellings must go: they are the only thing two instantiations' texts disagree about.
+    let erased = text
+        .replace(&self_symbol, "<SELF>")
+        .replace(&function.name, "<SELF>");
+    let mut mapping: Vec<(String, String)> = Vec::new();
+    for line in erased.split_inclusive('\n') {
+        let trimmed = line.trim_end();
+        let Some(token) = trimmed.strip_suffix(':') else {
+            continue;
+        };
+        if !token.starts_with("L_") {
+            continue;
+        }
+        label_map_push(&mut mapping, token);
+    }
+    let mut out = String::with_capacity(erased.len());
+    for line in erased.split_inclusive('\n') {
+        let trimmed = line.trim_end();
+        if let Some(token) = trimmed.strip_suffix(':') {
+            if token.starts_with("L_") {
+                out.push_str(&format!("{}:\n", label_of(&mapping, token)));
+                continue;
+            }
+        }
+        let mut rewritten = line.to_string();
+        for (raw, canonical) in &mapping {
+            rewritten = replace_symbol_token(&rewritten, raw, canonical);
+        }
+        out.push_str(&rewritten);
+    }
+    out
+}
+
+/// Maps an internal label token to its canonical name by order of first appearance.
+fn label_map_push(mapping: &mut Vec<(String, String)>, token: &str) -> String {
+    if let Some((_, canonical)) = mapping.iter().find(|(raw, _)| raw == token) {
+        return canonical.clone();
+    }
+    let canonical = format!("L{}", mapping.len());
+    mapping.push((token.to_string(), canonical.clone()));
+    canonical
+}
+
+/// Returns the canonical name of an already-mapped label token.
+fn label_of(mapping: &[(String, String)], token: &str) -> String {
+    mapping
+        .iter()
+        .find(|(raw, _)| raw == token)
+        .map(|(_, canonical)| canonical.clone())
+        .unwrap_or_else(|| token.to_string())
+}
+
+/// Replaces whole-token occurrences of `raw` with `canonical`, leaving longer symbols alone.
+fn replace_symbol_token(line: &str, raw: &str, canonical: &str) -> String {
+    let is_symbol_byte =
+        |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+    let mut out = String::with_capacity(line.len());
+    let mut cursor = 0;
+    while let Some(offset) = line[cursor..].find(raw) {
+        let start = cursor + offset;
+        let end = start + raw.len();
+        let before_ok = start == 0 || !is_symbol_byte(line.as_bytes()[start - 1]);
+        let after_ok = end >= line.len() || !is_symbol_byte(line.as_bytes()[end]);
+        if before_ok && after_ok {
+            out.push_str(&line[cursor..start]);
+            out.push_str(canonical);
+        } else {
+            out.push_str(&line[cursor..end]);
+        }
+        cursor = end;
+    }
+    out.push_str(&line[cursor..]);
+    out
+}

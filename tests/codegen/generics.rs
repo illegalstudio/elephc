@@ -2663,6 +2663,46 @@ echo get_class($int), "|", get_class($bool);
     );
 }
 
+/// `--report-generics` measures the residual sharing opportunity with the assembly oracle: a
+/// scalar instantiation whose lowered body is identical to its sibling is reported as removable.
+#[test]
+fn test_report_generics_oracle_counts_identical_scalar_bodies() {
+    let source = r#"<?php
+function id<T>(T $x): T { return $x; }
+echo id(1), id(true) ? "y" : "n";
+"#;
+    let reported = compile_cli_file_with_flags_capturing_stderr(source, &["--report-generics"]);
+    assert!(
+        reported.contains("shape-oracle: 1 slots lower to identical bodies"),
+        "{reported}"
+    );
+    assert!(reported.contains("1 removable"), "{reported}");
+}
+
+/// A body whose scalar is BOXED lowers to different code (a different runtime tag), so the oracle
+/// refuses it: the measured opportunity stays at zero rather than promising an unsound merge.
+#[test]
+fn test_report_generics_oracle_refuses_boxing_scalar_bodies() {
+    let source = r#"<?php
+class Sink<T> {
+    public function __construct(private mixed $slot = null) {}
+    public function box(T $v): void { $this->slot = $v; }
+}
+class User {}
+class Order {}
+$int = new Sink<int>();
+$int->box(1);
+$bool = new Sink<bool>();
+$bool->box(true);
+echo get_class($int), "|", get_class($bool);
+"#;
+    let reported = compile_cli_file_with_flags_capturing_stderr(source, &["--report-generics"]);
+    assert!(
+        reported.contains("shape-oracle: no further foldable bodies"),
+        "{reported}"
+    );
+}
+
 /// A dynamic property access on a `mixed` (runtime-typed) receiver dispatches on the runtime class,
 /// so its emitted code is identical across instantiations and the method merges.
 #[test]

@@ -790,6 +790,14 @@ pub(crate) fn compile(config: CliConfig) {
         ir_passes::optimize_module(&mut ir_module);
     }
     timings.record_since("ir-opt", phase_started);
+    // The shape merge has now folded everything the EIR comparison could prove identical, so what
+    // remains is the measured case for widening it: candidates whose lowered bodies agree.
+    if report_generics {
+        eprintln!(
+            "{}",
+            codegen::generic_body_sharing_oracle(&ir_module, regalloc_linear)
+        );
+    }
 
     backend::emit_and_link(backend::BackendInputs {
         filename,
