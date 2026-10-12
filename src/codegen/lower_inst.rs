@@ -31,6 +31,7 @@ use super::function_variants;
 use super::{CodegenIrError, Result};
 
 mod arithmetic;
+mod immediate_operands;
 mod arrays;
 mod buffers;
 mod call_argument_unpack;
@@ -162,6 +163,9 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         .cloned()
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst_id.as_raw()))?;
     core_builtins::prepare_backtrace_call_site(ctx, &inst)?;
+    if inst.result.is_some_and(|value| ctx.allocation.rematerialized(value).is_some()) {
+        return Ok(());
+    }
     match inst.op {
         Op::ConstI64 => lower_const_i64(ctx, &inst),
         Op::ConstF64 => floats::lower_const_f64(ctx, &inst),

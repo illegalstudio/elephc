@@ -41,6 +41,7 @@ mod loops;
 mod mem2reg;
 mod peephole;
 mod regalloc;
+pub(crate) mod rematerialize;
 mod rewrite;
 
 #[cfg(test)]
@@ -53,3 +54,4 @@ pub use intervals::{build_intervals, LiveInterval};
 pub use liveness::{compute_liveness, LivenessInfo};
 pub use loops::{compute_loops, LoopInfo, NaturalLoop};
 pub use regalloc::allocate_registers;
+pub use rematerialize::ScalarConstant;

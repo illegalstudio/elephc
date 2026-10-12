@@ -12,18 +12,10 @@ use super::*;
 
 /// Lowers a signed integer comparison into a boolean result value.
 pub(super) fn lower_int_compare(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    let lhs = expect_operand(inst, 0)?;
-    let rhs = expect_operand(inst, 1)?;
-    let predicate = expect_cmp_predicate(inst)?;
+    let predicate = immediate_operands::emit_int_compare(ctx, inst)?;
     let result_reg = abi::int_result_reg(ctx.emitter);
-    let rhs_reg = abi::secondary_scratch_reg(ctx.emitter);
-    require_integer_like(ctx.load_value_to_reg(lhs, result_reg)?, inst)?;
-    require_integer_like(ctx.load_value_to_reg(rhs, rhs_reg)?, inst)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!(                                   // compare signed integer operands for the EIR predicate
-                "cmp {}, {}", result_reg, rhs_reg
-            ));
             ctx.emitter.instruction(&format!(                                   // materialize the predicate result as 0 or 1
                 "cset {}, {}",
                 result_reg,
@@ -31,9 +23,6 @@ pub(super) fn lower_int_compare(ctx: &mut FunctionContext<'_>, inst: &Instructio
             ));
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!(                                   // compare signed integer operands for the EIR predicate
-                "cmp {}, {}", result_reg, rhs_reg
-            ));
             ctx.emitter.instruction(&format!(                                   // materialize the predicate result in the low byte
                 "set{} al", x86_64_condition(predicate)?
             ));

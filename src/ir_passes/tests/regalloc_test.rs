@@ -10,7 +10,7 @@
 //!   sizes are deterministic.
 
 use crate::codegen::platform::{Arch, Platform, Target};
-use crate::ir::{Builder, DataId, Function, Immediate, IrType, Op, Ownership, Terminator, ValueId};
+use crate::ir::{Builder, DataId, Function, Immediate, IrType, LocalKind, Op, Ownership, Terminator, ValueId};
 use crate::ir_passes::allocate_registers;
 use crate::types::PhpType;
 
@@ -33,6 +33,17 @@ fn emit_const_f64(builder: &mut Builder<'_>, value: f64) -> ValueId {
         .expect("const_f64 produces a value")
 }
 
+/// Emits an opaque scalar load so allocation tests cannot use constant recipes.
+fn emit_scalar_load(builder: &mut Builder<'_>, ty: IrType, php_type: PhpType) -> ValueId {
+    let slot = builder.add_local(None, ty, php_type.clone(), LocalKind::PhpLocal);
+    builder.emit_load_local(slot, ty, php_type)
+}
+
+/// Emits a nonconstant integer for register pressure and cross-call fixtures.
+fn emit_int_load(builder: &mut Builder<'_>) -> ValueId {
+    emit_scalar_load(builder, IrType::I64, PhpType::Int)
+}
+
 /// A purely arithmetic, call-free function assigns every temporary a
 /// caller-saved register and records no callee-saved usage, so a leaf function
 /// needs no prologue/epilogue save/restore.
@@ -41,11 +52,11 @@ fn straight_line_integers_use_caller_saved_registers() {
     let mut function = Function::new("ints".to_string(), IrType::I64, PhpType::Int);
     {
         let mut builder = Builder::new(&mut function);
-        let entry = builder.create_named_block("entry", vec![]);
+        let entry = builder.create_named_block("entry", vec![(IrType::I64, PhpType::Int); 2]);
         builder.set_entry(entry);
         builder.position_at_end(entry);
-        let v0 = builder.emit_const_i64(1);
-        let v1 = builder.emit_const_i64(2);
+        let v0 = builder.block_param(entry, 0);
+        let v1 = builder.block_param(entry, 1);
         let v2 = builder.emit_iadd(v0, v1);
         builder.terminate(Terminator::Return { value: Some(v2) });
     }
@@ -78,13 +89,13 @@ fn register_pressure_forces_spills() {
     let mut function = Function::new("pressure".to_string(), IrType::I64, PhpType::Int);
     {
         let mut builder = Builder::new(&mut function);
-        let entry = builder.create_named_block("entry", vec![]);
+        let entry = builder.create_named_block("entry", vec![(IrType::I64, PhpType::Int); COUNT as usize]);
         builder.set_entry(entry);
         builder.position_at_end(entry);
 
-        let consts: Vec<ValueId> = (0..COUNT).map(|i| builder.emit_const_i64(i as i64)).collect();
-        // Fold left so every constant stays live until its add: the first add
-        // sees all later constants still pending, creating peak pressure.
+        let consts: Vec<ValueId> = (0..COUNT).map(|i| builder.block_param(entry, i as usize)).collect();
+        // Fold left so every parameter stays live until its add: the first add
+        // sees all later parameters still pending, creating peak pressure.
         let mut acc = consts[0];
         for &c in &consts[1..] {
             acc = builder.emit_iadd(acc, c);
@@ -110,11 +121,12 @@ fn integers_and_floats_use_separate_pools() {
     let mut function = Function::new("mixed".to_string(), IrType::I64, PhpType::Int);
     let (int_val, float_val) = {
         let mut builder = Builder::new(&mut function);
-        let entry = builder.create_named_block("entry", vec![]);
+        let entry = builder.create_named_block("entry", vec![(IrType::I64, PhpType::Int), (IrType::F64, PhpType::Float)]);
         builder.set_entry(entry);
         builder.position_at_end(entry);
-        let i = builder.emit_const_i64(1);
-        let f = emit_const_f64(&mut builder, 2.5);
+        let i = builder.block_param(entry, 0);
+        let f = builder.block_param(entry, 1);
+        builder.emit(Op::FNeg, vec![f], None, IrType::F64, PhpType::Float, Ownership::NonHeap);
         builder.terminate(Terminator::Return { value: Some(i) });
         (i, f)
     };
@@ -143,7 +155,7 @@ fn block_parameters_and_branch_arguments_can_use_registers() {
         builder.set_entry(entry);
 
         builder.position_at_end(entry);
-        let arg = builder.emit_const_i64(7);
+        let arg = emit_int_load(&mut builder);
         builder.terminate(Terminator::Br {
             target: body,
             args: vec![arg],
@@ -172,7 +184,7 @@ fn heap_block_argument_keeps_scalar_off_caller_saved_registers() {
         builder.set_entry(entry);
         builder.position_at_end(entry);
         let string_arg = builder.emit_const_str(DataId::from_raw(0));
-        let scalar_arg = builder.emit_const_i64(7);
+        let scalar_arg = emit_int_load(&mut builder);
         builder.terminate(Terminator::Br { target: body, args: vec![string_arg, scalar_arg] });
         builder.position_at_end(body);
         let scalar_param = builder.block_param(body, 1);
@@ -225,7 +237,7 @@ fn value_live_across_call_uses_callee_saved() {
         let entry = builder.create_named_block("entry", vec![]);
         builder.set_entry(entry);
         builder.position_at_end(entry);
-        let v0 = builder.emit_const_i64(1);
+        let v0 = emit_int_load(&mut builder);
         emit_clobber_call(&mut builder); // clobber point between def and use
         let v1 = builder.emit_iadd(v0, v0); // v0 is live across the call
         builder.terminate(Terminator::Return { value: Some(v1) });
@@ -338,7 +350,7 @@ fn float_live_across_call_spills_on_x86_64() {
         let entry = builder.create_named_block("entry", vec![]);
         builder.set_entry(entry);
         builder.position_at_end(entry);
-        let a = emit_const_f64(&mut builder, 1.5);
+        let a = emit_scalar_load(&mut builder, IrType::F64, PhpType::Float);
         emit_clobber_call(&mut builder);
         let sum = builder
             .emit(
@@ -368,20 +380,20 @@ fn float_live_across_call_spills_on_x86_64() {
 #[test]
 fn spill_heuristic_keeps_frequently_used_value() {
     // Fill the entire call-free integer pool (4 caller + 8 callee = 12) with
-    // long-lived constants, then introduce one more long-lived value. The pool
+    // long-lived parameters, then introduce one more long-lived value. The pool
     // is exhausted, so the allocator must spill exactly one of the long-lived
     // intervals. The hot value below is used far more often than the others.
     const FILLERS: u32 = 12;
     let mut function = Function::new("heur".to_string(), IrType::I64, PhpType::Int);
     let (hot, fillers) = {
         let mut builder = Builder::new(&mut function);
-        let entry = builder.create_named_block("entry", vec![]);
+        let entry = builder.create_named_block("entry", vec![(IrType::I64, PhpType::Int); FILLERS as usize + 1]);
         builder.set_entry(entry);
         builder.position_at_end(entry);
 
         // One value used many times: defined first, kept live to the end.
-        let hot = builder.emit_const_i64(1);
-        let fillers: Vec<ValueId> = (0..FILLERS).map(|i| builder.emit_const_i64(i as i64 + 2)).collect();
+        let hot = builder.block_param(entry, 0);
+        let fillers: Vec<ValueId> = (1..=FILLERS).map(|i| builder.block_param(entry, i as usize)).collect();
         // Reference `hot` repeatedly so its use weight dominates.
         let mut acc = hot;
         for _ in 0..6 {
@@ -421,7 +433,7 @@ fn generator_functions_are_all_spilled() {
         let entry = builder.create_named_block("entry", vec![]);
         builder.set_entry(entry);
         builder.position_at_end(entry);
-        let v0 = builder.emit_const_i64(1);
+        let v0 = emit_int_load(&mut builder);
         builder.terminate(Terminator::Return { value: Some(v0) });
     }
     function.flags.is_generator = true;

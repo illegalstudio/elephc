@@ -12,6 +12,7 @@ mod bootstrap;
 mod calls;
 mod call_operand_scope;
 mod frame;
+pub(crate) mod immediate;
 mod registers;
 mod strings;
 mod symbols;

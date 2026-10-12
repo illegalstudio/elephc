@@ -27,6 +27,7 @@ pub(super) fn lower_int_binop(
     aarch64_mnemonic: &str,
     x86_64_mnemonic: &str,
 ) -> Result<()> {
+    if super::immediate_operands::try_int_binop(ctx, inst)? { return Ok(()); }
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
     let result_reg = abi::int_result_reg(ctx.emitter);

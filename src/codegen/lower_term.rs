@@ -497,7 +497,9 @@ mod tests {
                 Arch::AArch64 => "mov x12, x0",
                 Arch::X86_64 => "mov rsi, rax",
             };
-            assert_eq!(asm.matches(move_into_home).count(), 2, "{name}: {asm}");
+            // Only the destination parameter needs a home; the constant source
+            // is reconstructed directly for the edge copy.
+            assert_eq!(asm.matches(move_into_home).count(), 1, "{name}: {asm}");
         }
     }
 

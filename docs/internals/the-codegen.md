@@ -68,6 +68,49 @@ and link the resulting user object against the cached runtime object.
 The active backend must remain target-aware. New lowering paths should use the
 ABI helpers instead of hardcoding AArch64 or x86_64 register and stack details.
 
+## Scalar Constants and Immediate Operands
+
+With the default `--regalloc=linear`, integer, boolean, raw null, and floating-point
+constants have reconstruction recipes instead of spill slots. A constant used only
+as an immediate emits no standalone definition. Other consumers reconstruct it in
+their requested register. Float recipes preserve the exact IEEE bits, including
+negative zero and NaN payloads. Strings, heap values, and two-word tagged scalars
+retain their existing storage and ownership rules.
+
+`src/ir_passes/rematerialize.rs` estimates the cost of keeping a constant in a
+register versus reconstructing it. Encodable immediate uses contribute no register
+benefit. Other uses receive a loop-depth weight, capped at three nesting levels;
+definition cost, callee-save overhead, and a live-range surcharge offset that
+benefit. Expensive constants reused in a loop can therefore stay in registers
+after LICM places their definitions outside the loop. Register pressure falls back
+to reconstruction rather than a constant spill slot. Functions with implicit
+exception edges or generator suspension use recipes without allocating registers.
+The explicit `--regalloc=stack` mode retains backing slots as a diagnostic baseline.
+
+Allocation and emission share the encoding rules in
+`src/codegen_support/abi/immediate.rs`:
+
+| Operation | AArch64 | x86_64 |
+|---|---|---|
+| Integer add/subtract and compare | Unsigned 12-bit immediate, optionally shifted by 12; negative constants use the inverse add/subtract or `cmn` | Signed 32-bit immediate extended to 64 bits |
+| Integer AND/OR/XOR | Repeated, rotated runs of ones in a power-of-two bit width | Signed 32-bit immediate extended to 64 bits |
+| Integer multiply | Register operand | Signed 32-bit immediate extended to 64 bits |
+
+These constraints follow the [Arm instruction reference](https://documentation-service.arm.com/static/6245c734b059dc5ff9a8bdab)
+and [Intel instruction reference](https://www.intel.com/content/www/us/en/content-details/825760/intel-64-and-ia-32-architectures-software-developer-s-manual-combined-volumes-2a-2b-2c-and-2d-instruction-set-reference-a-z.html).
+Values outside an encoding's range use full-width registers. Commutative operations
+can exchange operands; comparisons also reverse their predicate. Loop bounds use
+the same comparison selection. Checked integer-to-int arithmetic skips the cold
+overflow path with one conditional branch (`b.vc`, `b.eq` for AArch64 multiply,
+or `jno` on x86_64). Overflow falls through and reconstructs an immediate operand
+only when conversion needs it. Boxed checked arithmetic still follows its runtime
+call ABI.
+
+`examples/constant-rematerialization/main.php` demonstrates bounded sample
+accumulation with immediate masks, scaling, increments, and a fixed loop bound.
+
+## Compound Array Operations
+
 For a nested write into an associative array, `ArrayFetchForWrite` ensures the
 parent entry exists and diagnoses a float key while normalizing it. The
 following `HashGetForWrite` carries a boolean EIR marker indicating that the

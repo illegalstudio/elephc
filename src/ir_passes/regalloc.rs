@@ -20,8 +20,10 @@
 //!   Edge copies materialize branch arguments into block-parameter homes, so
 //!   promoted loop values can remain in registers across back edges.
 //!   Unused parameters stay spilled because edge copies still write their homes.
-//!   Generators and handler functions fall back to all-spilled: implicit
+//!   Generators and handler functions use stack homes for nonconstants: implicit
 //!   exception edges are absent from liveness and interval numbering.
+//! - Scalar constants use reconstruction recipes unless their register-only
+//!   uses repay materialization, save/restore, and live-range costs.
 
 use std::collections::HashMap;
 
@@ -31,26 +33,29 @@ use crate::ir_passes::allocation::Allocation;
 use crate::ir_passes::cfg::has_exception_handlers;
 use crate::ir_passes::intervals::{build_intervals, LiveInterval};
 use crate::ir_passes::liveness::compute_liveness;
+use crate::ir_passes::rematerialize;
 
 /// Computes a register allocation for `func` on `target`.
 ///
 /// Runs liveness and interval analysis, then a linear scan that assigns
 /// callee-saved registers to eligible intervals and spills the longest-lived
 /// interval when a pool is exhausted. Generators and functions with implicit
-/// exception-handler edges conservatively fall back to all-spilled.
+/// exception-handler edges keep nonconstants on the stack and reconstruct constants.
 pub fn allocate_registers(func: &Function, target: Target) -> Allocation {
+    let constants = rematerialize::constants(func);
     if func.flags.is_generator || has_exception_handlers(func) {
-        return Allocation::all_spilled();
+        return Allocation::all_spilled().with_constants(constants);
     }
 
     let liveness = compute_liveness(func);
-    let intervals = build_intervals(func, &liveness);
+    let mut intervals = build_intervals(func, &liveness);
+    rematerialize::price_intervals(func, target, &constants, &mut intervals);
     let eligible: Vec<LiveInterval> = intervals
         .into_iter()
         .filter(|iv| is_eligible(func, iv))
         .collect();
 
-    scan(&eligible, target)
+    scan(&eligible, target).with_constants(constants)
 }
 
 /// Returns true when an interval's value can live in a register: a single-word
