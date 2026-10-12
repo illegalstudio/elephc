@@ -14,8 +14,11 @@ fn verify(target: &str) {
     let source = r#"<?php
 class O { public int $v = 1; public array $items = [1]; public array $nested = [[1]]; }
 class Root { public O $child; public function __construct() { $this->child = new O(); } }
-class C { public static O $o; public static ?O $nullable = null; }
-class Hook { public int $value { get { C::$o = new O(); return 7; } } }
+class C { public static O $o; public static ?O $nullable = null; public static int $n = 1; }
+class Hook {
+    public int $value { get { C::$o = new O(); return 7; } }
+    public int $bare { get { C::$n = 7; return 9; } }
+}
 class R { public static Root $root; public static ?Root $nullable = null; }
 function replace(): int { C::$o = new O(); return 9; }
 function write(): void { C::$o->v = replace(); }
@@ -47,6 +50,9 @@ function writeHookResult(Hook $box): int { return C::$o->items[computedKey()] = 
 function writeHookArrayCompound(Hook $box): void { C::$o->items[0] += $box->value; }
 function writeHookChildCompound(Hook $box): void { R::$root->child->items[0] += $box->value; }
 function writeHookNestedCompound(Hook $box): void { C::$o->nested[0][0] += $box->value; }
+function writeNestedFractionalHook(Hook $box): void { C::$o->nested[1.5][0] += $box->value; }
+function writeBareStaticHook(Hook $box): void { C::$n += $box->bare; }
+function writeBareStaticCall(): void { C::$n += replace(); }
 function writeStaticHookResult(Hook $box): int { return StaticBuckets::$items[0] = $box->value; }
 function writeNullChainArray(): void { R::$nullable->child->items[0] = (print 'rhs'); }
 function writeNullChainAppend(): void { R::$nullable->child->items[] = (print 'rhs'); }
@@ -80,7 +86,8 @@ C::$nullable->items[] = 3;
     let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
         std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
     for name in ["write", "writeNested", "writeChild", "writeNull", "writeStaticNested", "writeStaticAppend",
-        "writeStaticElement", "writeStaticCompound", "writeStaticNestedElement", "writeInterface", "writeCompoundNull"] {
+        "writeStaticElement", "writeStaticCompound", "writeStaticNestedElement", "writeInterface", "writeCompoundNull",
+        "writeBareStaticCall"] {
         let function = module.functions.iter().find(|function| function.name == name).unwrap();
         let rhs = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::Call).unwrap();
         let receiver = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::LoadStaticProperty).unwrap();
@@ -116,7 +123,8 @@ C::$nullable->items[] = 3;
         }
     }
     for name in ["writeHook", "writeHookIndexed", "writeHookDynamic", "writeHookResult",
-        "writeHookArrayCompound", "writeHookChildCompound", "writeHookNestedCompound", "writeStaticHookResult"] {
+        "writeHookArrayCompound", "writeHookChildCompound", "writeHookNestedCompound", "writeStaticHookResult",
+        "writeNestedFractionalHook", "writeBareStaticHook"] {
         let function = module.functions.iter().find(|function| function.name == name).unwrap();
         let calls: Vec<_> = function.instructions.iter().enumerate()
             .filter(|(_, inst)| inst.op == crate::ir::Op::MethodCall).collect();
@@ -150,12 +158,13 @@ C::$nullable->items[] = 3;
                 "{target}: {name} calls the key and RHS only once");
         }
     }
-    let fractional = module.functions.iter().find(|function|
-        function.name == "writeFractionalCompound").unwrap();
-    assert!(fractional.instructions.iter().any(|inst|
-        inst.immediate == Some(crate::ir::Immediate::RuntimeCall(
-            crate::ir::RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed))),
-        "{target}: fractional compound parents reuse the preceding read's key conversion");
+    for name in ["writeFractionalCompound", "writeNestedFractionalHook"] {
+        let fractional = module.functions.iter().find(|function| function.name == name).unwrap();
+        assert!(fractional.instructions.iter().any(|inst|
+            inst.immediate == Some(crate::ir::Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed))),
+            "{target}: {name} fractional parents reuse the preceding read's key conversion");
+    }
     for name in ["writeLocalAppend", "writeLocalIndexed", "writeDynamicLocal", "writeDynamicStatic"] {
         let function = module.functions.iter().find(|function| function.name == name).unwrap();
         let last_print = function.instructions.iter().rposition(|inst|

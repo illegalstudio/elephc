@@ -308,6 +308,12 @@ fn lower_non_local_assignment_write_with_diagnosed_key(
                     );
                     return;
                 }
+                ExprKind::ArrayAccess { .. } => {
+                    crate::ir_lower::stmt::lower_nested_array_assign_after_read(
+                        ctx, target, value, span,
+                    );
+                    return;
+                }
                 _ => {}
             }
         }
@@ -321,8 +327,7 @@ fn lower_non_local_assignment_write_with_diagnosed_key(
 
 /// Finds a compound array read bound to the value temp before its write half runs.
 ///
-/// The target is one dimension of a local, property, or static-property array, which are the
-/// write paths that can reuse the read's key conversion.
+/// Local, property and static-property array chains reuse every captured read dimension.
 fn compound_array_key_diagnosed_in_prelude(
     target: &Expr,
     value: &Expr,
@@ -332,8 +337,12 @@ fn compound_array_key_diagnosed_in_prelude(
     let ExprKind::ArrayAccess { array, .. } = &target.kind else {
         return false;
     };
+    let mut root = array.as_ref();
+    while let ExprKind::ArrayAccess { array, .. } = &root.kind {
+        root = array;
+    }
     if !matches!(
-        &array.kind,
+        &root.kind,
         ExprKind::Variable(_) | ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. }
     ) {
         return false;

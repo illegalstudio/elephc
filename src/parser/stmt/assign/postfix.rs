@@ -439,7 +439,10 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
     // exactly as `try_parse_postfix_assignment` does for local and property targets.
     let mut hoisted = EffectfulTargetLowerer::new(span);
     let (lhs_expr, rhs) = if matches!(op, AssignmentOperator::Compound(_)) {
-        let rhs = if compound_rhs_can_disturb_index(&lhs_expr, &rhs) {
+        let rhs = if matches!(lhs_expr.kind, ExprKind::StaticPropertyAccess { .. })
+            || compound_rhs_can_disturb_index(&lhs_expr, &rhs)
+        {
+            // Bare static reads also follow the RHS, including hooks and exceptions.
             hoisted.stabilize_unconditionally(rhs)
         } else {
             rhs

@@ -10,6 +10,67 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Bare static compound statements read the slot only after each RHS hook or call.
+#[test]
+fn test_static_receiver_fifth_review_bare_compound_rhs_order() {
+    verify(r#"<?php
+class C { public static int $n = 1; public static string $text = 'old'; }
+class Hook {
+    public int $value { get { echo 'H'; C::$n = 7; return 9; } }
+    public string $text { get { echo 'S'; C::$text = 'next'; return '!'; } }
+}
+function replace(): int { echo 'F'; C::$n = 7; return 9; }
+$hook = new Hook();
+C::$n += $hook->value; echo ':', C::$n, '|';
+C::$n = 1; C::$n += replace(); echo ':', C::$n, '|';
+C::$n = 1; $result = (C::$n += $hook->value); echo ':', C::$n, ':', $result, '|';
+C::$text .= $hook->text; echo ':', C::$text;
+"#, "H:16|F:16|H:16:16|S:next!");
+}
+
+/// A throwing RHS runs before an uninitialized static compound read and retires its owners.
+#[test]
+fn test_static_receiver_fifth_review_bare_compound_throw_order() {
+    verify(r#"<?php
+class C { public static int $n; }
+function fail(): int { echo 'T'; throw new Exception('rhs'); }
+try { C::$n += fail(); } catch (Throwable $error) { echo ':', get_class($error), ':', $error->getMessage(); }
+"#, "T:Exception:rhs");
+}
+
+/// Nested static-object compounds normalize a fractional parent dimension exactly once.
+#[test]
+fn test_static_receiver_fifth_review_nested_compound_fractional_key() {
+    verify(r#"<?php
+class O {
+    public array $nested = [[1, 2], [3, 4]];
+    public function __destruct() { echo 'D'; }
+}
+class C { public static ?O $o = null; }
+class Hook { public int $value { get { echo 'H'; C::$o = new O(); return 9; } } }
+C::$o = new O(); $hook = new Hook();
+set_error_handler(function($level, $message) { if ($level === E_DEPRECATED) { echo 'W'; } return true; });
+C::$o->nested[1.5][0] += $hook->value;
+restore_error_handler();
+echo ':', json_encode(C::$o->nested);
+C::$o = null;
+"#, "HDW:[[1,2],[12,4]]D");
+}
+
+/// Boxed local parent traversal also reuses the read's fractional key conversion.
+#[test]
+fn test_static_receiver_fifth_review_local_nested_fractional_key() {
+    verify(r#"<?php
+function update(array $items, int $value): void {
+    $result = ($items[1.5][0] += $value);
+    echo $result, '|', json_encode($items);
+}
+set_error_handler(function($level, $message) { if ($level === E_DEPRECATED) { echo 'W'; } return true; });
+update([[1, 2], [3, 4]], $argc);
+restore_error_handler();
+"#, "W4|[[1,2],[4,4]]");
+}
+
 /// Compound array reads follow a replayable RHS hook for direct, child and nested dimensions.
 #[test]
 fn test_static_receiver_fourth_review_compound_hook_arrays() {
