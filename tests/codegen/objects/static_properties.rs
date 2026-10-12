@@ -9,6 +9,70 @@
 
 use super::*;
 
+/// Postfix reads create null parents before invoking the undefined-leaf warning handler.
+#[test]
+fn test_static_prefix_latest_review_postfix_autovivification() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class T { public static array $items = [[null]]; }
+set_error_handler(function(int $level, string $message) { throw new Error($message); });
+try { $old = T::$items[0][0][1]++; }
+catch (Error $e) { echo $e->getMessage(), '|', json_encode(T::$items); }
+restore_error_handler();
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "Undefined array key 1|[[[]]]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A nested postfix result does not repeat the converted parent's key warning.
+#[test]
+fn test_static_prefix_latest_review_postfix_fractional_key() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H { public static array $items = [[1], [2]]; }
+set_error_handler(function($level, $message) {
+    if ($level === E_DEPRECATED) { echo 'W'; }
+    return true;
+});
+echo H::$items[1.5][0]++, '|', json_encode(H::$items);
+restore_error_handler();
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "W2|[[1],[3]]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Captured string, null, and integer postfix results remain independent of their updates.
+#[test]
+fn test_static_prefix_latest_review_postfix_old_values() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class P { public static array $items = [['az', null, 9]]; }
+set_error_handler(function($level, $message) { return true; });
+$s = P::$items[0][0]++; $n = P::$items[0][1]++; $d = P::$items[0][2]--;
+restore_error_handler();
+echo json_encode([$s, $n, $d]), '|', json_encode(P::$items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[\"az\",null,9]|[[\"ba\",1,8]]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// String offset incdec errors differ from integer-parent errors and leave storage unchanged.
+#[test]
+fn test_static_prefix_latest_review_string_offset_errors() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class T { public static array $items = ['ab', 10]; }
+try { ++T::$items[0][0]; }
+catch (Error $e) { echo $e->getMessage(), '|', json_encode(T::$items), '|'; }
+try { --T::$items[1][0]; }
+catch (Error $e) { echo $e->getMessage(), '|', json_encode(T::$items); }
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout,
+        "Cannot increment/decrement string offsets|[\"ab\",10]|Cannot use a scalar value as an array|[\"ab\",10]",
+        "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Literal null promotion remains writable by later null and numeric keys without breaking COW.
 #[test]
 fn test_static_prefix_fifth_review_repeated_literal_null() {

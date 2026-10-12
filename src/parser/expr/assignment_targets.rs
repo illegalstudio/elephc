@@ -116,15 +116,13 @@ pub(super) fn desugar_lvalue_incdec(
     let value = if prefix {
         // Nested static incdec already captures its new value. Re-reading the place
         // would diagnose converted keys twice and could observe a handler's replacement.
-        let captured = match &write.kind {
-            StmtKind::NestedArrayAssign { value, .. } => match &value.kind {
-                ExprKind::Assignment { target, .. } => Some(target.as_ref().clone()),
-                _ => None,
-            },
-            _ => None,
-        };
+        let captured = nested_incdec_result(&write, true);
         prelude.push(write);
         captured.unwrap_or(target)
+    } else if let Some(captured) = nested_incdec_result(&write, false) {
+        // The write-context lookup creates missing parents and diagnoses each key once.
+        prelude.push(write);
+        captured
     } else {
         // `$p++` evaluates to the OLD value, so it has to be captured before the write.
         let temp = crate::names::generated_local_name(&format!(
@@ -155,6 +153,19 @@ pub(super) fn desugar_lvalue_incdec(
         },
         span,
     ))
+}
+
+/// Selects a nested static update's existing old or new capture without another place read.
+fn nested_incdec_result(write: &Stmt, prefix: bool) -> Option<Expr> {
+    let value = match &write.kind {
+        StmtKind::NestedArrayAssign { value, .. } => value,
+        StmtKind::Synthetic(statements) => return nested_incdec_result(statements.last()?, prefix),
+        _ => return None,
+    };
+    let ExprKind::Assignment { target, prelude, .. } = &value.kind else { return None; };
+    if prefix { return Some(target.as_ref().clone()); }
+    let StmtKind::Assign { name, .. } = &prelude.first()?.kind else { return None; };
+    Some(Expr::new(ExprKind::Variable(name.clone()), value.span))
 }
 
 /// Returns true if the expression is a non-local assignment target (array-access,

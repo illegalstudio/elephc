@@ -141,11 +141,23 @@ fn lower_boxed_static_nested_update(
 ) {
     let ExprKind::ArrayAccess { array: read_array, index: read_key } = &read.kind else { unreachable!() };
     let ExprKind::ArrayAccess { array: write_array, index: write_key } = &write.kind else { unreachable!() };
-    let parent = lower_static_update_parent(ctx, read_array, write_array, span);
+    let incdec = matches!(update, ElementUpdate::IncDec { .. });
+    let parent = lower_static_update_parent(ctx, read_array, write_array, incdec, span);
     let (pinned, owner) = root_static_update_receiver(ctx, parent, span);
-    lower_static_update_key_and_guard(ctx, pinned, read_key, span);
+    lower_static_update_key_and_guard(ctx, pinned, read_key, incdec, span);
     let current = lower_array_access_from_lowered_receiver(ctx, pinned, write_key, read);
     let current_ty = ctx.builder.value_php_type(current.value);
+    if let ExprKind::Assignment { prelude, .. } = &source_value.kind {
+        if let Some(Stmt { kind: StmtKind::Assign { name, .. }, .. }) = prelude.first() {
+            // The specialized update bypasses the AST prelude. Keep its postfix result
+            // independent of both the mutable leaf cell and the incdec working local.
+            let borrowed = ctx.emit_value(Op::Borrow, vec![current.value], None, current_ty.clone(),
+                Op::Borrow.default_effects(), Some(span));
+            ctx.builder.set_value_ownership(borrowed.value, crate::ir::Ownership::Borrowed);
+            let captured = crate::ir_lower::ownership::copy_assignment_value(ctx, borrowed, Some(span));
+            ctx.store_call_argument_local(name, captured, current_ty.clone(), Some(span));
+        }
+    }
     let temp = ctx.declare_synthetic_php_local(current_ty.clone());
     let stored = crate::ir_lower::ownership::acquire_if_refcounted(ctx, current, Some(span));
     ctx.store_local(&temp, stored, current_ty, Some(span));
@@ -195,15 +207,16 @@ fn lower_static_update_parent(
     ctx: &mut LoweringContext<'_, '_>,
     read: &Expr,
     write: &Expr,
+    incdec: bool,
     span: Span,
 ) -> LoweredValue {
     let ExprKind::ArrayAccess { array: read_array, index: read_key } = &read.kind else {
         return lower_expr(ctx, read);
     };
     let ExprKind::ArrayAccess { array: write_array, index: write_key } = &write.kind else { unreachable!() };
-    let receiver = lower_static_update_parent(ctx, read_array, write_array, span);
+    let receiver = lower_static_update_parent(ctx, read_array, write_array, incdec, span);
     let (pinned, owner) = root_static_update_receiver(ctx, receiver, span);
-    lower_static_update_key_and_guard(ctx, pinned, read_key, span);
+    lower_static_update_key_and_guard(ctx, pinned, read_key, incdec, span);
     let probe = lower_array_access_from_lowered_receiver(ctx, pinned, write_key, read);
     if ctx.value_is_owning_temporary(probe) {
         crate::ir_lower::ownership::release_if_owned(ctx, probe, Some(span));
@@ -229,7 +242,7 @@ fn lower_static_update_parent(
 
 /// Runs each captured dimension before rejecting a scalar parent with a catchable Error.
 fn lower_static_update_key_and_guard(
-    ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, read_key: &Expr, span: Span,
+    ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, read_key: &Expr, incdec: bool, span: Span,
 ) {
     if !matches!(read_key.kind, ExprKind::IntLiteral(_) | ExprKind::StringLiteral(_)) {
         let key = lower_expr(ctx, read_key);
@@ -246,12 +259,26 @@ fn lower_static_update_key_and_guard(
     let valid = ctx.emit_value(Op::IBitOr, vec![array.value, object.value], None, PhpType::Bool,
         Op::IBitOr.default_effects(), Some(span));
     let present = ctx.builder.create_named_block("static.update.array", Vec::new());
-    let scalar = ctx.builder.create_named_block("static.update.scalar", Vec::new());
+    let invalid = ctx.builder.create_named_block("static.update.invalid", Vec::new());
     ctx.builder.terminate(Terminator::CondBr {
         cond: valid.value, then_target: present, then_args: Vec::new(),
-        else_target: scalar, else_args: Vec::new(),
+        else_target: invalid, else_args: Vec::new(),
     });
-    ctx.builder.position_at_end(scalar);
+    ctx.builder.position_at_end(invalid);
+    if incdec {
+        let string = ctx.emit_value(Op::TypePredicate, vec![parent.value],
+            Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::String)), PhpType::Bool,
+            Op::TypePredicate.default_effects(), Some(span));
+        let string_error = ctx.builder.create_named_block("static.update.string", Vec::new());
+        let scalar = ctx.builder.create_named_block("static.update.scalar", Vec::new());
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: string.value, then_target: string_error, then_args: Vec::new(),
+            else_target: scalar, else_args: Vec::new(),
+        });
+        ctx.builder.position_at_end(string_error);
+        lower_throw_access_error(ctx, "Cannot increment/decrement string offsets", span);
+        ctx.builder.position_at_end(scalar);
+    }
     lower_throw_access_error(ctx, "Cannot use a scalar value as an array", span);
     ctx.builder.position_at_end(present);
 }

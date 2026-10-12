@@ -9,6 +9,26 @@
 
 use super::*;
 
+/// Nested postfix results reuse the old-value capture inside their single update statement.
+#[test]
+fn test_parse_static_nested_postfix_reuses_update_capture() {
+    for expression in ["Counter::$items[0][1]++", "Counter::$items[key()][1]--"] {
+        let statements = parse_source(&format!("<?php echo {expression};"));
+        let StmtKind::Echo(Expr { kind: ExprKind::Assignment { value, prelude, .. }, .. })
+            = &statements[0].kind else { panic!("{expression}: expected captured assignment"); };
+        let StmtKind::NestedArrayAssign { value: update, .. } = &prelude.last().unwrap().kind
+            else { panic!("{expression}: expected one nested update"); };
+        let ExprKind::Assignment { prelude: captures, .. } = &update.kind
+            else { panic!("{expression}: expected PHP incdec capture"); };
+        let StmtKind::Assign { name, .. } = &captures[0].kind else { unreachable!() };
+        assert!(matches!(&value.kind, ExprKind::Variable(result) if result == name),
+            "{expression}: the postfix result must use the write-context old-value capture");
+        assert!(!prelude.iter().any(|stmt| matches!(&stmt.kind,
+            StmtKind::Assign { value: Expr { kind: ExprKind::ArrayAccess { .. }, .. }, .. })),
+            "{expression}: do not insert a separate plain-read traversal");
+    }
+}
+
 /// Direct static expression updates capture one read and reuse the PHP incdec local kernel.
 #[test]
 fn test_parse_static_property_array_incdec_expressions_read_once() {
