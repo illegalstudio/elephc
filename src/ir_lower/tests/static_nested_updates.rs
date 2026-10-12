@@ -89,13 +89,19 @@ echo json_encode(NestedUpdate::$items);
         assert!(function.instructions.iter().any(|inst| inst.op == Op::HashGetForWrite),
             "{target}: {name} obtains the stored string-key parent instead of index zero");
     }
-    for (name, write) in [("flatStringKey", Op::HashSet), ("flatMixedKey", Op::ArraySetMixedKey),
-        ("flatNullableKey", Op::ArraySetMixedKey)] {
+    for name in ["flatStringKey", "flatMixedKey", "flatNullableKey"] {
         let function = module.functions.iter().find(|function| function.name == name).unwrap();
         assert!(function.instructions.iter().any(|inst| inst.op == Op::LoadStaticPropertyRefCell),
             "{target}: {name} publishes key-dependent container replacements through the static slot");
-        assert!(function.instructions.iter().any(|inst| inst.op == write),
-            "{target}: {name} writes its actual dimension instead of coercing to index zero");
+        let write = function.instructions.iter().find(|inst| inst.op == Op::HashSet)
+            .unwrap_or_else(|| panic!("{target}: {name} must use the relocated hash root"));
+        assert_eq!(write.immediate, Some(Immediate::Bool(true)),
+            "{target}: {name} reuses its read's key diagnosis");
+        if name != "flatStringKey" {
+            let key = &function.values[write.operands[1].as_raw() as usize];
+            assert_ne!(key.php_type.codegen_repr(), PhpType::Int,
+                "{target}: {name} preserves mixed/null keys instead of coercing to index zero");
+        }
     }
     let float = module.functions.iter().find(|function| function.name == "assocFloatKey").unwrap();
     assert!(float.instructions.iter().any(|inst| {
