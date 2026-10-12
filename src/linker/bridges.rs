@@ -321,6 +321,19 @@ pub(super) fn bridge_lib_for_flag(flag: &str) -> Option<&'static str> {
         .map(|bridge| bridge.lib_name)
 }
 
+/// Applies normal source freshness rules to a bridge retained by the REPL executable cache.
+pub(super) fn cached_archive_is_current(name: &str, archive: &Path) -> bool {
+    let Some(bridge) = BRIDGES.iter().find(|bridge| bridge.lib_name == name) else {
+        return false;
+    };
+    let Some(filename) = archive.file_name().and_then(|name| name.to_str()) else { return false; };
+    if let Some(directory) = std::env::var_os(bridge.env_var) {
+        return Path::new(&directory).join(filename) == archive;
+    }
+    if bridge.find_named_archive(filename).as_deref() != Some(archive) { return false; }
+    bridge.find_workspace().is_none_or(|workspace| !bridge.sources_are_newer_than(&workspace, archive))
+}
+
 /// Returns all accepted `--with-<flag>` suffixes in stable table order.
 pub(super) fn crate_flag_names() -> Vec<&'static str> {
     BRIDGES.iter().map(|bridge| bridge.flag_name).collect()

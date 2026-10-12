@@ -46,6 +46,9 @@ serde = { version = "1", features = ["derive", "rc"] }
 bincode = "1"
 unicode-segmentation = "1"
 
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+rustyline = { version = "18", default-features = false, features = ["with-file-history"] }
+
 [dev-dependencies]
 elephc-mbstring = { path = "../elephc-mbstring" }
 elephc-bcmath = { path = "../elephc-bcmath" }

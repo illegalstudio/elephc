@@ -23,6 +23,7 @@ Task-oriented guides for building real programs with elephc.
 
 Everything about driving the compiler: the command-line flags and the full path from a `.php` or `.lfc` file to a native binary.
 
+- [Interactive REPL](compiling/repl.md): persistent eval sessions, multiline input, history, and cached native startup.
 - [Compiling Overview](compiling/overview.md) — basic invocation, output naming, defaults, and a map of this section
 - [The compilation pipeline](compiling/compilation-pipeline.md) — every phase from source text to binary, in order
 - [CLI reference](compiling/cli-reference.md) — the complete, authoritative list of every flag, value, default, and env override

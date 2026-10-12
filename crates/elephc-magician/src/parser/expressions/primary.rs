@@ -209,11 +209,11 @@ impl Parser {
         let name = self.resolve_qualified_name(name);
         if matches!(self.current(), TokenKind::LParen) {
             if self.consume_first_class_callable_marker() {
-                return Ok(Self::function_callable_value(name.to_ascii_lowercase(), None));
+                return Ok(Self::function_callable_value(name, None));
             }
             let args = self.parse_call_args()?;
             return Ok(EvalExpr::Call {
-                name: name.to_ascii_lowercase(),
+                name,
                 args,
             });
         }

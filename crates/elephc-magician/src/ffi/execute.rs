@@ -74,12 +74,9 @@ unsafe fn execute_eval_inner(
     } else {
         slice::from_raw_parts(code_ptr, code_len)
     };
-    let program = match parse_cache::parse_fragment_cached(code) {
-        Ok(program) => program,
-        Err(err) => return err.status().code(),
-    };
+    let program = parse_cache::parse_fragment_cached(code).map_err(|error| error.status());
     clear_result(out);
-    execute_parsed_eval(ctx, scope, program.as_ref(), out)
+    execute_parsed_eval(ctx, scope, program.as_deref().map_err(|status| *status), out)
 }
 
 /// Executes a parsed eval program in production builds using elephc runtime hooks.
@@ -90,7 +87,7 @@ unsafe fn execute_eval_inner(
 unsafe fn execute_parsed_eval(
     ctx: *mut ElephcEvalContext,
     scope: *mut ElephcEvalScope,
-    program: &eval_ir::EvalProgram,
+    program: Result<&eval_ir::EvalProgram, EvalStatus>,
     out: *mut ElephcEvalResult,
 ) -> i32 {
     let mut fallback_context;
@@ -108,55 +105,59 @@ unsafe fn execute_parsed_eval(
         &mut fallback_scope
     };
     context.sync_global_eval_classes();
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let submission = crate::repl::take_submission_request();
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
-    context.push_eval_backtrace_boundary();
-    let outcome = interpreter::execute_program_outcome_with_context(context, program, scope, &mut values);
-    context.pop_eval_backtrace_boundary();
+    let outcome = program.and_then(|program| {
+        context.push_eval_backtrace_boundary();
+        let outcome = interpreter::execute_program_outcome_with_context(context, program, scope, &mut values);
+        context.pop_eval_backtrace_boundary();
+        outcome
+    });
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let outcome = match submission {
+        Some(display) => interpreter::repl::finish_submission(outcome, display, context, &mut values),
+        None => outcome,
+    };
     match outcome {
-        Ok(outcome) => {
-            if let interpreter::EvalOutcome::Value(result) = &outcome {
-                match interpreter::value_contains_foreign_pcntl_callable(
-                    *result,
-                    context,
-                    &mut values,
-                ) {
-                    Ok(true) => {
-                        let _ = values.release(*result);
-                        return EvalStatus::EscapingPcntlCallable.code();
-                    }
-                    Ok(false) => {}
-                    Err(status) => {
-                        let _ = values.release(*result);
-                        return status.code();
-                    }
-                }
-            }
-            let escape_candidates = eval_escape_scope_cells(context, scope);
-            for candidate in escape_candidates {
-                match interpreter::value_contains_foreign_pcntl_callable(
-                    candidate,
-                    context,
-                    &mut values,
-                ) {
-                    Ok(true) => {
-                        if let interpreter::EvalOutcome::Value(result) = &outcome {
-                            let _ = values.release(*result);
-                        }
-                        return EvalStatus::EscapingPcntlCallable.code();
-                    }
-                    Ok(false) => {}
-                    Err(status) => {
-                        if let interpreter::EvalOutcome::Value(result) = &outcome {
-                            let _ = values.release(*result);
-                        }
-                        return status.code();
-                    }
-                }
-            }
-            write_outcome(outcome, out).code()
-        }
+        Ok(outcome) => match check_eval_escape(outcome, context, scope, &mut values) {
+            Ok(outcome) => write_outcome(outcome, out).code(),
+            Err(status) => status.code(),
+        },
         Err(status) => status.code(),
     }
+}
+
+/// Validates every outcome, including recovered submissions, before native scope writeback.
+/// Safety failures bypass REPL recovery because those cells cannot cross into native code.
+#[cfg(not(test))]
+fn check_eval_escape(
+    outcome: interpreter::EvalOutcome,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut ElephcRuntimeOps,
+) -> Result<interpreter::EvalOutcome, EvalStatus> {
+    let owned = match &outcome {
+        interpreter::EvalOutcome::Value(result) | interpreter::EvalOutcome::Throwable(result) => *result,
+    };
+    let checked = (|| {
+        if let interpreter::EvalOutcome::Value(result) = &outcome {
+            if interpreter::value_contains_foreign_pcntl_callable(*result, context, values)? {
+                return Err(EvalStatus::EscapingPcntlCallable);
+            }
+        }
+        for candidate in eval_escape_scope_cells(context, scope) {
+            if interpreter::value_contains_foreign_pcntl_callable(candidate, context, values)? {
+                return Err(EvalStatus::EscapingPcntlCallable);
+            }
+        }
+        Ok(())
+    })();
+    if let Err(status) = checked {
+        let _ = values.release(owned);
+        return Err(status);
+    }
+    Ok(outcome)
 }
 
 /// Collects every visible local and global cell that could cross the eval-to-AOT boundary.
@@ -187,8 +188,8 @@ fn eval_escape_scope_cells(
 unsafe fn execute_parsed_eval(
     _ctx: *mut ElephcEvalContext,
     _scope: *mut ElephcEvalScope,
-    _program: &eval_ir::EvalProgram,
+    program: Result<&eval_ir::EvalProgram, EvalStatus>,
     _out: *mut ElephcEvalResult,
 ) -> i32 {
-    EvalStatus::UnsupportedConstruct.code()
+    program.map_or_else(|status| status.code(), |_| EvalStatus::UnsupportedConstruct.code())
 }

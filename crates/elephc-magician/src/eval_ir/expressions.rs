@@ -18,6 +18,7 @@ pub enum EvalExpr {
         index: Box<EvalExpr>,
     },
     Call {
+        /// Resolved source spelling, normalized only when looking up the function.
         name: String,
         args: Vec<EvalCallArg>,
     },
@@ -33,7 +34,9 @@ pub enum EvalExpr {
         is_static: bool,
     },
     FunctionCallable {
+        /// Resolved source spelling, retained for undefined-function diagnostics.
         name: String,
+        /// Unqualified source spelling for PHP's global namespace fallback.
         fallback_name: Option<String>,
     },
     InvokableCallable {
@@ -109,6 +112,7 @@ pub enum EvalExpr {
     },
     Clone(Box<EvalExpr>),
     NamespacedCall {
+        /// Qualified source spelling, retained if namespace and global lookup both fail.
         name: String,
         fallback_name: String,
         args: Vec<EvalCallArg>,

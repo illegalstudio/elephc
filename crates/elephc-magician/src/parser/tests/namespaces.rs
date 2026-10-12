@@ -63,7 +63,7 @@ return dyn();"#,
                 ))))],
             },
             EvalStmt::Return(Some(EvalExpr::NamespacedCall {
-                name: "eval\\ns\\dyn".to_string(),
+                name: "Eval\\Ns\\dyn".to_string(),
                 fallback_name: "dyn".to_string(),
                 args: Vec::new(),
             })),
@@ -107,7 +107,7 @@ return Alias(LocalValue, new BoxAlias\Inner());"#,
     assert_eq!(
         program.statements(),
         &[EvalStmt::Return(Some(EvalExpr::Call {
-            name: "lib\\strlen".to_string(),
+            name: "Lib\\strlen".to_string(),
             args: vec![
                 EvalCallArg::positional(EvalExpr::ConstFetch("Lib\\VALUE".to_string())),
                 EvalCallArg::positional(EvalExpr::NewObject {
@@ -178,7 +178,7 @@ return Alias(LocalValue, OTHER, new BoxAlias\Inner(), new Thing());"#,
     assert_eq!(
         program.statements(),
         &[EvalStmt::Return(Some(EvalExpr::Call {
-            name: "lib\\imported_func".to_string(),
+            name: "Lib\\imported_func".to_string(),
             args: vec![
                 EvalCallArg::positional(EvalExpr::ConstFetch("Lib\\VALUE".to_string())),
                 EvalCallArg::positional(EvalExpr::ConstFetch("Lib\\OTHER".to_string())),
@@ -219,11 +219,11 @@ return outer_func();"#,
         program.statements(),
         &[
             EvalStmt::Return(Some(EvalExpr::Call {
-                name: "lib\\inner_func".to_string(),
+                name: "Lib\\inner_func".to_string(),
                 args: Vec::new(),
             })),
             EvalStmt::Return(Some(EvalExpr::Call {
-                name: "lib\\outer_func".to_string(),
+                name: "Lib\\outer_func".to_string(),
                 args: Vec::new(),
             })),
         ]
@@ -252,7 +252,7 @@ function dyn() { return alias(); }"#,
             parameter_is_variadic: Vec::new(),
             return_type: None,
             body: vec![EvalStmt::Return(Some(EvalExpr::Call {
-                name: "lib\\target".to_string(),
+                name: "Lib\\target".to_string(),
                 args: Vec::new(),
             }))],
         }]
