@@ -114,9 +114,17 @@ pub(super) fn desugar_lvalue_incdec(
     }
     let write = lower_postfix_incdec_assignment(target.clone(), increment, span).ok()?;
     let value = if prefix {
-        // `++$p` evaluates to the NEW value, which re-reading the target after the write gives.
+        // Nested static incdec already captures its new value. Re-reading the place
+        // would diagnose converted keys twice and could observe a handler's replacement.
+        let captured = match &write.kind {
+            StmtKind::NestedArrayAssign { value, .. } => match &value.kind {
+                ExprKind::Assignment { target, .. } => Some(target.as_ref().clone()),
+                _ => None,
+            },
+            _ => None,
+        };
         prelude.push(write);
-        target
+        captured.unwrap_or(target)
     } else {
         // `$p++` evaluates to the OLD value, so it has to be captured before the write.
         let temp = crate::names::generated_local_name(&format!(

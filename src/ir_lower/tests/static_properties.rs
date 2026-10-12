@@ -8,6 +8,59 @@
 //! - All five targets must skip uninitialized slots and detach inherited owners once.
 //! - Destructor boundaries must finish remaining slots before propagating exceptions.
 
+/// Verifies mixed static roots use storage-aware hash writes and captured prefix results.
+fn assert_mixed_static_update_storage(name: &str) {
+    let source = r#"<?php
+class ReviewMixedStorage {
+    public static array<mixed> $items = [[5], [7]];
+    public static array<string, mixed> $flat = ['k' => 5];
+    public static array $boxed = [[10]];
+}
+function bump(int $key): void { ++ReviewMixedStorage::$items[$key][0]; }
+++ReviewMixedStorage::$items[null][0];
+++ReviewMixedStorage::$items[null][0]; bump(0);
+++ReviewMixedStorage::$flat['k'];
+echo ++ReviewMixedStorage::$boxed[1.5][0];
+"#;
+    let target = crate::codegen::platform::Target::parse(name).unwrap();
+    let module = super::lower_source_at_for_target(source,
+        std::path::Path::new("main.php"), std::path::Path::new("."), target);
+    let ir = crate::ir::print_module(&module);
+    assert!(ir.contains("array_to_hash"), "{name}: {ir}");
+    assert!(!ir.contains("array_get_for_write"), "{name}: {ir}");
+    crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+}
+
+/// macOS emits storage-aware concrete mixed-static updates.
+#[test]
+fn mixed_static_update_storage_macos_aarch64() {
+    assert_mixed_static_update_storage("macos-aarch64");
+}
+
+/// iOS devices emit storage-aware concrete mixed-static updates.
+#[test]
+fn mixed_static_update_storage_ios_arm64() {
+    assert_mixed_static_update_storage("ios-arm64");
+}
+
+/// iOS simulators emit storage-aware concrete mixed-static updates.
+#[test]
+fn mixed_static_update_storage_ios_sim_arm64() {
+    assert_mixed_static_update_storage("ios-sim-arm64");
+}
+
+/// Linux ARM64 emits storage-aware concrete mixed-static updates.
+#[test]
+fn mixed_static_update_storage_linux_aarch64() {
+    assert_mixed_static_update_storage("linux-aarch64");
+}
+
+/// Linux x86_64 emits storage-aware concrete mixed-static updates.
+#[test]
+fn mixed_static_update_storage_linux_x86_64() {
+    assert_mixed_static_update_storage("linux-x86_64");
+}
+
 /// Nested updates capture keys once and reuse the read's normalization on every target.
 #[test]
 fn nested_static_update_keys_are_captured_on_all_targets() {

@@ -290,24 +290,18 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
         }
         return;
     }
+    let root = Expr::new(ExprKind::StaticPropertyAccess {
+        receiver: receiver.clone(), property: property.to_string(),
+    }, span);
+    if let Some(name) = bind_mixed_static_array_write_root(ctx, &root) {
+        array_write_core::lower_array_assign_with_diagnosed_key(
+            ctx, &name, index, value, span, key_already_diagnosed,
+        );
+        return;
+    }
     if let Some(property_ty) =
         static_property_type(ctx, receiver, property).filter(is_indexed_array_type)
     {
-        if matches!(property_ty.codegen_repr(), PhpType::Array(element)
-            if element.codegen_repr() == PhpType::Mixed)
-        {
-            // Reuse relocating local writes so string/Mixed keys can promote
-            // the container and publish its replacement through the static slot.
-            let name = ctx.declare_synthetic_php_local(property_ty);
-            let root = Expr::new(ExprKind::StaticPropertyAccess {
-                receiver: receiver.clone(), property: property.to_string(),
-            }, span);
-            crate::ir_lower::expr::lower_ref_assign_static_property(ctx, &name, &root, span);
-            array_write_core::lower_array_assign_with_diagnosed_key(
-                ctx, &name, index, value, span, key_already_diagnosed,
-            );
-            return;
-        }
         let array_ty = property_ty.clone();
         let property_value = load_static_property_as(ctx, receiver, property, property_ty, span);
         // PHP reads a plain-variable index at STORE time, after the right-hand side, so
@@ -363,6 +357,34 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
         effects_lookup::runtime_effects(),
         Some(span),
     );
+}
+
+/// Binds mixed-element static storage through a hash-aware relocating write alias.
+/// A previous statement or call may already have promoted an indexed declaration to a hash.
+pub(super) fn bind_mixed_static_array_write_root(
+    ctx: &mut LoweringContext<'_, '_>, root: &Expr,
+) -> Option<String> {
+    let ExprKind::StaticPropertyAccess { receiver, property } = &root.kind else { return None; };
+    let ty = static_property_type(ctx, receiver, property)?;
+    let indexed = match ty.codegen_repr() {
+        PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed => true,
+        PhpType::AssocArray { value, .. } if value.codegen_repr() == PhpType::Mixed => false,
+        _ => return None,
+    };
+    let name = ctx.declare_synthetic_php_local(ty.clone());
+    crate::ir_lower::expr::lower_ref_assign_static_property(ctx, &name, root, root.span);
+    if indexed {
+        let source = ctx.load_local(&name, Some(root.span));
+        let assoc_ty = promoted_assoc_array_type(ty, PhpType::Mixed);
+        ctx.prepare_mutated_local_owner_for_backend_retire(
+            &name, source, assoc_ty.clone(), Some(root.span),
+        );
+        // ArrayToHash checks the actual heap kind, reusing already-promoted storage.
+        let hash = ctx.emit_value(Op::ArrayToHash, vec![source.value], None, assoc_ty.clone(),
+            Op::ArrayToHash.default_effects(), Some(root.span));
+        ctx.store_prepared_mutated_local(&name, hash, assoc_ty, Some(root.span));
+    }
+    Some(name)
 }
 
 /// Publishes a detached boxed PHP array before a static-property element mutation.

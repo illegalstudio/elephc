@@ -9,6 +9,109 @@
 
 use super::*;
 
+/// Literal null promotion remains writable by later null and numeric keys without breaking COW.
+#[test]
+fn test_static_prefix_fifth_review_repeated_literal_null() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H { public static array<mixed> $items = [[5], [7]]; }
+$alias = H::$items;
+set_error_handler(function($level, $message) { return true; });
+++H::$items[null][0]; ++H::$items[null][0];
+++H::$items[0][0]; ++H::$items['1'][0];
+restore_error_handler();
+echo json_encode(H::$items), '|', json_encode($alias);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "{\"0\":[6],\"1\":[8],\"\":[2]}|[[5],[7]]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A static promoted in another statement keeps its hash protocol for typed integer calls.
+#[test]
+fn test_static_prefix_fifth_review_integer_after_promotion() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H { public static array<mixed> $items = [[5], [7]]; }
+function bump(int $key): void { ++H::$items[$key][0]; }
+$alias = H::$items;
+set_error_handler(function($level, $message) { return true; });
+++H::$items['k'][0]; bump(0); bump(1);
+restore_error_handler();
+echo json_encode(H::$items), '|', json_encode($alias);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "{\"0\":[6],\"1\":[8],\"k\":[1]}|[[5],[7]]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Flat declared indexed and associative mixed statics accept literal string and null keys.
+#[test]
+fn test_static_prefix_fifth_review_flat_literal_and_assoc_keys() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H {
+    public static array<mixed> $flat = [5, 7];
+    public static array<string, mixed> $assoc = ['k' => 5];
+}
+function bump(string $key): void { ++H::$assoc[$key]; }
+$flat = H::$flat; $assoc = H::$assoc;
+set_error_handler(function($level, $message) { return true; });
+++H::$flat['k']; ++H::$flat[null]; ++H::$flat[0];
+++H::$assoc['k']; bump('k'); ++H::$assoc[null];
+restore_error_handler();
+echo json_encode(H::$flat), '|', json_encode(H::$assoc), '|', json_encode($flat), '|', json_encode($assoc);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "{\"0\":6,\"1\":7,\"k\":1,\"\":1}|{\"k\":7,\"\":1}|[5,7]|{\"k\":5}", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Nested prefix expression results reuse each fractional dimension's single diagnosis.
+#[test]
+fn test_static_prefix_fifth_review_nested_expression_float_warning() {
+    let out = compile_and_run(r#"<?php
+class H { public static array $items = [[10]]; }
+set_error_handler(function($level, $message) { if ($level === E_DEPRECATED) { echo 'W'; } return true; });
+echo ++H::$items[1.5][0], '|', json_encode(H::$items);
+restore_error_handler();
+"#);
+    assert_eq!(out, "W1|[[10],[1]]");
+}
+
+/// Prefix results keep the pending value when a warning handler replaces the stored parent.
+#[test]
+fn test_static_prefix_fifth_review_nested_expression_handler_result() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class T { public static array $items = [[null]]; }
+set_error_handler(function($level, $message) {
+    echo json_encode(T::$items), ':', $message, '|';
+    T::$items[0][0]['extra'] = 9;
+    return true;
+});
+echo ++T::$items[0][0][1], '|';
+restore_error_handler();
+echo json_encode(T::$items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[[[]]]:Undefined array key 1|1|[[{\"extra\":9}]]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Numeric-only writes preserve list shape and subsequent concrete array consumers.
+#[test]
+fn test_static_prefix_fifth_review_numeric_list_consumers() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class H { public static array<mixed> $items = [1, 2]; }
+++H::$items[0];
+echo json_encode(H::$items), '|', json_encode(array_values(H::$items)), '|';
+echo json_encode(array_keys(H::$items)), '|', array_is_list(H::$items) ? 'L' : 'N', '|';
+$sum = 0;
+foreach (H::$items as $value) { $sum += $value; }
+echo $sum;
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[2,2]|[2,2]|[0,1]|L|4", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Nullable integer parents preserve null's empty key and the original COW sibling.
 #[test]
 fn test_static_prefix_fourth_review_nested_nullable_int() {

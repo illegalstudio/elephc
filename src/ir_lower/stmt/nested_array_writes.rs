@@ -59,13 +59,7 @@ fn bind_concrete_static_update_root(
 ) -> Option<(Expr, Expr)> {
     let mut root = read;
     while let ExprKind::ArrayAccess { array, .. } = &root.kind { root = array; }
-    let ExprKind::StaticPropertyAccess { receiver, property } = &root.kind else { return None; };
-    let ty = static_property_type(ctx, receiver, property)?;
-    if !static_root_has_mixed_elements(&ty) {
-        return None;
-    }
-    let name = ctx.declare_synthetic_php_local(ty);
-    crate::ir_lower::expr::lower_ref_assign_static_property(ctx, &name, root, root.span);
+    let name = bind_mixed_static_array_write_root(ctx, root)?;
     Some((replace_static_update_root(read, &name), replace_static_update_root(write, &name)))
 }
 
@@ -178,6 +172,14 @@ fn lower_boxed_static_nested_update(
     ctx.emit_void(Op::RuntimeCall, vec![pinned.value, key.value, value.value],
         Some(Immediate::Bool(true)), effects_lookup::runtime_effects(), Some(span));
     release_persisted_string_operand(ctx, key, span);
+    if let ExprKind::Assignment { target, .. } = &source_value.kind {
+        if let ExprKind::Variable(name) = &target.kind {
+            // Expression prefix forms yield this captured new value, not another traversal.
+            let captured = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
+            let ty = ctx.builder.value_php_type(captured.value);
+            ctx.store_call_argument_local(name, captured, ty, Some(span));
+        }
+    }
     if ctx.value_is_owning_temporary(value) {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     }
