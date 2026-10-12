@@ -101,18 +101,25 @@ fn parse_fragment_accepts_qualified_call_expression_source() {
         }))]
     );
 }
-/// Verifies first-class function callable syntax lowers to runtime callable resolution metadata.
+/// First-class function callables retain source spelling and namespace fallback metadata.
 #[test]
 fn parse_fragment_accepts_first_class_function_callable_source() {
-    let program = parse_fragment(br#"namespace App; return strlen(...);"#)
-        .expect("fragment should parse");
-    assert_eq!(
-        program.statements(),
-        &[EvalStmt::Return(Some(EvalExpr::FunctionCallable {
-                name: "app\\strlen".to_string(),
-                fallback_name: Some("strlen".to_string()),
+    for (source, name, fallback) in [
+        ("return StrLenX(...);", "StrLenX", None),
+        ("namespace App; return StrLenX(...);", "App\\StrLenX", Some("StrLenX")),
+        ("namespace App; return \\StrLenX(...);", "StrLenX", None),
+        ("namespace App; return Other\\StrLenX(...);", "App\\Other\\StrLenX", None),
+        ("namespace App; use function Lib\\MissingCall as Nope; return nOpE(...);", "Lib\\MissingCall", None),
+    ] {
+        let program = parse_fragment(source.as_bytes()).expect("fragment should parse");
+        assert_eq!(
+            program.statements(),
+            &[EvalStmt::Return(Some(EvalExpr::FunctionCallable {
+                name: name.to_string(),
+                fallback_name: fallback.map(str::to_string),
             }))]
-    );
+        );
+    }
 }
 /// Verifies variable callable expressions lower to dynamic calls with source-order args.
 #[test]
@@ -207,7 +214,7 @@ fn parse_fragment_accepts_isset_source() {
     assert_eq!(
         program.statements(),
         &[EvalStmt::Return(Some(EvalExpr::Call {
-            name: "isset".to_string(),
+            name: "ISSET".to_string(),
             args: vec![
                 EvalCallArg::positional(EvalExpr::LoadVar("x".to_string())),
                 EvalCallArg::positional(EvalExpr::ArrayGet {
@@ -225,7 +232,7 @@ fn parse_fragment_accepts_empty_source() {
     assert_eq!(
         program.statements(),
         &[EvalStmt::Return(Some(EvalExpr::Call {
-            name: "empty".to_string(),
+            name: "EMPTY".to_string(),
             args: vec![EvalCallArg::positional(EvalExpr::ArrayGet {
                 array: Box::new(EvalExpr::LoadVar("items".to_string())),
                 index: Box::new(EvalExpr::Const(EvalConst::String("k".to_string()))),

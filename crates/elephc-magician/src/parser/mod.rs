@@ -14,6 +14,8 @@
 
 mod cursor;
 mod expressions;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) mod repl;
 mod state;
 mod statements;
 

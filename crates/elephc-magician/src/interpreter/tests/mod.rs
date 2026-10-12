@@ -77,4 +77,6 @@ mod operand_shared_runtime;
 mod native_ref_cleanup;
 mod static_members;
 mod support;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod repl;
 mod trait_adaptations;

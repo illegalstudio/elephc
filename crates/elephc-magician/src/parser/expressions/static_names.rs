@@ -305,26 +305,23 @@ impl Parser {
         self.resolve_class_name(name)
     }
 
-    /// Builds a call expression, adding namespace fallback for unqualified names.
+    /// Preserves call spelling for diagnostics and adds namespace fallback for unqualified names.
     pub(in crate::parser) fn call_expr(&self, name: String, args: Vec<EvalCallArg>) -> EvalExpr {
         if let Some(imported) = self.imports.resolve_function(&name) {
             return EvalExpr::Call {
-                name: imported.to_ascii_lowercase(),
+                name: imported.to_string(),
                 args,
             };
         }
-        let fallback_name = name.to_ascii_lowercase();
         if self.namespace.is_empty() {
             EvalExpr::Call {
-                name: fallback_name,
+                name,
                 args,
             }
         } else {
             EvalExpr::NamespacedCall {
-                name: self
-                    .qualify_name_in_current_namespace(&name)
-                    .to_ascii_lowercase(),
-                fallback_name,
+                name: self.qualify_name_in_current_namespace(&name),
+                fallback_name: name,
                 args,
             }
         }

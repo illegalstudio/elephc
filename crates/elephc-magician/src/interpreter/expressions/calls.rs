@@ -11,6 +11,7 @@
 //!   normalized callable invocation.
 
 use super::*;
+use std::borrow::Cow;
 
 mod first_class;
 mod first_class_support;
@@ -39,6 +40,29 @@ pub(in crate::interpreter) fn eval_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_call_with_error_name(name, name, args, context, scope, values)
+}
+
+/// Normalizes mixed-case lookup keys without allocating for ordinary lowercase calls.
+fn call_lookup_name(name: &str) -> Cow<'_, str> {
+    if name.bytes().any(|byte| byte.is_ascii_uppercase()) {
+        Cow::Owned(name.to_ascii_lowercase())
+    } else {
+        Cow::Borrowed(name)
+    }
+}
+
+/// Keeps source spelling for errors while resolving a case-insensitive call target.
+fn eval_call_with_error_name(
+    name: &str,
+    error_name: &str,
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let lookup_name = call_lookup_name(name);
+    let name = lookup_name.as_ref();
     if eval_expr_language_construct_name(name) {
         let args = positional_call_arg_exprs(args)?;
         return eval_positional_expr_call(name, &args, context, scope, values);
@@ -162,7 +186,16 @@ pub(in crate::interpreter) fn eval_call(
     if let Some(function) = context.native_function(name) {
         return eval_native_function(function, args, context, scope, values);
     }
-    Err(EvalStatus::UnsupportedConstruct)
+    // A known builtin may require an unavailable prelude or capability. Preserve
+    // that diagnostic; an undefined function is a catchable PHP Error.
+    if elephc_builtin_contract::lookup(name).is_some() {
+        return Err(EvalStatus::UnsupportedConstruct);
+    }
+    eval_throw_error(
+        &format!("Call to undefined function {}()", error_name.trim_start_matches('\\')),
+        context,
+        values,
+    )
 }
 
 /// Evaluates an unqualified namespaced function call with PHP's global fallback.
@@ -174,13 +207,14 @@ pub(in crate::interpreter) fn eval_namespaced_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if let Some(function) = context.function(name).cloned() {
+    let lookup_name = call_lookup_name(name);
+    if let Some(function) = context.function(&lookup_name).cloned() {
         return eval_dynamic_function(&function, args, context, scope, values);
     }
-    if let Some(function) = context.native_function(name) {
+    if let Some(function) = context.native_function(&lookup_name) {
         return eval_native_function(function, args, context, scope, values);
     }
-    eval_call(fallback_name, args, context, scope, values)
+    eval_call_with_error_name(fallback_name, name, args, context, scope, values)
 }
 
 /// Evaluates a variable or expression callable and dispatches it with source-order arguments.

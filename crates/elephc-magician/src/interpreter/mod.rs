@@ -28,6 +28,8 @@ mod include_exec;
 mod operands;
 mod libc_shims;
 mod reflection;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) mod repl;
 mod return_type_compat;
 mod return_values;
 mod runtime_ops;

@@ -466,6 +466,20 @@ pub(crate) fn ensure_cli_bridge_staticlibs(actual_link_libs: &[&str]) {
     ensure_bridge_staticlibs(actual_link_libs, &bridge_staticlib_dir());
 }
 
+/// Pins CLI subprocesses to the same trusted archives used by archived test fixtures.
+/// Explicit linker overrides avoid comparing build-job artifacts with newer checkout
+/// timestamps. Ordinary local runs retain the compiler's source freshness checks.
+pub(crate) fn configure_prebuilt_cli_bridges(command: &mut Command) {
+    if !prebuilt_bridge_staticlibs_are_trusted() {
+        return;
+    }
+    let directory = bridge_staticlib_dir().canonicalize()
+        .expect("resolve prebuilt CLI bridge directory");
+    for bridge in TEST_BRIDGE_STATICLIBS {
+        command.env(format!("{}_LIB_DIR", bridge.lib_name.to_ascii_uppercase()), &directory);
+    }
+}
+
 /// Builds (or reuses, if fresh) the curl-aware magician archive a fixture that links BOTH
 /// `elephc_magician` (it calls `eval()`) and `elephc_curl` (it uses the curl surface, inside
 /// or outside eval) needs. Mirrors the production fix in `src/linker/bridges.rs`'s

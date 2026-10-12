@@ -122,7 +122,7 @@ impl Parser {
     }
 
     /// Parses a complete eval fragment until EOF.
-    pub(super) fn parse_program(mut self) -> Result<EvalProgram, EvalParseError> {
+    pub(super) fn parse_program(&mut self) -> Result<EvalProgram, EvalParseError> {
         let mut statements = Vec::new();
         while !matches!(self.current(), TokenKind::Eof) {
             statements.extend(self.parse_stmt()?);

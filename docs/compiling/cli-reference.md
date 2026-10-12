@@ -19,14 +19,37 @@ elephc [OPTIONS] <source-file>
 elephc --version
 elephc native <COMMAND> [OPTIONS]
 elephc monitor <PROGRAM> [OPTIONS]
+elephc repl [OPTIONS]
 ```
 
-Except for `--help` and `--version`, exactly one positional argument is required:
+For compilation, except for `--help` and `--version`, exactly one positional argument is required:
 the path to tagged `.php` or tagless `.lfc` source. The binary is written next
 to it, named after the source without its extension.
-Only an exact first argument of `native` or `monitor` selects a subcommand
-family. A source file literally named `native` or `monitor` must therefore be
-passed as `./native` or by another explicit path.
+Only an exact first argument of `native`, `monitor`, or `repl` selects a subcommand
+family. Source files with those names must use an explicit path such as `./repl`.
+
+## Interactive REPL
+
+`elephc repl` starts a persistent dynamic-eval session with parser-driven multiline
+input, expression results, line editing, and history. The native host is compiled
+on first use and reused from the existing per-user cache root. See
+[Interactive REPL](repl.md) for session semantics, errors, and cache invalidation.
+
+| Option | Meaning |
+|---|---|
+| `--php-version VERSION` | Select the PHP profile; otherwise use project detection. Also accepts `--php-version=VERSION`. |
+| `--strict-php` | Hide elephc extension builtins in evaluated code. |
+| `--with-<capability>` | Enable an optional eval capability at host build time. Web and monitoring modes are unavailable. |
+| `--ini KEY=VALUE` | Override project INI settings; repeatable, last value wins. Also accepts `--ini=KEY=VALUE`. Nonempty `opcache.preload` is unsupported. |
+| `--heap-size=BYTES` | Set session heap size, using the compiler's normal limits/default. |
+| `--heap-debug`, `--gc-stats` | Enable normal runtime heap diagnostics or GC statistics. |
+| `--no-history` | Disable history loading and persistence. |
+| `--quiet`, `-q` | Hide the banner and host-build notice. |
+| `--help`, `-h` | Show REPL usage without building a host. |
+
+The session runs on the current supported desktop host, so `--target` and artifact
+output modes are not accepted. Piped input uses the same session semantics without
+prompts or history.
 
 ## Native dependency commands
 

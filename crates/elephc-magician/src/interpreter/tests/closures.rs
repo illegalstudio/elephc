@@ -72,7 +72,7 @@ echo $x;"#,
 
 /// Verifies by-reference eval closure captures write back before a failing body escapes.
 #[test]
-fn execute_program_closure_by_ref_capture_writes_back_before_fatal() {
+fn execute_program_closure_by_ref_capture_writes_back_before_throw() {
     let program = parse_fragment(
         br#"$x = 1;
 $fn = function() use (&$x) { $x = 9; missing_eval_closure_function(); };
@@ -82,11 +82,14 @@ $fn();"#,
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
-    let err = execute_program(&program, &mut scope, &mut values).expect_err("closure should fail");
+    let mut context = ElephcEvalContext::new();
+    let err = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect_err("closure should throw");
     let x = scope.visible_cell("x").expect("scope should contain x");
 
-    assert_eq!(err, EvalStatus::UnsupportedConstruct);
+    assert_eq!(err, EvalStatus::UncaughtThrowable);
     assert_eq!(values.get(x), FakeValue::Int(9));
+    values.release(context.take_pending_throw().expect("undefined function Error")).unwrap();
 }
 
 /// Verifies eval closure by-reference parameters mutate the caller variable.

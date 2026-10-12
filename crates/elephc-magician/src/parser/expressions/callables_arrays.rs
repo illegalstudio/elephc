@@ -64,19 +64,17 @@ impl Parser {
         }
     }
 
-    /// Builds an eval function-callable expression with namespace fallback metadata.
+    /// Retains source spelling while resolving first-class function names and fallback metadata.
     pub(super) fn function_callable_expr(&self, name: String) -> EvalExpr {
         if let Some(imported) = self.imports.resolve_function(&name) {
-            return Self::function_callable_value(imported.to_ascii_lowercase(), None);
+            return Self::function_callable_value(imported.to_string(), None);
         }
-        let fallback_name = name.to_ascii_lowercase();
         if self.namespace.is_empty() {
-            Self::function_callable_value(fallback_name, None)
+            Self::function_callable_value(name, None)
         } else {
             Self::function_callable_value(
-                self.qualify_name_in_current_namespace(&name)
-                    .to_ascii_lowercase(),
-                Some(fallback_name),
+                self.qualify_name_in_current_namespace(&name),
+                Some(name),
             )
         }
     }
