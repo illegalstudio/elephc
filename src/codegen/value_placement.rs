@@ -1,20 +1,20 @@
 //! Purpose:
-//! Maps EIR SSA values to stable stack slots for the Phase 04 backend.
-//! This deliberately favors simple correctness over register efficiency.
+//! Maps EIR SSA values needing backing storage to stable stack slots.
 //!
 //! Called from:
 //! - `crate::codegen` function and instruction lowering helpers.
 //!
 //! Key details:
-//! - Each non-void SSA value gets a slot below the frame pointer.
-//! - Phase 06 replaces this with linear-scan register allocation.
+//! - Scalar constants with recipes or registers need no backing slots.
+//! - Other non-void values retain slots, including runtime ownership markers.
 
 use std::collections::HashMap;
 
 use crate::ir::{Function, Immediate, IrType, Op, Ownership, ValueDef, ValueId};
 use crate::types::PhpType;
+use crate::ir_passes::Allocation;
 
-/// Stack-slot table for the Phase 04 spill-everything backend.
+/// Backing stack slots and dynamic return-ownership markers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValuePlacement {
     pub slot_of: HashMap<ValueId, usize>,
@@ -61,15 +61,15 @@ fn publishes_runtime_ownership_status(func: &Function, value: ValueId) -> bool {
     })
 }
 
-/// Allocates a frame slot for every non-void SSA value in a function.
-pub fn allocate(func: &Function) -> ValuePlacement {
+/// Allocates backing slots, omitting constants handled by the allocation recipe table.
+pub fn allocate(func: &Function, allocation: &Allocation) -> ValuePlacement {
     let mut slot_of = HashMap::new();
     let mut runtime_return_ownership_slot_of = HashMap::new();
     let mut offset = 0usize;
     for (index, value) in func.values.iter().enumerate() {
         let value_id = ValueId::from_raw(index as u32);
         let bytes = bytes_for(value.ir_type);
-        if bytes == 0 {
+        if bytes == 0 || allocation.is_constant(value_id) {
             continue;
         }
         offset += bytes;
@@ -113,6 +113,7 @@ mod tests {
     //! Key details:
     //! - These tests verify the stack-slot contract before instruction lowering uses it.
 
+    use crate::ir_passes::Allocation;
     use crate::ir::{
         Builder, DataId, Function, Immediate, IrHeapKind, IrType, LocalSlotId, Op, Ownership,
     };
@@ -130,7 +131,7 @@ mod tests {
         builder.position_at_end(entry);
         let value = builder.emit_const_i64(7);
 
-        let placement = allocate(&function);
+        let placement = allocate(&function, &Allocation::all_spilled());
 
         assert_eq!(placement.slot(value), Some(8));
         assert_eq!(placement.total_slot_bytes, 16);
@@ -147,7 +148,7 @@ mod tests {
         builder.position_at_end(entry);
         let value = builder.emit_const_str(data_id);
 
-        let placement = allocate(&function);
+        let placement = allocate(&function, &Allocation::all_spilled());
 
         assert_eq!(placement.slot(value), Some(16));
         assert_eq!(placement.total_slot_bytes, 16);
@@ -193,7 +194,7 @@ mod tests {
             )
             .expect("iter_start produces a value");
 
-        let placement = allocate(&function);
+        let placement = allocate(&function, &Allocation::all_spilled());
 
         assert_eq!(placement.slot(array), Some(8));
         assert_eq!(placement.slot(iterator), Some(16));
@@ -223,7 +224,7 @@ mod tests {
             )
             .expect("call produces a value");
 
-        let placement = allocate(&function);
+        let placement = allocate(&function, &Allocation::all_spilled());
 
         assert_eq!(placement.slot(result), Some(8));
         assert_eq!(placement.runtime_return_ownership_slot(result), Some(16));
@@ -259,7 +260,7 @@ mod tests {
             )
             .expect("cast produces a value");
 
-        let placement = allocate(&function);
+        let placement = allocate(&function, &Allocation::all_spilled());
 
         assert_eq!(placement.runtime_return_ownership_slot(result), Some(32));
     }

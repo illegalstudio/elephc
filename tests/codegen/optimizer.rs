@@ -76,3 +76,4 @@ mod warning_globals;
 
 #[path = "optimizer/loop_optimization.rs"]
 mod loop_optimization;
+mod rematerialization;

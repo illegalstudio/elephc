@@ -7,7 +7,7 @@
 //!   `crate::codegen::lower_term`.
 //!
 //! Key details:
-//! - Phase 04 stores every SSA value in a stack slot and reloads result registers at use sites.
+//! - SSA values load from allocated registers, scalar recipes, or backing stack slots.
 //! - The context delegates target-specific movement to `crate::codegen::abi`.
 //! - Local labels carry a module-unique trailing id from `SharedCodegenState::next_label_id()`.
 //!   The readable part is `crate::names::label_fragment()`, which is intentionally lossy, so the
@@ -708,7 +708,14 @@ impl<'a> FunctionContext<'a> {
     /// into the result register instead of loaded from a stack slot.
     pub(super) fn load_value_to_result(&mut self, value: ValueId) -> Result<PhpType> {
         let ty = self.value_php_type(value)?;
-        if let Some(reg) = self.allocation.register_of(value) {
+        if let Some(constant) = self.allocation.rematerialized(value) {
+            let dst = if ty.codegen_repr() == PhpType::Float {
+                abi::float_result_reg(self.emitter)
+            } else {
+                abi::int_result_reg(self.emitter)
+            };
+            super::constant_materialization::emit_constant(self.emitter, self.data, constant, dst);
+        } else if let Some(reg) = self.allocation.register_of(value) {
             let dst = if ty.codegen_repr() == PhpType::Float {
                 abi::float_result_reg(self.emitter)
             } else {
@@ -728,7 +735,9 @@ impl<'a> FunctionContext<'a> {
     /// register (a no-op when the source already is the requested register).
     pub(super) fn load_value_to_reg(&mut self, value: ValueId, reg: &str) -> Result<PhpType> {
         let ty = self.value_php_type(value)?;
-        if let Some(home) = self.allocation.register_of(value) {
+        if let Some(constant) = self.allocation.rematerialized(value) {
+            super::constant_materialization::emit_constant(self.emitter, self.data, constant, reg);
+        } else if let Some(home) = self.allocation.register_of(value) {
             abi::emit_reg_move(self.emitter, reg, home);
         } else {
             let offset = self.value_offset(value)?;

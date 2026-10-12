@@ -78,8 +78,8 @@ pub(super) struct FrameLayout {
 
 /// Computes the register allocation and fixed stack slots for a function.
 ///
-/// Every SSA value keeps a spill slot (register-allocated values simply leave
-/// theirs unused), and each callee-saved register the allocator uses gets a
+/// Scalar constants use recipes or registers without spill slots. Other SSA
+/// values keep backing slots, and each callee-saved register gets a
 /// dedicated save slot so the prologue/epilogue can preserve it. When
 /// `regalloc_linear` is false the allocation is all-spilled, reproducing the
 /// original stack-only behavior.
@@ -96,7 +96,7 @@ pub(super) fn layout_for_function(
         Allocation::all_spilled()
     };
 
-    let value_placement = value_placement::allocate(function);
+    let value_placement = value_placement::allocate(function, &allocation);
     let local_analysis = LocalSlotAnalysis::new(function);
     let mut local_offsets = HashMap::new();
     let mut offset = value_placement.total_slot_bytes;
