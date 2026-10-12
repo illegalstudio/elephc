@@ -10,6 +10,56 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Statement-position local compounds reuse their fractional parent key diagnosis.
+#[test]
+fn test_static_receiver_latest_review_local_statement_float_key() {
+    verify(r#"<?php
+function update(array $items, int $value): void {
+    set_error_handler(function($level, $message) {
+        if ($level === E_DEPRECATED) { echo 'W'; } return true;
+    });
+    $items[1.5][0] += $value;
+    restore_error_handler();
+    echo '|', json_encode($items);
+}
+update([[1, 2], [3, 4]], $argc);
+"#, "W|[[1,2],[4,4]]");
+}
+
+/// Statement-position property compounds emit one float-key warning and retain the owner.
+#[test]
+fn test_static_receiver_latest_review_property_statement_float_key() {
+    verify(r#"<?php
+class O { public array $nested = [[1, 2], [3, 4]]; }
+$obj = new O();
+set_error_handler(function($level, $message) {
+    if ($level === E_DEPRECATED) { echo 'W'; } return true;
+});
+$obj->nested[1.5][0] += 1;
+restore_error_handler();
+echo '|', json_encode($obj->nested);
+"#, "W|[[1,2],[4,4]]");
+}
+
+/// Plain nested assignments still diagnose each fractional key before writing it.
+#[test]
+fn test_static_receiver_latest_review_plain_float_key_controls() {
+    verify(r#"<?php
+class O { public array $nested = [[1, 2], [3, 4]]; }
+$obj = new O();
+function update(array $items): void {
+    $items[1.5][0] = 9; echo '|', json_encode($items), '|';
+}
+set_error_handler(function($level, $message) {
+    if ($level === E_DEPRECATED) { echo 'W'; } return true;
+});
+update([[1, 2], [3, 4]]);
+$obj->nested[1.5][0] = 9;
+restore_error_handler();
+echo '|', json_encode($obj->nested);
+"#, "W|[[1,2],[9,4]]|W|[[1,2],[9,4]]");
+}
+
 /// Bare static compound statements read the slot only after each RHS hook or call.
 #[test]
 fn test_static_receiver_fifth_review_bare_compound_rhs_order() {

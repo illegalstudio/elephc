@@ -26,9 +26,9 @@ pub(super) fn lower_nested_array_assign(
     value: &Expr,
     span: Span,
 ) {
+    let compound = matches!(desugared_element_update(value, span, |read| read == target),
+        Some(ElementUpdate::Compound));
     if nested_target_has_static_root(target) {
-        let compound = matches!(desugared_element_update(value, span, |read| read == target),
-            Some(ElementUpdate::Compound));
         let mut captured = Vec::new();
         let target = capture_static_write_keys(ctx, target, &mut captured);
         let value = if compound {
@@ -47,7 +47,7 @@ pub(super) fn lower_nested_array_assign(
         }
         return;
     }
-    lower_nested_array_assign_inner(ctx, target, value, span, false);
+    lower_nested_array_assign_inner(ctx, target, value, span, compound);
 }
 
 /// Captures computed dimensions before the RHS without retaining the static array itself.
