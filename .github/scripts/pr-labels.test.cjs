@@ -36,6 +36,13 @@ test('docs-only changes do not acquire source-code areas', () => {
   assert.deepEqual(result.labels, ['area:docs']);
 });
 
+test('unified benchmark paths retain tooling and Magician classification', () => {
+  assert.deepEqual(selectAreas(['benchmark/run.py']).labels, ['area:tooling-ci']);
+  const result = selectAreas(['benchmark/cases/magician/arithmetic_loop/eval.php']);
+  assert.ok(result.labels.includes('area:magician'));
+  assert.ok(result.labels.includes('area:tooling-ci'));
+});
+
 test('distinctive domains are retained while areas are capped', () => {
   const result = classifyPullRequest({
     title: 'feat(eval): add dynamic execution',

@@ -11,7 +11,7 @@ elephc compiles PHP to native code for five supported targets without PHP, the Z
 
 - [Installation](getting-started/installation.md) — install and manage elephc versions with elvm, or use Homebrew, a source build, a release download, or an unsupported nightly
 - [Your First Program](getting-started/your-first-program.md) — write, compile, and run your first PHP binary
-- [Benchmark Suite](https://github.com/illegalstudio/elephc/blob/main/benchmarks/README.md) — compare elephc against PHP and equivalent C fixtures
+- [Benchmark Suite](https://github.com/illegalstudio/elephc/blob/main/benchmark/README.md): compare elephc against PHP and equivalent C fixtures
 
 ## How-To
 

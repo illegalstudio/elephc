@@ -1,0 +1,8 @@
+{
+  "schema_version": 2,
+  "suite": "hot-path",
+  "branch": "main",
+  "sampling": "latest-per-UTC-day-and-platform",
+  "points": 0,
+  "series": []
+}
