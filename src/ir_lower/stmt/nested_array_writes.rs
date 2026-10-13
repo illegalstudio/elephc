@@ -204,7 +204,7 @@ fn lower_boxed_static_nested_update(
     ctx.unset_local(&temp, null, Some(span));
 }
 
-/// Diagnoses each intermediate read, then creates and retains its writable stored cell.
+/// Reads an object offset once while retaining array diagnostics and autovivification.
 fn lower_static_update_parent(
     ctx: &mut LoweringContext<'_, '_>,
     read: &Expr,
@@ -220,14 +220,71 @@ fn lower_static_update_parent(
     lower_static_update_key_and_guard(ctx, pinned, read_key,
         "Cannot use string offset as an array", span);
     let probe = lower_array_access_from_lowered_receiver(ctx, pinned, write_key, read);
+    let object = ctx.emit_value(Op::TypePredicate, vec![pinned.value],
+        Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Object)), PhpType::Bool,
+        Op::TypePredicate.default_effects(), Some(span));
+    let selected = ctx.declare_owned_hidden_temp(PhpType::Mixed);
+    let slot = ctx.local_slots[&selected];
+    ctx.clear_owned_hidden_temp(&selected, Some(span));
+    let initialized = ctx.initialized_slots_snapshot();
+    let object_block = ctx.builder.create_named_block("static.update.object.parent", Vec::new());
+    let array_block = ctx.builder.create_named_block("static.update.array.parent", Vec::new());
+    let merge = ctx.builder.create_named_block("static.update.parent.merge", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: object.value, then_target: object_block, then_args: Vec::new(),
+        else_target: array_block, else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(object_block);
+    let parent = retain_static_update_parent(ctx, probe, span);
+    let ty = ctx.builder.value_php_type(parent.value);
+    ctx.store_call_argument_local(&selected, parent, ty, Some(span));
+    branch_to(ctx, merge);
+    ctx.builder.position_at_end(array_block);
+    ctx.restore_initialized_slots(initialized);
     if ctx.value_is_owning_temporary(probe) {
         crate::ir_lower::ownership::release_if_owned(ctx, probe, Some(span));
     }
+    let parent = lower_static_update_array_parent(ctx, pinned, read_array, write_key, read, span);
+    let parent = retain_static_update_parent(ctx, parent, span);
+    let ty = ctx.builder.value_php_type(parent.value);
+    ctx.store_call_argument_local(&selected, parent, ty, Some(span));
+    branch_to(ctx, merge);
+    ctx.builder.position_at_end(merge);
+    // Replace the original parent's topmost record before publishing the child:
+    // operand scopes are LIFO, even though the EIR pop names its protected slot.
+    if let Some(owner) = owner {
+        ctx.emit_void(Op::PopCallOperandOwner, Vec::new(), Some(Immediate::LocalSlot(owner)),
+            Op::PopCallOperandOwner.default_effects(), Some(span));
+    }
+    ctx.emit_void(Op::PushCallOperandOwner, Vec::new(), Some(Immediate::LocalSlot(slot)),
+        Op::PushCallOperandOwner.default_effects(), Some(span));
+    if let Some(owner) = owner {
+        // The child is now unwind-visible if releasing the original parent throws.
+        ctx.emit_void(Op::ReleaseLocalSlot, Vec::new(), Some(Immediate::LocalSlot(owner)),
+            Op::ReleaseLocalSlot.default_effects(), Some(span));
+    }
+    let result = ctx.load_local(&selected, Some(span));
+    ctx.clear_owned_hidden_temp(&selected, Some(span));
+    ctx.emit_void(Op::PopCallOperandOwner, Vec::new(), Some(Immediate::LocalSlot(slot)),
+        Op::PopCallOperandOwner.default_effects(), Some(span));
+    result
+}
+
+/// Keeps a selected child alive without cloning or detaching its writable identity.
+fn retain_static_update_parent(
+    ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, span: Span,
+) -> LoweredValue {
+    if ctx.value_is_owning_temporary(parent) { parent }
+    else { crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, parent, Some(span)) }
+}
+
+/// Creates an array's writable child after its first read has diagnosed the dimension.
+fn lower_static_update_array_parent(
+    ctx: &mut LoweringContext<'_, '_>, pinned: LoweredValue, read_array: &Expr,
+    write_key: &Expr, read: &Expr, span: Span,
+) -> LoweredValue {
     if let ExprKind::Variable(name) = &read_array.kind {
         if let Some(parent) = lower_local_parent_fetch_for_write_inner(ctx, name, write_key, read, true) {
-            if let Some(owner) = owner {
-                crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span);
-            }
             return parent;
         }
     }
@@ -236,9 +293,6 @@ fn lower_static_update_parent(
         Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed)),
         PhpType::Mixed, effects_lookup::runtime_effects(), Some(span));
     release_persisted_string_operand(ctx, key, span);
-    if let Some(owner) = owner {
-        crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span);
-    }
     parent
 }
 

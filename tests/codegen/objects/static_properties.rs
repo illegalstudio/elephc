@@ -9,6 +9,153 @@
 
 use super::*;
 
+/// Verifies a nested static update reads its intermediate ArrayAccess offset exactly once.
+fn verify_static_arrayaccess_update(operation: &str, expected: &str) {
+    let out = compile_and_run_with_heap_debug(&format!(r#"<?php
+class Box implements ArrayAccess {{
+    public ArrayObject $child; public int $reads = 0;
+    public function __construct() {{ $this->child = new ArrayObject([1]); }}
+    public function offsetExists(mixed $key): bool {{ return true; }}
+    public function offsetGet(mixed $key): mixed {{ echo 'G'; $this->reads++; return $this->child; }}
+    public function offsetSet(mixed $key, mixed $value): void {{}}
+    public function offsetUnset(mixed $key): void {{}}
+}}
+class C {{ public static array $items = []; }}
+function parentKey(): int {{ echo 'P'; return 0; }}
+function childKey(): string {{ echo 'M'; return 'child'; }}
+function leafKey(): int {{ echo 'L'; return 0; }}
+C::$items = [new Box()];
+$result = ({operation});
+echo ':', $result, ':', C::$items[0]->reads, ':', C::$items[0]->child[0];
+C::$items = [];
+"#));
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, expected, "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A prefix update through an object-returning offset getter preserves one read and its writeback.
+#[test]
+fn test_static_prefix_eighth_review_arrayaccess_literal() {
+    verify_static_arrayaccess_update("++C::$items[0]['child'][0]", "G:2:1:2");
+}
+
+/// All computed dimensions precede the single intermediate offset read in PHP source order.
+#[test]
+fn test_static_prefix_eighth_review_arrayaccess_computed() {
+    verify_static_arrayaccess_update("++C::$items[parentKey()][childKey()][leafKey()]", "PMLG:2:1:2");
+}
+
+/// Postfix captures the old value without repeating an intermediate object read.
+#[test]
+fn test_static_prefix_eighth_review_arrayaccess_postfix() {
+    verify_static_arrayaccess_update("C::$items[parentKey()][childKey()][leafKey()]++", "PMLG:1:1:2");
+}
+
+/// A getter choosing a different child object on each call must update the first selection.
+#[test]
+fn test_static_prefix_eighth_review_arrayaccess_switching() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ParentBox implements ArrayAccess {
+    public int $reads = 0; public ArrayObject $first; public ArrayObject $second;
+    public function __construct() { $this->first = new ArrayObject([10]); $this->second = new ArrayObject([20]); }
+    public function offsetExists(mixed $key): bool { return true; }
+    public function offsetGet(mixed $key): mixed {
+        echo 'G'; $this->reads++;
+        if ($this->reads === 1) { return $this->first; } return $this->second;
+    }
+    public function offsetSet(mixed $key, mixed $value): void {}
+    public function offsetUnset(mixed $key): void {}
+}
+class C { public static array $items = []; }
+C::$items = [new ParentBox()];
+$result = ++C::$items[0]['child'][0];
+echo ':', $result, ':', C::$items[0]->reads, ':', C::$items[0]->first[0], ':', C::$items[0]->second[0];
+C::$items = [];
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "G:11:1:11:20", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A fresh getter-produced child stays alive until its update and is then released exactly once.
+#[test]
+fn test_static_prefix_eighth_review_arrayaccess_fresh_child() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Child extends ArrayObject { public function __destruct() { echo 'D'; } }
+class ParentBox implements ArrayAccess {
+    public int $reads = 0;
+    public function offsetExists(mixed $key): bool { return true; }
+    public function offsetGet(mixed $key): mixed { echo 'G'; $this->reads++; return new Child([1]); }
+    public function offsetSet(mixed $key, mixed $value): void {}
+    public function offsetUnset(mixed $key): void {}
+}
+class C { public static array $items = []; }
+C::$items = [new ParentBox()];
+$result = ++C::$items[0]['child'][0];
+echo ':', $result, ':', C::$items[0]->reads;
+C::$items = [];
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "GD:2:1", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A throwing getter does not leak the retained static receiver or continue the update.
+#[test]
+fn test_static_prefix_eighth_review_arrayaccess_throwing() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ParentBox implements ArrayAccess {
+    public function offsetExists(mixed $key): bool { return true; }
+    public function offsetGet(mixed $key): mixed { echo 'G'; throw new Error('stop'); }
+    public function offsetSet(mixed $key, mixed $value): void { echo 'S'; }
+    public function offsetUnset(mixed $key): void {}
+}
+class C { public static array $items = []; }
+C::$items = [new ParentBox()];
+try { ++C::$items[0]['child'][0]; } catch (Error $e) { echo ':', $e->getMessage(); }
+C::$items = [];
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "G:stop", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A replaced parent throwing from its destructor still retires its first selected child.
+#[test]
+fn test_static_prefix_eighth_review_arrayaccess_parent_destructor() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Child extends ArrayObject { public function __destruct() { echo 'D'; } }
+class ParentBox implements ArrayAccess {
+    public function offsetExists(mixed $key): bool { return true; }
+    public function offsetGet(mixed $key): mixed { echo 'G'; C::$items = []; return new Child([1]); }
+    public function offsetSet(mixed $key, mixed $value): void {}
+    public function offsetUnset(mixed $key): void {}
+    public function __destruct() { echo 'B'; throw new Error('stop'); }
+}
+class C { public static array $items = []; }
+C::$items = [new ParentBox()];
+try { $result = ++C::$items[0]['child'][0]; } catch (Error $e) { echo ':', $e->getMessage(); }
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "GBD:stop", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Intermediate object read counts, child identity and ownership do not depend on IR passes.
+#[test]
+fn test_static_prefix_eighth_review_arrayaccess_without_ir_opt() {
+    crate::support::without_ir_opt(|| {
+        test_static_prefix_eighth_review_arrayaccess_literal();
+        test_static_prefix_eighth_review_arrayaccess_computed();
+        test_static_prefix_eighth_review_arrayaccess_postfix();
+        test_static_prefix_eighth_review_arrayaccess_switching();
+        test_static_prefix_eighth_review_arrayaccess_fresh_child();
+        test_static_prefix_eighth_review_arrayaccess_throwing();
+        test_static_prefix_eighth_review_arrayaccess_parent_destructor();
+    });
+}
+
 /// Checks one rejected string-parent update without mutating or retaining its static storage.
 fn verify_static_string_parent_error(operation: &str, effects: &str, message: &str) {
     let out = compile_and_run_with_heap_debug(&format!(r#"<?php

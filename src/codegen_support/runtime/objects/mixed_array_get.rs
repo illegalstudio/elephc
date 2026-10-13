@@ -13,6 +13,7 @@
 //!   (`NULL_SENTINEL`, materialized by a missed read forwarded through a ternary merge)
 //!   is treated as an absent container and also returns `Mixed(null)` (issue #585).
 //! - Every successful return is an owned `Mixed*`; borrowed array/hash slots are retained first.
+//! - A PHP offset getter's boxed key is an unwind-visible owner until the call returns.
 //! - Objects resolve in two steps: the runtime's OWN containers by class id, then any PHP class
 //!   declaring `ArrayAccess`, through the dense `_class_offsetget_ptrs` table. Without the second
 //!   step a synthetic `ArrayObject` read as `$m["a"]` answered null while `$m->offsetGet("a")` on
@@ -316,13 +317,17 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_array_get_php_box_key");
     emitter.instruction("bl __rt_mixed_from_value");                            // allocate the boxed ArrayAccess offset
     emitter.instruction("str x0, [sp, #8]");                                    // stash the box; key_lo has served its purpose
-    emitter.instruction("mov x1, x0");                                          // pass boxed offset as argument 1
-    emitter.instruction("ldr x0, [sp, #0]");                                    // pass unboxed receiver as argument 0
+    // -- retain the boxed key across normal and exceptional getter exits --
+    emitter.instruction("add x11, sp, #8");                                     // address the owning key slot before reserving its cleanup record
+    abi::emit_push_call_operand_owner(emitter, "x11", false);
+    emitter.instruction("ldr x1, [sp, #56]");                                   // pass boxed offset above the 48-byte cleanup record
+    emitter.instruction("ldr x0, [sp, #48]");                                   // pass the receiver above the same cleanup record
     emitter.instruction("ldr x11, [x0]");                                       // reload class id, clobbered across the boxing call
     abi::emit_symbol_address(emitter, "x12", "_class_offsetget_ptrs");
     emitter.instruction("ldr x12, [x12, x11, lsl #3]");                         // re-resolve offsetGet for the same class
     emitter.instruction("blr x12");                                             // read through PHP's ArrayAccess::offsetGet
-    emitter.instruction("str x0, [sp, #0]");                                    // stash the owned result; the receiver is done
+    emitter.instruction("str x0, [sp, #48]");                                   // stash the owned result in the original receiver slot
+    abi::emit_pop_call_operand_owner(emitter);
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload the boxed offset
     emitter.instruction("bl __rt_decref_mixed");                                // a PHP method BORROWS its argument, so this frame frees the box
     emitter.instruction("ldr x0, [sp, #0]");                                    // recover the owned result
@@ -616,13 +621,17 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_array_get_php_box_key");
     emitter.instruction("call __rt_mixed_from_value");                          // allocate the boxed ArrayAccess offset
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // stash the box; key_lo has served its purpose
-    emitter.instruction("mov rsi, rax");                                        // pass boxed offset as argument 1
+    // -- retain the boxed key across normal and exceptional getter exits --
+    emitter.instruction("lea r11, [rbp - 16]");                                 // address the owning key slot before reserving its cleanup record
+    abi::emit_push_call_operand_owner(emitter, "r11", false);
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the boxed offset after publishing its cleanup record
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass unboxed receiver as argument 0
     emitter.instruction("mov r11, QWORD PTR [rdi]");                            // reload class id, clobbered across the boxing call
     emitter.instruction("lea r12, [rip + _class_offsetget_ptrs]");              // dense ArrayAccess::offsetGet table
     emitter.instruction("mov r12, QWORD PTR [r12 + r11 * 8]");                  // re-resolve offsetGet for the same class
     emitter.instruction("call r12");                                            // read through PHP's ArrayAccess::offsetGet
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // stash the owned result; the receiver is done
+    abi::emit_pop_call_operand_owner(emitter);
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the boxed offset
     emitter.instruction("call __rt_decref_mixed");                              // a PHP method BORROWS its argument, so this frame frees the box
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // recover the owned result
@@ -650,4 +659,27 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return Mixed* in rax
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Each native ABI roots the PHP getter's key before dispatch and detaches before release.
+    #[test]
+    fn mixed_array_get_key_owner_on_all_targets() {
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(target).unwrap());
+            emit_mixed_array_get(&mut emitter);
+            let asm = emitter.output();
+            let getter = asm.split("__rt_mixed_array_get_php_box_key:").nth(1).unwrap();
+            let publish = getter.find("publish temporary call operand owner").unwrap();
+            let call = getter.find(if target == "linux-x86_64" { "call r12" } else { "blr x12" }).unwrap();
+            let detach = getter.find("detach temporary call operand owner").unwrap();
+            let release = getter.find("__rt_decref_mixed").unwrap();
+            assert!(publish < call && call < detach && detach < release, "{target}: {getter}");
+            assert!(getter[..call].contains("__rt_cleanup_call_operand_owner"), "{target}");
+        }
+    }
 }

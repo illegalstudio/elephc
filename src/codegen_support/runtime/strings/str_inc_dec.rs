@@ -540,6 +540,7 @@ pub fn emit_mixed_inc_dec(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save the borrowed operand cell for the numeric path
     emitter.instruction("str x1, [sp, #8]");                                    // save the +1/-1 delta for both result paths
     emitter.instruction("bl __rt_mixed_unbox");                                 // read the operand's runtime tag and payload words
+    // -- preserve null decrement before string and numeric dispatch --
     emitter.instruction("cmp x0, #8");                                          // recognize PHP null before numeric decrement coercion
     emitter.instruction("b.ne __rt_mid_dispatch");                              // non-null values keep their ordinary runtime dispatch
     emitter.instruction("ldr x9, [sp, #8]");                                    // inspect the saved delta without disturbing the unboxed payload
@@ -591,6 +592,7 @@ fn emit_mixed_inc_dec_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the borrowed operand cell for the numeric path
     emitter.instruction("mov QWORD PTR [rbp - 16], rdi");                       // save the +1/-1 delta for both result paths
     emitter.instruction("call __rt_mixed_unbox");                               // read the operand's runtime tag and payload words
+    // -- preserve null decrement before string and numeric dispatch --
     emitter.instruction("cmp rax, 8");                                          // recognize PHP null before numeric decrement coercion
     emitter.instruction("jne __rt_mid_dispatch_x86");                           // non-null values keep their ordinary runtime dispatch
     emitter.instruction("cmp QWORD PTR [rbp - 16], 0");                         // inspect the saved delta without disturbing the unboxed payload

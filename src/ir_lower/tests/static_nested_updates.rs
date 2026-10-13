@@ -20,6 +20,20 @@ class NestedUpdate { public static array $items = [[null]]; }
 class ConcreteUpdate { public static $items = [1, [5]]; }
 class DeclaredMixedUpdate { public static array<mixed> $items = [1, [5]]; }
 class DeclaredAssocUpdate { public static array<string, mixed> $items = ["k" => [5]]; }
+class ObjectParent implements ArrayAccess {
+    public ArrayObject $child;
+    public function __construct() { $this->child = new ArrayObject([1]); }
+    public function offsetExists(mixed $key): bool { return true; }
+    public function offsetGet(mixed $key): mixed { return $this->child; }
+    public function offsetSet(mixed $key, mixed $value): void {}
+    public function offsetUnset(mixed $key): void {}
+}
+class ObjectUpdate { public static array $items = []; }
+function objectLiteralUpdate(): mixed { return ++ObjectUpdate::$items[0]['child'][0]; }
+function objectComputedUpdate(int $parent, string $child, int $leaf): mixed {
+    return ++ObjectUpdate::$items[$parent][$child][$leaf];
+}
+function objectPostfixUpdate(): mixed { return ObjectUpdate::$items[0]['child'][0]++; }
 function variableStringKey(string $key): void { ++DeclaredAssocUpdate::$items[$key][0]; }
 function promotedStringKey(string $key): void { ++DeclaredMixedUpdate::$items[$key][0]; }
 function promotedMixedKey(mixed $key): void { ++DeclaredMixedUpdate::$items[$key][0]; }
@@ -121,6 +135,26 @@ echo json_encode(NestedUpdate::$items);
     assert!(float.instructions.iter().any(|inst| {
         inst.immediate == Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed))
     }), "{target}: associative float parents reuse their first key diagnosis");
+    for name in ["objectLiteralUpdate", "objectComputedUpdate", "objectPostfixUpdate"] {
+        let function = module.functions.iter().find(|function| function.name == name).unwrap();
+        let object = function.blocks.iter().filter(|block| {
+            block.name.starts_with("static.update.object.parent")
+        }).collect::<Vec<_>>();
+        assert!(!object.is_empty(), "{target}: {name} retains the first object-offset read");
+        for block in object {
+            assert!(!block.instructions.iter().any(|id| {
+                function.instructions[id.as_raw() as usize].immediate == Some(Immediate::RuntimeCall(
+                    RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed))
+            }), "{target}: {name} must not call offsetGet again in the object arm");
+        }
+        assert!(function.blocks.iter().any(|block| {
+            block.name.starts_with("static.update.array.parent")
+                && block.instructions.iter().any(|id| {
+                    function.instructions[id.as_raw() as usize].immediate == Some(Immediate::RuntimeCall(
+                        RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed))
+                })
+        }), "{target}: {name} preserves the already-diagnosed array autovivification arm");
+    }
     crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
 }
 
