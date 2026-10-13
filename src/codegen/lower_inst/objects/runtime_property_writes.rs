@@ -335,6 +335,9 @@ pub(super) fn lower_mixed_named_prop_set(
                 abi::emit_release_temporary_stack(ctx.emitter, 16);
                 super::super::exceptions::emit_error(ctx, message);
             }
+            MixedPropertyWriteAction::RefuseUnlessTagMatches { slot, message } => {
+                emit_refined_untyped_tag_guarded_store(ctx, value, slot, message, 0, 16, &done_label)?;
+            }
             MixedPropertyWriteAction::Slot(slot) => {
                 let base_reg = abi::symbol_scratch_reg(ctx.emitter);
                 abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 0);
@@ -401,6 +404,14 @@ enum MixedPropertyWriteAction {
     /// Raise a catchable `Error` and store nothing, either for PHP visibility or because this
     /// backend cannot safely change a refined untyped slot's physical representation at runtime.
     Refuse(String),
+    /// Store into a refined untyped slot when the runtime value's tag matches its refined
+    /// representation, and otherwise raise the refusal `Error` and store nothing.
+    ///
+    /// PHP's untyped property accepts any value, but elephc's refined slot (for example `int`
+    /// from a `3` default) cannot hold a mismatched one without changing its physical
+    /// representation. A matching tag is safe to store; a mismatch keeps the refusal instead of
+    /// silently coercing, which would diverge from PHP's store-as-is rule.
+    RefuseUnlessTagMatches { slot: PropertySlot, message: String },
     /// php resolves the name to a DYNAMIC property here, so the arm stores into this class's
     /// per-instance hash instead of into any slot.
     ///
@@ -456,8 +467,7 @@ fn emit_runtime_name_stacked_write_arm(
             PropertyRuntimeAction::Slot(slot) => {
                 let value_ty = ctx.value_php_type(value)?;
                 if let Some(message) = refined_untyped_mixed_write_refusal(slot, &value_ty) {
-                    abi::emit_release_temporary_stack(ctx.emitter, 32);
-                    super::super::exceptions::emit_error(ctx, &message);
+                    emit_refined_untyped_tag_guarded_store(ctx, value, slot, &message, 16, 32, done_label)?;
                     return Ok(());
                 }
                 ensure_property_value_supported(ctx, slot, value, &value_ty, inst)?;
@@ -619,7 +629,7 @@ fn mixed_property_write_candidate(
                 return Ok(None);
             }
             if let Some(message) = refined_untyped_mixed_write_refusal(&slot, value_ty) {
-                MixedPropertyWriteAction::Refuse(message)
+                MixedPropertyWriteAction::RefuseUnlessTagMatches { slot, message }
             } else {
                 ensure_property_value_supported(ctx, &slot, value, value_ty, inst)?;
                 MixedPropertyWriteAction::Slot(slot)
@@ -681,6 +691,158 @@ fn refined_untyped_mixed_write_refusal(
         "Unsupported dynamic property write: runtime Mixed value cannot be stored safely in the refined untyped property {}::${}",
         slot.class_name, slot.property
     ))
+}
+
+/// The runtime value tags a refined untyped slot can store as-is.
+///
+/// Only the shapes `load_property_store_value_to_result` copies OUT of the box are listed
+/// (scalars, string, object, iterable). An array/hash or callable refined slot is left to the
+/// unconditional refusal, because that store path would publish the box pointer instead of the
+/// payload. A packed field or a reference cell has its own store path, so it is refused too.
+fn refined_untyped_store_tags(slot: &PropertySlot) -> &'static [i64] {
+    if slot.is_packed || slot.is_reference {
+        return &[];
+    }
+    match slot.php_type.codegen_repr() {
+        PhpType::Int => &[0],
+        PhpType::Str => &[1],
+        PhpType::Float => &[2],
+        PhpType::Bool => &[3],
+        PhpType::Object(_) => &[6],
+        PhpType::TaggedScalar => &[0, 8],
+        PhpType::Iterable => &[4, 5, 6],
+        _ => &[],
+    }
+}
+
+/// Branches to `store_label` when the runtime value's boxed tag matches the refined slot.
+fn emit_refined_untyped_tag_guard(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    slot: &PropertySlot,
+    store_label: &str,
+) -> Result<()> {
+    let tags = refined_untyped_store_tags(slot);
+    if tags.is_empty() {
+        return Ok(()); // no tag is safe: fall straight through to the refusal
+    }
+    ctx.load_value_to_result(value)?;
+    let box_reg = abi::int_result_reg(ctx.emitter);
+    let tag_reg = abi::secondary_scratch_reg(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("ldr {}, [{}, #0]", tag_reg, box_reg)); // boxed value runtime tag
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{}]", tag_reg, box_reg)); // boxed value runtime tag
+        }
+    }
+    // An object slot's reads use the refined class's property layout, so tag 6 alone is not
+    // enough: the payload must be an instance of that class (or a subclass). Any other class
+    // would be read back through the wrong offsets (issue #1319 review).
+    if let PhpType::Object(class_name) = slot.php_type.codegen_repr() {
+        return emit_refined_untyped_object_class_guard(ctx, box_reg, tag_reg, &class_name, store_label);
+    }
+    for tag in tags {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cmp {}, #{}", tag_reg, tag)); // compare the runtime tag with a storable shape
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("cmp {}, {}", tag_reg, tag));  // compare the runtime tag with a storable shape
+            }
+        }
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.emitter.instruction(&format!("b.eq {}", store_label)), // take the store arm when the tag matches
+            Arch::X86_64 => ctx.emitter.instruction(&format!("je {}", store_label)), // take the store arm when the tag matches
+        }
+    }
+    Ok(())
+}
+
+/// Branches to `store_label` when the boxed value is an instance of the refined class.
+///
+/// The runtime class id is walked up `_class_parent_ids`, so a subclass is accepted while an
+/// unrelated class falls through to the caller's refusal. `__rt_exception_matches` is the
+/// shared object-to-class matcher (the same walk `instanceof` and `catch` use); its class-target
+/// arm is exactly `is_a(object, class_id)`. A refined class with no emitted metadata leaves the
+/// refusal in place rather than guessing.
+fn emit_refined_untyped_object_class_guard(
+    ctx: &mut FunctionContext<'_>,
+    box_reg: &str,
+    tag_reg: &str,
+    class_name: &str,
+    store_label: &str,
+) -> Result<()> {
+    let Some(class_id) = ctx
+        .module
+        .class_infos
+        .get(class_name.trim_start_matches('\\'))
+        .map(|info| info.class_id)
+    else {
+        return Ok(()); // no emitted class metadata to match: keep the refusal
+    };
+    let done = ctx.next_label("refined_untyped_object_refuse");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {}, #6", tag_reg));           // only an object payload can occupy an object slot
+            ctx.emitter.instruction(&format!("b.ne {}", done));                 // a non-object value falls through to the refusal
+            abi::emit_load_from_address(ctx.emitter, "x0", box_reg, 8);         // unbox the object pointer (boxed low word)
+            abi::emit_load_int_immediate(ctx.emitter, "x1", class_id as i64);   // the refined class the slot's layout belongs to
+            ctx.emitter.instruction("mov x2, #0");                              // kind 0 = class target, not an interface
+            abi::emit_call_label(ctx.emitter, "__rt_exception_matches");        // is_a(object, refined class): walks parent ids
+            ctx.emitter.instruction(&format!("cbnz x0, {}", store_label));      // the same class or a subclass can use this slot's layout
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {}, 6", tag_reg));            // only an object payload can occupy an object slot
+            ctx.emitter.instruction(&format!("jne {}", done));                  // a non-object value falls through to the refusal
+            abi::emit_load_from_address(ctx.emitter, "rdi", box_reg, 8);        // unbox the object pointer (boxed low word)
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", class_id as i64);  // the refined class the slot's layout belongs to
+            ctx.emitter.instruction("xor edx, edx");                            // kind 0 = class target, not an interface
+            abi::emit_call_label(ctx.emitter, "__rt_exception_matches");        // is_a(object, refined class): walks parent ids
+            ctx.emitter.instruction("test eax, eax");                           // did the matcher accept the object's class?
+            ctx.emitter.instruction(&format!("jne {}", store_label));           // the same class or a subclass can use this slot's layout
+            ctx.emitter.label(&done);
+        }
+    }
+    Ok(())
+}
+
+/// Stores a runtime-shaped value into a refined untyped slot when its tag matches, else refuses.
+fn emit_refined_untyped_tag_guarded_store(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    slot: &PropertySlot,
+    message: &str,
+    base_offset: usize,
+    stack_cleanup: usize,
+    done_label: &str,
+) -> Result<()> {
+    if refined_untyped_store_tags(slot).is_empty() {
+        abi::emit_release_temporary_stack(ctx.emitter, stack_cleanup);
+        super::super::exceptions::emit_error(ctx, message);
+        return Ok(());
+    }
+    let store_label = ctx.next_label("refined_untyped_mixed_store");
+    emit_refined_untyped_tag_guard(ctx, value, slot, &store_label)?;
+    abi::emit_release_temporary_stack(ctx.emitter, stack_cleanup);
+    super::super::exceptions::emit_error(ctx, message);
+    ctx.emitter.label(&store_label);
+    let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, base_offset);
+    emit_property_store(ctx, value, slot, base_reg)?;
+    if matches!(
+        slot.php_type.codegen_repr(),
+        PhpType::Str | PhpType::Int | PhpType::Float | PhpType::Bool
+    ) {
+        // A scalar/string slot copies the accepted payload out of the box, so retire an owned
+        // source box after the store, exactly as the plain Slot arm does.
+        super::release_adopted_mixed_source(ctx, value, &slot.php_type)?;
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, stack_cleanup);
+    abi::emit_jump(ctx.emitter, done_label);
+    Ok(())
 }
 
 /// Branches to `matched_label` when a stacked object payload has the given class id.
@@ -1204,6 +1366,9 @@ pub(super) fn lower_runtime_mixed_prop_set(
             MixedPropertyWriteAction::Refuse(message) => {
                 abi::emit_release_temporary_stack(ctx.emitter, 32);
                 super::super::exceptions::emit_error(ctx, message);
+            }
+            MixedPropertyWriteAction::RefuseUnlessTagMatches { slot, message } => {
+                emit_refined_untyped_tag_guarded_store(ctx, value, slot, message, 16, 32, &done_label)?;
             }
             MixedPropertyWriteAction::Slot(slot) => {
                 let base_reg = abi::symbol_scratch_reg(ctx.emitter);

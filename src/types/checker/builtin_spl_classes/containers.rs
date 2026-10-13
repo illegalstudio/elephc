@@ -391,28 +391,27 @@ fn dll_serialize_array_body() -> Vec<Stmt> {
 }
 
 /// Builds the synthetic method body for dll debug info.
+///
+/// PHP returns the PHYSICAL storage order (`[0 => first pushed, ...]`), not the LIFO/FIFO
+/// `offsetGet()` order. The old body called `setIteratorMode(0)` so `offsetGet()` walked storage
+/// order and restored the mode afterwards; a fixed-mode list (`SplStack` mode 6, `SplQueue` mode
+/// 4) now rejects that LIFO/FIFO flip with a RuntimeException. `__serialize()` already walks the
+/// physical storage (its `SplDllSerializeArray` intrinsic maps to `__rt_spl_dll_serialize_array`),
+/// so reuse it instead of touching the iterator mode.
 fn dll_debug_info_body() -> Vec<Stmt> {
-    let mut body = vec![
-        assign_stmt("mode", method_call(this_expr(), "getIteratorMode", Vec::new())),
-        expr_stmt(method_call(this_expr(), "setIteratorMode", vec![int_expr(0)])),
-    ];
-    body.extend(dll_items_snapshot_prelude());
-    body.push(expr_stmt(method_call(
-        this_expr(),
-        "setIteratorMode",
-        vec![var_expr("mode")],
-    )));
-    body.push(return_stmt(expr(ExprKind::ArrayLiteralAssoc(vec![
-        (
-            string_expr("\0SplDoublyLinkedList\0flags"),
-            var_expr("mode"),
-        ),
-        (
-            string_expr("\0SplDoublyLinkedList\0dllist"),
-            var_expr("items"),
-        ),
-    ]))));
-    body
+    vec![
+        assign_stmt("data", method_call(this_expr(), "__serialize", Vec::new())),
+        return_stmt(expr(ExprKind::ArrayLiteralAssoc(vec![
+            (
+                string_expr("\0SplDoublyLinkedList\0flags"),
+                array_access(var_expr("data"), int_expr(0)),
+            ),
+            (
+                string_expr("\0SplDoublyLinkedList\0dllist"),
+                array_access(var_expr("data"), int_expr(1)),
+            ),
+        ]))),
+    ]
 }
 
 /// Builds the synthetic method body for dll unserialize.

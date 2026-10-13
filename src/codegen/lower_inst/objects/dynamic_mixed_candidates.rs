@@ -585,6 +585,7 @@ pub(super) fn emit_dynamic_new_mixed_spl_dll_candidate(
         abi::int_arg_reg_name(ctx.emitter.target, 0),
         class_id as i64,
     );
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), 0);
     abi::emit_call_label(ctx.emitter, "__rt_spl_dll_new");
     emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Object(String::new()));
     ctx.store_result_value(result)

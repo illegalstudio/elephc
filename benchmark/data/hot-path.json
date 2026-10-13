@@ -3,6 +3,69 @@
   "suite": "hot-path",
   "branch": "main",
   "sampling": "latest-per-UTC-day-and-platform",
-  "points": 0,
-  "series": []
+  "points": 1,
+  "series": [
+    {
+      "date": "2026-10-13",
+      "timestamp": "2026-10-13T10:19:41Z",
+      "measurement_timestamp": "2026-10-13T10:16:06Z",
+      "commit": "11ed84e6acd8819fac11952f096693d7ee5b5435",
+      "run_id": 38380456489,
+      "run_attempt": 1,
+      "artifact_id": 11803473432,
+      "environment": {
+        "runner": "macos-15",
+        "os": "Darwin",
+        "architecture": "arm64",
+        "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "php": "PHP 8.5.11 (cli) (built: Sep 22 2026 13:32:06) (NTS)",
+        "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+        "php_mode": "CLI; OPcache/JIT disabled",
+        "measurement": "process-wall",
+        "iterations": 3,
+        "warmup": 1
+      },
+      "cases": [
+        {
+          "case": "buffer-vs-arrays",
+          "fixture_sha256": "6408d8d3b03fa555fe859c2f17e7c687b196104ca8843f9308eca6eff4946dc8",
+          "metadata": {
+            "description": "Equivalent position updates with three storage representations"
+          },
+          "variants": {
+            "buffer": {
+              "median_ms": 5.6399590000637545,
+              "samples_ms": [
+                6.092167000133486,
+                5.36558400017384,
+                5.6399590000637545
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "indexed": {
+              "median_ms": 26.827540999875055,
+              "samples_ms": [
+                26.69054199986931,
+                26.827540999875055,
+                27.360708999822236
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "assoc": {
+              "median_ms": 26.700291999986803,
+              "samples_ms": [
+                26.418415999842182,
+                26.700291999986803,
+                29.062749999866355
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        }
+      ]
+    }
+  ]
 }
