@@ -323,6 +323,112 @@ echo count($queue);
     assert_eq!(out, "2|1|1\na|b|b|1");
 }
 
+// SplStack array offsets are LIFO: offset 0 is the TOP of the stack, so reads, writes and
+// unset() address the list in reverse storage order (issue #1659). SplQueue stays FIFO.
+/// Verifies that spl stack bracket offsets follow LIFO order.
+#[test]
+fn test_spl_stack_bracket_offsets_are_lifo() {
+    let out = compile_and_run(
+        r#"<?php
+$s = new SplStack();
+$s->push("a"); $s->push("b"); $s->push("c");
+echo $s[0], $s[1], $s[2], "\n";
+echo $s->offsetGet(0), "\n";
+var_dump(isset($s[2]));
+$s[0] = "z";
+echo $s->top(), $s->bottom(), "\n";
+unset($s[0]);
+echo count($s), $s->top(), "\n";
+$q = new SplQueue();
+$q->enqueue("a"); $q->enqueue("b"); $q->enqueue("c");
+echo $q[0], $q[1], $q[2], "\n";
+$q[0] = "z";
+echo $q->bottom(), $q->top(), "\n";
+"#,
+    );
+    assert_eq!(out, "cba\nc\nbool(true)\nza\n2b\nabc\nzc\n");
+}
+
+// `getIteratorMode()` reports PHP's raw mode word: `SplStack` = 6 (FIX|LIFO), `SplQueue` = 4
+// (FIX), `SplDoublyLinkedList` = 0. `setIteratorMode()` freezes the LIFO/FIFO bit on a fixed
+// list (RuntimeException) while allowing the DELETE bit and preserving FIX (issue #1659).
+/// Verifies that spl iterator mode word and freeze.
+#[test]
+fn test_spl_iterator_mode_word_and_freeze() {
+    let out = compile_and_run(
+        r#"<?php
+$s = new SplStack();
+$q = new SplQueue();
+$d = new SplDoublyLinkedList();
+echo $s->getIteratorMode(), $q->getIteratorMode(), $d->getIteratorMode(), "|";
+try { $s->setIteratorMode(SplDoublyLinkedList::IT_MODE_FIFO); echo "no-throw"; }
+catch (RuntimeException $e) { echo "frozen"; }
+$s->setIteratorMode(SplDoublyLinkedList::IT_MODE_LIFO | SplDoublyLinkedList::IT_MODE_DELETE);
+echo "|", $s->getIteratorMode();
+$s->setIteratorMode(SplDoublyLinkedList::IT_MODE_LIFO);
+echo "|", $s->getIteratorMode();
+$q->setIteratorMode(SplDoublyLinkedList::IT_MODE_FIFO | SplDoublyLinkedList::IT_MODE_DELETE);
+echo "|", $q->getIteratorMode();
+$d->setIteratorMode(SplDoublyLinkedList::IT_MODE_LIFO);
+echo "|", $d->getIteratorMode();
+$d->setIteratorMode(4);
+echo "|", $d->getIteratorMode();
+$d->setIteratorMode(2);
+echo "|", $d->getIteratorMode();
+$s->setIteratorMode(PHP_INT_MAX);
+echo "|", $s->getIteratorMode();
+"#,
+    );
+    assert_eq!(out, "640|frozen|7|6|5|2|0|2|7");
+}
+
+// The LIFO default also drives `foreach` traversal order and `serialize()`'s flags byte; both
+// are PHP-parity wins of seeding the mode and were previously unpinned (issue #1659).
+/// Verifies that spl stack traversal and serialize follow lifo.
+#[test]
+fn test_spl_stack_traversal_and_serialize_follow_lifo() {
+    let out = compile_and_run(
+        r#"<?php
+$s = new SplStack();
+$s->push("a"); $s->push("b"); $s->push("c");
+foreach ($s as $k => $v) { echo $k, ":", $v, " "; }
+echo "|", serialize($s), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "2:c 1:b 0:a |O:8:\"SplStack\":3:{i:0;i:6;i:1;a:3:{i:0;s:1:\"a\";i:1;s:1:\"b\";i:2;s:1:\"c\";}i:2;a:0:{}}\n"
+    );
+}
+
+// `__debugInfo()` returns the raw mode word and the PHYSICAL storage order (first pushed first),
+// not the LIFO `offsetGet()` order, and must snapshot it WITHOUT flipping the frozen mode: the
+// old body called `setIteratorMode(0)`, which a fixed-mode list now rejects with a
+// RuntimeException (issue #1659).
+/// Verifies that spl debug info reports flags and physical order.
+#[test]
+fn test_spl_debug_info_reports_flags_and_physical_order() {
+    let out = compile_and_run(
+        r#"<?php
+$s = new SplStack();
+$s->push("a"); $s->push("b"); $s->push("c");
+var_dump($s->__debugInfo());
+$q = new SplQueue();
+$q->enqueue("a"); $q->enqueue("b"); $q->enqueue("c");
+var_dump($q->__debugInfo());
+$d = new SplDoublyLinkedList();
+$d->push("a"); $d->push("b"); $d->push("c");
+var_dump($d->__debugInfo());
+"#,
+    );
+    let entry = |flags: i64| {
+        format!(
+            "array(2) {{\n  [\"\0SplDoublyLinkedList\0flags\"]=>\n  int({flags})\n  [\"\0SplDoublyLinkedList\0dllist\"]=>\n  array(3) {{\n    [0]=>\n    string(1) \"a\"\n    [1]=>\n    string(1) \"b\"\n    [2]=>\n    string(1) \"c\"\n  }}\n}}\n"
+        )
+    };
+    assert_eq!(out, format!("{}{}{}", entry(6), entry(4), entry(0)));
+}
+
 // Tests SplFixedArray getSize/setSize, direct bracket read/write, isset/unset, toArray,
 // jsonSerialize, and that resizing a fixed array preserves existing elements up to the new size.
 /// Verifies that phase4 SPL fixed array runtime methods.

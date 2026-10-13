@@ -544,5 +544,6140 @@
       "magician",
       "native"
     ]
+  },
+  "8343402017": {
+    "timestamp": "2026-07-15T12:49:14Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-15",
+        "timestamp": "2026-07-15T12:49:14Z",
+        "run_id": 29416266315,
+        "run_attempt": null,
+        "artifact_id": 8343402017,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-15",
+        "timestamp": "2026-07-15T12:49:14Z",
+        "run_id": 29416266315,
+        "run_attempt": null,
+        "artifact_id": 8343402017,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8346394052": {
+    "timestamp": "2026-07-15T14:31:19Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-15",
+        "timestamp": "2026-07-15T14:31:19Z",
+        "run_id": 29423379554,
+        "run_attempt": null,
+        "artifact_id": 8346394052,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-15",
+        "timestamp": "2026-07-15T14:31:19Z",
+        "run_id": 29423379554,
+        "run_attempt": null,
+        "artifact_id": 8346394052,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8351824534": {
+    "timestamp": "2026-07-15T17:34:48Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-15",
+        "timestamp": "2026-07-15T17:34:48Z",
+        "run_id": 29436241784,
+        "run_attempt": null,
+        "artifact_id": 8351824534,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-15",
+        "timestamp": "2026-07-15T17:34:48Z",
+        "run_id": 29436241784,
+        "run_attempt": null,
+        "artifact_id": 8351824534,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8355840706": {
+    "timestamp": "2026-07-15T20:05:15Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-15",
+        "timestamp": "2026-07-15T20:05:15Z",
+        "run_id": 29446322352,
+        "run_attempt": null,
+        "artifact_id": 8355840706,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-15",
+        "timestamp": "2026-07-15T20:05:15Z",
+        "run_id": 29446322352,
+        "run_attempt": null,
+        "artifact_id": 8355840706,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8356810252": {
+    "timestamp": "2026-07-15T20:43:27Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-15",
+        "timestamp": "2026-07-15T20:43:27Z",
+        "run_id": 29448986416,
+        "run_attempt": null,
+        "artifact_id": 8356810252,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-15",
+        "timestamp": "2026-07-15T20:43:27Z",
+        "run_id": 29448986416,
+        "run_attempt": null,
+        "artifact_id": 8356810252,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8366674078": {
+    "timestamp": "2026-07-16T06:18:11Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-16",
+        "timestamp": "2026-07-16T06:18:11Z",
+        "run_id": 29475973860,
+        "run_attempt": null,
+        "artifact_id": 8366674078,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-16",
+        "timestamp": "2026-07-16T06:18:11Z",
+        "run_id": 29475973860,
+        "run_attempt": null,
+        "artifact_id": 8366674078,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8371055918": {
+    "timestamp": "2026-07-16T09:35:07Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-16",
+        "timestamp": "2026-07-16T09:35:07Z",
+        "run_id": 29487323476,
+        "run_attempt": null,
+        "artifact_id": 8371055918,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-16",
+        "timestamp": "2026-07-16T09:35:07Z",
+        "run_id": 29487323476,
+        "run_attempt": null,
+        "artifact_id": 8371055918,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8401513752": {
+    "timestamp": "2026-07-17T08:37:48Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-17",
+        "timestamp": "2026-07-17T08:37:48Z",
+        "run_id": 29566753746,
+        "run_attempt": null,
+        "artifact_id": 8401513752,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-17",
+        "timestamp": "2026-07-17T08:37:48Z",
+        "run_id": 29566753746,
+        "run_attempt": null,
+        "artifact_id": 8401513752,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8406070906": {
+    "timestamp": "2026-07-17T11:58:58Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-17",
+        "timestamp": "2026-07-17T11:58:58Z",
+        "run_id": 29578250004,
+        "run_attempt": null,
+        "artifact_id": 8406070906,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-17",
+        "timestamp": "2026-07-17T11:58:58Z",
+        "run_id": 29578250004,
+        "run_attempt": null,
+        "artifact_id": 8406070906,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8412271531": {
+    "timestamp": "2026-07-17T15:55:41Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-17",
+        "timestamp": "2026-07-17T15:55:41Z",
+        "run_id": 29593554836,
+        "run_attempt": null,
+        "artifact_id": 8412271531,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-17",
+        "timestamp": "2026-07-17T15:55:41Z",
+        "run_id": 29593554836,
+        "run_attempt": null,
+        "artifact_id": 8412271531,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8429464193": {
+    "timestamp": "2026-07-18T12:15:33Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-18",
+        "timestamp": "2026-07-18T12:15:33Z",
+        "run_id": 29643804178,
+        "run_attempt": null,
+        "artifact_id": 8429464193,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-18",
+        "timestamp": "2026-07-18T12:15:33Z",
+        "run_id": 29643804178,
+        "run_attempt": null,
+        "artifact_id": 8429464193,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8439676967": {
+    "timestamp": "2026-07-19T07:32:11Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-19",
+        "timestamp": "2026-07-19T07:32:11Z",
+        "run_id": 29677708186,
+        "run_attempt": null,
+        "artifact_id": 8439676967,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-19",
+        "timestamp": "2026-07-19T07:32:11Z",
+        "run_id": 29677708186,
+        "run_attempt": null,
+        "artifact_id": 8439676967,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8441398139": {
+    "timestamp": "2026-07-19T10:40:20Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-19",
+        "timestamp": "2026-07-19T10:40:20Z",
+        "run_id": 29683437799,
+        "run_attempt": null,
+        "artifact_id": 8441398139,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-19",
+        "timestamp": "2026-07-19T10:40:20Z",
+        "run_id": 29683437799,
+        "run_attempt": null,
+        "artifact_id": 8441398139,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8442792806": {
+    "timestamp": "2026-07-19T13:10:46Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-19",
+        "timestamp": "2026-07-19T13:10:46Z",
+        "run_id": 29688161820,
+        "run_attempt": null,
+        "artifact_id": 8442792806,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-19",
+        "timestamp": "2026-07-19T13:10:46Z",
+        "run_id": 29688161820,
+        "run_attempt": null,
+        "artifact_id": 8442792806,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8445144936": {
+    "timestamp": "2026-07-19T17:16:24Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-19",
+        "timestamp": "2026-07-19T17:16:24Z",
+        "run_id": 29696088449,
+        "run_attempt": null,
+        "artifact_id": 8445144936,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-19",
+        "timestamp": "2026-07-19T17:16:24Z",
+        "run_id": 29696088449,
+        "run_attempt": null,
+        "artifact_id": 8445144936,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8446190304": {
+    "timestamp": "2026-07-19T19:11:25Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-19",
+        "timestamp": "2026-07-19T19:11:25Z",
+        "run_id": 29699930143,
+        "run_attempt": null,
+        "artifact_id": 8446190304,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-19",
+        "timestamp": "2026-07-19T19:11:25Z",
+        "run_id": 29699930143,
+        "run_attempt": null,
+        "artifact_id": 8446190304,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8447032158": {
+    "timestamp": "2026-07-19T20:43:39Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-19",
+        "timestamp": "2026-07-19T20:43:39Z",
+        "run_id": 29702876597,
+        "run_attempt": null,
+        "artifact_id": 8447032158,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-19",
+        "timestamp": "2026-07-19T20:43:39Z",
+        "run_id": 29702876597,
+        "run_attempt": null,
+        "artifact_id": 8447032158,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8447852756": {
+    "timestamp": "2026-07-19T22:15:16Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-19",
+        "timestamp": "2026-07-19T22:15:16Z",
+        "run_id": 29705571641,
+        "run_attempt": null,
+        "artifact_id": 8447852756,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-19",
+        "timestamp": "2026-07-19T22:15:16Z",
+        "run_id": 29705571641,
+        "run_attempt": null,
+        "artifact_id": 8447852756,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8448921670": {
+    "timestamp": "2026-07-20T01:21:34Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-20",
+        "timestamp": "2026-07-20T01:21:34Z",
+        "run_id": 29710675819,
+        "run_attempt": null,
+        "artifact_id": 8448921670,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-20",
+        "timestamp": "2026-07-20T01:21:34Z",
+        "run_id": 29710675819,
+        "run_attempt": null,
+        "artifact_id": 8448921670,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8449470095": {
+    "timestamp": "2026-07-20T02:46:18Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-20",
+        "timestamp": "2026-07-20T02:46:18Z",
+        "run_id": 29713005015,
+        "run_attempt": null,
+        "artifact_id": 8449470095,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-20",
+        "timestamp": "2026-07-20T02:46:18Z",
+        "run_id": 29713005015,
+        "run_attempt": null,
+        "artifact_id": 8449470095,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8450964585": {
+    "timestamp": "2026-07-20T04:31:22Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-20",
+        "timestamp": "2026-07-20T04:31:22Z",
+        "run_id": 29716836094,
+        "run_attempt": null,
+        "artifact_id": 8450964585,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-20",
+        "timestamp": "2026-07-20T04:31:22Z",
+        "run_id": 29716836094,
+        "run_attempt": null,
+        "artifact_id": 8450964585,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8452517406": {
+    "timestamp": "2026-07-20T06:22:08Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-20",
+        "timestamp": "2026-07-20T06:22:08Z",
+        "run_id": 29721035952,
+        "run_attempt": null,
+        "artifact_id": 8452517406,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-20",
+        "timestamp": "2026-07-20T06:22:08Z",
+        "run_id": 29721035952,
+        "run_attempt": null,
+        "artifact_id": 8452517406,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8454838492": {
+    "timestamp": "2026-07-20T08:19:20Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-20",
+        "timestamp": "2026-07-20T08:19:20Z",
+        "run_id": 29726787178,
+        "run_attempt": null,
+        "artifact_id": 8454838492,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-20",
+        "timestamp": "2026-07-20T08:19:20Z",
+        "run_id": 29726787178,
+        "run_attempt": null,
+        "artifact_id": 8454838492,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8461305096": {
+    "timestamp": "2026-07-20T12:45:00Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-20",
+        "timestamp": "2026-07-20T12:45:00Z",
+        "run_id": 29742744560,
+        "run_attempt": null,
+        "artifact_id": 8461305096,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-20",
+        "timestamp": "2026-07-20T12:45:00Z",
+        "run_id": 29742744560,
+        "run_attempt": null,
+        "artifact_id": 8461305096,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8465270811": {
+    "timestamp": "2026-07-20T14:54:21Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-20",
+        "timestamp": "2026-07-20T14:54:21Z",
+        "run_id": 29752134015,
+        "run_attempt": null,
+        "artifact_id": 8465270811,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-20",
+        "timestamp": "2026-07-20T14:54:21Z",
+        "run_id": 29752134015,
+        "run_attempt": null,
+        "artifact_id": 8465270811,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8493181371": {
+    "timestamp": "2026-07-21T11:20:15Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-21",
+        "timestamp": "2026-07-21T11:20:15Z",
+        "run_id": 29824638884,
+        "run_attempt": null,
+        "artifact_id": 8493181371,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-21",
+        "timestamp": "2026-07-21T11:20:15Z",
+        "run_id": 29824638884,
+        "run_attempt": null,
+        "artifact_id": 8493181371,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8535619234": {
+    "timestamp": "2026-07-22T15:44:48Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-22",
+        "timestamp": "2026-07-22T15:44:48Z",
+        "run_id": 29933703550,
+        "run_attempt": null,
+        "artifact_id": 8535619234,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-22",
+        "timestamp": "2026-07-22T15:44:48Z",
+        "run_id": 29933703550,
+        "run_attempt": null,
+        "artifact_id": 8535619234,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8539849966": {
+    "timestamp": "2026-07-22T18:06:38Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-22",
+        "timestamp": "2026-07-22T18:06:38Z",
+        "run_id": 29944009592,
+        "run_attempt": null,
+        "artifact_id": 8539849966,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-22",
+        "timestamp": "2026-07-22T18:06:38Z",
+        "run_id": 29944009592,
+        "run_attempt": null,
+        "artifact_id": 8539849966,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8546493730": {
+    "timestamp": "2026-07-22T22:19:12Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-22",
+        "timestamp": "2026-07-22T22:19:12Z",
+        "run_id": 29957285943,
+        "run_attempt": null,
+        "artifact_id": 8546493730,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-22",
+        "timestamp": "2026-07-22T22:19:12Z",
+        "run_id": 29957285943,
+        "run_attempt": null,
+        "artifact_id": 8546493730,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8549977850": {
+    "timestamp": "2026-07-23T01:29:05Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-23",
+        "timestamp": "2026-07-23T01:29:05Z",
+        "run_id": 29971661854,
+        "run_attempt": null,
+        "artifact_id": 8549977850,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-23",
+        "timestamp": "2026-07-23T01:29:05Z",
+        "run_id": 29971661854,
+        "run_attempt": null,
+        "artifact_id": 8549977850,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8551628351": {
+    "timestamp": "2026-07-23T03:16:30Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-23",
+        "timestamp": "2026-07-23T03:16:30Z",
+        "run_id": 29976286751,
+        "run_attempt": null,
+        "artifact_id": 8551628351,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-23",
+        "timestamp": "2026-07-23T03:16:30Z",
+        "run_id": 29976286751,
+        "run_attempt": null,
+        "artifact_id": 8551628351,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8553062288": {
+    "timestamp": "2026-07-23T04:53:50Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-23",
+        "timestamp": "2026-07-23T04:53:50Z",
+        "run_id": 29980387690,
+        "run_attempt": null,
+        "artifact_id": 8553062288,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-23",
+        "timestamp": "2026-07-23T04:53:50Z",
+        "run_id": 29980387690,
+        "run_attempt": null,
+        "artifact_id": 8553062288,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8554888625": {
+    "timestamp": "2026-07-23T06:38:39Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-23",
+        "timestamp": "2026-07-23T06:38:39Z",
+        "run_id": 29985236996,
+        "run_attempt": null,
+        "artifact_id": 8554888625,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-23",
+        "timestamp": "2026-07-23T06:38:39Z",
+        "run_id": 29985236996,
+        "run_attempt": null,
+        "artifact_id": 8554888625,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8591459776": {
+    "timestamp": "2026-07-24T08:47:46Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-24",
+        "timestamp": "2026-07-24T08:47:46Z",
+        "run_id": 30079790052,
+        "run_attempt": null,
+        "artifact_id": 8591459776,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-24",
+        "timestamp": "2026-07-24T08:47:46Z",
+        "run_id": 30079790052,
+        "run_attempt": null,
+        "artifact_id": 8591459776,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8618293777": {
+    "timestamp": "2026-07-25T09:48:03Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-25",
+        "timestamp": "2026-07-25T09:48:03Z",
+        "run_id": 30153183416,
+        "run_attempt": null,
+        "artifact_id": 8618293777,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-25",
+        "timestamp": "2026-07-25T09:48:03Z",
+        "run_id": 30153183416,
+        "run_attempt": null,
+        "artifact_id": 8618293777,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8619307435": {
+    "timestamp": "2026-07-25T11:57:54Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-25",
+        "timestamp": "2026-07-25T11:57:54Z",
+        "run_id": 30156964122,
+        "run_attempt": null,
+        "artifact_id": 8619307435,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-25",
+        "timestamp": "2026-07-25T11:57:54Z",
+        "run_id": 30156964122,
+        "run_attempt": null,
+        "artifact_id": 8619307435,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8619991468": {
+    "timestamp": "2026-07-25T13:37:03Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-25",
+        "timestamp": "2026-07-25T13:37:03Z",
+        "run_id": 30159890800,
+        "run_attempt": null,
+        "artifact_id": 8619991468,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-25",
+        "timestamp": "2026-07-25T13:37:03Z",
+        "run_id": 30159890800,
+        "run_attempt": null,
+        "artifact_id": 8619991468,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8620809577": {
+    "timestamp": "2026-07-25T15:14:00Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-25",
+        "timestamp": "2026-07-25T15:14:00Z",
+        "run_id": 30162996809,
+        "run_attempt": null,
+        "artifact_id": 8620809577,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-25",
+        "timestamp": "2026-07-25T15:14:00Z",
+        "run_id": 30162996809,
+        "run_attempt": null,
+        "artifact_id": 8620809577,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8621720406": {
+    "timestamp": "2026-07-25T16:52:46Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-25",
+        "timestamp": "2026-07-25T16:52:46Z",
+        "run_id": 30166282483,
+        "run_attempt": null,
+        "artifact_id": 8621720406,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-25",
+        "timestamp": "2026-07-25T16:52:46Z",
+        "run_id": 30166282483,
+        "run_attempt": null,
+        "artifact_id": 8621720406,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8629919635": {
+    "timestamp": "2026-07-26T08:50:56Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-26",
+        "timestamp": "2026-07-26T08:50:56Z",
+        "run_id": 30195178309,
+        "run_attempt": null,
+        "artifact_id": 8629919635,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-26",
+        "timestamp": "2026-07-26T08:50:56Z",
+        "run_id": 30195178309,
+        "run_attempt": null,
+        "artifact_id": 8629919635,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8630880511": {
+    "timestamp": "2026-07-26T10:34:56Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-26",
+        "timestamp": "2026-07-26T10:34:56Z",
+        "run_id": 30198320355,
+        "run_attempt": null,
+        "artifact_id": 8630880511,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-26",
+        "timestamp": "2026-07-26T10:34:56Z",
+        "run_id": 30198320355,
+        "run_attempt": null,
+        "artifact_id": 8630880511,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8647224515": {
+    "timestamp": "2026-07-27T08:54:36Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-27",
+        "timestamp": "2026-07-27T08:54:36Z",
+        "run_id": 30251242103,
+        "run_attempt": null,
+        "artifact_id": 8647224515,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-27",
+        "timestamp": "2026-07-27T08:54:36Z",
+        "run_id": 30251242103,
+        "run_attempt": null,
+        "artifact_id": 8647224515,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8684106936": {
+    "timestamp": "2026-07-28T10:01:59Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-28",
+        "timestamp": "2026-07-28T10:01:59Z",
+        "run_id": 30347993679,
+        "run_attempt": null,
+        "artifact_id": 8684106936,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-28",
+        "timestamp": "2026-07-28T10:01:59Z",
+        "run_id": 30347993679,
+        "run_attempt": null,
+        "artifact_id": 8684106936,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8688337242": {
+    "timestamp": "2026-07-28T12:39:50Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-28",
+        "timestamp": "2026-07-28T12:39:50Z",
+        "run_id": 30358994195,
+        "run_attempt": null,
+        "artifact_id": 8688337242,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-28",
+        "timestamp": "2026-07-28T12:39:50Z",
+        "run_id": 30358994195,
+        "run_attempt": null,
+        "artifact_id": 8688337242,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8688788974": {
+    "timestamp": "2026-07-28T12:54:50Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-07-28",
+        "timestamp": "2026-07-28T12:54:50Z",
+        "run_id": 30360405781,
+        "run_attempt": null,
+        "artifact_id": 8688788974,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-07-28",
+        "timestamp": "2026-07-28T12:54:50Z",
+        "run_id": 30360405781,
+        "run_attempt": null,
+        "artifact_id": 8688788974,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8855536843": {
+    "timestamp": "2026-08-03T12:18:28Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-08-03",
+        "timestamp": "2026-08-03T12:18:28Z",
+        "run_id": 30812584621,
+        "run_attempt": null,
+        "artifact_id": 8855536843,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-08-03",
+        "timestamp": "2026-08-03T12:18:28Z",
+        "run_id": 30812584621,
+        "run_attempt": null,
+        "artifact_id": 8855536843,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8859806140": {
+    "timestamp": "2026-08-03T14:36:21Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-08-03",
+        "timestamp": "2026-08-03T14:36:21Z",
+        "run_id": 30822420743,
+        "run_attempt": null,
+        "artifact_id": 8859806140,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-08-03",
+        "timestamp": "2026-08-03T14:36:21Z",
+        "run_id": 30822420743,
+        "run_attempt": null,
+        "artifact_id": 8859806140,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8866318803": {
+    "timestamp": "2026-08-03T18:08:02Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-08-03",
+        "timestamp": "2026-08-03T18:08:02Z",
+        "run_id": 30839387254,
+        "run_attempt": null,
+        "artifact_id": 8866318803,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-08-03",
+        "timestamp": "2026-08-03T18:08:02Z",
+        "run_id": 30839387254,
+        "run_attempt": null,
+        "artifact_id": 8866318803,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8894063713": {
+    "timestamp": "2026-08-04T13:23:08Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-08-04",
+        "timestamp": "2026-08-04T13:23:08Z",
+        "run_id": 30912803758,
+        "run_attempt": null,
+        "artifact_id": 8894063713,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-08-04",
+        "timestamp": "2026-08-04T13:23:08Z",
+        "run_id": 30912803758,
+        "run_attempt": null,
+        "artifact_id": 8894063713,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8897664593": {
+    "timestamp": "2026-08-04T15:07:21Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-08-04",
+        "timestamp": "2026-08-04T15:07:21Z",
+        "run_id": 30921894970,
+        "run_attempt": null,
+        "artifact_id": 8897664593,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-08-04",
+        "timestamp": "2026-08-04T15:07:21Z",
+        "run_id": 30921894970,
+        "run_attempt": null,
+        "artifact_id": 8897664593,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "8995681165": {
+    "timestamp": "2026-08-07T13:35:27Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-08-07",
+        "timestamp": "2026-08-07T13:35:27Z",
+        "run_id": 31182712320,
+        "run_attempt": null,
+        "artifact_id": 8995681165,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-08-07",
+        "timestamp": "2026-08-07T13:35:27Z",
+        "run_id": 31182712320,
+        "run_attempt": null,
+        "artifact_id": 8995681165,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "9000094399": {
+    "timestamp": "2026-08-07T15:46:02Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-08-07",
+        "timestamp": "2026-08-07T15:46:02Z",
+        "run_id": 31193563905,
+        "run_attempt": null,
+        "artifact_id": 9000094399,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-08-07",
+        "timestamp": "2026-08-07T15:46:02Z",
+        "run_id": 31193563905,
+        "run_attempt": null,
+        "artifact_id": 9000094399,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "9022604134": {
+    "timestamp": "2026-08-08T13:48:02Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-08-08",
+        "timestamp": "2026-08-08T13:48:02Z",
+        "run_id": 31259842735,
+        "run_attempt": null,
+        "artifact_id": 9022604134,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-08-08",
+        "timestamp": "2026-08-08T13:48:02Z",
+        "run_id": 31259842735,
+        "run_attempt": null,
+        "artifact_id": 9022604134,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "9056192176": {
+    "timestamp": "2026-08-10T08:44:28Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-08-10",
+        "timestamp": "2026-08-10T08:44:28Z",
+        "run_id": 31370398210,
+        "run_attempt": null,
+        "artifact_id": 9056192176,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-08-10",
+        "timestamp": "2026-08-10T08:44:28Z",
+        "run_id": 31370398210,
+        "run_attempt": null,
+        "artifact_id": 9056192176,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "9138348315": {
+    "timestamp": "2026-08-12T10:49:19Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-08-12",
+        "timestamp": "2026-08-12T10:49:19Z",
+        "run_id": 31586158947,
+        "run_attempt": null,
+        "artifact_id": 9138348315,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-08-12",
+        "timestamp": "2026-08-12T10:49:19Z",
+        "run_id": 31586158947,
+        "run_attempt": null,
+        "artifact_id": 9138348315,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "9141758166": {
+    "timestamp": "2026-08-12T12:42:30Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-08-12",
+        "timestamp": "2026-08-12T12:42:30Z",
+        "run_id": 31596051425,
+        "run_attempt": null,
+        "artifact_id": 9141758166,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-08-12",
+        "timestamp": "2026-08-12T12:42:30Z",
+        "run_id": 31596051425,
+        "run_attempt": null,
+        "artifact_id": 9141758166,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "9209069185": {
+    "timestamp": "2026-08-14T05:40:15Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-08-14",
+        "timestamp": "2026-08-14T05:40:15Z",
+        "run_id": 31773263216,
+        "run_attempt": null,
+        "artifact_id": 9209069185,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-08-14",
+        "timestamp": "2026-08-14T05:40:15Z",
+        "run_id": 31773263216,
+        "run_attempt": null,
+        "artifact_id": 9209069185,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "9215904319": {
+    "timestamp": "2026-08-14T10:26:05Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-08-14",
+        "timestamp": "2026-08-14T10:26:05Z",
+        "run_id": 31788310986,
+        "run_attempt": null,
+        "artifact_id": 9215904319,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-08-14",
+        "timestamp": "2026-08-14T10:26:05Z",
+        "run_id": 31788310986,
+        "run_attempt": null,
+        "artifact_id": 9215904319,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "9285020242": {
+    "timestamp": "2026-08-17T10:26:19Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-08-17",
+        "timestamp": "2026-08-17T10:26:19Z",
+        "run_id": 32018697174,
+        "run_attempt": null,
+        "artifact_id": 9285020242,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-08-17",
+        "timestamp": "2026-08-17T10:26:19Z",
+        "run_id": 32018697174,
+        "run_attempt": null,
+        "artifact_id": 9285020242,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "9287014783": {
+    "timestamp": "2026-08-17T11:37:05Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-08-17",
+        "timestamp": "2026-08-17T11:37:05Z",
+        "run_id": 32025182695,
+        "run_attempt": null,
+        "artifact_id": 9287014783,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-08-17",
+        "timestamp": "2026-08-17T11:37:05Z",
+        "run_id": 32025182695,
+        "run_attempt": null,
+        "artifact_id": 9287014783,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "9332046960": {
+    "timestamp": "2026-08-18T15:51:10Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-08-18",
+        "timestamp": "2026-08-18T15:51:10Z",
+        "run_id": 32148246705,
+        "run_attempt": null,
+        "artifact_id": 9332046960,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-08-18",
+        "timestamp": "2026-08-18T15:51:10Z",
+        "run_id": 32148246705,
+        "run_attempt": null,
+        "artifact_id": 9332046960,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "9396657168": {
+    "timestamp": "2026-08-20T07:00:19Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-08-20",
+        "timestamp": "2026-08-20T07:00:19Z",
+        "run_id": 32341502477,
+        "run_attempt": null,
+        "artifact_id": 9396657168,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-08-20",
+        "timestamp": "2026-08-20T07:00:19Z",
+        "run_id": 32341502477,
+        "run_attempt": null,
+        "artifact_id": 9396657168,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "9449456986": {
+    "timestamp": "2026-08-21T14:05:43Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-08-21",
+        "timestamp": "2026-08-21T14:05:43Z",
+        "run_id": 32489552450,
+        "run_attempt": null,
+        "artifact_id": 9449456986,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-08-21",
+        "timestamp": "2026-08-21T14:05:43Z",
+        "run_id": 32489552450,
+        "run_attempt": null,
+        "artifact_id": 9449456986,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "9451418156": {
+    "timestamp": "2026-08-21T15:03:12Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-08-21",
+        "timestamp": "2026-08-21T15:03:12Z",
+        "run_id": 32494676435,
+        "run_attempt": null,
+        "artifact_id": 9451418156,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-08-21",
+        "timestamp": "2026-08-21T15:03:12Z",
+        "run_id": 32494676435,
+        "run_attempt": null,
+        "artifact_id": 9451418156,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "9606788317": {
+    "timestamp": "2026-08-26T12:30:26Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-08-26",
+        "timestamp": "2026-08-26T12:30:26Z",
+        "run_id": 32968267969,
+        "run_attempt": null,
+        "artifact_id": 9606788317,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-08-26",
+        "timestamp": "2026-08-26T12:30:26Z",
+        "run_id": 32968267969,
+        "run_attempt": null,
+        "artifact_id": 9606788317,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "9609623985": {
+    "timestamp": "2026-08-26T13:48:33Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-08-26",
+        "timestamp": "2026-08-26T13:48:33Z",
+        "run_id": 32975377654,
+        "run_attempt": null,
+        "artifact_id": 9609623985,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-08-26",
+        "timestamp": "2026-08-26T13:48:33Z",
+        "run_id": 32975377654,
+        "run_attempt": null,
+        "artifact_id": 9609623985,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "9642027810": {
+    "timestamp": "2026-08-27T10:10:21Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-08-27",
+        "timestamp": "2026-08-27T10:10:21Z",
+        "run_id": 33061201636,
+        "run_attempt": null,
+        "artifact_id": 9642027810,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-08-27",
+        "timestamp": "2026-08-27T10:10:21Z",
+        "run_id": 33061201636,
+        "run_attempt": null,
+        "artifact_id": 9642027810,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "9682149288": {
+    "timestamp": "2026-08-28T10:10:56Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-08-28",
+        "timestamp": "2026-08-28T10:10:56Z",
+        "run_id": 33161790674,
+        "run_attempt": null,
+        "artifact_id": 9682149288,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-08-28",
+        "timestamp": "2026-08-28T10:10:56Z",
+        "run_id": 33161790674,
+        "run_attempt": null,
+        "artifact_id": 9682149288,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "9700233813": {
+    "timestamp": "2026-08-28T20:16:10Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-08-28",
+        "timestamp": "2026-08-28T20:16:10Z",
+        "run_id": 33206885328,
+        "run_attempt": null,
+        "artifact_id": 9700233813,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-08-28",
+        "timestamp": "2026-08-28T20:16:10Z",
+        "run_id": 33206885328,
+        "run_attempt": null,
+        "artifact_id": 9700233813,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "9717852183": {
+    "timestamp": "2026-08-29T16:31:59Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-08-29",
+        "timestamp": "2026-08-29T16:31:59Z",
+        "run_id": 33262847474,
+        "run_attempt": null,
+        "artifact_id": 9717852183,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-08-29",
+        "timestamp": "2026-08-29T16:31:59Z",
+        "run_id": 33262847474,
+        "run_attempt": null,
+        "artifact_id": 9717852183,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "9807186096": {
+    "timestamp": "2026-09-01T15:17:05Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-01",
+        "timestamp": "2026-09-01T15:17:05Z",
+        "run_id": 33523708396,
+        "run_attempt": null,
+        "artifact_id": 9807186096,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-01",
+        "timestamp": "2026-09-01T15:17:05Z",
+        "run_id": 33523708396,
+        "run_attempt": null,
+        "artifact_id": 9807186096,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "9810632522": {
+    "timestamp": "2026-09-01T16:42:48Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-01",
+        "timestamp": "2026-09-01T16:42:48Z",
+        "run_id": 33532393393,
+        "run_attempt": null,
+        "artifact_id": 9810632522,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-01",
+        "timestamp": "2026-09-01T16:42:48Z",
+        "run_id": 33532393393,
+        "run_attempt": null,
+        "artifact_id": 9810632522,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "9890489786": {
+    "timestamp": "2026-09-03T11:11:12Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-03",
+        "timestamp": "2026-09-03T11:11:12Z",
+        "run_id": 33747555474,
+        "run_attempt": null,
+        "artifact_id": 9890489786,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-03",
+        "timestamp": "2026-09-03T11:11:12Z",
+        "run_id": 33747555474,
+        "run_attempt": null,
+        "artifact_id": 9890489786,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "9901007326": {
+    "timestamp": "2026-09-03T15:45:50Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-03",
+        "timestamp": "2026-09-03T15:45:50Z",
+        "run_id": 33773553762,
+        "run_attempt": null,
+        "artifact_id": 9901007326,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-03",
+        "timestamp": "2026-09-03T15:45:50Z",
+        "run_id": 33773553762,
+        "run_attempt": null,
+        "artifact_id": 9901007326,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10017010869": {
+    "timestamp": "2026-09-07T11:42:00Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-07",
+        "timestamp": "2026-09-07T11:42:00Z",
+        "run_id": 34117087777,
+        "run_attempt": null,
+        "artifact_id": 10017010869,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-07",
+        "timestamp": "2026-09-07T11:42:00Z",
+        "run_id": 34117087777,
+        "run_attempt": null,
+        "artifact_id": 10017010869,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10059095885": {
+    "timestamp": "2026-09-08T13:47:55Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-08",
+        "timestamp": "2026-09-08T13:47:55Z",
+        "run_id": 34233076305,
+        "run_attempt": null,
+        "artifact_id": 10059095885,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-08",
+        "timestamp": "2026-09-08T13:47:55Z",
+        "run_id": 34233076305,
+        "run_attempt": null,
+        "artifact_id": 10059095885,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10066065063": {
+    "timestamp": "2026-09-08T16:28:26Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-08",
+        "timestamp": "2026-09-08T16:28:26Z",
+        "run_id": 34250195244,
+        "run_attempt": null,
+        "artifact_id": 10066065063,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-08",
+        "timestamp": "2026-09-08T16:28:26Z",
+        "run_id": 34250195244,
+        "run_attempt": null,
+        "artifact_id": 10066065063,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10105340606": {
+    "timestamp": "2026-09-09T13:07:03Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-09",
+        "timestamp": "2026-09-09T13:07:03Z",
+        "run_id": 34354090669,
+        "run_attempt": null,
+        "artifact_id": 10105340606,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-09",
+        "timestamp": "2026-09-09T13:07:03Z",
+        "run_id": 34354090669,
+        "run_attempt": null,
+        "artifact_id": 10105340606,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10196561743": {
+    "timestamp": "2026-09-11T11:19:57Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-11",
+        "timestamp": "2026-09-11T11:19:57Z",
+        "run_id": 34592592981,
+        "run_attempt": null,
+        "artifact_id": 10196561743,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-11",
+        "timestamp": "2026-09-11T11:19:57Z",
+        "run_id": 34592592981,
+        "run_attempt": null,
+        "artifact_id": 10196561743,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10276329604": {
+    "timestamp": "2026-09-11T18:16:35Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-11",
+        "timestamp": "2026-09-11T18:16:35Z",
+        "run_id": 34630812663,
+        "run_attempt": null,
+        "artifact_id": 10276329604,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-11",
+        "timestamp": "2026-09-11T18:16:35Z",
+        "run_id": 34630812663,
+        "run_attempt": null,
+        "artifact_id": 10276329604,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10318713450": {
+    "timestamp": "2026-09-13T13:47:49Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-13",
+        "timestamp": "2026-09-13T13:47:49Z",
+        "run_id": 34760340966,
+        "run_attempt": null,
+        "artifact_id": 10318713450,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-13",
+        "timestamp": "2026-09-13T13:47:49Z",
+        "run_id": 34760340966,
+        "run_attempt": null,
+        "artifact_id": 10318713450,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10344252936": {
+    "timestamp": "2026-09-14T11:11:53Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-14",
+        "timestamp": "2026-09-14T11:11:53Z",
+        "run_id": 34836041710,
+        "run_attempt": null,
+        "artifact_id": 10344252936,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-14",
+        "timestamp": "2026-09-14T11:11:53Z",
+        "run_id": 34836041710,
+        "run_attempt": null,
+        "artifact_id": 10344252936,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10346552857": {
+    "timestamp": "2026-09-14T12:17:03Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-14",
+        "timestamp": "2026-09-14T12:17:03Z",
+        "run_id": 34841570203,
+        "run_attempt": null,
+        "artifact_id": 10346552857,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-14",
+        "timestamp": "2026-09-14T12:17:03Z",
+        "run_id": 34841570203,
+        "run_attempt": null,
+        "artifact_id": 10346552857,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10355252142": {
+    "timestamp": "2026-09-14T15:28:06Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-14",
+        "timestamp": "2026-09-14T15:28:06Z",
+        "run_id": 34861205378,
+        "run_attempt": null,
+        "artifact_id": 10355252142,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-14",
+        "timestamp": "2026-09-14T15:28:06Z",
+        "run_id": 34861205378,
+        "run_attempt": null,
+        "artifact_id": 10355252142,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10357168107": {
+    "timestamp": "2026-09-14T16:19:34Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-14",
+        "timestamp": "2026-09-14T16:19:34Z",
+        "run_id": 34866827224,
+        "run_attempt": null,
+        "artifact_id": 10357168107,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-14",
+        "timestamp": "2026-09-14T16:19:34Z",
+        "run_id": 34866827224,
+        "run_attempt": null,
+        "artifact_id": 10357168107,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10445942030": {
+    "timestamp": "2026-09-16T12:16:16Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-16",
+        "timestamp": "2026-09-16T12:16:16Z",
+        "run_id": 35093683408,
+        "run_attempt": null,
+        "artifact_id": 10445942030,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-16",
+        "timestamp": "2026-09-16T12:16:16Z",
+        "run_id": 35093683408,
+        "run_attempt": null,
+        "artifact_id": 10445942030,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10540316402": {
+    "timestamp": "2026-09-18T09:12:25Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-18",
+        "timestamp": "2026-09-18T09:12:25Z",
+        "run_id": 35327348616,
+        "run_attempt": null,
+        "artifact_id": 10540316402,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-18",
+        "timestamp": "2026-09-18T09:12:25Z",
+        "run_id": 35327348616,
+        "run_attempt": null,
+        "artifact_id": 10540316402,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10541218447": {
+    "timestamp": "2026-09-18T10:08:50Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-18",
+        "timestamp": "2026-09-18T10:08:50Z",
+        "run_id": 35332287734,
+        "run_attempt": null,
+        "artifact_id": 10541218447,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-18",
+        "timestamp": "2026-09-18T10:08:50Z",
+        "run_id": 35332287734,
+        "run_attempt": null,
+        "artifact_id": 10541218447,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10541919791": {
+    "timestamp": "2026-09-18T10:22:39Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-18",
+        "timestamp": "2026-09-18T10:22:39Z",
+        "run_id": 35333471340,
+        "run_attempt": null,
+        "artifact_id": 10541919791,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-18",
+        "timestamp": "2026-09-18T10:22:39Z",
+        "run_id": 35333471340,
+        "run_attempt": null,
+        "artifact_id": 10541919791,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10544827684": {
+    "timestamp": "2026-09-18T11:41:31Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-18",
+        "timestamp": "2026-09-18T11:41:31Z",
+        "run_id": 35339856569,
+        "run_attempt": null,
+        "artifact_id": 10544827684,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-18",
+        "timestamp": "2026-09-18T11:41:31Z",
+        "run_id": 35339856569,
+        "run_attempt": null,
+        "artifact_id": 10544827684,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10558398985": {
+    "timestamp": "2026-09-18T17:00:23Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-18",
+        "timestamp": "2026-09-18T17:00:23Z",
+        "run_id": 35356903360,
+        "run_attempt": null,
+        "artifact_id": 10558398985,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-18",
+        "timestamp": "2026-09-18T17:00:23Z",
+        "run_id": 35356903360,
+        "run_attempt": null,
+        "artifact_id": 10558398985,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10559529686": {
+    "timestamp": "2026-09-18T17:37:08Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-18",
+        "timestamp": "2026-09-18T17:37:08Z",
+        "run_id": 35372335082,
+        "run_attempt": null,
+        "artifact_id": 10559529686,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-18",
+        "timestamp": "2026-09-18T17:37:08Z",
+        "run_id": 35372335082,
+        "run_attempt": null,
+        "artifact_id": 10559529686,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10630614682": {
+    "timestamp": "2026-09-21T09:23:46Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-21",
+        "timestamp": "2026-09-21T09:23:46Z",
+        "run_id": 35581918931,
+        "run_attempt": null,
+        "artifact_id": 10630614682,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-21",
+        "timestamp": "2026-09-21T09:23:46Z",
+        "run_id": 35581918931,
+        "run_attempt": null,
+        "artifact_id": 10630614682,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10632006419": {
+    "timestamp": "2026-09-21T09:46:48Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-21",
+        "timestamp": "2026-09-21T09:46:48Z",
+        "run_id": 35584097342,
+        "run_attempt": null,
+        "artifact_id": 10632006419,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-21",
+        "timestamp": "2026-09-21T09:46:48Z",
+        "run_id": 35584097342,
+        "run_attempt": null,
+        "artifact_id": 10632006419,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10633557212": {
+    "timestamp": "2026-09-21T10:27:52Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-21",
+        "timestamp": "2026-09-21T10:27:52Z",
+        "run_id": 35587916634,
+        "run_attempt": null,
+        "artifact_id": 10633557212,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-21",
+        "timestamp": "2026-09-21T10:27:52Z",
+        "run_id": 35587916634,
+        "run_attempt": null,
+        "artifact_id": 10633557212,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10633869629": {
+    "timestamp": "2026-09-21T10:46:43Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-21",
+        "timestamp": "2026-09-21T10:46:43Z",
+        "run_id": 35589380263,
+        "run_attempt": null,
+        "artifact_id": 10633869629,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-21",
+        "timestamp": "2026-09-21T10:46:43Z",
+        "run_id": 35589380263,
+        "run_attempt": null,
+        "artifact_id": 10633869629,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10634859523": {
+    "timestamp": "2026-09-21T11:09:47Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-21",
+        "timestamp": "2026-09-21T11:09:47Z",
+        "run_id": 35591357885,
+        "run_attempt": null,
+        "artifact_id": 10634859523,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-21",
+        "timestamp": "2026-09-21T11:09:47Z",
+        "run_id": 35591357885,
+        "run_attempt": null,
+        "artifact_id": 10634859523,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10638000830": {
+    "timestamp": "2026-09-21T12:13:41Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-21",
+        "timestamp": "2026-09-21T12:13:41Z",
+        "run_id": 35597157341,
+        "run_attempt": null,
+        "artifact_id": 10638000830,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-21",
+        "timestamp": "2026-09-21T12:13:41Z",
+        "run_id": 35597157341,
+        "run_attempt": null,
+        "artifact_id": 10638000830,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10645930227": {
+    "timestamp": "2026-09-21T14:46:13Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-21",
+        "timestamp": "2026-09-21T14:46:13Z",
+        "run_id": 35613106634,
+        "run_attempt": null,
+        "artifact_id": 10645930227,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-21",
+        "timestamp": "2026-09-21T14:46:13Z",
+        "run_id": 35613106634,
+        "run_attempt": null,
+        "artifact_id": 10645930227,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10654621789": {
+    "timestamp": "2026-09-21T17:32:26Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-21",
+        "timestamp": "2026-09-21T17:32:26Z",
+        "run_id": 35631446666,
+        "run_attempt": null,
+        "artifact_id": 10654621789,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-21",
+        "timestamp": "2026-09-21T17:32:26Z",
+        "run_id": 35631446666,
+        "run_attempt": null,
+        "artifact_id": 10654621789,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10684904373": {
+    "timestamp": "2026-09-22T09:18:07Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-22",
+        "timestamp": "2026-09-22T09:18:07Z",
+        "run_id": 35708208996,
+        "run_attempt": null,
+        "artifact_id": 10684904373,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-22",
+        "timestamp": "2026-09-22T09:18:07Z",
+        "run_id": 35708208996,
+        "run_attempt": null,
+        "artifact_id": 10684904373,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10689341804": {
+    "timestamp": "2026-09-22T10:36:26Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-22",
+        "timestamp": "2026-09-22T10:36:26Z",
+        "run_id": 35715731921,
+        "run_attempt": null,
+        "artifact_id": 10689341804,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-22",
+        "timestamp": "2026-09-22T10:36:26Z",
+        "run_id": 35715731921,
+        "run_attempt": null,
+        "artifact_id": 10689341804,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10696096107": {
+    "timestamp": "2026-09-22T13:13:19Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-22",
+        "timestamp": "2026-09-22T13:13:19Z",
+        "run_id": 35730469366,
+        "run_attempt": null,
+        "artifact_id": 10696096107,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-22",
+        "timestamp": "2026-09-22T13:13:19Z",
+        "run_id": 35730469366,
+        "run_attempt": null,
+        "artifact_id": 10696096107,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10739879685": {
+    "timestamp": "2026-09-23T08:41:55Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-23",
+        "timestamp": "2026-09-23T08:41:55Z",
+        "run_id": 35837078890,
+        "run_attempt": null,
+        "artifact_id": 10739879685,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-23",
+        "timestamp": "2026-09-23T08:41:55Z",
+        "run_id": 35837078890,
+        "run_attempt": null,
+        "artifact_id": 10739879685,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10797750376": {
+    "timestamp": "2026-09-24T08:11:51Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-24",
+        "timestamp": "2026-09-24T08:11:51Z",
+        "run_id": 35972443059,
+        "run_attempt": null,
+        "artifact_id": 10797750376,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-24",
+        "timestamp": "2026-09-24T08:11:51Z",
+        "run_id": 35972443059,
+        "run_attempt": null,
+        "artifact_id": 10797750376,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10797399857": {
+    "timestamp": "2026-09-24T08:40:21Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-24",
+        "timestamp": "2026-09-24T08:40:21Z",
+        "run_id": 35975055733,
+        "run_attempt": null,
+        "artifact_id": 10797399857,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-24",
+        "timestamp": "2026-09-24T08:40:21Z",
+        "run_id": 35975055733,
+        "run_attempt": null,
+        "artifact_id": 10797399857,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10803805491": {
+    "timestamp": "2026-09-24T10:41:52Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-24",
+        "timestamp": "2026-09-24T10:41:52Z",
+        "run_id": 35987346089,
+        "run_attempt": null,
+        "artifact_id": 10803805491,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-24",
+        "timestamp": "2026-09-24T10:41:52Z",
+        "run_id": 35987346089,
+        "run_attempt": null,
+        "artifact_id": 10803805491,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10807810716": {
+    "timestamp": "2026-09-24T12:27:48Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-24",
+        "timestamp": "2026-09-24T12:27:48Z",
+        "run_id": 35997060666,
+        "run_attempt": null,
+        "artifact_id": 10807810716,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-24",
+        "timestamp": "2026-09-24T12:27:48Z",
+        "run_id": 35997060666,
+        "run_attempt": null,
+        "artifact_id": 10807810716,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10807928463": {
+    "timestamp": "2026-09-24T12:43:42Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-24",
+        "timestamp": "2026-09-24T12:43:42Z",
+        "run_id": 35999182365,
+        "run_attempt": null,
+        "artifact_id": 10807928463,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-24",
+        "timestamp": "2026-09-24T12:43:42Z",
+        "run_id": 35999182365,
+        "run_attempt": null,
+        "artifact_id": 10807928463,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10858510670": {
+    "timestamp": "2026-09-25T09:56:53Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-25",
+        "timestamp": "2026-09-25T09:56:53Z",
+        "run_id": 36119633377,
+        "run_attempt": null,
+        "artifact_id": 10858510670,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-25",
+        "timestamp": "2026-09-25T09:56:53Z",
+        "run_id": 36119633377,
+        "run_attempt": null,
+        "artifact_id": 10858510670,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10858972956": {
+    "timestamp": "2026-09-25T10:38:44Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-25",
+        "timestamp": "2026-09-25T10:38:44Z",
+        "run_id": 36123442919,
+        "run_attempt": null,
+        "artifact_id": 10858972956,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-25",
+        "timestamp": "2026-09-25T10:38:44Z",
+        "run_id": 36123442919,
+        "run_attempt": null,
+        "artifact_id": 10858972956,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10861104877": {
+    "timestamp": "2026-09-25T11:48:55Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-25",
+        "timestamp": "2026-09-25T11:48:55Z",
+        "run_id": 36129693377,
+        "run_attempt": null,
+        "artifact_id": 10861104877,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-25",
+        "timestamp": "2026-09-25T11:48:55Z",
+        "run_id": 36129693377,
+        "run_attempt": null,
+        "artifact_id": 10861104877,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10880051104": {
+    "timestamp": "2026-09-25T17:43:30Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-25",
+        "timestamp": "2026-09-25T17:43:30Z",
+        "run_id": 36167021188,
+        "run_attempt": null,
+        "artifact_id": 10880051104,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-25",
+        "timestamp": "2026-09-25T17:43:30Z",
+        "run_id": 36167021188,
+        "run_attempt": null,
+        "artifact_id": 10880051104,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10906345991": {
+    "timestamp": "2026-09-26T12:23:07Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-26",
+        "timestamp": "2026-09-26T12:23:07Z",
+        "run_id": 36241113307,
+        "run_attempt": null,
+        "artifact_id": 10906345991,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-26",
+        "timestamp": "2026-09-26T12:23:07Z",
+        "run_id": 36241113307,
+        "run_attempt": null,
+        "artifact_id": 10906345991,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10905903468": {
+    "timestamp": "2026-09-26T12:59:47Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-26",
+        "timestamp": "2026-09-26T12:59:47Z",
+        "run_id": 36242817080,
+        "run_attempt": null,
+        "artifact_id": 10905903468,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-26",
+        "timestamp": "2026-09-26T12:59:47Z",
+        "run_id": 36242817080,
+        "run_attempt": null,
+        "artifact_id": 10905903468,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10906479559": {
+    "timestamp": "2026-09-26T13:32:46Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-26",
+        "timestamp": "2026-09-26T13:32:46Z",
+        "run_id": 36244660624,
+        "run_attempt": null,
+        "artifact_id": 10906479559,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-26",
+        "timestamp": "2026-09-26T13:32:46Z",
+        "run_id": 36244660624,
+        "run_attempt": null,
+        "artifact_id": 10906479559,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10907727376": {
+    "timestamp": "2026-09-26T14:11:12Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-26",
+        "timestamp": "2026-09-26T14:11:12Z",
+        "run_id": 36246369699,
+        "run_attempt": null,
+        "artifact_id": 10907727376,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-26",
+        "timestamp": "2026-09-26T14:11:12Z",
+        "run_id": 36246369699,
+        "run_attempt": null,
+        "artifact_id": 10907727376,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10907853118": {
+    "timestamp": "2026-09-26T14:27:40Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-26",
+        "timestamp": "2026-09-26T14:27:40Z",
+        "run_id": 36247741311,
+        "run_attempt": null,
+        "artifact_id": 10907853118,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-26",
+        "timestamp": "2026-09-26T14:27:40Z",
+        "run_id": 36247741311,
+        "run_attempt": null,
+        "artifact_id": 10907853118,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10909240068": {
+    "timestamp": "2026-09-26T15:00:57Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-26",
+        "timestamp": "2026-09-26T15:00:57Z",
+        "run_id": 36249705357,
+        "run_attempt": null,
+        "artifact_id": 10909240068,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-26",
+        "timestamp": "2026-09-26T15:00:57Z",
+        "run_id": 36249705357,
+        "run_attempt": null,
+        "artifact_id": 10909240068,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10920287505": {
+    "timestamp": "2026-09-27T01:36:09Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-27",
+        "timestamp": "2026-09-27T01:36:09Z",
+        "run_id": 36270548674,
+        "run_attempt": null,
+        "artifact_id": 10920287505,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-27",
+        "timestamp": "2026-09-27T01:36:09Z",
+        "run_id": 36270548674,
+        "run_attempt": null,
+        "artifact_id": 10920287505,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10939761063": {
+    "timestamp": "2026-09-27T18:55:30Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-27",
+        "timestamp": "2026-09-27T18:55:30Z",
+        "run_id": 36341550588,
+        "run_attempt": null,
+        "artifact_id": 10939761063,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-27",
+        "timestamp": "2026-09-27T18:55:30Z",
+        "run_id": 36341550588,
+        "run_attempt": null,
+        "artifact_id": 10939761063,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10959893050": {
+    "timestamp": "2026-09-28T09:00:35Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-28",
+        "timestamp": "2026-09-28T09:00:35Z",
+        "run_id": 36398672333,
+        "run_attempt": null,
+        "artifact_id": 10959893050,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-28",
+        "timestamp": "2026-09-28T09:00:35Z",
+        "run_id": 36398672333,
+        "run_attempt": null,
+        "artifact_id": 10959893050,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10971021902": {
+    "timestamp": "2026-09-28T12:54:41Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-28",
+        "timestamp": "2026-09-28T12:54:41Z",
+        "run_id": 36422403141,
+        "run_attempt": null,
+        "artifact_id": 10971021902,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-28",
+        "timestamp": "2026-09-28T12:54:41Z",
+        "run_id": 36422403141,
+        "run_attempt": null,
+        "artifact_id": 10971021902,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "10974554762": {
+    "timestamp": "2026-09-28T14:24:29Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-28",
+        "timestamp": "2026-09-28T14:24:29Z",
+        "run_id": 36426027022,
+        "run_attempt": null,
+        "artifact_id": 10974554762,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-28",
+        "timestamp": "2026-09-28T14:24:29Z",
+        "run_id": 36426027022,
+        "run_attempt": null,
+        "artifact_id": 10974554762,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "11027302377": {
+    "timestamp": "2026-09-29T10:28:21Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-29",
+        "timestamp": "2026-09-29T10:28:21Z",
+        "run_id": 36552508515,
+        "run_attempt": null,
+        "artifact_id": 11027302377,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-29",
+        "timestamp": "2026-09-29T10:28:21Z",
+        "run_id": 36552508515,
+        "run_attempt": null,
+        "artifact_id": 11027302377,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "11031806639": {
+    "timestamp": "2026-09-29T12:05:29Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-29",
+        "timestamp": "2026-09-29T12:05:29Z",
+        "run_id": 36562830813,
+        "run_attempt": null,
+        "artifact_id": 11031806639,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-29",
+        "timestamp": "2026-09-29T12:05:29Z",
+        "run_id": 36562830813,
+        "run_attempt": null,
+        "artifact_id": 11031806639,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "11039074248": {
+    "timestamp": "2026-09-29T14:20:36Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-29",
+        "timestamp": "2026-09-29T14:20:36Z",
+        "run_id": 36576106643,
+        "run_attempt": null,
+        "artifact_id": 11039074248,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-29",
+        "timestamp": "2026-09-29T14:20:36Z",
+        "run_id": 36576106643,
+        "run_attempt": null,
+        "artifact_id": 11039074248,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "11044337580": {
+    "timestamp": "2026-09-29T15:47:32Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-29",
+        "timestamp": "2026-09-29T15:47:32Z",
+        "run_id": 36589743346,
+        "run_attempt": null,
+        "artifact_id": 11044337580,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-29",
+        "timestamp": "2026-09-29T15:47:32Z",
+        "run_id": 36589743346,
+        "run_attempt": null,
+        "artifact_id": 11044337580,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "11048027147": {
+    "timestamp": "2026-09-29T16:36:50Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-29",
+        "timestamp": "2026-09-29T16:36:50Z",
+        "run_id": 36596384440,
+        "run_attempt": null,
+        "artifact_id": 11048027147,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-29",
+        "timestamp": "2026-09-29T16:36:50Z",
+        "run_id": 36596384440,
+        "run_attempt": null,
+        "artifact_id": 11048027147,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "11082958068": {
+    "timestamp": "2026-09-30T07:34:07Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-30",
+        "timestamp": "2026-09-30T07:34:07Z",
+        "run_id": 36683450243,
+        "run_attempt": null,
+        "artifact_id": 11082958068,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-30",
+        "timestamp": "2026-09-30T07:34:07Z",
+        "run_id": 36683450243,
+        "run_attempt": null,
+        "artifact_id": 11082958068,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "11087233560": {
+    "timestamp": "2026-09-30T09:29:56Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-30",
+        "timestamp": "2026-09-30T09:29:56Z",
+        "run_id": 36695234637,
+        "run_attempt": null,
+        "artifact_id": 11087233560,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-30",
+        "timestamp": "2026-09-30T09:29:56Z",
+        "run_id": 36695234637,
+        "run_attempt": null,
+        "artifact_id": 11087233560,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "11092909829": {
+    "timestamp": "2026-09-30T11:36:35Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-09-30",
+        "timestamp": "2026-09-30T11:36:35Z",
+        "run_id": 36706891941,
+        "run_attempt": null,
+        "artifact_id": 11092909829,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-09-30",
+        "timestamp": "2026-09-30T11:36:35Z",
+        "run_id": 36706891941,
+        "run_attempt": null,
+        "artifact_id": 11092909829,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "11161293663": {
+    "timestamp": "2026-10-01T12:22:19Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-10-01",
+        "timestamp": "2026-10-01T12:22:19Z",
+        "run_id": 36859639659,
+        "run_attempt": null,
+        "artifact_id": 11161293663,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-10-01",
+        "timestamp": "2026-10-01T12:22:19Z",
+        "run_id": 36859639659,
+        "run_attempt": null,
+        "artifact_id": 11161293663,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "11168275568": {
+    "timestamp": "2026-10-01T13:54:52Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-10-01",
+        "timestamp": "2026-10-01T13:54:52Z",
+        "run_id": 36870425626,
+        "run_attempt": null,
+        "artifact_id": 11168275568,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-10-01",
+        "timestamp": "2026-10-01T13:54:52Z",
+        "run_id": 36870425626,
+        "run_attempt": null,
+        "artifact_id": 11168275568,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "11211516602": {
+    "timestamp": "2026-10-02T05:51:44Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-10-02",
+        "timestamp": "2026-10-02T05:51:44Z",
+        "run_id": 36969652365,
+        "run_attempt": null,
+        "artifact_id": 11211516602,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-10-02",
+        "timestamp": "2026-10-02T05:51:44Z",
+        "run_id": 36969652365,
+        "run_attempt": null,
+        "artifact_id": 11211516602,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "11266658218": {
+    "timestamp": "2026-10-03T06:18:40Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-10-03",
+        "timestamp": "2026-10-03T06:18:40Z",
+        "run_id": 37101834759,
+        "run_attempt": null,
+        "artifact_id": 11266658218,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-10-03",
+        "timestamp": "2026-10-03T06:18:40Z",
+        "run_id": 37101834759,
+        "run_attempt": null,
+        "artifact_id": 11266658218,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "11353865839": {
+    "timestamp": "2026-10-05T14:59:42Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-10-05",
+        "timestamp": "2026-10-05T14:59:42Z",
+        "run_id": 37326839291,
+        "run_attempt": null,
+        "artifact_id": 11353865839,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-10-05",
+        "timestamp": "2026-10-05T14:59:42Z",
+        "run_id": 37326839291,
+        "run_attempt": null,
+        "artifact_id": 11353865839,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "11398758663": {
+    "timestamp": "2026-10-06T08:37:56Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-10-06",
+        "timestamp": "2026-10-06T08:37:56Z",
+        "run_id": 37435674832,
+        "run_attempt": null,
+        "artifact_id": 11398758663,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-10-06",
+        "timestamp": "2026-10-06T08:37:56Z",
+        "run_id": 37435674832,
+        "run_attempt": null,
+        "artifact_id": 11398758663,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "11406258969": {
+    "timestamp": "2026-10-06T10:45:06Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-10-06",
+        "timestamp": "2026-10-06T10:45:06Z",
+        "run_id": 37450021795,
+        "run_attempt": null,
+        "artifact_id": 11406258969,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-10-06",
+        "timestamp": "2026-10-06T10:45:06Z",
+        "run_id": 37450021795,
+        "run_attempt": null,
+        "artifact_id": 11406258969,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "11413992172": {
+    "timestamp": "2026-10-06T12:32:46Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-10-06",
+        "timestamp": "2026-10-06T12:32:46Z",
+        "run_id": 37460478060,
+        "run_attempt": null,
+        "artifact_id": 11413992172,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-10-06",
+        "timestamp": "2026-10-06T12:32:46Z",
+        "run_id": 37460478060,
+        "run_attempt": null,
+        "artifact_id": 11413992172,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "11424900115": {
+    "timestamp": "2026-10-06T15:33:31Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-10-06",
+        "timestamp": "2026-10-06T15:33:31Z",
+        "run_id": 37474799052,
+        "run_attempt": null,
+        "artifact_id": 11424900115,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-10-06",
+        "timestamp": "2026-10-06T15:33:31Z",
+        "run_id": 37474799052,
+        "run_attempt": null,
+        "artifact_id": 11424900115,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "11470958159": {
+    "timestamp": "2026-10-07T08:59:56Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-10-07",
+        "timestamp": "2026-10-07T08:59:56Z",
+        "run_id": 37595440851,
+        "run_attempt": null,
+        "artifact_id": 11470958159,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-10-07",
+        "timestamp": "2026-10-07T08:59:56Z",
+        "run_id": 37595440851,
+        "run_attempt": null,
+        "artifact_id": 11470958159,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "11472539499": {
+    "timestamp": "2026-10-07T09:40:21Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-10-07",
+        "timestamp": "2026-10-07T09:40:21Z",
+        "run_id": 37599164070,
+        "run_attempt": null,
+        "artifact_id": 11472539499,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-10-07",
+        "timestamp": "2026-10-07T09:40:21Z",
+        "run_id": 37599164070,
+        "run_attempt": null,
+        "artifact_id": 11472539499,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "11479402187": {
+    "timestamp": "2026-10-07T11:27:15Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-10-07",
+        "timestamp": "2026-10-07T11:27:15Z",
+        "run_id": 37609093625,
+        "run_attempt": null,
+        "artifact_id": 11479402187,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-10-07",
+        "timestamp": "2026-10-07T11:27:15Z",
+        "run_id": 37609093625,
+        "run_attempt": null,
+        "artifact_id": 11479402187,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "11553786593": {
+    "timestamp": "2026-10-08T13:30:46Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-10-08",
+        "timestamp": "2026-10-08T13:30:46Z",
+        "run_id": 37782405626,
+        "run_attempt": null,
+        "artifact_id": 11553786593,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-10-08",
+        "timestamp": "2026-10-08T13:30:46Z",
+        "run_id": 37782405626,
+        "run_attempt": null,
+        "artifact_id": 11553786593,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "11707031942": {
+    "timestamp": "2026-10-11T15:40:25Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-10-11",
+        "timestamp": "2026-10-11T15:40:25Z",
+        "run_id": 38151074042,
+        "run_attempt": null,
+        "artifact_id": 11707031942,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-10-11",
+        "timestamp": "2026-10-11T15:40:25Z",
+        "run_id": 38151074042,
+        "run_attempt": null,
+        "artifact_id": 11707031942,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "11728422191": {
+    "timestamp": "2026-10-12T05:51:34Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-10-12",
+        "timestamp": "2026-10-12T05:51:34Z",
+        "run_id": 38208918414,
+        "run_attempt": null,
+        "artifact_id": 11728422191,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-10-12",
+        "timestamp": "2026-10-12T05:51:34Z",
+        "run_id": 38208918414,
+        "run_attempt": null,
+        "artifact_id": 11728422191,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "11755742461": {
+    "timestamp": "2026-10-12T15:12:39Z",
+    "suites": [
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-10-12",
+        "timestamp": "2026-10-12T15:12:39Z",
+        "run_id": 38262841163,
+        "run_attempt": null,
+        "artifact_id": 11755742461,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      },
+      "magician": {
+        "date": "2026-10-12",
+        "timestamp": "2026-10-12T15:12:39Z",
+        "run_id": 38262841163,
+        "run_attempt": null,
+        "artifact_id": 11755742461,
+        "environment": {
+          "runner": "unknown",
+          "os": "unknown",
+          "architecture": "unknown",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1,
+          "legacy": true
+        }
+      }
+    }
+  },
+  "11803473432": {
+    "timestamp": "2026-10-13T10:19:41Z",
+    "suites": [
+      "hot-path",
+      "magician",
+      "native"
+    ],
+    "samples": {
+      "native": {
+        "date": "2026-10-13",
+        "timestamp": "2026-10-13T10:19:41Z",
+        "run_id": 38380456489,
+        "run_attempt": 1,
+        "artifact_id": 11803473432,
+        "environment": {
+          "runner": "macos-15",
+          "os": "Darwin",
+          "architecture": "arm64",
+          "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+          "php": "PHP 8.5.11 (cli) (built: Sep 22 2026 13:32:06) (NTS)",
+          "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+          "php_mode": "CLI; OPcache/JIT disabled",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1
+        }
+      },
+      "magician": {
+        "date": "2026-10-13",
+        "timestamp": "2026-10-13T10:19:41Z",
+        "run_id": 38380456489,
+        "run_attempt": 1,
+        "artifact_id": 11803473432,
+        "environment": {
+          "runner": "macos-15",
+          "os": "Darwin",
+          "architecture": "arm64",
+          "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+          "php": "PHP 8.5.11 (cli) (built: Sep 22 2026 13:32:06) (NTS)",
+          "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+          "php_mode": "CLI; OPcache/JIT disabled",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1
+        }
+      },
+      "hot-path": {
+        "date": "2026-10-13",
+        "timestamp": "2026-10-13T10:19:41Z",
+        "run_id": 38380456489,
+        "run_attempt": 1,
+        "artifact_id": 11803473432,
+        "environment": {
+          "runner": "macos-15",
+          "os": "Darwin",
+          "architecture": "arm64",
+          "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+          "php": "PHP 8.5.11 (cli) (built: Sep 22 2026 13:32:06) (NTS)",
+          "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+          "php_mode": "CLI; OPcache/JIT disabled",
+          "measurement": "process-wall",
+          "iterations": 3,
+          "warmup": 1
+        }
+      }
+    }
   }
 }

@@ -717,6 +717,10 @@ pub(crate) fn emit_runtime_data_fixed(
         ("_spl_dll_shift_empty_msg", "Can't shift from an empty datastructure"),
         ("_spl_dll_peek_empty_msg", "Can't peek at an empty datastructure"),
         (
+            "_spl_dll_frozen_mode_msg",
+            "Iterators' LIFO/FIFO modes for SplStack/SplQueue objects are frozen",
+        ),
+        (
             "_spl_dll_add_range_msg",
             "SplDoublyLinkedList::add(): Argument #1 ($index) is out of range",
         ),

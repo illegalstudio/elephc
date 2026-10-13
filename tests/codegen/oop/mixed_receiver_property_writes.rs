@@ -61,23 +61,107 @@ var_dump($t->s, $t->f);
     assert_eq!(out, "string(1) \"z\"\nfloat(2.5)\n");
 }
 
-/// Refined untyped slots fail closed when their runtime storage representation is ambiguous.
+/// A same-type write into a refined untyped slot now lands: PHP stores the value as-is, and the
+/// runtime tag matches the slot's refined representation.
 #[test]
-fn test_mixed_receiver_write_refuses_an_untyped_refined_property() {
-    let out = compile_and_run_capture(
+fn test_mixed_receiver_write_accepts_a_matching_refined_untyped_property() {
+    let out = compile_and_run(
         r#"<?php
 class T { public $u = 1; }
 function write(mixed $o): void { $o->u = 9; }
+$t = new T();
+write($t);
+var_dump($t->u);
+"#,
+    );
+    assert_eq!(out, "int(9)\n");
+}
+
+/// The issue's reproduction: int- and string-refined untyped properties both accept a same-type
+/// write through a `mixed` receiver, matching PHP's `6b`.
+#[test]
+fn test_mixed_receiver_write_reaches_untyped_refined_scalars() {
+    let out = compile_and_run(
+        r#"<?php
+class T { public $pub = 3; public $s = "a"; }
+function direct(mixed $o): void { $o->pub = 6; $o->s = "b"; }
+$t = new T();
+direct($t);
+echo $t->pub, $t->s, "\n";
+"#,
+    );
+    assert_eq!(out, "6b\n");
+}
+
+/// A runtime type the refined slot cannot represent still fails closed rather than coercing it,
+/// which would diverge from PHP's store-as-is rule for an untyped property.
+#[test]
+fn test_mixed_receiver_write_refuses_a_mismatched_refined_untyped_property() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class T { public $u = 1; }
+function write(mixed $o): void { $o->u = "z"; }
         write(new T());
 "#,
     );
     let diagnostic = format!("{}{}", out.stdout, out.stderr);
-    assert!(!out.success, "untyped refined property write unexpectedly succeeded");
+    assert!(
+        !out.success,
+        "mismatched refined untyped property write unexpectedly succeeded"
+    );
     assert!(
         diagnostic.contains("Unsupported dynamic property write: runtime Mixed value cannot be stored safely in the refined untyped property T::$u"),
         "output: {}",
         diagnostic
     );
+}
+
+/// A runtime value of an UNRELATED class must be refused, not stored and then read back through
+/// the refined class's offsets (#1319 review). The slot's layout belongs to the refined class
+/// alone, so a foreign object would read the wrong words.
+#[test]
+fn test_mixed_receiver_write_refuses_a_mismatched_refined_untyped_object_property() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class A { public $x = 10; public $n = 3; }
+class B { public $n = 2; }
+class H { public $o; function __construct() { $this->o = new A(); } }
+function w(mixed $h, mixed $v): void { $h->o = $v; }
+$h = new H();
+w($h, new B());
+var_dump($h->o->n);
+"#,
+    );
+    let diagnostic = format!("{}{}", out.stdout, out.stderr);
+    assert!(
+        !out.success,
+        "an unrelated class into a refined object slot unexpectedly succeeded"
+    );
+    assert!(
+        diagnostic.contains("Unsupported dynamic property write: runtime Mixed value cannot be stored safely in the refined untyped property H::$o"),
+        "output: {}",
+        diagnostic
+    );
+}
+
+/// A same-class or subclass runtime value still lands in the refined untyped object slot: the
+/// slot's layout is the refined class's, and a subclass shares that prefix (#1319 review).
+#[test]
+fn test_mixed_receiver_write_accepts_same_and_subclass_into_a_refined_untyped_object_property() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public $x = 10; public $n = 3; }
+class Sub extends A { public $m = 5; }
+class H { public $o; function __construct() { $this->o = new A(); } }
+function w(mixed $h, mixed $v): void { $h->o = $v; }
+$h = new H();
+w($h, new A());
+var_dump($h->o->n);
+w($h, new Sub());
+var_dump($h->o->n, $h->o->x);
+"#,
+    );
+    assert_eq!(out, "int(3)\nint(3)\nint(10)\n");
 }
 
 /// Two classes declaring the same property name is what makes this a runtime dispatch rather than
