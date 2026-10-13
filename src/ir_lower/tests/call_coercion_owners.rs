@@ -35,6 +35,29 @@ fn ownership_forwarding_source(
     }
 }
 
+/// Traces a staged evaluation load through its preceding store and ownership-only forwarding.
+fn evaluation_operand_source(
+    function: &crate::ir::Function,
+    mut value: crate::ir::ValueId,
+) -> crate::ir::ValueId {
+    use crate::ir::{Immediate, Op, ValueDef};
+    let mut visited = std::collections::HashSet::new();
+    while visited.insert(value) {
+        let ValueDef::Instruction { inst, .. } = function.value(value).unwrap().def else { break; };
+        let producer = function.instruction(inst).unwrap();
+        if matches!(producer.op, Op::Acquire | Op::Borrow | Op::Move) {
+            value = producer.operands[0];
+        } else if producer.op == Op::LoadLocal {
+            let Some(Immediate::LocalSlot(slot)) = producer.immediate else { break; };
+            let Some(store) = function.instructions[..inst.as_raw() as usize].iter().rev().find(|candidate| {
+                candidate.op == Op::StoreLocal && candidate.immediate == Some(Immediate::LocalSlot(slot))
+            }) else { break; };
+            value = store.operands[0];
+        } else { break; }
+    }
+    value
+}
+
 /// Verifies that one final root slot protects an ownership-equivalent operand across its call.
 fn assert_final_operand_root_spans_call(
     function: &crate::ir::Function,
@@ -560,7 +583,8 @@ $callback();
                 "{target}: raw callable passthrough must retain its transfer contract");
             if name == "laterCallbackCaller" {
                 let callback = function.instructions[call].operands[1];
-                let ValueDef::Instruction { inst, .. } = function.value(callback).unwrap().def else {
+                let source = evaluation_operand_source(function, callback);
+                let ValueDef::Instruction { inst, .. } = function.value(source).unwrap().def else {
                     panic!("missing callback source");
                 };
                 assert_eq!(function.instruction(inst).unwrap().op, Op::ClosureNew, "{target}");
@@ -672,7 +696,7 @@ echo widenedStringReaders($argc), borrowedStringReader("x");
 /// Two implicit array boxes receive paired records around the native call on every supported ABI.
 #[test]
 fn implicit_array_argument_boxes_have_unwind_records_on_all_targets() {
-    use crate::ir::Op;
+    use crate::ir::{Immediate, IrHeapKind, IrType, Op};
 
     let source = r#"<?php
 function coercionTarget(array $left, array $right): int { return count($left) + count($right); }
@@ -689,10 +713,28 @@ echo coercionCaller($argc);
             crate::codegen::platform::Target::parse(target).unwrap(),
         );
         let caller = module.functions.iter().find(|function| function.name == "coercionCaller").unwrap();
-        assert_eq!(caller.instructions.iter().filter(|inst| inst.op == Op::PushCallOperandOwner).count(),
-            3, "{target}: the earlier source array has an evaluation root and both have final roots");
+        let call = caller.instructions.iter().position(|inst| inst.op == Op::Call).unwrap();
+        let mut final_roots = Vec::new();
+        for operand in &caller.instructions[call].operands {
+            assert_eq!(caller.value(*operand).unwrap().ir_type, IrType::Heap(IrHeapKind::Mixed),
+                "{target}: the PHP array ABI must receive an explicit EIR box");
+            final_roots.push(assert_final_operand_root_spans_call(caller, call, *operand, target, "boxed array"));
+        }
+        assert_eq!(final_roots.len(), 2, "{target}");
+        assert_ne!(final_roots[0], final_roots[1], "{target}: each box needs its own owner");
+        let publications = caller.instructions.iter().filter(|inst| inst.op == Op::PushCallOperandOwner)
+            .filter_map(|inst| match inst.immediate { Some(Immediate::LocalSlot(slot)) => Some(slot), _ => None })
+            .collect::<Vec<_>>();
+        assert_eq!(publications.iter().collect::<std::collections::HashSet<_>>().len(), 3,
+            "{target}: the source evaluation root is distinct from both final boxed roots");
+        assert_eq!(publications.len(), 4, "{target}: the source root is republished after binding");
         assert_eq!(caller.instructions.iter().filter(|inst| inst.op == Op::PopCallOperandOwner).count(),
-            3, "{target}: source evaluation and final roots must be detached");
+            4, "{target}: every publication, including rebinding, must be balanced");
+        let releases = caller.instructions[call + 1..].iter().filter(|inst| inst.op == Op::ReleaseLocalSlot)
+            .filter_map(|inst| match inst.immediate { Some(Immediate::LocalSlot(slot)) => Some(slot), _ => None })
+            .collect::<Vec<_>>();
+        assert_eq!(releases.len(), 3, "{target}: two boxes and one source pin must retire");
+        assert_eq!(&releases[..2], final_roots.as_slice(), "{target}: retire final boxes before the source pin");
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         let body = asm.split_once("@fn name=coercionCaller ").unwrap().1
             .split_once("@endfn name=coercionCaller").unwrap().0;
@@ -701,17 +743,12 @@ echo coercionCaller($argc);
             (line.starts_with("bl ") || line.starts_with("call ")) && line.contains("coercionTarget")
         }).unwrap_or_else(|| panic!("{target}: missing native call in {body}"));
         let (before, after) = body.split_once(invoke).unwrap();
-        // One evaluation root protects the earlier source argument, two final EIR roots span
-        // the call, and two backend roots protect the implicit Mixed boxes.
-        assert_eq!(before.matches("publish temporary call operand owner").count(), 5, "{target}: {body}");
-        assert_eq!(after.matches("detach temporary call operand owner").count(), 4, "{target}: {body}");
+        // Boxing is explicit EIR: two final boxed roots and a republished source pin
+        // replace the former opaque backend boxing frames.
+        assert_eq!(before.matches("publish temporary call operand owner").count(), 4, "{target}: {body}");
+        assert_eq!(after.matches("detach temporary call operand owner").count(), 3, "{target}: {body}");
         let implicit = after.split_once("op=pop_call_operand_owner").unwrap().0;
-        assert_eq!(implicit.matches("detach temporary call operand owner").count(), 2, "{target}: {body}");
-        let (inner, outer) = if target == "linux-x86_64" {
-            ("mov r10, QWORD PTR [rsp + 80]", "mov r10, QWORD PTR [rsp + 16]")
-        } else {
-            ("ldr x10, [sp, #80]", "ldr x10, [sp, #16]")
-        };
-        assert!(after.find(inner).unwrap() < after.find(outer).unwrap(), "{target}: {after}");
+        assert_eq!(implicit.matches("detach temporary call operand owner").count(), 0,
+            "{target}: no untracked backend boxing frames may replace the EIR owners");
     }
 }

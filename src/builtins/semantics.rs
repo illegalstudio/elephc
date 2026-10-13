@@ -515,7 +515,8 @@ pub const fn runtime_fn_semantics(target: RuntimeFnId) -> BuiltinSemantics {
         target_strategy: BuiltinTargetStrategy::RuntimeCall,
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::One(target),
-        argument_lowering: if target.uses_mbstring_runtime() {
+        argument_lowering: if target.uses_mbstring_runtime() || matches!(target, RuntimeFnId::CloneWith) {
+            // CloneWith must inspect original boxed override tags before copying the object.
             BuiltinArgumentLowering::PreserveValues
         } else { BuiltinArgumentLowering::Standard },
         callable: if target.runtime_callable_supported() {

@@ -2,7 +2,7 @@
 title: "xmlwriter_write_raw() - internals"
 description: "Compiler internals for xmlwriter_write_raw(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1068
+  order: 1069
 ---
 
 ## `xmlwriter_write_raw()` - internals

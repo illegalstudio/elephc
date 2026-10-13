@@ -16,6 +16,8 @@ use crate::ir::{print_module, Terminator};
 
 mod aggregate_operand_owners;
 mod argument_evaluation_owners;
+mod return_owners;
+mod fiber_operand_owners;
 mod arrays;
 mod array_reference_outputs;
 mod array_implode;
@@ -124,6 +126,11 @@ fn try_lower_source_at_for_target(
             .expect("resolver failed");
     let ast = crate::autoload::collect_aliases(ast).expect("alias collection failed");
     let mut prelude_inventory = crate::optimize::reachability::PreludeInventory::new();
+    // Match production's structured-execution injection before other feature preludes:
+    // Parallel extends the Async cancellation declarations and therefore must follow it.
+    let allow_extensions = !source_mode.strict_php_is_effective(crate::strict_php::is_requested());
+    let ast = crate::async_prelude::inject_if_used(ast, allow_extensions, &mut prelude_inventory);
+    let ast = crate::parallel_prelude::inject_if_used(ast, allow_extensions, &mut prelude_inventory);
     let ast = crate::pdo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     // Same injection order as `pipeline::compile`: mysqli after PDO, so the
     // shared `elephc_pdo` externs are merged in exactly once.
@@ -361,7 +368,9 @@ echo boxedLength("abc"), borrowedLength("abc");
         let function = module.functions.iter().find(|function| function.name == "boxedLength").unwrap();
         let length_index = function.instructions.iter().position(|inst| inst.op == Op::StrLen).unwrap();
         let string = function.instructions[length_index].operands[0];
-        let cast = function.instructions.iter().find(|inst| inst.result == Some(string)).unwrap();
+        let pin = function.instructions.iter().find(|inst| inst.result == Some(string)).unwrap();
+        assert_eq!(pin.op, Op::Acquire, "{name}: strlen must own its detached string lease");
+        let cast = function.instructions.iter().find(|inst| inst.result == Some(pin.operands[0])).unwrap();
         assert_eq!(cast.op, Op::Cast, "{name}");
         assert!(function.instructions[length_index + 1..].iter().any(|inst| {
             inst.op == Op::Release && inst.operands == [string]

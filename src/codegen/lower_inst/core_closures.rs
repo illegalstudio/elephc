@@ -118,6 +118,10 @@ pub(super) fn emit_runtime_closure_descriptor_with_captures(
                 release_replaced_value,
             )?;
             materialize_local_ref_arg_address(ctx, *operand)?;
+            let cell_reg = abi::int_result_reg(ctx.emitter);
+            abi::emit_push_reg(ctx.emitter, cell_reg);
+            abi::emit_call_label(ctx.emitter, "__rt_incref");                  // give the closure descriptor one shared owner of the reference cell
+            abi::emit_pop_reg(ctx.emitter, cell_reg);
             callable_descriptor::emit_store_current_result_to_runtime_capture(
                 ctx.emitter,
                 descriptor_reg,
@@ -274,16 +278,14 @@ pub(super) fn promote_local_slot_for_ref_capture(
         abi::load_at_offset(ctx.emitter, state_reg, state_offset);
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction(                                        // create the fallback cell only on the first runtime promotion
-                    &format!("cbz {}, {}", state_reg, promote)
-                );
+                let branch = format!("cbz {}, {}", state_reg, promote);
+                ctx.emitter.instruction(&branch);                               // create the fallback cell only on the first runtime promotion
                 ctx.emitter
                     .instruction(&format!("b {}", done));                         // reuse the existing cell on later loop iterations
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction(                                        // test whether this slot already stores a fallback cell
-                    &format!("test {}, {}", state_reg, state_reg)
-                );
+                let test = format!("test {}, {}", state_reg, state_reg);
+                ctx.emitter.instruction(&test);                                 // test whether this slot already stores a fallback cell
                 ctx.emitter
                     .instruction(&format!("je {}", promote));                       // create the fallback cell only on the first runtime promotion
                 ctx.emitter
@@ -331,11 +333,8 @@ pub(super) fn promote_local_slot_for_ref_capture_unchecked(
     );
     abi::emit_call_label(ctx.emitter, "__rt_reference_cell_new");
     let cell_reg = abi::symbol_scratch_reg(ctx.emitter);
-    ctx.emitter.instruction(&format!(                                           // keep the promoted closure capture cell while restoring its value
-        "mov {}, {}",
-        cell_reg,
-        abi::int_result_reg(ctx.emitter)
-    ));
+    let keep_cell = format!("mov {}, {}", cell_reg, abi::int_result_reg(ctx.emitter));
+    ctx.emitter.instruction(&keep_cell);                                        // keep the promoted closure capture cell while restoring its value
     pop_result_value(ctx, &local_ty);
     store_current_result_to_ref_cell(ctx, cell_reg, &local_ty);
     if release_replaced_value {

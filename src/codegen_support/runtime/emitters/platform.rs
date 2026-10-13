@@ -28,8 +28,16 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_cstr(emitter);
     io::emit_disk_space(emitter);
     io::emit_fopen(emitter);
+    io::emit_stream_owner_mark(emitter);
+    io::emit_stream_owner_clear(emitter);
+    io::emit_stream_owner_drain(emitter);
     io::emit_fgets(emitter);
     io::emit_feof(emitter);
+    if features.async_reactor {
+        io::emit_async_fd(emitter);
+        io::emit_async_monitor_event(emitter);
+        io::emit_async_poll(emitter);
+    }
     io::emit_stream_isatty(emitter);
     io::emit_stream_select(emitter);
     io::emit_stream_set_blocking(emitter);
@@ -96,6 +104,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_fwrite(emitter);
     io::emit_wrapper_unbox_int(emitter);
     io::emit_user_wrapper_fclose(emitter);
+    io::emit_user_wrapper_abandon_all(emitter);
     io::emit_user_wrapper_fread(emitter);
     io::emit_user_wrapper_fwrite(emitter);
     io::emit_user_wrapper_feof(emitter);
@@ -128,6 +137,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_apply_user_stream_filter(emitter);
     io::emit_user_filter_brigade_invoke(emitter);
     io::emit_user_filter_release_fd(emitter);
+    io::emit_user_filter_abandon_fd(emitter);
     io::emit_var_dump_array_int(emitter);
     io::emit_var_dump_array_str(emitter);
     io::emit_var_dump_array_bool(emitter);
@@ -251,7 +261,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     fibers::emit_fiber_alloc_stack(emitter);
     fibers::emit_fiber_free_stack(emitter);
     fibers::emit_fiber_switch(emitter);
-    fibers::emit_fiber_entry(emitter);
+    fibers::emit_fiber_entry(emitter, features);
     fibers::emit_fiber_construct(emitter);
     fibers::emit_fiber_throw_state_error(emitter);
     fibers::emit_fiber_start(emitter);

@@ -527,6 +527,8 @@ impl Checker {
             .chain(params.iter().map(|(name, _, _, _)| name))
             .filter_map(|name| env.get(name).map(|ty| (name.clone(), ty.clone())))
             .collect();
+        let previous_closure_span = self.current_closure_span;
+        self.current_closure_span = Some(expr.span);
         let body_result = self.with_local_storage_context(
             closure_ref_params,
             closure_param_names,
@@ -539,6 +541,7 @@ impl Checker {
                 Ok(())
             },
         );
+        self.current_closure_span = previous_closure_span;
         self.current_loop_storage_scope = previous_loop_storage_scope;
         self.current_by_ref_return = prev_by_ref_return;
         self.closure_depth -= 1;

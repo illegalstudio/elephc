@@ -10,6 +10,65 @@
 
 use std::path::{Path, PathBuf};
 
+/// Scoped callback guards preserve builtin defaults before target backend emission.
+#[test]
+fn scoped_callback_filter_materializes_default_mode_on_all_targets() {
+    use crate::ir::{Immediate, Op, RuntimeCallTarget, RuntimeFnId};
+    for namespace in ["Async", "Parallel"] {
+        let source = format!(
+            "<?php use Elephc\\{namespace}\\TaskGroup; use function Elephc\\{namespace}\\run; \
+             echo run(static function (TaskGroup $tasks): int {{ \
+             $predicate = static fn (int $value): bool => true; \
+             $filtered = array_filter([1], $predicate); return count($filtered); }});"
+        );
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let module = super::lower_source_at_for_target(
+                &source, Path::new("main.php"), Path::new("."),
+                crate::codegen::platform::Target::parse(name).unwrap(),
+            );
+            let filters = module.functions.iter().chain(&module.closures).chain(&module.class_methods)
+                .flat_map(|function| function.instructions.iter().filter_map(move |inst| {
+                    matches!(inst.immediate,
+                        Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::ArrayFilter)))
+                        | Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
+                            target: RuntimeFnId::ArrayFilter, ..
+                        })))
+                        .then_some((function, inst))
+                })).collect::<Vec<_>>();
+            assert!(!filters.is_empty(), "{namespace}/{name}: filter call must survive lowering");
+            for (function, filter) in filters {
+                assert_eq!(filter.operands.len(), 3, "{namespace}/{name}: runtime filter contract");
+                let mode = function.instructions.iter().find(|inst| inst.result == Some(filter.operands[2]))
+                    .expect("default filter mode producer");
+                assert_eq!(mode.op, Op::ConstI64, "{namespace}/{name}");
+                assert_eq!(mode.immediate, Some(Immediate::I64(0)), "{namespace}/{name}");
+            }
+        }
+    }
+}
+
+/// Keeps the corpus frontend's structured-execution preludes aligned with production on all targets.
+#[test]
+fn corpus_frontend_injects_async_then_parallel_on_all_targets() {
+    for namespace in ["Async", "Parallel"] {
+        let source = format!(
+            "<?php use Elephc\\{namespace}\\TaskGroup; \
+             use function Elephc\\{namespace}\\run; \
+             echo run(static function (TaskGroup $tasks): int {{ return 7; }});"
+        );
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = crate::codegen::platform::Target::parse(name).unwrap();
+            let module = super::lower_source_at_for_target(
+                &source, Path::new("main.php"), Path::new("."), target,
+            );
+            assert!(module.class_infos.contains_key(&format!("Elephc\\{namespace}\\TaskGroup")),
+                "{namespace}/{name}: missing structured-execution declarations");
+            assert!(module.functions.iter().any(|function| function.name == "main"),
+                "{namespace}/{name}: missing lowered main");
+        }
+    }
+}
+
 /// Lowers the PCNTL example for each desktop target without requiring cross-target linking.
 #[test]
 fn lowers_pcntl_example_on_every_desktop_target() {

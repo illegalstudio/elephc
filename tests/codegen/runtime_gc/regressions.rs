@@ -1768,8 +1768,7 @@ echo "done";
 
 /// Regression for #448: rethrowing the caught variable (`throw $e`) hands the same
 /// object to an outer handler. With catch slots owned and released, the rethrow must
-/// retain the borrowed local so inner and outer bindings each own a reference —
-/// neither a leak nor a double free.
+/// transfer the local owner and clear the abandoned slot — neither a leak nor a double free.
 #[test]
 fn test_regression_rethrow_chain_balances_references() {
     let out = compile_and_run_with_heap_debug(
@@ -2006,9 +2005,8 @@ echo $hits;
     );
 }
 
-/// Regression for #448: expression-form rethrow (`true ? throw $e : 0`) must retain
-/// the catch local the same way statement-form `throw $e` does. Without the retain,
-/// inner and outer catch slots share one reference and epilogue/rebind double-frees.
+/// Regression for #448: expression-form rethrow (`true ? throw $e : 0`) must transfer
+/// and clear the catch local the same way statement-form `throw $e` does.
 #[test]
 fn test_regression_expression_rethrow_balances_references() {
     let out = compile_and_run_with_heap_debug(
@@ -4582,6 +4580,7 @@ for ($i = 0; $i < 20; $i++) {
     $total += strlen(quotemeta(build()));
     $total += strlen(base_convert("ff", 16, 2));
 }
+
 echo $total, "\n";
 "#,
     );
@@ -4590,6 +4589,927 @@ echo $total, "\n";
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected scratch string builtins to release their argument temporaries, got: {}",
+        out.stderr
+    );
+}
+
+/// A reference cell widened after capture owns both the replacement object and the closure
+/// descriptor. Releasing the enclosing frame must dispose of each exactly once.
+#[test]
+fn test_by_ref_capture_later_outer_representation_change_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$value = null;
+$read = static function () use (&$value): string {
+    return $value instanceof stdClass ? "object" : gettype($value);
+};
+$value = new stdClass();
+echo $read();
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "object");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected widened reference-cell storage to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// The closure descriptor and frame hold independent owners of the shared cell. Unsetting the
+/// outer symbol drops only the frame owner; destroying the descriptor later releases the payload
+/// and cell exactly once.
+#[test]
+fn test_by_ref_capture_unset_outer_symbol_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$value = new stdClass();
+$first = static function () use (&$value): string {
+    return $value instanceof stdClass ? "object" : gettype($value);
+};
+$second = static function () use (&$value): string {
+    return $value instanceof stdClass ? "object" : gettype($value);
+};
+unset($value);
+echo $first(), "|";
+unset($first);
+echo $second();
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "object|object");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the closure-owned reference cell to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// A closure that captures a local alias to an object reference property owns the shared cell.
+/// Destroying the object drops only the object's owner; the closure must keep the value alive.
+#[test]
+fn test_object_reference_property_cell_survives_through_capturing_closure() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class ReferenceOwner { public array $items = [1, 2]; }
+
+function buildReader(): Closure {
+    $owner = new ReferenceOwner();
+    $alias = &$owner->items;
+    $reader = static function () use (&$alias): string {
+        return implode(',', $alias);
+    };
+    unset($owner);
+    return $reader;
+}
+
+$reader = buildReader();
+echo $reader();
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1,2");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the closure-owned property cell to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Cloning an object with a reference property gives both objects one owner of the same cell.
+/// Releasing the source must leave the clone and the original alias valid without leaking.
+#[test]
+fn test_cloned_object_reference_property_cell_has_independent_owner() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class ReferenceClone { public array $items = [1]; }
+
+$source = new ReferenceClone();
+$alias = &$source->items;
+$copy = clone $source;
+unset($source);
+$copy->items[] = 2;
+echo implode(',', $alias), '|', implode(',', $copy->items);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1,2|1,2");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected both cloned property-cell owners to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Parallel scope drain settles the actual Future object before releasing native job storage.
+/// An escaped success handle therefore remains repeatable and all parent-side objects are freed.
+#[test]
+fn test_parallel_escaped_future_cache_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$future = \Elephc\Parallel\run(
+    static function (\Elephc\Parallel\TaskGroup $tasks): \Elephc\Parallel\Future {
+        return $tasks->spawn(static fn (): int => 42);
+    },
+);
+echo $future->join(), '|', $future->join();
+unset($future);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "42|42");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected escaped Future state to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// An escaped failed Future owns its reconstructed parent-side TaskFailure after scope drain.
+/// Catching the scope aggregate, then joining the escaped handle, must preserve the typed failure
+/// and release both object graphs when their explicit owners leave scope.
+#[test]
+fn test_parallel_escaped_failed_future_is_heap_clean_after_scope_drain() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$future = null;
+try {
+    \Elephc\Parallel\run(static function (\Elephc\Parallel\TaskGroup $tasks) use (&$future): int {
+        $future = $tasks->spawn(static function (): int {
+            throw new LogicException("worker-boom");
+        });
+        return 0;
+    });
+} catch (\Elephc\Parallel\TaskGroupFailure $groupFailure) {
+    try {
+        $future->join();
+    } catch (\Elephc\Parallel\TaskFailure $failure) {
+        echo $failure->remoteClass(), "|", $failure->getMessage();
+        unset($failure);
+    }
+    unset($groupFailure);
+}
+unset($future);
+\__elephc_async_gc_collect();
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "LogicException|worker-boom");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected escaped failed Future state to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Parallel success and failure envelopes are copied out of the worker before its isolated
+/// context is released. Reading both forms from the parent must therefore be valid and leave
+/// no worker- or parent-owned transfer allocation behind.
+#[test]
+fn test_parallel_terminal_php_wire_payloads_are_heap_clean_after_worker_release() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$future = \Elephc\Parallel\run(
+    static function (\Elephc\Parallel\TaskGroup $tasks): \Elephc\Parallel\Future {
+        return $tasks->spawn(static fn (): int => 42);
+    },
+);
+$result = $future->join();
+$repeat = $future->join();
+unset($future);
+
+try {
+    \Elephc\Parallel\run(static function (\Elephc\Parallel\TaskGroup $tasks): int {
+        $tasks->spawn(static function (): int {
+            throw new RuntimeException("worker-boom", 17);
+        });
+        return 0;
+    });
+} catch (\Elephc\Parallel\TaskGroupFailure $groupFailure) {
+    $failure = $groupFailure->failures()[0];
+    echo $result, "|", $repeat, "|", $failure->remoteClass(), "|", $failure->getMessage(), "|", $failure->getCode();
+}
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={} stderr={}",
+        out.stdout,
+        out.stderr
+    );
+    assert_eq!(out.stdout, "42|42|RuntimeException|worker-boom|17");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected Parallel terminal PHP-wire payloads to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// A worker failure crosses the PHP wire as a data-only `TaskFailure`. Catching the resulting
+/// group failure must release the reconstructed parent-side exceptions and their payloads.
+#[test]
+fn test_parallel_worker_failure_php_wire_payload_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+try {
+    \Elephc\Parallel\run(static function (\Elephc\Parallel\TaskGroup $tasks): int {
+        $tasks->spawn(static function (): int {
+            throw new RuntimeException("worker-boom", 17);
+        });
+        return 0;
+    });
+} catch (\Elephc\Parallel\TaskGroupFailure $groupFailure) {
+    $failure = $groupFailure->failures()[0];
+    echo $failure->remoteClass(), "|", $failure->getMessage(), "|", $failure->getCode();
+    unset($failure);
+    unset($groupFailure);
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "RuntimeException|worker-boom|17");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected Parallel worker failure payload to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Isolates the parent-side Parallel failure objects from worker exception transport. Enum cases
+/// and `TaskFailure` properties are ordinary PHP values and must release like any other object.
+#[test]
+fn test_parallel_task_failure_object_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+echo \Elephc\Parallel\run(static fn (\Elephc\Parallel\TaskGroup $tasks): int => 42);
+$failure = new \Elephc\Parallel\TaskFailure(
+    \Elephc\Parallel\TaskFailureKind::TransferDecode,
+    "x",
+);
+echo $failure->getMessage();
+unset($failure);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "42x");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a parent-side Parallel TaskFailure to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// The TaskFailure payload reconstructed from the PHP wire owns remote strings and frames in
+/// addition to the enum kind. Those nested values must follow the exception's lifetime.
+#[test]
+fn test_parallel_task_failure_remote_payload_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+echo \Elephc\Parallel\run(static fn (\Elephc\Parallel\TaskGroup $tasks): int => 42);
+$failure = new \Elephc\Parallel\TaskFailure(
+    \Elephc\Parallel\TaskFailureKind::PhpThrowable,
+    "worker-boom",
+    17,
+    "RuntimeException",
+    "task.php",
+    41,
+    [["worker", "task.php", 41]],
+);
+echo $failure->remoteClass(), "|", $failure->getMessage(), "|", $failure->remoteFrames()[0][0];
+unset($failure);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "42RuntimeException|worker-boom|worker");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a nested Parallel TaskFailure payload to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// TaskGroupFailure owns the failure array while callers may retain one child independently.
+/// Both ownership edges must unwind once the group and child locals leave scope.
+#[test]
+fn test_parallel_task_group_failure_payload_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+echo \Elephc\Parallel\run(static fn (\Elephc\Parallel\TaskGroup $tasks): int => 42);
+$child = new \Elephc\Parallel\TaskFailure(
+    \Elephc\Parallel\TaskFailureKind::PhpThrowable,
+    "worker-boom",
+    17,
+    "RuntimeException",
+    "task.php",
+    41,
+    [["worker", "task.php", 41]],
+);
+$group = new \Elephc\Parallel\TaskGroupFailure([$child]);
+echo $group->failures()[0]->getMessage();
+unset($child);
+unset($group);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "42worker-boom");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a Parallel TaskGroupFailure payload to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Throwing and catching the aggregate failure must transfer its failure array out of the
+/// exception slot without retaining a second owner through the catch boundary.
+#[test]
+fn test_thrown_parallel_task_group_failure_payload_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+echo \Elephc\Parallel\run(static fn (\Elephc\Parallel\TaskGroup $tasks): int => 42);
+$child = new \Elephc\Parallel\TaskFailure(
+    \Elephc\Parallel\TaskFailureKind::PhpThrowable,
+    "worker-boom",
+    17,
+    "RuntimeException",
+    "task.php",
+    41,
+    [["worker", "task.php", 41]],
+);
+try {
+    throw new \Elephc\Parallel\TaskGroupFailure([$child]);
+} catch (\Elephc\Parallel\TaskGroupFailure $group) {
+    echo $group->failures()[0]->getMessage();
+}
+unset($child);
+unset($group);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "42worker-boom");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a thrown Parallel TaskGroupFailure payload to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// The synthetic cleanup handler around `Parallel::run()` must rethrow a root failure without
+/// retaining the current exception after the caller's catch owns it.
+#[test]
+fn test_parallel_root_failure_cleanup_handler_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+try {
+    \Elephc\Parallel\run(static function (\Elephc\Parallel\TaskGroup $tasks): int {
+        throw new RuntimeException("root-boom", 29);
+    });
+} catch (RuntimeException $failure) {
+    echo $failure->getMessage(), "|", $failure->getCode();
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "root-boom|29");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a root Parallel failure to clean handler ownership, got: {}",
+        out.stderr
+    );
+}
+
+/// Cancellation state reason ownership is released explicitly after a Parallel scope drains.
+/// This isolates the state/reason edge from worker and TaskGroup failure propagation.
+#[test]
+fn test_parallel_cancellation_reason_clear_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+echo \Elephc\Parallel\run(static fn (\Elephc\Parallel\TaskGroup $tasks): int => 42);
+$state = new \Elephc\Async\__CancellationState();
+$reason = new RuntimeException("root-boom", 29);
+$state->request($reason);
+$state->__clearReason();
+unset($reason);
+unset($state);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "42");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected Parallel cancellation reason cleanup, got: {}",
+        out.stderr
+    );
+}
+
+/// A caught Throwable must cross an ordinary closure boundary without retaining its activation
+/// record. This is the non-scheduler control for the root `Parallel::run()` callback path.
+#[test]
+fn test_closure_root_failure_boundary_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$body = static function (): int {
+    throw new RuntimeException("root-boom", 29);
+};
+try {
+    $body();
+} catch (RuntimeException $failure) {
+    echo $failure->getMessage(), "|", $failure->getCode();
+    unset($failure);
+}
+unset($body);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "root-boom|29");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a closure failure boundary to clean ownership, got: {}",
+        out.stderr
+    );
+}
+
+/// A throwing closure must release an object parameter that never reaches a normal return.
+/// This separates general callback-frame unwind ownership from Parallel's structured scope.
+#[test]
+fn test_closure_object_parameter_failure_boundary_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+final class ThrowBoundaryBox {}
+$box = new ThrowBoundaryBox();
+$body = static function (ThrowBoundaryBox $box): int {
+    throw new RuntimeException("root-boom", 29);
+};
+try {
+    $body($box);
+} catch (RuntimeException $failure) {
+    echo $failure->getMessage(), "|", $failure->getCode();
+}
+unset($body);
+unset($box);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "root-boom|29");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a closure parameter to release across throw, got: {}",
+        out.stderr
+    );
+}
+
+/// Models `Parallel::run()`'s catch, deferred rethrow, and result-box protocol without
+/// TaskGroup state. A leak here is a generic deferred-throw ownership defect.
+#[test]
+#[ignore = "known generic Throwable catch/rethrow heap ownership leak"]
+fn test_deferred_closure_rethrow_protocol_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function deferred(Closure $body): mixed {
+    $resultBox = [];
+    $failed = false;
+    $failure = null;
+    try {
+        $resultBox[] = $body();
+    } catch (Throwable $caught) {
+        $failed = true;
+        $failure = $caught;
+        unset($caught);
+    }
+    unset($body);
+    if ($failed) {
+        unset($resultBox);
+        throw $failure;
+    }
+    $result = $resultBox[0];
+    unset($resultBox);
+    return $result;
+}
+try {
+    deferred(static function (): int {
+        throw new RuntimeException("root-boom", 29);
+    });
+} catch (RuntimeException $failure) {
+    echo $failure->getMessage(), "|", $failure->getCode();
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "root-boom|29");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the deferred rethrow protocol to clean ownership, got: {}",
+        out.stderr
+    );
+}
+
+/// A concrete Throwable slot is the control for the mixed-slot rethrow reducer. Replacing the
+/// placeholder must release it, then transfer the caught Throwable exactly once at rethrow.
+#[test]
+#[ignore = "known generic Throwable catch/rethrow heap ownership leak"]
+fn test_deferred_concrete_throwable_rethrow_protocol_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function deferred_concrete(Closure $body): mixed {
+    $resultBox = [];
+    $failed = false;
+    $failure = new RuntimeException("placeholder");
+    try {
+        $resultBox[] = $body();
+    } catch (RuntimeException $caught) {
+        $failed = true;
+        $failure = $caught;
+        unset($caught);
+    }
+    unset($body);
+    if ($failed) {
+        unset($resultBox);
+        throw $failure;
+    }
+    $result = $resultBox[0];
+    unset($resultBox);
+    unset($failure);
+    return $result;
+}
+try {
+    deferred_concrete(static function (): int {
+        throw new RuntimeException("root-boom", 29);
+    });
+} catch (RuntimeException $failure) {
+    echo $failure->getMessage(), "|", $failure->getCode();
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "root-boom|29");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected concrete deferred rethrow ownership to clean, got: {}",
+        out.stderr
+    );
+}
+
+/// Immediate rethrow through a function catch is the smallest exception-frame control for
+/// deferred Parallel failure propagation.
+#[test]
+fn test_function_catch_rethrow_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function rethrow(Closure $body): void {
+    try {
+        $body();
+    } catch (Throwable $caught) {
+        unset($body);
+        throw $caught;
+    }
+}
+try {
+    rethrow(static function (): void {
+        throw new RuntimeException("root-boom", 29);
+    });
+} catch (RuntimeException $failure) {
+    echo $failure->getMessage(), "|", $failure->getCode();
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "root-boom|29");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected function catch/rethrow ownership to clean, got: {}",
+        out.stderr
+    );
+}
+
+/// An escaping function call must not strand an owning closure argument in its caller frame.
+#[test]
+fn test_function_catch_rethrow_with_caller_owned_closure_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function rethrow_owned(Closure $body): void {
+    try {
+        $body();
+    } catch (Throwable $caught) {
+        unset($body);
+        throw $caught;
+    }
+}
+$body = static function (): void {
+    throw new RuntimeException("root-boom", 29);
+};
+try {
+    rethrow_owned($body);
+} catch (RuntimeException $failure) {
+    echo $failure->getMessage(), "|", $failure->getCode();
+    unset($failure);
+}
+unset($body);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "root-boom|29");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected caller-owned closure cleanup across rethrow, got: {}",
+        out.stderr
+    );
+}
+
+/// Backed enum case slots retain process-lifetime singleton owners only while user code runs.
+/// The main epilogue must release those hidden owners before heap-debug reports final liveness.
+#[test]
+fn test_parallel_task_failure_kind_singletons_are_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+echo \Elephc\Parallel\run(static fn (\Elephc\Parallel\TaskGroup $tasks): int => 42);
+echo \Elephc\Parallel\TaskFailureKind::TransferDecode->value;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "427");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected Parallel TaskFailureKind singletons to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// An empty Parallel scope is the ownership baseline for the generated state/group objects.
+#[test]
+fn test_parallel_empty_scope_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+echo \Elephc\Parallel\run(
+    static fn (\Elephc\Parallel\TaskGroup $tasks): int => 42,
+);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "42");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected empty Parallel scope state to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Baseline for Parallel's root-body invocation: passing an owned object into a dynamic closure
+/// must balance the callee parameter and caller local owners.
+#[test]
+fn test_dynamic_closure_object_argument_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+final class ClosureArgument {}
+function invoke(\Closure $body): int {
+    $value = new ClosureArgument();
+    $result = $body($value);
+    unset($value);
+    unset($body);
+    return $result;
+}
+echo invoke(static fn (ClosureArgument $value): int => 42);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "42");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected dynamic closure object arguments to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Baseline for the cancellation pair reused by Parallel's TaskGroup.
+#[test]
+fn test_async_cancellation_handle_pair_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+if ($argc < 0) {
+    \Elephc\Async\run(static fn (\Elephc\Async\TaskGroup $tasks): int => 0);
+}
+function buildCancellationPair(): void {
+    $state = new \Elephc\Async\__CancellationState();
+    $cancellation = new \Elephc\Async\Cancellation($state);
+    unset($cancellation);
+    unset($state);
+}
+buildCancellationPair();
+\__elephc_async_gc_collect();
+echo "clean";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "clean");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected cancellation state/handle ownership to be balanced, got: {}",
+        out.stderr
+    );
+}
+
+/// Baseline for the repeated serialized-result decode used by Future::join().
+#[test]
+fn test_repeated_unserialize_scalar_result_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$first = unserialize("i:42;");
+echo $first, '|';
+unset($first);
+$second = unserialize("i:42;");
+echo $second;
+unset($second);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "42|42");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected repeated scalar unserialize results to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Mirrors the two mixed-return layers used by __takePreparedValue() and Future::join().
+#[test]
+fn test_nested_mixed_return_unserialize_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function decodeValue(): mixed {
+    $bytes = "i:42;";
+    $value = unserialize($bytes);
+    unset($bytes);
+    return $value;
+}
+function joinLike(): mixed {
+    $result = decodeValue();
+    return $result;
+}
+$first = joinLike();
+echo $first, '|';
+unset($first);
+$second = joinLike();
+echo $second;
+unset($second);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "42|42");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected nested mixed return owners to transfer cleanly, got: {}",
+        out.stderr
+    );
+}
+
+/// Mirrors Future::join() as an ordinary method returning a fresh Mixed decode.
+#[test]
+fn test_method_mixed_return_unserialize_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+final class Decoder {
+    public function decode(): mixed {
+        $value = unserialize("i:42;");
+        return $value;
+    }
+}
+$decoder = new Decoder();
+$first = $decoder->decode();
+echo $first, '|';
+unset($first);
+$second = $decoder->decode();
+echo $second;
+unset($second);
+unset($decoder);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "42|42");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected fresh Mixed method returns to transfer cleanly, got: {}",
+        out.stderr
+    );
+}
+
+/// Releases a shared dual-direction filter once, retaining only process-lifetime registry strings.
+#[test]
+fn test_dual_direction_user_filter_instance_is_released_once() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class HeapCleanFilter {
+    public function filter(string $data): string {
+        return $data;
+    }
+    public function onClose(): void {
+        echo "closed";
+    }
+}
+stream_filter_register("heap.clean", "HeapCleanFilter");
+$stream = fopen("php://memory", "r+");
+stream_filter_append($stream, "heap.clean");
+fclose($stream);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "closed");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: live_blocks=2 live_bytes=96"),
+        "expected only the two process-lifetime filter-registration strings to remain, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies enum backing coercion releases an owning Mixed array-read temporary.
+#[test]
+fn test_int_backed_enum_from_mixed_array_read_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+enum State: int { case Ready = 1; }
+
+function normalize_state(mixed $value): void {
+    State::from($value);
+}
+
+$wire = serialize([1, 1]);
+$fields = unserialize($wire);
+State::from($fields[0]);
+normalize_state($fields[1]);
+echo "enum";
+unset($fields);
+unset($wire);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "enum");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected enum backing coercion to release its owning Mixed argument, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies a throw from a named user function runs cleanup for its owning locals before a
+/// caller catch receives the exception.
+#[test]
+fn test_callee_throw_releases_owning_locals_before_catch() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function throw_from_callee(): void {
+    $payload = ["worker-" . $argc];
+    $message = $payload[0];
+    throw new RuntimeException($message, 17);
+}
+
+try {
+    throw_from_callee();
+} catch (RuntimeException $failure) {
+    echo $failure->getMessage(), "|", $failure->getCode();
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "worker-|17");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected callee exception cleanup to release its owning locals, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies a descriptor invoker releases its caller-owned Mixed argument container when the
+/// invoked closure throws and longjmps into the callee's handler.
+#[test]
+fn test_dynamic_closure_rethrow_releases_invoker_arguments() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function deferred_call(Closure $body): void {
+    $failure = null;
+    try {
+        $body();
+    } catch (Throwable $caught) {
+        $failure = $caught;
+        unset($caught);
+    }
+    unset($body);
+    throw $failure;
+}
+
+$body = static function (): int {
+    throw new RuntimeException("root-boom", 29);
+};
+try {
+    deferred_call($body);
+} catch (RuntimeException $failure) {
+    echo $failure->getMessage(), "|", $failure->getCode();
+    unset($failure);
+}
+unset($body);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "root-boom|29");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected descriptor invoker arguments to release after a closure throw, got: {}",
         out.stderr
     );
 }

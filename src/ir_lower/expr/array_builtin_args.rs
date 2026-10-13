@@ -267,6 +267,9 @@ fn lower_planned_builtin_call_args(
     if canonical == "eval" {
         return lower_eval_args(ctx, sig, args);
     }
+    if let Some(operands) = lower_callback_builtin_args_in_source_order(ctx, &canonical, sig, args) {
+        return operands;
+    }
     let argument_lowering = crate::builtins::registry::lookup(&canonical)
         .map(|def| def.spec.semantics.argument_lowering)
         .unwrap_or(crate::builtins::semantics::BuiltinArgumentLowering::Standard);
@@ -411,6 +414,132 @@ fn lower_planned_builtin_call_args(
     }
     lowered
 }
+
+/// Lowers native higher-order builtin arguments in PHP source order and guards its callback in place.
+///
+/// A forbidden callback prevents later arguments from being evaluated, while earlier arguments
+/// retain their PHP-visible side effects and owned temporaries are released on the rejecting edge.
+fn lower_callback_builtin_args_in_source_order(
+    ctx: &mut LoweringContext<'_, '_>,
+    canonical: &str,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Option<Vec<crate::ir::ValueId>> {
+    let parallel_enabled = ctx
+        .extern_functions
+        .contains_key("elephc_parallel_parent_scope_active");
+    let async_enabled = ctx
+        .classes
+        .keys()
+        .any(|name| crate::names::php_symbol_key(name) == "elephc\\async\\__scheduler");
+    if !parallel_enabled && !async_enabled {
+        return None;
+    }
+    let callback_index = match canonical {
+        "array_map" => Some(0),
+        "array_filter" | "array_reduce" | "array_walk" | "array_walk_recursive" | "usort" => {
+            Some(1)
+        }
+        _ => return None,
+    }?;
+    let sig = sig?;
+    let args = if args.iter().any(is_spread_arg) {
+        expand_static_call_spread_args(args)
+    } else {
+        args.to_vec()
+    };
+    if args.len() <= callback_index || args.iter().any(is_spread_arg) {
+        return None;
+    }
+    if crate::types::call_args::has_named_args(&args) {
+        return lower_named_callback_builtin_args(ctx, sig, callback_index, &args);
+    }
+
+    let mut lowered = Vec::with_capacity(args.len());
+    for (index, arg) in args.iter().enumerate() {
+        let value = lower_arg_with_signature(ctx, sig, index, arg);
+        if index == callback_index {
+            let pending_values = lowered.clone();
+            let callback_value = LoweredValue {
+                value,
+                ir_type: ctx.builder.value_type(value),
+            };
+            super::descriptor_invoke::maybe_emit_parallel_fiber_suspend_callback_guard_with_pending(
+                ctx,
+                callback_value,
+                arg.span,
+                &pending_values,
+            );
+        }
+        lowered.push(value);
+    }
+    let materialize_defaults = crate::builtins::registry::lookup(canonical).is_some_and(|definition| {
+        definition.spec.semantics.argument_lowering
+            == crate::builtins::semantics::BuiltinArgumentLowering::MaterializeDefaults
+    });
+    if materialize_defaults {
+        materialize_positional_argument_defaults(ctx, sig, args.len(), &mut lowered);
+    }
+    Some(lowered)
+}
+
+/// Lowers a no-spread named callback call from the shared plan, guarding it at source position.
+fn lower_named_callback_builtin_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    callback_index: usize,
+    args: &[Expr],
+) -> Option<Vec<crate::ir::ValueId>> {
+    let call_span = args.first()?.span;
+    let plan = crate::types::call_args::plan_call_args(sig, args, call_span, false, false).ok()?;
+    if plan.has_spread_args() || !plan.variadic_args.is_empty() {
+        return None;
+    }
+    let callback_source_index = match plan.regular_args.get(callback_index)? {
+        crate::types::call_args::PlannedRegularArg::Source { source_index, .. } => *source_index,
+        crate::types::call_args::PlannedRegularArg::Default(_)
+        | crate::types::call_args::PlannedRegularArg::SpreadElement { .. } => return None,
+    };
+
+    let mut source_values = vec![None; plan.source_args.len()];
+    for (source_index, source_arg) in plan.source_values.iter().enumerate() {
+        if source_arg.source_index() != source_index {
+            return None;
+        }
+        let value = super::variadic_args::lower_call_source_arg(ctx, source_arg.expr());
+        if source_index == callback_source_index {
+            let callback = LoweredValue {
+                value,
+                ir_type: ctx.builder.value_type(value),
+            };
+            let pending_values = source_values.iter().filter_map(|value| *value).collect::<Vec<_>>();
+            super::descriptor_invoke::maybe_emit_parallel_fiber_suspend_callback_guard_with_pending(
+                ctx,
+                callback,
+                source_arg.expr().span,
+                &pending_values,
+            );
+        }
+        source_values[source_index] = Some(value);
+    }
+
+    let mut operands = Vec::with_capacity(plan.regular_args.len());
+    for arg in &plan.regular_args {
+        match arg {
+            crate::types::call_args::PlannedRegularArg::Source { source_index, .. } => {
+                operands.push(source_values.get(*source_index).copied().flatten()?);
+            }
+            crate::types::call_args::PlannedRegularArg::Default(default) => {
+                operands.push(lower_expr(ctx, default).value);
+            }
+            crate::types::call_args::PlannedRegularArg::SpreadElement { .. } => return None,
+        }
+    }
+    Some(super::call_arg_coercion::coerce_operands_to_params(
+        ctx, sig, operands,
+    ))
+}
+
 
 /// Finds regex outputs without changing flow types, and prepares concrete PCNTL writeback slots.
 fn prepare_write_only_output_locals(

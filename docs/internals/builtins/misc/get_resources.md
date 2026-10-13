@@ -2,7 +2,7 @@
 title: "get_resources() - internals"
 description: "Compiler internals for get_resources(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 631
+  order: 632
 ---
 
 ## `get_resources()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/get_resources.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/get_resources.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:701](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L701) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

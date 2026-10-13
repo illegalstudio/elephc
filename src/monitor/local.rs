@@ -599,6 +599,7 @@ pub(crate) fn run_instrument(cmd: &MonitorCommand) -> i32 {
         return 1;
     }
     print!("{}", instrument_table(&graph));
+    print!("{}", scheduler_table(&stderr));
     let title = cmd.target.trim_end_matches(".php").to_string();
     // The exact capture carries no per-line data, but it can still show the
     // file: every measured function, located, with its cost.

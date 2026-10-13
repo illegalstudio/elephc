@@ -39,7 +39,7 @@ use crate::parser::ast::{
 
 use super::{
     build, IntrospectionCall, HIDDEN_ARGC_PARAM, HIDDEN_ARGS_PARAM, SNAPSHOT_KEY_LOCAL,
-    SNAPSHOT_VALUE_LOCAL,
+    SNAPSHOT_VALUE_LOCAL, TRACE_VARIADIC_SNAPSHOT,
 };
 
 /// The argument frame of the function-like scope currently being walked.
@@ -339,7 +339,13 @@ impl Rewriter {
                 .first()
                 .map(|statement| statement.span)
                 .unwrap_or_else(crate::span::Span::dummy);
-            let snapshot = source_variadic_snapshot(&source_variadic, count_metadata, span);
+            let mut snapshot = source_variadic_snapshot(&source_variadic, count_metadata, span);
+            if self.capture_all_frames {
+                snapshot.insert(0, Stmt::new(StmtKind::Assign {
+                    name: TRACE_VARIADIC_SNAPSHOT.to_string(),
+                    value: Expr::new(ExprKind::Variable(source_variadic.clone()), span),
+                }, span));
+            }
             body.splice(0..0, snapshot);
             if count_metadata {
                 let attribute_index = params.len();

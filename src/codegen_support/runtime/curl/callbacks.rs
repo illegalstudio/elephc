@@ -187,6 +187,7 @@ pub fn emit_curl_invoke_callback(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #224]");                                  // arg0 = the callable descriptor
     emitter.instruction("ldr x1, [sp, #256]");                                  // arg1 = the boxed argument container
     emitter.instruction(&format!("ldr x9, [x0, #{}]", CALLABLE_DESC_INVOKER_OFFSET)); // uniform invoker
+    crate::codegen_support::callable_descriptor::emit_global_weak_invoker_context(emitter);
     emitter.instruction("blr x9");                                              // call the PHP callable → OWNED boxed Mixed return
     emitter.instruction("str x0, [sp, #264]");                                  // save the boxed return for decode + release
 
@@ -373,6 +374,7 @@ fn emit_curl_invoke_callback_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // arg0 = the callable descriptor
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // arg1 = the boxed argument container
     emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", CALLABLE_DESC_INVOKER_OFFSET)); // load the uniform invoker
+    crate::codegen_support::callable_descriptor::emit_global_weak_invoker_context(emitter);
     emitter.instruction("call r10");                                            // call the PHP callable → OWNED boxed Mixed return
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the boxed return
 

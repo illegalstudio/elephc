@@ -9,6 +9,7 @@
 //! - Keep startup thin so CLI validation and pipeline behavior stay in dedicated modules.
 
 mod autoload;
+mod async_prelude;
 mod brand;
 mod builtins;
 mod cli;
@@ -52,6 +53,7 @@ mod shared_ini_prelude;
 mod optimize;
 mod otlp;
 mod parser;
+mod parallel_prelude;
 mod php_version;
 mod mysqli_prelude;
 mod pdo_prelude;

@@ -9,6 +9,8 @@
 //! - Public module boundaries here are part of the crate-facing compiler API.
 
 pub mod autoload;
+/// Structured cooperative scheduler prelude (`Elephc\Async`).
+pub mod async_prelude;
 /// Local Cargo source inputs shared by bridge discovery and integration-test builders.
 #[doc(hidden)]
 pub mod bridge_sources;
@@ -81,6 +83,8 @@ pub mod object_cast_prelude;
 pub mod optimize;
 /// Parser for PHP syntax.
 pub mod parser;
+/// Structured isolated-thread scheduler prelude (`Elephc\Parallel`).
+pub mod parallel_prelude;
 /// Selected PHP compatibility version for version-sensitive compiler surfaces.
 pub mod php_version;
 /// PDO (SQLite) standard-library prelude injection.

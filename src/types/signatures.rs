@@ -133,8 +133,9 @@ impl FunctionSig {
 
 /// Upgrades a variadic signature for use as a first-class callable.
 ///
-/// If the variadic parameter is not already typed as `Array`, upgrades it to
-/// `Array<Mixed>`. Non-variadic signatures are returned unchanged.
+/// Preserves explicit indexed, associative, or iterable container layouts. A scalar
+/// element signature or missing capture slot is upgraded to `Array<Mixed>`.
+/// Non-variadic signatures are returned unchanged.
 ///
 /// Called from:
 /// - first-class callable lowering in codegen
@@ -146,7 +147,7 @@ pub(crate) fn callable_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
     let mut wrapper_sig = sig.clone();
     if let Some((name, ty)) = wrapper_sig.params.last_mut() {
         if name == variadic_name {
-            if !matches!(ty, PhpType::Array(_)) {
+            if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable) {
                 *ty = PhpType::Array(Box::new(PhpType::Mixed));
             }
             return wrapper_sig;
@@ -229,19 +230,17 @@ pub(crate) fn variadic_param_index(sig: &FunctionSig) -> Option<usize> {
 /// contract of a promoted `int ...$xs` still reads "declared" and says nothing about what the
 /// slot can hold.
 ///
-/// Two spellings qualify, and both dispatch on the runtime heap kind rather than on a static
-/// container shape: [`descriptor_variadic_container`] itself, and the `iterable` marker that
-/// `crate::codegen_support::callable_dispatch::static_method_runtime_wrapper_sig` installs on a
-/// static-method wrapper for exactly this reason. `crate::codegen::runtime_callable_invoker`
-/// already resolves both to a `Mixed` element, so a collector spelled either way reads the
-/// entries the invoker's tail collector writes.
+/// Dynamic array/iterable collectors and key-preserving Hash collectors accept named entries.
+/// A Mixed collector receives a boxed container, not a raw hash pointer: the invoker's
+/// `variadic_param_uses_mixed_storage` path supplies that transport. Statically indexed scalar
+/// collectors remain excluded because their callee cannot interpret a hash header.
 pub(crate) fn variadic_storage_accepts_named_entries(sig: &FunctionSig) -> bool {
     let Some(index) = variadic_param_index(sig) else {
         return false;
     };
     match &sig.params[index].1 {
         PhpType::Array(elem) => elem.codegen_repr() == PhpType::Mixed,
-        PhpType::Iterable => true,
+        PhpType::Iterable | PhpType::Mixed | PhpType::AssocArray { .. } => true,
         _ => false,
     }
 }
@@ -601,8 +600,25 @@ mod tests {
 
         sig.params[1].1 = PhpType::Mixed;
         assert!(
+            variadic_storage_accepts_named_entries(&sig),
+            "a Mixed collector receives a boxed key-preserving container",
+        );
+        assert_eq!(variadic_source_element_type_expr(&sig), Some(&TypeExpr::Int));
+
+        sig.params[1].1 = PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Int),
+        };
+        assert!(
+            variadic_storage_accepts_named_entries(&sig),
+            "a typed Hash collector physically preserves string keys",
+        );
+        assert_eq!(variadic_source_element_type_expr(&sig), Some(&TypeExpr::Int));
+
+        sig.params[1].1 = PhpType::Str;
+        assert!(
             !variadic_storage_accepts_named_entries(&sig),
-            "a collector that is not a container at all admits nothing",
+            "a raw scalar collector still cannot receive a named container",
         );
 
         let undeclared = variadic_sig(vec![(
@@ -686,6 +702,22 @@ mod tests {
         assert_eq!(wrapper_sig.defaults.len(), 2);
         assert_eq!(wrapper_sig.ref_params.len(), 2);
         assert_eq!(wrapper_sig.declared_params.len(), 2);
+    }
+
+    /// Keeps explicit indexed, keyed and iterable variadic storage unchanged in callable wrappers.
+    #[test]
+    fn callable_wrapper_sig_preserves_explicit_variadic_container_layouts() {
+        for container in [
+            PhpType::Array(Box::new(PhpType::Int)),
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(PhpType::Mixed),
+            },
+            PhpType::Iterable,
+        ] {
+            let sig = variadic_sig(vec![("values".to_string(), container)]);
+            assert_eq!(callable_wrapper_sig(&sig), sig);
+        }
     }
 
     /// Builds the parameter metadata for callable wrapper sig appends missing variadic.

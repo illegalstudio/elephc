@@ -9,6 +9,84 @@
 
 use crate::ir::{Immediate, LocalKind, Op, Ownership};
 
+/// Explicit counted aliases skip ordinary promoted-cell cleanup before state-owned retirement.
+#[test]
+fn foreach_alias_unset_separates_counted_and_ordinary_cell_cleanup_on_all_targets() {
+    let source = r#"<?php
+        $source = ["u" => 1];
+        foreach ($source as &$value) {}
+        unset($value);
+        echo json_encode($source);
+    "#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+        assert!(asm.lines().any(|line| {
+            let line = line.trim_start();
+            (line.starts_with("b.ne ") || line.starts_with("jne "))
+                && line.contains("unset_closure_ref_cell_raw")
+        }), "{target}: explicit counted owner must not receive ordinary-cell cleanup too");
+    }
+}
+
+/// Clone's runtime array guard sees the original Mixed override tag on every target.
+#[test]
+fn clone_mixed_overrides_preserve_runtime_operand_type_on_all_targets() {
+    let source = r#"<?php
+        class CloneMixedOverrideProbe { public function __clone(): void {} }
+        function badOverrides(): mixed { echo 'argument'; return 7; }
+        function probeClone(): void { clone(new CloneMixedOverrideProbe(), badOverrides()); }
+        probeClone();
+    "#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let main = module.functions.iter().find(|function| function.name == "probeClone").unwrap();
+        let clone = main.instructions.iter().find(|inst| {
+            matches!(inst.immediate, Some(Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::CloneWith)
+                | crate::ir::RuntimeCallTarget::ProfiledFunction {
+                    target: crate::ir::RuntimeFnId::CloneWith, ..
+                }
+            )))
+        }).expect("typed clone operation");
+        assert_eq!(main.value(clone.operands[1]).unwrap().php_type, crate::types::PhpType::Mixed,
+            "{target}: source tag must survive until runtime validation");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
+/// Every target rejects a private clone hook before the shared shallow-copy adapter runs.
+#[test]
+fn private_clone_visibility_precedes_allocation_on_all_targets() {
+    let source = r#"<?php
+        class PrivateCloneGuard {
+            private function __clone(): void {}
+            public function __destruct() { echo 'destruct'; }
+        }
+        $original = new PrivateCloneGuard();
+        try { $duplicate = clone $original; } catch (Error $error) { echo 'caught'; }
+    "#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+        let guard = asm.find("clone_hook_access_checked").expect("private hook guard");
+        let copy = asm.find("__rt_object_clone_shallow_boxed").expect("clone adapter");
+        assert!(guard < copy, "{target}: access must be checked before allocation");
+    }
+}
+
 /// Concrete descriptor strings transfer one exact owner and retire it after expression use.
 #[test]
 fn concrete_descriptor_string_results_are_owned_and_released_once_on_all_targets() {
@@ -42,15 +120,18 @@ fn concrete_descriptor_string_results_are_owned_and_released_once_on_all_targets
         let metadata = function.value(result).unwrap();
         assert_eq!(metadata.php_type, crate::types::PhpType::Str, "{target}");
         assert_eq!(metadata.ownership, crate::ir::Ownership::Owned, "{target}");
-        assert_eq!(
-            function
-                .instructions
-                .iter()
-                .filter(|inst| inst.op == Op::Release && inst.operands == [result])
-                .count(),
-            1,
-            "{target}",
-        );
+        let slots = function.instructions.iter().filter_map(|inst| {
+            if inst.op != Op::StoreLocal || inst.operands != [result] { return None; }
+            match inst.immediate { Some(Immediate::LocalSlot(slot)) => Some(slot), _ => None }
+        }).collect::<Vec<_>>();
+        assert_eq!(slots.len(), 1, "{target}: one staging slot must adopt the result");
+        assert_eq!(function.instructions.iter().filter(|inst| {
+            inst.op == Op::ReleaseLocalSlot && inst.immediate == Some(Immediate::LocalSlot(slots[0]))
+        }).count(), 1, "{target}: directly discarded result retires exactly once through its slot");
+        assert!(!function.instructions.iter().any(|inst| {
+            inst.op == Op::Release && inst.operands == [result]
+        }), "{target}: statement cleanup must not release the retired SSA result again");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
 

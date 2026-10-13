@@ -168,7 +168,7 @@ impl Checker {
                     .collect();
                 if Self::has_unknown_named_variadic_arg(args, &regular_names) {
                     if let Some((_, variadic_ty)) = stored_sig.params.last_mut() {
-                        *variadic_ty = PhpType::Iterable;
+                        *variadic_ty = crate::types::signatures::descriptor_variadic_container();
                     }
                 } else {
                     let mut elem_ty = actual_arg_types[regular_param_count].clone();
@@ -215,9 +215,7 @@ impl Checker {
             if seen_idx < regular_param_count && actual_ty == PhpType::Callable {
                 if let Some((param_name, _)) = param_types.get(seen_idx) {
                     if let Some(sig) = self.resolve_expr_callable_sig(arg, caller_env)? {
-                        let key = (name.to_string(), param_name.clone());
-                        if self.callable_param_sigs.get(&key) != Some(&sig) {
-                            self.callable_param_sigs.insert(key, sig);
+                        if self.record_callable_param_sig(name, param_name, sig) {
                             changed = true;
                         }
                     }
@@ -226,9 +224,7 @@ impl Checker {
             if seen_idx < regular_param_count && is_callable_array_type(&actual_ty) {
                 if let Some((param_name, _)) = param_types.get(seen_idx) {
                     if let Some(sig) = self.resolve_expr_callable_array_sig(arg, caller_env)? {
-                        let key = (name.to_string(), param_name.clone());
-                        if self.callable_param_sigs.get(&key) != Some(&sig) {
-                            self.callable_param_sigs.insert(key, sig);
+                        if self.record_callable_param_sig(name, param_name, sig) {
                             changed = true;
                         }
                     }
@@ -334,8 +330,9 @@ impl Checker {
                     .iter()
                     .position(|(param_name, _)| param_name == variadic_name)
                 {
-                    if param_types[variadic_index].1 != PhpType::Iterable {
-                        param_types[variadic_index].1 = PhpType::Iterable;
+                    let container = crate::types::signatures::descriptor_variadic_container();
+                    if param_types[variadic_index].1 != container {
+                        param_types[variadic_index].1 = container;
                         changed = true;
                     }
                 }
@@ -411,16 +408,16 @@ fn function_variadic_tail_needs_iterable(
 
 /// Returns whether a spread source can carry string keys into a variadic function tail.
 fn function_spread_source_keeps_runtime_keys(expr: &Expr, env: &TypeEnv) -> bool {
+    let keeps_keys = |ty: &PhpType| {
+        matches!(ty, PhpType::AssocArray { .. } | PhpType::Iterable)
+            || ty.is_php_array()
+            || *ty == crate::types::signatures::descriptor_variadic_container()
+    };
     match &expr.kind {
-        ExprKind::Variable(name) => matches!(
-            env.get(name),
-            Some(PhpType::AssocArray { .. } | PhpType::Iterable)
-        ),
+        ExprKind::Variable(name) => env.get(name).is_some_and(keeps_keys),
+        ExprKind::ArrayLiteral(_) => false,
         ExprKind::ArrayLiteralAssoc(_) => true,
-        _ => matches!(
-            crate::types::checker::infer_expr_type_syntactic(expr),
-            PhpType::AssocArray { .. } | PhpType::Iterable
-        ),
+        _ => keeps_keys(&crate::types::checker::infer_expr_type_syntactic(expr)),
     }
 }
 

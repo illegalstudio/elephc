@@ -2,7 +2,7 @@
 title: "system() - internals"
 description: "Compiler internals for system(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 758
+  order: 759
 ---
 
 ## `system()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/system.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/system.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:701](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L701) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

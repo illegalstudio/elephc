@@ -2,7 +2,7 @@
 title: "get_extension_funcs() - internals"
 description: "Compiler internals for get_extension_funcs(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 626
+  order: 627
 ---
 
 ## `get_extension_funcs()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/get_extension_funcs.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/get_extension_funcs.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:701](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L701) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

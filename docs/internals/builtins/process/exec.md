@@ -2,7 +2,7 @@
 title: "exec() - internals"
 description: "Compiler internals for exec(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 750
+  order: 751
 ---
 
 ## `exec()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/exec.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/exec.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:701](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L701) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

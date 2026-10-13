@@ -2,7 +2,7 @@
 title: "__elephc_curl_mime_new() - internals"
 description: "Compiler internals for __elephc_curl_mime_new(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1093
+  order: 1098
 ---
 
 ## `__elephc_curl_mime_new()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/curl/__elephc_curl_mime_new.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/curl/__elephc_curl_mime_new.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:701](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L701) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

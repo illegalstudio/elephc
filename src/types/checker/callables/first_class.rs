@@ -40,6 +40,8 @@ impl Checker {
                     .canonical_function_name_folded(name.as_str())
                     .unwrap_or_else(|| name.as_str().to_string());
                 let function_name = canonical_function_name.as_str();
+                self.ensure_parallel_prelude_helper_is_internal(function_name, span)?;
+                self.ensure_parallel_extern_callable_is_internal(function_name, span)?;
                 let function_key =
                     crate::names::php_symbol_key(function_name.trim_start_matches('\\'));
                 let prefer_extension_builtin = !crate::strict_php::is_enabled()

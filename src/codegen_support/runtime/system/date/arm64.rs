@@ -92,9 +92,8 @@ pub(super) fn emit_date_arm64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #24]");                                   // save tm pointer
 
     // -- set up output buffer in concat_buf --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // load current concat offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x11");
     emitter.instruction("add x11, x11, x10");                                   // compute write position: buf + offset
     emitter.instruction("str x11, [sp, #32]");                                  // save output write position
     emitter.instruction("str x11, [sp, #40]");                                  // save output start position
@@ -799,10 +798,9 @@ pub(super) fn emit_date_arm64(emitter: &mut Emitter) {
     emitter.instruction("sub x2, x9, x1");                                      // x2 = output length
 
     // -- update concat_off --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_concat_off");
-    emitter.instruction("ldr x11, [x10]");                                      // load current offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x11");
     emitter.instruction("add x11, x11, x2");                                    // add result length
-    emitter.instruction("str x11, [x10]");                                      // store updated offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x11"); // store the updated concat offset (ctx-relative in ctx mode)
 
     // -- tear down stack frame --
     emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address

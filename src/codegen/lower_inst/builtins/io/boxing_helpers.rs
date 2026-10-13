@@ -141,6 +141,7 @@ pub(super) fn box_stream_fd_or_false_result_kind(
         Arch::AArch64 => {
             ctx.emitter.instruction("cmp x0, #0");                              // test whether the stream helper returned a negative descriptor
             ctx.emitter.instruction(&format!("b.lt {}", false_label));          // box PHP false when stream creation failed
+            abi::emit_call_label(ctx.emitter, "__rt_stream_owner_mark");       // claim every real 0..255 descriptor for this runtime context
             abi::emit_call_label(ctx.emitter, "__rt_resource_id_mint");         // mint a FRESH resource id: the kernel reuses descriptor numbers, PHP never reuses ids
             ctx.emitter.instruction("mov x1, x0");                              // pass the native stream fd as the Mixed low payload word
             ctx.emitter.instruction(&format!("mov x2, #{}", kind));             // resource-kind subtype in the Mixed high word (1=fd,3=popen,4=dir)
@@ -157,6 +158,7 @@ pub(super) fn box_stream_fd_or_false_result_kind(
         Arch::X86_64 => {
             ctx.emitter.instruction("test rax, rax");                           // test whether the stream helper returned a negative descriptor
             ctx.emitter.instruction(&format!("js {}", false_label));            // box PHP false when stream creation failed
+            abi::emit_call_label(ctx.emitter, "__rt_stream_owner_mark");       // claim every real 0..255 descriptor for this runtime context
             abi::emit_call_label(ctx.emitter, "__rt_resource_id_mint");         // mint a FRESH resource id: the kernel reuses descriptor numbers, PHP never reuses ids
             ctx.emitter.instruction("mov rdi, rax");                            // pass the native stream fd as the Mixed low payload word
             ctx.emitter.instruction(&format!("mov esi, {}", kind));             // resource-kind subtype in the Mixed high word (1=fd,3=popen,4=dir)
@@ -182,7 +184,7 @@ pub(super) fn box_stream_socket_pair_result(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction(&format!("cbz x0, {}", false_label));       // null pointer means socketpair failed
             ctx.emitter.instruction("mov x1, #9");                              // resource tag: each fd becomes Mixed(resource)
             abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
-            emit_box_current_value_as_mixed(
+            emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Array(Box::new(PhpType::Mixed)),
             );
@@ -198,7 +200,7 @@ pub(super) fn box_stream_socket_pair_result(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("mov rdi, rax");                            // pass the descriptor array to array_to_mixed
             ctx.emitter.instruction("mov esi, 9");                              // resource tag: each fd becomes Mixed(resource)
             abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
-            emit_box_current_value_as_mixed(
+            emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Array(Box::new(PhpType::Mixed)),
             );
@@ -241,9 +243,8 @@ pub(in crate::codegen::lower_inst::builtins) fn box_owned_string_or_false_result
             abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
             ctx.emitter.instruction("mov rax, 24");                             // request a mixed cell payload with tag and two value words
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(
-                &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(5))
-            );                                                                  // materialize the x86_64 Mixed heap kind word
+            let mixed_kind = crate::codegen_support::sentinels::x86_64_heap_kind_word(5);
+            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", mixed_kind));   // materialize the x86_64 Mixed heap kind word
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation header as a Mixed cell
             ctx.emitter.instruction("mov r10, 1");                              // select runtime tag 1 for a string Mixed payload
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the string tag in the Mixed cell
@@ -357,9 +358,8 @@ pub(super) fn box_owned_pathinfo_array_as_mixed(ctx: &mut FunctionContext<'_>) {
             abi::emit_push_reg(ctx.emitter, "rax");
             ctx.emitter.instruction("mov rax, 24");                             // request a mixed cell payload with tag and two value words
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(
-                &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(5))
-            );                                                                  // materialize the x86_64 Mixed heap kind word
+            let mixed_kind = crate::codegen_support::sentinels::x86_64_heap_kind_word(5);
+            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", mixed_kind));   // materialize the x86_64 Mixed heap kind word
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation header as a Mixed cell
             ctx.emitter.instruction("mov QWORD PTR [rax], 5");                  // select runtime tag 5 for an associative-array Mixed payload
             abi::emit_pop_reg(ctx.emitter, "r10");
@@ -500,9 +500,8 @@ fn box_array_or_false_result(ctx: &mut FunctionContext<'_>, tag: u64, label_pref
             abi::emit_push_reg(ctx.emitter, "rax");
             ctx.emitter.instruction("mov rax, 24");                             // request a mixed cell payload with tag and two value words
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(
-                &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(5))
-            );                                                                  // materialize the x86_64 Mixed heap kind word
+            let mixed_kind = crate::codegen_support::sentinels::x86_64_heap_kind_word(5);
+            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", mixed_kind));   // materialize the x86_64 Mixed heap kind word
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation header as a Mixed cell
             ctx.emitter.instruction(&format!("mov QWORD PTR [rax], {}", tag));  // select the runtime tag matching this array's payload shape
             abi::emit_pop_reg(ctx.emitter, "r10");

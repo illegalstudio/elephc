@@ -10,13 +10,45 @@
 //!   helpers rather than duplicating libc/syscall behavior in the EIR backend.
 
 use crate::codegen::abi;
-use crate::codegen::platform::{Arch, Platform};
+use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
 use crate::ir::{Instruction, ValueId};
 use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
 use super::{expect_operand, load_value_to_first_int_arg, store_if_result};
+
+/// Lowers the internal Async cycle-collection safe point.
+pub(crate) fn lower_async_gc_collect(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_async_gc_collect", 0)?;
+    abi::emit_call_label(ctx.emitter, "__rt_gc_collect_cycles");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers one internal Async scheduler transition into the dormant-gated runtime hook.
+pub(crate) fn lower_async_monitor_event(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_async_monitor_event", 5)?;
+    for (index, operand) in inst.operands.iter().enumerate() {
+        super::super::resolve_int_operand_to_result(
+            ctx,
+            *operand,
+            &format!("Async monitor argument {}", index + 1),
+        )?;
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    }
+    for index in (0..5).rev() {
+        let register = abi::int_arg_reg_name(ctx.emitter.target, index);
+        abi::emit_pop_reg(ctx.emitter, register);
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_async_monitor_event");
+    store_if_result(ctx, inst)
+}
 
 /// Lowers `date(format, timestamp?)` through the shared formatter runtime helper.
 pub(crate) fn lower_date(
@@ -930,28 +962,14 @@ fn emit_empty_string_result(ctx: &mut FunctionContext<'_>) {
 /// Emits a process-exit sequence using the already-loaded integer result register.
 fn emit_dynamic_exit(ctx: &mut FunctionContext<'_>) {
     abi::emit_cdylib_exit_escape(ctx.emitter);
-    match (ctx.emitter.target.platform, ctx.emitter.target.arch) {
-        (Platform::MacOS, Arch::AArch64) | (Platform::Linux, Arch::AArch64) => {
-            ctx.emitter.instruction("mov x19, x0");                             // stash the exit code in a callee-saved register (this path never returns)
-            ctx.emitter.instruction("bl __rt_ob_flush_all");                    // drain still-active output buffers to stdout before terminating
-            crate::codegen::frame::emit_instr_terminate(ctx);
-            ctx.emitter.instruction("mov x0, x19");                             // restore the exit code into the syscall argument register
-            ctx.emitter.syscall(1);
+    crate::codegen::frame::emit_instr_terminate(ctx);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("bl __rt_exit_or_parallel_fatal");          // escape a worker or terminate the process with x0 status
         }
-        (Platform::Linux, Arch::X86_64) => {
-            ctx.emitter.instruction("mov rbx, rax");                            // stash the exit code in a callee-saved register (this path never returns)
-            ctx.emitter.instruction("and rsp, -16");                            // realign the stack for the flush call (this path never returns)
-            ctx.emitter.instruction("call __rt_ob_flush_all");                  // drain still-active output buffers to stdout before terminating
-            crate::codegen::frame::emit_instr_terminate(ctx);
-            ctx.emitter.instruction("mov rdi, rbx");                            // move the computed exit code into the SysV first-argument register
-            ctx.emitter.instruction("mov eax, 60");                             // Linux x86_64 syscall 60 = exit
-            ctx.emitter.instruction("syscall");                                 // terminate the process through the Linux x86_64 syscall ABI
-        }
-        (Platform::MacOS, Arch::X86_64) => {
-            panic!("exit() is not implemented yet for target macos-x86_64");
-        }
-        (Platform::Windows, _) => {
-            panic!("Windows target is not yet supported (see issue #379)");
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the computed status to the worker-aware exit boundary
+            ctx.emitter.instruction("call __rt_exit_or_parallel_fatal");        // escape a worker or terminate the process; never returns
         }
     }
 }

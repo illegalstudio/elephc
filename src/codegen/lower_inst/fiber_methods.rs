@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
+//! - Published call-operand slots retain their cleanup duty across Fiber state errors and switches.
 
 use super::*;
 
@@ -21,6 +22,10 @@ pub(super) fn lower_fiber_start(
             "Fiber::start with more than seven EIR arguments",
         ));
     }
+    let receiver_reg = abi::nested_call_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, receiver_reg)?;
+    let receiver_owned = fiber_receiver_is_transferred(ctx, object)?;
+    emit_assert_fiber_not_started(ctx, receiver_reg, receiver_owned, &args)?;
     let param_types = vec![PhpType::Mixed; args.len()];
     let assignments =
         abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &param_types, 1);
@@ -28,15 +33,213 @@ pub(super) fn lower_fiber_start(
         ctx.load_value_to_result(*value)?;
         let source_ty = ctx.raw_value_php_type(*value)?;
         let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, &PhpType::Mixed)?;
+        if matches!(source_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+            abi::emit_call_label(ctx.emitter, "__rt_incref");
+        }
         abi::emit_push_result_value(ctx.emitter, &push_ty);
     }
     let overflow_bytes = abi::materialize_outgoing_args(ctx.emitter, &assignments);
     let receiver_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     ctx.load_value_to_reg(object, receiver_arg)?;
     emit_store_fiber_start_args(ctx, &assignments, args.len())?;
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        i64::from(receiver_owned),
+    ); // private receiver_owned ABI argument; start args have already been copied into the Fiber
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        0,
+    ); // direct Fiber::start has no auxiliary Throwable owner
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        0,
+    ); // keep private start-helper cleanup flags defined for every call site
     abi::emit_call_label(ctx.emitter, "__rt_fiber_start");
     abi::emit_release_temporary_stack(ctx.emitter, overflow_bytes);
     store_if_result(ctx, inst)
+}
+
+/// Lowers `Fiber::start(...)` after boxed-Mixed dispatch has already unboxed the receiver.
+pub(super) fn lower_mixed_fiber_start_from_reg(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    receiver_reg: &str,
+) -> Result<()> {
+    let args = fiber_start_visible_args(ctx, inst)?;
+    if args.len() > runtime::FIBER_START_ARGS_MAX as usize {
+        return Err(CodegenIrError::unsupported(
+            "Fiber::start with more than seven EIR arguments",
+        ));
+    }
+    emit_assert_fiber_not_started(ctx, receiver_reg, false, &args)?;
+    let param_types = vec![PhpType::Mixed; args.len()];
+    let assignments =
+        abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &param_types, 1);
+    for value in &args {
+        ctx.load_value_to_result(*value)?;
+        let source_ty = ctx.raw_value_php_type(*value)?;
+        let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, &PhpType::Mixed)?;
+        if matches!(source_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+            abi::emit_call_label(ctx.emitter, "__rt_incref");
+        }
+        abi::emit_push_result_value(ctx.emitter, &push_ty);
+    }
+    let overflow_bytes = abi::materialize_outgoing_args(ctx.emitter, &assignments);
+    let receiver_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    abi::emit_reg_move(ctx.emitter, receiver_arg, receiver_reg);
+    emit_store_fiber_start_args(ctx, &assignments, args.len())?;
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        0,
+    ); // the boxed Mixed owner remains responsible for the borrowed Fiber payload
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        0,
+    ); // mixed Fiber::start has no auxiliary Throwable owner
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        0,
+    ); // keep private start-helper cleanup flags defined for every call site
+    abi::emit_call_label(ctx.emitter, "__rt_fiber_start");
+    abi::emit_release_temporary_stack(ctx.emitter, overflow_bytes);
+    store_if_result(ctx, inst)
+}
+
+/// Checks the Fiber state before boxing or storing start arguments into its owned slots.
+/// The runtime helper repeats this guard; this early check preserves any arguments already
+/// attached to an invalid receiver and avoids leaking newly retained values on that PHP error.
+fn emit_assert_fiber_not_started(
+    ctx: &mut FunctionContext<'_>,
+    receiver_reg: &str,
+    receiver_owned: bool,
+    start_args: &[ValueId],
+) -> Result<()> {
+    let ready = ctx.next_label("fiber_start_not_started");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("ldr x9, [{receiver_reg}, #{}]", runtime::FIBER_STATE_OFFSET)); // read the receiver lifecycle before retaining arguments
+            ctx.emitter.instruction(&format!("cmp x9, #{}", runtime::FIBER_STATE_NOT_STARTED)); // require a Fiber that has never started
+            ctx.emitter.instruction(&format!("b.eq {ready}"));                  // continue only when the argument slots are empty
+            if receiver_owned {
+                abi::emit_push_reg(ctx.emitter, receiver_reg);
+            }
+            for value in start_args.iter().rev() {
+                if super::ownership::is_owned_temporary(ctx, *value)?
+                    && ctx.value_can_transfer_ownership_to_consumer(*value)?
+                {
+                    super::ownership::emit_release_value(ctx, *value)?;
+                }
+            }
+            if receiver_owned {
+                abi::emit_pop_reg(ctx.emitter, receiver_reg);
+                ctx.emitter.instruction(&format!("mov x0, {receiver_reg}"));    // release the transferred temporary before raising FiberError
+                abi::emit_call_label(ctx.emitter, "__rt_decref_object");
+            }
+            abi::emit_symbol_address(ctx.emitter, "x0", "_fiber_msg_already_started"); // preserve PHP's ordinary FiberError diagnostic
+            abi::emit_load_int_immediate(ctx.emitter, "x1", 50);               // pass the exact message length
+            abi::emit_call_label(ctx.emitter, "__rt_fiber_throw_state_error"); // invalid state throws before any argument owner is installed
+            ctx.emitter.label(&ready);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov r11, QWORD PTR [{receiver_reg} + {}]", runtime::FIBER_STATE_OFFSET)); // read the receiver lifecycle before retaining arguments
+            ctx.emitter.instruction(&format!("cmp r11, {}", runtime::FIBER_STATE_NOT_STARTED)); // require a Fiber that has never started
+            ctx.emitter.instruction(&format!("je {ready}"));                    // continue only when the argument slots are empty
+            if receiver_owned {
+                abi::emit_push_reg(ctx.emitter, receiver_reg);
+            }
+            for value in start_args.iter().rev() {
+                if super::ownership::is_owned_temporary(ctx, *value)?
+                    && ctx.value_can_transfer_ownership_to_consumer(*value)?
+                {
+                    super::ownership::emit_release_value(ctx, *value)?;
+                }
+            }
+            if receiver_owned {
+                abi::emit_pop_reg(ctx.emitter, receiver_reg);
+                abi::emit_reg_move(ctx.emitter, "rdi", receiver_reg);
+                abi::emit_call_label(ctx.emitter, "__rt_decref_object");
+            }
+            abi::emit_symbol_address(ctx.emitter, "rdi", "_fiber_msg_already_started"); // preserve PHP's ordinary FiberError diagnostic
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", 50);              // pass the exact message length
+            abi::emit_call_label(ctx.emitter, "__rt_fiber_throw_state_error"); // invalid state throws before any argument owner is installed
+            ctx.emitter.label(&ready);
+        }
+    }
+    Ok(())
+}
+
+/// Checks `resume()` state after PHP argument evaluation but before creating its Mixed transfer box.
+fn emit_assert_fiber_suspended(
+    ctx: &mut FunctionContext<'_>,
+    receiver_reg: &str,
+    receiver_owned: bool,
+    resume_value: Option<ValueId>,
+) -> Result<()> {
+    let ready = ctx.next_label("fiber_resume_suspended");
+    let resume_value = if let Some(value) = resume_value {
+        ctx.value_can_transfer_ownership_to_consumer(value)?.then_some(value)
+    } else {
+        None
+    };
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("ldr x9, [{receiver_reg}, #{}]", runtime::FIBER_STATE_OFFSET)); // read the receiver lifecycle after argument evaluation
+            ctx.emitter.instruction(&format!("cmp x9, #{}", runtime::FIBER_STATE_SUSPENDED)); // require a Fiber paused at suspend()
+            ctx.emitter.instruction(&format!("b.eq {ready}"));                  // only a suspended Fiber may receive a value
+            if let Some(value) = resume_value {
+                if receiver_owned {
+                    abi::emit_push_reg(ctx.emitter, receiver_reg);
+                }
+                super::ownership::emit_release_value(ctx, value)?;
+                if receiver_owned {
+                    abi::emit_pop_reg(ctx.emitter, receiver_reg);
+                }
+            }
+            if receiver_owned {
+                ctx.emitter.instruction(&format!("mov x0, {receiver_reg}"));    // release the transferred temporary before raising FiberError
+                abi::emit_call_label(ctx.emitter, "__rt_decref_object");
+            }
+            abi::emit_symbol_address(ctx.emitter, "x0", "_fiber_msg_not_suspended"); // preserve PHP's ordinary FiberError diagnostic
+            abi::emit_load_int_immediate(ctx.emitter, "x1", 43);               // pass the exact message length
+            abi::emit_call_label(ctx.emitter, "__rt_fiber_throw_state_error"); // invalid state throws before resume-value boxing
+            ctx.emitter.label(&ready);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov r11, QWORD PTR [{receiver_reg} + {}]", runtime::FIBER_STATE_OFFSET)); // read the receiver lifecycle after argument evaluation
+            ctx.emitter.instruction(&format!("cmp r11, {}", runtime::FIBER_STATE_SUSPENDED)); // require a Fiber paused at suspend()
+            ctx.emitter.instruction(&format!("je {ready}"));                    // only a suspended Fiber may receive a value
+            if let Some(value) = resume_value {
+                if receiver_owned {
+                    abi::emit_push_reg(ctx.emitter, receiver_reg);
+                }
+                super::ownership::emit_release_value(ctx, value)?;
+                if receiver_owned {
+                    abi::emit_pop_reg(ctx.emitter, receiver_reg);
+                }
+            }
+            if receiver_owned {
+                abi::emit_reg_move(ctx.emitter, "rdi", receiver_reg);           // pass the transferred Fiber to object decref
+                abi::emit_call_label(ctx.emitter, "__rt_decref_object");        // release the receiver before raising FiberError
+            }
+            abi::emit_symbol_address(ctx.emitter, "rdi", "_fiber_msg_not_suspended"); // preserve PHP's ordinary FiberError diagnostic
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", 43);               // pass the exact message length
+            abi::emit_call_label(ctx.emitter, "__rt_fiber_throw_state_error"); // invalid state throws before resume-value boxing
+            ctx.emitter.label(&ready);
+        }
+    }
+    Ok(())
+}
+
+/// Transfers an owning receiver temporary only when no caller cleanup retains its lease.
+fn fiber_receiver_is_transferred(ctx: &FunctionContext<'_>, object: ValueId) -> Result<bool> {
+    Ok(super::ownership::is_owned_temporary(ctx, object)?
+        && ctx.value_can_transfer_ownership_to_consumer(object)?)
 }
 
 /// Lowers `Fiber::resume($value = null)` through the shared runtime helper.
@@ -47,11 +250,56 @@ pub(super) fn lower_fiber_resume(
 ) -> Result<()> {
     let value =
         fiber_single_optional_arg(ctx, inst.operands.get(1..).unwrap_or(&[]), "Fiber::resume")?;
+    let receiver_owned = fiber_receiver_is_transferred(ctx, object)?;
+    let receiver_reg = abi::nested_call_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, receiver_reg)?;
+    emit_assert_fiber_suspended(ctx, receiver_reg, receiver_owned, value)?;
     emit_optional_mixed_arg(ctx, value)?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)); // preserve the boxed resume value while loading the receiver
     let receiver_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     ctx.load_value_to_reg(object, receiver_arg)?;
     abi::emit_pop_reg(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1)); // pass the boxed resume value as runtime helper argument 2
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        i64::from(fiber_receiver_is_transferred(ctx, object)?),
+    ); // transfer an owning temporary receiver to the runtime across a Fiber switch
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        1,
+    ); // the runtime owns the boxed resume value on both success and state-error paths
+    abi::emit_call_label(ctx.emitter, "__rt_fiber_resume");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `Fiber::resume(...)` for a borrowed Fiber payload unboxed from `Mixed`.
+pub(super) fn lower_mixed_fiber_resume_from_reg(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    receiver_reg: &str,
+) -> Result<()> {
+    let value =
+        fiber_single_optional_arg(ctx, inst.operands.get(1..).unwrap_or(&[]), "Fiber::resume")?;
+    emit_assert_fiber_suspended(ctx, receiver_reg, false, value)?;
+    emit_optional_mixed_arg(ctx, value)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_reg_move(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        receiver_reg,
+    );
+    abi::emit_pop_reg(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1));
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        0,
+    ); // the boxed Mixed owner remains responsible for the borrowed Fiber payload
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        1,
+    ); // transfer the owned resume value while keeping the unboxed Fiber borrowed
     abi::emit_call_label(ctx.emitter, "__rt_fiber_resume");
     store_if_result(ctx, inst)
 }
@@ -79,6 +327,56 @@ pub(super) fn lower_fiber_throw(
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)); // preserve the Throwable while loading the Fiber receiver
     ctx.load_value_to_reg(object, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
     abi::emit_pop_reg(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1)); // pass the Throwable object as runtime helper argument 2
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        i64::from(fiber_receiver_is_transferred(ctx, object)?),
+    ); // transfer an owning temporary receiver to the runtime across a Fiber switch or state error
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        i64::from(ctx.value_can_transfer_ownership_to_consumer(thrown)?),
+    ); // transfer only an unrooted Throwable; published caller slots retain their cleanup duty
+    abi::emit_call_label(ctx.emitter, "__rt_fiber_throw");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `Fiber::throw(...)` for a borrowed Fiber payload unboxed from `Mixed`.
+pub(super) fn lower_mixed_fiber_throw_from_reg(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    receiver_reg: &str,
+) -> Result<()> {
+    let args = fiber_visible_args(ctx, inst.operands.get(1..).unwrap_or(&[]), "Fiber::throw")?;
+    if args.len() != 1 {
+        return Err(CodegenIrError::unsupported(
+            "Fiber::throw without exactly one EIR argument",
+        ));
+    }
+    let thrown_ty = ctx.load_value_to_result(args[0])?;
+    if !matches!(thrown_ty.codegen_repr(), PhpType::Object(_)) {
+        return Err(CodegenIrError::unsupported(format!(
+            "Fiber::throw argument PHP type {:?}",
+            thrown_ty
+        )));
+    }
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_reg_move(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        receiver_reg,
+    );
+    abi::emit_pop_reg(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1));
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        0,
+    ); // the boxed Mixed owner remains responsible for the borrowed Fiber payload
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        i64::from(ctx.value_can_transfer_ownership_to_consumer(args[0])?),
+    ); // transfer only an unrooted Throwable so state errors do not retire published slots twice
     abi::emit_call_label(ctx.emitter, "__rt_fiber_throw");
     store_if_result(ctx, inst)
 }
@@ -232,6 +530,9 @@ pub(super) fn emit_optional_mixed_arg(ctx: &mut FunctionContext<'_>, value: Opti
         ctx.load_value_to_result(value)?;
         let source_ty = ctx.raw_value_php_type(value)?;
         materialize_direct_call_arg_for_param(ctx, &source_ty, &PhpType::Mixed)?;
+        if matches!(source_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+            abi::emit_call_label(ctx.emitter, "__rt_incref");
+        }
         return Ok(());
     }
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);

@@ -36,6 +36,9 @@ struct OwnedStringBoundaryLayout {
     result_len_offset: usize,
     owned_ptr_offset: usize,
     concat_offset: usize,
+    /// Slot holding the HOST's callee-saved ctx register across the call; the
+    /// publish below overwrites it and every return path must put it back.
+    saved_ctx_offset: usize,
     handler_base: usize,
     frame_size: usize,
 }
@@ -77,6 +80,18 @@ pub(super) fn emit_owned_string_export(
     ));
     emitter.label_global(&exported);
     abi::emit_frame_prologue(emitter, layout.frame_size);
+    // Foreign-entry publish (spike review, B2): re-establish the per-context
+    // state pointer before compiled PHP code runs; the host's callee-saved ctx
+    // register is foreign. Publish-only: never reset allocator state here.
+    crate::codegen_support::runtime::ctx::emit_ctx_save_foreign(
+        emitter,
+        layout.saved_ctx_offset,
+    );
+    crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
+    crate::codegen_support::runtime::ctx::emit_lazy_ctx_arena_install(
+        emitter,
+        &format!("L_cdylib_{suffix}_arena_ready"),
+    );
     emit_save_public_arguments(emitter, export, &layout);
     boundary::emit_initialize_hidden_collector_owner(emitter, layout.hidden_collector_offset);
     crate::codegen::stack_guard::emit_lazy_stack_limit_init(
@@ -149,7 +164,7 @@ pub(super) fn emit_owned_string_export(
 
     emitter.label(&labels.invalid);
     emit_set_static_error(emitter, invalid_error);
-    emit_unentered_return(emitter, layout.frame_size, STATUS_INVALID_ARGUMENT);
+    emit_unentered_return(emitter, &layout, STATUS_INVALID_ARGUMENT);
 }
 
 /// Computes stable frame slots for all flattened inputs, outputs, result state, and recovery data.
@@ -183,6 +198,8 @@ fn owned_string_boundary_layout(export: &ExportedFunction) -> OwnedStringBoundar
     let owned_ptr_offset = offset;
     offset += 8;
     let concat_offset = offset;
+    offset += 8;
+    let saved_ctx_offset = offset;
     let handler_base = boundary::align_16(offset + TRY_HANDLER_SLOT_SIZE);
     let frame_size = boundary::align_16(handler_base + 16);
     OwnedStringBoundaryLayout {
@@ -194,6 +211,7 @@ fn owned_string_boundary_layout(export: &ExportedFunction) -> OwnedStringBoundar
         result_len_offset,
         owned_ptr_offset,
         concat_offset,
+        saved_ctx_offset,
         handler_base,
         frame_size,
     }
@@ -495,16 +513,30 @@ fn emit_entered_return(
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, status as i64);
     boundary::emit_leave_boundary(emitter, layout.concat_offset);
     emit_status_result(emitter, status);
+    emit_restore_foreign_ctx(emitter, layout.saved_ctx_offset);
     abi::emit_frame_restore(emitter, layout.frame_size);
     abi::emit_return(emitter);
 }
 
 /// Records an argument failure before boundary entry and returns through the native frame.
-fn emit_unentered_return(emitter: &mut Emitter, frame_size: usize, status: i32) {
+fn emit_unentered_return(
+    emitter: &mut Emitter,
+    layout: &OwnedStringBoundaryLayout,
+    status: i32,
+) {
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, status as i64);
     emit_status_result(emitter, status);
-    abi::emit_frame_restore(emitter, frame_size);
+    emit_restore_foreign_ctx(emitter, layout.saved_ctx_offset);
+    abi::emit_frame_restore(emitter, layout.frame_size);
     abi::emit_return(emitter);
+}
+
+/// Hands the host back its own ctx register before leaving the boundary.
+///
+/// The ctx register is callee-saved on both targets, so the publish in the
+/// wrapper prologue is a borrow that every return path has to give back.
+fn emit_restore_foreign_ctx(emitter: &mut Emitter, saved_ctx_offset: usize) {
+    crate::codegen_support::runtime::ctx::emit_ctx_restore_foreign(emitter, saved_ctx_offset);
 }
 
 /// Materializes one public status code in the target's integer return register.

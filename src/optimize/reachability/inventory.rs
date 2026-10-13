@@ -77,6 +77,7 @@ impl PreludeInventory {
             .flat_map(|group| group.internal_callable_methods.iter().cloned())
             .collect()
     }
+
 }
 
 /// Records declarations in one statement list, carrying semicolon-style namespace state forward.

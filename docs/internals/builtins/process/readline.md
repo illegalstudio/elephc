@@ -2,7 +2,7 @@
 title: "readline() - internals"
 description: "Compiler internals for readline(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 755
+  order: 756
 ---
 
 ## `readline()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/readline.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/readline.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:701](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L701) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

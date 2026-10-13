@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Preserves target-aware ABI handling, runtime calls, and result ownership.
+//! - Boxed closed resources keep their identity but cannot reach native descriptor operations.
 
 use super::*;
 
@@ -126,9 +127,11 @@ pub(super) fn emit_resource_release_sentinel(emitter: &mut crate::codegen::emit:
     }
 }
 
-/// Unboxes a Mixed stream resource or emits a fatal TypeError for non-resource values.
+/// Unboxes a Mixed stream resource, refusing a closed payload before descriptor use.
+/// Non-resource values retain the existing diagnostic path.
 pub(super) fn emit_unbox_stream_or_type_error(ctx: &mut FunctionContext<'_>, function_name: &str) {
     let ok_label = ctx.next_label("stream_resource_ok");
+    let open_label = ctx.next_label("stream_resource_open");
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -142,6 +145,26 @@ pub(super) fn emit_unbox_stream_or_type_error(ctx: &mut FunctionContext<'_>, fun
     }
     emit_stream_type_error(ctx, function_name);
     ctx.emitter.label(&ok_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x1, #0");                              // negative resource payloads encode a closed handle, not an OS descriptor
+            ctx.emitter.instruction(&format!("b.ge {}", open_label));           // only an open payload may reach descriptor tables and syscalls
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rdi, rdi");                           // negative resource payloads encode a closed handle, not an OS descriptor
+            ctx.emitter.instruction(&format!("jns {}", open_label));            // only an open payload may reach descriptor tables and syscalls
+        }
+    }
+    let message = format!(
+        "{}(): Argument #1 ($stream) must be an open stream resource",
+        function_name
+    );
+    let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, ptr_reg, &message_label);
+    abi::emit_load_int_immediate(ctx.emitter, len_reg, message_len as i64);
+    super::super::super::exceptions::emit_type_error_from_string_result(ctx);
+    ctx.emitter.label(&open_label);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x0, x1");                              // expose the unboxed native stream fd as the integer result

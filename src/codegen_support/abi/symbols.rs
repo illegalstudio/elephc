@@ -9,6 +9,7 @@
 //! - Symbol relocations differ by platform and refcounted stores must preserve ownership cleanup.
 
 use crate::codegen_support::NULL_SENTINEL;
+use crate::codegen_support::runtime::ctx;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 use crate::types::PhpType;
 
@@ -106,6 +107,21 @@ pub fn emit_load_symbol_to_local_slot(
 /// addressing on x86_64.  The symbol must be defined in the current module's
 /// data section.
 pub fn emit_symbol_address(emitter: &mut Emitter, dest: &str, symbol: &str) {
+    // Large handle side tables are owned alongside each arena. Their ctx field
+    // stores the table POINTER, whereas ordinary per-context symbols live inline
+    // and use `emit_ctx_address` below.
+    if let Some(field) = ctx::per_context_pointer_symbol_offset(emitter, symbol) {
+        ctx::emit_ctx_load(emitter, dest, field);
+        return;
+    }
+    // PER-CONTEXT ROUTING. A ctx build serves this family out of `_rt_ctx` instead of a
+    // process-global symbol, so a second execution context gets its own. The check sits
+    // here rather than at the call sites because that is the whole point: 300 call sites
+    // stay as they are, and four functions decide where the state lives.
+    if let Some(field) = ctx::per_context_symbol_offset(emitter, symbol) {
+        ctx::emit_ctx_address(emitter, dest, field);
+        return;
+    }
     if emitter.pic_data_refs {
         emit_extern_symbol_address(emitter, dest, symbol);
         return;
@@ -191,6 +207,14 @@ pub fn emit_store_reg_to_extern_symbol(
 /// destination register itself, and float destinations borrow r11 behind a
 /// push/pop so call sites never see an extra clobbered register.
 pub fn emit_load_symbol_to_reg(emitter: &mut Emitter, reg: &str, symbol: &str, byte_offset: usize) {
+    // PER-CONTEXT ROUTING. A ctx build serves this family out of `_rt_ctx` instead of a
+    // process-global symbol, so a second execution context gets its own. The check sits
+    // here rather than at the call sites because that is the whole point: 300 call sites
+    // stay as they are, and four functions decide where the state lives.
+    if let Some(field) = ctx::per_context_symbol_offset(emitter, symbol) {
+        ctx::emit_ctx_load(emitter, reg, field + byte_offset);
+        return;
+    }
     if emitter.pic_data_refs {
         match emitter.target.arch {
             Arch::AArch64 => {
@@ -260,6 +284,14 @@ pub fn emit_store_reg_to_symbol(
     symbol: &str,
     byte_offset: usize,
 ) {
+    // PER-CONTEXT ROUTING. A ctx build serves this family out of `_rt_ctx` instead of a
+    // process-global symbol, so a second execution context gets its own. The check sits
+    // here rather than at the call sites because that is the whole point: 300 call sites
+    // stay as they are, and four functions decide where the state lives.
+    if let Some(field) = ctx::per_context_symbol_offset(emitter, symbol) {
+        ctx::emit_ctx_store(emitter, reg, field + byte_offset);
+        return;
+    }
     if emitter.pic_data_refs {
         match emitter.target.arch {
             Arch::AArch64 => {
@@ -316,6 +348,14 @@ pub fn emit_store_reg_to_symbol(
 /// immediate zero.  Used to initialize symbol storage to null/zero without
 /// a separate load-from-register step.
 pub fn emit_store_zero_to_symbol(emitter: &mut Emitter, symbol: &str, byte_offset: usize) {
+    // PER-CONTEXT ROUTING. A ctx build serves this family out of `_rt_ctx` instead of a
+    // process-global symbol, so a second execution context gets its own. The check sits
+    // here rather than at the call sites because that is the whole point: 300 call sites
+    // stay as they are, and four functions decide where the state lives.
+    if let Some(field) = ctx::per_context_symbol_offset(emitter, symbol) {
+        ctx::emit_ctx_store_zero(emitter, field + byte_offset);
+        return;
+    }
     if emitter.pic_data_refs {
         match emitter.target.arch {
             Arch::AArch64 => {
@@ -356,6 +396,12 @@ pub fn emit_store_zero_to_symbol(emitter: &mut Emitter, symbol: &str, byte_offse
 /// a push/pop. On AArch64 the immediate is materialized in x10 and stored
 /// through x9 (both clobbered).
 pub fn emit_store_imm_to_symbol(emitter: &mut Emitter, symbol: &str, byte_offset: usize, imm: i64) {
+    if let Some(field) = ctx::per_context_symbol_offset(emitter, symbol) {
+        let scratch = symbol_scratch_reg(emitter);
+        emit_load_int_immediate(emitter, scratch, imm);
+        ctx::emit_ctx_store(emitter, scratch, field + byte_offset);
+        return;
+    }
     match emitter.target.arch {
         Arch::AArch64 => {
             emit_symbol_address(emitter, "x9", symbol); // resolve the symbol address into the x9 scratch register
@@ -393,6 +439,15 @@ pub fn emit_store_imm_to_symbol(emitter: &mut Emitter, symbol: &str, byte_offset
 /// On AArch64 the symbol payload is loaded through x9 (clobbered) and compared
 /// register-to-register.
 pub fn emit_cmp_reg_to_symbol(emitter: &mut Emitter, reg: &str, symbol: &str) {
+    // PER-CONTEXT ROUTING, x86_64 only: the AArch64 arm already reaches the value through
+    // `emit_load_symbol_to_reg`, which routes itself.
+    if let Some(field) = ctx::per_context_symbol_offset(emitter, symbol) {
+        if emitter.target.arch == Arch::X86_64 {
+            let ctx_reg = ctx::ctx_reg(emitter);
+            emitter.instruction(&format!("cmp {}, QWORD PTR [{} + {}]", reg, ctx_reg, field)); // compare against this context's value
+            return;
+        }
+    }
     match emitter.target.arch {
         Arch::AArch64 => {
             emit_load_symbol_to_reg(emitter, "x9", symbol, 0); // load the symbol payload into the x9 scratch register
@@ -418,6 +473,13 @@ pub fn emit_cmp_reg_to_symbol(emitter: &mut Emitter, reg: &str, symbol: &str) {
 /// counter is loaded through x9/x10 (both clobbered), decremented, and stored
 /// back.
 pub fn emit_dec_symbol(emitter: &mut Emitter, symbol: &str) {
+    if let Some(field) = ctx::per_context_symbol_offset(emitter, symbol) {
+        if emitter.target.arch == Arch::X86_64 {
+            let ctx_reg = ctx::ctx_reg(emitter);
+            emitter.instruction(&format!("dec QWORD PTR [{} + {}]", ctx_reg, field)); // decrement this context's counter
+            return;
+        }
+    }
     match emitter.target.arch {
         Arch::AArch64 => {
             emit_symbol_address(emitter, "x9", symbol); // resolve the symbol address into the x9 scratch register

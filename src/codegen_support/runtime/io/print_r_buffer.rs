@@ -340,12 +340,12 @@ mod tests {
     #[test]
     fn pr_write_branches_on_mode_and_calls_append() {
         let mac = render(Platform::MacOS, Arch::AArch64);
-        assert!(mac.contains("_print_r_mode"));
+        assert!(mac.contains(&format!("{}]", crate::codegen_support::runtime::ctx::CTX_PRINT_R_MODE_OFFSET)));
         assert!(mac.contains("bl __rt_pr_append"));
         assert!(mac.contains("__rt_pr_write_syscall"));
 
         let linux_x86 = render(Platform::Linux, Arch::X86_64);
-        assert!(linux_x86.contains("_print_r_mode"));
+        assert!(linux_x86.contains(&format!("{}]", crate::codegen_support::runtime::ctx::CTX_PRINT_R_MODE_OFFSET)));
         assert!(linux_x86.contains("call __rt_pr_append"));
         assert!(linux_x86.contains("__rt_pr_write_syscall"));
     }
@@ -355,12 +355,12 @@ mod tests {
     fn pr_finish_persists_and_resets_state() {
         let mac = render(Platform::MacOS, Arch::AArch64);
         assert!(mac.contains("bl __rt_str_persist"));
-        assert!(mac.contains("_print_r_off"));
-        assert!(mac.contains("_print_r_buf"));
+        assert!(mac.contains(&format!("{}]", crate::codegen_support::runtime::ctx::CTX_PRINT_R_OFF_OFFSET)));
+        assert!(mac.contains(&format!("{}]", crate::codegen_support::runtime::ctx::CTX_PRINT_R_BUF_OFFSET)));
 
         let linux_x86 = render(Platform::Linux, Arch::X86_64);
         assert!(linux_x86.contains("call __rt_str_persist"));
-        assert!(linux_x86.contains("_print_r_off"));
-        assert!(linux_x86.contains("_print_r_buf"));
+        assert!(linux_x86.contains(&format!("{}]", crate::codegen_support::runtime::ctx::CTX_PRINT_R_OFF_OFFSET)));
+        assert!(linux_x86.contains(&format!("{}]", crate::codegen_support::runtime::ctx::CTX_PRINT_R_BUF_OFFSET)));
     }
 }

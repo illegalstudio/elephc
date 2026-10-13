@@ -2,7 +2,7 @@
 title: "mb_list_encodings()"
 description: "Lists every supported canonical encoding in PHP order."
 sidebar:
-  order: 860
+  order: 861
 ---
 
 ## mb_list_encodings()

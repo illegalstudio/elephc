@@ -12,17 +12,18 @@ use super::*;
 /// Lowers a throwing statement into a terminator.
 pub(super) fn lower_throw(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) {
     let value = lower_expr(ctx, expr);
-    // The in-flight exception cell owns one reference to the thrown object. Throwing
-    // an owning temporary (e.g. `throw new E()`, `throw f()`) transfers that
-    // reference; throwing a value that still leaves a local slot as owner — a
-    // PhpLocal/StaticLocal heap load such as a rethrown catch variable (`throw $e`)
-    // — must retain it, so the local's own release (rebind or epilogue) stays
-    // balanced with the catch-side release of the in-flight reference (issue #448).
-    // Main classifies concrete object local loads as owning temporaries for
-    // provisional unbox-release tracking; that must not be mistaken for a transfer.
+    // The in-flight exception cell owns one reference to the thrown object. An owning
+    // temporary transfers that reference directly. A direct local load transfers the
+    // slot's owner and zeroes the abandoned slot; retaining it instead strands the
+    // original owner when non-local control flow skips this frame's epilogue.
     let transferable = ctx.value_is_owning_temporary(value)
-        && !ctx.value_is_owned_unboxed_local_load(value.value);
-    let value = if transferable {
+        && !ctx.value_is_owned_unboxed_local_load(value.value)
+        && !matches!(ctx.builder.value_defining_op(value.value), Some(Op::LoadLocal));
+    let value = if let Some(value) =
+        crate::ir_lower::ownership::take_direct_local_load(ctx, value, Some(expr.span))
+    {
+        value
+    } else if transferable {
         value
     } else {
         crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(expr.span))

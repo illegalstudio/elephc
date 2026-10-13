@@ -2,7 +2,7 @@
 title: "unserialize() - internals"
 description: "Compiler internals for unserialize(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 690
+  order: 691
 ---
 
 ## `unserialize()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/unserialize.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/unserialize.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:701](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L701) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -25,7 +25,7 @@ sidebar:
 - **Target strategy**: `runtime_call`
 - **Validation**: `checker_hook`
 - **Result type source**: `checked`
-- **Result ownership**: `may_alias_arguments`
+- **Result ownership**: `fresh`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`

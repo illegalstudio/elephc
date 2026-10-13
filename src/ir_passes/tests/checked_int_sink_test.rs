@@ -433,6 +433,93 @@ fn rejects_integer_slot_with_observable_retirement() {
     assert!(validate_function(&function).is_ok());
 }
 
+/// Substitutes the frontend's independent value copy for the legacy numeric acquire scaffold.
+fn copied_retiring_integer_slot(observe_retired: bool) -> Function {
+    let mut function = retiring_integer_slot(observe_retired);
+    let copy = function.instructions.iter_mut().find(|inst| inst.op == Op::Acquire)
+        .expect("numeric assignment owner");
+    copy.op = Op::MixedClone;
+    copy.effects = Op::MixedClone.default_effects();
+    function
+}
+
+/// Numeric value copies can disappear only after every slot use proves raw integer storage.
+#[test]
+fn narrows_integer_slot_through_independent_value_copy() {
+    let mut function = copied_retiring_integer_slot(false);
+    assert!(validate_function(&function).is_ok());
+    assert!(specialize(&mut function));
+    assert_eq!(function.locals[0].php_type, PhpType::Int);
+    assert!(function.instructions.iter().any(|inst| inst.op == Op::ICheckedAddToInt));
+    assert!(!function.instructions.iter().any(|inst| matches!(inst.op,
+        Op::MixedClone | Op::Release | Op::ReleaseLocalSlot)));
+    assert!(validate_function(&function).is_ok());
+    assert!(!specialize(&mut function));
+}
+
+/// A copied numeric slot still keeps its observable retired-slot clear before a later read.
+#[test]
+fn rejects_value_copy_with_observable_slot_retirement() {
+    let mut function = copied_retiring_integer_slot(true);
+    assert!(validate_function(&function).is_ok());
+    assert!(!specialize(&mut function));
+    assert_eq!(function.locals[0].php_type, PhpType::Mixed);
+    assert!(function.instructions.iter().any(|inst| inst.op == Op::MixedClone));
+    assert!(validate_function(&function).is_ok());
+}
+
+/// A cloned cell observed by output cannot be replaced by an integer-only slot representation.
+#[test]
+fn rejects_value_copy_observed_outside_the_integer_slot() {
+    let mut function = copied_retiring_integer_slot(false);
+    let copied = function.instructions.iter().find(|inst| inst.op == Op::MixedClone)
+        .and_then(|inst| inst.result).unwrap();
+    let entry = function.entry;
+    let terminator = function.blocks[entry.as_raw() as usize].terminator.take()
+        .expect("fixture return");
+    let mut builder = Builder::new(&mut function);
+    builder.position_at_end(entry);
+    builder.emit(Op::EchoValue, vec![copied], None, IrType::Void,
+        PhpType::Void, Ownership::NonHeap);
+    builder.terminate(terminator);
+    assert!(validate_function(&function).is_ok());
+    assert!(!specialize(&mut function));
+    assert_eq!(function.locals[0].php_type, PhpType::Mixed);
+    assert!(function.instructions.iter().any(|inst| inst.op == Op::MixedClone));
+}
+
+/// A numeric copy observed solely through an explicit integer cast keeps cast overflow mode.
+#[test]
+fn specializes_integer_cast_through_independent_value_copy() {
+    let mut function = Function::new("copied_cast".to_string(), IrType::I64, PhpType::Int);
+    let (checked, copied);
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let lhs = builder.emit_const_i64(7);
+        let rhs = builder.emit_const_i64(2);
+        checked = emit_checked(&mut builder, Op::ICheckedAdd, lhs, rhs);
+        copied = builder.emit(Op::MixedClone, vec![checked], None,
+            IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed, Ownership::Owned).unwrap();
+        let cast = emit_int_cast(&mut builder, copied);
+        for value in [checked, copied] {
+            builder.emit(Op::Release, vec![value], None,
+                IrType::Void, PhpType::Void, Ownership::NonHeap);
+        }
+        builder.terminate(Terminator::Return { value: Some(cast) });
+    }
+    assert!(validate_function(&function).is_ok());
+    assert!(CheckedIntSink.is_applicable(&function));
+    assert!(specialize(&mut function));
+    let producer = function.instructions.iter().find(|inst| inst.result == Some(checked)).unwrap();
+    assert_eq!(producer.op, Op::ICheckedAddToInt);
+    assert_eq!(producer.immediate, Some(Immediate::Bool(true)));
+    assert!(!function.instructions.iter().any(|inst| matches!(inst.op, Op::MixedClone | Op::Release)));
+    assert!(validate_function(&function).is_ok());
+}
+
 /// A Mixed slot whose boxed value still escapes keeps its boxed frame storage.
 ///
 /// This is the boundary the narrowing must not cross: a reader that observes the cell itself

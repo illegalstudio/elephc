@@ -122,10 +122,10 @@ fn emit_array_walk_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
     emitter.instruction("push r12");                                            // preserve the callback address across recursion and calls
     emitter.instruction("push r13");                                            // preserve a scratch callee-saved register
-    emitter.instruction("push r14");                                            // preserve the optional callback environment across calls
+    emitter.instruction("push r15");                                            // preserve the optional callback environment across calls
     emitter.instruction("sub rsp, 24");                                         // reserve local slots for the array pointer, length, and index/cursor
     emitter.instruction("mov r12, rdi");                                        // r12 = callback address (callee-saved)
-    emitter.instruction("mov r14, rdx");                                        // r14 = optional callback environment (callee-saved)
+    emitter.instruction("mov r15, rdx");                                        // r15 = optional callback environment (callee-saved)
     emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // save the current array pointer
     emitter.instruction("mov r10, QWORD PTR [rsi - 8]");                        // load the uniform heap-kind header word
     emitter.instruction("mov r11, r10");                                        // copy the header word before masking the heap kind
@@ -147,9 +147,9 @@ fn emit_array_walk_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_array_walk_recursive_done");                  // finish once every element is visited
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the array pointer
     emitter.instruction("mov rdi, QWORD PTR [r10 + rax * 8 + 24]");             // load the scalar leaf at element[i]
-    emitter.instruction("test r14, r14");                                       // is a callback environment present?
+    emitter.instruction("test r15, r15");                                       // is a callback environment present?
     emitter.instruction("jz __rt_array_walk_recursive_idx_call");               // no environment keeps the one-argument callback ABI
-    emitter.instruction("mov rsi, r14");                                        // pass the callback environment as the second argument
+    emitter.instruction("mov rsi, r15");                                        // pass the callback environment as the second argument
     emitter.label("__rt_array_walk_recursive_idx_call");
     emitter.instruction("call r12");                                            // invoke callback(leaf [, env]); return value discarded
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the index after the callback call
@@ -163,7 +163,7 @@ fn emit_array_walk_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the array pointer
     emitter.instruction("mov rsi, QWORD PTR [r10 + rax * 8 + 24]");             // load the sub-array pointer at element[i]
     emitter.instruction("mov rdi, r12");                                        // pass the callback address to the recursive call
-    emitter.instruction("mov rdx, r14");                                        // pass the callback environment to the recursive call
+    emitter.instruction("mov rdx, r15");                                        // pass the callback environment to the recursive call
     emitter.instruction("call __rt_array_walk_recursive");                      // recurse into the sub-array
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the index after the recursive call
     emitter.instruction("add rax, 1");                                          // advance to the next sub-array
@@ -184,21 +184,21 @@ fn emit_array_walk_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r9, 5");                                           // is the value an associative sub-array?
     emitter.instruction("je __rt_array_walk_recursive_hash_rec");               // recurse into associative sub-array values
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // scalar leaf value goes in the first callback argument
-    emitter.instruction("test r14, r14");                                       // is a callback environment present?
+    emitter.instruction("test r15, r15");                                       // is a callback environment present?
     emitter.instruction("jz __rt_array_walk_recursive_hash_call");              // no environment keeps the one-argument callback ABI
-    emitter.instruction("mov rsi, r14");                                        // pass the callback environment as the second argument
+    emitter.instruction("mov rsi, r15");                                        // pass the callback environment as the second argument
     emitter.label("__rt_array_walk_recursive_hash_call");
     emitter.instruction("call r12");                                            // invoke callback(leaf [, env]); return value discarded
     emitter.instruction("jmp __rt_array_walk_recursive_hash_loop");             // continue iterating the hash entries
     emitter.label("__rt_array_walk_recursive_hash_rec");
     emitter.instruction("mov rdi, r12");                                        // pass the callback address to the recursive call
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // pass the sub-array value pointer to the recursive call
-    emitter.instruction("mov rdx, r14");                                        // pass the callback environment to the recursive call
+    emitter.instruction("mov rdx, r15");                                        // pass the callback environment to the recursive call
     emitter.instruction("call __rt_array_walk_recursive");                      // recurse into the sub-array value
     emitter.instruction("jmp __rt_array_walk_recursive_hash_loop");             // continue iterating the hash entries
     emitter.label("__rt_array_walk_recursive_done");
     emitter.instruction("add rsp, 24");                                         // release the local bookkeeping slots
-    emitter.instruction("pop r14");                                             // restore the caller environment register
+    emitter.instruction("pop r15");                                             // restore the caller environment register
     emitter.instruction("pop r13");                                             // restore the caller scratch register
     emitter.instruction("pop r12");                                             // restore the caller callback register
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

@@ -59,7 +59,7 @@ pub(super) fn lower_new_object(
         expr.span,
     );
     begin_call_argument_evaluation(ctx);
-    let mut operands = lower_args_with_signature(ctx, sig.as_ref(), args);
+    let mut operands = lower_args_with_eir_signature(ctx, sig.as_ref(), args);
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
     let roots = root_user_call_operands(
         ctx,

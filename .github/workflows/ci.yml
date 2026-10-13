@@ -43,6 +43,7 @@ env:
     -p elephc-magician
     -p elephc-web
     -p elephc-instr
+    -p elephc-parallel
     -p elephc-probe
     -p elephc-curl
 

@@ -2,7 +2,7 @@
 title: "extension_loaded() - internals"
 description: "Compiler internals for extension_loaded(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 611
+  order: 612
 ---
 
 ## `extension_loaded()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/extension_loaded.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/extension_loaded.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:701](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L701) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -8,6 +8,13 @@
 //! - Submodules group focused fixtures for exceptions, fibers, buffers, preprocessor, namespaces, and related suites.
 
 mod exceptions;
+mod async_scheduler;
+mod parallel_transfer;
+mod parallel_execution;
+mod mixed_sparse_writes;
+mod mixed_value_copies;
+mod string_parameter_boundaries;
+mod closed_stream_resources;
 mod fibers;
 mod buffers;
 mod generics;

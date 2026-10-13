@@ -2,7 +2,7 @@
 title: "ptr_get() - internals"
 description: "Compiler internals for ptr_get(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 731
+  order: 732
 ---
 
 ## `ptr_get()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/ptr_get.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/ptr_get.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:701](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L701) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

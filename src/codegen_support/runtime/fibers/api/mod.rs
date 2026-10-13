@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - API helpers must preserve Fiber state transitions and delegate target-specific assembly to focused emitters.
+//! - Synthesized FiberError objects use the complete compact Throwable payload and heap kind.
 
 mod arm64;
 mod common;
@@ -30,7 +31,7 @@ pub fn emit_fiber_throw_state_error(emitter: &mut Emitter) {
 }
 
 /// Allocates a new Fiber object: zeroes all runtime-managed fields, allocates
-/// the per-fiber stack via mmap, carves out a zeroed fake initial frame, and
+/// the per-fiber stack via mmap, seeds its initial frame with the creator's context, and
 /// sets state to `NotStarted`. Returns the new Fiber pointer in rax/x0.
 ///
 /// Input: rdi/x0 = callable (closure pointer), rsi/x1 = Fiber class_id, rdx/x2 = entry wrapper pointer.
@@ -157,4 +158,34 @@ pub fn emit_fiber_state_getter(emitter: &mut Emitter) {
     }
 
     arm64::emit_state_getter(emitter);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Locks complete compact Throwable allocation and initialization for every supported target.
+    #[test]
+    fn fiber_state_error_uses_complete_throwable_layout_on_all_targets() {
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(target).unwrap());
+            emit_fiber_throw_state_error(&mut emitter);
+            let asm = emitter.output();
+            let stores = if target == "linux-x86_64" {
+                assert!(asm.contains("mov rax, 56"), "{target}");
+                assert!(asm.contains(&format!("mov r10, 0x{:x}",
+                    crate::codegen_support::sentinels::x86_64_heap_kind_word(6))), "{target}");
+                [24, 32, 40, 48].map(|offset| format!("mov QWORD PTR [rax + {offset}], 0"))
+            } else {
+                assert!(asm.contains("mov x0, #56"), "{target}");
+                assert!(asm.contains("mov x9, #6"), "{target}");
+                [24, 32, 40, 48].map(|offset| format!("str xzr, [x0, #{offset}]"))
+            };
+            let (initialized, _) = asm.split_once("__rt_throw_current").unwrap();
+            for store in stores {
+                assert!(initialized.contains(&store), "{target}: {store}");
+            }
+        }
+    }
 }

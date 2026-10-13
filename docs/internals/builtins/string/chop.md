@@ -2,7 +2,7 @@
 title: "chop() - internals"
 description: "Compiler internals for chop(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 788
+  order: 789
 ---
 
 ## `chop()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/chop.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/chop.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:701](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L701) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

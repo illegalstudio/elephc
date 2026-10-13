@@ -88,7 +88,7 @@ pub fn emit_throw_current(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_pcntl_abort_dispatch");                        // restore PCNTL mask/guard state before a handler exception longjmps
     emitter.instruction("ldr x0, [x19, #8]");                                   // x0 = activation record that should survive this catch
     emitter.instruction("bl __rt_exception_cleanup_frames");                    // run cleanup callbacks for every unwound activation frame
-    abi::emit_store_reg_to_symbol(emitter, "xzr", "_concat_off", 0);
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "xzr");
     emitter.instruction(&format!("add x0, x19, #{}", TRY_HANDLER_JMP_BUF_OFFSET)); // x0 = jmp_buf base stored inside the active handler record
     emitter.instruction("mov x1, #1");                                          // longjmp return value = 1 to indicate exceptional control flow
     emitter.bl_c("longjmp"); // transfer control directly back to the saved catch resume point
@@ -121,7 +121,7 @@ fn emit_throw_current_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_pcntl_abort_dispatch");                      // restore PCNTL mask/guard state before a handler exception longjmps
     emitter.instruction("mov rdi, QWORD PTR [r12 + 8]");                        // rdi = activation record that should survive this catch
     emitter.instruction("call __rt_exception_cleanup_frames");                  // run cleanup callbacks for every unwound activation frame
-    abi::emit_store_zero_to_symbol(emitter, "_concat_off", 0);
+    crate::codegen_support::runtime::ctx::emit_concat_off_store_imm(emitter, 0);
     emitter.instruction(&format!("lea rdi, [r12 + {}]", TRY_HANDLER_JMP_BUF_OFFSET)); // rdi = jmp_buf base stored inside the active handler record
     emitter.instruction("mov esi, 1");                                          // longjmp return value = 1 to indicate exceptional control flow
     emitter.bl_c("longjmp"); // transfer control directly back to the saved catch resume point
@@ -170,6 +170,7 @@ fn emit_uncaught_exception_handler_aarch64(emitter: &mut Emitter) {
     emitter.label("2");
     emitter.instruction("mov x0, x19");                                         // invoker argument 0 is the callable descriptor
     emitter.instruction("mov x1, x20");                                         // invoker argument 1 is the boxed argument array
+    crate::codegen_support::callable_descriptor::emit_global_weak_invoker_context(emitter);
     emitter.instruction("blr x9");                                              // execute the user exception handler exactly once
     emitter.instruction("bl __rt_decref_mixed");                                // release the handler's boxed return value
     emitter.instruction("mov x0, x20");                                         // release the boxed argument container
@@ -201,21 +202,21 @@ fn emit_uncaught_exception_handler_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, r15");                                        // pass the active Throwable payload
     emitter.instruction("xor esi, esi");                                        // object values have no high payload word
     emitter.instruction("call __rt_mixed_from_value");                          // create the boxed Throwable argument
-    emitter.instruction("mov r14, rax");                                        // preserve the argument cell across array allocation
+    emitter.instruction("mov rbx, rax");                                        // preserve the argument cell across array allocation
     emitter.instruction("mov edi, 1");                                          // allocate one visible handler argument slot
     emitter.instruction("mov esi, 8");                                          // indexed array elements begin with the generic runtime shape
     emitter.instruction("call __rt_array_new");                                 // create the descriptor invoker argument array
     emitter.instruction("mov rdi, rax");                                        // append into the new raw array
-    emitter.instruction("mov rsi, r14");                                        // append the boxed Throwable cell
+    emitter.instruction("mov rsi, rbx");                                        // append the boxed Throwable cell
     emitter.instruction("call __rt_array_push_refcounted");                     // the array retains its own argument-cell owner
     emitter.instruction("mov r15, rax");                                        // preserve the completed raw argument array
-    emitter.instruction("mov rax, r14");                                        // release the construction-time Mixed owner
+    emitter.instruction("mov rax, rbx");                                        // release the construction-time Mixed owner
     emitter.instruction("call __rt_decref_mixed");                              // leave ownership solely with the array
     emitter.instruction("mov rax, 4");                                          // runtime tag 4 boxes the indexed argument array
     emitter.instruction("mov rdi, r15");                                        // pass the raw array payload
     emitter.instruction("xor esi, esi");                                        // arrays have no high payload word
     emitter.instruction("call __rt_mixed_from_value");                          // box the argument container for the uniform invoker ABI
-    emitter.instruction("mov r14, rax");                                        // keep the boxed container across raw-array release
+    emitter.instruction("mov rbx, rax");                                        // keep the boxed container across raw-array release
     emitter.instruction("mov rax, r15");                                        // drop the raw array's construction owner
     emitter.instruction("call __rt_decref_any");                                // the boxed container now owns the array
 
@@ -223,10 +224,11 @@ fn emit_uncaught_exception_handler_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r10, r10");                                       // reject malformed descriptors without an invoker
     emitter.instruction("jz __rt_report_uncaught_exception");                   // fall back to the safe fatal report
     emitter.instruction("mov rdi, r12");                                        // invoker argument 0 is the callable descriptor
-    emitter.instruction("mov rsi, r14");                                        // invoker argument 1 is the boxed argument array
+    emitter.instruction("mov rsi, rbx");                                        // invoker argument 1 is the boxed argument array
+    crate::codegen_support::callable_descriptor::emit_global_weak_invoker_context(emitter);
     emitter.instruction("call r10");                                            // execute the user exception handler exactly once
     emitter.instruction("call __rt_decref_mixed");                              // release the handler's boxed return value
-    emitter.instruction("mov rax, r14");                                        // release the boxed argument container
+    emitter.instruction("mov rax, rbx");                                        // release the boxed argument container
     emitter.instruction("call __rt_decref_mixed");                              // deep-release its retained Throwable argument
     emitter.instruction("mov rax, r12");                                        // release the normalized handler descriptor owner
     emitter.instruction("call __rt_callable_descriptor_release");               // static descriptors are ignored, runtime descriptors are decref'd
@@ -293,10 +295,16 @@ mod tests {
             (Platform::Linux, Arch::X86_64),
         ] {
             let asm = emitted(platform, arch);
-            for counter in ["_gc_allocs", "_gc_frees"] {
+            // The counters are ctx fields, so they appear as offsets rather than names.
+            // Two DISTINCT offsets is the property: the hook hands over both, and reading
+            // one twice would be the bug this test was written against.
+            let allocs = crate::codegen_support::runtime::ctx::CTX_GC_ALLOCS_OFFSET;
+            let frees = crate::codegen_support::runtime::ctx::CTX_GC_FREES_OFFSET;
+            assert_ne!(allocs, frees);
+            for offset in [allocs, frees] {
                 assert!(
-                    asm.contains(counter),
-                    "{platform:?}/{arch:?} never reads {counter}:\n{asm}"
+                    asm.contains(&format!("{}]", offset)),
+                    "{platform:?}/{arch:?} never reads the counter at +{offset}:\n{asm}"
                 );
             }
             let (guard, call) = match arch {

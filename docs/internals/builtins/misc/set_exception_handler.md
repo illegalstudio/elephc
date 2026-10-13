@@ -2,7 +2,7 @@
 title: "set_exception_handler() - internals"
 description: "Compiler internals for set_exception_handler(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 688
+  order: 689
 ---
 
 ## `set_exception_handler()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/set_exception_handler.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/set_exception_handler.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:701](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L701) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

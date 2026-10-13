@@ -2,7 +2,7 @@
 title: "is_int() - internals"
 description: "Compiler internals for is_int(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 962
+  order: 963
 ---
 
 ## `is_int()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/is_int.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_int.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:701](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L701) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

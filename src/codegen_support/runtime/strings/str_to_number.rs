@@ -366,7 +366,6 @@ fn emit_str_looks_like_int_for_coercion_normalized_linux_x86_64(emitter: &mut Em
     emitter.instruction("mov QWORD PTR [rsp + 856], rbx");                      // preserve rbx before using it for fractional-zero accounting
     emitter.instruction("mov QWORD PTR [rsp + 864], r12");                      // preserve r12 before using it as the any-digit flag
     emitter.instruction("mov QWORD PTR [rsp + 872], r13");                      // preserve r13 before using it as the nonzero-digit flag
-    emitter.instruction("mov QWORD PTR [rsp + 880], r14");                      // preserve r14 before using it as the integer-significand flag
     emitter.instruction("mov QWORD PTR [rsp + 888], r15");                      // preserve r15 before using it for the scientific exponent
     emitter.instruction("mov r8, rax");                                         // move the PHP byte pointer into the bounded scan cursor
     emitter.instruction("mov r9, rdx");                                         // retain the exact remaining PHP byte count
@@ -374,7 +373,7 @@ fn emit_str_looks_like_int_for_coercion_normalized_linux_x86_64(emitter: &mut Em
     emitter.instruction("xor r11d, r11d");                                      // clear the decimal-point-seen flag
     emitter.instruction("xor r12d, r12d");                                      // clear the any-mantissa-digit flag
     emitter.instruction("xor r13d, r13d");                                      // clear the first-nonzero-significand flag
-    emitter.instruction("xor r14d, r14d");                                      // clear the first-significant-digit-in-integer flag
+    emitter.instruction("mov QWORD PTR [rsp + 880], 0");                        // clear the first-significant-digit-in-integer flag (its own slot: r14 is the reserved ctx register, and 840 belongs to the exponent threshold)
     emitter.instruction("xor r15d, r15d");                                      // initialize digits-after-first-integer-significant count
     emitter.instruction("xor ebx, ebx");                                        // initialize leading fractional-zero count
     emitter.instruction("xor ecx, ecx");                                        // initialize the retained significant-digit count
@@ -439,10 +438,10 @@ fn emit_str_looks_like_int_for_coercion_normalized_linux_x86_64(emitter: &mut Em
     emitter.instruction("mov r13d, 1");                                         // mark that the normalized significand now has a first digit
     emitter.instruction("test r11d, r11d");                                     // was the decimal point consumed before this first digit?
     emitter.instruction("jnz __rt_sliic_normal_first_fractional_x");            // derive the exponent from fractional leading zeros when needed
-    emitter.instruction("mov r14d, 1");                                         // remember that the first significant digit was in the integer portion
+    emitter.instruction("mov QWORD PTR [rsp + 880], 1");                        // remember that the first significant digit was in the integer portion
     emitter.instruction("jmp __rt_sliic_normal_write_first_x");                 // share output construction after setting the location flag
     emitter.label("__rt_sliic_normal_first_fractional_x");
-    emitter.instruction("xor r14d, r14d");                                      // mark a fractional first significant digit
+    emitter.instruction("mov QWORD PTR [rsp + 880], 0");                        // mark a fractional first significant digit
     emitter.label("__rt_sliic_normal_write_first_x");
     emitter.instruction("mov BYTE PTR [r10], al");                              // write the first significant decimal digit to the local spelling
     emitter.instruction("add r10, 1");                                          // advance after the normalized first significand digit
@@ -569,8 +568,8 @@ fn emit_str_looks_like_int_for_coercion_normalized_linux_x86_64(emitter: &mut Em
     emitter.label("__rt_sliic_normal_append_exponent_x");
     emitter.instruction("mov BYTE PTR [r10], 101");                             // append the normalized scientific exponent separator
     emitter.instruction("add r10, 1");                                          // advance after the exponent marker
-    emitter.instruction("test r14d, r14d");                                     // was the first significant digit in the integer portion?
-    emitter.instruction("jnz __rt_sliic_normal_combine_exponent_x");            // integer suffix count already is the base scientific exponent
+    emitter.instruction("cmp QWORD PTR [rsp + 880], 0");                        // was the first significant digit in the integer portion?
+    emitter.instruction("jne __rt_sliic_normal_combine_exponent_x");            // integer suffix count already is the base scientific exponent
     emitter.instruction("mov r15, rbx");                                        // load the leading fractional-zero count
     emitter.instruction("neg r15");                                             // negate fractional leading zeros for the decimal exponent
     emitter.instruction("sub r15, 1");                                          // account for the first nonzero fractional digit itself
@@ -631,9 +630,75 @@ fn emit_str_looks_like_int_for_coercion_normalized_linux_x86_64(emitter: &mut Em
     emitter.instruction("mov rbx, QWORD PTR [rsp + 856]");                      // restore the caller's callee-saved rbx value
     emitter.instruction("mov r12, QWORD PTR [rsp + 864]");                      // restore the caller's callee-saved r12 value
     emitter.instruction("mov r13, QWORD PTR [rsp + 872]");                      // restore the caller's callee-saved r13 value
-    emitter.instruction("mov r14, QWORD PTR [rsp + 880]");                      // restore the caller's callee-saved r14 value
     emitter.instruction("mov r15, QWORD PTR [rsp + 888]");                      // restore the caller's callee-saved r15 value
     emitter.instruction("add rsp, 896");                                        // release the fixed normalization frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the numeric flag and correctly rounded double
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::emit::Emitter;
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+    use std::collections::BTreeMap;
+
+    /// THE INTEGER-SIGNIFICAND FLAG AND THE EXPONENT THRESHOLD DO NOT SHARE A SLOT.
+    ///
+    /// On `main` the flag lived in `r14`, which the ctx-register work reserved. Moving it to
+    /// the stack is correct; moving it to `[rsp + 840]` was not, because the exponent
+    /// saturation threshold already owned that slot. The two then overwrote each other on
+    /// every value carrying an exponent: the flag write destroyed the threshold, and the
+    /// threshold read returned 0 or 1.
+    ///
+    /// MEASURED. `1e-2` stopped parsing as a number, so `ksort(["0.1" => …, "1e-2" => …])`
+    /// fell back to byte ordering and put `0.1` first —
+    /// `codegen::arrays::assoc_helpers::test_assoc_key_sorts_compare_negative_exponent_keys_numerically`,
+    /// red on the linux-x86_64 shard only, because the AArch64 arm still holds the flag in a
+    /// register.
+    ///
+    /// A register rename is safe by construction: the assembler refuses a name that does not
+    /// exist, and a register is either free or visibly in use nearby. A stack slot is neither
+    /// — nothing rejects an occupied offset, and the other owner can be four hundred lines
+    /// away. That asymmetry is why this test exists and why it checks slots, not registers.
+    #[test]
+    fn the_numeric_parsers_flag_and_threshold_use_different_stack_slots() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        super::emit_str_looks_like_int_for_coercion(&mut emitter);
+        let asm = emitter.output();
+
+        // Every slot written with a literal is a flag; every slot that takes a register or is
+        // compared against one carries a computed value. A slot in both sets has two owners.
+        let mut literal_writes: BTreeMap<String, usize> = BTreeMap::new();
+        let mut value_uses: BTreeMap<String, usize> = BTreeMap::new();
+        for raw in asm.lines() {
+            let line = raw.trim();
+            let Some(start) = line.find("[rsp + ") else { continue };
+            let Some(end) = line[start..].find(']') else { continue };
+            let slot = line[start..start + end + 1].to_string();
+            let after = line[start + end + 1..].trim_start();
+            if let Some(value) = after.strip_prefix(',') {
+                let value = value.trim();
+                if value.parse::<i64>().is_ok() {
+                    *literal_writes.entry(slot).or_default() += 1;
+                } else {
+                    *value_uses.entry(slot).or_default() += 1;
+                }
+            } else if line.starts_with("cmp ") || line.starts_with("mov r") || line.starts_with("mov e") {
+                // `cmp rax, [slot]` and `mov <reg>, [slot]` both read a computed value.
+                *value_uses.entry(slot).or_default() += 1;
+            }
+        }
+
+        let shared: Vec<&String> = literal_writes
+            .keys()
+            .filter(|slot| value_uses.contains_key(*slot))
+            .collect();
+        assert!(
+            shared.is_empty(),
+            "these frame slots of __rt_str_looks_like_int_for_coercion are written with a \
+             literal AND used to carry a computed value — two owners, one slot, which is how \
+             the exponent threshold and the integer-significand flag destroyed each other: \
+             {shared:?}\nliteral writes: {literal_writes:?}\nvalue uses: {value_uses:?}"
+        );
+    }
 }

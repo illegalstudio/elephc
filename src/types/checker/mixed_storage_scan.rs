@@ -151,6 +151,12 @@ impl Checker {
         body: &[Stmt],
         pre_bound_own_storage: &HashMap<String, PhpType>,
     ) {
+        // This body is about to be checked again from scratch. Drop any reference-cell widening
+        // decisions produced by an earlier stabilization walk of the same function-like scope;
+        // the typed assignment walk below will re-record only those still justified.
+        let scope = self.current_loop_storage_scope.clone();
+        self.ref_cell_mixed_locals
+            .retain(|(recorded_scope, _)| recorded_scope != &scope);
         // The marking describes ONE frame. The caller saves and restores the enclosing body's
         // set, but clear it here too so the scan owns the whole decision for this body.
         self.mixed_storage_locals.clear();

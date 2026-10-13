@@ -146,6 +146,11 @@ references it) and, for crates whose PHP surface comes from an injected prelude
 available. This is useful when a program reaches a feature through indirection
 that detection cannot see. The flag is repeatable:
 
+`--with-parallel` is a link-only exception: it includes the isolated-worker bridge but does not
+declare the Parallel PHP API by itself. A statically visible `Elephc\Parallel\run()` call injects
+that API and its Async cancellation dependency. The flag alone is not a way to enable an opaque
+dynamic Parallel entry point.
+
 ```bash
 elephc app.php --with-pdo
 elephc app.php --with-crypto --with-tls

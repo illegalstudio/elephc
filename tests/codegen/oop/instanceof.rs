@@ -142,6 +142,24 @@ echo (maybe(false) instanceof User) ? "T" : "F";
     assert_eq!(out, "TTFTF");
 }
 
+/// A catch-assigned object local may retain a null value when its protected body succeeds.
+#[test]
+fn test_instanceof_null_catch_assigned_object_local() {
+    let out = compile_and_run(r#"<?php
+function inspect(bool $fail): void {
+    $failure = null;
+    try { if ($fail) { throw new RuntimeException("boom"); } }
+    catch (Throwable $caught) { $failure = $caught; }
+    $target = "Throwable";
+    echo $failure instanceof Throwable ? "T" : "F";
+    echo $failure instanceof $target ? "T" : "F";
+}
+inspect(false);
+inspect(true);
+"#);
+    assert_eq!(out, "FFTT");
+}
+
 /// Tests dynamic instanceof with string variables naming classes and interfaces,
 /// including case-insensitive lookup and absolute names.
 #[test]

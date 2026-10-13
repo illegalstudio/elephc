@@ -12,6 +12,8 @@
 mod arrays;
 mod buffers;
 mod callables;
+/// Per-context runtime state layout, ctx register convention, and `__rt_ctx_init`.
+pub(crate) mod ctx;
 /// PHP loose-equality (`==`) walkers for boxed Mixed values, arrays, and objects.
 mod compare;
 /// `ext/curl` easy-handle runtime helpers (`__rt_curl_*`) over the `elephc_curl` bridge.
@@ -43,6 +45,11 @@ pub(crate) mod reference_cells;
 mod round_mode;
 /// Standard PHP library constants, functions, and classes.
 pub(crate) mod spl;
+/// Feeds the generated runtime to a real assembler, for every target and with every
+/// feature on. Test-only: it catches what no text assertion can, an instruction that
+/// does not exist.
+#[cfg(test)]
+mod assembles;
 /// The whole-runtime System V call-alignment audit (x86_64). Test-only: it walks the
 /// emitted runtime and fails when a `call` would hand its callee a misaligned stack.
 #[cfg(test)]
@@ -94,9 +101,10 @@ pub(crate) use arrays::HashMapResultKind;
 pub(crate) use system::STACK_LIMIT_SYMBOL;
 /// Emit full runtime helpers (orchestrates all runtime sections).
 pub(crate) use fibers::{
-    FIBER_CALLABLE_OFFSET, FIBER_PENDING_THROW_OFFSET, FIBER_STACK_BASE_OFFSET,
-    FIBER_STACK_SIZE_OFFSET, FIBER_START_ARGS_MAX, FIBER_START_ARGS_OFFSET,
-    FIBER_START_ARG_COUNT_OFFSET, FIBER_STATE_NOT_STARTED, FIBER_STATE_RUNNING,
-    FIBER_STATE_SUSPENDED, FIBER_STATE_TERMINATED, FIBER_TRANSFER_VALUE_OFFSET,
-    FIBER_USER_ARG_MAX_OFFSET,
+    FIBER_CALLABLE_OFFSET, FIBER_DESCRIPTOR_ARGBOX_OFFSET, FIBER_PENDING_THROW_OFFSET,
+    FIBER_STACK_BASE_OFFSET, FIBER_STACK_SIZE_OFFSET, FIBER_START_ARGS_MAX,
+    FIBER_START_ARGS_OFFSET, FIBER_START_ARG_COUNT_OFFSET, FIBER_STATE_NOT_STARTED,
+    FIBER_STATE_OFFSET,
+    FIBER_STATE_RUNNING, FIBER_STATE_SUSPENDED, FIBER_STATE_TERMINATED,
+    FIBER_TRANSFER_VALUE_OFFSET, FIBER_USER_ARG_MAX_OFFSET,
 };

@@ -424,13 +424,13 @@ echo applyWithSameFrameCatch($record), ':', applyWithSameFrameCatch($record);
     assert_eq!(compile_and_run_tagged(source), "first|caught|ok0:first|caught|ok0");
 }
 
-/// A descriptor call's owned result survives a throwing destructor run by callback retirement.
+/// A descriptor call retires its discarded result before a throwing capture destructor, like PHP.
 ///
 /// The closure's captured array is the LAST owner of the capture payload by the time the call
 /// runs, because the argument expression clears the outer holder through a reference. Retiring
 /// the callback after the call therefore destroys that payload, and its destructor throws. The
-/// result object's own destructor pins that the result was still rooted when it did: without the
-/// result staging it is stranded and the heap summary is dirty.
+/// discarded result is destroyed first in PHP. Both owners must settle inside the source catch
+/// without stranding either object, including when the capture destructor throws.
 #[test]
 fn test_core_descriptor_result_survives_a_throwing_capture_destructor_before_a_same_frame_catch() {
     let source = r#"<?php
@@ -460,21 +460,21 @@ echo invokeWithLastOwnedCapture(), ':', invokeWithLastOwnedCapture();
     let out = compile_and_run_with_heap_debug(source);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
     assert_eq!(
-        out.stdout, "capture|result|caught|ok:capture|result|caught|ok",
+        out.stdout, "result|capture|caught|ok:result|capture|caught|ok",
         "{}", out.stderr,
     );
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
     assert_eq!(
         compile_and_run_tagged(source),
-        "capture|result|caught|ok:capture|result|caught|ok",
+        "result|capture|caught|ok:result|capture|caught|ok",
     );
 }
 
-/// An immediately invoked closure's result survives the throwing destructor of its own capture.
+/// An immediately invoked closure destroys its discarded result before retiring its capture.
 ///
 /// The direct call does not pass the descriptor, so the descriptor is retired separately after
-/// the call. It is the last owner of the captured array here, so that retirement runs a throwing
-/// destructor while the call's result is only an SSA temporary unless it is staged first.
+/// the call. PHP destroys the ignored result before this final environment owner; its throwing
+/// capture destructor must then reach the source catch with both objects already accounted for.
 #[test]
 fn test_core_immediately_invoked_closure_result_survives_a_throwing_capture_destructor() {
     let source = r#"<?php
@@ -503,13 +503,13 @@ echo invokeIifeWithLastOwnedCapture(), ':', invokeIifeWithLastOwnedCapture();
     let out = compile_and_run_with_heap_debug(source);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
     assert_eq!(
-        out.stdout, "capture|result|caught|ok:capture|result|caught|ok",
+        out.stdout, "result|capture|caught|ok:result|capture|caught|ok",
         "{}", out.stderr,
     );
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
     assert_eq!(
         compile_and_run_tagged(source),
-        "capture|result|caught|ok:capture|result|caught|ok",
+        "result|capture|caught|ok:result|capture|caught|ok",
     );
 }
 

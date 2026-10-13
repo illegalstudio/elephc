@@ -7,6 +7,7 @@
 //! Key details:
 //! - Initialization preserves native linkage and returns optional startup failures through the C ABI.
 //! - Repeated initialization does not reset the mbstring request settings used by exported PHP calls.
+//! - Foreign entries publish the runtime context before accessing it and restore the host register.
 
 use super::*;
 
@@ -26,14 +27,17 @@ pub(super) fn emit(emitter: &mut Emitter, target: Target, heap_debug: bool,
         emitter.blank();
         emitter.comment(&format!("cdylib lifecycle: {lifecycle}"));
         emitter.label_global(&target.extern_symbol(lifecycle));
-        if lifecycle == "elephc_init" {
-            abi::emit_frame_prologue(emitter, 16);
-        }
+        abi::emit_frame_prologue(emitter, 32);
+        crate::codegen_support::runtime::ctx::emit_ctx_save_foreign(emitter, 8);
+        crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
         emit_clear_error_inline(emitter);
         emit_reset_concat_inline(emitter);
         emit_store_immediate_to_symbol(emitter, BOUNDARY_ACTIVE, 0);
         emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_OK as i64);
         if lifecycle == "elephc_init" {
+            crate::codegen_support::runtime::ctx::emit_lazy_ctx_arena_install(
+                emitter, "L_cdylib_init_arena_ready",
+            );
             crate::codegen::stack_guard::emit_stack_limit_init_call(emitter);
             if heap_debug {
                 abi::emit_enable_heap_debug_flag(emitter);
@@ -62,8 +66,9 @@ pub(super) fn emit(emitter: &mut Emitter, target: Target, heap_debug: bool,
                 emitter.instruction(&failure);                                  // return recoverable runtime failure to the host initializer
                 emitter.label("L_cdylib_init_return");
             }
-            abi::emit_frame_restore(emitter, 16);
         }
+        crate::codegen_support::runtime::ctx::emit_ctx_restore_foreign(emitter, 8);
+        abi::emit_frame_restore(emitter, 32);
         emitter.instruction("ret");                                             // return to the current C-ABI caller
     }
 
@@ -104,11 +109,55 @@ pub(super) fn emit(emitter: &mut Emitter, target: Target, heap_debug: bool,
     emitter.blank();
     emitter.comment("cdylib release of caller-owned export storage");
     emitter.label_global(&target.extern_symbol("elephc_free"));
-    match target.arch {
-        Arch::AArch64 => emitter.instruction("b __rt_heap_free_safe"),          // release non-borrowed runtime storage when present
-        Arch::X86_64 => {
-            emitter.instruction("mov rax, rdi");                                // adapt the SysV pointer register to the runtime free ABI
-            emitter.instruction("jmp __rt_heap_free_safe");                     // release non-borrowed runtime storage when present
+    abi::emit_frame_prologue(emitter, 32);
+    crate::codegen_support::runtime::ctx::emit_ctx_save_foreign(emitter, 8);
+    crate::codegen_support::runtime::ctx::emit_ctx_publish(emitter);
+    if target.arch == Arch::X86_64 {
+        abi::emit_reg_move(emitter, "rax", "rdi");
+    }
+    abi::emit_call_label(emitter, "__rt_heap_free_safe");
+    crate::codegen_support::runtime::ctx::emit_ctx_restore_foreign(emitter, 8);
+    abi::emit_frame_restore(emitter, 32);
+    abi::emit_return(emitter);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Init, shutdown and free preserve the foreign context register on every supported target.
+    #[test]
+    fn lifecycle_entries_publish_context_after_save_and_restore_it_before_return() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new_cdylib(target);
+            emitter.ctx_register = true;
+            emit(&mut emitter, target, false, None, ("unused_runtime_error", 0));
+            let asm = emitter.output();
+            let (save, restore) = match target.arch {
+                Arch::AArch64 => (
+                    "stur x28, [x29, #-8]", "ldur x28, [x29, #-8]",
+                ),
+                Arch::X86_64 => (
+                    "mov QWORD PTR [rbp - 8], r14",
+                    "mov r14, QWORD PTR [rbp - 8]",
+                ),
+            };
+            // Library entries use PIC/GOT materialization on ELF, ordinary addresses on
+            // Mach-O. Check the ordering against the exact target-aware publish sequence.
+            let mut publication = Emitter::new_cdylib(target);
+            publication.ctx_register = true;
+            crate::codegen_support::runtime::ctx::emit_ctx_publish(&mut publication);
+            let publish = publication.output();
+            for entry in ["elephc_init", "elephc_shutdown", "elephc_free"] {
+                let label = format!("{}:\n", target.extern_symbol(entry));
+                let body = asm.split_once(&label).unwrap().1.split_once("ret").unwrap().0;
+                let saved = body.find(save).unwrap_or_else(|| panic!("{name}/{entry}: {body}"));
+                let published = body.find(publish.trim()).unwrap_or_else(|| panic!("{name}/{entry}: {body}"));
+                let restored = body.find(restore).unwrap_or_else(|| panic!("{name}/{entry}: {body}"));
+                assert!(saved < published && published < restored, "{name}/{entry}: {body}");
+            }
+            assert!(asm.contains("L_cdylib_init_arena_ready"), "{name}: initialization must preserve a live arena");
         }
     }
 }

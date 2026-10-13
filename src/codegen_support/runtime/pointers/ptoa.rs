@@ -8,7 +8,7 @@
 //! Key details:
 //! - Pointer helpers must keep null checks and C-string conversions aligned with the pointer extension ABI.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Emits the `__rt_ptoa` runtime helper that formats a pointer address as a lowercase hex string.
 ///
@@ -34,7 +34,7 @@ pub(crate) fn emit_ptoa(emitter: &mut Emitter) {
     emitter.instruction("str x30, [sp, #-16]!");                                // save link register
 
     // -- set up output buffer in concat_buf --
-    abi::emit_symbol_address(emitter, "x1", "_concat_buf");                     // load page of concat buffer
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x1");                     // load page of concat buffer
     emitter.instruction("mov x3, x1");                                          // x3 = write cursor
 
     // -- write "0x" prefix --
@@ -98,7 +98,7 @@ fn emit_ptoa_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_ptoa");
 
     emitter.instruction("mov r11, rax");                                        // preserve the incoming pointer payload because x86_64 call sites pass it in the integer result register
-    abi::emit_symbol_address(emitter, "rax", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "rax");
     emitter.instruction("mov rsi, rax");                                        // seed the write cursor from the concat buffer base so the helper can emit the pointer string in-place
     emitter.instruction("mov BYTE PTR [rsi], 0x30");                            // write the leading '0' of the hexadecimal pointer prefix
     emitter.instruction("add rsi, 1");                                          // advance the write cursor after storing the leading '0'

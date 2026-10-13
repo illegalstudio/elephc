@@ -6,7 +6,7 @@
 //! - The fixed-point pass driver after peephole and immutable-local classification.
 //!
 //! Key details:
-//! - The accepted use graph contains only integer casts/stores plus ordinary acquire/release
+//! - The accepted use graph contains only integer casts/stores plus ordinary copy/acquire/release
 //!   scaffolding. Returns, output, calls, comparisons, Mixed stores, terminators, lifetime pins,
 //!   and unknown/future opcodes reject the candidate.
 //! - Rewritten producers yield non-owning I64 values through `IChecked*ToInt`; removable casts
@@ -127,7 +127,7 @@ fn terminator_used_values(function: &Function) -> HashSet<ValueId> {
         .collect()
 }
 
-/// Returns whether an accepted integer sink is fed by checked arithmetic through acquires.
+/// Returns whether an integer sink is fed by checked arithmetic through non-pinned copies.
 fn has_potential_integer_sink(function: &Function) -> bool {
     function.instructions.iter().any(|user| {
         let accepts_integer = match user.op {
@@ -147,7 +147,7 @@ fn has_potential_integer_sink(function: &Function) -> bool {
     })
 }
 
-/// Follows transparent acquire definitions back to a boxed checked-arithmetic producer.
+/// Follows non-pinned acquires/value copies back to a boxed checked-arithmetic producer.
 fn value_originates_from_checked(function: &Function, mut value: ValueId) -> bool {
     for _ in 0..function.values.len() {
         let Some(value_ref) = function.values.get(value.as_raw() as usize) else {
@@ -162,7 +162,7 @@ fn value_originates_from_checked(function: &Function, mut value: ValueId) -> boo
         if checked_to_int_op(definition.op).is_some() {
             return true;
         }
-        if definition.op != Op::Acquire || definition.immediate.is_some() {
+        if !matches!(definition.op, Op::Acquire | Op::MixedClone) || definition.immediate.is_some() {
             return false;
         }
         let Some(operand) = definition.operands.first() else {
@@ -217,7 +217,7 @@ fn analyze_sink_graph(
             {
                 rewrite.saw_integer_sink = true;
             }
-            Op::Acquire if user.immediate.is_none() => {
+            Op::Acquire | Op::MixedClone if user.immediate.is_none() => {
                 let Some(acquired) = user.result else {
                     return false;
                 };
@@ -329,9 +329,9 @@ fn specialize_checked_producer(
 struct SlotRewrite {
     /// Boxed checked producers feeding the slot, rewritten to their `IChecked*ToInt` form.
     producers: Vec<InstId>,
-    /// Acquire, release, and old-value load scaffolding the scalar slot no longer needs.
+    /// Copy, acquire, release, and old-value load scaffolding the scalar slot no longer needs.
     neutralize: HashSet<InstId>,
-    /// Acquire results redirected to the now-scalar result of their own producer.
+    /// Copy/acquire results redirected to the now-scalar result of their own producer.
     replacements: HashMap<ValueId, ValueId>,
 }
 
@@ -449,7 +449,7 @@ fn instruction_mentions_slot(inst: &Instruction, slot: LocalSlotId) -> bool {
 
 /// Accepts one `store_local` into the candidate slot.
 ///
-/// A store is provable when it writes a value that is already a raw `I64`, or the `acquire`
+/// A store is provable when it writes a value that is already a raw `I64`, or the copy/acquire
 /// of a boxed checked producer whose remaining readers are release scaffolding — the exact
 /// shape `$i++` lowers to.
 fn accept_slot_writer(
@@ -466,7 +466,7 @@ fn accept_slot_writer(
     }
     let acquire_id = defining_instruction_id(function, stored)?;
     let acquire = function.instruction(acquire_id)?;
-    if acquire.op != Op::Acquire || acquire.immediate.is_some() {
+    if !matches!(acquire.op, Op::Acquire | Op::MixedClone) || acquire.immediate.is_some() {
         return None;
     }
     let produced = *acquire.operands.first()?;
@@ -489,9 +489,9 @@ struct ScaffoldContext {
     acquire_id: InstId,
 }
 
-/// Accepts the acquire/release scaffolding around a boxed value the retype makes scalar.
+/// Accepts copy/acquire/release scaffolding around a boxed value the retype makes scalar.
 ///
-/// Every reader must be the store into the candidate slot, the acquire being folded away, or
+/// Every reader must be the store into the candidate slot, the copy being folded away, or
 /// a `release` that the scalar slot renders dead. Anything else — a second store, a call, a
 /// terminator — can still observe the boxed cell, so the slot keeps its representation.
 fn accept_ownership_scaffold(

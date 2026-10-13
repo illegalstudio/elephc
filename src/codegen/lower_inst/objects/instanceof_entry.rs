@@ -37,7 +37,8 @@ pub(in crate::codegen::lower_inst) fn lower_instanceof(ctx: &mut FunctionContext
     };
     match value_ty {
         PhpType::Object(_) => {
-            ctx.load_value_to_reg(value, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+            emit_normalized_dynamic_instanceof_value(ctx, value, &value_ty)?;
+            abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), abi::int_result_reg(ctx.emitter));
             emit_match_call(ctx, target_id, target_kind, "__rt_exception_matches");
         }
         PhpType::Mixed | PhpType::Union(_) => {

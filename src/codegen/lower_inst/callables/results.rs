@@ -34,10 +34,18 @@ pub(super) fn emit_unbox_owned_descriptor_result(
         PhpType::Int => "__rt_mixed_cast_int",
         PhpType::Bool => "__rt_mixed_cast_bool",
         PhpType::Float => "__rt_mixed_cast_float",
-        PhpType::Str => "__rt_mixed_cast_string",
+        PhpType::Str => {
+            emit_transfer_owned_payload(emitter, true);
+            return Ok(());
+        }
         PhpType::TaggedScalar => "__rt_mixed_unbox",
         PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed => {
             emit_detach_owned_mixed_array_result(emitter);
+            return Ok(());
+        }
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)
+        | PhpType::Iterable | PhpType::Callable => {
+            emit_transfer_owned_payload(emitter, false);
             return Ok(());
         }
         other => return Err(CodegenIrError::unsupported(format!(
@@ -69,6 +77,36 @@ pub(super) fn emit_unbox_owned_descriptor_result(
     }
     abi::emit_release_temporary_stack(emitter, 16);
     Ok(())
+}
+
+/// Transfers the box's exact string or heap payload owner without allocating or retaining again.
+fn emit_transfer_owned_payload(emitter: &mut Emitter, string: bool) {
+    let result = abi::int_result_reg(emitter);
+    let (payload, high) = match emitter.target.arch {
+        Arch::AArch64 => ("x1", "x2"),
+        Arch::X86_64 => ("rdi", "rdx"),
+    };
+    abi::emit_push_reg(emitter, result);
+    abi::emit_call_label(emitter, "__rt_mixed_unbox");
+    if string {
+        abi::emit_push_reg_pair(emitter, payload, high);
+    } else {
+        abi::emit_push_reg(emitter, payload);
+    }
+    let box_pointer = abi::secondary_scratch_reg(emitter);
+    abi::emit_load_temporary_stack_slot(emitter, box_pointer, 16);
+    for offset in [0, 8, 16] {
+        abi::emit_store_zero_to_address(emitter, box_pointer, offset);
+    }
+    abi::emit_reg_move(emitter, result, box_pointer);
+    abi::emit_call_label(emitter, "__rt_decref_mixed");
+    if string {
+        let (pointer, length) = abi::string_result_regs(emitter);
+        abi::emit_pop_reg_pair(emitter, pointer, length);
+    } else {
+        abi::emit_pop_reg(emitter, result);
+    }
+    abi::emit_release_temporary_stack(emitter, 16);
 }
 
 /// Transfers an array payload out of its owned Mixed result box.
@@ -126,7 +164,7 @@ mod tests {
                 (PhpType::Int, "__rt_mixed_cast_int"),
                 (PhpType::Bool, "__rt_mixed_cast_bool"),
                 (PhpType::Float, "__rt_mixed_cast_float"),
-                (PhpType::Str, "__rt_mixed_cast_string"),
+                (PhpType::Str, "__rt_mixed_unbox"),
                 (PhpType::TaggedScalar, "__rt_mixed_unbox"),
             ] {
                 let mut emitter = Emitter::new(target);
@@ -159,7 +197,7 @@ mod tests {
         }
     }
 
-    /// A concrete descriptor string must carry the owner produced by its Mixed cast.
+    /// A concrete descriptor string must carry the owner transferred from its Mixed result.
     #[test]
     fn concrete_string_descriptor_results_fail_closed_without_owned_metadata() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
@@ -198,6 +236,24 @@ mod tests {
                 asm.find("__rt_incref").unwrap() < asm.find("__rt_decref_mixed").unwrap(),
                 "{name}",
             );
+        }
+    }
+
+    /// Concrete heap and string returns consume one box and transfer its payload without a copy.
+    #[test]
+    fn descriptor_payload_transfers_preserve_one_owner_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            for ty in [PhpType::Str, PhpType::Array(Box::new(PhpType::Int)),
+                PhpType::AssocArray { key: Box::new(PhpType::Mixed), value: Box::new(PhpType::Mixed) },
+                PhpType::Object("Result".into()), PhpType::Callable, PhpType::Iterable]
+            {
+                let mut emitter = Emitter::new(Target::parse(name).unwrap());
+                emit_unbox_owned_descriptor_result(&mut emitter, &ty, Ownership::Owned).unwrap();
+                let asm = emitter.output();
+                assert_eq!(asm.matches("__rt_mixed_unbox").count(), 1, "{name}: {ty:?}");
+                assert_eq!(asm.matches("__rt_decref_mixed").count(), 1, "{name}: {ty:?}");
+                assert!(!asm.contains("__rt_str_persist") && !asm.contains("__rt_incref"), "{name}: {ty:?}");
+            }
         }
     }
 }

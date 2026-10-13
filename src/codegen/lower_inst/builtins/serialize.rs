@@ -238,13 +238,20 @@ pub(crate) fn lower_unserialize(ctx: &mut FunctionContext<'_>, inst: &Instructio
         }
     }
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-    match ctx.value_php_type(data)?.codegen_repr() {
+    let releases_mixed_string_cast = match ctx.value_php_type(data)?.codegen_repr() {
         PhpType::Str => {
+            let mixed_backed = ctx.loaded_string_uses_mixed_storage(data)?;
             ctx.load_string_value_to_regs(data, ptr_reg, len_reg)?;
+            mixed_backed
         }
         PhpType::Mixed | PhpType::Union(_) => {
             load_value_to_first_int_arg(ctx, data)?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+            // A string-shaped Mixed detaches through `__rt_str_persist`; scalar
+            // casts instead borrow concat scratch. Retain the pointer across the
+            // parser so the validated heap release below frees only the detached
+            // string and ignores the borrowed cases.
+            true
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -252,8 +259,20 @@ pub(crate) fn lower_unserialize(ctx: &mut FunctionContext<'_>, inst: &Instructio
                 other
             )));
         }
+    };
+    if releases_mixed_string_cast {
+        abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+        abi::emit_store_to_sp(ctx.emitter, ptr_reg, 0);
     }
     abi::emit_call_label(ctx.emitter, "__rt_unserialize_mixed");
+    if releases_mixed_string_cast {
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        abi::emit_store_to_sp(ctx.emitter, result_reg, 8);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
+        abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 8);
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+    }
     abi::emit_call_label(ctx.emitter, "__rt_unserialize_end");
     box_false_on_unserialize_failure(ctx);
     store_if_result(ctx, inst)

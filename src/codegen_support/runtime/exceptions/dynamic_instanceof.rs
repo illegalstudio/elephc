@@ -19,7 +19,7 @@ use crate::codegen_support::abi;
 ///
 /// Input registers (ARM64): x0 = result (1=success, 0=failure), x1 = string pointer, x2 = string length
 /// Output registers (ARM64): x0 = 1 success / 0 failure, x1 = target id, x2 = 0 class / 1 interface
-/// Input registers (x86_64 Linux): rdi = string pointer, rsi = string length (System V ABI)
+/// Input registers (x86_64 Linux): rax = string pointer, rdx = string length (PHP string-result ABI)
 /// Output registers (x86_64 Linux): rax = 1 success / 0 failure, rdi = target id, rdx = 0 class / 1 interface
 ///
 /// The lookup scans `_instanceof_target_entries` (each entry: name ptr, name len, target id, target kind)

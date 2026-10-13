@@ -22,6 +22,7 @@ use crate::codegen_support::platform::Arch;
 /// `__rt_decref_any`, nested callable captures recurse, and managed reference captures retire
 /// their cell lease. Borrowed addresses stay untouched before the descriptor block is freed.
 pub(crate) fn emit_callable_descriptor_release(emitter: &mut Emitter) {
+    emit_ref_cell_release(emitter);
     if emitter.target.arch == Arch::X86_64 {
         emit_callable_descriptor_release_linux_x86_64(emitter);
         return;
@@ -33,11 +34,10 @@ pub(crate) fn emit_callable_descriptor_release(emitter: &mut Emitter) {
 
     // -- null and heap-range checks --
     emitter.instruction("cbz x0, __rt_callable_descriptor_release_done");       // static null descriptors have nothing to release
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x9");
     emitter.instruction("cmp x0, x9");                                          // is the descriptor below the managed heap?
     emitter.instruction("b.lo __rt_callable_descriptor_release_done");          // yes, it is static or foreign metadata
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_off");
-    emitter.instruction("ldr x10, [x10]");                                      // load the current heap bump offset
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "x10"); // x10 = current heap bump offset (ctx-relative in ctx mode)
     emitter.instruction("add x10, x9, x10");                                    // compute the current managed heap end
     emitter.instruction("cmp x0, x10");                                         // is the descriptor outside the live heap window?
     emitter.instruction("b.hs __rt_callable_descriptor_release_done");          // yes, do not touch it
@@ -132,6 +132,106 @@ pub(crate) fn emit_callable_descriptor_release(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return after releasing or ignoring the descriptor
 }
 
+/// Emits the shared reference-cell release helper.
+///
+/// Input is the cell pointer in `x0`/`rax` and the callable-descriptor type tag in `x1`/`rdx`.
+/// The uniform heap-header refcount tracks the frame owner plus every closure descriptor that
+/// captures the cell. The last owner releases the typed payload and then the cell allocation.
+fn emit_ref_cell_release(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: reference cell release ---");
+    emitter.label_global("__rt_ref_cell_release");
+    if emitter.target.arch == Arch::X86_64 {
+        emitter.instruction("test rax, rax");                                   // skip a null reference-cell pointer
+        emitter.instruction("jz __rt_ref_cell_release_done_x86");               // null cells own no payload
+        emitter.instruction("mov r10d, DWORD PTR [rax - 12]");                  // load the uniform heap-header refcount
+        emitter.instruction("test r10d, r10d");                                 // has this cell already been released defensively?
+        emitter.instruction("jz __rt_ref_cell_release_done_x86");               // avoid touching an already-freed cell
+        emitter.instruction("sub r10d, 1");                                     // drop one frame or descriptor owner
+        emitter.instruction("mov DWORD PTR [rax - 12], r10d");                  // publish the remaining cell-owner count
+        emitter.instruction("jnz __rt_ref_cell_release_done_x86");              // another owner keeps the cell and payload alive
+        emitter.instruction("push rbp");                                        // preserve the caller frame across nested payload release
+        emitter.instruction("mov rbp, rsp");                                    // establish spill addressing for the final release
+        emitter.instruction("sub rsp, 16");                                     // reserve the cell pointer and type tag
+        emitter.instruction("mov QWORD PTR [rbp - 8], rax");                    // save the cell pointer for final heap release
+        emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                   // save the payload type tag across nested calls
+        emitter.instruction("mov rax, QWORD PTR [rax]");                        // load the cell payload into the result register
+        emitter.instruction("cmp rdx, 1");                                      // is the payload a raw owned string pointer?
+        emitter.instruction("je __rt_ref_cell_release_string_x86");             // strings use the validating heap-free helper
+        emitter.instruction("cmp rdx, 4");                                      // is the payload an indexed array?
+        emitter.instruction("je __rt_ref_cell_release_any_x86");                // heap-backed values use uniform runtime dispatch
+        emitter.instruction("cmp rdx, 5");                                      // is the payload an associative array?
+        emitter.instruction("je __rt_ref_cell_release_any_x86");                // heap-backed values use uniform runtime dispatch
+        emitter.instruction("cmp rdx, 6");                                      // is the payload an object?
+        emitter.instruction("je __rt_ref_cell_release_any_x86");                // heap-backed values use uniform runtime dispatch
+        emitter.instruction("cmp rdx, 7");                                      // is the payload a boxed Mixed or union value?
+        emitter.instruction("je __rt_ref_cell_release_any_x86");                // heap-backed values use uniform runtime dispatch
+        emitter.instruction("cmp rdx, 10");                                     // is the payload a callable descriptor?
+        emitter.instruction("je __rt_ref_cell_release_callable_x86");           // callable descriptors need recursive capture cleanup
+        emitter.instruction("cmp rdx, 12");                                     // is the payload an erased iterable?
+        emitter.instruction("je __rt_ref_cell_release_any_x86");                // inspect the heap kind at runtime
+        emitter.instruction("jmp __rt_ref_cell_release_free_x86");              // scalar payloads need only the cell allocation freed
+        emitter.label("__rt_ref_cell_release_string_x86");
+        emitter.instruction("call __rt_heap_free_safe");                        // release the final owned string payload
+        emitter.instruction("jmp __rt_ref_cell_release_free_x86");              // continue with the cell allocation
+        emitter.label("__rt_ref_cell_release_any_x86");
+        emitter.instruction("call __rt_decref_any");                            // release the final heap-backed payload owner
+        emitter.instruction("jmp __rt_ref_cell_release_free_x86");              // continue with the cell allocation
+        emitter.label("__rt_ref_cell_release_callable_x86");
+        emitter.instruction("call __rt_callable_descriptor_release");           // release a callable payload and its captures
+        emitter.label("__rt_ref_cell_release_free_x86");
+        emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                    // restore the final reference-cell pointer
+        emitter.instruction("call __rt_heap_free");                             // release the reference-cell allocation itself
+        emitter.instruction("add rsp, 16");                                     // discard helper spill slots
+        emitter.instruction("pop rbp");                                         // restore the caller frame
+        emitter.label("__rt_ref_cell_release_done_x86");
+        emitter.instruction("ret");                                             // return after dropping one cell owner
+        return;
+    }
+
+    emitter.instruction("cbz x0, __rt_ref_cell_release_done");                  // skip a null reference-cell pointer
+    emitter.instruction("ldr w9, [x0, #-12]");                                  // load the uniform heap-header refcount
+    emitter.instruction("cbz w9, __rt_ref_cell_release_done");                  // avoid touching an already-freed cell
+    emitter.instruction("subs w9, w9, #1");                                     // drop one frame or descriptor owner
+    emitter.instruction("str w9, [x0, #-12]");                                  // publish the remaining cell-owner count
+    emitter.instruction("b.ne __rt_ref_cell_release_done");                     // another owner keeps the cell and payload alive
+    emitter.instruction("sub sp, sp, #32");                                     // reserve helper spills and saved frame state
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // preserve frame pointer and return address
+    emitter.instruction("add x29, sp, #16");                                    // establish the helper frame
+    emitter.instruction("stp x0, x1, [sp]");                                    // preserve cell pointer and payload type tag
+    emitter.instruction("ldr x0, [x0]");                                        // load the cell payload into the result register
+    emitter.instruction("cmp x1, #1");                                          // is the payload a raw owned string pointer?
+    emitter.instruction("b.eq __rt_ref_cell_release_string");                   // strings use the validating heap-free helper
+    emitter.instruction("cmp x1, #4");                                          // is the payload an indexed array?
+    emitter.instruction("b.eq __rt_ref_cell_release_any");                      // heap-backed values use uniform runtime dispatch
+    emitter.instruction("cmp x1, #5");                                          // is the payload an associative array?
+    emitter.instruction("b.eq __rt_ref_cell_release_any");                      // heap-backed values use uniform runtime dispatch
+    emitter.instruction("cmp x1, #6");                                          // is the payload an object?
+    emitter.instruction("b.eq __rt_ref_cell_release_any");                      // heap-backed values use uniform runtime dispatch
+    emitter.instruction("cmp x1, #7");                                          // is the payload a boxed Mixed or union value?
+    emitter.instruction("b.eq __rt_ref_cell_release_any");                      // heap-backed values use uniform runtime dispatch
+    emitter.instruction("cmp x1, #10");                                         // is the payload a callable descriptor?
+    emitter.instruction("b.eq __rt_ref_cell_release_callable");                 // callable descriptors need recursive capture cleanup
+    emitter.instruction("cmp x1, #12");                                         // is the payload an erased iterable?
+    emitter.instruction("b.eq __rt_ref_cell_release_any");                      // inspect the heap kind at runtime
+    emitter.instruction("b __rt_ref_cell_release_free");                        // scalar payloads need only the cell allocation freed
+    emitter.label("__rt_ref_cell_release_string");
+    emitter.instruction("bl __rt_heap_free_safe");                              // release the final owned string payload
+    emitter.instruction("b __rt_ref_cell_release_free");                        // continue with the cell allocation
+    emitter.label("__rt_ref_cell_release_any");
+    emitter.instruction("bl __rt_decref_any");                                  // release the final heap-backed payload owner
+    emitter.instruction("b __rt_ref_cell_release_free");                        // continue with the cell allocation
+    emitter.label("__rt_ref_cell_release_callable");
+    emitter.instruction("bl __rt_callable_descriptor_release");                 // release a callable payload and its captures
+    emitter.label("__rt_ref_cell_release_free");
+    emitter.instruction("ldr x0, [sp]");                                        // restore the final reference-cell pointer
+    emitter.instruction("bl __rt_heap_free");                                   // release the reference-cell allocation itself
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // discard helper spills
+    emitter.label("__rt_ref_cell_release_done");
+    emitter.instruction("ret");                                                 // return after dropping one cell owner
+}
+
 /// Emits the x86_64 Linux variant of `__rt_callable_descriptor_release`.
 fn emit_callable_descriptor_release_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
@@ -140,11 +240,10 @@ fn emit_callable_descriptor_release_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("test rax, rax");                                       // static null descriptors have nothing to release
     emitter.instruction("jz __rt_callable_descriptor_release_done");            // skip null descriptor pointers
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r10");
     emitter.instruction("cmp rax, r10");                                        // reject descriptors below the managed heap
     emitter.instruction("jb __rt_callable_descriptor_release_done");            // static descriptors live outside the heap and are ignored
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_heap_off");
-    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the x86_64 heap bump offset
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "r11"); // r11 = current heap offset (ctx-relative in ctx mode)
     emitter.instruction("add r11, r10");                                        // compute the current managed heap end
     emitter.instruction("cmp rax, r11");                                        // is the descriptor outside the live heap window?
     emitter.instruction("jae __rt_callable_descriptor_release_done");           // outside-heap descriptors are not runtime-owned

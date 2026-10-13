@@ -42,9 +42,8 @@ pub fn emit_implode_bool(emitter: &mut Emitter) {
     emitter.instruction("str x3, [sp, #16]");                                   // save the source indexed-array pointer
 
     // -- get concat_buf write position --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x6", "_concat_off");
-    emitter.instruction("ldr x8, [x6]");                                        // load current write offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x8");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x7");
     emitter.instruction("add x9, x7, x8");                                      // compute the implode destination pointer
     emitter.instruction("str x9, [sp, #24]");                                   // save the result start pointer
     emitter.instruction("str x6, [sp, #32]");                                   // save the concat offset variable address
@@ -86,10 +85,9 @@ pub fn emit_implode_bool(emitter: &mut Emitter) {
     emitter.label("__rt_implode_bool_done");
     emitter.instruction("ldr x1, [sp, #24]");                                   // load the result start pointer
     emitter.instruction("sub x2, x9, x1");                                      // result length = dest_end - dest_start
-    emitter.instruction("ldr x6, [sp, #32]");                                   // load the concat offset variable address
-    emitter.instruction("ldr x8, [x6]");                                        // load the current concat offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x8"); // load the current concat offset (ctx-relative in ctx mode)
     emitter.instruction("add x8, x8, x2");                                      // advance the offset by the joined result length
-    emitter.instruction("str x8, [x6]");                                        // publish the updated concat offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x8"); // publish the updated concat offset (ctx-relative in ctx mode)
     emitter.instruction("add sp, sp, #48");                                     // release the helper stack frame
     emitter.instruction("ret");                                                 // return the joined string in x1/x2
 }
@@ -109,9 +107,8 @@ fn emit_implode_bool_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the glue string pointer for every separator emission
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the glue string length for every separator emission
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // preserve the source indexed-array pointer across the render loop
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_off");
-    emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current concat-buffer write offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r9");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r10");
     emitter.instruction("lea r10, [r10 + r9]");                                 // compute the bool-implode destination pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // preserve the result start pointer for the final length computation
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve the running destination cursor across glue and element emission
@@ -162,8 +159,7 @@ fn emit_implode_bool_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the result start pointer
     emitter.instruction("mov rdx, r10");                                        // copy the final cursor before subtracting the start pointer
     emitter.instruction("sub rdx, rax");                                        // result length = dest_end - dest_start
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_off");
-    emitter.instruction("mov r9, QWORD PTR [r8]");                              // reload the current concat-buffer write offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r9");
     emitter.instruction("add r9, rdx");                                         // advance the offset by the joined result length
     emitter.instruction("mov QWORD PTR [r8], r9");                              // publish the updated concat-buffer write offset
     emitter.instruction("add rsp, 64");                                         // release the bool-implode spill slots

@@ -126,6 +126,7 @@ fn lower_builtin_callable_body(
         // independent site tables to forward, and a builtin wrapper has neither.
         &Default::default(),
         &Default::default(),
+        &Default::default(), // the synthetic body has no mixed-storage assignment sites
         label.to_string(),
         &module.global_constants,
         None,

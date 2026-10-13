@@ -14,6 +14,8 @@ use crate::ir::{CoreBuiltinOp, ResourceCleanupKind, RuntimeFnId};
 pub(in crate::ir_lower) fn include_lowered_runtime_features(module: &mut Module) {
     let features = lowered_runtime_features(module);
     module.required_runtime_features.regex |= features.regex;
+    module.required_runtime_features.async_reactor |= features.async_reactor;
+    module.required_runtime_features.parallel_execution |= features.parallel_execution;
     module.required_runtime_features.mbstring |= features.mbstring;
     module.required_runtime_features.mbregex |= features.mbregex;
     module.required_runtime_features.mbstring_mime |= features.mbstring_mime;
@@ -149,6 +151,7 @@ fn lowered_runtime_features_with(module: &Module, count_opcache_links: bool) -> 
                     }
                     if let Some(target) = typed_builtin_target(inst) {
                         features.regex |= target.uses_regex_runtime();
+                        features.async_reactor |= target.uses_async_reactor_runtime();
                         features.mbstring |= target.uses_mbstring_runtime();
                         features.mbregex |= target.uses_mbregex_runtime();
                         features.mbstring_mime |= target.uses_mbstring_mime_runtime();
@@ -214,6 +217,9 @@ fn lowered_runtime_features_with(module: &Module, count_opcache_links: bool) -> 
                 }
                 Op::PdoAdapterAddr => {
                     features.pdo_udf = true;
+                }
+                Op::ParallelSpawn => {
+                    features.parallel_execution = true;
                 }
                 _ => {}
             }

@@ -997,3 +997,87 @@ function sliceEvaluationOwner(string $source): string {
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
+
+/// Reference collectors use a detached owned operand and a scoped cell on every supported ABI.
+#[test]
+fn reference_variadic_collectors_detach_snapshot_slots_on_all_targets() {
+    use crate::ir::{Immediate, Op};
+
+    let source = r#"<?php
+function replace(&...$items): void { $items[0] = "changed"; }
+$value = 1;
+replace($value);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = lower_for(source, target);
+        let main = module.functions.iter().find(|function| function.name == "main").unwrap();
+        let call_index = main.instructions.iter().position(|inst| inst.op == Op::Call).unwrap();
+        let argument = main.instructions[call_index].operands[0];
+        let producer = main.instructions.iter().find(|inst| inst.result == Some(argument)).unwrap();
+        assert_eq!(producer.op, Op::Acquire, "{target}: the ABI must not borrow the cleared snapshot slot");
+        let owner = main.instructions.iter().find_map(|inst| {
+            if inst.op != Op::StoreLocal || inst.operands != [argument] { return None; }
+            match inst.immediate {
+                Some(Immediate::LocalSlot(slot)) => Some(slot),
+                _ => None,
+            }
+        }).expect("detached collector call root");
+        assert!(main.instructions[..call_index].iter().any(|inst| {
+            inst.op == Op::PushCallOperandOwner && inst.immediate == Some(Immediate::LocalSlot(owner))
+        }), "{target}: the collector must stay visible to exceptional cleanup");
+        assert!(main.instructions[call_index + 1..].iter().any(|inst| {
+            inst.op == Op::ReleaseLocalSlot && inst.immediate == Some(Immediate::LocalSlot(owner))
+        }), "{target}: normal cleanup must retire the collector root");
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(asm.matches("__rt_reference_cell_new").count() >= 2,
+            "{target}: source reference and managed collector cell must both be materialized");
+    }
+}
+
+/// Named by-value sources receive an evaluation snapshot before later reference mutation.
+#[test]
+fn named_argument_value_snapshot_precedes_later_reference_call_on_all_targets() {
+    let source = r#"<?php
+function mutate(mixed &$value): int { $value["x"] = 2; return 0; }
+function take(mixed $value, int $ignored): mixed { return $value; }
+function invoke(mixed $source): mixed { return take(value: $source, ignored: mutate($source)); }
+echo json_encode(invoke(["x" => 1]));
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = lower_for(source, target);
+        let function = module.functions.iter().find(|function| function.name == "invoke").unwrap();
+        let first_call = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::Call)
+            .expect("later reference mutation call");
+        assert!(function.instructions[..first_call].iter().any(|inst| {
+            inst.op == crate::ir::Op::MixedClone && inst.span.is_some_and(|span| span.line == 4)
+        }), "{target}: parameter entry copies alone cannot replace a named source snapshot");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
+/// Frame metadata retains its initialized named snapshot before and after EIR optimization.
+#[test]
+fn named_backtrace_snapshot_survives_frontend_optimization_on_all_targets() {
+    let source = r#"<?php
+function inspectNamedSnapshot(mixed ...$rest): void { debug_backtrace(); }
+inspectNamedSnapshot(named: 22);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let mut module = lower_for(source, target);
+        for optimized in [false, true] {
+            if optimized {
+                crate::ir_passes::optimize_module(&mut module);
+            }
+            let function = module.functions.iter().find(|function| function.name == "inspectNamedSnapshot").unwrap();
+            let snapshot = function.locals.iter().find(|local| {
+                local.name.as_deref() == Some(crate::func_args::TRACE_VARIADIC_SNAPSHOT)
+            }).expect("codegen-only frame metadata must keep its snapshot local");
+            assert!(function.instructions.iter().any(|inst| {
+                inst.op == crate::ir::Op::StoreLocal
+                    && inst.immediate == Some(crate::ir::Immediate::LocalSlot(snapshot.id))
+            }), "{target}, optimized={optimized}: the named snapshot must be initialized, not only declared");
+            let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+            assert!(asm.contains("backtrace_named_walk"), "{target}: the named reader must be emitted");
+        }
+    }
+}

@@ -2,7 +2,7 @@
 title: "substr()"
 description: "Returns a portion of a string specified by the offset and length."
 sidebar:
-  order: 935
+  order: 936
 ---
 
 ## substr()

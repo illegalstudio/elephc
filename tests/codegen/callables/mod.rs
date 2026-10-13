@@ -10,6 +10,7 @@
 mod boxed_calls;
 mod branch_reach;
 mod callable_strings;
+mod descriptor_param_binding;
 mod closure_array_returns;
 mod closure_call_returns;
 mod closures;

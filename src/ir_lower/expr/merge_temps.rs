@@ -344,18 +344,14 @@ pub(in crate::ir_lower) fn coerce_container_to_mixed_payload(
             // conversion borrows the cell and owns a fresh container
             // reference, so an owning cell must be consumed here.
             //
-            // The indexed conversion consumes one owned payload reference
-            // and rewrites sole-owner arrays in place, which is only sound
-            // when the cell owns its payload. A borrowed cell (a `?array`
-            // parameter or local) shares its payload with a live caller
-            // array, so it unboxes through the owned-payload coercion —
-            // which retains the payload — and the consuming `ArrayToMixed`
-            // copy-on-write-splits into a private converted copy. The
-            // associative helper returns a fresh hash without consuming the
-            // payload reference, so borrowed hash cells keep the
-            // single-call coercion.
+            // The cell's ownership is not ownership of an extra payload
+            // reference. ArrayToMixed consumes its input while the cell still
+            // retains that same array, so acquire a separate payload lease
+            // before conversion even for an owning argument snapshot. Otherwise
+            // ensure_unique and subsequent cell release consume two references
+            // while only the cell's one reference was supplied.
             let cell_is_owning = ctx.value_is_owning_temporary(value);
-            if !cell_is_owning && matches!(target_ty, PhpType::Array(_)) {
+            if matches!(target_ty, PhpType::Array(_)) {
                 let unboxed = ctx.emit_value(
                     Op::RuntimeCall,
                     vec![value.value],
@@ -364,7 +360,7 @@ pub(in crate::ir_lower) fn coerce_container_to_mixed_payload(
                     effects_lookup::runtime_effects(),
                     Some(span),
                 );
-                return ctx.emit_value(
+                let converted = ctx.emit_value(
                     Op::ArrayToMixed,
                     vec![unboxed.value],
                     None,
@@ -372,6 +368,10 @@ pub(in crate::ir_lower) fn coerce_container_to_mixed_payload(
                     Op::ArrayToMixed.default_effects(),
                     Some(span),
                 );
+                if cell_is_owning {
+                    crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+                }
+                return converted;
             }
             let converted = ctx.emit_value(
                 Op::RuntimeCall,

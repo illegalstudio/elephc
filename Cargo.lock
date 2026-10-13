@@ -694,6 +694,7 @@ dependencies = [
  "elephc-magician",
  "elephc-mbstring",
  "elephc-monitoring-contract",
+ "elephc-parallel-contract",
  "elephc-pcntl",
  "elephc-pdo",
  "elephc-phar",
@@ -781,6 +782,7 @@ dependencies = [
 name = "elephc-instr"
 version = "0.1.0"
 dependencies = [
+ "elephc-monitoring-contract",
  "libc",
 ]
 
@@ -817,6 +819,17 @@ dependencies = [
 
 [[package]]
 name = "elephc-monitoring-contract"
+version = "0.1.0"
+
+[[package]]
+name = "elephc-parallel"
+version = "0.1.0"
+dependencies = [
+ "elephc-parallel-contract",
+]
+
+[[package]]
+name = "elephc-parallel-contract"
 version = "0.1.0"
 
 [[package]]

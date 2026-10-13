@@ -59,8 +59,8 @@ pub mod print;
 use crate::names::{Name, NameKind};
 use crate::parser::ast::{
     Attribute, AttributeGroup, BinOp, CType, CastType, CatchClause, ClassConst, ClassMethod,
-    ClassProperty, Expr, ExprKind, ExternParam, Program, PropertyHooks, StaticReceiver, Stmt,
-    StmtKind, TypeExpr, Visibility,
+    ClassProperty, EnumCaseDecl, Expr, ExprKind, ExternParam, Program, PropertyHooks,
+    StaticReceiver, Stmt, StmtKind, TypeExpr, Visibility,
 };
 use crate::source::{SourceMode, SourceProfile};
 use crate::span::Span;
@@ -699,6 +699,7 @@ pub struct ClosureBuilder {
     params: Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
     return_type: Option<TypeExpr>,
     body: Vec<Stmt>,
+    is_static: bool,
     captures: Vec<String>,
     capture_refs: Vec<String>,
 }
@@ -709,6 +710,7 @@ pub fn closure() -> ClosureBuilder {
         params: Vec::new(),
         return_type: None,
         body: Vec::new(),
+        is_static: false,
         captures: Vec::new(),
         capture_refs: Vec::new(),
     }
@@ -731,6 +733,12 @@ impl ClosureBuilder {
     pub fn param_default(mut self, name: &str, ty: TypeExpr, default: Expr) -> Self {
         self.params
             .push((name.to_string(), Some(ty), Some(default), false));
+        self
+    }
+
+    /// Marks the closure as static, so it has no implicit this binding.
+    pub fn static_(mut self) -> Self {
+        self.is_static = true;
         self
     }
 
@@ -774,7 +782,7 @@ impl ClosureBuilder {
                 return_type: self.return_type,
                 body: self.body,
                 is_arrow: false,
-                is_static: false,
+                is_static: self.is_static,
                 by_ref_return: false,
                 captures: self.captures,
                 capture_refs: self.capture_refs,
@@ -2007,6 +2015,27 @@ fn audit_stmt(stmt: &Stmt, out: &mut Vec<String>) {
                 }
             }
         }
+        StmtKind::EnumDecl {
+            cases,
+            methods,
+            constants,
+            ..
+        } => {
+            for case in cases {
+                if let Some(value) = &case.value {
+                    audit_expr(value, out);
+                }
+            }
+            for constant in constants {
+                audit_expr(&constant.value, out);
+            }
+            for class_method in methods {
+                audit_params(&class_method.params, out);
+                for inner in &class_method.body {
+                    audit_stmt(inner, out);
+                }
+            }
+        }
         // An interface declares SIGNATURES, which carry no call sites; only a constant's
         // initializer can hold one.
         StmtKind::InterfaceDecl {
@@ -2466,6 +2495,77 @@ impl ClassBuilder {
                 properties: self.properties,
                 methods: self.methods,
                 constants: self.constants,
+            },
+            Span::dummy(),
+        )
+    }
+}
+
+/// Builder for a synthetic PHP enum declaration.
+pub struct EnumBuilder {
+    name: String,
+    backing_type: Option<TypeExpr>,
+    cases: Vec<EnumCaseDecl>,
+    implements: Vec<Name>,
+}
+
+/// Starts an unbacked enum named `name`.
+pub fn enum_decl(name: &str) -> EnumBuilder {
+    EnumBuilder {
+        name: name.to_string(),
+        backing_type: None,
+        cases: Vec::new(),
+        implements: Vec::new(),
+    }
+}
+
+impl EnumBuilder {
+    /// Gives the enum its scalar backing type (`int` or `string`).
+    pub fn backed(mut self, ty: TypeExpr) -> Self {
+        self.backing_type = Some(ty);
+        self
+    }
+
+    /// Adds an unbacked case.
+    pub fn case(mut self, name: &str) -> Self {
+        self.cases.push(EnumCaseDecl {
+            name: name.to_string(),
+            value: None,
+            span: Span::dummy(),
+            attributes: Vec::new(),
+        });
+        self
+    }
+
+    /// Adds a backed case.
+    pub fn case_value(mut self, name: &str, value: Expr) -> Self {
+        self.cases.push(EnumCaseDecl {
+            name: name.to_string(),
+            value: Some(value),
+            span: Span::dummy(),
+            attributes: Vec::new(),
+        });
+        self
+    }
+
+    /// Adds an implemented interface, preserving source spelling.
+    pub fn implements(mut self, interface: &str) -> Self {
+        self.implements.push(class_name(interface));
+        self
+    }
+
+    /// Emits the enum declaration statement.
+    pub fn build(self) -> Stmt {
+        Stmt::new(
+            StmtKind::EnumDecl {
+                name: self.name,
+                generics: Default::default(),
+                backing_type: self.backing_type,
+                cases: self.cases,
+                implements: self.implements,
+                trait_uses: Vec::new(),
+                methods: Vec::new(),
+                constants: Vec::new(),
             },
             Span::dummy(),
         )
@@ -3206,6 +3306,29 @@ function ignore_mode(int $mode = 0): bool {
             panic!("expected a function declaration");
         };
         assert_eq!(body.len(), 1, "a read parameter needs no consumption");
+    }
+
+    /// Synthetic static closures preserve their explicit captures.
+    #[test]
+    fn closure_builder_can_make_a_static_capturing_closure() {
+        let built = closure()
+            .static_()
+            .captures("body")
+            .captures("args")
+            .body(vec![s_return(e_closure_call(
+                "body",
+                vec![e_spread(e_var("args"))],
+            ))])
+            .build();
+
+        assert!(matches!(
+            built.kind,
+            ExprKind::Closure {
+                is_static: true,
+                captures,
+                ..
+            } if captures == vec!["body".to_string(), "args".to_string()]
+        ));
     }
 
     /// Match subjects, labels, results and defaults all contribute reads and audited calls.

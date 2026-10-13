@@ -15,6 +15,8 @@
 //!   `Error`. Both are ordinary catchable throwables.
 //! - The fresh clone is published as a temporary unwind owner before `__clone()` runs, so a
 //!   throwing hook releases it instead of leaking it.
+//! - Hook visibility is checked against the source before allocation: refusing a private hook
+//!   must never manufacture and destroy a duplicate of an external-resource owner.
 //! - Hook selection uses the runtime class id while visibility follows the INVOCATION SITE's
 //!   lexical class, exactly as php-src does. A direct call takes that scope statically from the
 //!   function being lowered. A body that a callable dispatch shared across call sites entered
@@ -106,6 +108,8 @@ pub(crate) fn lower_clone_with(ctx: &mut FunctionContext<'_>, inst: &Instruction
         inst.operands.get(2).copied(),
         &eval_handled,
     )?;
+    // A denied hook must not create a copy whose destructor can consume shared resources.
+    emit_clone_hook_access_guard(ctx, object, inst.operands.get(2).copied())?;
     emit_boxed_shallow_clone(ctx, object)?;
     emit_uncloneable_guard(ctx);
 
@@ -117,7 +121,7 @@ pub(crate) fn lower_clone_with(ctx: &mut FunctionContext<'_>, inst: &Instruction
     abi::emit_link_call_operand_owner_at_stack(ctx.emitter, &owner_addr, false, 16);
 
     emit_enum_uncloneable_guard(ctx);
-    emit_clone_hook(ctx, object, inst.operands.get(2).copied())?;
+    emit_clone_hook(ctx, object)?;
     // An omitted second argument IS the empty override array, so there is nothing to apply.
     if let Some(properties) = inst.operands.get(1).copied() {
         overrides::emit_property_overrides(
@@ -620,11 +624,50 @@ fn emit_enum_uncloneable_guard(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.label(&cloneable);
 }
 
-/// Dispatches `__clone()` by runtime class id, or does nothing when the class has no hook.
-fn emit_clone_hook(
+/// Checks hook visibility on the borrowed source before allocating any shallow copy.
+fn emit_clone_hook_access_guard(
     ctx: &mut FunctionContext<'_>,
     object_operand: ValueId,
     invocation_scope: Option<ValueId>,
+) -> Result<()> {
+    let candidates = clone_hook_candidates(ctx)?
+        .into_iter()
+        .filter(|candidate| candidate.visibility != Visibility::Public)
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return Ok(());
+    }
+    let done = ctx.next_label("clone_hook_access_checked");
+    let labels = candidates
+        .iter()
+        .map(|candidate| ctx.next_label(&format!("clone_hook_access_{}", candidate.class_id)))
+        .collect::<Vec<_>>();
+    ctx.load_value_to_result(object_operand)?;
+    let object_ty = ctx.value_php_type(object_operand)?.codegen_repr();
+    let receiver = if matches!(object_ty, PhpType::Object(_)) {
+        abi::int_result_reg(ctx.emitter).to_string()
+    } else {
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target).to_string()
+    };
+    emit_clone_hook_class_dispatch(ctx, &receiver, &candidates, &labels, &done);
+    for (candidate, label) in candidates.iter().zip(labels.iter()) {
+        ctx.emitter.label(label);
+        if let Some(invocation_scope) = invocation_scope {
+            emit_runtime_clone_hook_visibility_guard(ctx, candidate, invocation_scope)?;
+        } else if !clone_hook_is_visible(ctx, candidate) {
+            emit_static_clone_hook_visibility_error(ctx, candidate);
+        }
+        abi::emit_jump(ctx.emitter, &done);
+    }
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Dispatches an already visibility-checked `__clone()` hook on the allocated copy.
+fn emit_clone_hook(
+    ctx: &mut FunctionContext<'_>,
+    object_operand: ValueId,
 ) -> Result<()> {
     let candidates = clone_hook_candidates(ctx)?;
     if candidates.is_empty() {
@@ -649,16 +692,6 @@ fn emit_clone_hook(
 
     for (candidate, label) in candidates.iter().zip(labels.iter()) {
         ctx.emitter.label(label);
-        if let Some(invocation_scope) = invocation_scope {
-            emit_runtime_clone_hook_visibility_guard(
-                ctx,
-                candidate,
-                invocation_scope,
-            )?;
-        } else if !clone_hook_is_visible(ctx, candidate) {
-            emit_static_clone_hook_visibility_error(ctx, candidate);
-            continue;
-        }
         let receiver_ty = PhpType::Object(candidate.class_name.clone());
         let params = [receiver_ty.clone()];
         let refs = [false];

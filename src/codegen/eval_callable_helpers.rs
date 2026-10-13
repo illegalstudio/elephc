@@ -780,6 +780,7 @@ fn emit_eval_runtime_callable_invoker_inline(
         label: &label,
         sig,
         captures,
+        parallel_fiber_suspend_guard: None,
         mbstring_operation: None,
         mbstring_variable_ref_warnings: false,
         owns_string_return,

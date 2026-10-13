@@ -7,7 +7,7 @@
 //! Key details:
 //! - Option values are normalized into owned direct-string arrays before object hydration.
 
-use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::{abi, emit::Emitter};
 use crate::codegen_support::runtime::data::{
     UNSER_ALLOWED_CLASSES_ENTRY_PREFIX, UNSER_ALLOWED_CLASSES_POLICY_PREFIX,
     UNSER_OPTIONS_TYPE_PREFIX,
@@ -51,7 +51,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_unser_options_list_x");                       // arrays are allow-lists
     emitter.instruction("test rdi, rdi");                                       // false blocks all object hydration
     emitter.instruction("jnz __rt_unser_options_done_x");                       // true preserves allow-all policy
-    emitter.instruction("mov QWORD PTR [rip + _unser_allowed_mode], 1");        // mode 1 = no class hydration
+    abi::emit_store_imm_to_symbol(emitter, "_unser_allowed_mode", 0, 1);       // mode 1 blocks hydration in this context
     emitter.instruction("jmp __rt_unser_options_done_x");                       // restore the options helper frame
     emitter.label("__rt_unser_options_list_x");
     emitter.instruction("cmp rcx, 4");                                          // indexed array allow-list?
@@ -73,9 +73,9 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("call __rt_array_new");                                 // allocate context-owned normalized allow-list
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // retain normalized owner across validation calls
     emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // start packed index/hash cursor at zero
-    emitter.instruction("mov QWORD PTR [rip + _unser_allowed_list_mixed], 0");  // membership scans direct string pairs only
-    emitter.instruction("mov QWORD PTR [rip + _unser_allowed_mode], 2");        // publish named allow-list mode before validation
-    emitter.instruction("mov QWORD PTR [rip + _unser_allowed_list], rax");      // errors now release the partial normalized owner through end
+    abi::emit_store_zero_to_symbol(emitter, "_unser_allowed_list_mixed", 0);   // membership scans direct string pairs only
+    abi::emit_store_imm_to_symbol(emitter, "_unser_allowed_mode", 0, 2);       // publish this context's named allow-list mode
+    abi::emit_store_reg_to_symbol(emitter, "rax", "_unser_allowed_list", 0);  // publish this context's partial normalized owner
     emitter.instruction("cmp QWORD PTR [rbp - 32], 5");                         // associative source?
     emitter.instruction("je __rt_unser_options_hash_list_loop_x");              // hash keys are ignored; values supply class names
 
@@ -168,7 +168,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // normalized destination array
     emitter.instruction("call __rt_array_push_str");                            // persist and append converted class name
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // retain possibly-grown destination
-    emitter.instruction("mov QWORD PTR [rip + _unser_allowed_list], rax");      // keep cleanup owner current after possible growth
+    abi::emit_store_reg_to_symbol(emitter, "rax", "_unser_allowed_list", 0);  // keep this context's cleanup owner current
     emitter.instruction("cmp QWORD PTR [rbp - 56], 7");                         // did push_str take over a concat temporary in place?
     emitter.instruction("je __rt_unser_options_list_continue_x");               // transferred storage is now owned by the normalized array
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // recover transient __toString return owner
@@ -179,7 +179,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // normalized destination array
     emitter.instruction("call __rt_array_push_str");                            // persist and append borrowed source bytes
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // retain possibly-grown destination
-    emitter.instruction("mov QWORD PTR [rip + _unser_allowed_list], rax");      // keep cleanup owner current after possible growth
+    abi::emit_store_reg_to_symbol(emitter, "rax", "_unser_allowed_list", 0);  // keep this context's cleanup owner current
     emitter.label("__rt_unser_options_list_continue_x");
     emitter.instruction("cmp QWORD PTR [rbp - 32], 5");                         // resume the matching source traversal
     emitter.instruction("je __rt_unser_options_hash_list_loop_x");              // continue associative values
@@ -194,12 +194,12 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 48");                                         // class name plus list scan state
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // class name pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // class name length
-    emitter.instruction("mov r8, QWORD PTR [rip + _unser_allowed_mode]");       // current policy mode
+    abi::emit_load_symbol_to_reg(emitter, "r8", "_unser_allowed_mode", 0);    // load this context's current policy mode
     emitter.instruction("test r8, r8");                                         // mode 0 = allow all
     emitter.instruction("jz __rt_unser_class_allowed_yes_x");                   // hydrate unrestricted classes
     emitter.instruction("cmp r8, 1");                                           // mode 1 = block all
     emitter.instruction("je __rt_unser_class_allowed_no_x");                    // never hydrate blocked classes
-    emitter.instruction("mov r8, QWORD PTR [rip + _unser_allowed_list]");       // indexed string-array payload
+    abi::emit_load_symbol_to_reg(emitter, "r8", "_unser_allowed_list", 0);    // load this context's normalized allow-list
     emitter.instruction("test r8, r8");                                         // malformed list fails closed
     emitter.instruction("jz __rt_unser_class_allowed_no_x");                    // no list cannot grant hydration
     emitter.instruction("mov r9, QWORD PTR [r8]");                              // list length
@@ -210,7 +210,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, QWORD PTR [rbp - 32]");                       // exhausted every allowed name?
     emitter.instruction("jae __rt_unser_class_allowed_no_x");                   // no exact match means incomplete object
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // list base
-    emitter.instruction("cmp QWORD PTR [rip + _unser_allowed_list_mixed], 0");  // does this list contain boxed Mixed strings?
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_unser_allowed_list_mixed", 0); // load this context's list representation flag
+    emitter.instruction("test rax, rax");                                       // does this list contain boxed Mixed strings?
     emitter.instruction("jne __rt_unser_class_allowed_mixed_cell_x");           // boxed cells need an extra dereference
     emitter.instruction("mov rax, r10");                                        // preserve the list cursor while deriving a byte offset
     emitter.instruction("shl rax, 4");                                          // scale the cursor by the 16-byte direct-string pair stride

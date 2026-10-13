@@ -157,7 +157,8 @@ impl Checker {
                     // `Checker::flow_typed_returns`.
                     self.flow_typed_returns.insert(
                         stmt as *const Stmt as usize,
-                        (stmt.span, returned),
+                        (stmt.span, returned.clone(), matches!(&e.kind,
+                            ExprKind::Variable(name) if self.is_reference_aliased_array(name, &returned))),
                     );
                     // `function &f() { return $obj->prop; }` returns a reference to the
                     // property, so promote it to a reference property program-wide.

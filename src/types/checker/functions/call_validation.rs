@@ -815,8 +815,14 @@ impl Checker {
                     }
                 }
                 if let Some((param_name, expected_ty)) = sig.params.get(param_idx) {
+                    // An explicitly opaque value can bind a boxed target without any static
+                    // carrier conversion; the descriptor validates its declared PHP tag at runtime.
+                    // Do not extend this to raw indexed targets or supplied references.
+                    let runtime_boxed_descriptor_binding = descriptor_invocation
+                        && actual_ty == PhpType::Mixed
+                        && expected_ty.codegen_repr() == PhpType::Mixed;
                     let runtime_descriptor_projection = actual_ty.codegen_repr() == PhpType::Mixed
-                        && descriptor_projected
+                        && (descriptor_projected || runtime_boxed_descriptor_binding)
                         && !supplied_reference;
                     let tracks_boxed_reference_output = supplied_reference
                         && !self.internal_callback_binding

@@ -73,6 +73,9 @@ relative-to = "target"
 path = "debug/libelephc_instr.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
+path = "debug/libelephc_parallel.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
 path = "debug/libelephc_probe.a"
 relative-to = "target"
 [[profile.ci.archive.include]]

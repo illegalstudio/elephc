@@ -31,8 +31,11 @@ pub(super) fn lower_first_class_callable(ctx: &mut LoweringContext<'_, '_>, targ
 }
 
 /// Returns the strict-PHP visibility profile attached to runtime callable selection.
-pub(super) fn callable_profile_immediate() -> Option<Immediate> {
-    Some(Immediate::Bool(crate::strict_php::is_enabled()))
+pub(super) fn callable_profile_immediate(ctx: &LoweringContext<'_, '_>) -> Option<Immediate> {
+    Some(Immediate::CallableProfile {
+        strict_php: crate::strict_php::is_enabled(),
+        strict_types: ctx.argument_strict_types,
+    })
 }
 
 /// Lowers a pointer cast.
@@ -113,7 +116,10 @@ pub(super) fn lower_scoped_constant(ctx: &mut LoweringContext<'_, '_>, receiver:
     {
         let key = format!("{}::{}", normalized_class_name, name);
         let data = ctx.intern_string(&key);
-        return ctx.emit_value(
+        // The backend acquires one reference from the process-lifetime enum slot for every
+        // read. Model that reference as owned so an immediate property/method use, a temporary,
+        // or a discarded expression all release the same owner exactly once.
+        return ctx.emit_owned_value(
             Op::ScopedConstantGet,
             Vec::new(),
             Some(Immediate::Data(data)),

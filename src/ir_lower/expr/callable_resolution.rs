@@ -32,7 +32,8 @@ pub(super) fn static_callable_call_lowers_directly(
     match target {
         StaticCallableBinding::InstanceMethod { direct_call, .. } => *direct_call,
         StaticCallableBinding::Closure { captures, .. } => !captures.iter().any(|capture| {
-            ctx.builder.value_defining_op(capture.value) == Some(Op::LoadRefCell)
+            capture.by_ref_local.is_some()
+                || ctx.builder.value_defining_op(capture.value) == Some(Op::LoadRefCell)
         }),
         _ => true,
     }
@@ -62,7 +63,9 @@ pub(super) fn lower_static_callable_call(
                 ctx, sig.as_ref(), &return_alias, &php_type, expr.span,
             );
             begin_call_argument_evaluation(ctx);
-            let mut operands = lower_args_with_signature(ctx, sig.as_ref(), callback_args);
+            let mut operands = lower_args_with_eir_user_function_signature(
+                ctx, &function_name, sig.as_ref(), callback_args,
+            );
             let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
             let roots = root_user_call_operands(
                 ctx, &mut operands, sig.as_ref(), &return_alias, &php_type, expr.span,
@@ -187,7 +190,9 @@ pub(super) fn lower_static_callable_call(
                 expr.span,
             );
             begin_call_argument_evaluation(ctx);
-            let mut arg_values = lower_args_with_signature(ctx, Some(&signature), callback_args);
+            let mut arg_values = lower_args_with_eir_user_function_signature(
+                ctx, &name, Some(&signature), callback_args,
+            );
             let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
             let roots = root_user_call_operands(
                 ctx, &mut arg_values, Some(&signature), &return_alias, &php_type, expr.span,
@@ -408,6 +413,9 @@ pub(super) fn lower_bound_closure_immediate_call(
     let result = lower_static_callable_call(ctx, bound, args, expr)
         .expect("a directly callable bound closure lowers its call");
     stage_call_result(ctx, result_staging.as_ref(), result, expr.span);
+    let result = discard_result_before_callback(
+        ctx, result_staging.as_ref(), result, descriptor_owner, expr.span,
+    );
     if let Some(slot) = descriptor_owner {
         retire_owned_call_operand(ctx, slot, expr.span);
     }

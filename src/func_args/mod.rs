@@ -43,6 +43,9 @@ use crate::types::FunctionSig;
 /// parsed.
 pub(crate) const HIDDEN_ARGS_PARAM: &str = "__elephc_func_args#gen";
 
+/// Entry-time full variadic array used only for named backtrace arguments.
+pub(crate) const TRACE_VARIADIC_SNAPSHOT: &str = "__elephc_trace_variadic#gen";
+
 /// Hidden regular parameter carrying the actual count when a source variadic owns the tail slot.
 pub(crate) const HIDDEN_ARGC_PARAM: &str = "__elephc_func_argc#gen";
 
@@ -282,7 +285,7 @@ fn declared_name_collides(name: &str) -> bool {
 mod tests {
     use super::{
         HIDDEN_ARGC_PARAM, HIDDEN_ARGS_PARAM, POSITION_TEMP, SNAPSHOT_KEY_LOCAL,
-        SNAPSHOT_VALUE_LOCAL,
+        SNAPSHOT_VALUE_LOCAL, TRACE_VARIADIC_SNAPSHOT,
     };
     use crate::names::is_generated_local_name;
 
@@ -298,6 +301,7 @@ mod tests {
             POSITION_TEMP,
             SNAPSHOT_KEY_LOCAL,
             SNAPSHOT_VALUE_LOCAL,
+            TRACE_VARIADIC_SNAPSHOT,
         ] {
             assert!(is_generated_local_name(name), "{name}");
         }

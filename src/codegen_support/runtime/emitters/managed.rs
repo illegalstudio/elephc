@@ -285,6 +285,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     buffers::emit_buffer_resolve(emitter);
     buffers::emit_buffer_new(emitter);
     buffers::emit_buffer_free(emitter);
+    buffers::emit_buffer_registry_drain(emitter);
     buffers::emit_buffer_len(emitter);
     buffers::emit_buffer_bounds_fail(emitter);
     buffers::emit_buffer_registry_fail(emitter);

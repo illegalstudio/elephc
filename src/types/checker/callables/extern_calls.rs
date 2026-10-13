@@ -16,6 +16,117 @@ use crate::types::{FunctionSig, PhpType, TypeEnv};
 use super::super::Checker;
 
 impl Checker {
+    /// Restricts the Parallel bridge's raw FFI declarations to compiler-generated call sites.
+    ///
+    /// These declarations expose raw pointers, job IDs, and scope-control state. They are
+    /// implementation details of the injected Parallel prelude, not PHP-callable functions.
+    pub(crate) fn ensure_parallel_extern_call_is_internal(
+        &self,
+        name: &str,
+        library: Option<&str>,
+        span: crate::span::Span,
+    ) -> Result<(), CompileError> {
+        if library != Some("elephc_parallel") || self.is_compiler_owned_parallel_body(span) {
+            return Ok(());
+        }
+        Err(CompileError::new(
+            span,
+            &format!(
+                "Extern function '{name}' is an internal Elephc Parallel bridge function and cannot be called from user PHP"
+            ),
+        ))
+    }
+
+    /// Allows only generated bodies of the owning preludes to invoke Parallel FFI declarations.
+    /// Future and TaskGroup are compiler-owned final classes, while the listed free helpers
+    /// are fixed declarations in the same injected namespace. Source-located calls stay rejected
+    /// even when the checker is currently traversing a compiler prelude from inside user code.
+    pub(crate) fn ensure_parallel_extern_callable_is_internal(
+        &self,
+        name: &str,
+        span: crate::span::Span,
+    ) -> Result<(), CompileError> {
+        let Some(extern_sig) = self.extern_functions.get(name) else {
+            return Ok(());
+        };
+        self.ensure_parallel_extern_call_is_internal(name, extern_sig.library.as_deref(), span)
+    }
+
+    /// Rejects source-level calls to injected serialization helpers. Worker lowering emits EIR
+    /// calls to completion helpers directly after type checking; PHP source must not gain access
+    /// to their job-ID and raw-buffer capabilities.
+    pub(crate) fn ensure_parallel_prelude_helper_is_internal(
+        &self,
+        name: &str,
+        span: crate::span::Span,
+    ) -> Result<(), CompileError> {
+        let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+        let allowed = match key.as_str() {
+            "elephc\\parallel\\__takepreparedbytes" => {
+                self.current_function.as_deref().is_some_and(|current| {
+                    crate::names::php_symbol_key(current.trim_start_matches('\\'))
+                        == "elephc\\parallel\\__takepreparedvalue"
+                })
+            }
+            "elephc\\parallel\\__takepreparedvalue" => {
+                self.current_class.as_deref().is_some_and(|class| {
+                    crate::names::php_symbol_key(class) == "elephc\\parallel\\future"
+                }) && self.current_method.as_deref().is_some_and(|method| {
+                    crate::names::php_symbol_key(method) == "settle"
+                })
+            }
+            "elephc\\parallel\\__completejobvalue" | "elephc\\parallel\\__failjobvalue" => {
+                false
+            }
+            _ => true,
+        };
+        if allowed && self.current_closure_span.is_none() {
+            return Ok(());
+        }
+        if matches!(
+            key.as_str(),
+            "elephc\\parallel\\__takepreparedbytes"
+                | "elephc\\parallel\\__takepreparedvalue"
+                | "elephc\\parallel\\__completejobvalue"
+                | "elephc\\parallel\\__failjobvalue"
+        ) {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Function '{name}' is an internal Elephc Parallel helper and cannot be called from user PHP"
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Restricts internal Parallel FFI access to generated bodies with an approved class/function.
+    fn is_compiler_owned_parallel_body(&self, span: crate::span::Span) -> bool {
+        if span.is_from_source() {
+            return false;
+        }
+        let compiler_class = self.current_class.as_deref().is_some_and(|class| {
+            matches!(
+                crate::names::php_symbol_key(class).as_str(),
+                "elephc\\parallel\\future"
+                    | "elephc\\parallel\\taskgroup"
+                    | "elephc\\async\\__cancellationstate"
+            )
+        });
+        let compiler_function = self.current_function.as_deref().is_some_and(|name| {
+            let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+            matches!(
+                key.as_str(),
+                "elephc\\parallel\\run"
+                    | "elephc\\async\\run"
+                    | "elephc\\parallel\\__takepreparedbytes"
+                    | "elephc\\parallel\\__completejobvalue"
+                    | "elephc\\parallel\\__failjobvalue"
+            )
+        });
+        compiler_class || compiler_function
+    }
+
     /// Type-checks an extern function call.
     ///
     /// Looks up both the extern signature (`extern_sig`) and the user-defined function signature
@@ -39,6 +150,7 @@ impl Checker {
         let extern_sig = self.extern_functions.get(name).cloned().ok_or_else(|| {
             CompileError::new(span, &format!("Undefined extern function: {}", name))
         })?;
+        self.ensure_parallel_extern_call_is_internal(name, extern_sig.library.as_deref(), span)?;
 
         let sig = self
             .functions
@@ -93,6 +205,7 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<(), CompileError> {
         if let ExprKind::StringLiteral(callback_name) = &arg.kind {
+            self.ensure_parallel_extern_callable_is_internal(callback_name, arg.span)?;
             self.register_callback_function(callback_name, call_span)?;
             return Ok(());
         }

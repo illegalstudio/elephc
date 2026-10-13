@@ -2,7 +2,7 @@
 title: "mb_ereg_search_regs() - internals"
 description: "Compiler internals for mb_ereg_search_regs(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 850
+  order: 851
 ---
 
 ## `mb_ereg_search_regs()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_ereg_search_regs.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_ereg_search_regs.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:701](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L701) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

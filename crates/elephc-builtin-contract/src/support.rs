@@ -373,34 +373,13 @@ mod tests {
         // Sixty-four of these are the `xml_*` / `xmlwriter_*` contracts, which eval binds
         // through forwarding homes (see `eval_support`).
         assert_eq!(eval_registry, 682 + curl_surface);
-        // 83 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
-        // image prelude declares for its own use, plus the ELEVEN
-        // `__elephc_opcache_rt_*` runtime script-cache helpers this branch adds.
-        //
-        // Six REPORT on the cache: `_stat`, `_script_field` and `_script_path`, which the
-        // injected `opcache_get_status()` body reads; `_blacklist_entry`, which
-        // `opcache_get_configuration()` uses to list the resolved patterns; `_swap`, which
-        // `ini_set()` uses to install a directive on the live cache; and `_reset`, which
-        // `opcache_reset()` uses to schedule its restart.
-        //
-        // Five ACT on it, by path: `_is_cached`, `_discard`, `_soft_invalidate`, `_compile`
-        // and `_in_file_cache`. They are what let the natively compiled bodies answer about
-        // a dynamically included file, and about the on-disk cache, instead of only about
-        // the manifest. `opcache_invalidate` needs TWO of them because php-src's predicate
-        // differs by `$force` and the non-forced arm reads the cache's recorded mtime.
-        //
-        // None of the eleven is callable from eval'd code.
-        assert_eq!(eval_internal, 111);
-        // 28 registry builtins awaiting eval homes, plus the 325 PHP-visible prelude-provided
-        // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
-        assert_eq!(eval_pending, 353);
-        // The shared mbstring catalog adds sixty-four registry contracts, including
-        // its internal INI helper, to the prior compiler registry surface; the eleven
-        // `__elephc_opcache_rt_*` runtime script-cache helpers rolled through above add the rest.
-        assert_eq!(aot_registry, 737);
-        // Compiler transforms, constructs, dedicated syntax, preludes, and
-        // name-resolver rewrites remain outside the ordinary AOT registry.
-        assert_eq!(aot_external, 409 + curl_surface);
+        // Incoming main's internal helpers plus four AOT-only Async helpers.
+        assert_eq!(eval_internal, 115);
+        // The Async prelude entry is not an eval implementation.
+        assert_eq!(eval_pending, 354);
+        // Every internal Async helper joins the ordinary AOT registry.
+        assert_eq!(aot_registry, 741);
+        assert_eq!(aot_external, 410 + curl_surface);
     }
 
     /// Verifies representative exceptional routes are attached to their contracts.
@@ -448,9 +427,8 @@ mod tests {
         assert_eq!(shared_runtime, 85);
         assert_eq!(hybrid_adapter, 2);
         assert_eq!(interpreter_adapter, 595 + curl_surface);
-        // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
-        // call from AOT code and have no eval execution route of their own.
-        assert_eq!(unsupported, 464);
+        // Four internal Async helpers and the Async prelude add five absent eval routes.
+        assert_eq!(unsupported, 469);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

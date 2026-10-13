@@ -39,6 +39,7 @@ mod method_pass;
 mod mixed_storage_scan;
 mod packed_counter;
 pub(crate) mod null_probe;
+mod parallel_transfer;
 mod schema;
 mod stmt_check;
 mod type_compat;
@@ -213,6 +214,31 @@ pub(crate) struct Checker {
     /// Tracks capture payloads for closures assigned to variables, keyed by variable name.
     /// Each entry is (capture_name, capture_type, is_by_ref).
     pub callable_captures: HashMap<String, Vec<(String, PhpType, bool)>>,
+    /// Callable locals whose every return path is statically transferable to Parallel.
+    pub parallel_transfer_safe_callable_returns: HashSet<String>,
+    /// Parallel-specific transitive safety summary for callable locals.
+    pub parallel_callable_safety:
+        HashMap<String, crate::optimize::ParallelCallableSafety>,
+    /// Whole-program fixed-point effect analysis reused for Parallel task validation.
+    pub parallel_safety_analysis: Option<crate::optimize::ParallelSafetyAnalysis>,
+    /// Method-call spans proven to invoke `Elephc\Parallel\Future::join()`.
+    pub parallel_future_join_sites: Vec<Span>,
+    /// Innermost closure expression whose body is currently being checked.
+    pub current_closure_span: Option<Span>,
+    /// Proven Future join sites paired with the closure expression that owns them.
+    pub parallel_future_join_closure_sites: Vec<(Span, Span)>,
+    /// Proven Future join sites paired with their owning named function.
+    pub parallel_future_join_function_sites: Vec<(Span, String)>,
+    /// Function-call spans proven to invoke `Elephc\Parallel\run()`.
+    pub parallel_run_sites: Vec<Span>,
+    /// Proven Parallel run sites paired with the closure expression that owns them.
+    pub parallel_run_closure_sites: Vec<(Span, Span)>,
+    /// Proven Parallel run sites paired with their owning named function.
+    pub parallel_run_function_sites: Vec<(Span, String)>,
+    /// Closure expressions passed directly to Async `run()` or `TaskGroup::spawn()`.
+    pub async_task_closure_spans: HashSet<Span>,
+    /// Named functions passed directly to Async `run()` or `TaskGroup::spawn()`.
+    pub async_task_functions: HashSet<String>,
     /// Tracks callable-array targets assigned to variables, keyed by variable name.
     pub callable_array_targets: HashMap<String, CallableTarget>,
     /// Identifies the assignment that produced each callable-array target fact.
@@ -343,7 +369,8 @@ pub(crate) struct Checker {
     /// would be applied to returns that execute before it, silently accepting a nullable
     /// return. The address key is exact because both passes borrow the same immutable AST; the
     /// span is carried alongside so a recycled address can never be mistaken for a hit.
-    pub flow_typed_returns: HashMap<usize, (Span, PhpType)>,
+    /// The boolean records reference-array alias risk before the local scope is restored.
+    pub flow_typed_returns: HashMap<usize, (Span, PhpType, bool)>,
     /// Whether the statements being checked belong to the top-level (global) scope rather than a
     /// function, method, or closure body. `with_local_storage_context` clears it for every local
     /// scope, so `null_probe` only records deferred roots for the scope whose environment
@@ -437,6 +464,9 @@ pub(crate) struct Checker {
     /// already visits every expression with a typed environment, so no second AST walk is
     /// needed. See `crate::ir_lower::context::LoweringContext::boxed_incdec_storage_type`.
     pub string_incdec_locals: HashSet<(String, String)>,
+    /// `(function-like scope, local name)` pairs whose by-reference capture cell must use
+    /// boxed `Mixed` because a later outer assignment changes its runtime representation.
+    pub ref_cell_mixed_locals: HashSet<(String, String)>,
     /// Mirrors `CheckOptions::strict_locals` for the duration of the check. When set, the
     /// permissive local-retype path in `merge_local_assignment_type` and the branch-divergent
     /// `Mixed`-storage marking in `mixed_storage_scan::run_mixed_storage_scan` both step aside
@@ -974,6 +1004,8 @@ impl Checker {
         self.closure_return_types.remove(name);
         self.callable_sigs.remove(name);
         self.callable_captures.remove(name);
+        self.parallel_transfer_safe_callable_returns.remove(name);
+        self.parallel_callable_safety.remove(name);
         self.callable_array_targets.remove(name);
         self.mark_callable_array_target_write(name);
         self.first_class_callable_targets.remove(name);
@@ -1225,7 +1257,7 @@ fn check_types_on_compiler_stack(
     clone_override_storage::widen_property_unset_storage(&mut checker);
     scope_dynamic_storage::reserve_scope_dynamic_property_storage(&mut checker);
     validate_magic_method_contracts(&checker)?;
-
+    checker.emit_parallel_async_join_warnings();
     let mut warnings = crate::types::warnings::collect_warnings(program);
     warnings.extend(checker.warnings);
     // The warnings that belong to a local-binding decision, appended once the last walk has
@@ -1301,6 +1333,7 @@ fn check_types_on_compiler_stack(
         first_class_builtin_call_types: checker.first_class_builtin_call_types,
         loop_storage_types: checker.loop_storage_types,
         string_incdec_locals: checker.string_incdec_locals,
+        ref_cell_mixed_locals: checker.ref_cell_mixed_locals,
         local_bind_kill_sites: checker.local_bind_kill_sites,
         local_ref_detach_sites: checker.local_ref_detach_sites,
         local_retype_sites: checker.local_retype_sites,

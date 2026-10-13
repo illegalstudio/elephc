@@ -623,6 +623,34 @@ fn emit_mixed_local_slot_retirement(ctx: &mut FunctionContext<'_>, done: &str) {
 pub(super) fn lower_unset_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
     let offset = ctx.local_offset(slot)?;
+    if ctx.local_ref_cell_representation_is_dynamic(slot)
+        && ctx.ref_cell_owner_for_slot(slot).is_none()
+    {
+        let state_offset = ctx.ref_cell_state_offset(slot).ok_or_else(|| {
+            CodegenIrError::invalid_module(format!(
+                "dynamic ref-cell slot {} has no representation flag",
+                slot.as_raw()
+            ))
+        })?;
+        let raw = ctx.next_label("unset_closure_ref_cell_raw");
+        let state_reg = abi::secondary_scratch_reg(ctx.emitter);
+        abi::load_at_offset(ctx.emitter, state_reg, state_offset);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cmp {}, #1", state_reg));     // only ordinary promotion owns a cell through the local value slot
+                ctx.emitter.instruction(&format!("b.ne {}", raw));              // counted hash aliases retire once through their explicit state below
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("cmp {}, 1", state_reg));      // only ordinary promotion owns a cell through the local value slot
+                ctx.emitter.instruction(&format!("jne {}", raw));               // counted hash aliases retire once through their explicit state below
+            }
+        }
+        let cell_reg = abi::symbol_scratch_reg(ctx.emitter);
+        abi::load_at_offset(ctx.emitter, cell_reg, offset);
+        let value_ty = ctx.local_php_type(slot)?.codegen_repr();
+        abi::emit_release_local_ref_cell(ctx.emitter, cell_reg, &value_ty);
+        ctx.emitter.label(&raw);
+    }
     ctx.unmark_promoted_ref_cell(slot);
     if ctx.local_kind(slot)? == LocalKind::OwnedTemp {
         clear_local_slot_storage(ctx, slot, offset)?;

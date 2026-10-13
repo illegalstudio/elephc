@@ -2,7 +2,7 @@
 title: "mb_str_split() - internals"
 description: "Compiler internals for mb_str_split(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 873
+  order: 874
 ---
 
 ## `mb_str_split()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_str_split.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_str_split.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:701](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L701) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

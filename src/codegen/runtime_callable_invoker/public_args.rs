@@ -84,7 +84,9 @@ impl InvokerParamShape {
 pub(super) fn assoc_arg_count_reg(emitter: &Emitter) -> &'static str {
     match emitter.target.arch {
         Arch::AArch64 => "x21",
-        Arch::X86_64 => "r14",
+        // r14 is the runtime-context pointer. Associative marshalling does not use the
+        // indexed loop's rbx counter, so that callee-saved register can carry argc here.
+        Arch::X86_64 => "rbx",
     }
 }
 

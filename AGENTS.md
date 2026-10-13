@@ -112,6 +112,64 @@ fn test_my_feature() {
 
 Each test runs in an isolated temp directory. Tests run in parallel — the `compile_and_run` helper handles isolation automatically.
 
+## Repository memory (Kage)
+
+Kage is this repository's shared memory: verified, evidence-backed **memory packets** under `.agent_memory/packets/` (`bug_fix`, `decision`, `gotcha`, `convention`, `runbook`, `code_explanation`) plus a code graph over the source. The packets are committed and shared through git — they are part of a change, like a test. Everything else under `.agent_memory/` (indexes, code graph, structural and observation caches, daemon/store/report state) is regenerable local state and is git-ignored.
+
+### Recall before working
+
+- Call `kage_context` as the **first step of a task**, with the question you are actually answering and the files you intend to touch as `targets`. An agent delegated a task calls it as its first instruction.
+- Read the recalled packets and the "Related Code Graph" callers/consumers **before** reading code. A cold recall can take several minutes and is moved to the background — launch it early and keep working while it runs.
+- Before committing, run `kage_risk` on the files you changed, and read its co-change partners as **candidate twins of your change**: the same bug usually also sits in the sibling file, in the x86_64 arm beside the aarch64 one you just fixed.
+- Use `kage_dependency_path` when a hypothesis names a producer and a consumer and you need the edge between them.
+- Run `kage_pr_check` before declaring a change ready. Use `kage_decisions` to audit which hot paths still carry no memory.
+
+### Record at the commit
+
+- `kage_learn` writes the packet. State the **mechanism** — what happens, why, and where — cite the source `paths` (they are verified to exist), give the `evidence` that established it (reducer values before/after, test names, filter counts), and set the `type`.
+- When a new packet replaces an older claim, retire the old one with `kage_supersede` and give the reason.
+- When a commit only moves code under a packet whose claim still holds, run `kage reverify --project <repo root> --packet <id> --evidence "…"` instead of rewriting the packet.
+- Treat a packet a recall marks "Withheld (stale)" as possibly true but unverified: re-measure before acting on it.
+- A packet is not session narration, carries no secrets, and cites no path outside the repo (`allow_missing_paths` is only for a file you are about to create). It states a mechanism a future session can act on, with the evidence that established it.
+
+### Hygiene and known traps
+
+All measured in this repository:
+
+- The packet id derives from the first ~80 characters of the **title**, so a second `kage_learn` with the same title prefix overwrites the packet in place. Useful to repair a broken packet, destructive otherwise.
+- The secret scanner rejects prose containing `token: <word>`, or any `NAME=value` shape, as an "api key assignment". Write "X set to 1" instead.
+- A packet is flagged stale as soon as a cited file changes in the **working tree** — uncommitted edits count, not only commits.
+- `kage_refresh` on a non-default branch is a quiet refresh: flags are computed, not written.
+- The graph's "related tests" list can be noise (unrelated repository scripts). Judge it before trusting it.
+- Two agents writing a packet about the same finding within an hour happens; the later one supersedes the earlier, with the reason.
+
+
+## Locating code (Graft)
+
+Graft is a second index over the same source, and it answers a different question
+from Kage's. Kage explains **why** a thing is the way it is; Graft finds **where**
+a behaviour lives when you cannot name the symbol. `graft/` is a local, regenerable
+cache and is git-ignored — run `graft build` once per checkout.
+
+- `graft ask "<behaviour in your own words>"` returns ranked symbols with exact
+  `file:L<start>-L<end>`. Ask it in terms of what the code DOES, not what it is
+  called: the query "spl doubly linked list offsetUnset delete shift storage
+  compaction x86_64" returned `emit_iterator_delete_step_x86_64`, a symbol no grep
+  over register names or instruction text would have surfaced, and that function
+  was the bug.
+- `graft skeleton <file>` is the cheapest way to see one file's API surface before
+  opening it.
+- Reach for it **before** a broad grep, not after one fails. A grep finds a string
+  you already guessed; Graft finds the function you have not thought of yet. It is
+  also the right tool when the symptom is a test name and the cause is unnamed.
+- It stays lexical unless built with `--deep`, so it is fast and free, and its
+  ranking is a starting point rather than a verdict — confirm by reading the file
+  it names.
+
+The working order is: **`kage_context` to recall, `graft ask` to locate, a reducer
+to decide.** Neither index is evidence. They tell you where to look and what was
+learned there; only running something settles what is true now.
+
 ## Architecture
 
 ```
@@ -628,6 +686,11 @@ When cutting a release:
 ## Conventions
 
 - No `Co-Authored-By` lines in commits
+- `kage_risk` on the changed files before every commit, not before the first one of
+  a session. Its co-change partners are candidate twins of your change — the same
+  defect usually also sits in the sibling arm.
+- A fix commits **with** its `kage_learn` packet, the way it commits with its test.
+  A finding recorded a week later has already cost the next session the same hunt.
 - Use commit message prefixes such as `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, or `test:`
 - Keep commit messages concise
 - Run the focused pre-commit verification above before committing code changes. Do not knowingly commit with relevant focused tests failing; the full suite must pass in CI.

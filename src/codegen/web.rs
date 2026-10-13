@@ -199,12 +199,7 @@ fn emit_gc_state_reset(emitter: &mut Emitter) {
 /// lives outside `_heap_buf` and is unaffected.
 fn emit_heap_arena_reset(emitter: &mut Emitter) {
     emitter.comment("reset the PHP heap arena to pure-bump allocation for the next request");
-    abi::emit_store_zero_to_symbol(emitter, "_heap_off", 0);
-    abi::emit_store_zero_to_symbol(emitter, "_heap_free_list", 0);
-    abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 0);
-    abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 8);
-    abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 16);
-    abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 24);
+    crate::codegen_support::runtime::ctx::emit_heap_arena_reset_state(emitter);
     // Bulk reclamation also retires every block that remained after typed cleanup.
     // Keep cumulative allocation totals, but do not carry their live footprint into a new arena.
     let value = abi::int_result_reg(emitter);
@@ -222,15 +217,36 @@ mod handler_reset_tests {
     #[test]
     fn web_arena_reset_reconciles_allocation_counters_on_every_target() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
             emit_heap_arena_reset(&mut emitter);
             let asm = emitter.output();
-            let heap_reset = asm.rfind("_heap_small_bins").unwrap();
-            let allocs = asm.find("_gc_allocs").unwrap();
-            let frees = asm.find("_gc_frees").unwrap();
-            let live = asm.find("_gc_live").unwrap();
+            let bin = crate::codegen_support::runtime::ctx::CTX_HEAP_SMALL_BINS_OFFSET
+                + (crate::codegen_support::runtime::ctx::CTX_HEAP_SMALL_BIN_COUNT - 1) * 8;
+            let last_bin_zero = match target.arch {
+                crate::codegen_support::platform::Arch::AArch64 => format!("str xzr, [x28, #{bin}]"),
+                crate::codegen_support::platform::Arch::X86_64 => format!("mov QWORD PTR [r14 + {bin}], 0"),
+            };
+            let heap_reset = asm.rfind(&last_bin_zero).expect("last context-owned small-bin reset");
+            let mut counters = [Emitter::new(target), Emitter::new(target), Emitter::new(target)];
+            let value = abi::int_result_reg(&counters[0]);
+            abi::emit_load_symbol_to_reg(&mut counters[0], value, "_gc_allocs", 0);
+            abi::emit_store_reg_to_symbol(&mut counters[1], value, "_gc_frees", 0);
+            abi::emit_store_zero_to_symbol(&mut counters[2], "_gc_live", 0);
+            let [allocs_probe, frees_probe, live_probe] = counters;
+            let allocs = asm.find(allocs_probe.output().trim()).expect("context allocation total read");
+            let frees = asm.find(frees_probe.output().trim()).expect("context cumulative frees write");
+            let live = asm.find(live_probe.output().trim()).expect("context live-block reset");
             assert!(heap_reset < allocs && allocs < frees && frees < live, "{name}");
             assert!(!asm.contains("__rt_heap_alloc") && !asm.contains("_gc_peak"), "{name}");
+            let peak = crate::codegen_support::runtime::ctx::CTX_GC_PEAK_OFFSET;
+            let peak_access = match target.arch {
+                crate::codegen_support::platform::Arch::AArch64 => format!("[x28, #{peak}]"),
+                crate::codegen_support::platform::Arch::X86_64 => format!("[r14 + {peak}]"),
+            };
+            assert!(!asm.contains(&peak_access), "{name}: cumulative peak remains intact");
+            assert!(!asm.contains("_heap_small_bins") && !asm.contains("_gc_allocs"),
+                "{name}: request counters must not address shared globals");
         }
     }
 
@@ -395,5 +411,5 @@ fn emit_branch_if_equals_sentinel(emitter: &mut Emitter, label: &str) {
 /// correct base; the handler then captures this fresh base for its frame.
 fn emit_concat_offset_reset(emitter: &mut Emitter) {
     emitter.comment("reset the concat-buffer write offset for the next request");
-    abi::emit_store_zero_to_symbol(emitter, "_concat_off", 0);
+    crate::codegen_support::runtime::ctx::emit_concat_off_store_imm(emitter, 0);
 }

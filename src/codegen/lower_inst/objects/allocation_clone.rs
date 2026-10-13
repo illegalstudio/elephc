@@ -129,7 +129,9 @@ pub(super) fn cloned_property_retain_offsets(class_info: &ClassInfo) -> Vec<usiz
         .enumerate()
         .filter_map(|(index, (property, php_type))| {
             if class_info.property_slot_is_reference(index, property) {
-                return None;
+                // A cloned reference property shares its heap cell with the source object.
+                // Each object therefore owns one cell refcount until its deep destructor runs.
+                return Some(8 + index * 16);
             }
             property_clone_needs_retain(php_type).then_some(8 + index * 16)
         })
@@ -187,7 +189,7 @@ pub(super) fn emit_copy_property_slot(
     abi::emit_store_to_address(ctx.emitter, high_reg, dest_reg, offset + 8);
 }
 
-/// Retains the copied low-word pointer for string, array, hash, object, or Mixed slots.
+/// Retains the copied low-word pointer for reference cells and heap-backed value slots.
 pub(super) fn emit_retain_cloned_property_pointer(
     ctx: &mut FunctionContext<'_>,
     source_reg: &str,

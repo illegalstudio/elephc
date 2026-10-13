@@ -2,7 +2,7 @@
 title: "__elephc_phar_gzip_archive() - internals"
 description: "Compiler internals for __elephc_phar_gzip_archive(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1150
+  order: 1155
 ---
 
 ## `__elephc_phar_gzip_archive()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/__elephc_phar_gzip_archive.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_phar_gzip_archive.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:701](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L701) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

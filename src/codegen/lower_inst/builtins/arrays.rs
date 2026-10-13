@@ -34,7 +34,7 @@ mod keys;
 mod search;
 mod shift;
 mod unshift;
-pub(in crate::codegen::lower_inst::builtins) mod values;
+pub(in crate::codegen::lower_inst) mod values;
 mod basic;
 mod boxed_map_callback;
 mod boxed_merge;

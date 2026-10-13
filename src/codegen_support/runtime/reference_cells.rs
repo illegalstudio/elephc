@@ -230,12 +230,12 @@ fn emit_owner_lookup(emitter: &mut Emitter) {
     emitter.label_global("__rt_reference_cell_owner");
     match emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+            super::ctx::emit_heap_base_address(emitter, "x9");
             emitter.instruction("add x10, x9, #16");                            // require room for a complete allocation header
             emitter.instruction("cmp x0, x10");                                 // reject null, scalar and frame addresses below the managed payload range
             emitter.instruction("b.lo __rt_reference_cell_owner_none");         // borrowed addresses have no independent cell owner
-            abi::emit_load_symbol_to_reg(emitter, "x10", "_heap_off", 0);
-            abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+            super::ctx::emit_heap_off_load(emitter, "x10");
+            super::ctx::emit_heap_base_address(emitter, "x9");
             emitter.instruction("add x10, x9, x10");                            // bound the scan by the current managed heap extent
             emitter.instruction("cmp x0, x10");                                 // reject pointers outside the allocated heap window
             emitter.instruction("b.hs __rt_reference_cell_owner_none");         // never inspect foreign or frame storage as a heap header
@@ -256,11 +256,11 @@ fn emit_owner_lookup(emitter: &mut Emitter) {
             emitter.instruction("mov x0, xzr");                                 // report that borrowed storage has no transferable cell owner
         }
         Arch::X86_64 => {
-            abi::emit_symbol_address(emitter, "r8", "_heap_buf");
+            super::ctx::emit_heap_base_address(emitter, "r8");
             emitter.instruction("lea r9, [r8 + 16]");                           // require room for a complete allocation header
             emitter.instruction("cmp rax, r9");                                 // reject null, scalar and frame addresses below the managed payload range
             emitter.instruction("jb __rt_reference_cell_owner_none");           // borrowed addresses have no independent cell owner
-            abi::emit_load_symbol_to_reg(emitter, "r9", "_heap_off", 0);
+            super::ctx::emit_heap_off_load(emitter, "r9");
             emitter.instruction("add r9, r8");                                  // bound the scan by the current managed heap extent
             emitter.instruction("cmp rax, r9");                                 // reject pointers outside the allocated heap window
             emitter.instruction("jae __rt_reference_cell_owner_none");          // never inspect foreign or frame storage as a heap header

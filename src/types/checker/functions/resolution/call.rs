@@ -29,9 +29,8 @@ impl Checker {
     /// Returns true if any named argument in `args` does not correspond to a
     /// declared regular (non-variadic) parameter in `regular_params`.
     ///
-    /// Used to decide whether a variadic parameter should receive type `Iterable`
-    /// (when unknown named args may flow into it) or `Array<elem>` (when all
-    /// named args are known).
+    /// Selects the shared dynamic PHP-array collector when unknown names may flow into it;
+    /// known positional tails retain their indexed element storage.
     pub(super) fn has_unknown_named_variadic_arg(args: &[Expr], regular_params: &[String]) -> bool {
         args.iter().any(|arg| {
             matches!(
@@ -108,6 +107,7 @@ impl Checker {
             .canonical_function_name_folded(name)
             .unwrap_or_else(|| name.to_string());
         let name = canonical_name.as_str();
+        self.ensure_parallel_prelude_helper_is_internal(name, span)?;
         // A call site that actually PASSES something is what replaces an untyped parameter's
         // `Int` placeholder, so it is also what makes the pass-through return widening
         // unnecessary. Recorded here rather than inferred from `functions` membership: a
@@ -172,6 +172,10 @@ impl Checker {
             }
             let mut effective_sig =
                 Self::callable_sig_for_declared_params(&sig, &sig.declared_params);
+            let is_async_run = crate::names::php_symbol_key(name.trim_start_matches('\\'))
+                == "elephc\\async\\run";
+            let is_parallel_run = crate::names::php_symbol_key(name.trim_start_matches('\\'))
+                == "elephc\\parallel\\run";
             let plan = self.plan_named_call_args(
                 &effective_sig,
                 args,
@@ -208,6 +212,13 @@ impl Checker {
                         name
                     ),
                 ));
+            }
+            if is_async_run {
+                self.record_async_task_callable(&normalized_args);
+            }
+            if is_parallel_run {
+                self.check_parallel_run_task_group_escape(&normalized_args, span, caller_env)?;
+                self.record_parallel_run_site(span);
             }
             if self.respecialize_resolved_function_params_if_needed(
                 name,
@@ -435,18 +446,12 @@ impl Checker {
                 }
                 if ty == PhpType::Callable {
                     if let Some(sig) = self.resolve_expr_callable_sig(arg, caller_env)? {
-                        self.callable_param_sigs.insert(
-                            (name.to_string(), decl.params[arg_idx].clone()),
-                            sig,
-                        );
+                        self.record_callable_param_sig(name, &decl.params[arg_idx], sig);
                     }
                 }
                 if is_callable_array_type(&ty) {
                     if let Some(sig) = self.resolve_expr_callable_array_sig(arg, caller_env)? {
-                        self.callable_param_sigs.insert(
-                            (name.to_string(), decl.params[arg_idx].clone()),
-                            sig,
-                        );
+                        self.record_callable_param_sig(name, &decl.params[arg_idx], sig);
                     }
                 }
                 if supplied_reference {
@@ -638,7 +643,7 @@ impl Checker {
                 )?;
                 param_types.push((vp.clone(), PhpType::Array(Box::new(elem_ty))));
             } else if Self::has_unknown_named_variadic_arg(args, &decl.params) {
-                param_types.push((vp.clone(), PhpType::Iterable));
+                param_types.push((vp.clone(), crate::types::signatures::descriptor_variadic_container()));
             } else {
                 let variadic_elem_ty = if args.len() > decl.params.len() {
                     self.infer_type(&args[decl.params.len()], caller_env)

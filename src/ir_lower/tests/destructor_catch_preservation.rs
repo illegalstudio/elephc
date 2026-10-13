@@ -10,9 +10,8 @@
 //!   the emitted code is merely missing a handler rather than malformed. These assertions catch
 //!   it structurally instead, against the exact source shapes of the `callable_operand_owners`
 //!   runtime regressions.
-//! - `_exc_handler_top` and `setjmp` are the target-neutral needles
-//!   `lower_try_push_handler` emits on every supported target, so the emitter assertion is not
-//!   ARM64-first.
+//! - Context-relative handler publication and `setjmp` are checked on every supported target,
+//!   without assuming the former process-global exception symbols remain in emitted code.
 //! - The quiet-destructor control pins that the handler is kept because the destructor can
 //!   THROW, not because a destructor exists.
 //! - Local retirement consumes bounded cleanup's caught flag so an unchanged outer throw keeps
@@ -207,6 +206,23 @@ fn function_assembly(module: &crate::ir::Module, name: &str, target: &str) -> St
     body[..end].to_string()
 }
 
+/// Names the architecture-specific publication of the current context's catch-handler head.
+fn handler_publication(target: &str) -> String {
+    let parsed = Target::parse(target).unwrap();
+    let scratch = crate::codegen_support::abi::temp_int_reg(parsed);
+    let offset = crate::codegen_support::runtime::ctx::CTX_EXC_HANDLER_TOP_OFFSET;
+    if target == "linux-x86_64" {
+        format!("mov QWORD PTR [r14 + {offset}], {scratch}")
+    } else {
+        format!("str {scratch}, [x28, #{offset}]")
+    }
+}
+
+/// Distinguishes source PHP catches from private argument-evaluation cleanup handlers.
+fn has_php_catch_dispatch(function: &Function) -> bool {
+    function.blocks.iter().any(|block| block.name == "try.catch_dispatch")
+}
+
 /// Verifies one bounded local retirement distinguishes older and newly produced exceptions.
 fn assert_local_retirement_exception_gate(body: &str, target: &str) {
     let bounded = body
@@ -248,12 +264,12 @@ fn throwing_argument_destructor_keeps_its_same_frame_handler_on_every_target() {
         for name in ["buildWithSameFrameCatch", "buildThroughMethodWithSameFrameCatch"] {
             let (module, function) = lower_function(THROWING_ARGUMENT_SOURCE, target, name);
             assert!(
-                function.instructions.iter().any(|inst| inst.op == Op::TryPushHandler),
-                "{target}: {name} must install an EIR handler",
+                has_php_catch_dispatch(&function),
+                "{target}: {name} must retain its PHP catch, not only private cleanup guards",
             );
             let body = function_assembly(&module, name, target);
             assert!(
-                body.contains("_exc_handler_top"),
+                body.contains(&handler_publication(target)),
                 "{target}: {name} must push a handler in assembly:\n{body}",
             );
             assert!(
@@ -274,12 +290,12 @@ fn immediately_invoked_closure_capture_cleanup_keeps_its_handler_on_every_target
         let (module, function) =
             lower_function(IIFE_CAPTURE_SOURCE, target, "invokeIifeWithLastOwnedCapture");
         assert!(
-            function.instructions.iter().any(|inst| inst.op == Op::TryPushHandler),
-            "{target}: the IIFE capture cleanup must install an EIR handler",
+            has_php_catch_dispatch(&function),
+            "{target}: the IIFE capture cleanup must retain its PHP catch",
         );
         let body = function_assembly(&module, "invokeIifeWithLastOwnedCapture", target);
         assert!(
-            body.contains("_exc_handler_top") && body.contains("setjmp"),
+            body.contains(&handler_publication(target)) && body.contains("setjmp"),
             "{target}: the IIFE handler must survive to assembly:\n{body}",
         );
     }
@@ -361,8 +377,8 @@ fn quiet_destructor_still_prunes_its_unreachable_handler_on_every_target() {
     for target in TARGETS {
         let (_, function) = lower_function(QUIET_DESTRUCTOR_SOURCE, target, "buildWithSameFrameCatch");
         assert!(
-            !function.instructions.iter().any(|inst| inst.op == Op::TryPushHandler),
-            "{target}: a quiet destructor must not resurrect the handler",
+            !has_php_catch_dispatch(&function),
+            "{target}: a quiet destructor must not resurrect the PHP catch",
         );
     }
 }
@@ -460,11 +476,8 @@ fn a_proven_scalar_callee_does_not_resurrect_a_handler_on_every_target() {
     for target in TARGETS {
         let (_, function) = lower_function(SCALAR_HELPER_SOURCE, target, "callScalarHelper");
         assert!(
-            !function
-                .instructions
-                .iter()
-                .any(|inst| inst.op == Op::TryPushHandler),
-            "{target}: a proven scalar callee must not resurrect the handler",
+            !has_php_catch_dispatch(&function),
+            "{target}: a proven scalar callee must not resurrect the PHP catch",
         );
     }
 }

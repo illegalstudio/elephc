@@ -13,6 +13,8 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
+mod callable_flow;
+
 use crate::ir::{
     BlockId, Builder, DataId, DataPool, Effects, Function, Immediate, IrType, LocalKind,
     LocalSlotId, Op, Ownership, ValueId,
@@ -158,6 +160,8 @@ pub(crate) struct ReferenceCallContext {
 
 /// Rollback point for a speculative statement lowering.
 pub(crate) struct LoweringSnapshot {
+    argument_strict_types: bool,
+    argument_snapshot_scopes: Vec<Vec<String>>,
     function: Function,
     insertion_block: Option<BlockId>,
     data: DataPoolLengths,
@@ -185,6 +189,7 @@ pub(crate) struct LoweringSnapshot {
     speculating: bool,
     closure_count: usize,
     expression_depth: usize,
+    discarded_result_depth: Option<usize>,
     reference_call_context: Option<ReferenceCallContext>,
     refusals: usize,
     call_argument_evaluation_scopes: Vec<CallArgumentEvaluationScope>,
@@ -248,6 +253,10 @@ const EVAL_ARGV_LOCAL_NAME: &str = "argv";
 
 /// Mutable state for one function body while it is lowered.
 pub(crate) struct LoweringContext<'m, 'f> {
+    /// PHP scalar binding is controlled by the current call-site statement's file.
+    pub(crate) argument_strict_types: bool,
+    /// Owners held while call arguments are still being evaluated, nested by call site.
+    pub(crate) argument_snapshot_scopes: Vec<Vec<String>>,
     pub builder: Builder<'f>,
     pub data: &'m mut DataPool,
     pub local_slots: HashMap<String, LocalSlotId>,
@@ -255,6 +264,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub local_types: TypeEnv,
     /// Nested expression depth separates a reference-assignment call from its argument calls.
     pub(crate) expression_depth: usize,
+    /// Exact expression depth whose result the enclosing expression statement ignores.
+    pub(crate) discarded_result_depth: Option<usize>,
     /// Staging published by the enclosing reference assignment, if one is being lowered.
     ///
     /// `finish_reference_return_call` adopts the transferred lease into that staging immediately
@@ -301,6 +312,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// target. Those locals get boxed `Mixed` frame storage from their first store, so
     /// every read of the slot is already a boxed load instead of an owned string detach.
     pub string_incdec_locals: &'m HashSet<(String, String)>,
+    /// Checker-proven by-reference captures whose shared cell must use boxed `Mixed` storage.
+    pub ref_cell_mixed_locals: &'m HashSet<(String, String)>,
     /// Spans of the `unset()` ARGUMENTS whose local binding the CHECKER decided to kill
     /// (`CheckResult::local_bind_kill_sites`), each mapped to the SET of locals killed at that
     /// position. At one of these spans `unset_local` abandons the frame slot after releasing its
@@ -439,6 +452,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         generic_call_sites: &'m HashMap<(String, Span), String>,
         loop_storage_types: &'m crate::types::LoopStorageTypes,
         string_incdec_locals: &'m HashSet<(String, String)>,
+        ref_cell_mixed_locals: &'m HashSet<(String, String)>,
         bind_kill_sites: &'m HashMap<Span, HashSet<String>>,
         ref_detach_sites: &'m HashMap<Span, HashSet<String>>,
         retype_sites: &'m HashMap<Span, HashSet<String>>,
@@ -504,6 +518,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             generic_call_sites,
             loop_storage_types,
             string_incdec_locals,
+            ref_cell_mixed_locals,
             bind_kill_sites,
             ref_detach_sites,
             retype_sites,
@@ -544,7 +559,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             pending_static_callable_result: None,
             closure_counter: 0,
             hidden_temp_counter: 0,
+            argument_snapshot_scopes: Vec::new(),
+            argument_strict_types: false,
             expression_depth: 0,
+            discarded_result_depth: None,
             reference_call_context: None,
             call_argument_evaluation_scopes: Vec::new(),
             argument_guards: HashMap::new(),
@@ -563,6 +581,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Captures every mutable field touched by speculative statement lowering.
     pub(crate) fn snapshot(&self) -> LoweringSnapshot {
         LoweringSnapshot {
+            argument_strict_types: self.argument_strict_types,
+            argument_snapshot_scopes: self.argument_snapshot_scopes.clone(),
             function: self.builder.snapshot_function(),
             insertion_block: self.builder.insertion_block(),
             data: DataPoolLengths::capture(self.data),
@@ -593,6 +613,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             closure_counter: self.closure_counter,
             hidden_temp_counter: self.hidden_temp_counter,
             expression_depth: self.expression_depth,
+            discarded_result_depth: self.discarded_result_depth,
             reference_call_context: self.reference_call_context.clone(),
             // Refusals recorded by a speculative region must not outlive it: the region is
             // always lowered again for real, and that pass records its refusals again.
@@ -635,6 +656,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Restores state captured before a discarded speculative lowering.
     pub(crate) fn restore(&mut self, snapshot: LoweringSnapshot) {
+        self.argument_snapshot_scopes = snapshot.argument_snapshot_scopes;
+        self.argument_strict_types = snapshot.argument_strict_types;
         self.builder.restore_function(snapshot.function);
         self.builder.restore_insertion_cursor(snapshot.insertion_block);
         snapshot.data.truncate(self.data);
@@ -665,6 +688,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.closure_counter = snapshot.closure_counter;
         self.hidden_temp_counter = snapshot.hidden_temp_counter;
         self.expression_depth = snapshot.expression_depth;
+        self.discarded_result_depth = snapshot.discarded_result_depth;
         self.reference_call_context = snapshot.reference_call_context;
         crate::ir_lower::diagnostics::rollback_to(snapshot.refusals);
         self.call_argument_evaluation_scopes = snapshot.call_argument_evaluation_scopes;
@@ -676,6 +700,28 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.eval_scope_read_names = snapshot.eval_scope_read_names;
         self.eval_scope_write_names = snapshot.eval_scope_write_names;
         self.eval_scope_flush_names = snapshot.eval_scope_flush_names;
+    }
+
+    /// Removes an evaluation ledger's backing owner when its SSA value is consumed.
+    pub(crate) fn clear_consumed_argument_snapshot(&mut self, value: ValueId, span: Option<Span>) {
+        let slot = self.builder.value_defining_instruction(value).and_then(|inst| {
+            if inst.op != Op::LoadLocal {
+                return None;
+            }
+            match inst.immediate {
+                Some(Immediate::LocalSlot(slot)) => Some(slot),
+                _ => None,
+            }
+        });
+        let Some(slot) = slot else { return; };
+        let name = self.argument_snapshot_scopes.iter().flatten().find(|name| {
+            self.local_slots.get(*name).copied() == Some(slot)
+        }).cloned();
+        if let Some(name) = name {
+            // The release consumes the SSA owner's reference. The evaluation handler
+            // must not later release the stale pointer if another coercion throws.
+            self.clear_owned_hidden_temp(&name, span);
+        }
     }
 
     /// Returns the canonical PHP source path associated with this lowered body, if known.
@@ -998,14 +1044,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         span: Option<Span>,
     ) {
         let borrowed = self.load_local(name, span);
-        let value = if php_type.codegen_repr() == PhpType::Mixed {
-            self.emit_owned_value(
-                Op::MixedClone, vec![borrowed.value], None, PhpType::Mixed,
-                Op::MixedClone.default_effects(), span,
-            )
-        } else {
-            borrowed
-        };
         let shadow = self.builder.add_local(
             Some(format!("{}#cow", name)),
             value_ir_type(php_type),
@@ -1015,7 +1053,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.local_slots.insert(name.to_string(), shadow);
         self.local_kinds
             .insert(name.to_string(), LocalKind::PhpLocal);
-        self.store_local(name, value, php_type.clone(), span);
+        // The ordinary PHP binding store clones boxed cells and retains concrete
+        // containers. Pre-cloning here would detach the same parameter twice.
+        self.store_local(name, borrowed, php_type.clone(), span);
     }
 
     /// Marks a local slot as initialized by caller or synthetic setup.
@@ -2135,7 +2175,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             && !transfer_source_to_store
             && !self.is_ref_bound_local(name)
         {
-            crate::ir_lower::ownership::acquire_if_refcounted(self, value, span)
+            if previous_kind == LocalKind::PhpLocal || uses_global {
+                crate::ir_lower::ownership::copy_for_php_value_binding(self, value, span)
+            } else {
+                crate::ir_lower::ownership::acquire_if_refcounted(self, value, span)
+            }
         } else if store_retains_value && !transfer_source_to_store {
             // For ref-bound locals, acquire only when NOT narrowing Mixed→Int.
             // When the source is Mixed and the ref cell's previous type is Int,
@@ -2148,10 +2192,22 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             );
             let target_is_int = matches!(previous_type.codegen_repr(), PhpType::Int);
             if !(source_is_mixed && target_is_int) {
-                crate::ir_lower::ownership::acquire_if_refcounted(self, value, span)
+                crate::ir_lower::ownership::copy_for_php_value_binding(self, value, span)
             } else {
                 value
             }
+        } else {
+            value
+        };
+        // Static stores retain in the backend. Snapshot their boxed values, then release
+        // this intermediate owner after publication instead of adding a second retain.
+        let static_mixed_copy = previous_kind == LocalKind::StaticLocal
+            && matches!(
+                self.builder.value_php_type(value.value).codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_)
+            );
+        let value = if static_mixed_copy {
+            crate::ir_lower::ownership::copy_for_php_value_binding(self, value, span)
         } else {
             value
         };
@@ -2272,6 +2328,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             && ref_store_source_owner.is_none()
         {
             crate::ir_lower::ownership::release_if_owned(self, source, span);
+        }
+        if static_mixed_copy {
+            crate::ir_lower::ownership::release_if_owned(self, value, span);
+            // The static now owns the cell. Assignment expressions receive a borrowed
+            // load, never the just-released owning temporary used for publication.
+            return self.load_local(name, span);
         }
         value
     }
@@ -2611,8 +2673,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     ///
     /// At a span the CHECKER recorded in `bind_kill_sites` the binding is also ABANDONED: the
     /// name loses its slot mapping, so the next `declare_local` mints a FRESH slot at whatever
-    /// type the checker approved for the re-binding assignment. Only the checker decides
-    /// eligibility (`Checker::local_binding_is_killable`); the guard consulted here
+    /// type the checker approved for the re-binding assignment. The checker decides source-level
+    /// eligibility (`Checker::local_binding_is_killable`); the generated Parallel worker's
+    /// disposable transport `$payload` is the sole internal exception, because no later statement
+    /// can resolve that binding after the synthetic `unset`. The guard consulted here
     /// (`local_binding_slot_is_abandonable`) is about STORAGE, not eligibility — it refuses the
     /// storage shapes where "the name's slot" is not the value's home at all.
     ///
@@ -2644,13 +2708,19 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         null: LoweredValue,
         span: Option<Span>,
     ) -> LoweredValue {
-        let abandons_binding = span.is_some_and(|span| {
+        let is_parallel_worker_payload = name == "payload"
+            && self
+                .loop_storage_scope
+                .ends_with("__parallel_worker::parallel");
+        let checker_kills_binding = span.is_some_and(|span| {
             span.identifies_a_node()
                 && self
                     .bind_kill_sites
                     .get(&span)
                     .is_some_and(|killed| killed.contains(name))
-        }) && self.local_binding_slot_is_abandonable(name);
+        });
+        let abandons_binding = (is_parallel_worker_payload || checker_kills_binding)
+            && self.local_binding_slot_is_abandonable(name);
         if !self.is_ref_bound_local(name) {
             if abandons_binding {
                 self.release_and_abandon_local_binding(name, span);
@@ -3370,6 +3440,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::BufferNew
                     | Op::GeneratorNew
                     | Op::CatchBind
+                    // Enum case reads take one reference from their process-lifetime slot.
+                    // `ScopedConstantGet` must therefore participate in every retaining-store
+                    // and discarded-expression cleanup path.
+                    | Op::ScopedConstantGet
                     // `yield`/`yield from` return owned Mixed cells (the sent
                     // value from `__rt_gen_suspend`, the delegated return from
                     // `__rt_gen_delegate`); a discarded result must be released.

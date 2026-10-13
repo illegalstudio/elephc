@@ -19,6 +19,18 @@ pub(super) fn lower(
     target: RuntimeFnId,
 ) -> Option<Result<()>> {
     match target {
+        RuntimeFnId::ElephcAsyncFd => Some({
+            crate::codegen::lower_inst::builtins::io::lower_async_fd(ctx, inst)
+        }),
+        RuntimeFnId::ElephcAsyncGcCollect => Some({
+            crate::codegen::lower_inst::builtins::system::lower_async_gc_collect(ctx, inst)
+        }),
+        RuntimeFnId::ElephcAsyncMonitorEvent => Some({
+            crate::codegen::lower_inst::builtins::system::lower_async_monitor_event(ctx, inst)
+        }),
+        RuntimeFnId::ElephcAsyncPoll => Some({
+            crate::codegen::lower_inst::builtins::io::lower_async_poll(ctx, inst)
+        }),
         RuntimeFnId::Sqrt => Some({
             crate::codegen::lower_inst::builtins::math::lower_sqrt(ctx, inst)
         }),

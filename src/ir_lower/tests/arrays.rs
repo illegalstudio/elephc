@@ -10,6 +10,27 @@
 
 use crate::ir::print_module;
 
+/// Literal and void-call null payloads can grow initially empty indexed arrays on every target.
+#[test]
+fn null_only_indexed_array_appends_emit_on_all_targets() {
+    let source = r#"<?php
+function voidPayload(): void {}
+$values = [];
+$values[] = null;
+$values[] = voidPayload();
+echo count($values);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+        assert!(asm.contains("__rt_array_push_int"), "{target}: null payload append");
+    }
+}
+
 /// A dynamic callable may widen an object local without making its array property unwritable.
 #[test]
 fn widened_object_property_array_push_rewrites_through_a_local_on_every_target() {
@@ -1202,9 +1223,9 @@ echo count($owner->items), count(PhpArrayWrites::$shared);
         let module = super::lower_source_at_for_target(
             source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
         );
-        let instructions = module.functions.iter().chain(&module.class_methods)
-            .flat_map(|function| &function.instructions)
-            .collect::<Vec<_>>();
+        let write = module.class_methods.iter().find(|function| function.name == "PhpArrayWrites::write")
+            .expect("property mutation method");
+        let instructions = write.instructions.iter().collect::<Vec<_>>();
         let fetches = instructions.iter().filter(|inst| inst.op == Op::PropGetForWrite)
             .collect::<Vec<_>>();
         assert_eq!(fetches.len(), 2, "{name}");

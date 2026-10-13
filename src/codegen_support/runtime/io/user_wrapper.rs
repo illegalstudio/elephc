@@ -60,13 +60,15 @@ pub fn emit_user_wrapper_fclose(emitter: &mut Emitter) {
     emitter.comment("--- runtime: user_wrapper_fclose ---");
     emitter.label_global("__rt_user_wrapper_fclose");
 
-    // Frame: 32 bytes. [sp, #0..16] saved x29/x30. [sp, #16..24] saved fd.
-    emitter.instruction("sub sp, sp, #32");                                     // helper frame for the wrapper dispatch
+    // Frame: saved x29/x30, fd, and the table-owned wrapper object.
+    emitter.instruction("sub sp, sp, #48");                                     // helper frame for wrapper ownership and dispatch
     emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
     emitter.instruction("str x0, [sp, #16]");                                   // save the synthetic file descriptor
+    emitter.instruction("str xzr, [sp, #24]");                                  // default to no table-owned wrapper object
 
     emit_aarch64_handle_lookup(emitter, "__rt_uwfclose_clear");                 // resolve obj into x0, fall through to slot-clear on missing handles
+    emitter.instruction("str x0, [sp, #24]");                                   // retain the table owner across stream_close
     emit_aarch64_method_lookup(emitter, "__rt_uwfclose_clear", VTABLE_SLOT_CLOSE); // resolve stream_close method pointer into x11
 
     // -- call stream_close($this) --
@@ -78,9 +80,13 @@ pub fn emit_user_wrapper_fclose(emitter: &mut Emitter) {
     emit_aarch64_slot_from_fd(emitter, "x0", "x9");                             // x9 = fd & 0x3f, the handle slot index
     abi::emit_symbol_address(emitter, "x10", "_user_wrapper_handles");
     emitter.instruction("str xzr, [x10, x9, lsl #3]");                          // clear the freed handle slot
+    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the detached table owner
+    emitter.instruction("cbz x0, __rt_uwfclose_done");                          // missing handles own no wrapper object
+    emitter.instruction("bl __rt_decref_any");                                  // release the wrapper object after stream_close returned
+    emitter.label("__rt_uwfclose_done");
     emitter.instruction("mov x0, #1");                                          // fclose() on a wrapper always reports success
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #32");                                     // release the helper frame
+    emitter.instruction("add sp, sp, #48");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return to the inline fclose dispatch site
 }
 
@@ -92,10 +98,12 @@ fn emit_user_wrapper_fclose_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
-    emitter.instruction("sub rsp, 16");                                         // helper frame for the wrapper dispatch
+    emitter.instruction("sub rsp, 32");                                         // helper frame for fd and table-owned wrapper object
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the synthetic file descriptor
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // default to no table-owned wrapper object
 
     emit_x86_handle_lookup(emitter, "__rt_uwfclose_clear_x86");                 // resolve obj into rdi, fall through on missing handles
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdi");                       // retain the table owner across stream_close
     emit_x86_method_lookup(emitter, "__rt_uwfclose_clear_x86", VTABLE_SLOT_CLOSE); // resolve stream_close method pointer into r11
 
     // -- call stream_close($this) --
@@ -107,10 +115,69 @@ fn emit_user_wrapper_fclose_linux_x86_64(emitter: &mut Emitter) {
     emit_x86_slot_from_fd(emitter, "rdi", "r9");                                // r9 = fd & 0x3f, the handle slot index
     abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
     emitter.instruction("mov QWORD PTR [r10 + r9 * 8], 0");                     // clear the freed handle slot
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the detached table owner
+    emitter.instruction("test rax, rax");                                       // missing handles own no wrapper object
+    emitter.instruction("jz __rt_uwfclose_done_x86");                           // skip decref for an empty slot
+    emitter.instruction("call __rt_decref_any");                                // release the wrapper object after stream_close returned
+    emitter.label("__rt_uwfclose_done_x86");
     emitter.instruction("mov eax, 1");                                          // fclose() on a wrapper always reports success
-    emitter.instruction("add rsp, 16");                                         // release the helper frame
+    emitter.instruction("add rsp, 32");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to the inline fclose dispatch site
+}
+
+/// Releases wrapper objects still owned by the active context during fatal unwinding.
+pub fn emit_user_wrapper_abandon_all(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_user_wrapper_abandon_all_x86_64(emitter);
+        return;
+    }
+    emitter.blank();
+    emitter.comment("--- runtime: user_wrapper_abandon_all ---");
+    emitter.label_global("__rt_user_wrapper_abandon_all");
+    emitter.instruction("sub sp, sp, #48");                                     // preserve scan state across object releases
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // preserve frame pointer and return address
+    emitter.instruction("str x19, [sp, #16]");                                  // preserve the wrapper-slot index
+    emitter.instruction("add x29, sp, #32");                                    // establish the fatal cleanup frame
+    emitter.instruction("mov x19, #0");                                         // begin at the first wrapper slot
+    emitter.label("__rt_user_wrapper_abandon_loop");
+    emitter.instruction("cmp x19, #256");                                       // scanned every wrapper handle slot?
+    emitter.instruction("b.hs __rt_user_wrapper_abandon_done");                 // finish after the final slot
+    abi::emit_symbol_address(emitter, "x9", "_user_wrapper_handles");
+    emitter.instruction("ldr x0, [x9, x19, lsl #3]");                           // load one table-owned wrapper object
+    emitter.instruction("str xzr, [x9, x19, lsl #3]");                          // detach the slot before a destructor can re-enter fatal flow
+    emitter.instruction("bl __rt_decref_any");                                  // deep-release the detached wrapper object
+    emitter.instruction("add x19, x19, #1");                                    // advance to the next wrapper slot
+    emitter.instruction("b __rt_user_wrapper_abandon_loop");                    // continue the bounded wrapper scan
+    emitter.label("__rt_user_wrapper_abandon_done");
+    emitter.instruction("ldr x19, [sp, #16]");                                  // restore the wrapper-slot index register
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore caller frame state
+    emitter.instruction("add sp, sp, #48");                                     // release the fatal cleanup frame
+    emitter.instruction("ret");                                                 // return after all wrapper owners are detached
+}
+
+/// Detaches all x86_64 wrapper-table owners before deep release can re-enter fatal cleanup.
+fn emit_user_wrapper_abandon_all_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: user_wrapper_abandon_all ---");
+    emitter.label_global("__rt_user_wrapper_abandon_all");
+    emitter.instruction("push rbp");                                            // preserve caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the fatal cleanup frame
+    emitter.instruction("push r12");                                            // preserve the wrapper-slot index
+    emitter.instruction("xor r12d, r12d");                                      // begin at the first wrapper slot
+    emitter.label("__rt_user_wrapper_abandon_loop_x86");
+    emitter.instruction("cmp r12, 256");                                        // scanned every wrapper handle slot?
+    emitter.instruction("jae __rt_user_wrapper_abandon_done_x86");              // finish after the final slot
+    abi::emit_symbol_address(emitter, "r9", "_user_wrapper_handles");          // load the context-owned wrapper table
+    emitter.instruction("mov rax, QWORD PTR [r9 + r12 * 8]");                   // load one table-owned wrapper object
+    emitter.instruction("mov QWORD PTR [r9 + r12 * 8], 0");                     // detach the slot before a destructor can re-enter fatal flow
+    emitter.instruction("call __rt_decref_any");                                // deep-release the detached wrapper object
+    emitter.instruction("inc r12");                                             // advance to the next wrapper slot
+    emitter.instruction("jmp __rt_user_wrapper_abandon_loop_x86");              // continue the bounded wrapper scan
+    emitter.label("__rt_user_wrapper_abandon_done_x86");
+    emitter.instruction("pop r12");                                             // restore the wrapper-slot index register
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return after all wrapper owners are detached
 }
 
 /// `__rt_user_wrapper_fread`: invoke the wrapper's `stream_read($count)`

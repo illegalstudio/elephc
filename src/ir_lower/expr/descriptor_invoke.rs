@@ -9,6 +9,89 @@
 
 use super::*;
 
+/// Checks a runtime-resolved callback before its user arguments are evaluated.
+///
+/// The Parallel prelude helper is a no-op for ordinary callbacks and raises the locked v1 Error
+/// only when the callback is a string, method array, or first-class closure for `Fiber::suspend`.
+pub(super) fn maybe_emit_parallel_fiber_suspend_callback_guard(
+    ctx: &mut LoweringContext<'_, '_>,
+    callback: LoweredValue,
+    span: Span,
+) {
+    maybe_emit_parallel_fiber_suspend_callback_guard_with_pending(
+        ctx,
+        callback,
+        span,
+        &[],
+    );
+}
+
+/// Checks a runtime callback and transfers owning expression temporaries to its rejecting edge.
+pub(super) fn maybe_emit_parallel_fiber_suspend_callback_guard_with_pending(
+    ctx: &mut LoweringContext<'_, '_>,
+    callback: LoweredValue,
+    span: Span,
+    pending_values: &[crate::ir::ValueId],
+) {
+    let parallel_enabled = ctx
+        .extern_functions
+        .contains_key("elephc_parallel_parent_scope_active");
+    let async_enabled = ctx
+        .classes
+        .keys()
+        .any(|name| php_symbol_key(name) == "elephc\\async\\__scheduler");
+    let guard = if parallel_enabled {
+        Some("Elephc\\Parallel\\TaskGroup::__assertFiberSuspendCallableGuard")
+    } else if async_enabled {
+        Some("Elephc\\Async\\__Scheduler::__assertFiberSuspendCallableGuard")
+    } else {
+        None
+    };
+    if let Some(guard) = guard {
+        let guard = ctx.intern_string(guard);
+        let mut cleanup_values = pending_values
+            .iter()
+            .copied()
+            .filter(|value| {
+                callback_guard_value_is_owned_temporary(
+                    ctx,
+                    LoweredValue {
+                        value: *value,
+                        ir_type: ctx.builder.value_type(*value),
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        if callback_guard_value_is_owned_temporary(ctx, callback) {
+            cleanup_values.push(callback.value);
+        }
+        let mut operands = Vec::with_capacity(1 + cleanup_values.len());
+        operands.push(callback.value);
+        operands.extend(cleanup_values);
+        ctx.emit_void(
+            Op::StaticMethodCall,
+            operands,
+            Some(Immediate::Data(guard)),
+            Op::StaticMethodCall.default_effects(),
+            Some(span),
+        );
+    }
+}
+
+/// Distinguishes expression-owned temps from loads whose local slot still owns the value.
+fn callback_guard_value_is_owned_temporary(
+    ctx: &LoweringContext<'_, '_>,
+    value: LoweredValue,
+) -> bool {
+    if matches!(
+        ctx.builder.value_defining_op(value.value),
+        Some(Op::LoadLocal | Op::LoadGlobal | Op::LoadStaticLocal | Op::LoadRefCell)
+    ) {
+        return false;
+    }
+    ctx.value_is_owning_temporary(value)
+}
+
 /// Lowers `call_user_func*` for receiver-bound first-class callables through `expr_call`.
 ///
 /// The callback is a receiver-bound descriptor the caller's expression just built, so it is
@@ -46,6 +129,7 @@ pub(super) fn emit_rooted_expr_call(
     result_type: PhpType,
     span: Span,
 ) -> LoweredValue {
+    maybe_emit_parallel_fiber_suspend_callback_guard(ctx, callback, span);
     let result_staging = prepublish_call_result(ctx, &result_type, span);
     let (callback, callback_owner) = root_owned_call_operand(ctx, callback, span);
     let mut operands = vec![callback.value];
@@ -53,12 +137,13 @@ pub(super) fn emit_rooted_expr_call(
     let call = ctx.emit_value(
         Op::ExprCall,
         operands,
-        callable_profile_immediate(),
+        callable_profile_immediate(ctx),
         result_type,
         Op::ExprCall.default_effects(),
         Some(span),
     );
     stage_call_result(ctx, result_staging.as_ref(), call, span);
+    let call = discard_result_before_callback(ctx, result_staging.as_ref(), call, callback_owner, span);
     if let Some(slot) = callback_owner {
         retire_owned_call_operand(ctx, slot, span);
     }
@@ -162,6 +247,7 @@ pub(super) fn lower_dynamic_call_user_func_array(
     }
     let signature = callable_descriptor_signature_for_expr(ctx, callback_expr);
     let callback = lower_expr(ctx, callback_expr);
+    maybe_emit_parallel_fiber_suspend_callback_guard(ctx, callback, expr.span);
     // The decision between the ref-marker builder and a plain array expression is made from the
     // argument SYNTAX, before either one emits anything, so the callback can be published first.
     let result_type = descriptor_invoker_result_type(signature.as_ref());
@@ -471,6 +557,7 @@ pub(super) fn lower_call_user_func_descriptor_invoke_from_value(
     sig: Option<&FunctionSig>,
     expr: &Expr,
 ) -> LoweredValue {
+    maybe_emit_parallel_fiber_suspend_callback_guard(ctx, callback, expr.span);
     let result_type = descriptor_invoker_result_type(sig);
     let callback = root_descriptor_callback(ctx, callback, result_type, expr.span);
     let arg_container =
@@ -499,8 +586,8 @@ pub(super) struct RootedDescriptorCallback {
 
 /// Publishes a descriptor invocation's result staging and then its callback.
 ///
-/// A borrowed callback, such as a plain local load, owns nothing and is handed through
-/// unchanged, which keeps the backend's view of the callback's identity exactly as it was.
+/// A borrowed callback receives an independent value/descriptor lease before arguments run,
+/// because those arguments may replace its source local or mutable boxed callable cell.
 /// Taking `result_type` here rather than at the invocation is what guarantees the staged slot
 /// and the emitted call agree on one storage type.
 pub(super) fn root_descriptor_callback(
@@ -510,6 +597,11 @@ pub(super) fn root_descriptor_callback(
     span: Span,
 ) -> RootedDescriptorCallback {
     let result = prepublish_call_result(ctx, &result_type, span);
+    let callback = if ctx.value_needs_release_after_use(callback) {
+        callback
+    } else {
+        crate::ir_lower::ownership::copy_for_php_value_binding(ctx, callback, Some(span))
+    };
     let (value, owner) = root_owned_call_operand(ctx, callback, span);
     RootedDescriptorCallback { value, owner, result_type, result }
 }
@@ -539,7 +631,7 @@ pub(super) fn emit_callable_descriptor_invoke(
         ctx,
         Op::CallableDescriptorInvoke,
         vec![callback.value, arg_container.value],
-        callable_profile_immediate(),
+        callable_profile_immediate(ctx),
         result_type,
         span,
     );
@@ -552,6 +644,7 @@ pub(super) fn emit_callable_descriptor_invoke(
     } else if ctx.value_is_owning_temporary(arg_container) {
         crate::ir_lower::ownership::release_if_owned(ctx, arg_container, Some(span));
     }
+    let result = discard_result_before_callback(ctx, result_staging.as_ref(), result, callback_owner, span);
     if let Some(slot) = callback_owner {
         retire_owned_call_operand(ctx, slot, span);
     }

@@ -118,7 +118,7 @@ pub(super) fn lower_method_call_with_receiver(
     if op == Op::MethodCall
         && is_reflection_class_new_instance_without_constructor_call(ctx, object.value, method)
     {
-        return lower_reflection_class_new_instance_without_constructor(ctx, object, args, expr);
+        return lower_reflection_class_new_instance_without_constructor(ctx, None, object, args, expr);
     }
     let magic_args;
     let (dispatch_method, args) =
@@ -144,7 +144,7 @@ pub(super) fn lower_method_call_with_receiver(
         ctx, sig.as_ref(), &return_alias, &result_type, expr.span,
     );
     begin_call_argument_evaluation(ctx);
-    let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
+    let arg_values = lower_args_with_eir_signature(ctx, sig.as_ref(), args);
     let mut arg_values = arg_values;
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
     let roots = root_user_call_operands(
@@ -179,7 +179,11 @@ pub(super) fn lower_method_call_with_receiver(
         expr.span,
     );
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
-    release_owning_receiver_temporary(ctx, object, expr.span);
+    if fiber_switch_transfers_receiver(ctx, object, dispatch_method) {
+        ctx.builder.set_value_ownership(object.value, Ownership::Owned);
+    } else {
+        release_owning_receiver_temporary(ctx, object, expr.span);
+    }
     let call = take_prepublished_call_result(ctx, result_staging, call, expr.span);
     finish_reference_return_value(ctx, call, reference_staging, expr.span)
 }
@@ -326,6 +330,12 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
                     || signature.returned_parameter_has_independent_owner(parameter_index));
             let independently_boxed = signature.is_some_and(|signature| {
                 call_arg_gets_independent_mixed_box(signature, parameter_index, &php_type)
+            }) || result.is_some_and(|result| {
+                // A native callable descriptor is not a Mixed cell. Returning it through a
+                // PHP Mixed contract creates a separate box that retains the descriptor payload;
+                // it therefore cannot consume this caller's raw descriptor reference.
+                php_type.codegen_repr() == PhpType::Callable
+                    && matches!(ctx.builder.value_php_type(result).codegen_repr(), PhpType::Mixed | PhpType::Union(_))
             });
             // The call result reuses this argument's payload — so the argument release
             // must be suppressed and the ownership left to flow through the result —

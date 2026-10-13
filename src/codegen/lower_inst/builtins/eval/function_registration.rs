@@ -256,6 +256,7 @@ pub(super) fn emit_eval_native_function_invoker_inline(
         label: &label,
         sig,
         captures: &captures,
+        parallel_fiber_suspend_guard: None,
         owns_string_return: ctx.module.functions.iter().find(|function| function.name == name)
             .is_some_and(crate::codegen::runtime_callable_invoker::function_returns_owned_string),
         php_return_status: true,

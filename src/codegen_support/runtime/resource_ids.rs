@@ -78,6 +78,10 @@
 //!   $i = fopen(...)` reports 5 / 6, 7 / 8. The eval interpreter's resources reach
 //!   this table through `__elephc_eval_value_resource` -> `__rt_mixed_from_value`,
 //!   so they interleave with the host program's in true creation order.
+//! - THE TABLE AND CURSOR ARE PROCESS-WIDE because host code and `eval()` share PHP's
+//!   request resource-id space. Isolated Parallel contexts therefore serialize mint/lookup
+//!   with `_resource_id_lock`; without it, worker threads can overwrite a probe slot or lose
+//!   a cursor increment while opening ordinary local streams.
 //!   What is NOT shared is the KEY space: an eval payload is an index into
 //!   `elephc_magician::stream_resources::EvalStreamResources`, a dense counter that
 //!   would otherwise collide with descriptor numbers. `EVAL_RESOURCE_PAYLOAD_BASE`
@@ -143,6 +147,7 @@ fn emit_resource_id_mint_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x9, x10, [sp, #-48]!");                            // preserve the hash and probe scratch pair
     emitter.instruction("stp x11, x12, [sp, #16]");                             // preserve the table-address scratch pair
     emitter.instruction("stp x13, x14, [sp, #32]");                             // preserve the cursor and slot-index scratch pair
+    emit_resource_id_lock_acquire_aarch64(emitter, "mint");
 
     emitter.instruction(&format!("cmp x0, #{}", STD_STREAM_MAX_PAYLOAD));       // is this one of the standard stream descriptors?
     emitter.instruction("b.ls __rt_resource_id_mint_done");                     // STDIN/STDOUT/STDERR keep their fixed 1/2/3 ids
@@ -178,6 +183,7 @@ fn emit_resource_id_mint_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x9, [x13]");                                       // publish the advanced cursor
 
     emitter.label("__rt_resource_id_mint_done");
+    emit_resource_id_lock_release_aarch64(emitter);
     emitter.instruction("ldp x13, x14, [sp, #32]");                             // restore the cursor and slot-index scratch pair
     emitter.instruction("ldp x11, x12, [sp, #16]");                             // restore the table-address scratch pair
     emitter.instruction("ldp x9, x10, [sp], #48");                              // restore the hash and probe scratch pair
@@ -198,6 +204,7 @@ fn emit_resource_id_of_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x9, x10, [sp, #-48]!");                            // preserve the hash and probe scratch pair
     emitter.instruction("stp x11, x12, [sp, #16]");                             // preserve the table-address scratch pair
     emitter.instruction("stp x13, x14, [sp, #32]");                             // preserve the cursor and slot-index scratch pair
+    emit_resource_id_lock_acquire_aarch64(emitter, "of");
 
     emitter.instruction("tbnz x0, #63, __rt_resource_id_of_closed");            // a negative payload is a closed handle carrying its own id
     abi::emit_load_int_immediate(emitter, "x9", DEFAULT_CONTEXT_PAYLOAD);
@@ -254,6 +261,7 @@ fn emit_resource_id_of_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x9, [x13]");                                       // publish the advanced cursor
 
     emitter.label("__rt_resource_id_of_done");
+    emit_resource_id_lock_release_aarch64(emitter);
     emitter.instruction("ldp x13, x14, [sp, #32]");                             // restore the cursor and slot-index scratch pair
     emitter.instruction("ldp x11, x12, [sp, #16]");                             // restore the table-address scratch pair
     emitter.instruction("ldp x9, x10, [sp], #48");                              // restore the hash and probe scratch pair
@@ -289,6 +297,7 @@ fn emit_resource_id_mint_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push r9");                                             // preserve the value-table address scratch
     emitter.instruction("push r10");                                            // preserve the loaded-word scratch
     emitter.instruction("push r11");                                            // preserve the id-cursor scratch
+    emit_resource_id_lock_acquire_x86_64(emitter, "mint");
 
     emitter.instruction(&format!("cmp rax, {}", STD_STREAM_MAX_PAYLOAD));       // is this one of the standard stream descriptors?
     emitter.instruction("jbe __rt_resource_id_mint_done_x86");                  // STDIN/STDOUT/STDERR keep their fixed 1/2/3 ids
@@ -325,6 +334,7 @@ fn emit_resource_id_mint_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r10], r11");                            // publish the advanced cursor
 
     emitter.label("__rt_resource_id_mint_done_x86");
+    emit_resource_id_lock_release_x86_64(emitter);
     emitter.instruction("pop r11");                                             // restore the id-cursor scratch
     emitter.instruction("pop r10");                                             // restore the loaded-word scratch
     emitter.instruction("pop r9");                                              // restore the value-table address scratch
@@ -351,6 +361,7 @@ fn emit_resource_id_of_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push r9");                                             // preserve the value-table address scratch
     emitter.instruction("push r10");                                            // preserve the loaded-word scratch
     emitter.instruction("push r11");                                            // preserve the id-cursor scratch
+    emit_resource_id_lock_acquire_x86_64(emitter, "of");
 
     emitter.instruction("test rax, rax");                                       // a negative payload is a closed handle carrying its own id
     emitter.instruction("js __rt_resource_id_of_closed_x86");                   // recover it directly instead of probing the table
@@ -409,6 +420,7 @@ fn emit_resource_id_of_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r10], r11");                            // publish the advanced cursor
 
     emitter.label("__rt_resource_id_of_done_x86");
+    emit_resource_id_lock_release_x86_64(emitter);
     emitter.instruction("pop r11");                                             // restore the id-cursor scratch
     emitter.instruction("pop r10");                                             // restore the loaded-word scratch
     emitter.instruction("pop r9");                                              // restore the value-table address scratch
@@ -417,6 +429,41 @@ fn emit_resource_id_of_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rdx");                                             // restore the probe-counter scratch
     emitter.instruction("pop rcx");                                             // restore the hash scratch
     emitter.instruction("ret");                                                 // return the resource id in rax
+}
+
+/// Acquires the process-wide resource registry with an acquire-exclusive AArch64 spin loop.
+fn emit_resource_id_lock_acquire_aarch64(emitter: &mut Emitter, suffix: &str) {
+    let retry = format!("__rt_resource_id_lock_retry_{suffix}_arm64");
+    abi::emit_symbol_address(emitter, "x9", "_resource_id_lock");
+    emitter.instruction("mov w10, #1");                                         // claim the process-wide id registry lock
+    emitter.label(&retry);
+    emitter.instruction("ldaxr w11, [x9]");                                     // acquire the lock word before touching shared slots
+    emitter.instruction(&format!("cbnz w11, {retry}"));                         // wait while another context owns the registry
+    emitter.instruction("stxr w12, w10, [x9]");                                 // publish ownership if the lock stayed free
+    emitter.instruction(&format!("cbnz w12, {retry}"));                         // retry if another worker won the reservation
+}
+
+/// Publishes resource table and cursor updates with an AArch64 release store.
+fn emit_resource_id_lock_release_aarch64(emitter: &mut Emitter) {
+    abi::emit_symbol_address(emitter, "x9", "_resource_id_lock");
+    emitter.instruction("stlr wzr, [x9]");                                      // release all table and cursor writes to other workers
+}
+
+/// Acquires the shared registry with atomic memory exchange without using the payload register.
+fn emit_resource_id_lock_acquire_x86_64(emitter: &mut Emitter, suffix: &str) {
+    let retry = format!("__rt_resource_id_lock_retry_{suffix}_x86");
+    abi::emit_symbol_address(emitter, "r10", "_resource_id_lock");
+    emitter.label(&retry);
+    emitter.instruction("mov r11d, 1");                                         // request ownership without clobbering the payload/result register
+    emitter.instruction("xchg DWORD PTR [r10], r11d");                          // memory xchg is an implicitly locked atomic operation
+    emitter.instruction("test r11d, r11d");                                     // zero means this worker acquired the registry
+    emitter.instruction(&format!("jnz {retry}"));                               // wait while another context owns the registry
+}
+
+/// Releases the x86_64 registry lock after its table and cursor writes are complete.
+fn emit_resource_id_lock_release_x86_64(emitter: &mut Emitter) {
+    abi::emit_symbol_address(emitter, "r10", "_resource_id_lock");
+    emitter.instruction("mov DWORD PTR [r10], 0");                              // release all table and cursor writes to other workers
 }
 
 /// Emits the x86_64 payload hash into `dest` from `src`, leaving `src` untouched.
@@ -456,6 +503,29 @@ mod tests {
             let asm = emitter.output();
             assert!(asm.contains("__rt_resource_id_mint:"), "{target:?}");
             assert!(asm.contains("__rt_resource_id_of:"), "{target:?}");
+        }
+    }
+
+    /// Requires both registry entry points to emit matching acquire and release sequences.
+    #[test]
+    fn shared_resource_registry_updates_are_locked_on_both_targets() {
+        for (target, acquire, release) in [
+            (
+                Target::new(Platform::MacOS, Arch::AArch64),
+                "ldaxr w11, [x9]",
+                "stlr wzr, [x9]",
+            ),
+            (
+                Target::new(Platform::Linux, Arch::X86_64),
+                "xchg DWORD PTR [r10], r11d",
+                "mov DWORD PTR [r10], 0",
+            ),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emit_resource_ids(&mut emitter);
+            let asm = emitter.output();
+            assert_eq!(asm.matches(acquire).count(), 2, "{target:?}: {asm}");
+            assert_eq!(asm.matches(release).count(), 2, "{target:?}: {asm}");
         }
     }
 

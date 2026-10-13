@@ -206,6 +206,9 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::RuntimeRef(id) => {
             let _ = write!(out, " runtime#{}", id.0);
         }
+        Immediate::CallableProfile { strict_php, strict_types } => {
+            let _ = write!(out, " callable_profile(strict_php={},strict_types={})", strict_php, strict_types);
+        }
         Immediate::ProfiledData { data: id, strict_php } => {
             let _ = write!(
                 out,

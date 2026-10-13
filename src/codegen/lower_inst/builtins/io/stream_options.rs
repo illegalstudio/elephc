@@ -9,6 +9,56 @@
 
 use super::*;
 
+/// Lowers descriptor duplication and release for the internal Async reactor.
+pub(crate) fn lower_async_fd(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::super::ensure_arg_count(inst, "__elephc_async_fd", 2)?;
+    let source = expect_operand(inst, 0)?;
+    let operation = expect_operand(inst, 1)?;
+    ctx.load_value_to_result(source)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    ctx.load_value_to_result(operation)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x1, x0");                              // pass the descriptor ownership operation
+            abi::emit_pop_reg(ctx.emitter, "x0");                               // pass the boxed source array
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rsi, rax");                            // pass the descriptor ownership operation
+            abi::emit_pop_reg(ctx.emitter, "rdi");                              // pass the boxed source array
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_async_fd");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers the internal packed-descriptor poll used by the Async reactor.
+pub(crate) fn lower_async_poll(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::super::ensure_arg_count(inst, "__elephc_async_poll", 2)?;
+    let entries = expect_operand(inst, 0)?;
+    let timeout_ms = expect_operand(inst, 1)?;
+    ctx.load_value_to_result(entries)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    ctx.load_value_to_result(timeout_ms)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x1, x0");                              // timeout milliseconds
+            abi::emit_pop_reg(ctx.emitter, "x0");                           // packed descriptor entries
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rsi, rax");                            // timeout milliseconds
+            abi::emit_pop_reg(ctx.emitter, "rdi");                          // packed descriptor entries
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_async_poll");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `stream_isatty(stream)`.
 pub(crate) fn lower_stream_isatty(
     ctx: &mut FunctionContext<'_>,
@@ -52,9 +102,7 @@ pub(crate) fn lower_stream_set_blocking(
             ctx.emitter.instruction(&format!("b {}", after));                   // skip wrapper dispatch after the native fd update
             ctx.emitter.label(&wrapper);
             ctx.emitter.instruction("mov x2, x1");                              // pass the blocking flag as wrapper option arg1
-            ctx.emitter.instruction(
-                &format!("mov x1, #{}", STREAM_OPTION_BLOCKING)
-            );                                                                  // select STREAM_OPTION_BLOCKING
+            ctx.emitter.instruction(&format!("mov x1, #{}", STREAM_OPTION_BLOCKING)); // select STREAM_OPTION_BLOCKING
             ctx.emitter.instruction("mov x3, #0");                              // pass zero as wrapper option arg2
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_set_option");
             ctx.emitter.label(&after);
@@ -69,9 +117,7 @@ pub(crate) fn lower_stream_set_blocking(
             ctx.emitter.instruction(&format!("jmp {}", after));                 // skip wrapper dispatch after the native fd update
             ctx.emitter.label(&wrapper);
             ctx.emitter.instruction("mov rdx, rsi");                            // pass the blocking flag as wrapper option arg1
-            ctx.emitter.instruction(
-                &format!("mov rsi, {}", STREAM_OPTION_BLOCKING)
-            );                                                                  // select STREAM_OPTION_BLOCKING
+            ctx.emitter.instruction(&format!("mov rsi, {}", STREAM_OPTION_BLOCKING)); // select STREAM_OPTION_BLOCKING
             ctx.emitter.instruction("xor ecx, ecx");                            // pass zero as wrapper option arg2
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_set_option");
             ctx.emitter.label(&after);
@@ -259,4 +305,3 @@ pub(crate) fn lower_stream_resolve_include_path(
     box_owned_string_or_false_result(ctx, "stream_resolve_include_path");
     store_if_result(ctx, inst)
 }
-

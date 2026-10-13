@@ -7,7 +7,7 @@
 //! Key details:
 //! - Begin and end isolate nested calls by snapshotting policy, depth, and reference-registry state.
 
-use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::{abi, emit::Emitter};
 
 /// Emits the AArch64 begin/end helpers that isolate one active unserialize call.
 ///
@@ -181,16 +181,16 @@ pub(super) fn emit_unserialize_context_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve the caller frame across context allocation
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame for snapshot sizing
     emitter.instruction("sub rsp, 32");                                         // reserve logical-count and copy-count spills
-    emitter.instruction("mov r10, QWORD PTR [rip + _unser_active]");            // load the active unserialize nesting count
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_unser_active", 0);         // load this context's active unserialize nesting count
     emitter.instruction("test r10, r10");                                       // is another parser already active?
     emitter.instruction("jnz __rt_unserialize_begin_nested_x");                 // snapshot the outer call before resetting globals
-    emitter.instruction("mov QWORD PTR [rip + _unser_active], 1");              // mark the top-level parser active
+    abi::emit_store_imm_to_symbol(emitter, "_unser_active", 0, 1);             // mark this context's top-level parser active
     emitter.instruction("jmp __rt_unserialize_begin_reset_x");                  // initialize the fresh per-call state
 
     emitter.label("__rt_unserialize_begin_nested_x");
     emitter.instruction("cmp r10, 256");                                        // has reentrant parser nesting reached its hard limit?
     emitter.instruction("jae __rt_unser_depth_fatal_x");                        // reject another snapshot before allocating bounded heap state
-    emitter.instruction("mov r10, QWORD PTR [rip + _unser_count]");             // load the outer registry's logical value count
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_unser_count", 0);          // load this context's outer registry value count
     emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // preserve the logical count across context allocation
     emitter.instruction("mov r11, 65536");                                      // materialize the fixed registry capacity
     emitter.instruction("cmp r10, r11");                                        // does the logical count exceed the physical registry?
@@ -200,21 +200,21 @@ pub(super) fn emit_unserialize_context_x86_64(emitter: &mut Emitter) {
     emitter.instruction("shl rax, 3");                                          // convert copied slots to bytes
     emitter.instruction("add rax, 56");                                         // include the seven-word context header
     emitter.instruction("call __rt_heap_alloc");                                // allocate the linked reentrant context snapshot
-    emitter.instruction("mov r10, QWORD PTR [rip + _unser_context]");           // load the previous context link
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_unser_context", 0);        // load this runtime context's previous parser link
     emitter.instruction("mov QWORD PTR [rax], r10");                            // context.prev = previous context
-    emitter.instruction("mov r10, QWORD PTR [rip + _unser_allowed_mode]");      // load the outer allowed-class mode
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_unser_allowed_mode", 0);   // load this context's outer allowed-class mode
     emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // snapshot the outer allowed-class mode
-    emitter.instruction("mov r10, QWORD PTR [rip + _unser_allowed_list]");      // load the outer context-owned allow-list
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_unser_allowed_list", 0);   // load this context's outer owned allow-list
     emitter.instruction("mov QWORD PTR [rax + 16], r10");                       // move the outer allow-list reference into the snapshot
-    emitter.instruction("mov r10, QWORD PTR [rip + _unser_allowed_list_mixed]"); // load the outer list representation flag
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_unser_allowed_list_mixed", 0); // load this context's outer list representation flag
     emitter.instruction("mov QWORD PTR [rax + 24], r10");                       // snapshot the outer list representation flag
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // recover the outer logical registry count
     emitter.instruction("mov QWORD PTR [rax + 32], r10");                       // snapshot the logical registry count
-    emitter.instruction("mov r10, QWORD PTR [rip + _unser_depth]");             // load the outer recursive parser depth
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_unser_depth", 0);          // load this context's outer parser depth
     emitter.instruction("mov QWORD PTR [rax + 40], r10");                       // snapshot the outer parser depth
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // recover the bounded registry copy count
     emitter.instruction("mov QWORD PTR [rax + 48], r11");                       // record how many registry slots follow the header
-    emitter.instruction("lea rdx, [rip + _unser_values]");                      // load the outer reference-registry base
+    abi::emit_symbol_address(emitter, "rdx", "_unser_values");                // load this context's reference-registry base
     emitter.instruction("xor r10d, r10d");                                      // start copying the populated registry prefix
     emitter.label("__rt_unserialize_begin_copy_x");
     emitter.instruction("cmp r10, r11");                                        // copied every in-bounds outer registry slot?
@@ -224,15 +224,17 @@ pub(super) fn emit_unserialize_context_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r10, 1");                                          // advance to the next populated slot
     emitter.instruction("jmp __rt_unserialize_begin_copy_x");                   // continue copying the used registry prefix
     emitter.label("__rt_unserialize_begin_copy_done_x");
-    emitter.instruction("mov QWORD PTR [rip + _unser_context], rax");           // publish this snapshot as the current context link
-    emitter.instruction("add QWORD PTR [rip + _unser_active], 1");              // account for the nested parser
+    abi::emit_store_reg_to_symbol(emitter, "rax", "_unser_context", 0);       // publish this context's current parser snapshot
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_unser_active", 0);         // load this context's nesting count
+    emitter.instruction("add r10, 1");                                          // account for the nested parser
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_unser_active", 0);        // publish this context's incremented nesting count
 
     emitter.label("__rt_unserialize_begin_reset_x");
-    emitter.instruction("mov QWORD PTR [rip + _unser_allowed_mode], 0");        // default this call to allow-all until options are installed
-    emitter.instruction("mov QWORD PTR [rip + _unser_allowed_list], 0");        // this call starts without an owned allow-list
-    emitter.instruction("mov QWORD PTR [rip + _unser_allowed_list_mixed], 0");  // default to direct-string list representation
-    emitter.instruction("mov QWORD PTR [rip + _unser_count], 0");               // reset this call's reference-registry count
-    emitter.instruction("mov QWORD PTR [rip + _unser_depth], 0");               // reset this call's recursive parser depth
+    abi::emit_store_zero_to_symbol(emitter, "_unser_allowed_mode", 0);         // default this context's call to allow-all
+    abi::emit_store_zero_to_symbol(emitter, "_unser_allowed_list", 0);         // start without a context-owned allow-list
+    abi::emit_store_zero_to_symbol(emitter, "_unser_allowed_list_mixed", 0);   // default to direct-string list representation
+    abi::emit_store_zero_to_symbol(emitter, "_unser_count", 0);                // reset this context's reference-registry count
+    abi::emit_store_zero_to_symbol(emitter, "_unser_depth", 0);                // reset this context's recursive parser depth
     emitter.instruction("leave");                                               // restore the caller frame after begin setup
     emitter.instruction("ret");                                                 // enter the new isolated unserialize call
 
@@ -243,30 +245,30 @@ pub(super) fn emit_unserialize_context_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the parsed Mixed result across cleanup
     crate::codegen_support::abi::emit_call_label(emitter, "__rt_unserialize_detach_data");
     crate::codegen_support::abi::store_at_offset(emitter, "rax", 24);
-    emitter.instruction("mov rax, QWORD PTR [rip + _unser_allowed_list]");      // load this call's owned allow-list reference
-    emitter.instruction("mov QWORD PTR [rip + _unser_allowed_list], 0");        // unpublish the list before releasing its ownership
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_unser_allowed_list", 0);   // load this context's owned allow-list reference
+    abi::emit_store_zero_to_symbol(emitter, "_unser_allowed_list", 0);         // unpublish the list before releasing ownership
     emitter.instruction("test rax, rax");                                       // was an allow-list installed for this call?
     emitter.instruction("jz __rt_unserialize_end_list_done_x");                 // skip refcount traffic when no list was installed
     emitter.instruction("call __rt_decref_array");                              // release this call's allow-list ownership
     emitter.label("__rt_unserialize_end_list_done_x");
-    emitter.instruction("mov r10, QWORD PTR [rip + _unser_context]");           // load the outer snapshot, if this call was reentrant
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_unser_context", 0);        // load this context's outer parser snapshot
     emitter.instruction("test r10, r10");                                       // does an outer parser need restoration?
     emitter.instruction("jz __rt_unserialize_end_top_x");                       // top-level completion has no outer state
     emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // preserve the snapshot pointer across heap release
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // load the previous linked context
-    emitter.instruction("mov QWORD PTR [rip + _unser_context], r11");           // pop the current context snapshot
+    abi::emit_store_reg_to_symbol(emitter, "r11", "_unser_context", 0);       // pop this context's current parser snapshot
     emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // recover the outer allowed-class mode
-    emitter.instruction("mov QWORD PTR [rip + _unser_allowed_mode], r11");      // restore the outer allowed-class mode
+    abi::emit_store_reg_to_symbol(emitter, "r11", "_unser_allowed_mode", 0);  // restore this context's outer allowed-class mode
     emitter.instruction("mov r11, QWORD PTR [r10 + 16]");                       // recover the outer owned allow-list reference
-    emitter.instruction("mov QWORD PTR [rip + _unser_allowed_list], r11");      // republish the outer owned allow-list
+    abi::emit_store_reg_to_symbol(emitter, "r11", "_unser_allowed_list", 0);  // republish this context's outer owned allow-list
     emitter.instruction("mov r11, QWORD PTR [r10 + 24]");                       // recover the outer list representation flag
-    emitter.instruction("mov QWORD PTR [rip + _unser_allowed_list_mixed], r11"); // restore the outer list representation flag
+    abi::emit_store_reg_to_symbol(emitter, "r11", "_unser_allowed_list_mixed", 0); // restore this context's outer list representation
     emitter.instruction("mov r11, QWORD PTR [r10 + 32]");                       // recover the outer logical registry count
-    emitter.instruction("mov QWORD PTR [rip + _unser_count], r11");             // restore the outer logical registry count
+    abi::emit_store_reg_to_symbol(emitter, "r11", "_unser_count", 0);         // restore this context's outer registry count
     emitter.instruction("mov r11, QWORD PTR [r10 + 40]");                       // recover the suspended outer parser depth
-    emitter.instruction("mov QWORD PTR [rip + _unser_depth], r11");             // restore the suspended outer parser depth
+    abi::emit_store_reg_to_symbol(emitter, "r11", "_unser_depth", 0);         // restore this context's outer parser depth
     emitter.instruction("mov r11, QWORD PTR [r10 + 48]");                       // load the bounded registry snapshot length
-    emitter.instruction("lea rdx, [rip + _unser_values]");                      // load the active reference-registry base
+    abi::emit_symbol_address(emitter, "rdx", "_unser_values");                // load this context's active reference registry
     emitter.instruction("xor ecx, ecx");                                        // start restoring the outer registry prefix
     emitter.label("__rt_unserialize_end_copy_x");
     emitter.instruction("cmp rcx, r11");                                        // restored every snapshotted registry slot?
@@ -276,18 +278,18 @@ pub(super) fn emit_unserialize_context_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rcx, 1");                                          // advance to the next saved slot
     emitter.instruction("jmp __rt_unserialize_end_copy_x");                     // continue restoring the used registry prefix
     emitter.label("__rt_unserialize_end_copy_done_x");
-    emitter.instruction("sub QWORD PTR [rip + _unser_active], 1");              // account for the completed nested parser
+    abi::emit_dec_symbol(emitter, "_unser_active");                            // account for this context's completed nested parser
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // pass the consumed snapshot to heap_free
     emitter.instruction("call __rt_heap_free");                                 // release the temporary reentrancy snapshot
     emitter.instruction("jmp __rt_unserialize_end_return_x");                   // preserve the restored outer context
 
     emitter.label("__rt_unserialize_end_top_x");
-    emitter.instruction("mov QWORD PTR [rip + _unser_allowed_mode], 0");        // clear the completed top-level policy mode
-    emitter.instruction("mov QWORD PTR [rip + _unser_allowed_list_mixed], 0");  // clear the completed list representation flag
-    emitter.instruction("mov QWORD PTR [rip + _unser_count], 0");               // retire the completed top-level registry
-    emitter.instruction("mov QWORD PTR [rip + _unser_depth], 0");               // leave no parser depth behind after completion
-    emitter.instruction("mov QWORD PTR [rip + _unser_active], 0");              // mark the unserialize runtime idle
-    emitter.instruction("mov QWORD PTR [rip + _unser_context], 0");             // leave no linked snapshot after top-level completion
+    abi::emit_store_zero_to_symbol(emitter, "_unser_allowed_mode", 0);         // clear this context's completed policy mode
+    abi::emit_store_zero_to_symbol(emitter, "_unser_allowed_list_mixed", 0);   // clear this context's list representation flag
+    abi::emit_store_zero_to_symbol(emitter, "_unser_count", 0);                // retire this context's completed registry
+    abi::emit_store_zero_to_symbol(emitter, "_unser_depth", 0);                // leave no parser depth behind
+    abi::emit_store_zero_to_symbol(emitter, "_unser_active", 0);               // mark this context's unserialize runtime idle
+    abi::emit_store_zero_to_symbol(emitter, "_unser_context", 0);              // leave no linked snapshot behind
     emitter.label("__rt_unserialize_end_return_x");
     crate::codegen_support::abi::load_at_offset(emitter, "rdi", 8);
     crate::codegen_support::abi::load_at_offset(emitter, "rsi", 24);

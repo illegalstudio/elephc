@@ -198,10 +198,14 @@ fn emit_getprotobyname_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
     emitter.instruction("push r12");                                            // save callee-saved register (token start)
     emitter.instruction("push r13");                                            // save callee-saved register (query pointer)
-    emitter.instruction("push r14");                                            // save callee-saved register (query length)
+    emitter.instruction("push r14");                                            // save callee-saved register (unused here, kept so the spill offsets and the call alignment below stay put)
     emitter.instruction("push r15");                                            // save callee-saved register (matched flag)
+    emitter.instruction("sub rsp, 16");                                         // one spill slot (16 keeps the call alignment this helper already had)
     emitter.instruction("mov r13, rdi");                                        // r13 = query pointer, survives the load call
-    emitter.instruction("mov r14, rsi");                                        // r14 = query length, survives the load call
+    // The query length goes to the frame, not to r14: r14 is the reserved
+    // runtime-context register, and every other callee-saved register here is
+    // already spoken for.
+    emitter.instruction("mov QWORD PTR [rbp - 40], rsi");                       // query length, survives the load call
     emitter.instruction("call __rt_protoent_load");                             // read /etc/protocols, rax=buffer rdx=count
     emitter.instruction("mov r8, rax");                                         // r8 = scan cursor
     emitter.instruction("lea r9, [rax + rdx]");                                 // r9 = end-of-buffer pointer
@@ -266,7 +270,7 @@ fn emit_getprotobyname_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_gpbn_parsenum");                               // parse the protocol number
 
     // -- compare a name/alias token against the query --
-    emitter.instruction("cmp rcx, r14");                                        // token and query lengths must match
+    emitter.instruction("cmp rcx, QWORD PTR [rbp - 40]");                       // token and query lengths must match (the spill slot, not r14)
     emitter.instruction("jne __rt_gpbn_tokdone");                               // different length cannot match
     emitter.instruction("xor esi, esi");                                        // byte compare index = 0
     emitter.label("__rt_gpbn_cmp");
@@ -352,6 +356,7 @@ fn emit_getprotobyname_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, -1");                                         // -1 sentinel: the builtin boxes PHP false
 
     emitter.label("__rt_gpbn_return");
+    emitter.instruction("add rsp, 16");                                         // release the query-length spill slot
     emitter.instruction("pop r15");                                             // restore callee-saved register
     emitter.instruction("pop r14");                                             // restore callee-saved register
     emitter.instruction("pop r13");                                             // restore callee-saved register

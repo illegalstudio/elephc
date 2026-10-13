@@ -11,7 +11,6 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::abi;
 
 /// Emits the grapheme-aware string reversal runtime helper for the active target.
 ///
@@ -35,9 +34,8 @@ pub fn emit_grapheme_strrev(emitter: &mut Emitter) {
     emitter.instruction("str x30, [sp, #8]");                                   // preserve the external caller return address across local decoder calls
 
     // -- get concat_buf write position --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x6", "_concat_off");
-    emitter.instruction("ldr x8, [x6]");                                        // load current concat-buffer write offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x8");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x7");
     emitter.instruction("add x9, x7, x8");                                      // compute destination pointer for the reversed string
     emitter.instruction("mov x10, x9");                                         // preserve destination start for the returned string pointer
     emitter.instruction("mov x0, x1");                                          // keep the source string pointer in a decoder-friendly scratch register
@@ -93,10 +91,9 @@ pub fn emit_grapheme_strrev(emitter: &mut Emitter) {
 
     // -- publish success --
     emitter.label("__rt_grapheme_strrev_done");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x6", "_concat_off");
-    emitter.instruction("ldr x8, [x6]");                                        // reload concat-buffer write offset for the final update
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x8");
     emitter.instruction("add x8, x8, x2");                                      // advance offset by the unchanged source byte length
-    emitter.instruction("str x8, [x6]");                                        // publish the updated concat-buffer write offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x8"); // publish the updated concat-buffer write offset (ctx-relative in ctx mode)
     emitter.instruction("mov x1, x10");                                         // return pointer to the reversed string
     emitter.instruction("ldr x30, [sp, #8]");                                   // restore the external caller return address
     emitter.instruction("add sp, sp, #16");                                     // release the local decoder-call frame
@@ -232,15 +229,14 @@ fn emit_grapheme_strrev_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbx");                                            // preserve callee-saved source pointer storage
     emitter.instruction("push r12");                                            // preserve callee-saved source length storage
     emitter.instruction("push r13");                                            // preserve callee-saved destination cursor storage
-    emitter.instruction("push r14");                                            // preserve callee-saved destination start storage
+    emitter.instruction("sub rsp, 8");                                          // spill slot for the destination start: r14 is the reserved ctx register and rbx already holds the source pointer
     emitter.instruction("push r15");                                            // preserve callee-saved cluster-end storage
     emitter.instruction("mov rbx, rax");                                        // keep the source string pointer stable across decoder calls
     emitter.instruction("mov r12, rdx");                                        // keep the source string length stable across decoder calls
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_off");
-    emitter.instruction("mov r9, QWORD PTR [r8]");                              // load current concat-buffer write offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r9");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r10");
     emitter.instruction("lea r13, [r10 + r9]");                                 // compute destination pointer for the reversed string
-    emitter.instruction("mov r14, r13");                                        // preserve destination start for the returned string pointer
+    emitter.instruction("mov QWORD PTR [rsp + 8], r13");                        // preserve destination start for the returned string pointer
     emitter.instruction("mov rcx, r12");                                        // scan_end = source length in bytes
 
     emitter.label("__rt_grapheme_strrev_loop_x");
@@ -293,13 +289,13 @@ fn emit_grapheme_strrev_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_grapheme_strrev_loop_x");                     // continue with the previous source grapheme cluster
 
     emitter.label("__rt_grapheme_strrev_done_x");
-    abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // reload concat-buffer write offset for the final update
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r8");              // reload concat-buffer write offset for the final update
     emitter.instruction("add r8, r12");                                         // advance offset by the unchanged source byte length
-    abi::emit_store_reg_to_symbol(emitter, "r8", "_concat_off", 0);             // publish the updated concat-buffer write offset
-    emitter.instruction("mov rax, r14");                                        // return pointer to the reversed string
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r8");             // publish the updated concat-buffer write offset
+    emitter.instruction("mov rax, QWORD PTR [rsp + 8]");                        // return pointer to the reversed string
     emitter.instruction("mov rdx, r12");                                        // return the unchanged source byte length
     emitter.instruction("pop r15");                                             // restore callee-saved cluster-end storage
-    emitter.instruction("pop r14");                                             // restore callee-saved destination start storage
+    emitter.instruction("add rsp, 8");                                          // release the destination-start spill slot
     emitter.instruction("pop r13");                                             // restore callee-saved destination cursor storage
     emitter.instruction("pop r12");                                             // restore callee-saved source length storage
     emitter.instruction("pop rbx");                                             // restore callee-saved source pointer storage
@@ -309,7 +305,7 @@ fn emit_grapheme_strrev_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor eax, eax");                                        // null pointer sentinel means false for grapheme_strrev()
     emitter.instruction("xor edx, edx");                                        // failure length is zero
     emitter.instruction("pop r15");                                             // restore callee-saved cluster-end storage on failure
-    emitter.instruction("pop r14");                                             // restore callee-saved destination start storage on failure
+    emitter.instruction("add rsp, 8");                                          // release the destination-start spill slot on failure
     emitter.instruction("pop r13");                                             // restore callee-saved destination cursor storage on failure
     emitter.instruction("pop r12");                                             // restore callee-saved source length storage on failure
     emitter.instruction("pop rbx");                                             // restore callee-saved source pointer storage on failure

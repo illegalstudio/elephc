@@ -16,7 +16,19 @@ use crate::types::PhpType;
 /// Uses thread-local `ACTIVE_FUNCTION_EFFECTS` for user-defined functions. Falls back to
 /// Registry builtins consume their shared descriptor; unknown calls remain conservative.
 pub(in crate::optimize) fn function_call_effect(name: &str, args: &[Expr]) -> Effect {
-    let effect = with_active_function_effects(|effects| effects.and_then(|effects| effects.get(name).copied()))
+    let function_key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+    let mut pcntl_process_write = false;
+    let effect = with_active_function_effects(|effects| {
+        effects.and_then(|effects| {
+            effects.get(name).copied().or_else(|| {
+                effects.iter().find_map(|(candidate, effect)| {
+                    (crate::names::php_symbol_key(candidate.trim_start_matches('\\'))
+                        == function_key)
+                    .then_some(*effect)
+                })
+            })
+        })
+    })
     .unwrap_or_else(|| {
         if let Some(def) = crate::builtins::registry::lookup(name) {
             let arg_types = semantic_optimizer_arg_types(def, args);
@@ -27,6 +39,8 @@ pub(in crate::optimize) fn function_call_effect(name: &str, args: &[Expr]) -> Ef
                 span: crate::span::Span::dummy(),
             };
             let effects = crate::builtins::semantics::resolve_builtin_effects(def, &input);
+            pcntl_process_write = function_key.starts_with("pcntl_")
+                && effects.contains(crate::ir::Effects::WRITES_PROCESS);
             if let Some((callback_index, intrinsic_effects)) = builtin_callback_effects(def) {
                 let callback_effect = args
                     .get(callback_index)
@@ -36,15 +50,143 @@ pub(in crate::optimize) fn function_call_effect(name: &str, args: &[Expr]) -> Ef
             }
             Effect::from_eir(effects)
         } else {
-            conservative_call_effect()
+            let effect = conservative_call_effect();
+            if crate::optimize::parallel_extern_is_worker_safe(&function_key)
+                || matches!(
+                    function_key.as_str(),
+                    "die" | "empty" | "exit" | "isset" | "unset"
+                )
+            {
+                effect
+            } else {
+                // A statically named call absent from both the user-function summaries and
+                // builtin registry is an external/unknown boundary. Parallel cannot assume
+                // that arbitrary native code is worker-safe.
+                effect.with_process_global_runtime_state()
+            }
         }
     });
-    if args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_))) {
-        // Unpacking can fail before even a pure builtin executes. Its arity guard
-        // must remain observable when the caller discards the builtin result.
+    let effect = if args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_))) {
         effect.with_may_throw()
+    } else { effect };
+    let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+    let effect = match key.as_str() {
+        "elephc\\parallel\\run" => effect.with_parallel_scope(),
+        "elephc\\async\\run" => effect.with_async_scope(),
+        _ => effect,
+    };
+    let effect = if uses_process_global_runtime_state(&key) {
+        effect.with_process_global_runtime_state()
     } else {
         effect
+    };
+    if pcntl_process_write
+        || call_may_dispatch_user_wrapper(&key, args)
+        || matches!(
+            key.as_str(),
+            "stream_wrapper_register"
+                | "stream_wrapper_unregister"
+                | "stream_wrapper_restore"
+                | "stream_filter_register"
+                | "stream_filter_append"
+                | "stream_filter_prepend"
+                | "stream_get_wrappers"
+                | "stream_get_filters"
+                | "bcscale"
+                | "chdir"
+                | "iconv_set_encoding"
+                | "umask"
+        )
+    {
+        effect.with_process_global_storage()
+    } else {
+        effect
+    }
+}
+
+/// Mutable runtime state that is process-wide in the current Parallel implementation.
+///
+/// These builtins are rejected from worker call graphs until their backing state is moved into
+/// `_rt_ctx` or made explicitly thread-safe. This list is deliberately separate from PHP global
+/// storage and generic EIR `READS_GLOBAL`/`WRITES_GLOBAL` effects.
+fn uses_process_global_runtime_state(name: &str) -> bool {
+    matches!(
+        name,
+        "date"
+            | "date_default_timezone_get"
+            | "date_default_timezone_set"
+            | "getdate"
+            | "getenv"
+            | "gmdate"
+            | "localtime"
+            | "mktime"
+            | "putenv"
+            | "setenv"
+            | "strtotime"
+            | "unsetenv"
+    ) || name.starts_with("json_")
+        || name.starts_with("stream_context_")
+}
+
+/// User stream-wrapper schemes live in the shared PHP registry, unlike ordinary file paths.
+/// Unknown paths may contain a scheme at runtime, so Parallel v1 rejects wrapper-aware paths
+/// conservatively even when their values are not statically known.
+fn path_may_dispatch_user_wrapper(path: Option<&Expr>) -> bool {
+    match path.map(|path| &path.kind) {
+        Some(ExprKind::StringLiteral(path)) => path.contains("://"),
+        _ => true,
+    }
+}
+
+/// Checks each builtin's path positions for possible dispatch through the shared wrapper registry.
+fn call_may_dispatch_user_wrapper(name: &str, args: &[Expr]) -> bool {
+    let first_path = || path_may_dispatch_user_wrapper(args.first());
+    match name {
+        "copy" | "rename" => first_path() || path_may_dispatch_user_wrapper(args.get(1)),
+        "hash_file" => path_may_dispatch_user_wrapper(args.get(1)),
+        "fopen"
+        | "readfile"
+        | "opendir"
+        | "scandir"
+        | "file"
+        | "file_get_contents"
+        | "file_put_contents"
+        | "file_exists"
+        | "getimagesize"
+        | "imagecreatefrombmp"
+        | "imagecreatefromgif"
+        | "imagecreatefromjpeg"
+        | "imagecreatefrompng"
+        | "imagecreatefromtga"
+        | "imagecreatefromwebp"
+        | "stat"
+        | "lstat"
+        | "fileatime"
+        | "filectime"
+        | "filegroup"
+        | "fileinode"
+        | "fileowner"
+        | "fileperms"
+        | "filetype"
+        | "filesize"
+        | "filemtime"
+        | "is_file"
+        | "is_dir"
+        | "is_link"
+        | "is_readable"
+        | "is_writable"
+        | "is_writeable"
+        | "is_executable"
+        | "unlink"
+        | "mkdir"
+        | "rmdir"
+        | "chmod"
+        | "chown"
+        | "chgrp"
+        | "lchown"
+        | "lchgrp"
+        | "touch" => first_path(),
+        _ => false,
     }
 }
 
@@ -69,6 +211,34 @@ fn conservative_call_effect() -> Effect {
         .with_side_effects()
         .with_may_throw()
         .with_writes_globals()
+}
+
+/// Resolves a statically known function-name string used as an indirect callable.
+///
+/// Dynamic scheduler/Fiber entrypoints intentionally retain only a conservative call barrier
+/// here: Parallel's runtime guard owns those indirect-call diagnostics, and static propagation
+/// must not turn a guarded `call_user_func("Fiber::suspend", ...)` into a compile-time rejection.
+pub(super) fn callable_string_effect(name: &str) -> Option<Effect> {
+    let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+    if matches!(
+        key.as_str(),
+        "elephc\\parallel\\run" | "elephc\\async\\run" | "fiber::suspend"
+    ) {
+        return Some(conservative_call_effect());
+    }
+
+    let known_user_function = with_active_function_effects(|effects| {
+        effects.is_some_and(|effects| {
+            effects
+                .keys()
+                .any(|candidate| crate::names::php_symbol_key(candidate.trim_start_matches('\\')) == key)
+        })
+    });
+    if known_user_function || crate::builtins::registry::lookup(name).is_some() {
+        Some(function_call_effect(name, &[]))
+    } else {
+        Some(conservative_call_effect().with_process_global_storage())
+    }
 }
 
 /// Derives safe semantic argument types from literals or the checked registry signature.
@@ -114,6 +284,17 @@ pub(super) fn closure_body_call_effect(body: &[Stmt]) -> Effect {
     block_effect(body)
 }
 
+/// Closure invocation includes declared element binding, even for unused results.
+fn closure_invocation_effect(expr: &Expr) -> Effect {
+    let ExprKind::Closure { body, params, variadic_type, variadic_by_ref, return_type, .. } = &expr.kind else {
+        return conservative_call_effect();
+    };
+    let effect = closure_body_call_effect(body).combine(super::super::return_binding_effects::effect(params, return_type, body));
+    if super::super::effect_analysis::callable_binds_string(params, variadic_type.as_ref(), *variadic_by_ref) {
+        effect.combine(super::super::effect_analysis::string_binding_effect())
+    } else { effect }
+}
+
 /// Computes the effect for an expression that may be called at runtime.
 ///
 /// Dispatches based on expression variant:
@@ -123,7 +304,7 @@ pub(super) fn closure_body_call_effect(body: &[Stmt]) -> Effect {
 pub(in crate::optimize) fn expr_call_effect(callee: &Expr) -> Effect {
     match &callee.kind {
         ExprKind::FirstClassCallable(target) => callable_target_call_effect(target),
-        ExprKind::Closure { body, .. } => closure_body_call_effect(body),
+        ExprKind::Closure { .. } => closure_invocation_effect(callee),
         ExprKind::Variable(name) => callable_alias_effect(name),
         _ => conservative_call_effect(),
     }
@@ -139,7 +320,7 @@ pub(in crate::optimize) fn callable_alias_effect(name: &str) -> Effect {
             .as_ref()
             .and_then(|effects| effects.get(name).copied())
     })
-    .unwrap_or_else(conservative_call_effect)
+    .unwrap_or_else(|| conservative_call_effect().with_process_global_storage())
 }
 
 /// Computes the effect for a callable target resolved at compile time.
@@ -164,25 +345,26 @@ pub(super) fn callable_target_call_effect(target: &CallableTarget) -> Effect {
 /// variants, returns `None`.
 pub(super) fn closure_alias_effect(expr: &Expr) -> Option<Effect> {
     match &expr.kind {
-        ExprKind::Closure { body, .. } => Some(closure_body_call_effect(body)),
+        ExprKind::Closure { .. } => Some(closure_invocation_effect(expr)),
         _ => None,
     }
 }
 
 /// Merges a collection of optional call effects into a single optional effect.
 ///
-/// Returns `Some(first)` only when every non-None effect in the iterator equals `first`.
-/// Returns `None` if effects differ or if the iterator is empty or contains no `Some` values.
+/// Combines all possible callable effects into one conservative summary.
+///
+/// Returns `None` when a branch cannot be resolved or when the iterator is empty; differing
+/// effects are combined because a runtime-selected callable may exhibit any branch's behavior.
 pub(super) fn merge_callable_value_effects(
     effects: impl IntoIterator<Item = Option<Effect>>,
 ) -> Option<Effect> {
-    let mut effects = effects.into_iter();
-    let first = effects.next().flatten()?;
-    if effects.all(|effect| effect == Some(first)) {
-        Some(first)
-    } else {
-        None
-    }
+    effects
+        .into_iter()
+        .try_fold(None, |combined, effect| {
+            let effect = effect?;
+            Some(Some(combined.map_or(effect, |combined: Effect| combined.combine(effect))))
+        })?
 }
 
 /// Looks up the effect for a static method call.
@@ -195,13 +377,26 @@ pub(in crate::optimize) fn static_method_call_effect(
     method_name: &str,
 ) -> Effect {
     let Some(class_name) = resolve_static_receiver_class(receiver) else {
-        return Effect::PURE.with_side_effects().with_may_throw().with_writes_globals();
+        return Effect::PURE
+            .with_side_effects()
+            .with_may_throw()
+            .with_writes_globals();
     };
 
-    with_active_static_method_effects(|effects| {
+    let effect = with_active_static_method_effects(|effects| {
         effects.and_then(|effects| effects.get(&method_effect_key(&class_name, method_name)).copied())
     })
-    .unwrap_or_else(|| Effect::PURE.with_side_effects().with_may_throw().with_writes_globals())
+    .unwrap_or_else(|| {
+        Effect::PURE
+            .with_side_effects()
+            .with_may_throw()
+            .with_writes_globals()
+    });
+    if crate::optimize::parallel_enum_class_access_is_process_global(&class_name) {
+        effect.with_process_global_runtime_state()
+    } else {
+        effect
+    }
 }
 
 /// Resolves the effect of an instance call when the receiver's runtime class set is closed.

@@ -2578,6 +2578,12 @@ fn lower_array_push_aarch64(
         return lower_mixed_array_push_aarch64(ctx, array, value, &value_ty);
     }
     match value_ty {
+        PhpType::Void => {
+            ctx.load_value_to_reg(array, "x9")?;
+            abi::emit_load_int_immediate(ctx.emitter, "x1", crate::codegen::NULL_SENTINEL);
+            ctx.emitter.instruction("mov x0, x9");                              // pass the indexed-array receiver for its null payload slot
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+        }
         PhpType::TaggedScalar if elem_ty.codegen_repr() == PhpType::TaggedScalar => {
             lower_array_push_tagged_scalar_aarch64(ctx, array, value)?;
         }
@@ -2623,8 +2629,8 @@ fn lower_array_push_aarch64(
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
-                "array_push for PHP type {:?}",
-                other
+                "array_push for PHP type {:?} in {} (array={}, value={})",
+                other, ctx.function.name, array.as_raw(), value.as_raw()
             )));
         }
     }
@@ -2669,7 +2675,7 @@ fn scalar_slot_element_tag(elem_ty: &PhpType, value_ty: &PhpType) -> Option<PhpT
         return None;
     }
     let from_value = value_ty.codegen_repr();
-    matches!(from_value, PhpType::Float | PhpType::Bool).then_some(from_value)
+    matches!(from_value, PhpType::Float | PhpType::Bool | PhpType::Void).then_some(from_value)
 }
 
 /// Lowers an indexed-array append for x86_64 targets.
@@ -2688,6 +2694,12 @@ fn lower_array_push_x86_64(
         return lower_mixed_array_push_x86_64(ctx, array, value, &value_ty);
     }
     match value_ty {
+        PhpType::Void => {
+            ctx.load_value_to_reg(array, "r11")?;
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", crate::codegen::NULL_SENTINEL);
+            ctx.emitter.instruction("mov rdi, r11");                            // pass the indexed-array receiver for its null payload slot
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+        }
         PhpType::TaggedScalar if elem_ty.codegen_repr() == PhpType::TaggedScalar => {
             lower_array_push_tagged_scalar_x86_64(ctx, array, value)?;
         }
@@ -2733,8 +2745,8 @@ fn lower_array_push_x86_64(
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
-                "array_push for PHP type {:?}",
-                other
+                "array_push for PHP type {:?} in {} (array={}, value={})",
+                other, ctx.function.name, array.as_raw(), value.as_raw()
             )));
         }
     }

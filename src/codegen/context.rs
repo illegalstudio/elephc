@@ -486,9 +486,37 @@ impl<'a> FunctionContext<'a> {
         Some(slot)
     }
 
+    /// Returns whether a logically string-valued load is physically boxed in a Mixed slot.
+    ///
+    /// Loading that shape routes through `__rt_mixed_cast_string`, whose tag-1 arm detaches a
+    /// heap string. Consumers that only borrow the bytes for one runtime call must release the
+    /// detached temporary afterwards; a raw `Str` local instead lends its existing storage.
+    pub(super) fn loaded_string_uses_mixed_storage(&self, value: ValueId) -> Result<bool> {
+        let Some(slot) = self.loaded_local_slot(value) else {
+            return Ok(false);
+        };
+        Ok(matches!(
+            self.local_php_type(slot)?.codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        ))
+    }
+
     /// Returns whether this slot is represented as a ref-cell pointer anywhere in the function.
     pub(super) fn local_slot_ever_stores_ref_cell_pointer(&self, slot: LocalSlotId) -> bool {
         self.local_analysis.ever_stores_ref_cell_pointer(slot)
+    }
+
+    /// Returns the hidden fallback-cell owner paired with an explicitly promoted local slot.
+    pub(super) fn ref_cell_owner_for_slot(&self, slot: LocalSlotId) -> Option<LocalSlotId> {
+        self.function.instructions.iter().find_map(|inst| {
+            if inst.op != Op::PromoteLocalRefCell {
+                return None;
+            }
+            match inst.immediate {
+                Some(Immediate::LocalSlotPair { first, second }) if first == slot => Some(second),
+                _ => None,
+            }
+        })
     }
 
     /// Returns whether this deferred release may execute while the slot stores a ref-cell pointer.

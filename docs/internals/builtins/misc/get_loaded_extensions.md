@@ -2,7 +2,7 @@
 title: "get_loaded_extensions() - internals"
 description: "Compiler internals for get_loaded_extensions(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 628
+  order: 629
 ---
 
 ## `get_loaded_extensions()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/get_loaded_extensions.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/get_loaded_extensions.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:701](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L701) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

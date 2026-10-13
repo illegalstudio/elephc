@@ -81,6 +81,8 @@ fn compile_lfc_eval_project_and_run(
         .expect("CLI should emit LFC eval assembly");
     let runtime_features = elephc::codegen::RuntimeFeatures {
         regex: true,
+        async_reactor: false,
+        parallel_execution: false,
         mbstring: false,
         mbregex: false,
         mbstring_mime: false,
@@ -98,6 +100,11 @@ fn compile_lfc_eval_project_and_run(
         // neither kind-specific destructor arm.
         popen_resource: false,
         directory_resource: false,
+        // The compiler emits ctx-register addressing unconditionally, so a runtime built
+        // for this fixture must carry the ctx helpers the CLI-emitted main prologue calls.
+        // Pinned to false, this linked a runtime with no `__rt_ctx_init` against a main
+        // that calls it — an undefined reference, which is the tripwire doing its job.
+        ctx_register: true,
         ..elephc::codegen::RuntimeFeatures::none()
     };
     let runtime_asm =

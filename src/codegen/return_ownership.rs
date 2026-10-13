@@ -242,18 +242,7 @@ pub(super) fn emit_load_status(emitter: &mut Emitter, offset: usize) {
 
 /// Branches when the current compiled PHP return transfers an existing owner.
 pub(super) fn emit_branch_if_owned(emitter: &mut Emitter, owned_label: &str) {
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction(&format!(                                       // transfer a result whose EIR return path already owns its storage
-                "cbnz x15, {}",
-                owned_label
-            ));
-        }
-        Arch::X86_64 => {
-            emitter.instruction("test r11, r11");                               // inspect the per-return EIR ownership status from the callable entry
-            emitter.instruction(&format!("jne {}", owned_label));               // transfer a result whose EIR return path already owns its storage
-        }
-    }
+    abi::emit_branch_if_php_return_owned(emitter, owned_label);
 }
 
 /// Returns the private caller-saved register used by the compiled PHP ABI.

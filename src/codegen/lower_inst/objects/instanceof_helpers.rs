@@ -18,6 +18,7 @@ pub(super) fn emit_normalized_dynamic_instanceof_value(
     match value_ty {
         PhpType::Object(_) => {
             ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
+            emit_instanceof_object_null_normalization(ctx);
         }
         PhpType::Mixed | PhpType::Union(_) => {
             ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
@@ -28,6 +29,18 @@ pub(super) fn emit_normalized_dynamic_instanceof_value(
         }
     }
     Ok(())
+}
+
+/// Converts either null encoding in an object slot to the matcher's null pointer.
+pub(super) fn emit_instanceof_object_null_normalization(ctx: &mut FunctionContext<'_>) {
+    let value_reg = abi::int_result_reg(ctx.emitter);
+    let scratch_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x9",
+        Arch::X86_64 => "r10",
+    };
+    crate::codegen_support::sentinels::emit_normalize_null_container_to_zero(
+        ctx.emitter, value_reg, scratch_reg,
+    );
 }
 
 /// Normalizes an unboxed Mixed object pointer into the integer result register for `instanceof`.

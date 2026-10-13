@@ -1,0 +1,1930 @@
+            s_namespace("Elephc\\Async", vec![
+                class("CancelledException")
+                    .final_()
+                    .extends("\\RuntimeException")
+                    .private_prop("cancellationReason", t_nullable(t_class("\\Throwable")), Some(e_null()))
+                    .private_prop("requestState", t_nullable(t_class("__CancellationState")), Some(e_null()))
+                    .method(
+                        method("__construct")
+                            .param_default("message", TypeExpr::Str, e_str("Elephc Async task cancelled"))
+                            .param_default("reason", t_nullable(t_class("\\Throwable")), e_null())
+                            .body(vec![
+                                s_prop_assign(e_this(), "message", e_var("message")),
+                                s_prop_assign(e_this(), "code", e_int(0)),
+                                s_prop_assign(e_this(), "cancellationReason", e_var("reason")),
+                            ]),
+                    )
+                    .method(
+                        method("reason")
+                            .returns(t_nullable(t_class("\\Throwable")))
+                            .body(vec![
+                                s_return(e_this_prop("cancellationReason")),
+                            ]),
+                    )
+                    .method(
+                        method("__markRequestPaired")
+                            .param("state", t_class("__CancellationState"))
+                            .param("token", t_class("\\stdClass"))
+                            .returns(TypeExpr::Void)
+                            .body(vec![
+                                s_if(
+                                    e_not(e_method_call(e_var("state"), "__isRequestToken", vec![e_var("token")])),
+                                    vec![s_return_void()],
+                                    vec![],
+                                    None,
+                                ),
+                                s_prop_assign(e_this(), "requestState", e_var("state")),
+                            ]),
+                    )
+                    .method(
+                        method("__isRequestPaired")
+                            .static_()
+                            .param("error", t_mixed())
+                            .param("state", t_class("__CancellationState"))
+                            .returns(TypeExpr::Bool)
+                            .body(vec![
+                                s_if(
+                                    e_not(e_instance_of(e_var("error"), "CancelledException")),
+                                    vec![s_return(e_bool(false))],
+                                    vec![],
+                                    None,
+                                ),
+                                s_return(e_binop(
+                                    e_prop(e_var("error"), "requestState"),
+                                    BinOp::StrictEq,
+                                    e_var("state"),
+                                )),
+                            ]),
+                    )
+                    .build(),
+                class("__CancellationState")
+                    .final_()
+                    .private_prop("requested", TypeExpr::Bool, Some(e_bool(false)))
+                    .private_prop("hasReason", TypeExpr::Bool, Some(e_bool(false)))
+                    .private_prop("reason", t_class("\\Throwable"), None)
+                    .private_prop("requestToken", t_class("\\stdClass"), None)
+                    .method(
+                        method("__construct")
+                            .body(vec![s_prop_assign(
+                                e_this(),
+                                "requestToken",
+                                e_new_fq("stdClass", vec![]),
+                            )]),
+                    )
+                    .method(
+                        method("__isRequestToken")
+                            .param("token", t_class("\\stdClass"))
+                            .returns(TypeExpr::Bool)
+                            .body(vec![s_return(e_binop(
+                                e_this_prop("requestToken"),
+                                BinOp::StrictEq,
+                                e_var("token"),
+                            ))]),
+                    )
+                    .method(
+                        method("request")
+                            .param_default("reason", t_nullable(t_class("\\Throwable")), e_null())
+                            .returns(TypeExpr::Void)
+                            .body(vec![
+                                s_if(
+                                    e_this_prop("requested"),
+                                    vec![
+                                        s_return_void(),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_prop_assign(e_this(), "requested", e_bool(true)),
+                                s_if(
+                                    e_binop(e_var("reason"), BinOp::StrictNotEq, e_null()),
+                                    vec![
+                                        s_prop_assign(e_this(), "hasReason", e_bool(true)),
+                                        s_expr(e_method_call(e_this(), "storeReason", vec![e_var("reason")])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                            ]),
+                    )
+                    .method(
+                        method("storeReason")
+                            .private()
+                            .param("reason", t_class("\\Throwable"))
+                            .returns(TypeExpr::Void)
+                            .body(vec![
+                                s_prop_assign(e_this(), "reason", e_var("reason")),
+                            ]),
+                    )
+                    .method(
+                        method("__clearReason")
+                            .returns(TypeExpr::Void)
+                            .body(vec![
+                                s_if(
+                                    e_this_prop("hasReason"),
+                                    vec![
+                                        s_expr(e_call("unset", vec![e_this_prop("reason")])),
+                                        s_prop_assign(e_this(), "hasReason", e_bool(false)),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                            ]),
+                    )
+                    .method(
+                        method("isRequested")
+                            .returns(TypeExpr::Bool)
+                            .body(vec![
+                                s_return(e_this_prop("requested")),
+                            ]),
+                    )
+                    .method(
+                        method("throwIfRequested")
+                            .returns(TypeExpr::Void)
+                            .body(vec![
+                                s_if(
+                                    e_this_prop("requested"),
+                                    vec![
+                                        s_throw(e_method_call(e_this(), "exception", vec![])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                            ]),
+                    )
+                    .method(
+                        method("exception")
+                            .returns(t_class("CancelledException"))
+                            .body(vec![
+                                s_if(
+                                    e_this_prop("hasReason"),
+                                    vec![
+                                        s_assign("exception", e_new("CancelledException", vec![e_str("Elephc Async task cancelled"), e_this_prop("reason")])),
+                                    ],
+                                    vec![],
+                                    Some(vec![
+                                        s_assign("exception", e_new("CancelledException", vec![])),
+                                    ]),
+                                ),
+                                s_expr(e_method_call(
+                                    e_var("exception"),
+                                    "__markRequestPaired",
+                                    vec![e_this(), e_this_prop("requestToken")],
+                                )),
+                                s_return(e_var("exception")),
+                            ]),
+                    )
+                    .build(),
+                class("Cancellation")
+                    .final_()
+                    .private_prop("state", t_class("__CancellationState"), None)
+                    .method(
+                        method("__construct")
+                            .param("state", t_class("__CancellationState"))
+                            .body(vec![
+                                s_prop_assign(e_this(), "state", e_var("state")),
+                            ]),
+                    )
+                    .method(
+                        method("isRequested")
+                            .returns(TypeExpr::Bool)
+                            .body(vec![
+                                s_return(e_method_call(e_this_prop("state"), "isRequested", vec![])),
+                            ]),
+                    )
+                    .method(
+                        method("throwIfRequested")
+                            .returns(TypeExpr::Void)
+                            .body(vec![
+                                s_if(
+                                    e_method_call(e_this_prop("state"), "isRequested", vec![]),
+                                    vec![
+                                        s_throw(e_method_call(e_this_prop("state"), "exception", vec![])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                            ]),
+                    )
+                    .build(),
+                class("__TaskOutcome")
+                    .final_()
+                    .private_prop("failed", TypeExpr::Bool, Some(e_bool(false)))
+                    .private_prop("observed", TypeExpr::Bool, Some(e_bool(false)))
+                    .private_prop("failure", t_class("\\Throwable"), None)
+                    .method(
+                        method("recordFailure")
+                            .param("failure", t_class("\\Throwable"))
+                            .returns(TypeExpr::Void)
+                            .body(vec![
+                                s_prop_assign(e_this(), "failed", e_bool(true)),
+                                s_prop_assign(e_this(), "observed", e_bool(false)),
+                                s_prop_assign(e_this(), "failure", e_var("failure")),
+                            ]),
+                    )
+                    .method(
+                        method("observeAndThrowIfFailed")
+                            .returns(TypeExpr::Void)
+                            .body(vec![
+                                s_if(
+                                    e_this_prop("failed"),
+                                    vec![
+                                        s_prop_assign(e_this(), "observed", e_bool(true)),
+                                        s_throw(e_this_prop("failure")),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                            ]),
+                    )
+                    .method(
+                        method("throwIfFailed")
+                            .returns(TypeExpr::Void)
+                            .body(vec![
+                                s_if(
+                                    e_this_prop("failed"),
+                                    vec![
+                                        s_throw(e_this_prop("failure")),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                            ]),
+                    )
+                    .method(
+                        method("hasUnobservedFailure")
+                            .returns(TypeExpr::Bool)
+                            .body(vec![
+                                s_return(e_binop(e_this_prop("failed"), BinOp::And, e_not(e_this_prop("observed")))),
+                            ]),
+                    )
+                    .build(),
+                class("__RunResult")
+                    .final_()
+                    .private_prop("value", t_mixed(), Some(e_null()))
+                    .method(
+                        method("set")
+                            .param("value", t_mixed())
+                            .returns(TypeExpr::Void)
+                            .body(vec![
+                                s_prop_assign(e_this(), "value", e_var("value")),
+                            ]),
+                    )
+                    .method(
+                        method("get")
+                            .returns(t_mixed())
+                            .body(vec![
+                                s_return(e_this_prop("value")),
+                            ]),
+                    )
+                    .build(),
+                class("__TaskStart")
+                    .final_()
+                    .private_prop("fiber", t_class("\\Fiber"), None)
+                    .private_prop("fiberArgs", t_array(), Some(e_array(vec![])))
+                    .method(
+                        method("__construct")
+                            .private()
+                            .param("fiber", t_class("\\Fiber"))
+                            .body(vec![
+                                s_prop_assign(e_this(), "fiber", e_var("fiber")),
+                            ]),
+                    )
+                    .method(
+                        method("fromArguments")
+                            .static_()
+                            .param("fiber", t_class("\\Fiber"))
+                            .param("args", t_array())
+                            .returns(t_class("__TaskStart"))
+                            .body(vec![
+                                s_assign("start", e_new_self(vec![e_var("fiber")])),
+                                s_prop_assign(e_var("start"), "fiberArgs", e_var("args")),
+                                s_return(e_var("start")),
+                            ]),
+                    )
+                    .method(
+                        method("fromNoArgs")
+                            .static_()
+                            .param("fiber", t_class("\\Fiber"))
+                            .returns(t_class("__TaskStart"))
+                            .body(vec![
+                                s_assign("start", e_new_self(vec![e_var("fiber")])),
+                                s_return(e_var("start")),
+                            ]),
+                    )
+                    .method(
+                        method("start")
+                            .returns(t_mixed())
+                            .body(vec![
+                                s_assign("args", e_this_prop("fiberArgs")),
+                                s_prop_assign(e_this(), "fiberArgs", e_array(vec![])),
+                                s_assign("argCount", e_call("count", vec![e_var("args")])),
+                                s_if(
+                                    e_binop(e_var("argCount"), BinOp::StrictEq, e_int(0)),
+                                    vec![
+                                        s_assign("signal", e_method_call(e_this_prop("fiber"), "start", vec![])),
+                                    ],
+                                    vec![
+                                    (e_binop(e_var("argCount"), BinOp::StrictEq, e_int(1)), vec![
+                                        s_assign("arg0", e_index(e_var("args"), e_int(0))),
+                                        s_assign("signal", e_method_call(e_this_prop("fiber"), "start", vec![e_var("arg0")])),
+                                        s_expr(e_call("unset", vec![e_var("arg0")])),
+                                    ]),
+                                    (e_binop(e_var("argCount"), BinOp::StrictEq, e_int(2)), vec![
+                                        s_assign("arg0", e_index(e_var("args"), e_int(0))),
+                                        s_assign("arg1", e_index(e_var("args"), e_int(1))),
+                                        s_assign("signal", e_method_call(e_this_prop("fiber"), "start", vec![e_var("arg0"), e_var("arg1")])),
+                                        s_expr(e_call("unset", vec![e_var("arg0")])),
+                                        s_expr(e_call("unset", vec![e_var("arg1")])),
+                                    ]),
+                                    (e_binop(e_var("argCount"), BinOp::StrictEq, e_int(3)), vec![
+                                        s_assign("arg0", e_index(e_var("args"), e_int(0))),
+                                        s_assign("arg1", e_index(e_var("args"), e_int(1))),
+                                        s_assign("arg2", e_index(e_var("args"), e_int(2))),
+                                        s_assign("signal", e_method_call(e_this_prop("fiber"), "start", vec![e_var("arg0"), e_var("arg1"), e_var("arg2")])),
+                                        s_expr(e_call("unset", vec![e_var("arg0")])),
+                                        s_expr(e_call("unset", vec![e_var("arg1")])),
+                                        s_expr(e_call("unset", vec![e_var("arg2")])),
+                                    ]),
+                                    (e_binop(e_var("argCount"), BinOp::StrictEq, e_int(4)), vec![
+                                        s_assign("arg0", e_index(e_var("args"), e_int(0))),
+                                        s_assign("arg1", e_index(e_var("args"), e_int(1))),
+                                        s_assign("arg2", e_index(e_var("args"), e_int(2))),
+                                        s_assign("arg3", e_index(e_var("args"), e_int(3))),
+                                        s_assign("signal", e_method_call(e_this_prop("fiber"), "start", vec![e_var("arg0"), e_var("arg1"), e_var("arg2"), e_var("arg3")])),
+                                        s_expr(e_call("unset", vec![e_var("arg0")])),
+                                        s_expr(e_call("unset", vec![e_var("arg1")])),
+                                        s_expr(e_call("unset", vec![e_var("arg2")])),
+                                        s_expr(e_call("unset", vec![e_var("arg3")])),
+                                    ]),
+                                    (e_binop(e_var("argCount"), BinOp::StrictEq, e_int(5)), vec![
+                                        s_assign("arg0", e_index(e_var("args"), e_int(0))),
+                                        s_assign("arg1", e_index(e_var("args"), e_int(1))),
+                                        s_assign("arg2", e_index(e_var("args"), e_int(2))),
+                                        s_assign("arg3", e_index(e_var("args"), e_int(3))),
+                                        s_assign("arg4", e_index(e_var("args"), e_int(4))),
+                                        s_assign("signal", e_method_call(e_this_prop("fiber"), "start", vec![e_var("arg0"), e_var("arg1"), e_var("arg2"), e_var("arg3"), e_var("arg4")])),
+                                        s_expr(e_call("unset", vec![e_var("arg0")])),
+                                        s_expr(e_call("unset", vec![e_var("arg1")])),
+                                        s_expr(e_call("unset", vec![e_var("arg2")])),
+                                        s_expr(e_call("unset", vec![e_var("arg3")])),
+                                        s_expr(e_call("unset", vec![e_var("arg4")])),
+                                    ]),
+                                    (e_binop(e_var("argCount"), BinOp::StrictEq, e_int(6)), vec![
+                                        s_assign("arg0", e_index(e_var("args"), e_int(0))),
+                                        s_assign("arg1", e_index(e_var("args"), e_int(1))),
+                                        s_assign("arg2", e_index(e_var("args"), e_int(2))),
+                                        s_assign("arg3", e_index(e_var("args"), e_int(3))),
+                                        s_assign("arg4", e_index(e_var("args"), e_int(4))),
+                                        s_assign("arg5", e_index(e_var("args"), e_int(5))),
+                                        s_assign("signal", e_method_call(e_this_prop("fiber"), "start", vec![e_var("arg0"), e_var("arg1"), e_var("arg2"), e_var("arg3"), e_var("arg4"), e_var("arg5")])),
+                                        s_expr(e_call("unset", vec![e_var("arg0")])),
+                                        s_expr(e_call("unset", vec![e_var("arg1")])),
+                                        s_expr(e_call("unset", vec![e_var("arg2")])),
+                                        s_expr(e_call("unset", vec![e_var("arg3")])),
+                                        s_expr(e_call("unset", vec![e_var("arg4")])),
+                                        s_expr(e_call("unset", vec![e_var("arg5")])),
+                                    ]),
+                                    (e_binop(e_var("argCount"), BinOp::StrictEq, e_int(7)), vec![
+                                        s_assign("arg0", e_index(e_var("args"), e_int(0))),
+                                        s_assign("arg1", e_index(e_var("args"), e_int(1))),
+                                        s_assign("arg2", e_index(e_var("args"), e_int(2))),
+                                        s_assign("arg3", e_index(e_var("args"), e_int(3))),
+                                        s_assign("arg4", e_index(e_var("args"), e_int(4))),
+                                        s_assign("arg5", e_index(e_var("args"), e_int(5))),
+                                        s_assign("arg6", e_index(e_var("args"), e_int(6))),
+                                        s_assign("signal", e_method_call(e_this_prop("fiber"), "start", vec![e_var("arg0"), e_var("arg1"), e_var("arg2"), e_var("arg3"), e_var("arg4"), e_var("arg5"), e_var("arg6")])),
+                                        s_expr(e_call("unset", vec![e_var("arg0")])),
+                                        s_expr(e_call("unset", vec![e_var("arg1")])),
+                                        s_expr(e_call("unset", vec![e_var("arg2")])),
+                                        s_expr(e_call("unset", vec![e_var("arg3")])),
+                                        s_expr(e_call("unset", vec![e_var("arg4")])),
+                                        s_expr(e_call("unset", vec![e_var("arg5")])),
+                                        s_expr(e_call("unset", vec![e_var("arg6")])),
+                                    ]),
+                                ],
+                                    Some(vec![
+                                    s_throw(e_new_fq("Error", vec![e_str("Elephc Async internal Fiber launch received an unsupported argument count")])),
+                                ]),
+                                ),
+                                s_expr(e_call("unset", vec![e_var("args")])),
+                                s_return(e_var("signal")),
+                            ]),
+                    )
+                    .build(),
+                class("__Scheduler")
+                    .final_()
+                    .private_static_prop("asyncTaskActive", TypeExpr::Bool, Some(e_bool(false)))
+                    .private_prop("cancellation", t_class("__CancellationState"), None)
+                    .private_prop("fibers", t_array(), Some(e_array(vec![])))
+                    .private_prop("taskStarts", t_array(), Some(e_array(vec![])))
+                    .private_prop("ready", t_array(), Some(e_array(vec![])))
+                    .private_prop("queued", t_array(), Some(e_array(vec![])))
+                    .private_prop("waitingOn", t_array(), Some(e_array(vec![])))
+                    .private_prop("done", t_array(), Some(e_array(vec![])))
+                    .private_prop("cancelled", t_array(), Some(e_array(vec![])))
+                    .private_prop("cancelling", t_array(), Some(e_array(vec![])))
+                    .private_prop("outcomes", t_array(), Some(e_array(vec![])))
+                    .private_prop("sleepDeadlines", t_array(), Some(e_array(vec![])))
+                    .private_prop("ioSources", t_array(), Some(e_array(vec![])))
+                    .private_prop("ioPollFds", t_array(), Some(e_array(vec![])))
+                    .private_prop("ioInterests", t_array(), Some(e_array(vec![])))
+                    .private_prop("ioTaskIds", t_array(), Some(e_array(vec![])))
+                    .private_prop("ioDeadlines", t_array(), Some(e_array(vec![])))
+                    .private_prop("ioActive", t_array(), Some(e_array(vec![])))
+                    .private_prop("ioReady", t_array(), Some(e_array(vec![])))
+                    .private_prop("taskIoRegistration", t_array(), Some(e_array(vec![])))
+                    .private_prop("taskGenerations", t_array(), Some(e_array(vec![])))
+                    .private_prop("taskHandles", t_array(), Some(e_array(vec![])))
+                    .private_prop("parentTaskIds", t_array(), Some(e_array(vec![])))
+                    .private_prop("groupTaskIds", t_array(), Some(e_array(vec![])))
+                    .private_prop("closed", TypeExpr::Bool, Some(e_bool(false)))
+                    .private_prop("nextTaskGeneration", TypeExpr::Int, Some(e_int(1)))
+                    .private_prop("head", TypeExpr::Int, Some(e_int(0)))
+                    .private_prop("live", TypeExpr::Int, Some(e_int(0)))
+                    .private_prop("currentId", TypeExpr::Int, Some(e_neg(e_int(1))))
+                    .private_prop("rootId", TypeExpr::Int, Some(e_neg(e_int(1))))
+                    .private_prop("failureOrder", t_array(), Some(e_array(vec![])))
+                    .method(
+                        method("__construct")
+                            .param("cancellation", t_class("__CancellationState"))
+                            .body(vec![
+                                s_prop_assign(e_this(), "cancellation", e_var("cancellation")),
+                            ]),
+                    )
+                    .method(method_is_async_task_active())
+                    .method(method_assert_fiber_suspend_allowed_in_async_task())
+                    .method(method_assert_fiber_suspend_callable_allowed())
+                    .method(method_is_fiber_suspend_callable_array())
+                    .method(method_assert_fiber_suspend_callable_guard())
+                    .method(
+                        method("spawn")
+                            .param("body", t_class("callable"))
+                            .param("args", t_mixed())
+                            .returns(t_class("Awaitable"))
+                            .body(vec![
+                                s_if(
+                                    e_method_call(e_this_prop("cancellation"), "isRequested", vec![]),
+                                    vec![
+                                        s_expr(e_call("unset", vec![e_var("body")])),
+                                        s_expr(e_call("unset", vec![e_var("args")])),
+                                        s_throw(e_new_fq("Error", vec![e_str("Elephc Async TaskGroup cannot spawn after cancellation has been requested")])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_assign(
+                                    "runner",
+                                    closure()
+                                        .static_()
+                                        .captures("body")
+                                        .captures("args")
+                                        .returns(t_mixed())
+                                        .body(vec![s_return(e_call(
+                                            "call_user_func_array",
+                                            vec![e_var("body"), e_var("args")],
+                                        ))])
+                                        .build(),
+                                ),
+                                s_assign("taskId", e_method_call(e_this(), "createTaskNoArgs", vec![e_var("runner")])),
+                                s_expr(e_call("unset", vec![e_var("runner")])),
+                                s_assign("awaitable", e_new("Awaitable", vec![e_this(), e_var("taskId")])),
+                                s_expr(e_call("unset", vec![e_var("body")])),
+                                s_expr(e_call("unset", vec![e_var("args")])),
+                                s_return(e_var("awaitable")),
+                            ]),
+                    )
+                    .method(
+                        method("runRoot")
+                            .private()
+                            .param("body", t_class("callable"))
+                            .param("group", t_class("TaskGroup"))
+                            .returns(t_mixed())
+                            .body(vec![
+                                s_prop_assign(e_this(), "closed", e_bool(false)),
+                                s_assign("rootTaskId", e_method_call(e_this(), "createTask", vec![e_var("body"), e_array(vec![e_var("group")])])),
+                                s_assign("rootId", e_method_call(e_this(), "resolveTaskId", vec![e_var("rootTaskId")])),
+                                s_prop_assign(e_this(), "rootId", e_var("rootId")),
+                                s_try(vec![
+                                    s_expr(e_method_call(e_this(), "drive", vec![])),
+                                    s_expr(e_method_call(e_var("group"), "__detach", vec![])),
+                                    s_expr(e_method_call(e_this(), "throwFirstUnobservedFailure", vec![])),
+                                    s_assign("root", e_index(e_this_prop("fibers"), e_var("rootId"))),
+                                    s_assign("result", e_method_call(e_var("root"), "getReturn", vec![])),
+                                    s_prop_array_assign(e_this(), "fibers", e_var("rootId"), e_null()),
+                                    s_expr(e_call("unset", vec![e_var("root")])),
+                                    s_expr(e_method_call(e_this(), "teardown", vec![])),
+                                ], vec![
+                                    (vec!["\\Throwable"], Some("error"), vec![
+                                        s_expr(e_method_call(e_this(), "teardown", vec![])),
+                                        s_expr(e_call("unset", vec![e_var("body")])),
+                                        s_expr(e_call("unset", vec![e_var("group")])),
+                                        s_throw(e_var("error")),
+                                    ]),
+                                ], None),
+                                s_expr(e_call("unset", vec![e_var("body")])),
+                                s_expr(e_call("unset", vec![e_var("group")])),
+                                s_return(e_var("result")),
+                            ]),
+                    )
+                    .method(
+                        method("awaitTask")
+                            .param("taskId", TypeExpr::Int)
+                            .returns(t_mixed())
+                            .body(vec![
+                                s_assign("targetId", e_method_call(e_this(), "resolveTaskId", vec![e_var("taskId")])),
+                                s_if(
+                                    e_index(e_this_prop("done"), e_var("targetId")),
+                                    vec![
+                                        s_if(
+                                            e_index(e_this_prop("cancelled"), e_var("targetId")),
+                                            vec![
+                                                s_throw(e_method_call(e_this_prop("cancellation"), "exception", vec![])),
+                                            ],
+                                            vec![],
+                                            None,
+                                        ),
+                                        s_assign("outcome", e_index(e_this_prop("outcomes"), e_var("targetId"))),
+                                        s_expr(e_method_call(e_var("outcome"), "observeAndThrowIfFailed", vec![])),
+                                        s_expr(e_call("unset", vec![e_var("outcome")])),
+                                        s_assign("target", e_index(e_this_prop("fibers"), e_var("targetId"))),
+                                        s_return(e_method_call(e_var("target"), "getReturn", vec![])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_if(
+                                    e_binop(e_this_prop("currentId"), BinOp::Lt, e_int(0)),
+                                    vec![
+                                        s_throw(e_new_fq("Error", vec![e_str("Awaitable::await() must be called from an Elephc Async task")])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_if(
+                                    e_binop(e_this_prop("currentId"), BinOp::StrictEq, e_var("targetId")),
+                                    vec![
+                                        s_throw(e_new_fq("Error", vec![e_str("An Elephc Async task cannot await itself")])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_assign("currentId", e_this_prop("currentId")),
+                                s_prop_array_assign(e_this(), "waitingOn", e_var("currentId"), e_var("targetId")),
+                                s_expr(e_method_call(e_this(), "monitorTask", vec![e_var("currentId"), e_int(4), e_int(4)])),
+                                s_expr(e_static_call("\\Fiber", "suspend", vec![e_int(1)])),
+                                s_if(
+                                    e_binop(e_var("currentId"), BinOp::StrictNotEq, e_this_prop("rootId")),
+                                    vec![
+                                        s_expr(e_method_call(e_this(), "throwIfCancellationRequested", vec![])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_if(
+                                    e_index(e_this_prop("cancelled"), e_var("targetId")),
+                                    vec![
+                                        s_throw(e_method_call(e_this_prop("cancellation"), "exception", vec![])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_assign("outcome", e_index(e_this_prop("outcomes"), e_var("targetId"))),
+                                s_expr(e_method_call(e_var("outcome"), "observeAndThrowIfFailed", vec![])),
+                                s_expr(e_call("unset", vec![e_var("outcome")])),
+                                s_assign("target", e_index(e_this_prop("fibers"), e_var("targetId"))),
+                                s_return(e_method_call(e_var("target"), "getReturn", vec![])),
+                            ]),
+                    )
+                    .method(
+                        method("isComplete")
+                            .param("taskId", TypeExpr::Int)
+                            .returns(TypeExpr::Bool)
+                            .body(vec![
+                                s_assign("slot", e_method_call(e_this(), "resolveTaskId", vec![e_var("taskId")])),
+                                s_return(e_index(e_this_prop("done"), e_var("slot"))),
+                            ]),
+                    )
+                    .method(
+                        method("rescheduleCurrent")
+                            .returns(TypeExpr::Void)
+                            .body(vec![
+                                s_if(
+                                    e_binop(e_this_prop("currentId"), BinOp::Lt, e_int(0)),
+                                    vec![
+                                        s_throw(e_new_fq("Error", vec![e_str("TaskGroup::reschedule() must be called from an Elephc Async task")])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_if(
+                                    e_binop(e_this_prop("currentId"), BinOp::StrictNotEq, e_this_prop("rootId")),
+                                    vec![
+                                        s_expr(e_method_call(e_this(), "throwIfCancellationRequested", vec![])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_expr(e_static_call("\\Fiber", "suspend", vec![e_int(0)])),
+                                s_if(
+                                    e_binop(e_this_prop("currentId"), BinOp::StrictNotEq, e_this_prop("rootId")),
+                                    vec![
+                                        s_expr(e_method_call(e_this(), "throwIfCancellationRequested", vec![])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                            ]),
+                    )
+                    .method(
+                        method("sleepCurrent")
+                            .param("seconds", TypeExpr::Float)
+                            .returns(TypeExpr::Void)
+                            .body(vec![
+                                s_if(
+                                    e_binop(e_this_prop("currentId"), BinOp::Lt, e_int(0)),
+                                    vec![
+                                        s_throw(e_new_fq("Error", vec![e_str("TaskGroup::sleep() must be called from an Elephc Async task")])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_if(
+                                    e_not(e_call("is_finite", vec![e_var("seconds")])),
+                                    vec![s_throw(e_new_fq(
+                                        "ValueError",
+                                        vec![e_str("TaskGroup::sleep(): Argument #1 ($seconds) must be finite")],
+                                    ))],
+                                    vec![],
+                                    None,
+                                ),
+                                s_if(
+                                    e_binop(e_var("seconds"), BinOp::Lt, e_float(0.0)),
+                                    vec![
+                                        s_throw(e_new_fq("ValueError", vec![e_str("TaskGroup::sleep(): Argument #1 ($seconds) must be greater than or equal to 0")])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_if(
+                                    e_binop(e_this_prop("currentId"), BinOp::StrictNotEq, e_this_prop("rootId")),
+                                    vec![
+                                        s_expr(e_method_call(e_this(), "throwIfCancellationRequested", vec![])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_if(
+                                    e_binop(e_var("seconds"), BinOp::StrictEq, e_float(0.0)),
+                                    vec![
+                                        s_expr(e_static_call("\\Fiber", "suspend", vec![e_int(0)])),
+                                        s_if(
+                                            e_binop(e_this_prop("currentId"), BinOp::StrictNotEq, e_this_prop("rootId")),
+                                            vec![
+                                                s_expr(e_method_call(e_this(), "throwIfCancellationRequested", vec![])),
+                                            ],
+                                            vec![],
+                                            None,
+                                        ),
+                                        s_return_void(),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_assign("deadlineBase", e_call("hrtime", vec![e_bool(true)])),
+                                s_assign(
+                                    "maximumSeconds",
+                                    e_binop(
+                                        e_binop(e_int(i64::MAX), BinOp::Sub, e_var("deadlineBase")),
+                                        BinOp::Div,
+                                        e_float(1000000000.0),
+                                    ),
+                                ),
+                                s_if(
+                                    e_binop(e_var("seconds"), BinOp::Gt, e_var("maximumSeconds")),
+                                    vec![s_throw(e_new_fq(
+                                        "ValueError",
+                                        vec![e_str("TaskGroup::sleep(): seconds exceed the monotonic deadline range")],
+                                    ))],
+                                    vec![],
+                                    None,
+                                ),
+                                s_assign("nanoseconds", e_cast(CastType::Int, e_binop(e_var("seconds"), BinOp::Mul, e_float(1000000000.0)))),
+                                s_prop_array_assign(e_this(), "sleepDeadlines", e_this_prop("currentId"), e_binop(e_var("deadlineBase"), BinOp::Add, e_var("nanoseconds"))),
+                                s_expr(e_method_call(e_this(), "monitorTask", vec![e_this_prop("currentId"), e_int(5), e_int(0)])),
+                                s_expr(e_static_call("\\Fiber", "suspend", vec![e_int(2)])),
+                                s_if(
+                                    e_binop(e_this_prop("currentId"), BinOp::StrictNotEq, e_this_prop("rootId")),
+                                    vec![
+                                        s_expr(e_method_call(e_this(), "throwIfCancellationRequested", vec![])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                            ]),
+                    )
+                    .method(
+                        method("awaitReadable")
+                            .param("stream", t_mixed())
+                            .param_default("timeout", t_nullable(TypeExpr::Float), e_null())
+                            .returns(TypeExpr::Bool)
+                            .body(vec![
+                                s_return(e_method_call(e_this(), "awaitIo", vec![e_var("stream"), e_int(1), e_var("timeout"), e_str("TaskGroup::awaitReadable()")])),
+                            ]),
+                    )
+                    .method(
+                        method("awaitWritable")
+                            .param("stream", t_mixed())
+                            .param_default("timeout", t_nullable(TypeExpr::Float), e_null())
+                            .returns(TypeExpr::Bool)
+                            .body(vec![
+                                s_return(e_method_call(e_this(), "awaitIo", vec![e_var("stream"), e_int(4), e_var("timeout"), e_str("TaskGroup::awaitWritable()")])),
+                            ]),
+                    )
+                    .method(
+                        method("awaitIo")
+                            .private()
+                            .param("stream", t_mixed())
+                            .param("interest", TypeExpr::Int)
+                            .param("timeout", t_nullable(TypeExpr::Float))
+                            .param("operation", TypeExpr::Str)
+                            .returns(TypeExpr::Bool)
+                            .body(vec![
+                                s_if(
+                                    e_binop(e_this_prop("currentId"), BinOp::Lt, e_int(0)),
+                                    vec![
+                                        s_throw(e_new_fq("Error", vec![e_binop(e_var("operation"), BinOp::Concat, e_str(" must be called from an Elephc Async task"))])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_if(
+                                    e_binop(e_not(e_call("is_resource", vec![e_var("stream")])), BinOp::And, e_not(e_call("is_int", vec![e_var("stream")]))),
+                                    vec![
+                                        s_throw(e_new_fq("TypeError", vec![e_binop(e_var("operation"), BinOp::Concat, e_str(" expects a native stream resource or descriptor"))])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_if(
+                                    e_binop(
+                                        e_call("is_int", vec![e_var("stream")]),
+                                        BinOp::And,
+                                        e_binop(
+                                            e_binop(e_var("stream"), BinOp::Lt, e_int(0)),
+                                            BinOp::Or,
+                                            e_binop(e_var("stream"), BinOp::Gt, e_int(2147483647)),
+                                        ),
+                                    ),
+                                    vec![
+                                        s_throw(e_new_fq("ValueError", vec![e_binop(e_var("operation"), BinOp::Concat, e_str(" expects a descriptor within the non-negative C int range"))])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_if(
+                                    e_binop(
+                                        e_binop(e_var("timeout"), BinOp::StrictNotEq, e_null()),
+                                        BinOp::And,
+                                        e_not(e_call("is_finite", vec![e_var("timeout")])),
+                                    ),
+                                    vec![s_throw(e_new_fq(
+                                        "ValueError",
+                                        vec![e_binop(
+                                            e_var("operation"),
+                                            BinOp::Concat,
+                                            e_str(": Argument #2 ($timeout) must be finite"),
+                                        )],
+                                    ))],
+                                    vec![],
+                                    None,
+                                ),
+                                s_if(
+                                    e_binop(e_binop(e_var("timeout"), BinOp::StrictNotEq, e_null()), BinOp::And, e_binop(e_var("timeout"), BinOp::Lt, e_float(0.0))),
+                                    vec![
+                                        s_throw(e_new_fq("ValueError", vec![e_binop(e_var("operation"), BinOp::Concat, e_str(": Argument #2 ($timeout) must be greater than or equal to 0"))])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_if(
+                                    e_binop(e_var("timeout"), BinOp::StrictEq, e_float(0.0)),
+                                    vec![
+                                        s_return(e_method_call(e_this(), "probeIo", vec![e_var("stream"), e_var("interest")])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_assign("deadline", e_neg(e_int(1))),
+                                s_if(
+                                    e_binop(e_var("timeout"), BinOp::StrictNotEq, e_null()),
+                                    vec![
+                                        s_assign("deadlineBase", e_call("hrtime", vec![e_bool(true)])),
+                                        s_assign(
+                                            "maximumTimeout",
+                                            e_binop(
+                                                e_binop(e_int(i64::MAX), BinOp::Sub, e_var("deadlineBase")),
+                                                BinOp::Div,
+                                                e_float(1000000000.0),
+                                            ),
+                                        ),
+                                        s_if(
+                                            e_binop(e_var("timeout"), BinOp::Gt, e_var("maximumTimeout")),
+                                            vec![s_throw(e_new_fq(
+                                                "ValueError",
+                                                vec![e_binop(
+                                                    e_var("operation"),
+                                                    BinOp::Concat,
+                                                    e_str(": timeout exceeds the monotonic deadline range"),
+                                                )],
+                                            ))],
+                                            vec![],
+                                            None,
+                                        ),
+                                        s_assign(
+                                            "deadline",
+                                            e_binop(
+                                                e_var("deadlineBase"),
+                                                BinOp::Add,
+                                                e_cast(CastType::Int, e_binop(e_var("timeout"), BinOp::Mul, e_float(1000000000.0))),
+                                            ),
+                                        ),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_assign("pollFd", e_method_call(e_this(), "duplicateIoSource", vec![e_var("stream")])),
+                                s_if(
+                                    e_binop(e_var("pollFd"), BinOp::Lt, e_int(0)),
+                                    vec![
+                                        s_throw(e_new_fq("Error", vec![e_binop(e_var("operation"), BinOp::Concat, e_str(" could not duplicate the native descriptor"))])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_assign("registrationId", e_call("count", vec![e_this_prop("ioSources")])),
+                                s_prop_array_assign(e_this(), "ioSources", e_var("registrationId"), e_var("stream")),
+                                s_prop_array_assign(e_this(), "ioPollFds", e_var("registrationId"), e_var("pollFd")),
+                                s_prop_array_assign(e_this(), "ioInterests", e_var("registrationId"), e_var("interest")),
+                                s_prop_array_assign(e_this(), "ioTaskIds", e_var("registrationId"), e_this_prop("currentId")),
+                                s_prop_array_assign(e_this(), "ioDeadlines", e_var("registrationId"), e_var("deadline")),
+                                s_prop_array_assign(e_this(), "ioActive", e_var("registrationId"), e_bool(true)),
+                                s_prop_array_assign(e_this(), "ioReady", e_var("registrationId"), e_bool(false)),
+                                s_prop_array_assign(e_this(), "taskIoRegistration", e_this_prop("currentId"), e_var("registrationId")),
+                                s_assign("taskId", e_this_prop("currentId")),
+                                s_expr(e_method_call(e_this(), "monitorTask", vec![e_var("taskId"), e_int(6), e_int(0)])),
+                                s_expr(e_static_call("\\Fiber", "suspend", vec![e_int(3)])),
+                                s_if(
+                                    e_binop(e_var("taskId"), BinOp::StrictNotEq, e_this_prop("rootId")),
+                                    vec![
+                                        s_expr(e_method_call(e_this(), "throwIfCancellationRequested", vec![])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_return(e_index(e_this_prop("ioReady"), e_var("registrationId"))),
+                            ]),
+                    )
+                    .method(
+                        method("probeIo")
+                            .private()
+                            .param("source", t_mixed())
+                            .param("interest", TypeExpr::Int)
+                            .returns(TypeExpr::Bool)
+                            .body(vec![
+                                s_assign("pollFd", e_method_call(e_this(), "duplicateIoSource", vec![e_var("source")])),
+                                s_if(
+                                    e_binop(e_var("pollFd"), BinOp::Lt, e_int(0)),
+                                    vec![
+                                        s_throw(e_new_fq("Error", vec![e_str("Elephc Async reactor could not duplicate the native descriptor")])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_assign("entries", e_array(vec![e_var("pollFd"), e_var("interest")])),
+                                s_assign("result", e_neg(e_int(2))),
+                                s_while(e_binop(e_var("result"), BinOp::StrictEq, e_neg(e_int(2))), vec![
+                                    s_assign("result", e_call("\\__elephc_async_poll", vec![e_var("entries"), e_int(0)])),
+                                ]),
+                                s_expr(e_method_call(e_this(), "releasePollFd", vec![e_var("pollFd")])),
+                                s_if(
+                                    e_binop(e_var("result"), BinOp::StrictEq, e_int(0)),
+                                    vec![
+                                        s_return(e_bool(true)),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_if(
+                                    e_binop(e_var("result"), BinOp::StrictEq, e_neg(e_int(1))),
+                                    vec![
+                                        s_return(e_bool(false)),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_throw(e_new_fq("Error", vec![e_str("Elephc Async reactor poll failed")])),
+                            ]),
+                    )
+                    .method(
+                        method("duplicateIoSource")
+                            .private()
+                            .param("source", t_mixed())
+                            .returns(TypeExpr::Int)
+                            .body(vec![
+                                s_return(e_call("\\__elephc_async_fd", vec![e_array(vec![e_var("source")]), e_int(0)])),
+                            ]),
+                    )
+                    .method(
+                        method("throwIfCancellationRequested")
+                            .private()
+                            .returns(TypeExpr::Void)
+                            .body(vec![
+                                s_assign("cancellation", e_this_prop("cancellation")),
+                                s_expr(e_method_call(e_var("cancellation"), "throwIfRequested", vec![])),
+                                s_expr(e_call("unset", vec![e_var("cancellation")])),
+                            ]),
+                    )
+                    .method(
+                        method("releasePollFd")
+                            .private()
+                            .param("pollFd", TypeExpr::Int)
+                            .returns(TypeExpr::Void)
+                            .body(vec![
+                                s_expr(e_call("\\__elephc_async_fd", vec![e_array(vec![e_var("pollFd")]), e_int(1)])),
+                            ]),
+                    )
+                    .method(
+                        method("createTask")
+                            .private()
+                            .param("body", t_class("callable"))
+                            .param("args", t_array())
+                            .returns(TypeExpr::Int)
+                            .body(vec![
+                                s_assign("fiber", e_new_fq("Fiber", vec![e_var("body")])),
+                                s_assign("taskStart", e_static_call("__TaskStart", "fromArguments", vec![e_var("fiber"), e_var("args")])),
+                                s_assign("taskId", e_method_call(e_this(), "registerTask", vec![e_var("fiber"), e_var("taskStart")])),
+                                s_expr(e_call("unset", vec![e_var("fiber")])),
+                                s_expr(e_call("unset", vec![e_var("taskStart")])),
+                                s_expr(e_call("unset", vec![e_var("args")])),
+                                s_expr(e_call("unset", vec![e_var("body")])),
+                                s_return(e_var("taskId")),
+                            ]),
+                    )
+                    .method(
+                        method("createTaskNoArgs")
+                            .private()
+                            .param("body", t_class("callable"))
+                            .returns(TypeExpr::Int)
+                            .body(vec![
+                                s_assign("fiber", e_new_fq("Fiber", vec![e_var("body")])),
+                                s_assign("taskStart", e_static_call("__TaskStart", "fromNoArgs", vec![e_var("fiber")])),
+                                s_assign("taskId", e_method_call(e_this(), "registerTask", vec![e_var("fiber"), e_var("taskStart")])),
+                                s_expr(e_call("unset", vec![e_var("fiber")])),
+                                s_expr(e_call("unset", vec![e_var("taskStart")])),
+                                s_expr(e_call("unset", vec![e_var("body")])),
+                                s_return(e_var("taskId")),
+                            ]),
+                    )
+                    .method(
+                        method("registerTask")
+                            .private()
+                            .param("fiber", t_class("\\Fiber"))
+                            .param("taskStart", t_class("__TaskStart"))
+                            .returns(TypeExpr::Int)
+                            .body(vec![
+                                s_assign("slot", e_call("count", vec![e_this_prop("fibers")])),
+                                s_assign("generation", e_this_prop("nextTaskGeneration")),
+                                s_if(
+                                    e_binop(e_var("generation"), BinOp::GtEq, e_int(4294967296)),
+                                    vec![
+                                        s_throw(e_new_fq("Error", vec![e_str("Elephc Async task generation space exhausted")])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_prop_assign(e_this(), "nextTaskGeneration", e_binop(e_var("generation"), BinOp::Add, e_int(1))),
+                                s_prop_array_assign(e_this(), "taskGenerations", e_var("slot"), e_var("generation")),
+                                s_assign("taskId", e_binop(e_binop(e_var("slot"), BinOp::Mul, e_int(4294967296)), BinOp::Add, e_var("generation"))),
+                                s_assign("parentTaskId", e_neg(e_int(1))),
+                                s_if(
+                                    e_binop(e_this_prop("currentId"), BinOp::GtEq, e_int(0)),
+                                    vec![
+                                        s_assign("parentTaskId", e_index(e_this_prop("taskHandles"), e_this_prop("currentId"))),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_assign("groupTaskId", e_var("taskId")),
+                                s_if(
+                                    e_binop(e_this_prop("rootId"), BinOp::GtEq, e_int(0)),
+                                    vec![
+                                        s_assign("groupTaskId", e_index(e_this_prop("taskHandles"), e_this_prop("rootId"))),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_prop_array_assign(e_this(), "taskHandles", e_var("slot"), e_var("taskId")),
+                                s_prop_array_assign(e_this(), "parentTaskIds", e_var("slot"), e_var("parentTaskId")),
+                                s_prop_array_assign(e_this(), "groupTaskIds", e_var("slot"), e_var("groupTaskId")),
+                                s_prop_array_assign(e_this(), "fibers", e_var("slot"), e_var("fiber")),
+                                s_prop_array_assign(e_this(), "taskStarts", e_var("slot"), e_var("taskStart")),
+                                s_prop_array_assign(e_this(), "queued", e_var("slot"), e_bool(false)),
+                                s_prop_array_assign(e_this(), "waitingOn", e_var("slot"), e_neg(e_int(1))),
+                                s_prop_array_assign(e_this(), "done", e_var("slot"), e_bool(false)),
+                                s_prop_array_assign(e_this(), "cancelled", e_var("slot"), e_bool(false)),
+                                s_prop_array_assign(e_this(), "cancelling", e_var("slot"), e_bool(false)),
+                                s_prop_array_assign(e_this(), "outcomes", e_var("slot"), e_new("__TaskOutcome", vec![])),
+                                s_prop_array_assign(e_this(), "sleepDeadlines", e_var("slot"), e_neg(e_int(1))),
+                                s_prop_array_assign(e_this(), "taskIoRegistration", e_var("slot"), e_neg(e_int(1))),
+                                s_prop_assign(e_this(), "live", e_binop(e_this_prop("live"), BinOp::Add, e_int(1))),
+                                s_expr(e_method_call(e_this(), "monitorTask", vec![e_var("slot"), e_int(1), e_int(0)])),
+                                s_expr(e_method_call(e_this(), "enqueue", vec![e_var("slot"), e_int(1)])),
+                                s_assign("resultTaskId", e_var("taskId")),
+                                s_expr(e_call("unset", vec![e_var("fiber")])),
+                                s_expr(e_call("unset", vec![e_var("taskStart")])),
+                                s_return(e_var("resultTaskId")),
+                            ]),
+                    )
+                    .method(
+                        method("resolveTaskId")
+                            .private()
+                            .param("taskId", TypeExpr::Int)
+                            .returns(TypeExpr::Int)
+                            .body(vec![
+                                s_if(
+                                    e_this_prop("closed"),
+                                    vec![s_throw(e_new_fq("Error", vec![e_str("Elephc Async Awaitable scope has ended")]))],
+                                    vec![],
+                                    None,
+                                ),
+                                s_if(
+                                    e_binop(e_var("taskId"), BinOp::Lt, e_int(1)),
+                                    vec![
+                                        s_throw(e_new_fq("Error", vec![e_str("Stale Elephc Async task handle")])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_assign("slot", e_call("intdiv", vec![e_var("taskId"), e_int(4294967296)])),
+                                s_assign("generation", e_binop(e_var("taskId"), BinOp::Mod, e_int(4294967296))),
+                                s_if(
+                                    e_binop(e_binop(e_var("slot"), BinOp::Lt, e_int(0)), BinOp::Or, e_binop(e_var("slot"), BinOp::GtEq, e_call("count", vec![e_this_prop("taskGenerations")]))),
+                                    vec![
+                                        s_throw(e_new_fq("Error", vec![e_str("Stale Elephc Async task handle")])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_if(
+                                    e_binop(e_index(e_this_prop("taskGenerations"), e_var("slot")), BinOp::StrictNotEq, e_var("generation")),
+                                    vec![
+                                        s_throw(e_new_fq("Error", vec![e_str("Stale Elephc Async task handle")])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_return(e_var("slot")),
+                            ]),
+                    )
+                    .method(
+                        method("monitorTask")
+                            .private()
+                            .param("slot", TypeExpr::Int)
+                            .param("state", TypeExpr::Int)
+                            .param("reason", TypeExpr::Int)
+                            .returns(TypeExpr::Void)
+                            .body(vec![
+                                s_expr(e_call("\\__elephc_async_monitor_event", vec![e_int(1), e_index(e_this_prop("taskHandles"), e_var("slot")), e_index(e_this_prop("parentTaskIds"), e_var("slot")), e_index(e_this_prop("groupTaskIds"), e_var("slot")), e_binop(e_binop(e_var("state"), BinOp::Mul, e_int(256)), BinOp::Add, e_var("reason"))])),
+                            ]),
+                    )
+                    .method(
+                        method("enqueue")
+                            .private()
+                            .param("taskId", TypeExpr::Int)
+                            .param("wakeReason", TypeExpr::Int)
+                            .returns(TypeExpr::Void)
+                            .body(vec![
+                                s_if(
+                                    e_binop(e_index(e_this_prop("done"), e_var("taskId")), BinOp::Or, e_index(e_this_prop("queued"), e_var("taskId"))),
+                                    vec![
+                                        s_return_void(),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_prop_array_assign(e_this(), "queued", e_var("taskId"), e_bool(true)),
+                                s_prop_array_push(e_this(), "ready", e_var("taskId")),
+                                s_expr(e_method_call(e_this(), "monitorTask", vec![e_var("taskId"), e_int(2), e_var("wakeReason")])),
+                            ]),
+                    )
+                    .method(
+                        method("dequeue")
+                            .private()
+                            .returns(TypeExpr::Int)
+                            .body(vec![
+                                s_if(
+                                    e_binop(e_this_prop("head"), BinOp::GtEq, e_call("count", vec![e_this_prop("ready")])),
+                                    vec![
+                                        s_prop_assign(e_this(), "ready", e_array(vec![])),
+                                        s_prop_assign(e_this(), "head", e_int(0)),
+                                        s_return(e_neg(e_int(1))),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_assign("taskId", e_index(e_this_prop("ready"), e_this_prop("head"))),
+                                s_prop_assign(e_this(), "head", e_binop(e_this_prop("head"), BinOp::Add, e_int(1))),
+                                s_prop_array_assign(e_this(), "queued", e_var("taskId"), e_bool(false)),
+                                s_return(e_var("taskId")),
+                            ]),
+                    )
+                    .method(
+                        method("wakeWaiters")
+                            .private()
+                            .param("completedId", TypeExpr::Int)
+                            .returns(TypeExpr::Void)
+                            .body(vec![
+                                s_assign("taskId", e_int(0)),
+                                s_assign("count", e_call("count", vec![e_this_prop("fibers")])),
+                                s_while(e_binop(e_var("taskId"), BinOp::Lt, e_var("count")), vec![
+                                    s_if(
+                                        e_binop(e_index(e_this_prop("waitingOn"), e_var("taskId")), BinOp::StrictEq, e_var("completedId")),
+                                        vec![
+                                            s_prop_array_assign(e_this(), "waitingOn", e_var("taskId"), e_neg(e_int(1))),
+                                            s_expr(e_method_call(e_this(), "enqueue", vec![e_var("taskId"), e_int(5)])),
+                                        ],
+                                        vec![],
+                                        None,
+                                    ),
+                                    s_assign("taskId", e_binop(e_var("taskId"), BinOp::Add, e_int(1))),
+                                ]),
+                            ]),
+                    )
+                    .method(
+                        method("wakeExpiredTimers")
+                            .private()
+                            .returns(TypeExpr::Void)
+                            .body(vec![
+                                s_assign("now", e_call("hrtime", vec![e_bool(true)])),
+                                s_assign("taskId", e_int(0)),
+                                s_assign("count", e_call("count", vec![e_this_prop("fibers")])),
+                                s_while(e_binop(e_var("taskId"), BinOp::Lt, e_var("count")), vec![
+                                    s_assign("deadline", e_index(e_this_prop("sleepDeadlines"), e_var("taskId"))),
+                                    s_if(
+                                        e_binop(e_binop(e_var("deadline"), BinOp::GtEq, e_int(0)), BinOp::And, e_binop(e_var("deadline"), BinOp::LtEq, e_var("now"))),
+                                        vec![
+                                            s_prop_array_assign(e_this(), "sleepDeadlines", e_var("taskId"), e_neg(e_int(1))),
+                                            s_expr(e_method_call(e_this(), "enqueue", vec![e_var("taskId"), e_int(6)])),
+                                        ],
+                                        vec![],
+                                        None,
+                                    ),
+                                    s_assign("taskId", e_binop(e_var("taskId"), BinOp::Add, e_int(1))),
+                                ]),
+                            ]),
+                    )
+                    .method(
+                        method("deregisterIoForTask")
+                            .private()
+                            .param("taskId", TypeExpr::Int)
+                            .returns(TypeExpr::Void)
+                            .body(vec![
+                                s_assign("registrationId", e_index(e_this_prop("taskIoRegistration"), e_var("taskId"))),
+                                s_if(
+                                    e_binop(e_var("registrationId"), BinOp::GtEq, e_int(0)),
+                                    vec![
+                                        s_expr(e_method_call(e_this(), "releaseIoRegistration", vec![e_var("registrationId")])),
+                                        s_prop_array_assign(e_this(), "taskIoRegistration", e_var("taskId"), e_neg(e_int(1))),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                            ]),
+                    )
+                    .method(
+                        method("releaseIoRegistration")
+                            .private()
+                            .param("registrationId", TypeExpr::Int)
+                            .returns(TypeExpr::Void)
+                            .body(vec![
+                                s_if(
+                                    e_not(e_index(e_this_prop("ioActive"), e_var("registrationId"))),
+                                    vec![
+                                        s_return_void(),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_prop_array_assign(e_this(), "ioActive", e_var("registrationId"), e_bool(false)),
+                                s_prop_array_assign(e_this(), "ioSources", e_var("registrationId"), e_null()),
+                                s_assign("pollFd", e_index(e_this_prop("ioPollFds"), e_var("registrationId"))),
+                                s_if(
+                                    e_binop(e_var("pollFd"), BinOp::GtEq, e_int(0)),
+                                    vec![
+                                        s_expr(e_method_call(e_this(), "releasePollFd", vec![e_var("pollFd")])),
+                                        s_prop_array_assign(e_this(), "ioPollFds", e_var("registrationId"), e_neg(e_int(1))),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                            ]),
+                    )
+                    .method(
+                        method("wakeExpiredIo")
+                            .private()
+                            .returns(TypeExpr::Void)
+                            .body(vec![
+                                s_assign("now", e_call("hrtime", vec![e_bool(true)])),
+                                s_assign("registrationId", e_int(0)),
+                                s_assign("count", e_call("count", vec![e_this_prop("ioSources")])),
+                                s_while(e_binop(e_var("registrationId"), BinOp::Lt, e_var("count")), vec![
+                                    s_assign("deadline", e_index(e_this_prop("ioDeadlines"), e_var("registrationId"))),
+                                    s_if(
+                                        e_binop(e_binop(e_index(e_this_prop("ioActive"), e_var("registrationId")), BinOp::And, e_binop(e_var("deadline"), BinOp::GtEq, e_int(0))), BinOp::And, e_binop(e_var("deadline"), BinOp::LtEq, e_var("now"))),
+                                        vec![
+                                            s_assign("taskId", e_index(e_this_prop("ioTaskIds"), e_var("registrationId"))),
+                                            s_expr(e_method_call(e_this(), "releaseIoRegistration", vec![e_var("registrationId")])),
+                                            s_prop_array_assign(e_this(), "ioReady", e_var("registrationId"), e_bool(false)),
+                                            s_prop_array_assign(e_this(), "taskIoRegistration", e_var("taskId"), e_neg(e_int(1))),
+                                            s_expr(e_method_call(e_this(), "enqueue", vec![e_var("taskId"), e_int(8)])),
+                                        ],
+                                        vec![],
+                                        None,
+                                    ),
+                                    s_assign("registrationId", e_binop(e_var("registrationId"), BinOp::Add, e_int(1))),
+                                ]),
+                            ]),
+                    )
+                    .method(
+                        method("hasIoRegistrations")
+                            .private()
+                            .returns(TypeExpr::Bool)
+                            .body(vec![
+                                s_assign("registrationId", e_int(0)),
+                                s_assign("count", e_call("count", vec![e_this_prop("ioSources")])),
+                                s_while(e_binop(e_var("registrationId"), BinOp::Lt, e_var("count")), vec![
+                                    s_if(
+                                        e_index(e_this_prop("ioActive"), e_var("registrationId")),
+                                        vec![
+                                            s_return(e_bool(true)),
+                                        ],
+                                        vec![],
+                                        None,
+                                    ),
+                                    s_assign("registrationId", e_binop(e_var("registrationId"), BinOp::Add, e_int(1))),
+                                ]),
+                                s_return(e_bool(false)),
+                            ]),
+                    )
+                    .method(
+                        method("pollIo")
+                            .private()
+                            .param("timeoutMilliseconds", TypeExpr::Int)
+                            .returns(TypeExpr::Void)
+                            .body(vec![
+                                s_assign("wait", e_var("timeoutMilliseconds")),
+                                s_while(e_bool(true), vec![
+                                    s_assign("entries", e_array(vec![])),
+                                    s_assign("registrationIds", e_array(vec![])),
+                                    s_assign("registrationId", e_int(0)),
+                                    s_assign("count", e_call("count", vec![e_this_prop("ioSources")])),
+                                    s_while(e_binop(e_var("registrationId"), BinOp::Lt, e_var("count")), vec![
+                                        s_if(
+                                            e_index(e_this_prop("ioActive"), e_var("registrationId")),
+                                            vec![
+                                                s_array_push("entries", e_index(e_this_prop("ioPollFds"), e_var("registrationId"))),
+                                                s_array_push("entries", e_index(e_this_prop("ioInterests"), e_var("registrationId"))),
+                                                s_array_push("registrationIds", e_var("registrationId")),
+                                            ],
+                                            vec![],
+                                            None,
+                                        ),
+                                        s_assign("registrationId", e_binop(e_var("registrationId"), BinOp::Add, e_int(1))),
+                                    ]),
+                                    s_if(
+                                        e_binop(e_call("count", vec![e_var("registrationIds")]), BinOp::StrictEq, e_int(0)),
+                                        vec![
+                                            s_return_void(),
+                                        ],
+                                        vec![],
+                                        None,
+                                    ),
+                                    s_assign("readyIndex", e_call("\\__elephc_async_poll", vec![e_var("entries"), e_var("wait")])),
+                                    s_if(
+                                        e_binop(e_binop(e_var("readyIndex"), BinOp::StrictEq, e_neg(e_int(1))), BinOp::Or, e_binop(e_var("readyIndex"), BinOp::StrictEq, e_neg(e_int(2)))),
+                                        vec![
+                                            s_return_void(),
+                                        ],
+                                        vec![],
+                                        None,
+                                    ),
+                                    s_if(
+                                        e_binop(e_var("readyIndex"), BinOp::Lt, e_int(0)),
+                                        vec![
+                                            s_throw(e_new_fq("Error", vec![e_str("Elephc Async reactor poll failed")])),
+                                        ],
+                                        vec![],
+                                        None,
+                                    ),
+                                    s_assign("readyRegistrationId", e_index(e_var("registrationIds"), e_var("readyIndex"))),
+                                    s_assign("taskId", e_index(e_this_prop("ioTaskIds"), e_var("readyRegistrationId"))),
+                                    s_expr(e_method_call(e_this(), "releaseIoRegistration", vec![e_var("readyRegistrationId")])),
+                                    s_prop_array_assign(e_this(), "ioReady", e_var("readyRegistrationId"), e_bool(true)),
+                                    s_prop_array_assign(e_this(), "taskIoRegistration", e_var("taskId"), e_neg(e_int(1))),
+                                    s_expr(e_method_call(e_this(), "enqueue", vec![e_var("taskId"), e_int(7)])),
+                                    s_assign("wait", e_int(0)),
+                                ]),
+                            ]),
+                    )
+                    .method(
+                        method("wakeCancelledTasks")
+                            .private()
+                            .returns(TypeExpr::Void)
+                            .body(vec![
+                                s_if(
+                                    e_not(e_method_call(e_this_prop("cancellation"), "isRequested", vec![])),
+                                    vec![
+                                        s_return_void(),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_assign("taskId", e_int(0)),
+                                s_assign("count", e_call("count", vec![e_this_prop("fibers")])),
+                                s_while(e_binop(e_var("taskId"), BinOp::Lt, e_var("count")), vec![
+                                    s_if(
+                                        e_binop(e_binop(e_var("taskId"), BinOp::StrictNotEq, e_this_prop("rootId")), BinOp::And, e_not(e_index(e_this_prop("done"), e_var("taskId")))),
+                                        vec![
+                                            s_if(
+                                                e_not(e_index(e_this_prop("cancelling"), e_var("taskId"))),
+                                                vec![
+                                                    s_prop_array_assign(e_this(), "cancelling", e_var("taskId"), e_bool(true)),
+                                                    s_expr(e_method_call(e_this(), "monitorTask", vec![e_var("taskId"), e_int(7), e_int(9)])),
+                                                ],
+                                                vec![],
+                                                None,
+                                            ),
+                                            s_prop_array_assign(e_this(), "waitingOn", e_var("taskId"), e_neg(e_int(1))),
+                                            s_prop_array_assign(e_this(), "sleepDeadlines", e_var("taskId"), e_neg(e_int(1))),
+                                            s_expr(e_method_call(e_this(), "deregisterIoForTask", vec![e_var("taskId")])),
+                                            s_expr(e_method_call(e_this(), "enqueue", vec![e_var("taskId"), e_int(9)])),
+                                        ],
+                                        vec![],
+                                        None,
+                                    ),
+                                    s_assign("taskId", e_binop(e_var("taskId"), BinOp::Add, e_int(1))),
+                                ]),
+                            ]),
+                    )
+                    .method(
+                        method("nextTimerDeadline")
+                            .private()
+                            .returns(TypeExpr::Int)
+                            .body(vec![
+                                s_assign("next", e_neg(e_int(1))),
+                                s_assign("taskId", e_int(0)),
+                                s_assign("count", e_call("count", vec![e_this_prop("fibers")])),
+                                s_while(e_binop(e_var("taskId"), BinOp::Lt, e_var("count")), vec![
+                                    s_assign("deadline", e_index(e_this_prop("sleepDeadlines"), e_var("taskId"))),
+                                    s_if(
+                                        e_binop(e_binop(e_var("deadline"), BinOp::GtEq, e_int(0)), BinOp::And, e_binop(e_binop(e_var("next"), BinOp::Lt, e_int(0)), BinOp::Or, e_binop(e_var("deadline"), BinOp::Lt, e_var("next")))),
+                                        vec![
+                                            s_assign("next", e_var("deadline")),
+                                        ],
+                                        vec![],
+                                        None,
+                                    ),
+                                    s_assign("taskId", e_binop(e_var("taskId"), BinOp::Add, e_int(1))),
+                                ]),
+                                s_assign("registrationId", e_int(0)),
+                                s_assign("registrationCount", e_call("count", vec![e_this_prop("ioSources")])),
+                                s_while(e_binop(e_var("registrationId"), BinOp::Lt, e_var("registrationCount")), vec![
+                                    s_assign("deadline", e_index(e_this_prop("ioDeadlines"), e_var("registrationId"))),
+                                    s_if(
+                                        e_binop(e_binop(e_index(e_this_prop("ioActive"), e_var("registrationId")), BinOp::And, e_binop(e_var("deadline"), BinOp::GtEq, e_int(0))), BinOp::And, e_binop(e_binop(e_var("next"), BinOp::Lt, e_int(0)), BinOp::Or, e_binop(e_var("deadline"), BinOp::Lt, e_var("next")))),
+                                        vec![
+                                            s_assign("next", e_var("deadline")),
+                                        ],
+                                        vec![],
+                                        None,
+                                    ),
+                                    s_assign("registrationId", e_binop(e_var("registrationId"), BinOp::Add, e_int(1))),
+                                ]),
+                                s_return(e_var("next")),
+                            ]),
+                    )
+                    .method(
+                        method("throwFirstUnobservedFailure")
+                            .private()
+                            .returns(TypeExpr::Void)
+                            .body(vec![
+                                s_assign("index", e_int(0)),
+                                s_assign("count", e_call("count", vec![e_this_prop("failureOrder")])),
+                                s_while(e_binop(e_var("index"), BinOp::Lt, e_var("count")), vec![
+                                    s_assign("taskId", e_index(e_this_prop("failureOrder"), e_var("index"))),
+                                    s_assign("outcome", e_index(e_this_prop("outcomes"), e_var("taskId"))),
+                                    s_if(
+                                        e_method_call(e_var("outcome"), "hasUnobservedFailure", vec![]),
+                                        vec![
+                                            s_expr(e_method_call(e_this(), "teardown", vec![])),
+                                            s_expr(e_method_call(e_var("outcome"), "throwIfFailed", vec![])),
+                                        ],
+                                        vec![],
+                                        None,
+                                    ),
+                                s_assign("index", e_binop(e_var("index"), BinOp::Add, e_int(1))),
+                                ]),
+                            ]),
+                    )
+                    .method(
+                        method("teardown")
+                            .private()
+                            .returns(TypeExpr::Void)
+                            .body(vec![
+                                s_prop_assign(e_this(), "closed", e_bool(true)),
+                                s_assign("registrationId", e_int(0)),
+                                s_assign("registrationCount", e_call("count", vec![e_this_prop("ioSources")])),
+                                s_while(e_binop(e_var("registrationId"), BinOp::Lt, e_var("registrationCount")), vec![
+                                    s_expr(e_method_call(e_this(), "releaseIoRegistration", vec![e_var("registrationId")])),
+                                    s_assign("registrationId", e_binop(e_var("registrationId"), BinOp::Add, e_int(1))),
+                                ]),
+                                s_assign("taskId", e_int(0)),
+                                s_assign("taskCount", e_call("count", vec![e_this_prop("fibers")])),
+                                s_while(e_binop(e_var("taskId"), BinOp::Lt, e_var("taskCount")), vec![
+                                    s_prop_array_assign(e_this(), "taskStarts", e_var("taskId"), e_null()),
+                                    s_prop_array_assign(e_this(), "outcomes", e_var("taskId"), e_null()),
+                                    s_prop_array_assign(e_this(), "fibers", e_var("taskId"), e_null()),
+                                    s_assign("taskId", e_binop(e_var("taskId"), BinOp::Add, e_int(1))),
+                                ]),
+                                s_prop_assign(e_this(), "fibers", e_array(vec![])),
+                                s_prop_assign(e_this(), "taskStarts", e_array(vec![])),
+                                s_prop_assign(e_this(), "ready", e_array(vec![])),
+                                s_prop_assign(e_this(), "queued", e_array(vec![])),
+                                s_prop_assign(e_this(), "waitingOn", e_array(vec![])),
+                                s_prop_assign(e_this(), "done", e_array(vec![])),
+                                s_prop_assign(e_this(), "cancelled", e_array(vec![])),
+                                s_prop_assign(e_this(), "cancelling", e_array(vec![])),
+                                s_prop_assign(e_this(), "outcomes", e_array(vec![])),
+                                s_prop_assign(e_this(), "sleepDeadlines", e_array(vec![])),
+                                s_prop_assign(e_this(), "ioSources", e_array(vec![])),
+                                s_prop_assign(e_this(), "ioPollFds", e_array(vec![])),
+                                s_prop_assign(e_this(), "ioInterests", e_array(vec![])),
+                                s_prop_assign(e_this(), "ioTaskIds", e_array(vec![])),
+                                s_prop_assign(e_this(), "ioDeadlines", e_array(vec![])),
+                                s_prop_assign(e_this(), "ioActive", e_array(vec![])),
+                                s_prop_assign(e_this(), "ioReady", e_array(vec![])),
+                                s_prop_assign(e_this(), "taskIoRegistration", e_array(vec![])),
+                                s_prop_assign(e_this(), "taskGenerations", e_array(vec![])),
+                                s_prop_assign(e_this(), "taskHandles", e_array(vec![])),
+                                s_prop_assign(e_this(), "parentTaskIds", e_array(vec![])),
+                                s_prop_assign(e_this(), "groupTaskIds", e_array(vec![])),
+                                s_prop_assign(e_this(), "failureOrder", e_array(vec![])),
+                                s_prop_assign(e_this(), "head", e_int(0)),
+                                s_prop_assign(e_this(), "live", e_int(0)),
+                                s_prop_assign(e_this(), "currentId", e_neg(e_int(1))),
+                                s_prop_assign(e_this(), "rootId", e_neg(e_int(1))),
+                            ]),
+                    )
+                    .method(
+                        method("drive")
+                            .private()
+                            .returns(TypeExpr::Void)
+                            .body(vec![
+                                s_while(e_binop(e_this_prop("live"), BinOp::Gt, e_int(0)), vec![
+                                    s_expr(e_method_call(e_this(), "wakeCancelledTasks", vec![])),
+                                    s_expr(e_method_call(e_this(), "wakeExpiredTimers", vec![])),
+                                    s_expr(e_method_call(e_this(), "wakeExpiredIo", vec![])),
+                                    s_if(
+                                        e_method_call(e_this(), "hasIoRegistrations", vec![]),
+                                        vec![
+                                            s_expr(e_method_call(e_this(), "pollIo", vec![e_int(0)])),
+                                        ],
+                                        vec![],
+                                        None,
+                                    ),
+                                    s_assign("taskId", e_method_call(e_this(), "dequeue", vec![])),
+                                    s_if(
+                                        e_binop(e_var("taskId"), BinOp::Lt, e_int(0)),
+                                        vec![
+                                            s_assign("deadline", e_method_call(e_this(), "nextTimerDeadline", vec![])),
+                                            s_assign("hasIo", e_method_call(e_this(), "hasIoRegistrations", vec![])),
+                                            s_if(
+                                                e_var("hasIo"),
+                                                vec![
+                                                    s_assign("timeoutMilliseconds", e_neg(e_int(1))),
+                                                    s_if(
+                                                        e_binop(e_var("deadline"), BinOp::GtEq, e_int(0)),
+                                                        vec![
+                                                            s_assign("remaining", e_binop(e_var("deadline"), BinOp::Sub, e_call("hrtime", vec![e_bool(true)]))),
+                                                            s_if(
+                                                                e_binop(e_var("remaining"), BinOp::LtEq, e_int(0)),
+                                                                vec![
+                                                                    s_assign("timeoutMilliseconds", e_int(0)),
+                                                                ],
+                                                                vec![],
+                                                                Some(vec![
+                                                                s_assign("timeoutMilliseconds", e_cast(CastType::Int, e_binop(e_binop(e_var("remaining"), BinOp::Add, e_int(999999)), BinOp::Div, e_int(1000000)))),
+                                                            ]),
+                                                            ),
+                                                        ],
+                                                        vec![],
+                                                        None,
+                                                    ),
+                                                    s_expr(e_method_call(e_this(), "pollIo", vec![e_var("timeoutMilliseconds")])),
+                                                ],
+                                                vec![
+                                                (e_binop(e_var("deadline"), BinOp::Lt, e_int(0)), vec![
+                                                    s_throw(e_new_fq("Error", vec![e_str("Elephc Async deadlock: tasks are live but none are runnable")])),
+                                                ]),
+                                            ],
+                                                Some(vec![
+                                                s_assign("remaining", e_binop(e_var("deadline"), BinOp::Sub, e_call("hrtime", vec![e_bool(true)]))),
+                                                s_if(
+                                                    e_binop(e_var("remaining"), BinOp::Gt, e_int(0)),
+                                                    vec![
+                                                        s_assign("microseconds", e_cast(CastType::Int, e_binop(e_var("remaining"), BinOp::Div, e_int(1000)))),
+                                                        s_if(
+                                                            e_binop(e_var("microseconds"), BinOp::Lt, e_int(1)),
+                                                            vec![
+                                                                s_assign("microseconds", e_int(1)),
+                                                            ],
+                                                            vec![],
+                                                            None,
+                                                        ),
+                                                        s_expr(e_call("usleep", vec![e_var("microseconds")])),
+                                                    ],
+                                                    vec![],
+                                                    None,
+                                                ),
+                                            ]),
+                                            ),
+                                            s_expr(e_method_call(e_this(), "wakeExpiredTimers", vec![])),
+                                            s_expr(e_method_call(e_this(), "wakeExpiredIo", vec![])),
+                                            s_assign("taskId", e_method_call(e_this(), "dequeue", vec![])),
+                                            s_if(
+                                                e_binop(e_var("taskId"), BinOp::Lt, e_int(0)),
+                                                vec![
+                                                    s_continue(1),
+                                                ],
+                                                vec![],
+                                                None,
+                                            ),
+                                        ],
+                                        vec![],
+                                        None,
+                                    ),
+                                    s_prop_assign(e_this(), "currentId", e_var("taskId")),
+                                    s_expr(e_method_call(e_this(), "monitorTask", vec![e_var("taskId"), e_int(3), e_int(2)])),
+                                    s_assign("fiber", e_index(e_this_prop("fibers"), e_var("taskId"))),
+                                    s_assign("signal", e_null()),
+                                    s_assign("cancelled", e_bool(false)),
+                                    s_assign("failed", e_bool(false)),
+                                    s_self_static_prop_assign("asyncTaskActive", e_bool(true)),
+                                    s_try(vec![
+                                        s_if(
+                                            e_binop(e_method_call(e_this_prop("cancellation"), "isRequested", vec![]), BinOp::And, e_binop(e_var("taskId"), BinOp::StrictNotEq, e_this_prop("rootId"))),
+                                            vec![
+                                                s_if(
+                                                    e_not(e_method_call(e_var("fiber"), "isStarted", vec![])),
+                                                    vec![
+                                                        s_assign("cancelled", e_bool(true)),
+                                                    ],
+                                                    vec![],
+                                                    Some(vec![
+                                                    s_assign("signal", e_method_call(e_var("fiber"), "resume", vec![])),
+                                                ]),
+                                                ),
+                                            ],
+                                            vec![
+                                            (e_not(e_method_call(e_var("fiber"), "isStarted", vec![])), vec![
+                                                s_assign("start", e_index(e_this_prop("taskStarts"), e_var("taskId"))),
+                                                s_prop_array_assign(e_this(), "taskStarts", e_var("taskId"), e_null()),
+                                                s_assign("signal", e_method_call(e_var("start"), "start", vec![])),
+                                                s_expr(e_call("unset", vec![e_var("start")])),
+                                            ]),
+                                        ],
+                                            Some(vec![
+                                            s_assign("signal", e_method_call(e_var("fiber"), "resume", vec![])),
+                                        ]),
+                                        ),
+                                    ], vec![
+                                        (vec!["\\Throwable"], Some("error"), vec![
+                                            s_if(
+                                                e_binop(
+                                                    e_binop(
+                                                        e_instance_of(e_var("error"), "CancelledException"),
+                                                        BinOp::And,
+                                                        e_binop(e_var("taskId"), BinOp::StrictNotEq, e_this_prop("rootId")),
+                                                    ),
+                                                    BinOp::And,
+                                                    e_static_call("CancelledException", "__isRequestPaired", vec![e_var("error"), e_this_prop("cancellation")]),
+                                                ),
+                                                vec![
+                                                    s_assign("cancelled", e_bool(true)),
+                                                ],
+                                                vec![],
+                                                Some(vec![
+                                                s_assign("failed", e_bool(true)),
+                                                s_expr(e_method_call(e_index(e_this_prop("outcomes"), e_var("taskId")), "recordFailure", vec![e_var("error")])),
+                                                s_prop_array_push(e_this(), "failureOrder", e_var("taskId")),
+                                                s_expr(e_method_call(e_this_prop("cancellation"), "request", vec![e_var("error")])),
+                                            ]),
+                                            ),
+                                        ]),
+                                    ], None),
+                                    s_self_static_prop_assign("asyncTaskActive", e_bool(false)),
+                                    s_expr(e_call("unset", vec![e_var("error")])),
+                                    s_if(
+                                        e_binop(e_var("cancelled"), BinOp::Or, e_method_call(e_var("fiber"), "isTerminated", vec![])),
+                                        vec![
+                                            s_prop_array_assign(e_this(), "done", e_var("taskId"), e_bool(true)),
+                                            s_prop_array_assign(e_this(), "cancelled", e_var("taskId"), e_var("cancelled")),
+                                            s_prop_array_assign(e_this(), "sleepDeadlines", e_var("taskId"), e_neg(e_int(1))),
+                                            s_expr(e_method_call(e_this(), "deregisterIoForTask", vec![e_var("taskId")])),
+                                            s_prop_assign(e_this(), "live", e_binop(e_this_prop("live"), BinOp::Sub, e_int(1))),
+                                            s_if(
+                                                e_var("cancelled"),
+                                                vec![
+                                                    s_expr(e_method_call(e_this(), "monitorTask", vec![e_var("taskId"), e_int(10), e_int(9)])),
+                                                ],
+                                                vec![
+                                                (e_var("failed"), vec![
+                                                    s_expr(e_method_call(e_this(), "monitorTask", vec![e_var("taskId"), e_int(9), e_int(11)])),
+                                                ]),
+                                            ],
+                                                Some(vec![
+                                                s_expr(e_method_call(e_this(), "monitorTask", vec![e_var("taskId"), e_int(8), e_int(10)])),
+                                            ]),
+                                            ),
+                                            s_expr(e_method_call(e_this(), "wakeWaiters", vec![e_var("taskId")])),
+                                        ],
+                                        vec![
+                                        (e_binop(e_var("signal"), BinOp::StrictEq, e_int(0)), vec![
+                                            s_expr(e_method_call(e_this(), "enqueue", vec![e_var("taskId"), e_int(3)])),
+                                        ]),
+                                    ],
+                                        None,
+                                    ),
+                                    s_expr(e_call("unset", vec![e_var("fiber")])),
+                                    s_expr(e_call("unset", vec![e_var("signal")])),
+                                    s_prop_assign(e_this(), "currentId", e_neg(e_int(1))),
+                                ]),
+                            ]),
+                    )
+                    .build(),
+                class("__ScopeState")
+                    .final_()
+                    .private_prop("scheduler", t_nullable(t_class("__Scheduler")), None)
+                    .method(
+                        method("__construct")
+                            .param("scheduler", t_class("__Scheduler"))
+                            .body(vec![
+                                s_prop_assign(e_this(), "scheduler", e_var("scheduler")),
+                            ]),
+                    )
+                    .method(
+                        method("scheduler")
+                            .returns(t_class("__Scheduler"))
+                            .body(vec![
+                                s_assign("scheduler", e_this_prop("scheduler")),
+                                s_if(
+                                    e_binop(e_var("scheduler"), BinOp::StrictEq, e_null()),
+                                    vec![
+                                        s_throw(e_new_fq("Error", vec![e_str("Elephc Async TaskGroup scope has ended")])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_return(e_var("scheduler")),
+                            ]),
+                    )
+                    .method(
+                        method("detach")
+                            .returns(TypeExpr::Bool)
+                            .body(vec![
+                                s_prop_assign(e_this(), "scheduler", e_null()),
+                                s_return(e_bool(true)),
+                            ]),
+                    )
+                    .build(),
+                class("TaskGroup")
+                    .final_()
+                    .private_prop("scope", t_nullable(t_class("__ScopeState")), None)
+                    .private_prop("state", t_class("__CancellationState"), None)
+                    .private_prop("cancellation", t_class("Cancellation"), None)
+                    .method(
+                        method("__construct")
+                            .param("scope", t_class("__ScopeState"))
+                            .param("state", t_class("__CancellationState"))
+                            .body(vec![
+                                s_prop_assign(e_this(), "scope", e_var("scope")),
+                                s_prop_assign(e_this(), "state", e_var("state")),
+                                s_prop_assign(e_this(), "cancellation", e_new("Cancellation", vec![e_var("state")])),
+                            ]),
+                    )
+                    .method(
+                        method("spawn")
+                            .param("task", t_class("callable"))
+                            .variadic("args", Some(t_mixed()))
+                            .returns(t_class("Awaitable"))
+                            .body(vec![
+                                s_assign("scheduler", e_method_call(e_method_call(e_this(), "scope", vec![]), "scheduler", vec![])),
+                                s_assign("awaitable", e_method_call(e_var("scheduler"), "spawn", vec![e_var("task"), e_var("args")])),
+                                s_expr(e_call("unset", vec![e_var("task")])),
+                                s_expr(e_call("unset", vec![e_var("args")])),
+                                s_expr(e_call("unset", vec![e_var("scheduler")])),
+                                s_return(e_var("awaitable")),
+                            ]),
+                    )
+                    .method(
+                        method("reschedule")
+                            .returns(TypeExpr::Void)
+                            .body(vec![
+                                s_expr(e_method_call(e_method_call(e_method_call(e_this(), "scope", vec![]), "scheduler", vec![]), "rescheduleCurrent", vec![])),
+                            ]),
+                    )
+                    .method(
+                        method("sleep")
+                            .param("seconds", TypeExpr::Float)
+                            .returns(TypeExpr::Void)
+                            .body(vec![
+                                s_assign("scheduler", e_method_call(e_method_call(e_this(), "scope", vec![]), "scheduler", vec![])),
+                                s_expr(e_method_call(e_var("scheduler"), "sleepCurrent", vec![e_var("seconds")])),
+                                s_expr(e_call("unset", vec![e_var("scheduler")])),
+                            ]),
+                    )
+                    .method(
+                        method("awaitReadable")
+                            .param("stream", t_mixed())
+                            .param_default("timeout", t_nullable(TypeExpr::Float), e_null())
+                            .returns(TypeExpr::Bool)
+                            .body(vec![
+                                s_return(e_method_call(e_method_call(e_method_call(e_this(), "scope", vec![]), "scheduler", vec![]), "awaitReadable", vec![e_var("stream"), e_var("timeout")])),
+                            ]),
+                    )
+                    .method(
+                        method("awaitWritable")
+                            .param("stream", t_mixed())
+                            .param_default("timeout", t_nullable(TypeExpr::Float), e_null())
+                            .returns(TypeExpr::Bool)
+                            .body(vec![
+                                s_return(e_method_call(e_method_call(e_method_call(e_this(), "scope", vec![]), "scheduler", vec![]), "awaitWritable", vec![e_var("stream"), e_var("timeout")])),
+                            ]),
+                    )
+                    .method(
+                        method("cancellation")
+                            .returns(t_class("Cancellation"))
+                            .body(vec![
+                                s_assign("scope", e_this_prop("scope")),
+                                s_if(
+                                    e_binop(e_var("scope"), BinOp::StrictEq, e_null()),
+                                    vec![
+                                        s_throw(e_new_fq("Error", vec![e_str("Elephc Async TaskGroup scope has ended")])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_assign("scheduler", e_method_call(e_var("scope"), "scheduler", vec![])),
+                                s_expr(e_call("unset", vec![e_var("scheduler")])),
+                                s_expr(e_call("unset", vec![e_var("scope")])),
+                                s_return(e_this_prop("cancellation")),
+                            ]),
+                    )
+                    .method(
+                        method("cancel")
+                            .param_default("reason", t_nullable(t_class("\\Throwable")), e_null())
+                            .returns(TypeExpr::Void)
+                            .body(vec![
+                                s_assign("scope", e_this_prop("scope")),
+                                s_if(
+                                    e_binop(e_var("scope"), BinOp::StrictEq, e_null()),
+                                    vec![
+                                        s_throw(e_new_fq("Error", vec![e_str("Elephc Async TaskGroup scope has ended")])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_assign("scheduler", e_method_call(e_var("scope"), "scheduler", vec![])),
+                                s_expr(e_call("unset", vec![e_var("scheduler")])),
+                                s_expr(e_call("unset", vec![e_var("scope")])),
+                                s_expr(e_method_call(e_this_prop("state"), "request", vec![e_var("reason")])),
+                            ]),
+                    )
+                    .method(
+                        method("__detach")
+                            .returns(TypeExpr::Bool)
+                            .body(vec![
+                                s_assign("scope", e_this_prop("scope")),
+                                s_if(
+                                    e_binop(e_var("scope"), BinOp::StrictEq, e_null()),
+                                    vec![
+                                        s_return(e_bool(true)),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_expr(e_method_call(e_var("scope"), "detach", vec![])),
+                                s_prop_assign(e_this(), "scope", e_null()),
+                                s_expr(e_call("unset", vec![e_var("scope")])),
+                                s_return(e_bool(true)),
+                            ]),
+                    )
+                    .method(
+                        method("scope")
+                            .private()
+                            .returns(t_class("__ScopeState"))
+                            .body(vec![
+                                s_assign("scope", e_this_prop("scope")),
+                                s_if(
+                                    e_binop(e_var("scope"), BinOp::StrictEq, e_null()),
+                                    vec![
+                                        s_throw(e_new_fq("Error", vec![e_str("Elephc Async TaskGroup scope has ended")])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_return(e_var("scope")),
+                            ]),
+                    )
+                    .build(),
+                class("Awaitable")
+                    .final_()
+                    .private_prop("scheduler", t_class("__Scheduler"), None)
+                    .private_prop("taskId", TypeExpr::Int, None)
+                    .method(
+                        method("__construct")
+                            .param("scheduler", t_class("__Scheduler"))
+                            .param("taskId", TypeExpr::Int)
+                            .body(vec![
+                                s_prop_assign(e_this(), "scheduler", e_var("scheduler")),
+                                s_prop_assign(e_this(), "taskId", e_var("taskId")),
+                            ]),
+                    )
+                    .method(
+                        method("await")
+                            .returns(t_mixed())
+                            .body(vec![
+                                s_assign("scheduler", e_this_prop("scheduler")),
+                                s_assign("result", e_method_call(e_var("scheduler"), "awaitTask", vec![e_this_prop("taskId")])),
+                                s_expr(e_call("unset", vec![e_var("scheduler")])),
+                                s_return(e_var("result")),
+                            ]),
+                    )
+                    .method(
+                        method("isComplete")
+                            .returns(TypeExpr::Bool)
+                            .body(vec![
+                                s_return(e_method_call(e_this_prop("scheduler"), "isComplete", vec![e_this_prop("taskId")])),
+                            ]),
+                    )
+                    .build(),
+                function("run")
+                    .param("body", t_class("callable"))
+                    .returns(t_mixed())
+                    .body(vec![
+                        s_if(
+                            e_binop(e_static_call("\\Fiber", "getCurrent", vec![]), BinOp::StrictNotEq, e_null()),
+                            vec![
+                                s_throw(e_new_fq("Error", vec![e_str("Elephc\\Async\\run() cannot be nested or called from a Fiber")])),
+                            ],
+                            vec![],
+                            None,
+                        ),
+                        s_assign("state", e_new("__CancellationState", vec![])),
+                        s_assign("scheduler", e_new("__Scheduler", vec![e_var("state")])),
+                        s_assign("scope", e_new("__ScopeState", vec![e_var("scheduler")])),
+                        s_assign("group", e_new("TaskGroup", vec![e_var("scope"), e_var("state")])),
+                        s_assign("runResult", e_new("__RunResult", vec![])),
+                        s_assign("failed", e_bool(false)),
+                        s_assign("failure", e_null()),
+                        s_try(vec![
+                            s_expr(e_method_call(e_var("runResult"), "set", vec![e_method_call(e_var("scheduler"), "runRoot", vec![e_var("body"), e_var("group")])])),
+                        ], vec![
+                            (vec!["\\Throwable"], Some("caught"), vec![
+                                s_assign("failed", e_bool(true)),
+                                s_assign("failure", e_var("caught")),
+                                s_expr(e_call("unset", vec![e_var("caught")])),
+                            ]),
+                        ], None),
+                        s_expr(e_method_call(e_var("scope"), "detach", vec![])),
+                        s_expr(e_call("unset", vec![e_var("group")])),
+                        s_assign("scope", e_null()),
+                        s_expr(e_call("unset", vec![e_var("scheduler")])),
+                        s_expr(e_call("unset", vec![e_var("state")])),
+                        s_expr(e_call("unset", vec![e_var("body")])),
+                        s_expr(e_call("\\__elephc_async_gc_collect", vec![])),
+                        s_if(
+                            e_var("failed"),
+                            vec![
+                                s_expr(e_call("unset", vec![e_var("runResult")])),
+                                s_throw(e_var("failure")),
+                            ],
+                            vec![],
+                            None,
+                        ),
+                        s_assign("result", e_method_call(e_var("runResult"), "get", vec![])),
+                        s_expr(e_call("unset", vec![e_var("runResult")])),
+                        s_return(e_var("result")),
+                    ])
+                    .build()
+            ])

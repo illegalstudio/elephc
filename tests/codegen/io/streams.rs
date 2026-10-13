@@ -5665,6 +5665,28 @@ fclose($m);
     assert_eq!(out, ">>x|closed");
 }
 
+/// Calls onClose once when both stream directions share the same filter instance.
+#[test]
+fn test_stream_filter_all_releases_one_shared_instance_once() {
+    let out = compile_and_run(
+        r#"<?php
+class DualDirectionFilter {
+    public function filter(string $data): string {
+        return $data;
+    }
+    public function onClose(): void {
+        echo "closed";
+    }
+}
+stream_filter_register("dual.direction", "DualDirectionFilter");
+$stream = fopen("php://memory", "r+");
+stream_filter_append($stream, "dual.direction");
+fclose($stream);
+"#,
+    );
+    assert_eq!(out, "closed");
+}
+
 /// Verifies compiled PHP output for stream filter register accepts registration.
 #[test]
 fn test_stream_filter_register_accepts_registration() {

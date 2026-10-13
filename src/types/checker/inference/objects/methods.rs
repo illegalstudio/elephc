@@ -42,7 +42,7 @@ impl Checker {
             }
             let return_ty = self.infer_method_call_on_class_type(class_name, method, args, expr, env)?;
             return Ok(self
-                .tracked_reflection_class_method_return_type(object, method)
+                .tracked_reflection_class_method_return_type(object, method, env)
                 .unwrap_or(return_ty));
         }
         // Method calls on a union object type are allowed when the union has a
@@ -70,7 +70,7 @@ impl Checker {
                 let return_ty =
                     self.infer_method_call_on_class_type(&class_name, method, args, expr, env)?;
                 return Ok(self
-                    .tracked_reflection_class_method_return_type(object, method)
+                    .tracked_reflection_class_method_return_type(object, method, env)
                     .unwrap_or(return_ty));
             }
             // Union of two or more distinct object classes (`A|B`, `A|B|false`):
@@ -196,11 +196,12 @@ impl Checker {
         &self,
         object: &Expr,
         method: &str,
+        env: &TypeEnv,
     ) -> Option<PhpType> {
-        let ExprKind::Variable(name) = &object.kind else {
-            return None;
+        let reflected_class = match &object.kind {
+            ExprKind::Variable(name) => self.reflection_class_targets.get(name)?.clone(),
+            _ => self.reflection_class_constructor_target(object, env)?,
         };
-        let reflected_class = self.reflection_class_targets.get(name)?;
         match php_symbol_key(method).as_str() {
             "newinstance" | "newinstanceargs" | "newinstancewithoutconstructor" => {
                 Some(PhpType::Object(reflected_class.clone()))
@@ -418,6 +419,8 @@ impl Checker {
                     if !self.can_access_member(declaring_class, visibility)
                         && !self.can_access_pdo_prelude_internal_method(class_name, &method_key)
                         && !self.can_access_mysqli_prelude_internal_method(class_name, &method_key)
+                        && !self.can_access_parallel_prelude_internal_method(class_name, &method_key, expr.span)
+                        && !self.can_access_async_prelude_internal_method(class_name, &method_key)
                     {
                         // PHP raises this as a catchable `Error` at runtime instead of a
                         // compile-time rejection. Record the throw site so EIR lowering
@@ -529,6 +532,35 @@ impl Checker {
                     &format!("Undefined method: {}::{}", class_name, method),
                 ));
             }
+        }
+        if class_name
+            .trim_start_matches('\\')
+            .eq_ignore_ascii_case("Elephc\\Parallel\\TaskGroup")
+            && method_key == "spawn"
+        {
+            self.check_parallel_spawn_transfer(&normalized_args, expr.span, env)?;
+        }
+        if class_name
+            .trim_start_matches('\\')
+            .eq_ignore_ascii_case("Elephc\\Parallel\\Future")
+            && method_key == "join"
+            && !self.parallel_future_join_sites.contains(&expr.span)
+        {
+            self.parallel_future_join_sites.push(expr.span);
+            if let Some(closure_span) = self.current_closure_span {
+                self.parallel_future_join_closure_sites
+                    .push((expr.span, closure_span));
+            } else if let Some(function) = self.current_function.clone() {
+                self.parallel_future_join_function_sites
+                    .push((expr.span, function));
+            }
+        }
+        if class_name
+            .trim_start_matches('\\')
+            .eq_ignore_ascii_case("Elephc\\Async\\TaskGroup")
+            && method_key == "spawn"
+        {
+            self.record_async_task_callable(&normalized_args);
         }
         if let Some(return_ty) = magic_return_ty {
             if let Some(args) = magic_original_args {
@@ -996,6 +1028,7 @@ impl Checker {
                     if !self.can_access_member(declaring_class, visibility)
                         && !self.can_access_pdo_exception_internal_factory(class_name, method)
                         && !self.can_access_mysqli_prelude_internal_factory(class_name, method)
+                        && !self.can_access_async_prelude_internal_factory(class_name, method)
                     {
                         return Err(CompileError::new(
                             expr.span,
@@ -1455,6 +1488,68 @@ impl Checker {
                 .as_deref()
                 .is_some_and(|name| php_symbol_key(name) == "mysqli_stmt_bind_param");
         pending_probe || bind_values
+    }
+
+    /// Allows only the compiler-owned Parallel orchestrator and drain path to reach private
+    /// authority-bearing methods. User PHP sees ordinary private-method visibility errors.
+    fn can_access_parallel_prelude_internal_method(
+        &self,
+        class_name: &str,
+        method_key: &str,
+        span: crate::span::Span,
+    ) -> bool {
+        let run_orchestrator = class_name == "Elephc\\Parallel\\TaskGroup"
+            && matches!(
+                method_key,
+                "__cancelall"
+                    | "__drain"
+                    | "__close"
+                    | "__releaseparentroot"
+                    | "__cleanuponexit"
+            )
+            && self.current_function.as_deref().is_some_and(|name| {
+                php_symbol_key(name.trim_start_matches('\\')) == "elephc\\parallel\\run"
+            });
+        let group_drain = class_name == "Elephc\\Parallel\\Future"
+            && matches!(method_key, "__scopefailure" | "__phase" | "__finishscope")
+            && self.current_class.as_deref() == Some("Elephc\\Parallel\\TaskGroup")
+            && self.current_method.as_deref() == Some("__drain");
+        let group_cancel = class_name == "Elephc\\Parallel\\Future"
+            && method_key == "__cancel"
+            && self.current_class.as_deref() == Some("Elephc\\Parallel\\TaskGroup")
+            && self.current_method.as_deref() == Some("__cancelall");
+        let group_record = !span.is_from_source()
+            && class_name == "Elephc\\Parallel\\Future"
+            && method_key == "__attachscope"
+            && self.current_class.as_deref() == Some("Elephc\\Parallel\\TaskGroup")
+            && self.current_method.as_deref() == Some("__recordfuture");
+        run_orchestrator || group_drain || group_cancel || group_record
+    }
+
+    /// Restricts the Async root driver to the compiler-owned `Async\run()` orchestration function.
+    fn can_access_async_prelude_internal_method(&self, class_name: &str, method_key: &str) -> bool {
+        let run_root = class_name == "Elephc\\Async\\__Scheduler"
+            && method_key == "runroot"
+            && self.current_function.as_deref().is_some_and(|name| {
+                php_symbol_key(name.trim_start_matches('\\')) == "elephc\\async\\run"
+            });
+        let mark_cancellation = class_name == "Elephc\\Async\\CancelledException"
+            && method_key == "__markrequestpaired"
+            && self.current_class.as_deref() == Some("Elephc\\Async\\__CancellationState")
+            && self.current_method.as_deref() == Some("exception");
+        let inspect_cancellation = class_name == "Elephc\\Async\\CancelledException"
+            && method_key == "__isrequestpaired"
+            && self.current_class.as_deref() == Some("Elephc\\Async\\__Scheduler")
+            && self.current_method.as_deref() == Some("drive");
+        run_root || mark_cancellation || inspect_cancellation
+    }
+
+    /// Allows only the scheduler drive method to inspect request-paired cancellation exceptions.
+    fn can_access_async_prelude_internal_factory(&self, class_name: &str, method: &str) -> bool {
+        class_name == "Elephc\\Async\\CancelledException"
+            && php_symbol_key(method) == "__isrequestpaired"
+            && self.current_class.as_deref() == Some("Elephc\\Async\\__Scheduler")
+            && self.current_method.as_deref() == Some("drive")
     }
 }
 

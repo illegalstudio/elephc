@@ -669,7 +669,13 @@ mod tests {
     fn throw_terminator_enters_runtime_unwinder() {
         let asm = generate_throw_terminator_main_asm(Target::new(Platform::Linux, Arch::X86_64));
 
-        assert!(asm.contains("mov QWORD PTR [rip + _exc_value], rax"), "{asm}");
+        assert!(
+            asm.contains(&format!(
+                "mov QWORD PTR [r14 + {}], rax",
+                crate::codegen_support::runtime::ctx::CTX_EXC_VALUE_OFFSET
+            )),
+            "{asm}"
+        );
         assert!(asm.contains("call __rt_throw_current"), "{asm}");
     }
 
@@ -678,7 +684,13 @@ mod tests {
     fn throw_exception_opcode_enters_runtime_unwinder() {
         let asm = generate_throw_exception_opcode_main_asm(Target::new(Platform::Linux, Arch::AArch64));
 
-        assert!(asm.contains("_exc_value"), "{asm}");
+        assert!(
+            asm.contains(&format!(
+                "str x0, [x28, #{}]",
+                crate::codegen_support::runtime::ctx::CTX_EXC_VALUE_OFFSET
+            )),
+            "{asm}"
+        );
         assert!(asm.contains("bl __rt_throw_current"), "{asm}");
     }
 

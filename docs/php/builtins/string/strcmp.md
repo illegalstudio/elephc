@@ -2,7 +2,7 @@
 title: "strcmp()"
 description: "Binary safe string comparison. Returns negative, zero, or positive."
 sidebar:
-  order: 921
+  order: 922
 ---
 
 ## strcmp()

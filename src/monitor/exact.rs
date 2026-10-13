@@ -576,6 +576,65 @@ pub(crate) fn instrument_table(graph: &crate::call_graph::CallGraph) -> String {
     out
 }
 
+/// Renders task scheduler rows carried alongside an exact instrumentation dump.
+pub(crate) fn scheduler_table(text: &str) -> String {
+    const PREFIX: &str = "elephc-instr-scheduler: ";
+    let rows: Vec<&str> = text.lines().filter_map(|line| line.strip_prefix(PREFIX)).collect();
+    if rows.is_empty() {
+        return String::new();
+    }
+    let field = |row: &str, key: &str| -> String {
+        row.split_whitespace()
+            .find_map(|part| part.strip_prefix(key))
+            .unwrap_or("-")
+            .to_string()
+    };
+    let duration = |row: &str, key: &str| -> String {
+        field(row, key)
+            .parse::<u64>()
+            .map(fmt_ns)
+            .unwrap_or_else(|_| "-".to_string())
+    };
+    let mut out = format!("\nscheduler tasks — {} task{}\n\n", rows.len(), if rows.len() == 1 { "" } else { "s" });
+    for row in rows {
+        let mut wakes = Vec::new();
+        for (key, label) in [
+            ("wake_spawn=", "spawn"),
+            ("wake_yield=", "yield"),
+            ("wake_dependency=", "dependency"),
+            ("wake_timer=", "timer"),
+            ("wake_io_ready=", "io-ready"),
+            ("wake_io_timeout=", "io-timeout"),
+            ("wake_cancellation=", "cancellation"),
+        ] {
+            let count = field(row, key);
+            if count != "0" && count != "-" {
+                wakes.push(format!("{label}:{count}"));
+            }
+        }
+        let wakes = if wakes.is_empty() { "-".to_string() } else { wakes.join(",") };
+        out.push_str(&format!(
+            "{} scope {}  task {}  parent {}  group-task {}  {:<12} runnable {}  running {}  blocked {}  cancellation {}  wakes {}  ctx {}  worker {}  trace {} span {}\n",
+            field(row, "domain="),
+            field(row, "scope="),
+            field(row, "task="),
+            field(row, "parent="),
+            field(row, "group_task="),
+            field(row, "state="),
+            duration(row, "runnable_ns="),
+            duration(row, "running_ns="),
+            duration(row, "blocked_ns="),
+            duration(row, "cancellation_ns="),
+            wakes,
+            field(row, "ctx="),
+            field(row, "worker="),
+            field(row, "trace="),
+            field(row, "span="),
+        ));
+    }
+    out
+}
+
 /// Matches source declarations to sampled symbols, which fold only method names.
 pub(crate) fn same_sampled_declaration(source: &str, symbol: &str) -> bool {
     match (source.rsplit_once("::"), symbol.rsplit_once("::")) {

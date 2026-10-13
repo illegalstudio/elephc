@@ -98,6 +98,12 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
             link_libs: sig.library.iter().cloned().collect(),
         })
         .collect();
+    // Parallel worker callbacks are generated after reachability has reduced the public prelude.
+    // They still invoke this internal bridge, so preserve its typed extern declaration even when
+    // the frontend did not retain it in `CheckResult::extern_functions`.
+    if program_declares_parallel_worker_prepare(program) {
+        ensure_parallel_worker_prepare_extern(module);
+    }
     module.required_runtime_features =
         crate::codegen::runtime_features_for_program_and_classes(program, &check_result.classes);
     // Callable descriptors can introduce bridge calls only during assembly emission.
@@ -110,6 +116,42 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
         // The CLI backend replaces these defaults when explicit startup overrides are supplied.
         module.mbstring_startup = Some(vec![b"UTF-8".to_vec(); 3]);
     }
+}
+
+/// Adds the internal bridge signature a synthetic Parallel worker invokes after frontend pruning.
+pub(super) fn ensure_parallel_worker_prepare_extern(module: &mut Module) {
+    if !module
+        .extern_decls
+        .iter()
+        .any(|decl| decl.name == "elephc_parallel_job_input_php_prepare")
+    {
+        module.extern_decls.push(ExternDecl {
+            name: "elephc_parallel_job_input_php_prepare".to_string(),
+            params: vec![ExternParamDecl {
+                name: "jobId".to_string(),
+                ir_type: IrType::I64,
+                php_type: PhpType::Int,
+            }],
+            return_type: IrType::I64,
+            return_php_type: PhpType::Int,
+            link_libs: vec!["elephc_parallel".to_string()],
+        });
+    }
+}
+
+/// Finds the worker-input bridge inside compiler-owned synthetic prelude wrappers.
+fn program_declares_parallel_worker_prepare(statements: &[Stmt]) -> bool {
+    statements.iter().any(|stmt| match &stmt.kind {
+        StmtKind::ExternFunctionDecl { name, .. } => {
+            name == "elephc_parallel_job_input_php_prepare"
+        }
+        StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::Synthetic(body)
+        | StmtKind::IncludeOnceGuard { body, .. } => {
+            program_declares_parallel_worker_prepare(body)
+        }
+        _ => false,
+    })
 }
 
 /// Normalizes class method metadata to the ABI contracts emitted in EIR.

@@ -41,6 +41,10 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
+use elephc_monitoring_contract::{
+    decode_scheduler_transition, SchedulerDomain, SchedulerState, SchedulerWakeReason,
+};
+
 /// Cap on live stack depth; deeper recursion stops being tracked (guarded, not
 /// UB, and reported rather than silent).
 ///
@@ -87,6 +91,9 @@ const MAX_STACK: usize = 65_536;
 /// has seen. The refusal is counted and reported, because a silent truncation
 /// reads as a profile that covered everything.
 const MAX_PARKED: usize = 4_096;
+
+/// Scheduler tasks retained in one exact capture before later events are dropped visibly.
+const MAX_SCHEDULER_TASKS: usize = 65_536;
 
 /// Per-function accumulators, indexed by the compiler-assigned function id.
 #[derive(Clone, Copy, Default)]
@@ -213,6 +220,29 @@ struct Parked {
     frames: Vec<(u32, usize)>,
 }
 
+/// Per-task scheduler accounting retained only while an exact capture is active.
+#[derive(Default)]
+struct SchedulerTaskAcc {
+    scope_id: u64,
+    domain: u8,
+    task_id: i64,
+    parent_id: i64,
+    group_id: i64,
+    context_id: usize,
+    worker_id: u64,
+    state: Option<SchedulerState>,
+    last_ticks: u64,
+    runnable_ticks: u64,
+    running_ticks: u64,
+    blocked_ticks: u64,
+    cancellation_started: Option<u64>,
+    cancellation_ticks: u64,
+    transitions: u64,
+    wake_counts: [u64; 12],
+    trace_id: String,
+    span_id: String,
+}
+
 /// Thread-local instrumentation state.
 #[derive(Default)]
 struct State {
@@ -258,6 +288,12 @@ struct State {
     trace: Vec<(u32, u64, u64)>,
     /// Calls not recorded because the trace buffer was full.
     trace_dropped: u64,
+    /// Async/Parallel task state accounting for the current exact capture.
+    scheduler_tasks: Vec<SchedulerTaskAcc>,
+    /// Scheduler task identities dropped after `MAX_SCHEDULER_TASKS`.
+    scheduler_tasks_dropped: u64,
+    /// Capture-local monotonic identity for sequential scheduler root scopes.
+    scheduler_scope_seq: u64,
 }
 
 /// An exception that is still unwinding.
@@ -1042,6 +1078,108 @@ impl State {
         }
     }
 
+    /// Records one task transition and charges the elapsed span to its previous state.
+    fn scheduler_event(
+        &mut self,
+        domain: SchedulerDomain,
+        task_id: i64,
+        parent_id: i64,
+        group_id: i64,
+        state: SchedulerState,
+        reason: SchedulerWakeReason,
+        context_id: usize,
+        worker_id: u64,
+        ticks: u64,
+    ) {
+        let created = matches!(state, SchedulerState::Created);
+        let scope_id = if created && parent_id < 0 && group_id == task_id {
+            self.scheduler_scope_seq = self.scheduler_scope_seq.saturating_add(1);
+            self.scheduler_scope_seq
+        } else {
+            self.scheduler_tasks
+                .iter()
+                .rev()
+                .find(|task| {
+                    task.domain == domain as u8
+                        && task.context_id == context_id
+                        && task.task_id == group_id
+                        && task.parent_id < 0
+                })
+                .map(|task| task.scope_id)
+                .unwrap_or(0)
+        };
+        let index = (!created).then(|| {
+            self.scheduler_tasks.iter().rposition(|task| {
+                task.domain == domain as u8
+                    && task.context_id == context_id
+                    && task.scope_id == scope_id
+                    && task.task_id == task_id
+                    && !scheduler_state_is_terminal(task.state)
+            })
+        }).flatten();
+        let index = match index {
+            Some(index) => index,
+            None if self.scheduler_tasks.len() >= MAX_SCHEDULER_TASKS => {
+                self.scheduler_tasks_dropped = self.scheduler_tasks_dropped.saturating_add(1);
+                return;
+            }
+            None => {
+                let (trace_id, span_id) = active_scheduler_trace();
+                self.scheduler_tasks.push(SchedulerTaskAcc {
+                    scope_id,
+                    domain: domain as u8,
+                    task_id,
+                    parent_id,
+                    group_id,
+                    context_id,
+                    worker_id,
+                    trace_id,
+                    span_id,
+                    ..SchedulerTaskAcc::default()
+                });
+                self.scheduler_tasks.len() - 1
+            }
+        };
+        let task = &mut self.scheduler_tasks[index];
+        let elapsed = ticks.wrapping_sub(task.last_ticks);
+        match task.state {
+            Some(SchedulerState::Runnable) => {
+                task.runnable_ticks = task.runnable_ticks.wrapping_add(elapsed)
+            }
+            Some(SchedulerState::Running) => {
+                task.running_ticks = task.running_ticks.wrapping_add(elapsed)
+            }
+            Some(
+                SchedulerState::WaitingTask
+                | SchedulerState::Sleeping
+                | SchedulerState::WaitingIo
+                | SchedulerState::Cancelling,
+            ) => task.blocked_ticks = task.blocked_ticks.wrapping_add(elapsed),
+            _ => {}
+        }
+        if matches!(state, SchedulerState::Cancelling) && task.cancellation_started.is_none() {
+            task.cancellation_started = Some(ticks);
+        }
+        if matches!(
+            state,
+            SchedulerState::Completed | SchedulerState::Failed | SchedulerState::Cancelled
+        ) {
+            if let Some(started) = task.cancellation_started.take() {
+                task.cancellation_ticks = ticks.wrapping_sub(started);
+            }
+        }
+        task.parent_id = parent_id;
+        task.group_id = group_id;
+        task.context_id = context_id;
+        task.worker_id = worker_id;
+        task.state = Some(state);
+        task.last_ticks = ticks;
+        task.transitions = task.transitions.saturating_add(1);
+        if matches!(state, SchedulerState::Runnable) {
+            task.wake_counts[reason as usize] = task.wake_counts[reason as usize].saturating_add(1);
+        }
+    }
+
     /// Drops every accumulator so the next dump reports only what follows it.
     /// The live stack is cleared too: a dump happens at a point where nothing
     /// of this slice is still running, and carrying frames across the boundary
@@ -1068,6 +1206,9 @@ impl State {
         self.unwinding = None;
         self.trace.clear();
         self.trace_dropped = 0;
+        self.scheduler_tasks.clear();
+        self.scheduler_tasks_dropped = 0;
+        self.scheduler_scope_seq = 0;
     }
 
     /// Renders the report, most inclusive-time first.
@@ -1081,7 +1222,7 @@ impl State {
         let name_of = |id: usize| -> String {
             names.get(id).cloned().unwrap_or_else(|| format!("#{id}"))
         };
-        if self.fns.iter().all(|a| a.calls == 0) {
+        if self.fns.iter().all(|a| a.calls == 0) && self.scheduler_tasks.is_empty() {
             return String::new();
         }
         let mut out = String::new();
@@ -1117,6 +1258,12 @@ impl State {
                 "elephc-instr: note: {} suspension(s) past {} parked coroutines were not \
                  parked; their consumers' time is charged to them\n",
                 self.parks_refused, MAX_PARKED
+            ));
+        }
+        if self.scheduler_tasks_dropped > 0 {
+            out.push_str(&format!(
+                "elephc-instr: note: {} scheduler task event(s) past {} identities were not tracked\n",
+                self.scheduler_tasks_dropped, MAX_SCHEDULER_TASKS
             ));
         }
         if tick_rate().is_none() {
@@ -1188,8 +1335,71 @@ impl State {
                 ns
             ));
         }
+        let mut scheduler_tasks: Vec<&SchedulerTaskAcc> = self.scheduler_tasks.iter().collect();
+        scheduler_tasks.sort_by_key(|task| (task.domain, task.scope_id, task.task_id));
+        for task in scheduler_tasks {
+            out.push_str(&format!(
+                "elephc-instr-scheduler: domain={} scope={} task={} parent={} group_task={} state={} transitions={} runnable_ns={} running_ns={} blocked_ns={} cancellation_ns={} wake_spawn={} wake_yield={} wake_dependency={} wake_timer={} wake_io_ready={} wake_io_timeout={} wake_cancellation={} ctx=0x{:x} worker={} trace={} span={}\n",
+                scheduler_domain_name(task.domain),
+                task.scope_id,
+                task.task_id,
+                task.parent_id,
+                task.group_id,
+                scheduler_state_name(task.state),
+                task.transitions,
+                ticks_to_ns(task.runnable_ticks),
+                ticks_to_ns(task.running_ticks),
+                ticks_to_ns(task.blocked_ticks),
+                ticks_to_ns(task.cancellation_ticks),
+                task.wake_counts[SchedulerWakeReason::Spawn as usize],
+                task.wake_counts[SchedulerWakeReason::Yield as usize],
+                task.wake_counts[SchedulerWakeReason::Dependency as usize],
+                task.wake_counts[SchedulerWakeReason::Timer as usize],
+                task.wake_counts[SchedulerWakeReason::IoReady as usize],
+                task.wake_counts[SchedulerWakeReason::IoTimeout as usize],
+                task.wake_counts[SchedulerWakeReason::Cancellation as usize],
+                task.context_id,
+                task.worker_id,
+                task.trace_id,
+                task.span_id,
+            ));
+        }
         out
     }
+}
+
+/// Renders known Async/Parallel domain tags while retaining an explicit unknown fallback.
+fn scheduler_domain_name(domain: u8) -> &'static str {
+    match domain {
+        value if value == SchedulerDomain::Async as u8 => "async",
+        value if value == SchedulerDomain::Parallel as u8 => "parallel",
+        _ => "unknown",
+    }
+}
+
+/// Maps optional scheduler states to the stable dump spellings consumed by monitor rendering.
+fn scheduler_state_name(state: Option<SchedulerState>) -> &'static str {
+    match state {
+        Some(SchedulerState::Created) => "created",
+        Some(SchedulerState::Runnable) => "runnable",
+        Some(SchedulerState::Running) => "running",
+        Some(SchedulerState::WaitingTask) => "waiting-task",
+        Some(SchedulerState::Sleeping) => "sleeping",
+        Some(SchedulerState::WaitingIo) => "waiting-io",
+        Some(SchedulerState::Cancelling) => "cancelling",
+        Some(SchedulerState::Completed) => "completed",
+        Some(SchedulerState::Failed) => "failed",
+        Some(SchedulerState::Cancelled) => "cancelled",
+        None => "unknown",
+    }
+}
+
+/// Classifies completed, failed and cancelled tasks as terminal for scope accounting.
+fn scheduler_state_is_terminal(state: Option<SchedulerState>) -> bool {
+    matches!(
+        state,
+        Some(SchedulerState::Completed | SchedulerState::Failed | SchedulerState::Cancelled)
+    )
 }
 
 thread_local! {
@@ -1392,6 +1602,61 @@ fn render_queries() -> String {
 /// services' clocks can disagree, so a hop may appear to start slightly before
 /// its parent.
 static TRACE_CTX: Mutex<Option<(String, String, String, u64, String)>> = Mutex::new(None);
+
+thread_local! {
+    /// Stable process-local worker identity without an OS-specific syscall.
+    static SCHEDULER_WORKER_MARKER: u8 = const { 0 };
+}
+
+/// Uses the thread-local marker address as an OS-independent process-local worker identity.
+fn scheduler_worker_identity() -> u64 {
+    SCHEDULER_WORKER_MARKER.with(|marker| marker as *const u8 as usize as u64)
+}
+
+/// Copies active trace/span correlation or returns absent markers when no trace is available.
+fn active_scheduler_trace() -> (String, String) {
+    TRACE_CTX
+        .lock()
+        .ok()
+        .and_then(|trace| {
+            trace
+                .as_ref()
+                .map(|(trace_id, span_id, _, _, _)| (trace_id.clone(), span_id.clone()))
+        })
+        .unwrap_or_else(|| ("-".to_string(), "-".to_string()))
+}
+
+/// Receives one scheduler transition from the generated runtime's nullable hook slot.
+#[no_mangle]
+pub extern "C" fn elephc_instr_scheduler_event(
+    domain: u32,
+    task_id: i64,
+    parent_id: i64,
+    group_id: i64,
+    transition: u32,
+    context_id: usize,
+) {
+    // The generated wrapper checks the active word first, and the callback keeps
+    // its own gate so direct bridge/tests and a closing capture remain harmless.
+    if !ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    let domain = match domain {
+        value if value == SchedulerDomain::Async as u32 => SchedulerDomain::Async,
+        value if value == SchedulerDomain::Parallel as u32 => SchedulerDomain::Parallel,
+        _ => return,
+    };
+    let Some((state, reason)) = decode_scheduler_transition(transition) else {
+        return;
+    };
+    let ticks = now_ticks();
+    let worker_id = scheduler_worker_identity();
+    STATE.with(|scheduler| {
+        scheduler.borrow_mut().scheduler_event(
+            domain, task_id, parent_id, group_id, state, reason, context_id, worker_id, ticks,
+        );
+    });
+}
 
 /// Percent-encodes a value for the `key=value` trace line.
 ///
@@ -2875,6 +3140,113 @@ mod tests {
     /// Reads the runtime word the way another crate does — PDO's whole gate.
     fn published_active() -> u64 {
         unsafe { std::ptr::addr_of!(crate::elephc_monitor_active).read() }
+    }
+
+    /// Pins state-duration partitioning, wake counts and context/worker identity for one task.
+    #[test]
+    fn scheduler_accounting_partitions_runnable_running_and_blocked_time() {
+        let mut state = State::default();
+        let event = |state: &mut State,
+                     task_state: SchedulerState,
+                     reason: SchedulerWakeReason,
+                     ticks: u64| {
+            state.scheduler_event(
+                SchedulerDomain::Async,
+                1,
+                -1,
+                1,
+                task_state,
+                reason,
+                0xabc,
+                7,
+                ticks,
+            );
+        };
+        event(&mut state, SchedulerState::Created, SchedulerWakeReason::None, 100);
+        event(&mut state, SchedulerState::Runnable, SchedulerWakeReason::Spawn, 110);
+        event(&mut state, SchedulerState::Running, SchedulerWakeReason::Dispatch, 150);
+        event(&mut state, SchedulerState::Sleeping, SchedulerWakeReason::None, 200);
+        event(&mut state, SchedulerState::Runnable, SchedulerWakeReason::Timer, 260);
+        event(&mut state, SchedulerState::Running, SchedulerWakeReason::Dispatch, 300);
+        event(&mut state, SchedulerState::Completed, SchedulerWakeReason::Completion, 350);
+
+        let task = &state.scheduler_tasks[0];
+        assert_eq!(task.runnable_ticks, 80);
+        assert_eq!(task.running_ticks, 100);
+        assert_eq!(task.blocked_ticks, 60);
+        assert_eq!(task.wake_counts[SchedulerWakeReason::Spawn as usize], 1);
+        assert_eq!(task.wake_counts[SchedulerWakeReason::Timer as usize], 1);
+        assert_eq!(task.context_id, 0xabc);
+        assert_eq!(task.worker_id, 7);
+    }
+
+    /// Keeps sequential root scopes distinct even when their task identifiers are reused.
+    #[test]
+    fn sequential_scheduler_roots_with_reused_task_ids_keep_distinct_scopes() {
+        let mut state = State::default();
+        for base in [100, 1_000] {
+            state.scheduler_event(
+                SchedulerDomain::Async,
+                1,
+                -1,
+                1,
+                SchedulerState::Created,
+                SchedulerWakeReason::None,
+                0xabc,
+                7,
+                base,
+            );
+            state.scheduler_event(
+                SchedulerDomain::Async,
+                1,
+                -1,
+                1,
+                SchedulerState::Runnable,
+                SchedulerWakeReason::Spawn,
+                0xabc,
+                7,
+                base + 10,
+            );
+            state.scheduler_event(
+                SchedulerDomain::Async,
+                1,
+                -1,
+                1,
+                SchedulerState::Completed,
+                SchedulerWakeReason::Completion,
+                0xabc,
+                7,
+                base + 20,
+            );
+        }
+
+        assert_eq!(state.scheduler_tasks.len(), 2);
+        assert_eq!(state.scheduler_tasks[0].scope_id, 1);
+        assert_eq!(state.scheduler_tasks[1].scope_id, 2);
+        for task in &state.scheduler_tasks {
+            assert_eq!(task.wake_counts[SchedulerWakeReason::Spawn as usize], 1);
+            assert_eq!(task.transitions, 3);
+        }
+    }
+
+    /// Ensures dormant scheduler instrumentation creates no task records outside capture windows.
+    #[test]
+    fn dormant_scheduler_callback_records_nothing() {
+        let _serial = ENABLED_TESTS.lock().unwrap_or_else(|error| error.into_inner());
+        ENABLED.store(false, Ordering::Relaxed);
+        STATE.with(|state| state.borrow_mut().reset());
+        elephc_instr_scheduler_event(
+            SchedulerDomain::Async as u32,
+            1,
+            -1,
+            1,
+            elephc_monitoring_contract::scheduler_transition(
+                SchedulerState::Created,
+                SchedulerWakeReason::None,
+            ),
+            0xabc,
+        );
+        STATE.with(|state| assert!(state.borrow().scheduler_tasks.is_empty()));
     }
 
     /// The word PDO gates on follows the SLICE, in both directions.

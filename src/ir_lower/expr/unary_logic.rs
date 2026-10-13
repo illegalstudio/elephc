@@ -94,11 +94,16 @@ pub(super) fn lower_not(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &
 /// Lowers throw used as an expression and returns a placeholder null value.
 pub(super) fn lower_throw_expr(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
-    // Match statement-form `throw`: transfer owning temps, but retain loads that
-    // leave a local slot as owner (e.g. `true ? throw $e : 0` after a catch bind).
+    // Match statement-form `throw`: transfer owning temps and move direct local
+    // owners out of their slots before the non-local control transfer.
     let transferable = ctx.value_is_owning_temporary(value)
-        && !ctx.value_is_owned_unboxed_local_load(value.value);
-    let value = if transferable {
+        && !ctx.value_is_owned_unboxed_local_load(value.value)
+        && !matches!(ctx.builder.value_defining_op(value.value), Some(Op::LoadLocal));
+    let value = if let Some(value) =
+        crate::ir_lower::ownership::take_direct_local_load(ctx, value, Some(inner.span))
+    {
+        value
+    } else if transferable {
         value
     } else {
         crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(inner.span))
@@ -238,4 +243,3 @@ pub(super) fn lower_truthy_bool(
     }
     result
 }
-

@@ -35,10 +35,8 @@ fn emit_scan_aarch64(emitter: &mut Emitter, fill: bool) {
     let next = format!("{loop_label}_next");
     let ready = format!("{loop_label}_ready");
     let done = format!("{loop_label}_done");
-    abi::emit_symbol_address(emitter, "x9", "_heap_buf");
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_heap_off", 0);
-    // The symbol load may use x9 as address scratch.
-    abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    super::super::ctx::emit_heap_base_address(emitter, "x9");
+    super::super::ctx::emit_heap_off_load(emitter, "x10");
     emitter.instruction("add x10, x9, x10");                                    // bound this allocation-free scan by the current heap extent
     emitter.label(&loop_label);
     emitter.instruction("cmp x9, x10");                                         // have all heap headers been inspected?
@@ -214,8 +212,8 @@ fn emit_scan_x86_64(emitter: &mut Emitter, fill: bool) {
     let next = format!("{loop_label}_next");
     let ready = format!("{loop_label}_ready");
     let done = format!("{loop_label}_done");
-    abi::emit_symbol_address(emitter, "r8", "_heap_buf");
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_heap_off", 0);
+    super::super::ctx::emit_heap_base_address(emitter, "r8");
+    super::super::ctx::emit_heap_off_load(emitter, "r9");
     emitter.instruction("add r9, r8");                                          // capture the allocation-free scan's heap limit
     emitter.label(&loop_label);
     emitter.instruction("cmp r8, r9");                                          // have all headers in the current heap been inspected?
@@ -404,9 +402,20 @@ mod tests {
                 < after_destroy.find("__rt_gc_unpin_reachable").unwrap(), "{name}");
             assert!(after_destroy.find("__rt_gc_unpin_reachable").unwrap()
                 < after_destroy.find("__rt_gc_collect_cycles_free_loop:").unwrap(), "{name}");
-            assert!(assembly.contains("_gc_freeing_unreachable"), "{name}");
-            assert!(assembly.rfind("_gc_collecting").unwrap()
-                < assembly.find("__rt_gc_rethrow_pending").unwrap(), "{name}");
+            let mut sweep = Emitter::new(target);
+            let flag_reg = if target.arch == crate::codegen_support::platform::Arch::AArch64 { "x9" } else { "r8" };
+            crate::codegen_support::abi::emit_symbol_address(&mut sweep, flag_reg, "_gc_freeing_unreachable");
+            assert!(assembly.contains(sweep.output().trim()), "{name}: context-owned sweep flag");
+            let mut reset = Emitter::new(target);
+            let (reset_reg, zero_store) = if target.arch == crate::codegen_support::platform::Arch::AArch64 {
+                ("x9", "str xzr, [x9]")
+            } else { ("r8", "mov QWORD PTR [r8], 0") };
+            crate::codegen_support::abi::emit_symbol_address(&mut reset, reset_reg, "_gc_collecting");
+            let reset_address = assembly.rfind(reset.output().trim()).expect("context collector flag address");
+            let reset_store = reset_address + assembly[reset_address..].find(zero_store).expect("collector inactive store");
+            assert!(reset_store < assembly.find("__rt_gc_rethrow_pending").unwrap(), "{name}");
+            assert!(!assembly.contains("_gc_freeing_unreachable") && !assembly.contains("_gc_collecting"),
+                "{name}: collector flags must not address shared globals");
             assert!(assembly.find("__rt_gc_drop_pins").unwrap()
                 < assembly.find("__rt_gc_rethrow_pending").unwrap(), "{name}");
         }

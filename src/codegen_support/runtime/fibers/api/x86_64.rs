@@ -12,7 +12,7 @@ use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 
 use super::common::emit_box_null_mixed;
-use super::super::switch::{fiber_initial_entry_offset, fiber_initial_stack_frame_bytes};
+use super::super::switch::{fiber_initial_context_offset, fiber_initial_entry_offset, fiber_initial_stack_frame_bytes};
 use super::super::{
     FIBER_CALLABLE_OFFSET, FIBER_CALLABLE_WRAPPER_OFFSET, FIBER_CALLER_OFFSET,
     FIBER_DEFAULT_STACK_SIZE, FIBER_OBJECT_SIZE, FIBER_PENDING_THROW_OFFSET,
@@ -38,15 +38,19 @@ pub(super) fn emit_throw_state_error_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r12, rdi");                                        // r12 = message bytes pointer
     emitter.instruction("mov r13, rsi");                                        // r13 = message length
 
-    emitter.instruction("mov rax, 24");                                         // FiberError object size (8 class_id + 16 message property)
+    emitter.instruction("mov rax, 56");                                         // compact Throwable payload includes message, code, creation line, and previous
     emitter.instruction("call __rt_heap_alloc");                                // rax = freshly allocated payload pointer
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(4))); // materialize the object heap kind word
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // select compact Throwable cleanup and previous-link storage
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the kind in the uniform heap header
     emitter.instruction("call __rt_object_handle_acquire");                     // bind the new object to its PHP object handle
     abi::emit_load_symbol_to_reg(emitter, "r10", "_fiber_error_class_id", 0);   // r10 = runtime class id of FiberError
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store FiberError class id at the object header
     emitter.instruction("mov QWORD PTR [rax + 8], r12");                        // message property low half = bytes pointer
     emitter.instruction("mov QWORD PTR [rax + 16], r13");                       // message property high half = byte length
+    emitter.instruction("mov QWORD PTR [rax + 24], 0");                         // the synthesized FiberError code defaults to zero
+    crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "rax");
+    emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // the compact previous-object link defaults to null
+    emitter.instruction("mov QWORD PTR [rax + 48], 0");                         // clear the unused high half of the previous slot before publication
     abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);             // _exc_value = the freshly built FiberError
     emitter.instruction("call __rt_throw_current");                             // unwind into the active try/catch chain (no return)
     emitter.instruction("ud2");                                                 // defensive trap: __rt_throw_current must not return here
@@ -69,7 +73,7 @@ pub(super) fn emit_construct_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base while nested helpers run
     emitter.instruction("push r12");                                            // preserve callable across heap allocation
     emitter.instruction("push r13");                                            // preserve class_id across heap allocation
-    emitter.instruction("push r14");                                            // preserve the allocated Fiber object pointer
+    emitter.instruction("push rbx");                                            // preserve the allocated Fiber object pointer
     emitter.instruction("push r15");                                            // preserve the generated Fiber wrapper pointer
     emitter.instruction("mov r12, rdi");                                        // r12 = callable descriptor pointer
     emitter.instruction("mov r13, rsi");                                        // r13 = Fiber class_id
@@ -78,14 +82,14 @@ pub(super) fn emit_construct_x86_64(emitter: &mut Emitter) {
     // -- allocate the Fiber object payload --
     emitter.instruction(&format!("mov rax, {}", FIBER_OBJECT_SIZE));            // size in bytes for the Fiber object payload
     emitter.instruction("call __rt_heap_alloc");                                // rax = pointer to the object payload
-    emitter.instruction("mov r14, rax");                                        // r14 = Fiber object pointer kept until return
+    emitter.instruction("mov rbx, rax");                                        // rbx = Fiber object pointer kept until return
     emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(4))); // materialize the object heap kind word
-    emitter.instruction("mov QWORD PTR [r14 - 8], r10");                        // stamp the allocation as an object instance
+    emitter.instruction("mov QWORD PTR [rbx - 8], r10");                        // stamp the allocation as an object instance
     emitter.instruction("call __rt_object_handle_acquire");                     // bind the new Fiber object to its PHP object handle (rax still holds it)
-    emitter.instruction("mov QWORD PTR [r14], r13");                            // store the runtime class_id at the object header
+    emitter.instruction("mov QWORD PTR [rbx], r13");                            // store the runtime class_id at the object header
 
     // -- zero-initialise every Fiber field before populating meaningful ones --
-    emitter.instruction("lea r10, [r14 + 8]");                                  // r10 = first runtime-managed Fiber field after class_id
+    emitter.instruction("lea r10, [rbx + 8]");                                  // r10 = first runtime-managed Fiber field after class_id
     emitter.instruction(&format!("mov r11, {}", (FIBER_OBJECT_SIZE - 8) / 8));  // r11 = number of qword fields to clear
     emitter.label("__rt_fiber_construct_zero_object_loop");
     emitter.instruction("mov QWORD PTR [r10], 0");                              // clear the current runtime-managed Fiber qword field
@@ -94,22 +98,22 @@ pub(super) fn emit_construct_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_fiber_construct_zero_object_loop");           // continue until every runtime-managed field is zeroed
 
     emitter.instruction(&format!("mov r10, {}", FIBER_START_ARGS_MAX));         // default user_arg_max = full slot count
-    emitter.instruction(&format!("mov QWORD PTR [r14 + {}], r10", FIBER_USER_ARG_MAX_OFFSET)); // user_arg_max stored on the freshly built fiber
-    emitter.instruction(&format!("mov QWORD PTR [r14 + {}], r12", FIBER_CALLABLE_OFFSET)); // callable.lo = descriptor pointer
-    emitter.instruction(&format!("mov QWORD PTR [r14 + {}], r15", FIBER_CALLABLE_WRAPPER_OFFSET)); // callable wrapper = Fiber entry ABI adapter
+    emitter.instruction(&format!("mov QWORD PTR [rbx + {}], r10", FIBER_USER_ARG_MAX_OFFSET)); // user_arg_max stored on the freshly built fiber
+    emitter.instruction(&format!("mov QWORD PTR [rbx + {}], r12", FIBER_CALLABLE_OFFSET)); // callable.lo = descriptor pointer
+    emitter.instruction(&format!("mov QWORD PTR [rbx + {}], r15", FIBER_CALLABLE_WRAPPER_OFFSET)); // callable wrapper = Fiber entry ABI adapter
 
     // -- allocate the per-fiber stack via mmap; alloc returns base/top/total --
     emitter.instruction(&format!("mov edi, {}", FIBER_DEFAULT_STACK_SIZE));     // request the default usable fiber stack size in bytes
     emitter.instruction("call __rt_fiber_alloc_stack");                         // rax = stack_base, rdx = stack_top, rcx = total mapped length
     emitter.instruction("test rax, rax");                                       // did mmap return a real stack mapping?
     emitter.instruction("jz __rt_fiber_construct_stack_failed");                // abort construction before writing a fake frame at NULL
-    emitter.instruction(&format!("mov QWORD PTR [r14 + {}], rax", FIBER_STACK_BASE_OFFSET)); // stack_base = mmap mapping start
-    emitter.instruction(&format!("mov QWORD PTR [r14 + {}], rdx", FIBER_STACK_TOP_OFFSET)); // stack_top = initial SP target
-    emitter.instruction(&format!("mov QWORD PTR [r14 + {}], rcx", FIBER_STACK_SIZE_OFFSET)); // stack_size = total mapped length
+    emitter.instruction(&format!("mov QWORD PTR [rbx + {}], rax", FIBER_STACK_BASE_OFFSET)); // stack_base = mmap mapping start
+    emitter.instruction(&format!("mov QWORD PTR [rbx + {}], rdx", FIBER_STACK_TOP_OFFSET)); // stack_top = initial SP target
+    emitter.instruction(&format!("mov QWORD PTR [rbx + {}], rcx", FIBER_STACK_SIZE_OFFSET)); // stack_size = total mapped length
 
     // -- carve out and zero a fake initial frame at the top of the stack --
     emitter.instruction(&format!("lea r10, [rdx - {}]", initial_frame_bytes));  // r10 = initial saved_sp for the switch restore path
-    emitter.instruction(&format!("mov QWORD PTR [r14 + {}], r10", FIBER_SAVED_SP_OFFSET)); // saved_sp points at the fake switch frame
+    emitter.instruction(&format!("mov QWORD PTR [rbx + {}], r10", FIBER_SAVED_SP_OFFSET)); // saved_sp points at the fake switch frame
     emitter.instruction("mov r11, r10");                                        // r11 = cursor through the fake frame
     emitter.instruction(&format!("mov rcx, {}", initial_frame_bytes / 8));      // rcx = number of qwords to zero in the fake frame
     emitter.label("__rt_fiber_construct_zero_frame_loop");
@@ -117,14 +121,16 @@ pub(super) fn emit_construct_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r11, 8");                                          // advance to the next fake-frame qword
     emitter.instruction("sub rcx, 1");                                          // consume one fake-frame qword
     emitter.instruction("jne __rt_fiber_construct_zero_frame_loop");            // continue until the fake frame is zeroed
-    abi::emit_symbol_address(emitter, "r11", "__rt_fiber_entry");              // r11 = absolute address of the entry trampoline
+    // The first switch restores the creator's context just like every subsequent resume.
+    abi::emit_store_to_address(emitter, "r14", "r10", fiber_initial_context_offset(emitter.target.arch));
+    abi::emit_symbol_address(emitter, "r11", "__rt_fiber_entry");               // r11 = absolute address of the entry trampoline
     emitter.instruction(&format!("mov QWORD PTR [r10 + {}], r11", initial_entry_offset)); // saved return address = entry trampoline
 
     // -- finish: state = NotStarted and return the new Fiber pointer --
-    emitter.instruction(&format!("mov QWORD PTR [r14 + {}], {}", FIBER_STATE_OFFSET, FIBER_STATE_NOT_STARTED)); // state = NotStarted
-    emitter.instruction("mov rax, r14");                                        // return the freshly built Fiber pointer
+    emitter.instruction(&format!("mov QWORD PTR [rbx + {}], {}", FIBER_STATE_OFFSET, FIBER_STATE_NOT_STARTED)); // state = NotStarted
+    emitter.instruction("mov rax, rbx");                                        // return the freshly built Fiber pointer
     emitter.instruction("pop r15");                                             // restore caller's r15
-    emitter.instruction("pop r14");                                             // restore caller's r14
+    emitter.instruction("pop rbx");                                             // restore caller's rbx
     emitter.instruction("pop r13");                                             // restore caller's r13
     emitter.instruction("pop r12");                                             // restore caller's r12
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
@@ -138,8 +144,9 @@ pub(super) fn emit_construct_x86_64(emitter: &mut Emitter) {
 }
 
 /// Emits `__rt_fiber_start` which transitions a NotStarted fiber to Running and switches to it.
-/// Takes rdi=fiber object pointer. Returns the yielded or terminated transfer value as a Mixed in rax.
-/// Validates the fiber is in NotStarted state; raises FiberError via `__rt_fiber_throw_state_error` otherwise.
+/// Takes rdi=fiber*, rsi=receiver_owned, rdx=auxiliary Throwable*, rcx=auxiliary_owned.
+/// Returns the yielded or terminated transfer value as a Mixed in rax.
+/// Releases transferred owners before raising FiberError for an invalid receiver.
 pub(super) fn emit_start_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fiber_start ---");
@@ -148,11 +155,26 @@ pub(super) fn emit_start_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while switching fibers
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the start helper
     emitter.instruction("push r12");                                            // preserve the receiver Fiber pointer across the cooperative switch
-    emitter.instruction("sub rsp, 8");                                          // keep the SysV stack aligned after saving one callee-saved register
+    emitter.instruction("sub rsp, 40");                                         // align calls and reserve receiver, auxiliary-owner, result, and escape slots
+    emitter.instruction("mov QWORD PTR [rsp], rsi");                            // receiver_owned = second private ABI argument
+    emitter.instruction("mov QWORD PTR [rsp + 8], rdx");                        // save the optional Generator::throw Throwable
+    emitter.instruction("mov QWORD PTR [rsp + 16], rcx");                       // save the auxiliary Throwable ownership flag
     emitter.instruction("mov r12, rdi");                                        // r12 = fiber object pointer
     emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", FIBER_STATE_OFFSET)); // r10 = receiver fiber state
     emitter.instruction(&format!("cmp r10, {}", FIBER_STATE_NOT_STARTED));      // is the fiber still in the NotStarted state?
     emitter.instruction("je __rt_fiber_start_state_ok");                        // proceed when the fiber has not been started yet
+    emitter.instruction("mov r10, QWORD PTR [rsp]");                            // did lowering transfer an owning receiver temporary?
+    emitter.instruction("test r10, r10");                                       // borrowed receivers remain owned by their caller
+    emitter.instruction("jz __rt_fiber_start_state_receiver_released");         // skip cleanup for borrowed Fiber receivers
+    emitter.instruction("mov rax, r12");                                        // pass the transferred Fiber receiver to object decref
+    emitter.instruction("call __rt_decref_object");                             // release the receiver before raising FiberError
+    emitter.label("__rt_fiber_start_state_receiver_released");
+    emitter.instruction("mov r10, QWORD PTR [rsp + 16]");                       // did Generator::throw transfer an auxiliary Throwable?
+    emitter.instruction("test r10, r10");                                       // ordinary Fiber::start calls have no auxiliary owner
+    emitter.instruction("jz __rt_fiber_start_state_value_released");            // skip cleanup when the auxiliary value is borrowed
+    emitter.instruction("mov rax, QWORD PTR [rsp + 8]");                        // pass the auxiliary Throwable to object decref
+    emitter.instruction("call __rt_decref_object");                             // release it before raising FiberError
+    emitter.label("__rt_fiber_start_state_value_released");
     abi::emit_symbol_address(emitter, "rdi", "_fiber_msg_already_started");     // rdi = pointer to the static error message
     emitter.instruction("mov esi, 50");                                         // rsi = error message length in bytes
     emitter.instruction("call __rt_fiber_throw_state_error");                   // raise FiberError; this call does not return
@@ -172,7 +194,15 @@ pub(super) fn emit_start_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", FIBER_TRANSFER_VALUE_OFFSET)); // clear transfer_value.lo because ownership moves to the caller
     emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", FIBER_TRANSFER_VALUE_OFFSET + 8)); // clear transfer_value.hi to leave no stale yielded payload
     emitter.label("__rt_fiber_start_return_ready");
-    emitter.instruction("add rsp, 8");                                          // drop the alignment pad
+    emitter.instruction("mov r10, QWORD PTR [rsp]");                            // reload the private receiver_owned flag after the switch
+    emitter.instruction("test r10, r10");                                       // did call lowering transfer the Fiber receiver?
+    emitter.instruction("jz __rt_fiber_start_receiver_released");               // borrowed receivers remain owned by their caller
+    emitter.instruction("mov QWORD PTR [rsp + 24], rax");                       // preserve the yielded or terminal result across cleanup
+    emitter.instruction("mov rax, r12");                                        // pass the transferred Fiber receiver to object decref
+    emitter.instruction("call __rt_decref_object");                             // release the receiver after the cooperative switch
+    emitter.instruction("mov rax, QWORD PTR [rsp + 24]");                       // restore the PHP result for the caller
+    emitter.label("__rt_fiber_start_receiver_released");
+    emitter.instruction("add rsp, 40");                                         // drop the aligned frame and private owner slots
     emitter.instruction("pop r12");                                             // restore caller's r12
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return the harvested value to the caller
@@ -191,11 +221,27 @@ pub(super) fn emit_resume_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the resume helper
     emitter.instruction("push r12");                                            // preserve the receiver Fiber pointer across the cooperative switch
     emitter.instruction("push r13");                                            // preserve the resume value across state validation
+    emitter.instruction("sub rsp, 16");                                         // private receiver_owned ABI storage, preserved across the switch
+    emitter.instruction("mov QWORD PTR [rsp], rdx");                            // receiver_owned = third private ABI argument
+    emitter.instruction("mov QWORD PTR [rsp + 8], rcx");                        // resume_value_owned = fourth private ABI argument
     emitter.instruction("mov r12, rdi");                                        // r12 = fiber object pointer
     emitter.instruction("mov r13, rsi");                                        // r13 = boxed Mixed value to deliver
     emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", FIBER_STATE_OFFSET)); // r10 = receiver fiber state
     emitter.instruction(&format!("cmp r10, {}", FIBER_STATE_SUSPENDED));        // is the fiber currently paused at Fiber::suspend()?
     emitter.instruction("je __rt_fiber_resume_state_ok");                       // proceed only when the fiber is suspended
+    emitter.instruction("mov r10, QWORD PTR [rsp]");                            // did lowering transfer an owning receiver temporary?
+    emitter.instruction("test r10, r10");                                       // check whether this state-error path owns the Fiber
+    emitter.instruction("jz __rt_fiber_resume_state_error_receiver_released_x86"); // borrowed receivers stay owned by their callers
+    emitter.instruction("mov QWORD PTR [rsp], 0");                              // consume receiver ownership before any throwing cleanup
+    emitter.instruction("mov rdi, r12");                                        // pass the temporary Fiber to object decref
+    emitter.instruction("call __rt_decref_object");                             // release the receiver before raising FiberError
+    emitter.label("__rt_fiber_resume_state_error_receiver_released_x86");
+    emitter.instruction("mov r10, QWORD PTR [rsp + 8]");                        // did lowering transfer an owned boxed resume value?
+    emitter.instruction("test r10, r10");                                       // internal borrowed values remain with their callers
+    emitter.instruction("jz __rt_fiber_resume_state_error_value_released_x86"); // skip cleanup when ownership was not transferred
+    emitter.instruction("mov rax, r13");                                        // pass the rejected Mixed argument to its releaser
+    emitter.instruction("call __rt_decref_mixed");                              // release the boxed value before raising FiberError
+    emitter.label("__rt_fiber_resume_state_error_value_released_x86");
     abi::emit_symbol_address(emitter, "rdi", "_fiber_msg_not_suspended");       // rdi = pointer to the static error message
     emitter.instruction("mov esi, 43");                                         // rsi = error message length in bytes
     emitter.instruction("call __rt_fiber_throw_state_error");                   // raise FiberError; this call does not return
@@ -216,6 +262,15 @@ pub(super) fn emit_resume_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", FIBER_TRANSFER_VALUE_OFFSET)); // clear transfer_value.lo because ownership moves to the caller
     emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", FIBER_TRANSFER_VALUE_OFFSET + 8)); // clear transfer_value.hi to leave no stale yielded payload
     emitter.label("__rt_fiber_resume_return_ready");
+    emitter.instruction("mov r10, QWORD PTR [rsp]");                            // reload the private receiver_owned flag after the switch
+    emitter.instruction("test r10, r10");                                       // did call lowering transfer the Fiber receiver?
+    emitter.instruction("jz __rt_fiber_resume_receiver_released");              // borrowed receivers remain owned by their caller
+    emitter.instruction("mov QWORD PTR [rsp + 8], rax");                        // preserve the yielded or terminal result across cleanup
+    emitter.instruction("mov rax, r12");                                        // pass the transferred Fiber receiver to object decref
+    emitter.instruction("call __rt_decref_object");                             // release the receiver after the cooperative switch
+    emitter.instruction("mov rax, QWORD PTR [rsp + 8]");                        // restore the PHP result for the caller
+    emitter.label("__rt_fiber_resume_receiver_released");
+    emitter.instruction("add rsp, 16");                                         // drop the private ABI storage
     emitter.instruction("pop r13");                                             // restore caller's r13
     emitter.instruction("pop r12");                                             // restore caller's r12
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
@@ -248,7 +303,8 @@ pub(super) fn emit_suspend_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov esi, 33");                                         // rsi = error message length in bytes
     emitter.instruction("call __rt_fiber_throw_state_error");                   // raise FiberError; this call does not return
     emitter.label("__rt_fiber_suspend_state_ok");
-    emitter.instruction("cmp QWORD PTR [rip + _unser_active], 0");              // is global unserialize parser state currently owned?
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_unser_active", 0);         // load this context's active unserialize nesting count
+    emitter.instruction("test r10, r10");                                       // is this context currently inside unserialize()?
     emitter.instruction("je __rt_fiber_suspend_unserialize_ok_x");              // switching is safe only when no parser context is live
     // Also raises without returning, and also before the switch.
     super::common::emit_instr_unpark_hook(emitter, "__rt_fiber_suspend_unser_no_instr_x", "r12");
@@ -296,11 +352,27 @@ pub(super) fn emit_throw_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the throw helper
     emitter.instruction("push r12");                                            // preserve the receiver Fiber pointer across the cooperative switch
     emitter.instruction("push r13");                                            // preserve the Throwable pointer across state validation
+    emitter.instruction("push rbx");                                            // preserve the callee-saved register used for receiver ownership
+    emitter.instruction("sub rsp, 24");                                         // keep the SysV stack aligned and save throwable ownership
+    emitter.instruction("mov QWORD PTR [rsp], rcx");                            // throwable_owned = fourth private ABI argument
     emitter.instruction("mov r12, rdi");                                        // r12 = fiber object pointer
     emitter.instruction("mov r13, rsi");                                        // r13 = Throwable to deliver
+    emitter.instruction("mov QWORD PTR [rsp + 8], r13");                        // preserve the original argument for a non-returning escape path
+    emitter.instruction("mov rbx, rdx");                                        // rbx = private receiver_owned flag preserved across the switch
     emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", FIBER_STATE_OFFSET)); // r10 = receiver fiber state
     emitter.instruction(&format!("cmp r10, {}", FIBER_STATE_SUSPENDED));        // is the fiber currently paused at Fiber::suspend()?
     emitter.instruction("je __rt_fiber_throw_state_ok");                        // proceed only when the fiber is suspended
+    emitter.instruction("test rbx, rbx");                                       // did call lowering transfer the Fiber receiver?
+    emitter.instruction("jz __rt_fiber_throw_state_receiver_released");         // borrowed receivers remain owned by their caller
+    emitter.instruction("mov rax, r12");                                        // pass the transferred Fiber receiver to object decref
+    emitter.instruction("call __rt_decref_object");                             // release the temporary receiver before raising FiberError
+    emitter.label("__rt_fiber_throw_state_receiver_released");
+    emitter.instruction("mov r10, QWORD PTR [rsp]");                            // did lowering transfer an owned Throwable argument?
+    emitter.instruction("test r10, r10");                                       // borrowed Throwable values remain owned by their caller
+    emitter.instruction("jz __rt_fiber_throw_state_value_released");            // skip cleanup when ownership was not transferred
+    emitter.instruction("mov rax, r13");                                        // pass the rejected Throwable to object decref
+    emitter.instruction("call __rt_decref_object");                             // release the argument before raising FiberError
+    emitter.label("__rt_fiber_throw_state_value_released");
     abi::emit_symbol_address(emitter, "rdi", "_fiber_msg_throw_not_suspended"); // rdi = pointer to the static error message
     emitter.instruction("mov esi, 43");                                         // rsi = error message length in bytes
     emitter.instruction("call __rt_fiber_throw_state_error");                   // raise FiberError; this call does not return
@@ -323,6 +395,15 @@ pub(super) fn emit_throw_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", FIBER_TRANSFER_VALUE_OFFSET)); // clear transfer_value.lo because ownership moves to the caller
     emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", FIBER_TRANSFER_VALUE_OFFSET + 8)); // clear transfer_value.hi to leave no stale yielded payload
     emitter.label("__rt_fiber_throw_return_ready");
+    emitter.instruction("test rbx, rbx");                                       // did call lowering transfer the Fiber receiver?
+    emitter.instruction("jz __rt_fiber_throw_receiver_released");               // borrowed receivers remain owned by their caller
+    emitter.instruction("mov r13, rax");                                        // preserve the yielded or terminal result across receiver cleanup
+    emitter.instruction("mov rax, r12");                                        // pass the transferred Fiber receiver to object decref
+    emitter.instruction("call __rt_decref_object");                             // release the receiver after the cooperative switch returns
+    emitter.instruction("mov rax, r13");                                        // restore the PHP result for the caller
+    emitter.label("__rt_fiber_throw_receiver_released");
+    emitter.instruction("add rsp, 24");                                         // drop the ownership slot and SysV alignment storage
+    emitter.instruction("pop rbx");                                             // restore caller's receiver-ownership register
     emitter.instruction("pop r13");                                             // restore caller's r13
     emitter.instruction("pop r12");                                             // restore caller's r12
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
@@ -418,6 +499,46 @@ fn emit_check_escape_x86_64(emitter: &mut Emitter, prefix: &str) {
     emitter.instruction("test r11, r11");                                       // did an exception escape from the fiber entry boundary?
     emitter.instruction(&format!("je __rt_fiber_{}_no_escape", prefix));        // skip re-raise when termination was clean
     emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", FIBER_PENDING_THROW_OFFSET)); // clear pending_throw before re-raising
+    if matches!(prefix, "start" | "resume") {
+        let released = format!("__rt_fiber_{}_escape_receiver_released", prefix);
+        emitter.instruction("mov r10, QWORD PTR [rsp]");                        // reload the private receiver_owned flag on escape
+        emitter.instruction("test r10, r10");                                   // did call lowering transfer the Fiber receiver?
+        emitter.instruction(&format!("jz {released}"));                         // borrowed receivers remain owned by their caller
+        emitter.instruction("mov QWORD PTR [rsp], r11");                        // preserve the escaped Throwable across cleanup
+        emitter.instruction("mov rax, r12");                                    // pass the transferred Fiber receiver to object decref
+        emitter.instruction("call __rt_decref_object");                         // release the receiver before the non-returning rethrow
+        emitter.instruction("mov r11, QWORD PTR [rsp]");                        // restore the escaped Throwable for publication
+        emitter.label(&released);
+        if prefix == "start" {
+            let value_released = "__rt_fiber_start_escape_value_released";
+            emitter.instruction("mov r10, QWORD PTR [rsp + 16]");               // did Generator::throw transfer its Throwable argument?
+            emitter.instruction("test r10, r10");                               // ordinary Fiber::start calls have no auxiliary owner
+            emitter.instruction(&format!("jz {value_released}"));               // skip cleanup when the auxiliary value is borrowed
+            emitter.instruction("mov QWORD PTR [rsp + 32], r11");               // preserve the Fiber error across auxiliary cleanup
+            emitter.instruction("mov rax, QWORD PTR [rsp + 8]");                // pass the original Generator::throw argument to decref
+            emitter.instruction("call __rt_decref_object");                     // release it before the non-returning rethrow
+            emitter.instruction("mov r11, QWORD PTR [rsp + 32]");               // restore the Fiber error for publication
+            emitter.label(value_released);
+        }
+    } else if prefix == "throw" {
+        let released = "__rt_fiber_throw_escape_receiver_released";
+        emitter.instruction("test rbx, rbx");                                   // did call lowering transfer the Fiber receiver?
+        emitter.instruction(&format!("jz {released}"));                         // borrowed receivers remain owned by their caller
+        emitter.instruction("mov r13, r11");                                    // preserve the escaped Throwable across receiver cleanup
+        emitter.instruction("mov rax, r12");                                    // pass the transferred Fiber receiver to object decref
+        emitter.instruction("call __rt_decref_object");                         // release the receiver before the non-returning rethrow
+        emitter.instruction("mov r11, r13");                                    // restore the escaped Throwable for publication
+        emitter.label(released);
+        let value_released = "__rt_fiber_throw_escape_value_released";
+        emitter.instruction("mov r10, QWORD PTR [rsp]");                        // reload the private throwable_owned flag on escape
+        emitter.instruction("test r10, r10");                                   // did call lowering transfer an argument owner?
+        emitter.instruction(&format!("jz {value_released}"));                   // borrowed Throwable values remain owned by their caller
+        emitter.instruction("mov QWORD PTR [rsp + 16], r11");                   // preserve the escaping Throwable across argument cleanup
+        emitter.instruction("mov rax, QWORD PTR [rsp + 8]");                    // pass the original Throwable argument to object decref
+        emitter.instruction("call __rt_decref_object");                         // release the argument owner skipped by the non-returning rethrow
+        emitter.instruction("mov r11, QWORD PTR [rsp + 16]");                   // restore the escaping Throwable for publication
+        emitter.label(value_released);
+    }
     abi::emit_store_reg_to_symbol(emitter, "r11", "_exc_value", 0);             // _exc_value = escaped Throwable ready for __rt_throw_current
     emitter.instruction("call __rt_throw_current");                             // re-raise on the caller's stack chain
     emitter.instruction("ud2");                                                 // defensive trap if __rt_throw_current ever returns

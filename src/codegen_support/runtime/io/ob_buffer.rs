@@ -1152,10 +1152,10 @@ mod tests {
     #[test]
     fn append_chunk_threshold_triggers_process_and_write() {
         let mac = render(Platform::MacOS, Arch::AArch64);
-        assert!(mac.contains("_ob_chunk_sizes"));
+        assert!(mac.contains(&format!("{}]", crate::codegen_support::runtime::ctx::CTX_OB_CHUNK_SIZES_OFFSET)));
         assert!(mac.contains("bl __rt_ob_process_and_write"));
         let linux_x86 = render(Platform::Linux, Arch::X86_64);
-        assert!(linux_x86.contains("_ob_chunk_sizes"));
+        assert!(linux_x86.contains(&format!("{}]", crate::codegen_support::runtime::ctx::CTX_OB_CHUNK_SIZES_OFFSET)));
         assert!(linux_x86.contains("call __rt_ob_process_and_write"));
     }
 }

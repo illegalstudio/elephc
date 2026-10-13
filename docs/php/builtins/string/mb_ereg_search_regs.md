@@ -2,7 +2,7 @@
 title: "mb_ereg_search_regs()"
 description: "Returns the next multibyte regex match and captured groups, preserving numeric and named keys."
 sidebar:
-  order: 850
+  order: 851
 ---
 
 ## mb_ereg_search_regs()

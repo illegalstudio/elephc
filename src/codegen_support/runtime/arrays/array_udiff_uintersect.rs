@@ -98,6 +98,7 @@ pub fn emit_array_udiff_uintersect(emitter: &mut Emitter) {
         INVOCATION_SCOPE,
     );
     clear_slot(emitter, ARGUMENTS);
+    crate::codegen_support::callable_descriptor::emit_invoker_binding_policy(emitter, false);
     abi::emit_call_label(emitter, "__rt_callable_invoke_owned_args");
     abi::store_at_offset(emitter, result, NEXT);
     abi::emit_call_label(emitter, "__rt_mixed_cast_int");

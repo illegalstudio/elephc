@@ -297,6 +297,113 @@ echo $g->getReturn();
     assert_eq!(out, "10|10|null|12");
 }
 
+/// A temporary thrown exception is retired when a started generator unwinds.
+#[test]
+fn test_generator_throw_temporary_exception_escape_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function gen() {
+    yield 1;
+}
+$g = gen();
+$g->rewind();
+try {
+    $g->throw(new Exception("boom"));
+} catch (Exception $error) {
+    echo $error->getMessage();
+}
+unset($error);
+unset($g);
+echo "done";
+"#,
+    );
+    assert_eq!(out.stdout, "boomdone", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// An unstarted generator releases the injected exception when its body throws first.
+#[test]
+fn test_generator_throw_into_unstarted_generator_releases_input_on_escape() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php function gen(bool $fail) { if ($fail) { throw new Exception("body"); } yield 1; } $g = gen(true); try { $g->throw(new Exception("unused")); } catch (Exception $error) { echo $error->getMessage(); } unset($g); echo "done";"#,
+    );
+    assert_eq!(out.stdout, "bodydone", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Dropping a suspended generator releases its yielded object.
+#[test]
+fn test_generator_heap_clean_after_yield_and_drop() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php class YieldedPayload { public function __destruct() { echo "Y"; } } function gen() { yield new YieldedPayload(); } $g = gen(); $g->rewind(); echo "drop"; unset($g); echo "done";"#,
+    );
+    assert_eq!(out.stdout, "dropYdone", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Dropping a generator retires object locals owned by its suspended stack.
+#[test]
+fn test_generator_heap_clean_for_local_object_on_suspended_stack() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php class LocalPayload { public function __destruct() { echo "Y"; } } function gen() { $payload = new LocalPayload(); yield; echo "resumed"; } $g = gen(); $g->rewind(); echo "drop"; unset($g); echo "done";"#,
+    );
+    assert_eq!(out.stdout, "dropYdone", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// A next() exception cleans both the yielded payload and exception owner.
+#[test]
+fn test_generator_next_body_exception_escape_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class YieldedPayload { public function __destruct() { echo "Y"; } }
+class TrackedException extends Exception { public function __destruct() { echo "X"; } }
+function gen() { yield new YieldedPayload(); throw new TrackedException(); }
+$g = gen();
+$g->rewind();
+try { $g->next(); } catch (Exception $error) { echo "escaped"; }
+unset($g, $error);
+echo "done";
+"#,
+    );
+    assert_eq!(out.stdout, "escapedYXdone", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Throwing a borrowed exception through a generator preserves the caller's independent owner.
+#[test]
+fn test_generator_throw_borrowed_exception_escape_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php function gen() { yield 1; } $g = gen(); $g->rewind(); $thrown = new Exception("boom"); try { $g->throw($thrown); } catch (Exception $error) { echo $error->getMessage(); } unset($error, $thrown, $g); echo "done";"#,
+    );
+    assert_eq!(out.stdout, "boomdone", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
 /// Regression for issue #338: `Generator::send()` on a **fresh** generator must start it,
 /// deliver the payload to the first suspended `yield`, and return the NEXT yielded value —
 /// not the first one.

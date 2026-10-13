@@ -2,7 +2,7 @@
 title: "count_chars() - internals"
 description: "Compiler internals for count_chars(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 791
+  order: 792
 ---
 
 ## `count_chars()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/count_chars.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/count_chars.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:701](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L701) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

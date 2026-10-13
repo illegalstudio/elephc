@@ -719,6 +719,8 @@ impl Checker {
             self.closure_return_types.remove(&name);
             self.callable_sigs.remove(&name);
             self.callable_captures.remove(&name);
+            self.parallel_transfer_safe_callable_returns.remove(&name);
+            self.parallel_callable_safety.remove(&name);
             self.callable_array_targets.remove(&name);
             self.first_class_callable_targets.remove(&name);
         }

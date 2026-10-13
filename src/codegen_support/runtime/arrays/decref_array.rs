@@ -28,13 +28,12 @@ pub fn emit_decref_array(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_decref_array_skip");                      // skip if null pointer
 
     // -- heap range check: x0 >= _heap_buf --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x9");
     emitter.instruction("cmp x0, x9");                                          // is pointer below heap start?
     emitter.instruction("b.lo __rt_decref_array_skip");                         // yes — not a heap pointer, skip
 
     // -- heap range check: x0 < _heap_buf + _heap_off --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_off");
-    emitter.instruction("ldr x10, [x10]");                                      // x10 = current heap offset
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "x10"); // x10 = current heap offset (ctx-relative in ctx mode) (ctx-relative in ctx mode)
     emitter.instruction("add x10, x9, x10");                                    // x10 = heap_buf + heap_off = heap end
     emitter.instruction("cmp x0, x10");                                         // is pointer at or beyond heap end?
     emitter.instruction("b.hs __rt_decref_array_skip");                         // yes — not a valid heap pointer, skip
@@ -83,13 +82,12 @@ fn emit_decref_array_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("test rax, rax");                                       // skip null array pointers so non-values do not participate in refcount traffic
     emitter.instruction("jz __rt_decref_array_skip");                           // null array pointers need no heap refcount update
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r10");
     emitter.instruction("lea r10, [r10 + 16]");                                 // first valid user payload begins after the initial heap header
     emitter.instruction("cmp rax, r10");                                        // reject null sentinels, scalar values, and static pointers before reading a heap header
     emitter.instruction("jb __rt_decref_array_skip");                           // non-heap values below the managed heap do not own indexed-array storage
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_heap_off");
-    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the current x86_64 heap bump extent before deriving the live heap end
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "r11"); // r11 = current heap offset (ctx-relative in ctx mode)
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r10");
     emitter.instruction("add r11, r10");                                        // compute the managed heap end address from the base and live offset
     emitter.instruction("cmp rax, r11");                                        // is the candidate array pointer outside the live heap window?
     emitter.instruction("jae __rt_decref_array_skip");                          // pointers above the live heap end are not refcounted arrays

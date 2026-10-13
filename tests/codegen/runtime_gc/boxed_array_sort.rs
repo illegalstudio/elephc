@@ -109,4 +109,3 @@ eval('echo "|e";');
     assert_eq!(out.stdout, "1,2,3:3|z,y,x:3|e", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
-

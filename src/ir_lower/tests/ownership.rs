@@ -171,7 +171,23 @@ function exercise(mixed &$value): mixed { return observe($value, replace($value)
             .iter()
             .find(|function| function.name == "exercise")
             .unwrap();
-        let pinned_load = function.instructions.iter().any(|inst| {
+        let snapshot = function.instructions.iter().find(|inst| {
+            inst.op == Op::MixedClone && inst.operands.first().is_some_and(|value| {
+                function.value(*value).and_then(|metadata| match metadata.def {
+                    ValueDef::Instruction { inst, .. } => function.instruction(inst),
+                    _ => None,
+                }).is_some_and(|producer| producer.op == Op::LoadRefCell)
+            })
+        }).expect("by-value reference read must detach its mutable Mixed cell");
+        let snapshot_value = snapshot.result.unwrap();
+        assert_eq!(function.value(snapshot_value).unwrap().ownership, Ownership::Owned, "{target}");
+        let snapshot_slot = function.instructions.iter().find_map(|inst| {
+            if inst.op == Op::StoreLocal && inst.operands == [snapshot_value] {
+                if let Some(crate::ir::Immediate::LocalSlot(slot)) = inst.immediate { return Some(slot); }
+            }
+            None
+        }).expect("snapshot evaluation slot");
+        let pinned_load = function.instructions.iter().find(|inst| {
             inst.op == Op::Acquire
                 && inst.immediate == Some(crate::ir::Immediate::Bool(true))
                 && inst.operands.first().is_some_and(|value| {
@@ -181,10 +197,25 @@ function exercise(mixed &$value): mixed { return observe($value, replace($value)
                             ValueDef::Instruction { inst, .. } => function.instruction(inst),
                             _ => None,
                         })
-                        .is_some_and(|producer| producer.op == Op::LoadRefCell)
+                        .is_some_and(|producer| producer.op == Op::LoadLocal
+                            && producer.immediate == Some(crate::ir::Immediate::LocalSlot(snapshot_slot)))
                 })
-        });
-        assert!(pinned_load, "{target}");
+        }).expect("detached snapshot must receive an evaluation lifetime pin");
+        let pin = pinned_load.result.unwrap();
+        let owner_slot = function.instructions.iter().find_map(|inst| {
+            if inst.op == Op::StoreLocal && inst.operands == [pin] {
+                if let Some(crate::ir::Immediate::LocalSlot(slot)) = inst.immediate { return Some(slot); }
+            }
+            None
+        }).expect("snapshot pin owner slot");
+        let replacement = function.instructions.iter().position(|inst| {
+            inst.op == Op::Call && matches!(inst.immediate, Some(crate::ir::Immediate::Data(id))
+                if module.data.function_names[id.as_raw() as usize] == "replace")
+        }).expect("later reference mutation");
+        assert!(function.instructions[..replacement].iter().any(|inst| {
+            inst.op == Op::PushCallOperandOwner
+                && inst.immediate == Some(crate::ir::Immediate::LocalSlot(owner_slot))
+        }), "{target}: snapshot pin must be visible before the later mutation");
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
@@ -494,7 +525,14 @@ fn exception_handlers_preserve_their_surviving_activation_on_all_targets() {
         assert!(handlers.len() >= 2, "{name}: the nested PHP catches must survive lowering");
         for handler in handlers {
             let setup = handler.split("setjmp").next().unwrap();
-            assert!(setup.contains("_exc_call_frame_top"), "{name}: catch must preserve its activation");
+            let scratch = crate::codegen_support::abi::temp_int_reg(module.target);
+            let offset = crate::codegen_support::runtime::ctx::CTX_EXC_CALL_FRAME_TOP_OFFSET;
+            let load = if name == "linux-x86_64" {
+                format!("mov {scratch}, QWORD PTR [r14 + {offset}]")
+            } else {
+                format!("ldr {scratch}, [x28, #{offset}]")
+            };
+            assert!(setup.contains(&load), "{name}: catch must preserve its context activation: {setup}");
         }
     }
 }
@@ -718,8 +756,13 @@ fn mixed_parameters_own_detached_entry_cells_on_all_targets() {
         let clone = clones[0].result.unwrap();
         assert_eq!(identity.instructions.iter().filter(|inst| {
             inst.op == Op::Release && inst.operands == [clone]
-        }).count(), 1, "{target}: the shadow store must release its producer exactly once");
-        assert!(identity.locals.iter().any(|local| local.name.as_deref() == Some("value#cow")), "{target}");
+        }).count(), 0, "{target}: the shadow adopts its sole clone without retiring that owner");
+        let shadow = identity.locals.iter().find(|local| local.name.as_deref() == Some("value#cow"))
+            .expect("owning parameter shadow");
+        assert!(identity.instructions.iter().any(|inst| {
+            inst.op == Op::StoreLocal && inst.operands == [clone]
+                && inst.immediate == Some(crate::ir::Immediate::LocalSlot(shadow.id))
+        }), "{target}: the shadow must adopt the one detached parameter cell");
         let reference = module.functions.iter().find(|function| function.name == "mixed_reference").unwrap();
         let returned_clones = reference.instructions.iter().filter(|inst| inst.op == Op::MixedClone).collect::<Vec<_>>();
         assert_eq!(returned_clones.len(), 1, "{target}: by-value return must detach from the caller's reference");

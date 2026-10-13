@@ -231,9 +231,11 @@ impl NativeFunction {
     /// `arg_array` must be a boxed Mixed indexed array whose elements are boxed
     /// Mixed cells following the descriptor-invoker ABI.
     pub unsafe fn call(&self, arg_array: RuntimeCellHandle) -> RuntimeCellHandle {
+        // Eval has already bound these values according to its caller policy.
+        // Do not apply a second strict coercion to normalized native operands.
         // Registered AOT user functions ignore the descriptor ABI's trailing lexical-scope
         // argument. Eval-owned callbacks have their own scope stack, so global is the only
         // honest native invocation-site value at this bridge boundary.
-        RuntimeCellHandle::from_raw((self.invoker)(self.descriptor, arg_array.as_ptr(), -1))
+        RuntimeCellHandle::from_raw((self.invoker)(self.descriptor, arg_array.as_ptr(), -1, 0))
     }
 }

@@ -726,6 +726,7 @@ fn emit_dynamic_new_mixed_constructor_container_call_at_offset(
         "dynamic_constructor",
         true,
         true,
+        false,
     )?;
     abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
     Ok(())

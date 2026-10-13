@@ -78,10 +78,9 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
 
     // -- refresh heap bounds after destructor callbacks have mutated the graph --
     emitter.label("__rt_gc_collect_cycles_recount");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x9");
     emitter.instruction("str x9, [sp, #16]");                                   // save the heap base for later scans
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_off");
-    emitter.instruction("ldr x10, [x10]");                                      // load the current heap offset
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "x10"); // x10 = current heap offset (ctx-relative in ctx mode)
     emitter.instruction("add x10, x9, x10");                                    // compute the current heap end
     emitter.instruction("str x10, [sp, #8]");                                   // save the initial heap end for the metadata passes
     emitter.instruction("str x9, [sp, #0]");                                    // initialize the scan pointer to the heap base
@@ -364,8 +363,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.label("__rt_gc_collect_cycles_free_loop");
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the current heap header scan pointer
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload the heap base for the dynamic end calculation
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_heap_off");
-    emitter.instruction("ldr x11, [x11]");                                      // load the current heap offset after any tail trimming
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "x11"); // x11 = current heap offset (ctx-relative in ctx mode)
     emitter.instruction("add x10, x10, x11");                                   // compute the current heap end after collection frees
     emitter.instruction("cmp x9, x10");                                         // reached the end of the current bump region?
     emitter.instruction("b.ge __rt_gc_collect_cycles_finish");                  // finish once every surviving header was scanned

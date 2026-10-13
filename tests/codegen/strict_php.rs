@@ -178,6 +178,22 @@ fn test_strict_php_extension_call_fails_with_hint() {
     );
 }
 
+/// Verifies the compiler-owned Async namespace is absent from strict AOT source.
+#[test]
+fn test_strict_php_hides_async_surface_from_aot() {
+    let stderr = compile_cli_expect_error(
+        r#"<?php
+use function Elephc\Async\run;
+run(static function ($tasks): int { return 1; });
+"#,
+        &["--strict-php"],
+    );
+    assert!(
+        stderr.contains("Undefined function: Elephc\\Async\\run"),
+        "unexpected stderr: {stderr}",
+    );
+}
+
 /// Rejects a hidden extension in a pipe with the disabled-extension diagnostic.
 #[test]
 fn test_strict_php_pipe_rejects_hidden_is_real() {
@@ -188,6 +204,22 @@ fn test_strict_php_pipe_rejects_hidden_is_real() {
     assert!(
         stderr.contains("Undefined function: is_real")
             && stderr.contains("disabled by --strict-php"),
+        "unexpected stderr: {stderr}",
+    );
+}
+
+/// Verifies strict AOT source cannot enter the compiler-owned Parallel scope.
+#[test]
+fn test_strict_php_hides_parallel_surface_from_aot() {
+    let stderr = compile_cli_expect_error(
+        r#"<?php
+use function Elephc\Parallel\run;
+run(static function ($tasks): int { return 1; });
+"#,
+        &["--strict-php"],
+    );
+    assert!(
+        stderr.contains("Undefined function: Elephc\\Parallel\\run"),
         "unexpected stderr: {stderr}",
     );
 }
@@ -355,6 +387,31 @@ echo eval($code);
 "#,
     );
     assert_eq!(out, "bufnew-no+strlen-ptrcallable:1");
+}
+
+/// Verifies dynamic eval agrees that the compiler-owned Async namespace is unavailable in strict
+/// mode, instead of exposing the injected AOT-only extension surface through Magician.
+#[test]
+fn test_strict_php_eval_hides_async_surface() {
+    let out = compile_strict_cli_and_run(
+        r#"<?php
+$code = '$n = ' . $argc . '; return function_exists("Elephc\\Async\\run") ? "yes" : "no";';
+echo eval($code);
+"#,
+    );
+    assert_eq!(out, "no");
+}
+
+/// Verifies strict eval hides both Parallel's entry function and its catalogued class surface.
+#[test]
+fn test_strict_php_eval_hides_parallel_surface() {
+    let out = compile_strict_cli_and_run(
+        r#"<?php
+$code = '$n = ' . $argc . '; return (function_exists("Elephc\\Parallel\\run") ? "yes" : "no") . ":" . (class_exists("Elephc\\Parallel\\Future") ? "yes" : "no");';
+echo eval($code);
+"#,
+    );
+    assert_eq!(out, "no:no");
 }
 
 /// Verifies the same probes keep reporting the extension builtins without the

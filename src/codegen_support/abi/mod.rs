@@ -58,6 +58,7 @@ pub use registers::{
     OutgoingArgAssignment,
 };
 pub use strings::emit_owned_mixed_string;
+pub(crate) use strings::emit_branch_if_php_return_owned;
 pub use symbols::{
     emit_cmp_reg_to_symbol, emit_dec_symbol, emit_extern_symbol_address,
     emit_load_extern_symbol_to_reg, emit_load_symbol_to_reg, emit_load_symbol_to_result,

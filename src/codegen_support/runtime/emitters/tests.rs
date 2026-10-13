@@ -93,6 +93,88 @@ fn test_aarch64_runtime_emits_fiber_routines() {
             sym
         );
     }
+    assert!(asm.contains("__rt_fiber_resume_state_error_receiver_released"));
+    assert!(asm.contains("ldr x9, [sp, #24]"));
+    let entry = asm
+        .split("__rt_fiber_entry:\n")
+        .nth(1)
+        .unwrap()
+        .split("__rt_fiber_construct:\n")
+        .next()
+        .unwrap();
+    assert!(entry.contains("_generator_class_id"));
+    assert!(entry.contains("ldr x11, [x19]"));
+    assert!(entry.contains("cmp x11, x10"));
+    assert!(entry.contains("b.eq __rt_fiber_entry_escape_argbox_done"));
+    let object_free = asm
+        .split("__rt_object_free_deep:\n")
+        .nth(1)
+        .unwrap()
+        .split("__rt_object_free_deep_done:\n")
+        .next()
+        .unwrap();
+    assert!(object_free.contains("__rt_object_free_deep_fiber_frame_cleanup_done"));
+    assert!(object_free.contains("__rt_object_free_deep_generator_frame_cleanup_done"));
+    let start = asm
+        .split("__rt_fiber_start:\n")
+        .nth(1)
+        .unwrap()
+        .split("__rt_fiber_resume:\n")
+        .next()
+        .unwrap();
+    assert!(start.contains("str x2, [sp, #16]"));
+    assert!(start.contains("str x3, [sp, #24]"));
+    assert!(start.contains("str x10, [sp, #40]"));
+    assert!(start.contains("ldp x29, x30, [sp, #32]"));
+    assert!(start.contains("add sp, sp, #48"));
+    let resume = asm
+        .split("__rt_fiber_resume:\n")
+        .nth(1)
+        .unwrap()
+        .split("__rt_fiber_suspend:\n")
+        .next()
+        .unwrap();
+    assert!(resume.contains("str x3, [sp, #16]"));
+    assert!(resume.contains("bl __rt_decref_mixed"));
+    assert!(resume.contains("ldp x29, x30, [sp, #32]"));
+    assert!(resume.contains("add sp, sp, #48"));
+    let throw = asm
+        .split("__rt_fiber_throw:\n")
+        .nth(1)
+        .unwrap()
+        .split("__rt_fiber_get_current:\n")
+        .next()
+        .unwrap();
+    assert!(throw.contains("str x3, [sp, #8]"));
+    assert!(throw.contains("bl __rt_decref_object"));
+    assert!(throw.contains("__rt_fiber_throw_escape_value_released"));
+    let gen_throw = asm
+        .split("__rt_gen_throw:\n")
+        .nth(1)
+        .unwrap()
+        .split("__rt_gen_rewind:\n")
+        .next()
+        .unwrap();
+    assert!(gen_throw.contains("str x2, [sp]"));
+    assert!(gen_throw.contains("ldr x3, [sp]"));
+}
+
+/// Keeps Fiber entry escape cleanup independent of optional generator class metadata.
+#[test]
+fn test_fiber_entry_escape_does_not_require_generator_class_metadata() {
+    let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+    emit_runtime(&mut emitter, RuntimeFeatures::none());
+    let asm = emitter.output();
+    let entry = asm
+        .split("__rt_fiber_entry:\n")
+        .nth(1)
+        .unwrap()
+        .split("__rt_fiber_construct:\n")
+        .next()
+        .unwrap();
+
+    assert!(!entry.contains("_generator_class_id"));
+    assert!(entry.contains("str xzr, [x19, #184]"));
 }
 
 /// Verifies optional regex helpers are omitted when the program does not reference them.
@@ -105,6 +187,25 @@ fn test_runtime_can_omit_regex_helpers() {
     assert!(!asm.contains("__rt_preg_match:"));
     assert!(!asm.contains("__rt_preg_replace:"));
     assert!(!asm.contains("__rt_preg_split:"));
+}
+
+/// Verifies the Async libc poll adapter is emitted only for programs using the reactor surface.
+#[test]
+fn test_runtime_can_gate_async_reactor_helper() {
+    let target = Target::new(Platform::MacOS, Arch::AArch64);
+    let mut omitted = Emitter::new(target);
+    emit_runtime(&mut omitted, RuntimeFeatures::none());
+    assert!(!omitted.output().contains("__rt_async_poll:"));
+
+    let mut included = Emitter::new(target);
+    emit_runtime(
+        &mut included,
+        RuntimeFeatures {
+            async_reactor: true,
+            ..RuntimeFeatures::none()
+        },
+    );
+    assert!(included.output().contains("__rt_async_poll:"));
 }
 
 /// Verifies the shared mbstring helper is omitted when neither AOT nor eval requires it.
@@ -148,6 +249,69 @@ fn test_linux_x86_64_runtime_uses_shared_surface() {
             sym
         );
     }
+    assert!(asm.contains("__rt_fiber_resume_state_error_receiver_released_x86"));
+    assert!(asm.contains("mov QWORD PTR [rsp], 0"));
+    let entry = asm
+        .split("__rt_fiber_entry:\n")
+        .nth(1)
+        .unwrap()
+        .split("__rt_fiber_construct:\n")
+        .next()
+        .unwrap();
+    assert!(entry.contains("_generator_class_id"));
+    assert!(entry.contains("mov r8, QWORD PTR [r12]"));
+    assert!(entry.contains("cmp r8, r11"));
+    assert!(entry.contains("je __rt_fiber_entry_escape_argbox_done"));
+    let object_free = asm
+        .split("__rt_object_free_deep:\n")
+        .nth(1)
+        .unwrap()
+        .split("__rt_object_free_deep_done:\n")
+        .next()
+        .unwrap();
+    assert!(object_free.contains("__rt_object_free_deep_fiber_x86_frame_cleanup_done"));
+    assert!(object_free.contains("__rt_object_free_deep_generator_x86_frame_cleanup_done"));
+    let start = asm
+        .split("__rt_fiber_start:\n")
+        .nth(1)
+        .unwrap()
+        .split("__rt_fiber_resume:\n")
+        .next()
+        .unwrap();
+    assert!(start.contains("sub rsp, 40"));
+    assert!(start.contains("mov QWORD PTR [rsp + 8], rdx"));
+    assert!(start.contains("mov QWORD PTR [rsp + 16], rcx"));
+    assert!(start.contains("mov QWORD PTR [rsp + 32], r11"));
+    assert!(start.contains("add rsp, 40"));
+    let resume = asm
+        .split("__rt_fiber_resume:\n")
+        .nth(1)
+        .unwrap()
+        .split("__rt_fiber_suspend:\n")
+        .next()
+        .unwrap();
+    assert!(resume.contains("mov QWORD PTR [rsp + 8], rcx"));
+    assert!(resume.contains("call __rt_decref_mixed"));
+    let throw = asm
+        .split("__rt_fiber_throw:\n")
+        .nth(1)
+        .unwrap()
+        .split("__rt_fiber_get_current:\n")
+        .next()
+        .unwrap();
+    assert!(throw.contains("mov QWORD PTR [rsp], rcx"));
+    assert!(throw.contains("call __rt_decref_object"));
+    assert!(throw.contains("__rt_fiber_throw_escape_value_released"));
+    let gen_throw = asm
+        .split("__rt_gen_throw:\n")
+        .nth(1)
+        .unwrap()
+        .split("__rt_gen_rewind:\n")
+        .next()
+        .unwrap();
+    assert!(gen_throw.contains("mov QWORD PTR [rsp], rdx"));
+    assert!(gen_throw.contains("mov rcx, QWORD PTR [rsp]"));
+    assert!(gen_throw.contains("add rsp, 16"));
 }
 
 /// Every process-fatal buffer, pointer-null, and container-capacity helper named by

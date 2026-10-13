@@ -221,7 +221,9 @@ fn emit_getservbyport_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea r9, [rax + rdx]");                                 // r9 = end-of-buffer pointer
     emitter.instruction("mov r12, QWORD PTR [rsp]");                            // r12 = query port
     emitter.instruction("mov r13, QWORD PTR [rsp + 8]");                        // r13 = protocol pointer
-    emitter.instruction("mov r14, QWORD PTR [rsp + 16]");                       // r14 = protocol length
+    // The protocol length stays in its spill slot: r14 is the reserved
+    // runtime-context register, and the one comparison below reads the slot
+    // directly (rsp does not move between here and it).
 
     // -- iterate over each line --
     emitter.label("__rt_gsbp_line");
@@ -339,7 +341,7 @@ fn emit_getservbyport_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_gsbp_protoend");
     emitter.instruction("mov rcx, r8");                                         // copy the protocol token end pointer
     emitter.instruction("sub rcx, rsi");                                        // rcx = protocol token length
-    emitter.instruction("cmp rcx, r14");                                        // protocol lengths must match
+    emitter.instruction("cmp rcx, QWORD PTR [rsp + 16]");                       // protocol lengths must match (the spill slot, not r14)
     emitter.instruction("jne __rt_gsbp_skipeol");                               // different length: move to the next line
     emitter.instruction("xor edi, edi");                                        // byte compare index = 0
     emitter.label("__rt_gsbp_protocmp");

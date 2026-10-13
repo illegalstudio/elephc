@@ -173,6 +173,7 @@ elephc-specific builtins with no PHP equivalent (not counted in coverage above):
 | `read_exif_data()` | Image | Alias of exif_read_data(). |
 | `clamp()` | Math | Clamps a value to be within a specified range. *(No PHP equivalent (not in PHP 8.4/8.5))* |
 | `log2()` | Math | Returns the base-2 logarithm of a number. *(No PHP equivalent (PHP has log(), log10(), log1p()))* |
+| `elephc\async\run()` | Misc | Runs a structured cooperative task scope to completion. |
 | `pcntl_daemon()` | Misc | Detaches the surviving child into a background daemon process. |
 | `buffer_new()` | Pointer | Allocates a raw byte buffer. |
 | `ptr()` | Pointer | Returns a raw pointer to the given variable. |
@@ -197,7 +198,7 @@ elephc-specific builtins with no PHP equivalent (not counted in coverage above):
 | `grapheme_strrev()` | String | Reverses a string by grapheme cluster, returning false on failure. *(No PHP equivalent (not in PHP 8.4/8.5 intl))* |
 | `is_real()` | Type | Alias of is_float(). *(Removed in PHP 8.0; kept as a compatibility alias of is_float())* |
 
-Classes: `DateUnknownException` (`date`), `ImageException` (`gd`).
+Classes: `DateUnknownException` (`date`), `Elephc\Async\Awaitable`, `Elephc\Async\Cancellation`, `Elephc\Async\CancelledException`, `Elephc\Async\TaskGroup`, `Elephc\Parallel\Future`, `Elephc\Parallel\TaskFailure`, `Elephc\Parallel\TaskFailureKind`, `Elephc\Parallel\TaskGroup`, `Elephc\Parallel\TaskGroupFailure`, `ImageException` (`gd`).
 
 Constants: `ARRAY_FILTER_USE_VALUE` (`standard`), `MYSQLI_TYPE_VARCHAR` (`mysqli`).
 

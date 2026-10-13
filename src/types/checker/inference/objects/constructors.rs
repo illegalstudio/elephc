@@ -152,6 +152,7 @@ impl Checker {
                     if !self.can_access_member(declaring_class, visibility)
                         && !self.can_construct_internal_iterator_from_builtin_get_iterator(&class_name)
                         && !self.can_construct_pdo_row_from_prelude_fetch(&class_name)
+                        && !self.can_construct_parallel_internal_from_prelude(&class_name)
                     {
                         return Err(CompileError::new(
                             expr.span,
@@ -255,6 +256,19 @@ impl Checker {
             }
         }
         Ok(PhpType::Object(class_name))
+    }
+
+    /// Grants constructor access only to the compiler-owned Parallel orchestration paths.
+    fn can_construct_parallel_internal_from_prelude(&self, class_name: &str) -> bool {
+        let task_group_from_run = class_name == "Elephc\\Parallel\\TaskGroup"
+            && self.current_function.as_deref().is_some_and(|name| {
+                crate::names::php_symbol_key(name.trim_start_matches('\\'))
+                    == "elephc\\parallel\\run"
+            });
+        let future_from_drain = class_name == "Elephc\\Parallel\\Future"
+            && self.current_class.as_deref() == Some("Elephc\\Parallel\\TaskGroup")
+            && self.current_method.as_deref() == Some("__drain");
+        task_group_from_run || future_from_drain
     }
 
     /// Infers constructor arguments for a class that may have been declared by a prior eval call.

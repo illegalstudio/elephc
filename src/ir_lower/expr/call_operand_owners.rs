@@ -435,11 +435,15 @@ pub(super) fn root_user_call_operands(
         || return_alias == &ReturnArgAlias::None;
     let mut roots = Vec::new();
     for (index, operand) in operands.iter_mut().enumerate().rev() {
+        let owned_reference_collector = signature.is_some_and(|sig| {
+            crate::types::signatures::variadic_param_index(sig) == Some(index)
+        }) && ctx.builder.value_defining_op(*operand) == Some(Op::Acquire);
         if signature.is_some_and(|sig| sig.ref_params.get(index).copied().unwrap_or(false))
             && !matches!(ctx.builder.value_defining_op(*operand), Some(Op::ArrayNew | Op::HashNew))
+            && !owned_reference_collector
         {
             // Actual reference places must preserve their caller storage. A fresh default
-            // container has no place: backend staging retains its own managed-cell payload,
+            // or detached reference collector has no place: ABI staging retains its cell payload,
             // and the original EIR owner must also retire when the callee throws.
             continue;
         }
@@ -570,6 +574,33 @@ pub(super) fn take_prepublished_call_result(
     unregister_owned_call_operand(ctx, staging.slot, span);
     ctx.clear_owned_hidden_temp(&staging.temp_name, Some(span));
     result
+}
+
+/// Settles a directly discarded result before retiring a temporary callable's environment.
+/// The outer owner record stays published with a null slot until callback cleanup completes,
+/// preserving strict LIFO unwinding if either destructor throws. Nested argument results are used
+/// by their parent expression and must never enter this path.
+pub(super) fn discard_result_before_callback(
+    ctx: &mut LoweringContext<'_, '_>,
+    staging: Option<&PrepublishedCallResult>,
+    result: LoweredValue,
+    callback_owner: Option<crate::ir::LocalSlotId>,
+    span: Span,
+) -> LoweredValue {
+    if callback_owner.is_none() || ctx.discarded_result_depth != Some(ctx.expression_depth) {
+        return result;
+    }
+    let Some(staging) = staging else { return result; };
+    ctx.emit_void(
+        Op::ReleaseLocalSlot, Vec::new(), Some(Immediate::LocalSlot(staging.slot)),
+        Op::ReleaseLocalSlot.default_effects(), Some(span),
+    );
+    // Only the enclosing expression statement receives this non-owning sentinel.
+    // Returning the freed SSA result would make statement cleanup release it twice.
+    ctx.emit_value(
+        Op::ConstNull, Vec::new(), None, PhpType::Void,
+        Op::ConstNull.default_effects(), Some(span),
+    )
 }
 
 /// Publishes a freshly created container before the expressions that fill it can throw.

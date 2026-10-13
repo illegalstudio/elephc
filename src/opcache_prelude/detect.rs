@@ -47,7 +47,7 @@
 use crate::names::Name;
 use crate::parser::ast::{
     CallableTarget, CastType, ClassConst, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind,
-    InstanceOfTarget, PackedField, Stmt, StmtKind, TraitUse, TypeExpr,
+    InstanceOfTarget, PackedField, Stmt, StmtKind, TraitUse, TypeExpr, UseItem, UseKind,
 };
 use crate::span::Span;
 
@@ -65,6 +65,8 @@ use crate::span::Span;
 pub(crate) enum SymbolKind {
     /// A function name: matched case-insensitively, and also matched in string literals.
     Function,
+    /// A fully qualified function name matched against the complete namespace path.
+    QualifiedFunction,
     /// A function name matched case-insensitively at CALL POSITIONS ONLY — never inside a
     /// string literal.
     ///
@@ -146,6 +148,8 @@ pub(crate) struct Symbol<'a> {
     pub(crate) kind: SymbolKind,
     /// Narrows a FUNCTION match by what the call asks about — see [`ArgFilter`].
     pub(crate) args: ArgFilter<'a>,
+    /// Namespace/import context for source calls; literal callable strings never use it.
+    function_scope: Option<(&'a str, &'a [UseItem])>,
 }
 
 impl<'a> Symbol<'a> {
@@ -155,6 +159,17 @@ impl<'a> Symbol<'a> {
             name,
             kind: SymbolKind::Function,
             args: ArgFilter::Any,
+            function_scope: None,
+        }
+    }
+
+    /// A fully qualified function symbol, matched against the complete source name.
+    pub(crate) fn qualified_function(name: &'a str) -> Self {
+        Self {
+            name,
+            kind: SymbolKind::QualifiedFunction,
+            args: ArgFilter::Any,
+            function_scope: None,
         }
     }
 
@@ -164,6 +179,7 @@ impl<'a> Symbol<'a> {
             name,
             kind: SymbolKind::Function,
             args,
+            function_scope: None,
         }
     }
 
@@ -194,6 +210,7 @@ impl<'a> Symbol<'a> {
             name: "",
             kind,
             args: ArgFilter::Any,
+            function_scope: None,
         }
     }
 
@@ -206,6 +223,7 @@ impl<'a> Symbol<'a> {
             name,
             kind: SymbolKind::CallSite,
             args: ArgFilter::Any,
+            function_scope: None,
         }
     }
 
@@ -215,6 +233,7 @@ impl<'a> Symbol<'a> {
             name,
             kind: SymbolKind::Constant,
             args: ArgFilter::Any,
+            function_scope: None,
         }
     }
 }
@@ -265,6 +284,81 @@ fn args_select_subject(args: &[Expr], target: Symbol<'_>) -> bool {
 /// a prelude injector deciding whether to emit a function declaration.
 pub(crate) fn program_references(program: &[Stmt], target: &str) -> bool {
     first_reference(program, Symbol::function(target)).is_some()
+}
+
+/// Returns whether a program reaches a fully-qualified function through its source name,
+/// function/namespace import aliases, namespace-relative calls, or a fully-qualified callable string.
+///
+/// Prelude injection runs before name resolution, so it must account for import aliases itself.
+/// Unlike [`program_references`], this qualified entry point does not match an unrelated
+/// function merely because it has the same short name. Imports and namespace prefixes
+/// are matched against the requested fully qualified name within their source scope.
+pub(crate) fn program_references_function_or_import_alias(
+    program: &[Stmt],
+    target_fqn: &str,
+) -> bool {
+    let target_fqn = target_fqn.trim_start_matches('\\');
+    qualified_function_scope_references(program, target_fqn, "")
+}
+
+/// Resolves the source spellings that can reach the target in one namespace scope.
+/// Import tables belong to that scope, not to nested namespace blocks; the existing
+/// exhaustive expression walker then finds references inside functions and class bodies.
+fn qualified_function_scope_references(program: &[Stmt], target_fqn: &str, namespace: &str) -> bool {
+    // Semicolon-form namespaces remain sequential NamespaceDecl markers before
+    // name resolution. Split their import scopes just as brace-form blocks are split.
+    if program.iter().any(|stmt| matches!(stmt.kind, StmtKind::NamespaceDecl { .. })) {
+        let mut start = 0;
+        let mut current_namespace = namespace;
+        for (index, stmt) in program.iter().enumerate() {
+            if let StmtKind::NamespaceDecl { name } = &stmt.kind {
+                if qualified_function_scope_references(&program[start..index], target_fqn, current_namespace) {
+                    return true;
+                }
+                current_namespace = name.as_deref().unwrap_or("");
+                start = index + 1;
+            }
+        }
+        return qualified_function_scope_references(&program[start..], target_fqn, current_namespace);
+    }
+    let imports: Vec<UseItem> = program.iter().flat_map(|stmt| match &stmt.kind {
+        StmtKind::UseDecl { imports } => imports.as_slice(),
+        _ => &[],
+    }).cloned().collect();
+    let target = Symbol {
+        function_scope: Some((namespace, &imports)),
+        ..Symbol::qualified_function(target_fqn)
+    };
+    program.iter().any(|stmt| match &stmt.kind {
+        StmtKind::NamespaceBlock { name, body } => {
+            qualified_function_scope_references(body, target_fqn, name.as_deref().unwrap_or(""))
+        }
+        _ => stmt_refs(stmt, target).is_some(),
+    })
+}
+
+/// Resolves a source call without applying imports to absolute names or strings.
+fn scoped_function_name(name: &Name, namespace: &str, imports: &[UseItem]) -> String {
+    let raw = name.as_str();
+    if name.is_fully_qualified() {
+        return raw.to_string();
+    }
+    let (first, rest) = raw.split_once('\\').map_or((raw, None), |(first, rest)| (first, Some(rest)));
+    let qualify = |suffix: &str| if namespace.is_empty() {
+        suffix.to_string()
+    } else {
+        format!("{namespace}\\{suffix}")
+    };
+    if first.eq_ignore_ascii_case("namespace") {
+        if let Some(rest) = rest {
+            return qualify(rest);
+        }
+    }
+    let import_kind = if rest.is_some() { UseKind::Class } else { UseKind::Function };
+    if let Some(import) = imports.iter().find(|item| item.kind == import_kind && item.alias.eq_ignore_ascii_case(first)) {
+        return rest.map_or_else(|| import.name.as_str().to_string(), |rest| format!("{}\\{rest}", import.name.as_str()));
+    }
+    qualify(raw)
 }
 
 /// Returns whether an `eval()` argument string mentions `target` as a whole word.
@@ -409,6 +503,14 @@ fn name_is(name: &Name, target: Symbol<'_>) -> bool {
         SymbolKind::Function | SymbolKind::CallSite => name
             .last_segment()
             .is_some_and(|segment| segment.eq_ignore_ascii_case(target.name)),
+        SymbolKind::QualifiedFunction => {
+            let resolved = target.function_scope.map_or_else(
+                || name.as_str().to_string(),
+                |(namespace, imports)| scoped_function_name(name, namespace, imports),
+            );
+            crate::names::php_symbol_key(resolved.trim_start_matches('\\'))
+                == crate::names::php_symbol_key(target.name)
+        }
         SymbolKind::Constant
         | SymbolKind::PipeOperator
         | SymbolKind::PropertyHooks
@@ -432,6 +534,7 @@ fn const_name_is(name: &Name, target: Symbol<'_>) -> bool {
             .last_segment()
             .is_some_and(|segment| segment == target.name),
         SymbolKind::Function
+        | SymbolKind::QualifiedFunction
         | SymbolKind::CallSite
         | SymbolKind::PipeOperator
         | SymbolKind::PropertyHooks
@@ -556,9 +659,17 @@ fn expr_refs(expr: &Expr, target: Symbol<'_>) -> Option<Span> {
         // only. A constant name inside a string is prose, not a reference to the constant.
         // A matching string is a reference for `Function` (it may be how the program reaches
         // the callee) but NOT for `CallSite` — see [`SymbolKind::CallSite`].
-        ExprKind::StringLiteral(value) => (target.kind == SymbolKind::Function
-            && value.eq_ignore_ascii_case(target.name))
-        .then_some(expr.span),
+        ExprKind::StringLiteral(value) => {
+            let matches = match target.kind {
+                SymbolKind::Function => value.eq_ignore_ascii_case(target.name),
+                SymbolKind::QualifiedFunction => {
+                    crate::names::php_symbol_key(value.trim_start_matches('\\'))
+                        == crate::names::php_symbol_key(target.name)
+                }
+                _ => false,
+            };
+            matches.then_some(expr.span)
+        }
 
         // The only position at which a global constant is referenced.
         ExprKind::ConstRef(name) => const_name_is(name, target).then_some(expr.span),
@@ -1006,6 +1117,149 @@ enum DeclarationOwner {
     #[test]
     fn detects_case_insensitive() {
         assert!(program_references(&parse(r#"<?php OPCACHE_RESET();"#), RESET));
+    }
+
+    /// Counts a fully qualified callable string as a reference to its exact prelude root.
+    #[test]
+    fn detects_fully_qualified_callable_string_for_prelude_function() {
+        let program = parse(
+            r#"<?php call_user_func("Elephc\\Async\\run", static fn (): int => 1);"#,
+        );
+        assert!(program_references_function_or_import_alias(
+            &program,
+            "Elephc\\Async\\run"
+        ));
+    }
+
+    /// Detects an absolute Parallel root call before ordinary name resolution.
+    #[test]
+    fn detects_fully_qualified_call_for_prelude_function() {
+        let program = parse(r#"<?php \Elephc\Parallel\run(static fn (): int => 1);"#);
+        assert!(program_references_function_or_import_alias(
+            &program,
+            "Elephc\\Parallel\\run"
+        ));
+    }
+
+    /// Resolves an imported function alias against the exact Async root name.
+    #[test]
+    fn detects_an_imported_alias_for_the_exact_prelude_function() {
+        let program = parse(
+            r#"<?php
+use function Elephc\Async\run as asyncRun;
+asyncRun(static fn (): int => 1);
+"#,
+        );
+        assert!(program_references_function_or_import_alias(
+            &program,
+            "Elephc\\Async\\run"
+        ));
+    }
+
+    /// Covers namespace aliases and relative calls that resolve to the Async root.
+    #[test]
+    fn detects_namespace_alias_and_namespace_relative_prelude_references() {
+        for source in [
+            "<?php use Elephc\\Async as A; A\\run();",
+            "<?php namespace Client; use Elephc as E; E\\Async\\run();",
+            "<?php namespace Elephc; Async\\run();",
+            "<?php namespace Elephc\\Async; run();",
+        ] {
+            assert!(program_references_function_or_import_alias(
+                &parse(source), "Elephc\\Async\\run"
+            ), "{source}");
+        }
+    }
+
+    /// Keeps import tables local to their namespace blocks and semicolon-form scopes.
+    #[test]
+    fn namespace_import_aliases_do_not_leak_between_scopes() {
+        for source in [
+            "<?php namespace One { use Elephc\\Async as A; } namespace Two { A\\run(); }",
+            "<?php namespace One; use Elephc\\Async as A; namespace Two; A\\run();",
+            "<?php namespace Other; run();",
+            "<?php use Other\\Async as A; A\\run();",
+        ] {
+            assert!(!program_references_function_or_import_alias(
+                &parse(source), "Elephc\\Async\\run"
+            ), "{source}");
+        }
+    }
+
+    /// Distinguishes absolute names from names resolved through imports or current namespaces.
+    #[test]
+    fn qualified_prelude_calls_distinguish_absolute_names_from_aliases() {
+        for (source, expected) in [
+            ("<?php use Elephc\\Async as A; A\\run();", true),
+            ("<?php use Elephc\\Async as A; \\A\\run();", false),
+            ("<?php namespace Other; Elephc\\Async\\run();", false),
+            ("<?php namespace Other; \\Elephc\\Async\\run();", true),
+            ("<?php use Other as Elephc; Elephc\\Async\\run();", false),
+        ] {
+            assert_eq!(program_references_function_or_import_alias(&parse(source), "Elephc\\Async\\run"), expected, "{source}");
+        }
+    }
+
+    /// Prevents callable strings from inheriting source-code import or namespace resolution rules.
+    #[test]
+    fn callable_string_prelude_names_do_not_resolve_imports_or_namespaces() {
+        for (source, expected) in [
+            ("<?php use Elephc\\Async as A; call_user_func('A\\\\run');", false),
+            ("<?php use function Elephc\\Async\\run as start; call_user_func('start');", false),
+            ("<?php namespace Elephc\\Async; call_user_func('run');", false),
+            ("<?php namespace Other; call_user_func('Elephc\\\\Async\\\\run');", true),
+            ("<?php use Elephc\\Async as A; call_user_func('\\\\Elephc\\\\Async\\\\run');", true),
+        ] {
+            assert_eq!(program_references_function_or_import_alias(&parse(source), "Elephc\\Async\\run"), expected, "{source}");
+        }
+    }
+
+    /// Tests explicit namespace-relative Name nodes independently of parser syntax support.
+    #[test]
+    fn explicit_namespace_relative_function_name_uses_current_scope() {
+        // The detector receives Name nodes. Build the namespace-relative call node
+        // explicitly because the frontend currently treats Token::Namespace as a
+        // declaration rather than accepting namespace\\run() expression syntax.
+        let mut program = parse("<?php namespace Elephc\\Async; run();");
+        let Some(Stmt { kind: StmtKind::ExprStmt(expr), .. }) = program.last_mut() else {
+            panic!("expected function call after namespace marker");
+        };
+        let ExprKind::FunctionCall { name, .. } = &mut expr.kind else {
+            panic!("expected function call node");
+        };
+        *name = Name::qualified(vec!["namespace".to_string(), "run".to_string()]);
+        assert!(program_references_function_or_import_alias(&program, "Elephc\\Async\\run"));
+        assert!(!program_references_function_or_import_alias(&program, "Elephc\\Parallel\\run"));
+    }
+
+    /// Rejects an identically spelled function alias imported from a different namespace.
+    #[test]
+    fn ignores_an_alias_imported_from_another_namespace() {
+        let program = parse(
+            r#"<?php
+use function Other\run as asyncRun;
+asyncRun(static fn (): int => 1);
+"#,
+        );
+        assert!(!program_references_function_or_import_alias(
+            &program,
+            "Elephc\\Async\\run"
+        ));
+    }
+
+    /// Does not infer a Parallel reference merely from an imported Async run function.
+    #[test]
+    fn same_short_function_name_from_another_import_does_not_match() {
+        let program = parse(
+            r#"<?php
+use function Elephc\Async\run;
+run(static fn (): int => 1);
+"#,
+        );
+        assert!(!program_references_function_or_import_alias(
+            &program,
+            "Elephc\\Parallel\\run"
+        ));
     }
 
     /// Detection is per-name: a program using only `opcache_reset` does not count as

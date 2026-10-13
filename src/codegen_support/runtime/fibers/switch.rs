@@ -247,6 +247,15 @@ pub(crate) fn fiber_initial_entry_offset(arch: Arch) -> i32 {
     }
 }
 
+/// Saved slot restored into the reserved runtime-context register on the first coroutine switch.
+/// AArch64 saves x27/x28 at 64/72; SysV restores r15 then r14 from slots 0/8.
+pub(crate) fn fiber_initial_context_offset(arch: Arch) -> usize {
+    match arch {
+        Arch::AArch64 => 72,
+        Arch::X86_64 => 8,
+    }
+}
+
 /// Emits the x86_64 SysV ABI variant of `__rt_fiber_switch`.
 ///
 /// Saves the source context's callee-saved registers (rbx, rbp, r12–r15) and resume address to its own stack,
@@ -355,15 +364,45 @@ mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
 
+    /// The first restore inherits its creator context on all targets and entry never publishes main.
+    #[test]
+    fn initial_coroutine_frames_inherit_creator_context_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let offset = fiber_initial_context_offset(target.arch);
+            assert!(offset + 8 <= fiber_initial_stack_frame_bytes(target.arch) as usize);
+            assert_ne!(offset, fiber_initial_entry_offset(target.arch) as usize);
+            let mut constructor = Emitter::new(target);
+            super::super::emit_fiber_construct(&mut constructor);
+            let constructor = constructor.output();
+            let (zero, seed) = if target.arch == Arch::AArch64 {
+                ("b.ne __rt_fiber_construct_zero_loop", "str x28, [x10, #72]")
+            } else {
+                ("jne __rt_fiber_construct_zero_frame_loop", "mov QWORD PTR [r10 + 8], r14")
+            };
+            assert!(constructor.find(zero).unwrap() < constructor.find(seed).unwrap(), "{name}: {constructor}");
+            assert!(constructor.find(seed).unwrap() < constructor.find("__rt_fiber_entry").unwrap(), "{name}: {constructor}");
+            let mut entry = Emitter::new(target);
+            super::super::emit_fiber_entry(&mut entry, crate::codegen_support::RuntimeFeatures::none());
+            let entry = entry.output();
+            assert!(!entry.contains("_rt_ctx"), "{name}: entry must not replace the inherited arena: {entry}");
+        }
+    }
+
     #[test]
     /// Verifies both architecture emitters save and restore coroutine magic-setter guard chains.
     fn switches_magic_set_guard_heads_on_both_emitters() {
         for name in ["macos-aarch64", "linux-x86_64"] {
             let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            let active = crate::codegen_support::runtime::ctx::per_context_symbol_offset(&emitter, "_magic_set_guard_head").unwrap();
+            let parked = crate::codegen_support::runtime::ctx::per_context_symbol_offset(&emitter, "_fiber_main_saved_magic_set_guard").unwrap();
             emit_fiber_switch(&mut emitter);
             let asm = emitter.output();
-            assert!(asm.contains("_magic_set_guard_head"), "{name}");
-            assert!(asm.contains("_fiber_main_saved_magic_set_guard"), "{name}");
+            for offset in [active, parked] {
+                let address = if name == "linux-x86_64" { format!("[r14 + {offset}]") } else { format!("[x28, #{offset}]") };
+                assert!(asm.contains(&address), "{name}: {asm}");
+            }
+            assert!(!asm.contains("_magic_set_guard_head") && !asm.contains("_fiber_main_saved_magic_set_guard"), "{name}");
             assert!(
                 asm.contains(&FIBER_OWN_MAGIC_SET_GUARD_OFFSET.to_string()),
                 "{name}"

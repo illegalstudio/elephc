@@ -2,7 +2,7 @@
 title: "bin2hex() - internals"
 description: "Compiler internals for bin2hex(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 787
+  order: 788
 ---
 
 ## `bin2hex()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/bin2hex.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/bin2hex.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:701](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L701) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

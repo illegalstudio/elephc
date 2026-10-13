@@ -19,7 +19,7 @@ pub(super) fn lower_concat_reset(ctx: &mut FunctionContext<'_>) -> Result<()> {
 pub(super) fn reset_concat_to_frame_base(ctx: &mut FunctionContext<'_>) {
     let scratch = abi::temp_int_reg(ctx.emitter.target);
     abi::load_at_offset(ctx.emitter, scratch, ctx.concat_base_offset);
-    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_concat_off", 0);
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(ctx.emitter, scratch);
 }
 
 /// Lowers metadata-only NOPs, emitting data-backed messages as assembly comments.

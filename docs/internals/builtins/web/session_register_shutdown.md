@@ -2,7 +2,7 @@
 title: "session_register_shutdown() - internals"
 description: "Compiler internals for session_register_shutdown(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 994
+  order: 995
 ---
 
 ## `session_register_shutdown()` - internals

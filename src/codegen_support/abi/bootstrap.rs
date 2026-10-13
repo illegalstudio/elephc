@@ -73,25 +73,14 @@ pub fn emit_copy_frame_pointer(emitter: &mut Emitter, dest: &str) {
 /// `ELEPHC_STATUS_RUNTIME_FAILURE` and unwinds through `__rt_throw_current` instead.
 pub fn emit_exit(emitter: &mut Emitter, code: u32) {
     emit_cdylib_exit_escape(emitter);
-    match (emitter.target.platform, emitter.target.arch) {
-        (super::super::platform::Platform::MacOS, Arch::AArch64)
-        | (super::super::platform::Platform::Linux, Arch::AArch64) => {
-            emitter.instruction("bl __rt_ob_flush_all");                        // drain still-active output buffers to stdout before terminating
-            emitter.instruction(&format!("mov x0, #{}", code));                 // load the requested process exit code into the ABI return register
-            emitter.syscall(1);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("mov x0, #{}", code));                 // pass the requested status to the worker-aware exit boundary
+            emitter.instruction("bl __rt_exit_or_parallel_fatal");              // escape a worker or terminate the process; never returns
         }
-        (super::super::platform::Platform::Linux, Arch::X86_64) => {
-            emitter.instruction("and rsp, -16");                                // realign the stack for the flush call (this path never returns)
-            emitter.instruction("call __rt_ob_flush_all");                      // drain still-active output buffers to stdout before terminating
-            emitter.instruction(&format!("mov edi, {}", code));                 // load the requested process exit code into the SysV first-argument register
-            emitter.instruction("mov eax, 231");                                // Linux x86_64 syscall 231 = exit_group
-            emitter.instruction("syscall");                                     // terminate the process through the Linux x86_64 syscall ABI
-        }
-        (super::super::platform::Platform::MacOS, Arch::X86_64) => {
-            panic!("process exit emission is not implemented yet for target macos-x86_64");
-        }
-        (super::super::platform::Platform::Windows, _) => {
-            panic!("Windows target is not yet supported (see issue #379)");
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov edi, {}", code));                 // pass the requested status to the worker-aware exit boundary
+            emitter.instruction("call __rt_exit_or_parallel_fatal");            // escape a worker or terminate the process; never returns
         }
     }
 }

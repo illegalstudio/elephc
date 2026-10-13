@@ -2,7 +2,7 @@
 title: "mb_language() - internals"
 description: "Compiler internals for mb_language(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 858
+  order: 859
 ---
 
 ## `mb_language()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_language.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_language.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:701](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L701) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -278,8 +278,7 @@ pub(super) fn emit_throw_iterator_iterator_downcast_logic_exception(ctx: &mut Fu
             ctx.emitter.instruction("str xzr, [x0, #24]");                      // exception code defaults to zero
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "x0");
             ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null
-            abi::emit_symbol_address(ctx.emitter, "x9", "_exc_value");
-            ctx.emitter.instruction("str x0, [x9]");                            // publish the active exception object
+            abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_exc_value", 0);  // publish the active exception object
             ctx.emitter.instruction("b __rt_throw_current");                    // enter the standard exception unwinder
         }
         Arch::X86_64 => {
@@ -306,8 +305,7 @@ pub(super) fn emit_throw_iterator_iterator_downcast_logic_exception(ctx: &mut Fu
             ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // exception code defaults to zero
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
             ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null
-            ctx.emitter
-                .instruction("mov QWORD PTR [rip + _exc_value], rax"); // publish the active exception object
+            abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0); // publish the active exception object
             ctx.emitter.instruction("mov rsp, rbp");                            // release helper frame before throwing
             ctx.emitter.instruction("pop rbp");                                 // restore caller frame pointer before throwing
             ctx.emitter.instruction("jmp __rt_throw_current");                  // enter the standard exception unwinder

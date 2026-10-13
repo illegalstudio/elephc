@@ -192,7 +192,8 @@ pub fn expr_exposes_dynamic_param(expr: &Expr, dynamic_params: &HashSet<String>)
 /// Returns the return type a CALLER of a user function observes.
 ///
 /// A declared return type is authoritative. So is the inferred type of a callee whose parameters
-/// are all typed, by reference, or variadic. An untyped by-value parameter, however, reaches the
+/// are all typed or by reference. An inferred variadic container uses the boxed carrier that
+/// preserves both positional and named collector shapes. An untyped by-value parameter reaches the
 /// callee as a boxed Mixed cell, so an array the callee builds from it holds Mixed elements even
 /// when the checker inferred `array<int>` from the placeholder: the container element is widened
 /// to Mixed. Scalars are left alone; `return_exposes_dynamic_param` owns the pass-through case.
@@ -201,6 +202,12 @@ pub fn expr_exposes_dynamic_param(expr: &Expr, dynamic_params: &HashSet<String>)
 /// checker's typing of a closure whose body is `return <user call>;` applies the same two
 /// predicates, so the element the caller reads has one type on both sides (issue #1270).
 pub fn caller_visible_return_type(signature: &FunctionSig) -> PhpType {
+    if !signature.declared_return
+        && signature.variadic.is_some()
+        && matches!(signature.return_type.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
+    {
+        return PhpType::Mixed;
+    }
     if signature.declared_return || !signature_has_dynamic_untyped_param(signature) {
         return signature.return_type.clone();
     }
@@ -262,5 +269,40 @@ pub fn type_contains_container(ty: &PhpType) -> bool {
         PhpType::Array(_) | PhpType::AssocArray { .. } => true,
         PhpType::Union(members) => members.iter().any(type_contains_container),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds a typed variadic declaration whose inferred container can receive named keys.
+    fn variadic_signature(return_type: PhpType, declared_return: bool) -> FunctionSig {
+        FunctionSig {
+            params: vec![("values".into(), PhpType::php_array())],
+            param_type_exprs: vec![Some(crate::parser::ast::TypeExpr::Str)],
+            param_attributes: vec![Vec::new()],
+            defaults: vec![None],
+            return_type,
+            declared_return,
+            by_ref_return: false,
+            ref_params: vec![false],
+            declared_params: vec![true],
+            variadic: Some("values".into()),
+            deprecation: None,
+            is_generator: false,
+        }
+    }
+
+    /// Inferred variadic containers keep one boxed return ABI; explicit returns remain authoritative.
+    #[test]
+    fn variadic_container_return_abi_is_shared_by_callers_and_metadata() {
+        for ty in [PhpType::Array(Box::new(PhpType::Str)),
+            PhpType::AssocArray { key: Box::new(PhpType::Mixed), value: Box::new(PhpType::Str) }]
+        {
+            assert_eq!(caller_visible_return_type(&variadic_signature(ty.clone(), false)), PhpType::Mixed);
+            assert_eq!(caller_visible_return_type(&variadic_signature(ty.clone(), true)), ty);
+        }
+        assert_eq!(caller_visible_return_type(&variadic_signature(PhpType::Int, false)), PhpType::Int);
     }
 }

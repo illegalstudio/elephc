@@ -9,7 +9,10 @@
 //! - Path operands are already evaluated by EIR and are materialized into the
 //!   string result registers expected by the shared runtime helpers.
 
-use crate::codegen::{abi, callable_descriptor, emit_box_current_value_as_mixed, NULL_SENTINEL};
+use crate::codegen::{
+    abi, callable_descriptor, emit_box_current_owned_value_as_mixed,
+    emit_box_current_value_as_mixed, NULL_SENTINEL,
+};
 use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
 use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
@@ -115,7 +118,7 @@ pub(crate) use stream_buckets::{
     lower_stream_is_local, lower_stream_supports_lock,
 };
 pub(crate) use stream_options::{
-    lower_stream_isatty, lower_stream_set_blocking, lower_stream_set_chunk_size, lower_stream_set_buffer,
+    lower_async_fd, lower_async_poll, lower_stream_isatty, lower_stream_set_blocking, lower_stream_set_chunk_size, lower_stream_set_buffer,
     lower_stream_set_timeout, lower_stream_select, lower_stream_resolve_include_path,
 };
 pub(crate) use stream_sockets::{

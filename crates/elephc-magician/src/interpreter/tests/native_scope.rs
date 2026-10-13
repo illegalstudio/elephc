@@ -255,6 +255,7 @@ unsafe extern "C" fn fake_native_null_descriptor(
     _descriptor: *mut std::ffi::c_void,
     _args: *mut crate::value::RuntimeCell,
     _invocation_scope: i64,
+    _binding_policy: u64,
 ) -> *mut crate::value::RuntimeCell {
     std::ptr::null_mut()
 }

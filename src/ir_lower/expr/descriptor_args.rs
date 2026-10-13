@@ -208,13 +208,18 @@ pub(super) fn lower_signature_invoker_ref_arg_marker(
     item: &Expr,
 ) -> Option<LoweredValue> {
     let var_name = invoker_ref_arg_variable(ctx, sig, index, item)?;
+    if sig.is_none() && ctx.boxed_reference_promotion_is_authorized(var_name, item.span) {
+        // A CFG join may forget callable identity without revoking this checked storage contract.
+        // Keep runtime descriptor selection, but prepare a value-wide reference for its output.
+        return Some(lower_invoker_ref_variadic_arg_marker(ctx, var_name, item.span));
+    }
     if let Some(sig) = sig {
         let regular_param_count = crate::types::call_args::regular_param_count(sig);
-        let expects_mixed = (index >= regular_param_count && variadic_param_is_by_ref(sig))
-            || sig
-                .params
-                .get(index)
-                .is_some_and(|(_, ty)| matches!(ty, PhpType::Mixed));
+        if index >= regular_param_count && variadic_param_is_by_ref(sig) {
+            return Some(lower_invoker_ref_variadic_arg_marker(ctx, var_name, item.span));
+        }
+        let expects_mixed = sig.params.get(index)
+            .is_some_and(|(_, ty)| matches!(ty, PhpType::Mixed));
         if expects_mixed
             && ctx.boxed_reference_promotion_is_authorized(var_name, item.span)
             && !ctx.is_ref_bound_local(var_name)

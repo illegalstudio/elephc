@@ -9,6 +9,7 @@
 //! - Separate entries distinguish borrowed descriptors from caller-transferred descriptor owners.
 //! - A third hidden ABI argument carries the invocation-site lexical class id through the
 //!   exception boundary. The value is frame-owned, so nesting, throws and fibers cannot clobber it.
+//! - The fourth ABI argument carries scalar binding policy independently of lexical scope.
 //! - A local native handler keeps cleanup below the caller's exception boundary.
 //! - Slots are cleared before release so a cleanup throw cannot release an owner twice.
 
@@ -17,7 +18,7 @@ use crate::codegen_support::try_handlers::{
     TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
 };
 
-const FRAME_SIZE: usize = TRY_HANDLER_SLOT_SIZE + 64;
+const FRAME_SIZE: usize = TRY_HANDLER_SLOT_SIZE + 80;
 const HANDLER_OFFSET: usize = FRAME_SIZE - 16;
 const DESCRIPTOR: usize = 8;
 const ARGUMENTS: usize = 16;
@@ -26,8 +27,9 @@ const PENDING: usize = 32;
 const PREVIOUS: usize = 40;
 const OWNED_DESCRIPTOR: usize = 48;
 const INVOCATION_SCOPE: usize = 56;
+const BINDING_POLICY: usize = 64;
 
-/// Emits a consuming argument-container boundary using the descriptor's three-argument native ABI.
+/// Emits a consuming argument-container boundary using the descriptor's four-argument native ABI.
 /// Returns an owned Mixed cell, or rethrows only after releasing the arguments and interrupted result.
 pub(crate) fn emit_callable_invoke_owned_args(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
@@ -62,6 +64,7 @@ pub(crate) fn emit_callable_invoke_owned_args(emitter: &mut Emitter) {
         abi::int_arg_reg_name(emitter.target, 2),
         INVOCATION_SCOPE,
     );
+    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 3), BINDING_POLICY);
     callable_descriptor::emit_load_invoker_from_descriptor(emitter, invoker, descriptor_arg);
     abi::emit_call_reg(emitter, invoker);
     abi::store_at_offset(emitter, result, RESULT);
@@ -114,6 +117,7 @@ fn emit_owned_args_entry(emitter: &mut Emitter, label: &str, owns_descriptor: bo
         abi::int_arg_reg_name(emitter.target, 2),
         INVOCATION_SCOPE,
     );
+    abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 3), BINDING_POLICY);
     if owns_descriptor {
         abi::store_at_offset(emitter, descriptor, OWNED_DESCRIPTOR);
     } else {
@@ -222,6 +226,18 @@ mod tests {
                 .unwrap();
             assert!(stored < loaded && loaded < invoke, "{name}: {asm}");
             assert!(!asm.contains("_callable_invocation_scope"), "{name}: {asm}");
+            let (store_policy, load_policy) = match target.arch {
+                Arch::AArch64 => (
+                    format!("stur x3, [x29, #-{BINDING_POLICY}]"),
+                    format!("ldur x3, [x29, #-{BINDING_POLICY}]"),
+                ),
+                Arch::X86_64 => (
+                    format!("mov QWORD PTR [rbp - {BINDING_POLICY}], rcx"),
+                    format!("mov rcx, QWORD PTR [rbp - {BINDING_POLICY}]"),
+                ),
+            };
+            assert!(asm.contains(&store_policy) && asm.contains(&load_policy), "{name}: {asm}");
+            assert!(BINDING_POLICY < FRAME_SIZE - TRY_HANDLER_SLOT_SIZE);
         }
     }
 

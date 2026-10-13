@@ -261,6 +261,7 @@ fn emit_visitor(emitter: &mut Emitter) {
         VISIT_INVOCATION_SCOPE,
     );
     install_visit_borrow(emitter);
+    crate::codegen_support::callable_descriptor::emit_invoker_binding_policy(emitter, false);
     abi::emit_call_label(emitter, "__rt_callable_invoke_owned_args");
     restore_visit_borrow(emitter);
     store_callback_result(emitter);

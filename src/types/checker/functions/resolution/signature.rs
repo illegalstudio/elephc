@@ -109,6 +109,8 @@ impl Checker {
             } else {
                 self.closure_return_types.remove(pname);
                 self.callable_sigs.remove(pname);
+                self.parallel_transfer_safe_callable_returns.remove(pname);
+                self.parallel_callable_safety.remove(pname);
             }
         }
 
@@ -187,8 +189,7 @@ impl Checker {
         body_check_result?;
         for pname in &callable_param_names {
             if let Some(sig) = self.callable_sigs.get(pname).cloned() {
-                self.callable_param_sigs
-                    .insert((function_key.clone(), pname.clone()), sig);
+                self.record_callable_param_sig(&function_key, pname, sig);
             }
         }
         for (pname, saved_sig, saved_return) in saved_callable_metadata {
@@ -196,6 +197,8 @@ impl Checker {
                 self.callable_sigs.insert(pname.clone(), sig);
             } else {
                 self.callable_sigs.remove(&pname);
+                self.parallel_transfer_safe_callable_returns.remove(&pname);
+                self.parallel_callable_safety.remove(&pname);
             }
             if let Some(return_ty) = saved_return {
                 self.closure_return_types.insert(pname, return_ty);

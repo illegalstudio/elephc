@@ -91,9 +91,8 @@ pub fn emit_json_decode(emitter: &mut Emitter) {
     emitter.instruction("str x2, [sp, #8]");                                    // save the trimmed quoted JSON length across the decode loop and concat-buffer writes
 
     // -- get output position in concat_buf --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // load the current concat-buffer absolute offset before writing decoded string bytes
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x11");
     emitter.instruction("add x11, x11, x10");                                   // compute the concat-buffer write pointer where the decoded string should begin
     emitter.instruction("str x11, [sp, #16]");                                  // save the decoded-string start pointer for the final result slice
     emitter.instruction("str x11, [sp, #24]");                                  // save the current concat-buffer write pointer for the decode loop
@@ -328,10 +327,9 @@ pub fn emit_json_decode(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #16]");                                   // return the decoded-string start pointer in the string result register pair
     emitter.instruction("ldr x11, [sp, #24]");                                  // reload the final concat-buffer write pointer before turning it into a slice length
     emitter.instruction("sub x2, x11, x1");                                     // compute the decoded-string length from write_end - write_start
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // reload the current concat-buffer absolute offset before publishing the decoded-string append
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
     emitter.instruction("add x10, x10, x2");                                    // advance the concat-buffer absolute offset by the decoded-string length
-    emitter.instruction("str x10, [x9]");                                       // publish the updated concat-buffer absolute offset for later writers
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x10"); // publish the updated concat-buffer absolute offset for later writers (ctx-relative in ctx mode)
     emitter.instruction("b __rt_json_decode_ret");                              // return the decoded concat-backed string slice through the shared epilogue
 
     // -- empty input decodes to the empty string slice --

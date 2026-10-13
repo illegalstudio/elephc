@@ -55,8 +55,8 @@ pub(super) fn specialize_dynamic_assoc_variadic_user_callback(
         return Ok(());
     };
     let mut param_types = sig.params.clone();
-    if let Some((_, variadic_ty)) = param_types.last_mut() {
-        *variadic_ty = PhpType::Iterable;
+    if let Some(index) = crate::types::signatures::variadic_param_index(sig) {
+        param_types[index].1 = crate::types::signatures::descriptor_variadic_container();
     }
     checker.resolve_function_signature(name, &decl, param_types)?;
     Ok(())

@@ -13,4 +13,4 @@ mod call_validation;
 mod param_binding;
 mod reference_outputs;
 mod resolution;
-mod returns;
+pub(super) mod returns;

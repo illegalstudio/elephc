@@ -2,7 +2,7 @@
 title: "__elephc_pdo_adapter_addr() - internals"
 description: "Compiler internals for __elephc_pdo_adapter_addr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1140
+  order: 1145
 ---
 
 ## `__elephc_pdo_adapter_addr()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/elephc_pdo_adapter_addr.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/elephc_pdo_adapter_addr.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:701](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L701) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

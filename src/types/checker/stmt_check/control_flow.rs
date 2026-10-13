@@ -1210,6 +1210,18 @@ impl Checker {
         } else {
             self.callable_captures.remove(dest);
         }
+        if self.parallel_transfer_safe_callable_returns.contains(src) {
+            self.parallel_transfer_safe_callable_returns
+                .insert(dest.to_string());
+        } else {
+            self.parallel_transfer_safe_callable_returns.remove(dest);
+        }
+        if let Some(safety) = self.parallel_callable_safety.get(src).copied() {
+            self.parallel_callable_safety
+                .insert(dest.to_string(), safety);
+        } else {
+            self.parallel_callable_safety.remove(dest);
+        }
         if let Some(target) = self.callable_array_targets.get(src).cloned() {
             self.callable_array_targets
                 .insert(dest.to_string(), target);
@@ -1234,6 +1246,8 @@ impl Checker {
         self.closure_return_types.remove(dest);
         self.callable_sigs.remove(dest);
         self.callable_captures.remove(dest);
+        self.parallel_transfer_safe_callable_returns.remove(dest);
+        self.parallel_callable_safety.remove(dest);
         self.callable_array_targets.remove(dest);
         self.first_class_callable_targets.remove(dest);
     }

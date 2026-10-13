@@ -406,6 +406,81 @@ echo $repeated;
     assert_eq!(out, "position:name|position:name|position|counted|second");
 }
 
+/// A throwing reference-variadic callee preserves caller writeback and retires temporary collectors.
+#[test]
+fn test_by_ref_variadic_throw_retires_collector_and_preserves_writeback() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function update_then_throw(&...$items): void {
+    $items[0] = "changed";
+    throw new RuntimeException("boom");
+}
+$value = 1;
+try { update_then_throw($value); }
+catch (RuntimeException $error) { echo $value, "|", $error->getMessage(); unset($error); }
+unset($value);
+"#);
+    assert_eq!(out.stdout, "changed|boom", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Keeps call_user_func retyping leak-free after a prior invocation discards callable flow facts.
+#[test]
+fn test_by_ref_variadic_call_user_func_retypes_with_balanced_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function replace(&...$items): void { $items[0] = "position"; }
+$callback = replace(...);
+$first = 1;
+$callback($first);
+$value = 5;
+call_user_func($callback, $value);
+echo $value;
+unset($first);
+unset($value);
+unset($callback);
+"#);
+    assert_eq!(out.stdout, "position", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Fixed scalar reference targets retain their typed ABI after callable flow identity is lost.
+#[test]
+fn test_descriptor_fixed_reference_after_prior_call_keeps_scalar_storage() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function increment(int &$value): void { $value += 1; }
+$callback = increment(...);
+$first = 0;
+$callback($first);
+$value = 5;
+call_user_func($callback, $value);
+echo $first, ":", $value;
+unset($first);
+unset($value);
+unset($callback);
+"#);
+    assert_eq!(out.stdout, "1:6", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Storage authorization must not preserve a stale target after a callable is reassigned.
+#[test]
+fn test_descriptor_reference_authorization_keeps_runtime_target_selection() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function replace(&...$items): void { $items[0] = "changed"; }
+function identity(mixed $value): mixed { return $value; }
+$callback = replace(...);
+$first = 1;
+$callback($first);
+$callback = $argc > 0 ? identity(...) : replace(...);
+$value = 5;
+echo call_user_func($callback, $value), "|", $value;
+unset($first);
+unset($value);
+unset($callback);
+"#);
+    assert_eq!(out.stdout, "5|5", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 // --- Issue #1062: a by-reference variadic may retype the caller's variable -----------------
 //
 // `f(&...$items)` is the one by-reference form PHP's checker does not constrain: the callee

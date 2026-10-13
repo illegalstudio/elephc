@@ -2,7 +2,7 @@
 title: "__elephc_invoke_pdo_statement_constructor() - internals"
 description: "Compiler internals for __elephc_invoke_pdo_statement_constructor(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1121
+  order: 1126
 ---
 
 ## `__elephc_invoke_pdo_statement_constructor()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/__elephc_invoke_pdo_statement_constructor.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_invoke_pdo_statement_constructor.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:701](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L701) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

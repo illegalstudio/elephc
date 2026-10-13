@@ -15,6 +15,7 @@ sidebar:
 | [`debug_print_backtrace()`](./misc/debug_print_backtrace.md) | `(int $options = 0, int $limit = 0): void` | `void` | ✓ | ✓ |
 | [`define()`](./misc/define.md) | `(string $constant_name, mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`defined()`](./misc/defined.md) | `(string $constant_name): bool` | `bool` | ✓ | ✓ |
+| [`elephc\async\run()`](./misc/elephc-async-run.md) | `(callable $body): mixed` | `mixed` | ✓ | - |
 | [`empty()`](./misc/empty.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`error_reporting()`](./misc/error_reporting.md) | `(mixed $error_level = null): int` | `int` | ✓ | ✓ |
 | [`extension_loaded()`](./misc/extension_loaded.md) | `(string $extension): bool` | `bool` | ✓ | ✓ |

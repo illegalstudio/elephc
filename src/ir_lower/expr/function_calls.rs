@@ -104,11 +104,23 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         return value;
     }
     let extension_builtin = source_prefers_extension_builtin(canonical);
-    let sig = call_signature(ctx, canonical, extension_builtin);
-    let is_extern = ctx.extern_functions.contains_key(canonical);
-    let is_user_function = ctx.functions.contains_key(canonical) && !extension_builtin;
+    // Synthetic EIR bodies are constructed after name resolution, so their generated `Name`
+    // nodes can retain a root marker or non-canonical casing. Match known extern/user names by
+    // PHP symbol key before deciding whether this is a builtin fallback.
+    let requested = canonical.trim_start_matches('\\');
+    let extern_name = lookup_folded_name(ctx.extern_functions.keys(), requested);
+    let user_name = (!extension_builtin)
+        .then(|| lookup_folded_name(ctx.functions.keys(), requested))
+        .flatten();
+    let callee = extern_name
+        .as_deref()
+        .or(user_name.as_deref())
+        .unwrap_or(canonical);
+    let sig = call_signature(ctx, callee, extension_builtin);
+    let is_extern = extern_name.is_some();
+    let is_user_function = user_name.is_some();
     if !is_extern && !is_user_function {
-        if let Some(call) = lower_packed_builtin_call(ctx, canonical, sig.as_ref(), args, expr) {
+        if let Some(call) = lower_packed_builtin_call(ctx, callee, sig.as_ref(), args, expr) {
             return call;
         }
     }
@@ -127,7 +139,7 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     // signature alone, so the type declared here is the exact type the call is emitted with.
     let user_return_alias = is_user_function.then(|| {
         ctx.return_alias_summaries
-            .function(canonical)
+            .function(callee)
             .cloned()
             .unwrap_or(ReturnArgAlias::Unknown)
     });
@@ -136,7 +148,7 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
             ctx,
             sig.as_ref(),
             return_alias,
-            &call_return_type(ctx, canonical, &[]),
+            &call_return_type(ctx, callee, &[]),
             expr.span,
         ),
         _ => None,
@@ -148,26 +160,26 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         // like the same fixed signature reached through a builtin descriptor surface.
         sig.as_ref()
             .and_then(|signature| {
-                dynamic_spreads::lower_boxed_spread_args(ctx, signature, args, canonical, false)
+                dynamic_spreads::lower_boxed_spread_args(ctx, signature, args, callee, false)
             })
-            .unwrap_or_else(|| lower_args_with_signature(ctx, sig.as_ref(), args))
+            .unwrap_or_else(|| lower_args_with_eir_user_function_signature(ctx, callee, sig.as_ref(), args))
     } else if is_extern {
         lower_args_with_signature(ctx, sig.as_ref(), args)
     } else {
-        lower_builtin_call_args(ctx, canonical, sig.as_ref(), args)
+        lower_builtin_call_args(ctx, callee, sig.as_ref(), args)
     };
     let php_type = if is_extern || is_user_function {
-        call_return_type(ctx, canonical, &operands)
+        call_return_type(ctx, callee, &operands)
     } else if let Some(php_type) =
-        registry_builtin_result_type(ctx, canonical, args, &operands, expr.span)
+        registry_builtin_result_type(ctx, callee, args, &operands, expr.span)
     {
         php_type
     } else {
-        call_return_type(ctx, canonical, &operands)
+        call_return_type(ctx, callee, &operands)
     };
     if is_extern {
         let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
-        let data = ctx.intern_function_name(canonical);
+        let data = ctx.intern_function_name(callee);
         let call = ctx.emit_value(
             Op::ExternCall,
             operands.clone(),
@@ -196,16 +208,16 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         let roots = root_user_call_operands(
             ctx, &mut operands, sig.as_ref(), &return_alias, &php_type, expr.span,
         );
-        let data = ctx.intern_function_name(canonical);
+        let data = ctx.intern_function_name(callee);
         let call = ctx.emit_value(
             Op::Call,
             operands.clone(),
             Some(Immediate::Data(data)),
             php_type,
-            effects_lookup::user_call_effects(canonical),
+            effects_lookup::user_call_effects(callee),
             Some(expr.span),
         );
-        ctx.invalidate_callable_user_function(canonical, sig.as_ref(), &operands);
+        ctx.invalidate_callable_user_function(callee, sig.as_ref(), &operands);
         // Plain user calls release owned argument temporaries the same way method and
         // builtin calls do. The alias guard keeps a passthrough result (e.g. a function
         // that returns its own array argument typed `iterable`) from being freed.

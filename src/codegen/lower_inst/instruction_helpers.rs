@@ -142,12 +142,18 @@ pub(super) fn expect_bool(inst: &Instruction) -> Result<bool> {
 pub(in crate::codegen) fn instruction_strict_php_profile(inst: &Instruction) -> bool {
     match inst.immediate {
         Some(Immediate::Bool(strict_php))
+        | Some(Immediate::CallableProfile { strict_php, .. })
         | Some(Immediate::ProfiledData { strict_php, .. })
         | Some(Immediate::RuntimeCall(
             crate::ir::RuntimeCallTarget::ProfiledFunction { strict_php, .. },
         )) => strict_php,
         _ => false,
     }
+}
+
+/// Returns scalar strictness at the physical invocation, never the descriptor creator.
+pub(in crate::codegen) fn instruction_strict_types(inst: &Instruction) -> bool {
+    matches!(inst.immediate, Some(Immediate::CallableProfile { strict_types: true, .. }))
 }
 
 /// Returns the data-pool immediate attached to a data-backed instruction.

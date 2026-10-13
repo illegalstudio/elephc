@@ -21,6 +21,9 @@ use super::super::Checker;
 pub(crate) struct ReturnInfo {
     pub ty: PhpType,
     pub has_value: bool,
+    pub expr: Option<crate::parser::ast::Expr>,
+    /// Reference-array risk observed in the return site's own lexical/storage context.
+    pub reference_aliased_array: bool,
 }
 
 /// Adds one scalar member to an inferred return type, the way [`nullable_return_type`] adds
@@ -85,12 +88,15 @@ impl Checker {
                 let recorded = self
                     .flow_typed_returns
                     .get(&(stmt as *const Stmt as usize))
-                    .filter(|(span, _)| *span == stmt.span)
-                    .map(|(_, ty)| ty.clone());
-                if let Some(ty) = recorded.or_else(|| self.infer_type(expr, env).ok()) {
+                    .filter(|(span, _, _)| *span == stmt.span)
+                    .map(|(_, ty, aliased)| (ty.clone(), *aliased));
+                let reference_aliased_array = recorded.as_ref().is_some_and(|(_, aliased)| *aliased);
+                if let Some(ty) = recorded.map(|(ty, _)| ty).or_else(|| self.infer_type(expr, env).ok()) {
                     returns.push(ReturnInfo {
                         ty,
                         has_value: true,
+                        expr: Some(expr.clone()),
+                        reference_aliased_array,
                     });
                 }
             }
@@ -98,6 +104,8 @@ impl Checker {
                 returns.push(ReturnInfo {
                     ty: PhpType::Void,
                     has_value: false,
+                    expr: None,
+                    reference_aliased_array: false,
                 });
             }
             StmtKind::If {

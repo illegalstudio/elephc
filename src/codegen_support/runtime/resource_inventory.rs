@@ -4,6 +4,7 @@
 //! Called from:
 //! - `__rt_mixed_from_value` when a genuine PHP resource is boxed.
 //! - Explicit stream close lowering and the Core `get_resources()` lowering.
+//! - Pooled context teardown, which retires native descriptor incarnations before closing them.
 //!
 //! Key details:
 //! - Inventory nodes are append-only so descriptor reuse cannot erase closed resources.
@@ -64,10 +65,66 @@ fn emit_retire(emitter: &mut Emitter) {
 /// Emits inventory registration, close tracking, filtering, and enumeration helpers.
 pub(crate) fn emit_resource_inventory(emitter: &mut Emitter, features: RuntimeFeatures) {
     emit_retire(emitter);
+    emit_abandon_fd(emitter);
     match emitter.target.arch {
         Arch::AArch64 => emit_resource_inventory_aarch64(emitter, features),
         Arch::X86_64 => emit_resource_inventory_x86_64(emitter, features),
     }
+    emit_reset_cursor(emitter);
+}
+
+/// Resets the request cursor only for request-reset callers, never for pooled-worker draining.
+fn emit_reset_cursor(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.label_global("__rt_resource_inventory_reset");
+    abi::emit_frame_prologue(emitter, 16);
+    abi::emit_call_label(emitter, "__rt_resource_inventory_drain");
+    let scratch = abi::secondary_scratch_reg(emitter);
+    abi::emit_load_int_immediate(emitter, scratch, 5);
+    abi::emit_store_reg_to_symbol(emitter, scratch, "_resource_id_next", 0);
+    abi::emit_frame_restore(emitter, 16);
+    abi::emit_return(emitter);
+}
+
+/// Marks active native descriptor incarnations closed before worker teardown permits fd reuse.
+fn emit_abandon_fd(emitter: &mut Emitter) {
+    let arm = emitter.target.arch == Arch::AArch64;
+    let node = if arm { "x9" } else { "r9" };
+    let scratch = if arm { "x10" } else { "r10" };
+    let fd = abi::int_arg_reg_name(emitter.target, 0);
+    emitter.blank();
+    emitter.label_global("__rt_resource_inventory_abandon_fd");
+    abi::emit_load_symbol_to_reg(emitter, node, "_resource_inventory_head", 0);
+    emitter.label("__rt_resource_inventory_abandon_fd_scan");
+    emitter.instruction(if arm { "cbz x9, __rt_resource_inventory_abandon_fd_done" } else { "test r9, r9" }); // stop after inspecting this context's incarnations
+    if !arm {
+        emitter.instruction("jz __rt_resource_inventory_abandon_fd_done");      // leave the native descriptor unchanged on return
+    }
+    abi::emit_load_from_address(emitter, scratch, node, 32);
+    emitter.instruction(if arm { "cbnz x10, __rt_resource_inventory_abandon_fd_next" } else { "test r10, r10" }); // ignore already-closed and retired weak entries
+    if !arm {
+        emitter.instruction("jnz __rt_resource_inventory_abandon_fd_next");     // never rewrite a retired incarnation
+    }
+    abi::emit_load_from_address(emitter, scratch, node, 24);
+    for kind in [1, 3, 4] {
+        emitter.instruction(&format!("cmp {scratch}, {}{kind}", if arm { "#" } else { "" })); // only stream, pipe and directory subtypes carry native descriptors
+        emitter.instruction(if arm { "b.eq __rt_resource_inventory_abandon_fd_match" } else { "je __rt_resource_inventory_abandon_fd_match" }); // exclude synthetic contexts and filter identities
+    }
+    abi::emit_jump(emitter, "__rt_resource_inventory_abandon_fd_next");
+    emitter.label("__rt_resource_inventory_abandon_fd_match");
+    abi::emit_load_from_address(emitter, scratch, node, 16);
+    emitter.instruction(&format!("cmp {scratch}, {fd}"));                       // match the descriptor before close can recycle its number
+    emitter.instruction(if arm { "b.ne __rt_resource_inventory_abandon_fd_next" } else { "jne __rt_resource_inventory_abandon_fd_next" }); // leave unrelated resource owners untouched
+    abi::emit_load_from_address(emitter, scratch, node, 8);
+    emitter.instruction(if arm { "neg x10, x10" } else { "neg r10" });          // a closed node retains its stable PHP id as a negative payload
+    abi::emit_store_to_address(emitter, scratch, node, 16);
+    abi::emit_load_int_immediate(emitter, scratch, 1);
+    abi::emit_store_to_address(emitter, scratch, node, 32);
+    emitter.label("__rt_resource_inventory_abandon_fd_next");
+    abi::emit_load_from_address(emitter, node, node, 0);
+    abi::emit_jump(emitter, "__rt_resource_inventory_abandon_fd_scan");
+    emitter.label("__rt_resource_inventory_abandon_fd_done");
+    abi::emit_return(emitter);
 }
 
 /// Emits the complete AArch64 inventory helper family.
@@ -84,7 +141,7 @@ fn emit_resource_inventory_aarch64(emitter: &mut Emitter, features: RuntimeFeatu
 fn emit_reset_aarch64(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.blank();
     emitter.comment("--- runtime: resource_inventory_reset ---");
-    emitter.label_global("__rt_resource_inventory_reset");
+    emitter.label_global("__rt_resource_inventory_drain");
     emitter.instruction("sub sp, sp, #32");                                     // reserve an aligned frame and one next-node spill
     emitter.instruction("stp x29, x30, [sp, #16]");                             // preserve caller frame state across heap frees
     emitter.instruction("add x29, sp, #16");                                    // establish the reset frame
@@ -144,8 +201,6 @@ fn emit_reset_aarch64(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.label("__rt_resource_inventory_reset_done");
     abi::emit_store_zero_to_symbol(emitter, "_resource_inventory_head", 0);
     abi::emit_store_zero_to_symbol(emitter, "_resource_inventory_tail", 0);
-    abi::emit_load_int_immediate(emitter, "x9", 5);
-    abi::emit_store_reg_to_symbol(emitter, "x9", "_resource_id_next", 0);
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore caller frame state
     emitter.instruction("add sp, sp, #32");                                     // release reset storage
     emitter.instruction("ret");                                                 // return with an empty inventory
@@ -399,7 +454,7 @@ fn emit_resource_inventory_x86_64(emitter: &mut Emitter, features: RuntimeFeatur
 fn emit_reset_x86_64(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.blank();
     emitter.comment("--- runtime: resource_inventory_reset ---");
-    emitter.label_global("__rt_resource_inventory_reset");
+    emitter.label_global("__rt_resource_inventory_drain");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer and align nested calls
     emitter.instruction("mov rbp, rsp");                                        // establish the reset frame
     emitter.instruction("sub rsp, 16");                                         // reserve one next-node spill while keeping alignment
@@ -457,8 +512,6 @@ fn emit_reset_x86_64(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.label("__rt_resource_inventory_reset_done_x86");
     abi::emit_store_zero_to_symbol(emitter, "_resource_inventory_head", 0);
     abi::emit_store_zero_to_symbol(emitter, "_resource_inventory_tail", 0);
-    abi::emit_load_int_immediate(emitter, "r10", 5);
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_resource_id_next", 0);
     emitter.instruction("leave");                                               // release reset storage and restore rbp
     emitter.instruction("ret");                                                 // return with an empty inventory
 }
@@ -729,6 +782,8 @@ mod tests {
             emit_resource_inventory(&mut emitter, RuntimeFeatures::none());
             let asm = emitter.output();
             for symbol in [
+                "__rt_resource_inventory_abandon_fd:",
+                "__rt_resource_inventory_drain:",
                 "__rt_resource_inventory_register:",
                 "__rt_resource_inventory_retire:",
                 "__rt_resource_inventory_close:",
@@ -742,6 +797,30 @@ mod tests {
         }
     }
 
+    /// Worker cleanup frees inventory nodes without resetting the process-wide resource cursor.
+    #[test]
+    fn worker_inventory_draining_preserves_global_cursor_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emitter.ctx_register = true;
+            emit_resource_inventory(&mut emitter, RuntimeFeatures::none());
+            let asm = emitter.output();
+            let drain = asm.split_once("__rt_resource_inventory_drain:\n").unwrap().1;
+            let drain = drain.split_once("__rt_resource_inventory_insert:").expect("inventory insert follows drain").0;
+            assert!(!drain.contains("_resource_id_next"), "{name}: {drain}");
+            let reset = asm.split_once("__rt_resource_inventory_reset:\n").unwrap().1;
+            assert!(reset.contains("__rt_resource_inventory_drain") && reset.contains("_resource_id_next"), "{name}: {reset}");
+            let abandon = asm.split_once("__rt_resource_inventory_abandon_fd:\n").unwrap().1;
+            let abandon = abandon.split_once("__rt_resource_inventory_abandon_fd_done:").unwrap().0;
+            assert!(!abandon.contains("_resource_inventory_head"), "{name}: state must route through ctx");
+            for kind in [1, 3, 4] {
+                let compare = if name == "linux-x86_64" { format!("cmp r10, {kind}") } else { format!("cmp x10, #{kind}") };
+                assert!(abandon.contains(&compare), "{name}: missing native subtype {kind}: {abandon}");
+            }
+            assert!(!abandon.contains("__rt_heap_free") && !abandon.contains("syscall"), "{name}: marking must not close or free: {abandon}");
+        }
+    }
+
     /// Pins that enumeration includes PHP's standard ids and append-only node walk.
     #[test]
     fn enumeration_includes_standard_resources_and_walks_inventory() {
@@ -750,10 +829,18 @@ mod tests {
             Target::new(Platform::Linux, Arch::X86_64),
         ] {
             let mut emitter = Emitter::new(target);
+            emitter.ctx_register = true;
+            let head = super::super::ctx::per_context_symbol_offset(&emitter, "_resource_inventory_head").unwrap();
+            let tail = super::super::ctx::per_context_symbol_offset(&emitter, "_resource_inventory_tail").unwrap();
             emit_resource_inventory(&mut emitter, RuntimeFeatures::none());
             let asm = emitter.output();
-            assert!(asm.contains("_resource_inventory_head"), "{target:?}");
-            assert!(asm.contains("_resource_inventory_tail"), "{target:?}");
+            let (head_address, tail_address) = if target.arch == Arch::AArch64 {
+                (format!("add x9, x28, #{head}"), format!("add x10, x28, #{tail}"))
+            } else {
+                (format!("lea r10, [r14 + {head}]"), format!("lea r10, [r14 + {tail}]"))
+            };
+            assert!(asm.contains(&head_address) && asm.contains(&tail_address), "{target:?}: {asm}");
+            assert!(!asm.contains("_resource_inventory_head") && !asm.contains("_resource_inventory_tail"), "{target:?}: {asm}");
             assert!(asm.contains("__rt_get_resources_standard"), "{target:?}");
             assert!(asm.contains("__rt_get_resources_loop"), "{target:?}");
             assert!(asm.contains("__rt_resource_inventory_insert"), "{target:?}");

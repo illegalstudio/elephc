@@ -62,6 +62,7 @@ unsafe extern "C" fn fake_native_invoker(
     _descriptor: *mut c_void,
     _args: *mut RuntimeCell,
     _invocation_scope: i64,
+    _binding_policy: u64,
 ) -> *mut RuntimeCell {
     std::ptr::null_mut()
 }

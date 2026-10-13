@@ -50,6 +50,10 @@ pub fn emit_stream_socket_pair(emitter: &mut Emitter) {
 
     // -- success: build a two-element descriptor array --
     emitter.label("__rt_ssp_ok");
+    emitter.instruction("ldr w0, [sp, #16]");                                   // load the first socket descriptor for context ownership
+    emitter.instruction("bl __rt_stream_owner_mark");                           // claim the first socket before any later allocation can fail
+    emitter.instruction("ldr w0, [sp, #20]");                                   // load the second socket descriptor for context ownership
+    emitter.instruction("bl __rt_stream_owner_mark");                           // claim the second socket before any later allocation can fail
     emitter.instruction("mov x0, #2");                                          // result array capacity
     emitter.instruction("mov x1, #8");                                          // element size = 8 bytes
     emitter.instruction("bl __rt_array_new");                                   // allocate the result array, x0 = pointer
@@ -80,6 +84,10 @@ fn emit_stream_socket_pair_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_ssp_fail_x86");                                // a negative result means failure
 
     // -- success: build a two-element descriptor array --
+    emitter.instruction("mov eax, DWORD PTR [rbp - 16]");                       // load the first socket descriptor for context ownership
+    emitter.instruction("call __rt_stream_owner_mark");                         // claim the first socket before any later allocation can fail
+    emitter.instruction("mov eax, DWORD PTR [rbp - 12]");                       // load the second socket descriptor for context ownership
+    emitter.instruction("call __rt_stream_owner_mark");                         // claim the second socket before any later allocation can fail
     emitter.instruction("mov edi, 2");                                          // result array capacity
     emitter.instruction("mov esi, 8");                                          // element size = 8 bytes
     emitter.instruction("call __rt_array_new");                                 // allocate the result array, rax = pointer

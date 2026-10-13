@@ -137,6 +137,90 @@ fn test_unknown_callee_conservatively_writes_globals() {
     );
 }
 
+/// Parallel safety is stricter than top-level propagation: static locals use process-wide
+/// storage even though they are not PHP `global` aliases.
+#[test]
+fn test_static_local_is_process_global_parallel_storage() {
+    let program = vec![function_decl(
+        "worker",
+        vec![Stmt::new(
+            StmtKind::StaticVar {
+                name: "calls".to_string(),
+                init: Expr::int_lit(0),
+            },
+            Span::dummy(),
+        )],
+    )];
+
+    let (function_effects, _, _) = compute_program_callable_effects(&program);
+    assert!(
+        function_effects
+            .get("worker")
+            .unwrap()
+            .uses_process_global_storage
+    );
+}
+
+/// Static-property reads must carry the same worker-isolation veto as writes.
+#[test]
+fn test_static_property_read_is_process_global_parallel_storage() {
+    let program = vec![function_decl(
+        "worker",
+        vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::StaticPropertyAccess {
+                    receiver: crate::parser::ast::StaticReceiver::Named(Name::from("State")),
+                    property: "value".to_string(),
+                },
+                Span::dummy(),
+            ))),
+            Span::dummy(),
+        )],
+    )];
+
+    let (function_effects, _, _) = compute_program_callable_effects(&program);
+    assert!(
+        function_effects
+            .get("worker")
+            .unwrap()
+            .uses_process_global_storage
+    );
+}
+
+/// The Parallel-scope bit propagates through ordinary user-function calls to a fixed point.
+#[test]
+fn test_nested_parallel_scope_propagates_through_user_calls() {
+    let nested = function_decl(
+        "nested",
+        vec![Stmt::new(
+            StmtKind::ExprStmt(Expr::new(
+                ExprKind::FunctionCall {
+                    name: Name::from("Elephc\\Parallel\\run"),
+                    args: Vec::new(),
+                },
+                Span::dummy(),
+            )),
+            Span::dummy(),
+        )],
+    );
+    let wrapper = function_decl(
+        "worker",
+        vec![Stmt::new(
+            StmtKind::ExprStmt(Expr::new(
+                ExprKind::FunctionCall {
+                    name: Name::from("nested"),
+                    args: Vec::new(),
+                },
+                Span::dummy(),
+            )),
+            Span::dummy(),
+        )],
+    );
+
+    let (function_effects, _, _) = compute_program_callable_effects(&[nested, wrapper]);
+    assert!(function_effects.get("worker").unwrap().enters_parallel_scope);
+}
+
 /// A warning-capable builtin can invoke an error handler that writes globals or throws.
 #[test]
 fn test_warning_builtin_call_can_write_globals_through_handler() {

@@ -1,0 +1,9 @@
+[package]
+name = "elephc-parallel-contract"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Dependency-neutral worker storage layout shared by Elephc and its Parallel bridge"
+publish = false
+
+[dependencies]

@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Preserves compile-time metadata, target-aware object layout, and ownership.
+//! - Fresh constant/default arrays transfer their creator lease into the stored Mixed box.
 
 use super::*;
 
@@ -213,7 +214,7 @@ pub(super) fn emit_reflection_constant_array_property_by_name(
         key: Box::new(PhpType::Str),
         value: Box::new(PhpType::Mixed),
     };
-    emit_box_current_value_as_mixed(ctx.emitter, &assoc_type);
+    emit_box_current_owned_value_as_mixed(ctx.emitter, &assoc_type);
     abi::emit_pop_reg(ctx.emitter, object_reg);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_store_zero_to_address(ctx.emitter, object_reg, high_offset);
@@ -247,7 +248,7 @@ pub(super) fn emit_reflection_default_property_array_property_by_name(
         key: Box::new(PhpType::Str),
         value: Box::new(PhpType::Mixed),
     };
-    emit_box_current_value_as_mixed(ctx.emitter, &assoc_type);
+    emit_box_current_owned_value_as_mixed(ctx.emitter, &assoc_type);
     abi::emit_pop_reg(ctx.emitter, object_reg);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_store_zero_to_address(ctx.emitter, object_reg, high_offset);

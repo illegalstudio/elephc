@@ -15,6 +15,9 @@ use crate::codegen_support::platform::Arch;
 use crate::codegen_support::{abi, value_boxing};
 use crate::types::PhpType;
 
+mod reference_values;
+pub(crate) use reference_values::emit_materialize_ref_cell_value_as_mixed;
+
 /// Internal boxed-Mixed tag used only inside descriptor-invoker argument arrays.
 pub(crate) const INVOKER_ARG_REF_CELL_TAG: i64 = 11;
 

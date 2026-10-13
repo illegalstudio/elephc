@@ -76,7 +76,7 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::ir::Module;
 use crate::names::{enum_case_symbol, join_php_symbol};
-use crate::types::{ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo};
+use crate::types::{ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo, PhpType};
 
 use super::context::FunctionContext;
 
@@ -512,6 +512,44 @@ pub(super) fn emit_enum_slot_resets(emitter: &mut Emitter, module: &Module) {
             ));
             abi::emit_store_zero_to_symbol(emitter, &symbol, 0);
         }
+    }
+}
+
+/// Releases every materialized enum singleton at process shutdown.
+///
+/// Enum case slots keep the one process-lifetime reference that makes repeated case reads
+/// canonical. Main has already released ordinary locals, statics, and globals when it reaches
+/// this cleanup, so dropping that final slot reference is safe and lets heap-debug distinguish
+/// genuine leaks from intentional singleton caching.
+pub(super) fn emit_enum_slot_cleanup(ctx: &mut FunctionContext<'_>) {
+    let mut slots = ctx
+        .module
+        .enum_infos
+        .iter()
+        .flat_map(|(enum_name, enum_info)| {
+            enum_info.cases.iter().map(move |case| {
+                (
+                    enum_name.clone(),
+                    case.name.clone(),
+                    enum_case_symbol(enum_name, &case.name),
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    slots.sort_by(|left, right| left.2.cmp(&right.2));
+
+    for (enum_name, case_name, symbol) in slots {
+        let done = ctx.next_label("enum_singleton_cleanup_done");
+        let ty = PhpType::Object(enum_name);
+        ctx.emitter.comment(&format!(
+            "epilogue release enum singleton {} from {}",
+            case_name, symbol
+        ));
+        abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), &symbol, 0);
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
+        abi::emit_decref_if_refcounted(ctx.emitter, &ty);
+        abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 0);
+        ctx.emitter.label(&done);
     }
 }
 

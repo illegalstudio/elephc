@@ -29,7 +29,8 @@
 //! | 112    | 56   | start_args[0..7]  | up to 7 Mixed pointers passed to start() (one per AArch64 int arg-reg minus $this) |
 //! | 168    | 8    | user_arg_max      | how many start_args slots `start()` may write |
 //! | 176    | 8    | start_arg_count   | number of boxed values copied by `start()` |
-//! | 184    | 48   | reserved          | legacy slot file; descriptor captures now carry hidden Fiber callback args |
+//! | 184    | 8    | descriptor_argbox | boxed dynamic-invoker arguments while callback is active |
+//! | 192    | 40   | reserved          | legacy slots; descriptor captures now carry hidden callback args |
 //! | 232    | 8    | own_magic_set_guard | saved `__set` reentrancy chain head for this fiber |
 //!
 //! Total payload = 240 bytes.
@@ -83,10 +84,12 @@ pub(crate) const FIBER_START_ARGS_MAX: i32 = 7;
 pub(crate) const FIBER_USER_ARG_MAX_OFFSET: i32 = 168;
 /// Byte offset storing how many start_args slots were supplied by the most recent start() call.
 pub(crate) const FIBER_START_ARG_COUNT_OFFSET: i32 = 176;
+/// Byte offset of the boxed argument container owned by an active descriptor-invoker wrapper.
+pub(crate) const FIBER_DESCRIPTOR_ARGBOX_OFFSET: i32 = 184;
 /// Byte offset of the first reserved legacy float slot.
-pub(crate) const FIBER_FLOAT_ARGS_OFFSET: i32 = 184;
+pub(crate) const FIBER_FLOAT_ARGS_OFFSET: i32 = 192;
 /// Maximum number of reserved legacy float slots.
-pub(crate) const FIBER_FLOAT_ARGS_MAX: i32 = 6;
+pub(crate) const FIBER_FLOAT_ARGS_MAX: i32 = 5;
 /// Total size of the Fiber object payload in bytes (heap-allocated; class_id at offset 0, followed by all runtime-managed fields).
 pub(crate) const FIBER_OBJECT_SIZE: i32 = 240;
 

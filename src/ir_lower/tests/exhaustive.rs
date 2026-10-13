@@ -151,6 +151,7 @@ fn dummy_check_result() -> CheckResult {
         first_class_builtin_call_types: HashMap::new(),
         loop_storage_types: HashMap::new(),
         string_incdec_locals: Default::default(),
+        ref_cell_mixed_locals: Default::default(),
         local_bind_kill_sites: Default::default(),
         local_ref_detach_sites: Default::default(),
         local_retype_sites: Default::default(),

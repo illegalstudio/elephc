@@ -34,6 +34,7 @@ pub(super) fn lower_reflection_class_new_instance(
         &result_type,
         expr.span,
     );
+    let (class_name, name_owner) = root_owned_call_operand(ctx, class_name, expr.span);
     begin_call_argument_evaluation(ctx);
     let mut arg_values = lower_args_with_signature(ctx, constructor_sig.as_ref(), &args);
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
@@ -66,7 +67,9 @@ pub(super) fn lower_reflection_class_new_instance(
         expr.span,
     );
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
-    take_prepublished_call_result(ctx, result_staging, object, expr.span)
+    if let Some(slot) = name_owner { retire_owned_call_operand(ctx, slot, expr.span); }
+    let object = take_prepublished_call_result(ctx, result_staging, object, expr.span);
+    concrete_reflection_instance_result(ctx, object_expr, object, expr)
 }
 
 /// Lowers `ReflectionClass::newInstanceArgs()` by unpacking one static argument array.
@@ -86,6 +89,7 @@ pub(super) fn lower_reflection_class_new_instance_args(
 /// Lowers `ReflectionClass::newInstanceWithoutConstructor()` to constructorless allocation.
 pub(super) fn lower_reflection_class_new_instance_without_constructor(
     ctx: &mut LoweringContext<'_, '_>,
+    object_expr: Option<&Expr>,
     object: LoweredValue,
     args: &[Expr],
     expr: &Expr,
@@ -94,14 +98,38 @@ pub(super) fn lower_reflection_class_new_instance_without_constructor(
         return lower_reflection_class_new_instance_without_constructor_unsupported(ctx, expr);
     }
     let class_name = lower_property_get_from_value(ctx, object, "__name", Op::PropGet, expr);
-    ctx.emit_value(
+    let staging = prepublish_call_result(ctx, &PhpType::Mixed, expr.span);
+    let (class_name, name_owner) = root_owned_call_operand(ctx, class_name, expr.span);
+    let result = ctx.emit_value(
         Op::DynamicObjectNewWithoutConstructorMixed,
         vec![class_name.value],
         None,
         PhpType::Mixed,
         Op::DynamicObjectNewWithoutConstructorMixed.default_effects(),
         Some(expr.span),
-    )
+    );
+    stage_call_result(ctx, staging.as_ref(), result, expr.span);
+    if let Some(slot) = name_owner { retire_owned_call_operand(ctx, slot, expr.span); }
+    let result = take_prepublished_call_result(ctx, staging, result, expr.span);
+    concrete_reflection_instance_result(ctx, object_expr, result, expr)
+}
+
+/// Extracts an independently owned concrete object when reflected construction proves its class.
+fn concrete_reflection_instance_result(
+    ctx: &mut LoweringContext<'_, '_>,
+    object_expr: Option<&Expr>,
+    boxed: LoweredValue,
+    expr: &Expr,
+) -> LoweredValue {
+    let Some(class) = object_expr.and_then(|object| reflection_class_reflected_class(ctx, object)) else {
+        return boxed;
+    };
+    let object = ctx.emit_value(
+        Op::RuntimeCall, vec![boxed.value], None, PhpType::Object(class),
+        effects_lookup::runtime_effects(), Some(expr.span),
+    );
+    crate::ir_lower::ownership::release_if_owned(ctx, boxed, Some(expr.span));
+    object
 }
 
 /// Lowers live static-property value access for statically-known `ReflectionClass` calls.

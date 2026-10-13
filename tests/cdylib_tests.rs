@@ -1056,6 +1056,82 @@ fn test_ios_targets_reject_executable_output_with_library_guidance() {
     fs::remove_dir_all(&dir).ok();
 }
 
+/// Both iOS targets diagnose unsupported Async execution while preserving analysis-only mode.
+#[test]
+fn test_ios_targets_reject_async_library_execution_but_allow_analysis() {
+    let dir = make_test_dir("elephc_ios_async_refuse");
+    fs::write(
+        dir.join("main.php"),
+        "<?php use Elephc\\Async\\TaskGroup; use function Elephc\\Async\\run; run(function (TaskGroup $tasks): void {});",
+    )
+    .unwrap();
+
+    for target in ["ios-arm64", "ios-sim-arm64"] {
+        let emitted = elephc_command(&dir)
+            .args(["--target", target, "--emit", "staticlib", "main.php"])
+            .output()
+            .expect("failed to compile Async for iOS");
+        assert!(!emitted.status.success(), "{target} must reject Async execution");
+        let message = String::from_utf8_lossy(&emitted.stderr);
+        assert!(
+            message.contains("Elephc Async execution is unavailable")
+                && message.contains("host-driven Fiber scheduler contract")
+                && message.contains("Use --check"),
+            "{target}: missing actionable Async diagnostic: {message}"
+        );
+
+        let checked = elephc_command(&dir)
+            .args(["--target", target, "--check", "main.php"])
+            .output()
+            .expect("failed to analyze Async for iOS");
+        assert!(
+            checked.status.success(),
+            "{target} analysis must remain available:\n{}",
+            String::from_utf8_lossy(&checked.stderr)
+        );
+    }
+
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// Both iOS targets diagnose unsupported worker execution while preserving analysis-only mode.
+#[test]
+fn test_ios_targets_reject_parallel_library_execution_but_allow_analysis() {
+    let dir = make_test_dir("elephc_ios_parallel_refuse");
+    fs::write(
+        dir.join("main.php"),
+        "<?php use Elephc\\Parallel\\TaskGroup; use function Elephc\\Parallel\\run; run(static function (TaskGroup $tasks): int { return $tasks->spawn(static fn (): int => 1)->join(); });",
+    )
+    .unwrap();
+
+    for target in ["ios-arm64", "ios-sim-arm64"] {
+        let emitted = elephc_command(&dir)
+            .args(["--target", target, "--emit", "staticlib", "main.php"])
+            .output()
+            .expect("failed to compile Parallel for iOS");
+        assert!(!emitted.status.success(), "{target} must reject Parallel execution");
+        let message = String::from_utf8_lossy(&emitted.stderr);
+        assert!(
+            message.contains("Elephc Parallel execution is unavailable")
+                && message.contains("host-driven worker-thread contract")
+                && message.contains("Use --check"),
+            "{target}: missing actionable Parallel diagnostic: {message}"
+        );
+
+        let checked = elephc_command(&dir)
+            .args(["--target", target, "--check", "main.php"])
+            .output()
+            .expect("failed to analyze Parallel for iOS");
+        assert!(
+            checked.status.success(),
+            "{target} Parallel analysis must remain available:\n{}",
+            String::from_utf8_lossy(&checked.stderr)
+        );
+    }
+
+    fs::remove_dir_all(&dir).ok();
+}
+
 /// Cross-emits an iOS AArch64 static-library boundary and pins both zero-input
 /// and mixed-input string-return shapes without relying on the CI host ABI.
 #[test]
@@ -2434,6 +2510,976 @@ fn test_export_attribute_warns_and_is_ignored_in_executable_mode() {
         .output()
         .expect("failed to run the compiled executable");
     assert_eq!(String::from_utf8_lossy(&run.stdout), "42");
+
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// A C host that parks a sentinel in the reserved ctx register, calls across the
+/// library boundary, and reports whether it came back.
+///
+/// The probe is module-level assembly, not inline asm with a register variable:
+/// clang happily spills an explicit `register ... asm("x28")` around the call
+/// and reloads it afterwards, so the C-level version of this test passes even
+/// against a library that clobbers the register.
+const CTX_ABI_HOST_C: &str = r#"
+#include <stdio.h>
+#include <stdint.h>
+
+int32_t elephc_init(void);
+uint64_t probe_add_i64(int64_t a, int64_t b);
+
+#define SENTINEL 0x1234567890ABCDEFULL
+
+/* Mach-O prefixes C symbols with an underscore and ELF does not, so the name the
+   assembly calls differs by platform. Hardcoding the Mach-O spelling passed on macOS
+   and failed the linux-aarch64 shard with
+   `undefined reference to \`_add_i64\`` — a link error, so the sentinel never ran at all. */
+#if defined(__APPLE__)
+#define CSYM(name) "_" name
+#else
+#define CSYM(name) name
+#endif
+
+#if defined(__aarch64__)
+__asm__(
+"    .text\n"
+"    .globl _probe_add_i64\n"
+"    .globl probe_add_i64\n"
+"    .align 2\n"
+"_probe_add_i64:\n"
+"probe_add_i64:\n"
+"    sub sp, sp, #32\n"
+"    stp x29, x30, [sp, #16]\n"
+"    add x29, sp, #16\n"
+"    str x28, [sp, #0]\n"
+"    movz x28, #0xCDEF\n"
+"    movk x28, #0x90AB, lsl #16\n"
+"    movk x28, #0x5678, lsl #32\n"
+"    movk x28, #0x1234, lsl #48\n"
+"    bl " CSYM("add_i64") "\n"
+"    mov x0, x28\n"
+"    ldr x28, [sp, #0]\n"
+"    ldp x29, x30, [sp, #16]\n"
+"    add sp, sp, #32\n"
+"    ret\n"
+);
+#elif defined(__x86_64__)
+__asm__(
+"    .text\n"
+"    .globl probe_add_i64\n"
+"probe_add_i64:\n"
+"    push %rbp\n"
+"    mov %rsp, %rbp\n"
+"    push %r14\n"
+"    push %r15\n"
+"    movabs $0x1234567890ABCDEF, %r14\n"
+"    call " CSYM("add_i64") "\n"
+"    mov %r14, %rax\n"
+"    pop %r15\n"
+"    pop %r14\n"
+"    pop %rbp\n"
+"    ret\n"
+);
+#endif
+
+int main(void) {
+    if (elephc_init() != 0) {
+        fprintf(stderr, "init failed\n");
+        return 1;
+    }
+    uint64_t after = probe_add_i64(40, 2);
+    if (after != SENTINEL) {
+        printf("CLOBBERED %016llx\n", (unsigned long long) after);
+        return 2;
+    }
+    printf("PRESERVED\n");
+    return 0;
+}
+"#;
+
+/// A C host that exercises the context pool directly, since no PHP program can reach it.
+const CTX_POOL_HOST_C: &str = r#"
+#include <stdio.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <pthread.h>
+#include <dirent.h>
+#include <glob.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+int32_t elephc_init(void);
+
+/* The runtime defines these with their names spelled exactly, so an ordinary C
+   declaration misses on Mach-O, where the compiler prepends its own underscore:
+   `__rt_ctx_release` in C becomes `___rt_ctx_release`. An explicit asm label pins the
+   symbol on both formats. */
+void *__rt_ctx_acquire(void *arena_base, uint64_t arena_size, void *object_index,
+                       void *object_free, void *buffer_registry,
+                       void *serialize_object_ptrs, void *serialize_object_indexes,
+                       void *unserialize_values)
+    __asm__("__rt_ctx_acquire");
+int64_t __rt_ctx_release(void *ctx) __asm__("__rt_ctx_release");
+int64_t __rt_stream_owner_mark(void) __asm__("__rt_stream_owner_mark");
+void *__rt_resource_inventory_register(int64_t id, int64_t payload, int64_t kind)
+    __asm__("__rt_resource_inventory_register");
+extern uint64_t resource_id_cursor __asm__("_resource_id_next");
+void __rt_exit_or_parallel_fatal(int64_t status)
+    __asm__("__rt_exit_or_parallel_fatal") __attribute__((noreturn));
+void __rt_cstr_to_str(void) __asm__("__rt_cstr_to_str");
+void (*zlib_close_hook)(int fd) __asm__("_zlib_close_fn");
+void (*bz2_close_hook)(int fd) __asm__("_bz2_close_fn");
+void (*iconv_close_hook)(int fd) __asm__("_iconv_close_fn");
+void (*tls_close_hook)(void *handle) __asm__("_elephc_tls_close_fn");
+typedef int64_t (*worker_callback)(void *job);
+int64_t native_parallel_worker_entry(void *ctx, worker_callback callback, void *job,
+                                   uint64_t stack_size, int64_t *released)
+    __asm__("__rt_parallel_worker_entry");
+
+/* The bridge needs both callback status and clean-release status before freeing
+   its backing arrays. Preserve that composed ABI in every native pool probe. */
+static int64_t run_worker_entry(void *ctx, worker_callback callback,
+                                        void *job, uint64_t stack_size) {
+    int64_t released = -1;
+    int64_t status = native_parallel_worker_entry(ctx, callback, job, stack_size, &released);
+    if (released != 1) {
+        printf("WORKER-CONTEXT-NOT-CLEANLY-RELEASED-%lld\n", (long long)released);
+        return -98;
+    }
+    return status;
+}
+
+#define SLOTS 8
+#define ARENA 4096
+#define STORAGE_SETS (SLOTS + 16)
+#define RACE_WORKERS SLOTS
+#define OBJECT_INDEX_WORDS ((ARENA + 15) / 16)
+#define OBJECT_FREE_WORDS ((ARENA + 23) / 24)
+#define BUFFER_REGISTRY_WORDS (((4096 + 1) * 48) / 8)
+#define SERIALIZE_OBJECT_TABLE_WORDS 65536
+#define UNSERIALIZE_VALUE_TABLE_WORDS 65536
+/* Pinned by ctx_layout_offsets_are_ordered_and_size_is_aligned. */
+#define REQUEST_STATE_BASE 280
+#define REQUEST_STATE_WORDS 45
+#define REQUEST_STATE_BYTES (REQUEST_STATE_WORDS * 8)
+#define USER_WRAPPER_HANDLES_OFFSET (20616 + REQUEST_STATE_BYTES)
+#define EOF_FLAGS_OFFSET (5512 + REQUEST_STATE_BYTES)
+#define POPEN_FILES_OFFSET (5768 + REQUEST_STATE_BYTES)
+#define DIR_HANDLES_OFFSET (7816 + REQUEST_STATE_BYTES)
+#define GLOB_HANDLES_OFFSET (9864 + REQUEST_STATE_BYTES)
+#define BZSTREAM_HANDLES_OFFSET (11912 + REQUEST_STATE_BYTES)
+#define STREAM_READ_FILTERS_OFFSET (13960 + REQUEST_STATE_BYTES)
+#define STREAM_WRITE_FILTERS_OFFSET (14216 + REQUEST_STATE_BYTES)
+#define ZSTREAM_HANDLES_OFFSET (14472 + REQUEST_STATE_BYTES)
+#define ICONV_HANDLES_OFFSET (16520 + REQUEST_STATE_BYTES)
+#define TLS_SESSIONS_OFFSET (18568 + REQUEST_STATE_BYTES)
+#define USER_FILTER_INSTANCES_OFFSET (22664 + REQUEST_STATE_BYTES)
+#define STREAM_CHUNK_SIZE_OFFSET (26760 + REQUEST_STATE_BYTES)
+#define STREAM_CONNECT_HOST_OFFSET (28808 + REQUEST_STATE_BYTES)
+#define STREAM_OWNED_FDS_OFFSET (32904 + REQUEST_STATE_BYTES)
+/* Non-resource scalar fields pinned by ctx_layout_offsets_are_ordered_and_size_is_aligned. */
+#define HEAP_OFF_OFFSET 8
+#define HEAP_BASE_OFFSET 56
+#define EXC_VALUE_OFFSET 72
+#define GC_ALLOCS_OFFSET 144
+#define GC_FREES_OFFSET 152
+#define GC_PEAK_OFFSET 168
+#define SER_VALUE_COUNTER_OFFSET 184
+#define SER_OBJECT_COUNT_OFFSET 192
+#define UNSER_DEPTH_OFFSET 200
+#define UNSER_ACTIVE_OFFSET 232
+#define UNSER_CONTEXT_OFFSET 240
+#define PRINT_R_MODE_OFFSET 256
+#define PRINT_R_OFF_OFFSET 264
+#define OB_LEVEL_OFFSET 272
+
+static unsigned char arenas[STORAGE_SETS][ARENA];
+static uint32_t object_indexes[STORAGE_SETS][OBJECT_INDEX_WORDS];
+static uint32_t object_frees[STORAGE_SETS][OBJECT_FREE_WORDS];
+static uint64_t buffer_registries[STORAGE_SETS][BUFFER_REGISTRY_WORDS];
+static uint64_t serialize_object_ptrs[STORAGE_SETS][SERIALIZE_OBJECT_TABLE_WORDS];
+static uint64_t serialize_object_indexes[STORAGE_SETS][SERIALIZE_OBJECT_TABLE_WORDS];
+static uint64_t unserialize_values[STORAGE_SETS][UNSERIALIZE_VALUE_TABLE_WORDS];
+static pthread_mutex_t race_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t race_ready_changed = PTHREAD_COND_INITIALIZER;
+static pthread_cond_t race_start = PTHREAD_COND_INITIALIZER;
+static int race_ready = 0;
+static int race_go = 0;
+static pthread_mutex_t isolation_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t isolation_ready_changed = PTHREAD_COND_INITIALIZER;
+static pthread_cond_t isolation_start = PTHREAD_COND_INITIALIZER;
+static int isolation_ready = 0;
+static int isolation_go = 0;
+
+static void *acquire_context(int storage) {
+    return __rt_ctx_acquire(arenas[storage], ARENA, object_indexes[storage],
+                            object_frees[storage], buffer_registries[storage],
+                            serialize_object_ptrs[storage], serialize_object_indexes[storage],
+                            unserialize_values[storage]);
+}
+
+struct race_job {
+    int storage;
+    void *context;
+};
+
+static void *race_acquire(void *opaque) {
+    struct race_job *job = opaque;
+    pthread_mutex_lock(&race_lock);
+    race_ready++;
+    pthread_cond_signal(&race_ready_changed);
+    while (!race_go) {
+        pthread_cond_wait(&race_start, &race_lock);
+    }
+    pthread_mutex_unlock(&race_lock);
+    job->context = acquire_context(job->storage);
+    return NULL;
+}
+
+#define ISOLATION_SLOT 17
+
+static const size_t ISOLATION_WORD_TABLE_OFFSETS[] = {
+    POPEN_FILES_OFFSET, DIR_HANDLES_OFFSET, GLOB_HANDLES_OFFSET,
+    BZSTREAM_HANDLES_OFFSET, ZSTREAM_HANDLES_OFFSET, ICONV_HANDLES_OFFSET,
+    TLS_SESSIONS_OFFSET,
+};
+
+static uint64_t *native_handle_table_for(void *ctx, size_t offset);
+
+static const size_t ISOLATION_SCALAR_OFFSETS[] = {
+    HEAP_OFF_OFFSET, HEAP_BASE_OFFSET, EXC_VALUE_OFFSET, GC_ALLOCS_OFFSET,
+    GC_FREES_OFFSET, GC_PEAK_OFFSET, SER_VALUE_COUNTER_OFFSET,
+    SER_OBJECT_COUNT_OFFSET, UNSER_DEPTH_OFFSET, UNSER_ACTIVE_OFFSET,
+    UNSER_CONTEXT_OFFSET, PRINT_R_MODE_OFFSET, PRINT_R_OFF_OFFSET, OB_LEVEL_OFFSET,
+};
+
+static void write_context_marker(void *ctx, uint64_t marker) {
+    unsigned char *bytes = ctx;
+    for (size_t index = 0; index < REQUEST_STATE_WORDS; index++) {
+        *(uint64_t *)(bytes + REQUEST_STATE_BASE + index * 8) = marker;
+    }
+    for (size_t index = 0; index < sizeof(ISOLATION_SCALAR_OFFSETS) / sizeof(ISOLATION_SCALAR_OFFSETS[0]); index++) {
+        *(uint64_t *)(bytes + ISOLATION_SCALAR_OFFSETS[index]) = marker;
+    }
+    bytes[EOF_FLAGS_OFFSET + ISOLATION_SLOT] = (unsigned char)marker;
+    bytes[STREAM_READ_FILTERS_OFFSET + ISOLATION_SLOT] = (unsigned char)marker;
+    bytes[STREAM_WRITE_FILTERS_OFFSET + ISOLATION_SLOT] = (unsigned char)marker;
+    bytes[STREAM_OWNED_FDS_OFFSET + ISOLATION_SLOT] = (unsigned char)marker;
+    for (size_t index = 0; index < sizeof(ISOLATION_WORD_TABLE_OFFSETS) / sizeof(ISOLATION_WORD_TABLE_OFFSETS[0]); index++) {
+        native_handle_table_for(ctx, ISOLATION_WORD_TABLE_OFFSETS[index])[ISOLATION_SLOT] = marker;
+    }
+    native_handle_table_for(ctx, USER_WRAPPER_HANDLES_OFFSET)[ISOLATION_SLOT] = marker;
+    native_handle_table_for(ctx, USER_FILTER_INSTANCES_OFFSET)[ISOLATION_SLOT * 2] = marker;
+    native_handle_table_for(ctx, USER_FILTER_INSTANCES_OFFSET)[ISOLATION_SLOT * 2 + 1] = marker;
+    native_handle_table_for(ctx, STREAM_CHUNK_SIZE_OFFSET)[ISOLATION_SLOT] = marker;
+    native_handle_table_for(ctx, STREAM_CONNECT_HOST_OFFSET)[ISOLATION_SLOT * 2] = marker;
+    native_handle_table_for(ctx, STREAM_CONNECT_HOST_OFFSET)[ISOLATION_SLOT * 2 + 1] = marker + 1;
+}
+
+static int context_marker_matches(void *ctx, uint64_t marker) {
+    unsigned char *bytes = ctx;
+    for (size_t index = 0; index < REQUEST_STATE_WORDS; index++) {
+        if (*(uint64_t *)(bytes + REQUEST_STATE_BASE + index * 8) != marker) return 0;
+    }
+    for (size_t index = 0; index < sizeof(ISOLATION_SCALAR_OFFSETS) / sizeof(ISOLATION_SCALAR_OFFSETS[0]); index++) {
+        if (*(uint64_t *)(bytes + ISOLATION_SCALAR_OFFSETS[index]) != marker) return 0;
+    }
+    if (bytes[EOF_FLAGS_OFFSET + ISOLATION_SLOT] != marker ||
+        bytes[STREAM_READ_FILTERS_OFFSET + ISOLATION_SLOT] != marker ||
+        bytes[STREAM_WRITE_FILTERS_OFFSET + ISOLATION_SLOT] != marker ||
+        bytes[STREAM_OWNED_FDS_OFFSET + ISOLATION_SLOT] != marker) return 0;
+    for (size_t index = 0; index < sizeof(ISOLATION_WORD_TABLE_OFFSETS) / sizeof(ISOLATION_WORD_TABLE_OFFSETS[0]); index++) {
+        if (native_handle_table_for(ctx, ISOLATION_WORD_TABLE_OFFSETS[index])[ISOLATION_SLOT] != marker) return 0;
+    }
+    return native_handle_table_for(ctx, USER_WRAPPER_HANDLES_OFFSET)[ISOLATION_SLOT] == marker &&
+        native_handle_table_for(ctx, USER_FILTER_INSTANCES_OFFSET)[ISOLATION_SLOT * 2] == marker &&
+        native_handle_table_for(ctx, USER_FILTER_INSTANCES_OFFSET)[ISOLATION_SLOT * 2 + 1] == marker &&
+        native_handle_table_for(ctx, STREAM_CHUNK_SIZE_OFFSET)[ISOLATION_SLOT] == marker &&
+        native_handle_table_for(ctx, STREAM_CONNECT_HOST_OFFSET)[ISOLATION_SLOT * 2] == marker &&
+        native_handle_table_for(ctx, STREAM_CONNECT_HOST_OFFSET)[ISOLATION_SLOT * 2 + 1] == marker + 1;
+}
+
+static void clear_context_marker(void *ctx) {
+    write_context_marker(ctx, 0);
+    native_handle_table_for(ctx, STREAM_CONNECT_HOST_OFFSET)[ISOLATION_SLOT * 2 + 1] = 0;
+}
+
+static int64_t worker_probe(void *expected) {
+    void *actual = NULL;
+#if defined(__aarch64__)
+    __asm__ volatile("mov %0, x28" : "=r"(actual));
+#elif defined(__x86_64__)
+    __asm__ volatile("mov %%r14, %0" : "=r"(actual));
+#else
+#error unsupported worker-entry test architecture
+#endif
+    return actual == expected ? 37 : -7;
+}
+
+/* `__rt_stream_owner_mark` takes and returns its descriptor through the runtime
+   result register instead of the C ABI argument register. Keep this tiny shim
+   in the C host so the test exercises the production ownership path unchanged. */
+static int64_t mark_stream_owner_from_worker(int64_t descriptor) {
+#if defined(__aarch64__)
+    register int64_t result __asm__("x0") = descriptor;
+    register void *marker __asm__("x16") = (void *)(uintptr_t)__rt_stream_owner_mark;
+    __asm__ volatile("blr x16" : "+r"(result) : "r"(marker) : "x9", "x10", "x30", "memory");
+    return result;
+#elif defined(__x86_64__)
+    register int64_t result __asm__("rax") = descriptor;
+    void *marker = (void *)(uintptr_t)__rt_stream_owner_mark;
+    __asm__ volatile("call *%1" : "+a"(result) : "r"(marker) : "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11", "memory", "cc");
+    return result;
+#else
+#error unsupported worker-entry test architecture
+#endif
+}
+
+static void *runtime_owned_string(const char *source) {
+#if defined(__aarch64__)
+    register const char *input __asm__("x0") = source;
+    register void *result __asm__("x1");
+    register void *converter __asm__("x16") = (void *)(uintptr_t)__rt_cstr_to_str;
+    __asm__ volatile("blr x16" : "+r"(input), "=r"(result) : "r"(converter) : "x2", "x3", "x9", "x10", "x11", "x12", "x13", "x14", "x15", "x17", "x30", "memory");
+    return result;
+#elif defined(__x86_64__)
+    register const char *input __asm__("rax") = source;
+    void *converter = (void *)(uintptr_t)__rt_cstr_to_str;
+    __asm__ volatile("call *%1" : "+a"(input) : "r"(converter) : "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11", "memory", "cc");
+    return (void *)input;
+#else
+#error unsupported worker-entry test architecture
+#endif
+}
+
+static int zlib_closed_fd = -1;
+static int bz2_closed_fd = -1;
+static int iconv_closed_fd = -1;
+static void *tls_closed_handle = NULL;
+
+static void *active_worker_context(void) {
+    void *ctx = NULL;
+#if defined(__aarch64__)
+    __asm__ volatile("mov %0, x28" : "=r"(ctx));
+#elif defined(__x86_64__)
+    __asm__ volatile("mov %%r14, %0" : "=r"(ctx));
+#else
+#error unsupported worker-entry test architecture
+#endif
+    return ctx;
+}
+
+static uint64_t *native_handle_table_for(void *ctx, size_t offset) {
+    return (uint64_t *)((unsigned char *)ctx + offset);
+}
+
+static void host_zlib_close(int fd) {
+    zlib_closed_fd = fd;
+    native_handle_table_for(active_worker_context(), ZSTREAM_HANDLES_OFFSET)[fd] = 0;
+}
+
+static void host_bz2_close(int fd) {
+    bz2_closed_fd = fd;
+    native_handle_table_for(active_worker_context(), BZSTREAM_HANDLES_OFFSET)[fd] = 0;
+}
+
+static void host_iconv_close(int fd) {
+    iconv_closed_fd = fd;
+    native_handle_table_for(active_worker_context(), ICONV_HANDLES_OFFSET)[fd] = 0;
+}
+
+static uint64_t *inventory_node_seen;
+static int inventory_retired_before_native_close;
+static uint64_t inventory_node_snapshot[6];
+static uint64_t inventory_registered_snapshot[6];
+static int tls_close_calls;
+
+static void host_tls_close(void *handle) {
+    tls_close_calls++;
+    tls_closed_handle = handle;
+    if (inventory_node_seen != NULL) {
+        for (size_t index = 0; index < 6; index++) inventory_node_snapshot[index] = inventory_node_seen[index];
+    }
+    inventory_retired_before_native_close = inventory_node_seen != NULL &&
+        inventory_node_seen[2] == (uint64_t)-99 && inventory_node_seen[4] == 1;
+}
+
+struct worker_stream_owner_job {
+    int fd;
+    int attach_native_handles;
+};
+
+static int64_t worker_stream_owner_fatal_probe(void *opaque) {
+    struct worker_stream_owner_job *job = opaque;
+    job->fd = open("/dev/null", O_RDONLY);
+    if (job->fd < 0) { return -11; }
+    if (mark_stream_owner_from_worker(job->fd) != job->fd) {
+        close(job->fd);
+        return -12;
+    }
+    if (job->fd >= 256) {
+        close(job->fd);
+        return -13;
+    }
+    if (job->attach_native_handles) {
+        inventory_node_seen = __rt_resource_inventory_register(99, job->fd, 1);
+        if (inventory_node_seen == NULL) return -14;
+        for (size_t index = 0; index < 6; index++) inventory_registered_snapshot[index] = inventory_node_seen[index];
+        void *ctx = active_worker_context();
+        ((unsigned char *)ctx)[EOF_FLAGS_OFFSET + job->fd] = 1;
+        ((unsigned char *)ctx)[STREAM_READ_FILTERS_OFFSET + job->fd] = 1;
+        ((unsigned char *)ctx)[STREAM_WRITE_FILTERS_OFFSET + job->fd] = 1;
+        native_handle_table_for(ctx, STREAM_CHUNK_SIZE_OFFSET)[job->fd] = 4096;
+        native_handle_table_for(ctx, STREAM_CONNECT_HOST_OFFSET)[job->fd * 2] = 0xC0DE;
+        native_handle_table_for(ctx, STREAM_CONNECT_HOST_OFFSET)[job->fd * 2 + 1] = 4;
+        native_handle_table_for(ctx, BZSTREAM_HANDLES_OFFSET)[job->fd] = 1;
+        native_handle_table_for(ctx, ZSTREAM_HANDLES_OFFSET)[job->fd] = 1;
+        native_handle_table_for(ctx, ICONV_HANDLES_OFFSET)[job->fd] = 1;
+        native_handle_table_for(ctx, TLS_SESSIONS_OFFSET)[job->fd] = 0x5A17;
+    }
+    __rt_exit_or_parallel_fatal(7);
+}
+
+struct worker_popen_job {
+    int fd;
+};
+
+static int64_t worker_popen_fatal_probe(void *opaque) {
+    struct worker_popen_job *job = opaque;
+    FILE *pipe = popen("printf x", "r");
+    if (pipe == NULL) { return -21; }
+    job->fd = fileno(pipe);
+    if (job->fd < 0 || job->fd >= 256 || mark_stream_owner_from_worker(job->fd) != job->fd) {
+        pclose(pipe);
+        return -22;
+    }
+    native_handle_table_for(active_worker_context(), POPEN_FILES_OFFSET)[job->fd] = (uintptr_t)pipe;
+    __rt_exit_or_parallel_fatal(7);
+}
+
+struct worker_directory_job {
+    int fd;
+};
+
+static int64_t worker_directory_fatal_probe(void *opaque) {
+    struct worker_directory_job *job = opaque;
+    DIR *directory = opendir(".");
+    if (directory == NULL) { return -31; }
+    job->fd = dirfd(directory);
+    if (job->fd < 0 || job->fd >= 256 || mark_stream_owner_from_worker(job->fd) != job->fd) {
+        closedir(directory);
+        return -32;
+    }
+    native_handle_table_for(active_worker_context(), DIR_HANDLES_OFFSET)[job->fd] = (uintptr_t)directory;
+    __rt_exit_or_parallel_fatal(7);
+}
+
+struct worker_glob_job {
+    int fd;
+};
+
+struct worker_glob_state {
+    unsigned char header[24];
+    glob_t glob;
+};
+
+static int64_t worker_glob_fatal_probe(void *opaque) {
+    struct worker_glob_job *job = opaque;
+    struct worker_glob_state *state = calloc(1, sizeof(*state));
+    if (state == NULL) { return -41; }
+    if (glob("*", 0, NULL, &state->glob) != 0) {
+        free(state);
+        return -42;
+    }
+    job->fd = open("/dev/null", O_RDONLY);
+    if (job->fd < 0 || job->fd >= 256 || mark_stream_owner_from_worker(job->fd) != job->fd) {
+        if (job->fd >= 0) { close(job->fd); }
+        globfree(&state->glob);
+        free(state);
+        return -43;
+    }
+    native_handle_table_for(active_worker_context(), GLOB_HANDLES_OFFSET)[job->fd] = (uintptr_t)state;
+    __rt_exit_or_parallel_fatal(7);
+}
+
+struct worker_wrapper_job {
+    void *value;
+};
+
+static int64_t worker_wrapper_fatal_probe(void *opaque) {
+    struct worker_wrapper_job *job = opaque;
+    job->value = runtime_owned_string("fatal-wrapper-owner");
+    if (job->value == NULL) { return -51; }
+    native_handle_table_for(active_worker_context(), USER_WRAPPER_HANDLES_OFFSET)[0] = (uintptr_t)job->value;
+    __rt_exit_or_parallel_fatal(7);
+}
+
+struct worker_filter_job {
+    int fd;
+    void *value;
+};
+
+static int64_t worker_filter_fatal_probe(void *opaque) {
+    struct worker_filter_job *job = opaque;
+    job->fd = open("/dev/null", O_RDONLY);
+    if (job->fd < 0 || job->fd >= 256 || mark_stream_owner_from_worker(job->fd) != job->fd) {
+        if (job->fd >= 0) { close(job->fd); }
+        return -61;
+    }
+    job->value = runtime_owned_string("fatal-filter-owner");
+    if (job->value == NULL) {
+        close(job->fd);
+        return -62;
+    }
+    uint64_t *instances = native_handle_table_for(active_worker_context(), USER_FILTER_INSTANCES_OFFSET);
+    instances[job->fd * 2] = (uintptr_t)job->value;
+    instances[job->fd * 2 + 1] = (uintptr_t)job->value;
+    __rt_exit_or_parallel_fatal(7);
+}
+
+struct worker_probe_job {
+    void *ctx;
+    int64_t status;
+};
+
+static void *run_worker_probe(void *opaque) {
+    struct worker_probe_job *job = opaque;
+    job->status = run_worker_entry(
+        job->ctx, worker_probe, job->ctx, 8 * 1024 * 1024
+    );
+    return NULL;
+}
+
+struct isolation_job {
+    void *ctx;
+    uint64_t marker;
+    int64_t status;
+};
+
+static int64_t worker_context_isolation_probe(void *opaque) {
+    struct isolation_job *job = opaque;
+    if (active_worker_context() != job->ctx) return -71;
+    uint64_t request_state_snapshot[REQUEST_STATE_WORDS];
+    for (size_t index = 0; index < REQUEST_STATE_WORDS; index++) {
+        request_state_snapshot[index] = *(uint64_t *)((unsigned char *)job->ctx + REQUEST_STATE_BASE + index * 8);
+    }
+    uint64_t arena_base = *(uint64_t *)((unsigned char *)job->ctx + HEAP_BASE_OFFSET);
+    write_context_marker(job->ctx, job->marker);
+    pthread_mutex_lock(&isolation_lock);
+    isolation_ready++;
+    pthread_cond_signal(&isolation_ready_changed);
+    while (!isolation_go) {
+        pthread_cond_wait(&isolation_start, &isolation_lock);
+    }
+    pthread_mutex_unlock(&isolation_lock);
+    int ok = context_marker_matches(job->ctx, job->marker);
+    clear_context_marker(job->ctx);
+    for (size_t index = 0; index < REQUEST_STATE_WORDS; index++) {
+        *(uint64_t *)((unsigned char *)job->ctx + REQUEST_STATE_BASE + index * 8) = request_state_snapshot[index];
+    }
+    *(uint64_t *)((unsigned char *)job->ctx + HEAP_BASE_OFFSET) = arena_base;
+    return ok ? 73 : -72;
+}
+
+static void *run_context_isolation_probe(void *opaque) {
+    struct isolation_job *job = opaque;
+    job->status = run_worker_entry(
+        job->ctx, worker_context_isolation_probe, job, 8 * 1024 * 1024
+    );
+    return NULL;
+}
+
+int main(void) {
+    if (elephc_init() != 0) { printf("INIT-FAILED\n"); return 1; }
+
+    if (__rt_ctx_acquire(arenas[0], ARENA, NULL, object_frees[0],
+                         buffer_registries[0], serialize_object_ptrs[0],
+                         serialize_object_indexes[0], unserialize_values[0]) != NULL) {
+        printf("NULL-METADATA-ACCEPTED\n"); return 1;
+    }
+
+    void *first = acquire_context(0);
+    void *second = acquire_context(1);
+    if (first == NULL || second == NULL) { printf("ACQUIRE-NULL\n"); return 1; }
+    if (first == second) { printf("SAME-SLOT-TWICE\n"); return 1; }
+
+    /* Releasing hands the slot back; the next acquire must be able to take it. */
+    if (__rt_ctx_release(first) != 1) { printf("CLEAN-RELEASE-REJECTED\n"); return 1; }
+    void *again = acquire_context(2);
+    if (again != first) { printf("RELEASED-SLOT-NOT-REUSED\n"); return 1; }
+    pthread_attr_t worker_attr;
+    pthread_t worker;
+    struct worker_probe_job worker_job = { again, 0 };
+    if (pthread_attr_init(&worker_attr) != 0 ||
+        pthread_attr_setstacksize(&worker_attr, 8 * 1024 * 1024) != 0 ||
+        pthread_create(&worker, &worker_attr, run_worker_probe, &worker_job) != 0 ||
+        pthread_join(worker, NULL) != 0) {
+        printf("WORKER-THREAD-FAILED\n"); return 1;
+    }
+    pthread_attr_destroy(&worker_attr);
+    if (worker_job.status != 37) {
+        printf("WORKER-CONTEXT-NOT-INSTALLED\n"); return 1;
+    }
+    /* The entry consumed this lease. Reject reuse before acquiring a new one. */
+    int64_t stale_release = 92;
+    if (native_parallel_worker_entry(again, worker_probe, again, 8 * 1024 * 1024, &stale_release) != -1 || stale_release != 92) {
+        printf("RELEASED-WORKER-CONTEXT-ACCEPTED\n"); return 1;
+    }
+    again = acquire_context(2);
+    if (again != first) { printf("WORKER-SLOT-NOT-REACQUIRED\n"); return 1; }
+
+    /* Mark a real descriptor from inside an installed worker context, then
+       enter the production fatal trampoline. It must close the descriptor,
+       return a typed PHP-fatal status, and leave this exact slot reusable. */
+    zlib_close_hook = host_zlib_close;
+    bz2_close_hook = host_bz2_close;
+    iconv_close_hook = host_iconv_close;
+    tls_close_hook = host_tls_close;
+    zlib_closed_fd = -1;
+    bz2_closed_fd = -1;
+    iconv_closed_fd = -1;
+    tls_closed_handle = NULL;
+    inventory_node_seen = NULL;
+    inventory_retired_before_native_close = 0;
+    resource_id_cursor = 77;
+    struct worker_stream_owner_job stream_owner_job = { -1, 1 };
+    int64_t fatal_status = run_worker_entry(
+        again, worker_stream_owner_fatal_probe, &stream_owner_job, 8 * 1024 * 1024
+    );
+    if (fatal_status != -5) { printf("STREAM-OWNER-FATAL-STATUS-%lld\n", (long long)fatal_status); return 1; }
+    if (!inventory_retired_before_native_close) {
+        printf("INVENTORY-INCARNATION-NOT-RETIRED\n");
+        fprintf(stderr, "inventory id=%lld payload=%lld kind=%llu closed=%llu weak=%llu fd=%d\n",
+            (long long)inventory_node_snapshot[1], (long long)inventory_node_snapshot[2],
+            (unsigned long long)inventory_node_snapshot[3], (unsigned long long)inventory_node_snapshot[4],
+            (unsigned long long)inventory_node_snapshot[5], stream_owner_job.fd);
+        fprintf(stderr, "registered id=%lld payload=%lld kind=%llu closed=%llu tls-calls=%d zlib=%d bz2=%d iconv=%d\n",
+            (long long)inventory_registered_snapshot[1], (long long)inventory_registered_snapshot[2],
+            (unsigned long long)inventory_registered_snapshot[3], (unsigned long long)inventory_registered_snapshot[4],
+            tls_close_calls, zlib_closed_fd, bz2_closed_fd, iconv_closed_fd);
+        return 1;
+    }
+    if (resource_id_cursor != 77) { printf("WORKER-RESET-GLOBAL-RESOURCE-CURSOR\n"); return 1; }
+    if (stream_owner_job.fd < 0) { printf("STREAM-OWNER-OPEN-FAILED\n"); return 1; }
+    if (zlib_closed_fd != stream_owner_job.fd) { printf("ZLIB-CLOSE-HOOK-MISSED\n"); return 1; }
+    if (bz2_closed_fd != stream_owner_job.fd) { printf("BZ2-CLOSE-HOOK-MISSED\n"); return 1; }
+    if (iconv_closed_fd != stream_owner_job.fd) { printf("ICONV-CLOSE-HOOK-MISSED\n"); return 1; }
+    if (tls_closed_handle != (void *)(uintptr_t)0x5A17) { printf("TLS-CLOSE-HOOK-MISSED\n"); return 1; }
+    if (((unsigned char *)again)[EOF_FLAGS_OFFSET + stream_owner_job.fd] != 0) { printf("EOF-FLAG-STILL-LIVE\n"); return 1; }
+    if (((unsigned char *)again)[STREAM_READ_FILTERS_OFFSET + stream_owner_job.fd] != 0) { printf("READ-FILTER-ID-STILL-LIVE\n"); return 1; }
+    if (((unsigned char *)again)[STREAM_WRITE_FILTERS_OFFSET + stream_owner_job.fd] != 0) { printf("WRITE-FILTER-ID-STILL-LIVE\n"); return 1; }
+    if (native_handle_table_for(again, STREAM_CHUNK_SIZE_OFFSET)[stream_owner_job.fd] != 0) { printf("CHUNK-SIZE-STILL-LIVE\n"); return 1; }
+    if (native_handle_table_for(again, STREAM_CONNECT_HOST_OFFSET)[stream_owner_job.fd * 2] != 0 || native_handle_table_for(again, STREAM_CONNECT_HOST_OFFSET)[stream_owner_job.fd * 2 + 1] != 0) { printf("CONNECT-HOST-STILL-LIVE\n"); return 1; }
+    if (native_handle_table_for(again, BZSTREAM_HANDLES_OFFSET)[stream_owner_job.fd] != 0) { printf("BZ2-HANDLE-STILL-LIVE\n"); return 1; }
+    if (native_handle_table_for(again, ZSTREAM_HANDLES_OFFSET)[stream_owner_job.fd] != 0) { printf("ZLIB-HANDLE-STILL-LIVE\n"); return 1; }
+    if (native_handle_table_for(again, ICONV_HANDLES_OFFSET)[stream_owner_job.fd] != 0) { printf("ICONV-HANDLE-STILL-LIVE\n"); return 1; }
+    if (native_handle_table_for(again, TLS_SESSIONS_OFFSET)[stream_owner_job.fd] != 0) { printf("TLS-HANDLE-STILL-LIVE\n"); return 1; }
+    errno = 0;
+    if (fcntl(stream_owner_job.fd, F_GETFD) != -1 || errno != EBADF) {
+        printf("STREAM-OWNER-FATAL-FD-STILL-OPEN\n"); return 1;
+    }
+    zlib_close_hook = NULL;
+    bz2_close_hook = NULL;
+    iconv_close_hook = NULL;
+    tls_close_hook = NULL;
+    if (__rt_ctx_release(again) != 1) { printf("STREAM-OWNER-RELEASE-REJECTED\n"); return 1; }
+    again = acquire_context(2);
+    if (again != first) { printf("STREAM-OWNER-SLOT-NOT-REUSED\n"); return 1; }
+
+    struct worker_popen_job popen_job = { -1 };
+    fatal_status = run_worker_entry(
+        again, worker_popen_fatal_probe, &popen_job, 8 * 1024 * 1024
+    );
+    if (fatal_status != -5) { printf("POPEN-FATAL-STATUS-%lld\n", (long long)fatal_status); return 1; }
+    if (popen_job.fd < 0) { printf("POPEN-OPEN-FAILED\n"); return 1; }
+    if (native_handle_table_for(again, POPEN_FILES_OFFSET)[popen_job.fd] != 0) { printf("POPEN-HANDLE-STILL-LIVE\n"); return 1; }
+    errno = 0;
+    if (fcntl(popen_job.fd, F_GETFD) != -1 || errno != EBADF) { printf("POPEN-FD-STILL-OPEN\n"); return 1; }
+    if (__rt_ctx_release(again) != 1) { printf("POPEN-RELEASE-REJECTED\n"); return 1; }
+    again = acquire_context(2);
+    if (again != first) { printf("POPEN-SLOT-NOT-REUSED\n"); return 1; }
+
+    struct worker_directory_job directory_job = { -1 };
+    fatal_status = run_worker_entry(
+        again, worker_directory_fatal_probe, &directory_job, 8 * 1024 * 1024
+    );
+    if (fatal_status != -5) { printf("DIR-FATAL-STATUS-%lld\n", (long long)fatal_status); return 1; }
+    if (directory_job.fd < 0) { printf("DIR-OPEN-FAILED\n"); return 1; }
+    if (native_handle_table_for(again, DIR_HANDLES_OFFSET)[directory_job.fd] != 0) { printf("DIR-HANDLE-STILL-LIVE\n"); return 1; }
+    errno = 0;
+    if (fcntl(directory_job.fd, F_GETFD) != -1 || errno != EBADF) { printf("DIR-FD-STILL-OPEN\n"); return 1; }
+    if (__rt_ctx_release(again) != 1) { printf("DIR-RELEASE-REJECTED\n"); return 1; }
+    again = acquire_context(2);
+    if (again != first) { printf("DIR-SLOT-NOT-REUSED\n"); return 1; }
+
+    struct worker_glob_job glob_job = { -1 };
+    fatal_status = run_worker_entry(
+        again, worker_glob_fatal_probe, &glob_job, 8 * 1024 * 1024
+    );
+    if (fatal_status != -5) { printf("GLOB-FATAL-STATUS-%lld\n", (long long)fatal_status); return 1; }
+    if (glob_job.fd < 0) { printf("GLOB-OPEN-FAILED\n"); return 1; }
+    if (native_handle_table_for(again, GLOB_HANDLES_OFFSET)[glob_job.fd] != 0) { printf("GLOB-HANDLE-STILL-LIVE\n"); return 1; }
+    errno = 0;
+    if (fcntl(glob_job.fd, F_GETFD) != -1 || errno != EBADF) { printf("GLOB-FD-STILL-OPEN\n"); return 1; }
+    if (__rt_ctx_release(again) != 1) { printf("GLOB-RELEASE-REJECTED\n"); return 1; }
+    again = acquire_context(2);
+    if (again != first) { printf("GLOB-SLOT-NOT-REUSED\n"); return 1; }
+
+    struct worker_wrapper_job wrapper_job = { NULL };
+    fatal_status = run_worker_entry(
+        again, worker_wrapper_fatal_probe, &wrapper_job, 8 * 1024 * 1024
+    );
+    if (fatal_status != -5) { printf("WRAPPER-FATAL-STATUS-%lld\n", (long long)fatal_status); return 1; }
+    if (wrapper_job.value == NULL) { printf("WRAPPER-ALLOC-FAILED\n"); return 1; }
+    if (native_handle_table_for(again, USER_WRAPPER_HANDLES_OFFSET)[0] != 0) { printf("WRAPPER-HANDLE-STILL-LIVE\n"); return 1; }
+    if (__rt_ctx_release(again) != 1) { printf("WRAPPER-RELEASE-REJECTED\n"); return 1; }
+    again = acquire_context(2);
+    if (again != first) { printf("WRAPPER-SLOT-NOT-REUSED\n"); return 1; }
+
+    struct worker_filter_job filter_job = { -1, NULL };
+    fatal_status = run_worker_entry(
+        again, worker_filter_fatal_probe, &filter_job, 8 * 1024 * 1024
+    );
+    if (fatal_status != -5) { printf("FILTER-FATAL-STATUS-%lld\n", (long long)fatal_status); return 1; }
+    if (filter_job.fd < 0 || filter_job.value == NULL) { printf("FILTER-ALLOC-FAILED\n"); return 1; }
+    uint64_t *filter_instances = native_handle_table_for(again, USER_FILTER_INSTANCES_OFFSET);
+    if (filter_instances[filter_job.fd * 2] != 0 || filter_instances[filter_job.fd * 2 + 1] != 0) { printf("FILTER-HANDLE-STILL-LIVE\n"); return 1; }
+    errno = 0;
+    if (fcntl(filter_job.fd, F_GETFD) != -1 || errno != EBADF) { printf("FILTER-FD-STILL-OPEN\n"); return 1; }
+    if (__rt_ctx_release(again) != 1) { printf("FILTER-RELEASE-REJECTED\n"); return 1; }
+    again = acquire_context(2);
+    if (again != first) { printf("FILTER-SLOT-NOT-REUSED\n"); return 1; }
+
+    struct isolation_job isolation_a = { again, 0x31, 0 };
+    struct isolation_job isolation_b = { second, 0x52, 0 };
+    pthread_t isolation_threads[2];
+    pthread_attr_t isolation_attr;
+    if (pthread_attr_init(&isolation_attr) != 0 ||
+        pthread_attr_setstacksize(&isolation_attr, 8 * 1024 * 1024) != 0 ||
+        pthread_create(&isolation_threads[0], &isolation_attr, run_context_isolation_probe, &isolation_a) != 0 ||
+        pthread_create(&isolation_threads[1], &isolation_attr, run_context_isolation_probe, &isolation_b) != 0) {
+        printf("ISOLATION-THREAD-CREATE-FAILED\n"); return 1;
+    }
+    pthread_mutex_lock(&isolation_lock);
+    while (isolation_ready != 2) {
+        pthread_cond_wait(&isolation_ready_changed, &isolation_lock);
+    }
+    isolation_go = 1;
+    pthread_cond_broadcast(&isolation_start);
+    pthread_mutex_unlock(&isolation_lock);
+    if (pthread_join(isolation_threads[0], NULL) != 0 || pthread_join(isolation_threads[1], NULL) != 0) {
+        printf("ISOLATION-THREAD-JOIN-FAILED\n"); return 1;
+    }
+    pthread_attr_destroy(&isolation_attr);
+    if (isolation_a.status != 73 || isolation_b.status != 73) { printf("ISOLATION-STATE-CROSSTALK\n"); return 1; }
+    if (__rt_ctx_release(again) != 1 || __rt_ctx_release(second) != 1) { printf("ISOLATION-RELEASE-REJECTED\n"); return 1; }
+    again = acquire_context(2);
+    second = acquire_context(1);
+    if (again != first || second == NULL || again == second) { printf("ISOLATION-SLOT-REUSE-FAILED\n"); return 1; }
+    int64_t invalid_release = 91;
+    if (native_parallel_worker_entry(NULL, worker_probe, again, 8 * 1024 * 1024, &invalid_release) != -1 || invalid_release != 91) {
+        printf("NULL-WORKER-CONTEXT-ACCEPTED\n"); return 1;
+    }
+
+    /* Fill the pool: two are held (again, second), so SLOTS-2 remain. */
+    void *held[SLOTS];
+    int n = 0;
+    for (int i = 0; i < SLOTS; i++) {
+        void *c = acquire_context(3 + i);
+        if (c == NULL) { break; }
+        held[n++] = c;
+    }
+    if (n != SLOTS - 2) { printf("EXPECTED-%d-FREE-GOT-%d\n", SLOTS - 2, n); return 1; }
+    if (acquire_context(SLOTS + 3) != NULL) { printf("OVERSUBSCRIBED\n"); return 1; }
+
+    /* Release exactly one slot, then race every worker contender for it. */
+    if (__rt_ctx_release(held[0]) != 1) { printf("RECOVERY-RELEASE-REJECTED\n"); return 1; }
+    pthread_t racers[RACE_WORKERS];
+    struct race_job jobs[RACE_WORKERS];
+    for (int i = 0; i < RACE_WORKERS; i++) {
+        jobs[i].storage = SLOTS + 3 + i;
+        jobs[i].context = NULL;
+        if (pthread_create(&racers[i], NULL, race_acquire, &jobs[i]) != 0) {
+            printf("RACE-THREAD-CREATE-FAILED\n"); return 1;
+        }
+    }
+    pthread_mutex_lock(&race_lock);
+    while (race_ready != RACE_WORKERS) {
+        pthread_cond_wait(&race_ready_changed, &race_lock);
+    }
+    race_go = 1;
+    pthread_cond_broadcast(&race_start);
+    pthread_mutex_unlock(&race_lock);
+    int winners = 0;
+    void *winner = NULL;
+    for (int i = 0; i < RACE_WORKERS; i++) {
+        if (pthread_join(racers[i], NULL) != 0) { printf("RACE-THREAD-JOIN-FAILED\n"); return 1; }
+        if (jobs[i].context != NULL) { winners++; winner = jobs[i].context; }
+    }
+    if (winners != 1 || winner != held[0]) { printf("LAST-SLOT-RACE-FAILED-%d\n", winners); return 1; }
+    if (__rt_ctx_release(winner) != 1) { printf("RACE-WINNER-RELEASE-REJECTED\n"); return 1; }
+    if (acquire_context(SLOTS + 12) == NULL) { printf("NO-RACE-RECOVERY\n"); return 1; }
+
+    /* A context with a surviving owner must stay claimed instead of exposing backing
+       storage that its Rust WorkerStorage owner is about to release. The pool is full
+       here, so any successful acquire would necessarily mean the dirty slot escaped. */
+    *(uint64_t *)((unsigned char *)held[1] + USER_WRAPPER_HANDLES_OFFSET) = 1;
+    if (__rt_ctx_release(held[1]) != 0) { printf("DIRTY-RELEASE-ACCEPTED\n"); return 1; }
+    if (acquire_context(SLOTS + 13) != NULL) { printf("DIRTY-SLOT-REUSED\n"); return 1; }
+
+    printf("POOL-OK\n");
+    return 0;
+}
+"#;
+
+/// THE CONTEXT POOL HANDS OUT DISTINCT SLOTS, REUSES RELEASED ONES, AND REFUSES WHEN FULL.
+///
+/// `__rt_ctx_acquire` / `__rt_ctx_release` are new assembly that no PHP program can reach,
+/// so the only honest test drives them from C against the static archive. What it pins is
+/// the contract the M1 bridge will depend on: two acquires never return the same slot, a
+/// released slot becomes available again, the pool refuses rather than overcommitting, and
+/// it recovers after a release.
+///
+/// What it CANNOT test is the part the atomics are for — two threads racing for the last
+/// slot. That is why the claim uses `ldaxr`/`stlxr` and `lock cmpxchg` now rather than when
+/// M1 arrives: a plain load/store pair would pass this test exactly as well.
+#[test]
+fn test_rt_ctx_pool_hands_out_distinct_slots_and_reuses_released_ones() {
+    let dir = make_test_dir("elephc_ctx_pool");
+    fs::write(dir.join("auth.php"), EXPORT_PHP).unwrap();
+
+    let output = elephc_command(&dir)
+        .args(["--emit", "staticlib", "auth.php"])
+        .output()
+        .expect("failed to run elephc");
+    assert!(
+        output.status.success(),
+        "--rt-ctx staticlib compilation failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let host = compile_linked_c_host(&dir, CTX_POOL_HOST_C, "ctx-pool-host", "auth");
+    let run = Command::new(&host).output().expect("failed to run the ctx pool host");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout).trim(),
+        "POOL-OK",
+        "the context pool broke its contract (exit {:?}):\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// Produces current Linux assembly and the same native pool fixture without a Docker Cargo rebuild.
+/// Run explicitly, then assemble/link/execute each bundle in its matching Linux image.
+#[test]
+#[ignore = "manual cross-target fixture emission; requires subsequent native Linux execution"]
+fn emit_linux_context_pool_probe_bundles() {
+    use elephc::codegen_support::{generate_runtime_with_features_mode, platform::Target, RuntimeFeatures};
+    let root = make_test_dir("elephc_linux_context_pool_probes");
+    for name in ["linux-aarch64", "linux-x86_64"] {
+        let dir = root.join(name);
+        fs::create_dir_all(&dir).unwrap();
+        // A scalar export requires no optional bridge; the pool/runtime helpers are real,
+        // not substitutes for the PHP/eval descriptor or Rust Parallel bridge gates.
+        fs::write(dir.join("auth.php"), "<?php\n#[Export]\nfunction add_i64(int $a, int $b): int { return $a + $b; }\n").unwrap();
+        let output = elephc_command(&dir)
+            .args(["--target", name, "--emit", "staticlib", "--emit-asm", "auth.php"])
+            .output().expect("cross-target assembly emission");
+        assert!(output.status.success(), "{name}: {}", String::from_utf8_lossy(&output.stderr));
+        let runtime = generate_runtime_with_features_mode(
+            8 * 1024 * 1024, Target::parse(name).unwrap(), RuntimeFeatures::none(), false, true,
+        );
+        assert!(runtime.contains("__rt_resource_inventory_abandon_fd") && runtime.contains("__rt_parallel_worker_entry"), "{name}: missing real runtime controls");
+        fs::write(dir.join("runtime.s"), runtime).unwrap();
+        fs::write(dir.join("pool-host.c"), CTX_POOL_HOST_C).unwrap();
+        println!("Linux context-pool bundle: {}", dir.display());
+    }
+}
+
+/// THE STATICLIB ARM CARRIES THE SAME ABI CONTRACT, AND WAS NEVER PROBED.
+///
+/// The cdylib arm has been green since round 3, and `.plans/sandbox-threads.md` listed
+/// the staticlib as still unprobed — the two emit kinds build their export wrappers
+/// through different paths, so "the cdylib preserves the register" says nothing about
+/// the archive a host links directly.
+///
+/// Same sentinel as the cdylib test: a module-level assembly probe parks a known value
+/// in the ctx register, calls the export, and reports whether the value survived. It is
+/// module-level assembly rather than a C `register … asm("x28")` variable because clang
+/// spills and reloads such a variable around the call, which makes the C version pass
+/// against a library that clobbers the register.
+#[test]
+fn test_rt_ctx_staticlib_export_preserves_the_hosts_ctx_register() {
+    let dir = make_test_dir("elephc_staticlib_rt_ctx_abi");
+    fs::write(dir.join("auth.php"), EXPORT_PHP).unwrap();
+
+    let output = elephc_command(&dir)
+        .args(["--emit", "staticlib", "auth.php"])
+        .output()
+        .expect("failed to run elephc");
+    assert!(
+        output.status.success(),
+        "--rt-ctx staticlib compilation failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        dir.join("libauth.a").exists(),
+        "expected the archive the host links directly against"
+    );
+
+    let host = compile_linked_c_host(&dir, CTX_ABI_HOST_C, "ctx-abi-static-host", "auth");
+    let run = Command::new(&host)
+        .output()
+        .expect("failed to run the ctx ABI static host");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout).trim(),
+        "PRESERVED",
+        "a --rt-ctx staticlib export clobbered the host's callee-saved ctx register \
+         (exit {:?}):\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// The ctx register (`x28` AArch64 / `r14` x86_64) is callee-saved, so a library
+/// export that publishes elephc's `_rt_ctx` pointer into it borrows a register
+/// the HOST owns. Every return path must hand the host's value back — the same
+/// contract the FFI callback trampoline already carries.
+///
+/// Without the save/restore pair the host gets elephc's context pointer in place
+/// of its own value, corrupting whatever the caller kept there: an ABI break no
+/// PHP-level test can see.
+#[test]
+fn test_rt_ctx_cdylib_export_preserves_the_hosts_ctx_register() {
+    let dir = make_test_dir("elephc_cdylib_rt_ctx_abi");
+    fs::write(dir.join("auth.php"), EXPORT_PHP).unwrap();
+
+    let output = elephc_command(&dir)
+        .args(["--emit", "cdylib", "auth.php"])
+        .output()
+        .expect("failed to run elephc");
+    assert!(
+        output.status.success(),
+        "--rt-ctx cdylib compilation failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let host = compile_linked_c_host(&dir, CTX_ABI_HOST_C, "ctx-abi-host", "auth");
+    let run = Command::new(&host)
+        .output()
+        .expect("failed to run the ctx ABI host");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout).trim(),
+        "PRESERVED",
+        "a --rt-ctx export clobbered the host's callee-saved ctx register (exit {:?}):\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stderr)
+    );
 
     fs::remove_dir_all(&dir).ok();
 }

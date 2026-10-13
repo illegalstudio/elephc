@@ -163,6 +163,7 @@ pub fn emit_mixed_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
 
     emitter.instruction("b.hs __rt_mixed_free_deep_box");                       // skip close for synthetic/already-closed handles
 
+    emitter.instruction("bl __rt_stream_owner_clear");                          // detach context ownership before the kernel can recycle this fd
     emitter.syscall(6);                                                         // close(fd) — AArch64 macOS x16=6/svc #0x80, Linux remapped to x8=57/svc #0
     emitter.instruction("b __rt_mixed_free_deep_box");                          // free the mixed box after closing the native fd
 
@@ -364,6 +365,8 @@ fn emit_mixed_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFea
 
     emitter.instruction("jae __rt_mixed_free_deep_box");                        // skip synthetic/already-closed handles
 
+    emitter.instruction("mov rax, rdi");                                        // copy the fd into the ownership-helper result register
+    emitter.instruction("call __rt_stream_owner_clear");                        // detach context ownership before libc can recycle this fd
     emitter.instruction("call close");                                          // close(fd) via the C library on x86_64 Linux
 
     emitter.instruction("jmp __rt_mixed_free_deep_box");                        // free the mixed box after closing the native fd

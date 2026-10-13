@@ -2,7 +2,7 @@
 title: "get_exception_handler() - internals"
 description: "Compiler internals for get_exception_handler(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 625
+  order: 626
 ---
 
 ## `get_exception_handler()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/get_exception_handler.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/get_exception_handler.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:701](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L701) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

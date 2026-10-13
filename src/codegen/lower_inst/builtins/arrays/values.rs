@@ -197,7 +197,7 @@ fn lower_assoc_array_values(
 }
 
 /// Copies the currently loaded associative array values into a new indexed array.
-pub(in crate::codegen::lower_inst::builtins) fn emit_loaded_assoc_array_values(
+pub(in crate::codegen::lower_inst) fn emit_loaded_assoc_array_values(
     ctx: &mut FunctionContext<'_>,
     value_ty: &PhpType,
 ) -> Result<()> {

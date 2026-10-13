@@ -1262,6 +1262,276 @@
     },
     {
       "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": false,
+      "eval": {
+        "reason": "internal-compiler-surface",
+        "supported": false
+      },
+      "extension": true,
+      "internal": true,
+      "kind": "class",
+      "module": "elephc",
+      "name": "Elephc\\Async\\__CancellationState",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": false,
+      "eval": {
+        "reason": "internal-compiler-surface",
+        "supported": false
+      },
+      "extension": true,
+      "internal": true,
+      "kind": "class",
+      "module": "elephc",
+      "name": "Elephc\\Async\\__RunResult",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": false,
+      "eval": {
+        "reason": "internal-compiler-surface",
+        "supported": false
+      },
+      "extension": true,
+      "internal": true,
+      "kind": "class",
+      "module": "elephc",
+      "name": "Elephc\\Async\\__Scheduler",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": false,
+      "eval": {
+        "reason": "internal-compiler-surface",
+        "supported": false
+      },
+      "extension": true,
+      "internal": true,
+      "kind": "class",
+      "module": "elephc",
+      "name": "Elephc\\Async\\__ScopeState",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": false,
+      "eval": {
+        "reason": "internal-compiler-surface",
+        "supported": false
+      },
+      "extension": true,
+      "internal": true,
+      "kind": "class",
+      "module": "elephc",
+      "name": "Elephc\\Async\\__TaskOutcome",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": false,
+      "eval": {
+        "reason": "internal-compiler-surface",
+        "supported": false
+      },
+      "extension": true,
+      "internal": true,
+      "kind": "class",
+      "module": "elephc",
+      "name": "Elephc\\Async\\__TaskStart",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": false,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": true,
+      "internal": false,
+      "kind": "class",
+      "module": "elephc",
+      "name": "Elephc\\Async\\Awaitable",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": false,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": true,
+      "internal": false,
+      "kind": "class",
+      "module": "elephc",
+      "name": "Elephc\\Async\\Cancellation",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": false,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": true,
+      "internal": false,
+      "kind": "class",
+      "module": "elephc",
+      "name": "Elephc\\Async\\CancelledException",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": false,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": true,
+      "internal": false,
+      "kind": "class",
+      "module": "elephc",
+      "name": "Elephc\\Async\\TaskGroup",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": false,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": true,
+      "internal": false,
+      "kind": "class",
+      "module": "elephc",
+      "name": "Elephc\\Parallel\\Future",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": false,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": true,
+      "internal": false,
+      "kind": "class",
+      "module": "elephc",
+      "name": "Elephc\\Parallel\\TaskFailure",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": false,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": true,
+      "internal": false,
+      "kind": "enum",
+      "module": "elephc",
+      "name": "Elephc\\Parallel\\TaskFailureKind",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": false,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": true,
+      "internal": false,
+      "kind": "class",
+      "module": "elephc",
+      "name": "Elephc\\Parallel\\TaskGroup",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": false,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": true,
+      "internal": false,
+      "kind": "class",
+      "module": "elephc",
+      "name": "Elephc\\Parallel\\TaskGroupFailure",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
         "kind": "checker-injected",
         "supported": true
       },

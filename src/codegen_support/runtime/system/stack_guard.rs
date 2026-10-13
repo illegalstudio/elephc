@@ -47,7 +47,8 @@ const RLIMIT_STACK: i64 = 3;
 /// Linux, `0x7FFF_FFFF_FFFF_FFFF` on macOS). Clamping keeps the computed floor a real
 /// address instead of wrapping below zero; the cost is that a genuinely unlimited stack
 /// reports the fatal after 64 MiB instead of running until the OS refuses to grow it.
-const STACK_BUDGET_CAP_BYTES: i64 = 64 * 1024 * 1024;
+pub(crate) const STACK_BUDGET_CAP_BYTES: i64 =
+    elephc_parallel_contract::WORKER_STACK_MAX_BYTES as i64;
 
 /// Budget used when `getrlimit` fails outright (8 MiB — the default on both platforms).
 const STACK_BUDGET_FALLBACK_BYTES: i64 = 8 * 1024 * 1024;
@@ -55,7 +56,8 @@ const STACK_BUDGET_FALLBACK_BYTES: i64 = 8 * 1024 * 1024;
 /// Smallest budget worth guarding. Below this the reserve would swallow the whole stack,
 /// so the guard is disabled instead of publishing a floor that is effectively at the
 /// current stack pointer.
-const STACK_BUDGET_MIN_BYTES: i64 = 256 * 1024;
+pub(crate) const STACK_BUDGET_MIN_BYTES: i64 =
+    elephc_parallel_contract::WORKER_STACK_MIN_BYTES as i64;
 
 /// Emits `__rt_stack_limit_init`, which measures the running OS stack once at process
 /// start and publishes the resulting floor into `_stack_limit` and `_stack_limit_main`.
@@ -234,8 +236,15 @@ mod tests {
             assert!(asm.contains("__rt_stack_limit_init:"), "{target:?}: {asm}");
             assert!(asm.contains("__rt_stack_overflow:"), "{target:?}: {asm}");
             assert!(asm.contains(getrlimit_call), "{target:?}: {asm}");
-            assert!(asm.contains("_stack_limit"), "{target:?}: {asm}");
-            assert!(asm.contains("_stack_limit_main"), "{target:?}: {asm}");
+            // Both floors are ctx fields now, so they appear as offsets rather than
+            // names: the live one every prologue compares against, and the
+            // main-thread one `__rt_fiber_switch` restores when control leaves a
+            // fiber stack. Two distinct offsets is the property worth pinning.
+            let live = crate::codegen_support::runtime::ctx::CTX_STACK_LIMIT_OFFSET;
+            let main = crate::codegen_support::runtime::ctx::CTX_STACK_LIMIT_MAIN_OFFSET;
+            assert_ne!(live, main);
+            assert!(asm.contains(&format!("{}]", live)), "{target:?}: {asm}");
+            assert!(asm.contains(&format!("{}]", main)), "{target:?}: {asm}");
             assert!(asm.contains("_stack_err_msg"), "{target:?}: {asm}");
         }
     }

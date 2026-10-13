@@ -188,8 +188,13 @@ pub(super) fn lower_closure_with_context(
     let mut captured_values = Vec::with_capacity(captures.len());
     let mut capture_params = Vec::with_capacity(captures.len());
     let mut by_value_capture_views = Vec::with_capacity(captures.len());
+    let mut snapshot_slots = Vec::new();
     for capture in captures {
         let by_ref = capture_refs.iter().any(|name| name == capture);
+        let ref_cell_must_be_mixed = by_ref
+            && ctx
+                .ref_cell_mixed_locals
+                .contains(&(ctx.loop_storage_scope.clone(), capture.clone()));
         let (captured, php_type) = if capture == "this" && !ctx.local_slots.contains_key("this") {
             // Top-level closure: no enclosing `$this`. Start with a null receiver
             // that `Closure::bind` overwrites; `Mixed` so members dispatch at
@@ -212,7 +217,7 @@ pub(super) fn lower_closure_with_context(
         } else {
             let widens_by_ref_capture = by_ref
                 && self_ref_callable_capture != Some(capture.as_str())
-                && (body_contains_eval || body_writes_local(body, capture));
+                && (ref_cell_must_be_mixed || body_contains_eval || body_writes_local(body, capture));
             let php_type_override = if by_ref && self_ref_callable_capture == Some(capture.as_str()) {
                 Some(PhpType::Callable)
             } else if widens_by_ref_capture {
@@ -240,6 +245,20 @@ pub(super) fn lower_closure_with_context(
             let php_type = php_type_override
                 .unwrap_or_else(|| ctx.builder.value_php_type(captured.value));
             (captured, php_type)
+        };
+        // A by-value Mixed capture is a snapshot, not another reference to the source zval.
+        // Stage its owner in a private slot so capture operands are borrowed loads.
+        // ClosureNew retains that same cell; retire the creator's slot afterwards so
+        // descriptor destruction is not delayed until this frame exits.
+        let captured = if !by_ref
+            && matches!(php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        {
+            let snapshot = format!("{}#capture{}", capture, ctx.builder.value_count());
+            ctx.store_local(&snapshot, captured, php_type.clone(), Some(expr.span));
+            snapshot_slots.push(ctx.local_slots[&snapshot]);
+            ctx.load_local(&snapshot, Some(expr.span))
+        } else {
+            captured
         };
         let immediate = by_ref.then_some(Immediate::I64(1));
         ctx.emit_void(Op::ClosureCapture, vec![captured.value], immediate, Op::ClosureCapture.default_effects(), Some(expr.span));
@@ -301,6 +320,10 @@ pub(super) fn lower_closure_with_context(
     let loop_storage_scope =
         crate::types::nested_loop_storage_scope(&ctx.loop_storage_scope, expr.span);
     let by_ref_return = matches!(&expr.kind, ExprKind::Closure { by_ref_return: true, .. });
+    let variadic_type = match &expr.kind {
+        ExprKind::Closure { variadic_type, .. } => variadic_type.as_ref(),
+        _ => None,
+    };
     let signature = if contextual_arg_types.is_empty() && bound_this_context.is_none() {
         function::lower_closure_function(
             ctx,
@@ -308,6 +331,7 @@ pub(super) fn lower_closure_with_context(
             params,
             variadic,
             variadic_by_ref,
+            variadic_type,
             return_type,
             body,
             &capture_params,
@@ -323,6 +347,7 @@ pub(super) fn lower_closure_with_context(
             params,
             variadic,
             variadic_by_ref,
+            variadic_type,
             return_type,
             body,
             &capture_params,
@@ -347,12 +372,6 @@ pub(super) fn lower_closure_with_context(
         .iter()
         .map(|capture| capture.value)
         .collect::<Vec<_>>();
-    ctx.set_pending_static_callable_result(StaticCallableBinding::Closure {
-        name,
-        signature,
-        captures: captured_values,
-        return_alias,
-    });
     let closure = ctx.emit_value(
         Op::ClosureNew,
         closure_operands,
@@ -361,12 +380,30 @@ pub(super) fn lower_closure_with_context(
         Op::ClosureNew.default_effects(),
         Some(expr.span),
     );
+    for slot in snapshot_slots {
+        // The descriptor already holds the same cell, so this cannot be its last
+        // owner. Keep the canonical slot-retirement effects: the validator does
+        // not permit a per-site refinement of this opcode's cleanup contract.
+        ctx.emit_void(
+            Op::ReleaseLocalSlot,
+            Vec::new(),
+            Some(Immediate::LocalSlot(slot)),
+            Op::ReleaseLocalSlot.default_effects(),
+            Some(expr.span),
+        );
+    }
     // A later store can widen a captured local to Mixed, making its narrower load an owned
     // unbox. Retire that view after the descriptor retains it. Ownership finalization prunes
     // borrowed-load releases, and explicit releases prevent ClosureNew from stealing a view.
     for view in by_value_capture_views {
         crate::ir_lower::ownership::release_if_owned(ctx, view, Some(expr.span));
     }
+    ctx.set_pending_static_callable_result(StaticCallableBinding::Closure {
+        name,
+        signature,
+        captures: captured_values,
+        return_alias,
+    });
     if let Some(capture) = self_ref_callable_capture {
         ctx.set_local_logical_type(capture, PhpType::Callable);
     }

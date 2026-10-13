@@ -224,6 +224,9 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload the requested integer index
     emitter.instruction("cmp x9, #0");                                          // negative indexes are not representable in dense storage
     emitter.instruction("b.lt __rt_mixed_array_gfw_promote");                   // negative integer keys require associative PHP-array storage
+    emitter.instruction("ldr x11, [x10]");                                      // read the dense parent array's logical length
+    emitter.instruction("cmp x9, x11");                                         // would the missing child leave a gap in the parent's keys?
+    emitter.instruction("b.hi __rt_mixed_array_gfw_promote");                   // sparse child keys require Hash storage before autovivification
     emitter.instruction("ldr x12, [x10, #-8]");                                 // load the packed indexed-array metadata
     emitter.instruction("ubfx x1, x12, #8, #7");                                // pass the source value_type tag to the Mixed conversion helper
     emitter.instruction("mov x0, x10");                                         // pass the indexed array to the Mixed conversion helper
@@ -551,6 +554,9 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // reload the requested integer index
     emitter.instruction("cmp r9, 0");                                           // negative indexes are not representable in dense storage
     emitter.instruction("jl __rt_mixed_array_gfw_promote");                     // negative integer keys require associative PHP-array storage
+    emitter.instruction("mov r11, QWORD PTR [r10]");                            // read the dense parent array's logical length
+    emitter.instruction("cmp r9, r11");                                         // would the missing child leave a gap in the parent's keys?
+    emitter.instruction("ja __rt_mixed_array_gfw_promote");                     // sparse child keys require Hash storage before autovivification
     emitter.instruction("mov r8, QWORD PTR [r10 - 8]");                         // load the packed indexed-array metadata
     emitter.instruction("shr r8, 8");                                           // shift the runtime element value_type tag into the low bits
     emitter.instruction("and r8, 0x7f");                                        // remove the persistent COW flag from the extracted tag

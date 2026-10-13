@@ -64,11 +64,10 @@ pub fn emit_user_wrapper_stream_cast(emitter: &mut Emitter) {
     // A `: int` return arrives as a raw fd; an untyped/`resource` return arrives
     // as a boxed Mixed cell (heap pointer) whose payload word holds the fd.
     emitter.instruction("cbz x0, __rt_uwcast_neg1");                            // null/false-ish → not selectable
-    abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x9");
     emitter.instruction("cmp x0, x9");                                          // is the return below the managed heap?
     emitter.instruction("b.lo __rt_uwcast_ret");                                // raw small int → it is already the fd
-    abi::emit_symbol_address(emitter, "x10", "_heap_off");
-    emitter.instruction("ldr x10, [x10]");                                      // current heap byte length
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "x10"); // x10 = current heap byte length (ctx-relative in ctx mode)
     emitter.instruction("add x10, x9, x10");                                    // managed heap end address
     emitter.instruction("cmp x0, x10");                                         // is the return at or beyond the heap end?
     emitter.instruction("b.hs __rt_uwcast_ret");                                // raw int above the heap → already the fd
@@ -151,11 +150,10 @@ fn emit_user_wrapper_stream_cast_linux_x86_64(emitter: &mut Emitter) {
     // -- normalize the return to a raw int fd (see the AArch64 path for the rationale) --
     emitter.instruction("test rax, rax");                                       // null/false-ish return?
     emitter.instruction("jz __rt_uwcast_neg1_x86");                             // → not selectable
-    abi::emit_symbol_address(emitter, "r10", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r10");
     emitter.instruction("cmp rax, r10");                                        // is the return below the managed heap?
     emitter.instruction("jb __rt_uwcast_ret_x86");                              // raw small int → already the fd
-    abi::emit_symbol_address(emitter, "r11", "_heap_off");
-    emitter.instruction("mov r11, QWORD PTR [r11]");                            // current heap byte length
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "r11"); // r11 = current heap offset (ctx-relative in ctx mode)
     emitter.instruction("add r11, r10");                                        // managed heap end address
     emitter.instruction("cmp rax, r11");                                        // is the return at or beyond the heap end?
     emitter.instruction("jae __rt_uwcast_ret_x86");                             // raw int above the heap → already the fd

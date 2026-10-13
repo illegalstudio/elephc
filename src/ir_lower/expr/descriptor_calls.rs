@@ -49,6 +49,7 @@ pub(super) fn lower_expr_call_from_value(
     expr: &Expr,
 ) -> LoweredValue {
     let result_type = dynamic_callable_result_type(ctx, callee.value, expr);
+    maybe_emit_parallel_fiber_suspend_callback_guard(ctx, callee, expr.span);
     let callee = root_descriptor_callback(ctx, callee, result_type, expr.span);
     let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span);
     emit_callable_descriptor_invoke(ctx, callee, arg_container, expr.span)

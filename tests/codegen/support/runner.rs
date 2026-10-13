@@ -133,6 +133,11 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         php_extensions: &[],
     },
     TestBridgeStaticlib {
+        lib_name: "elephc_parallel",
+        package: "elephc-parallel",
+        php_extensions: &[],
+    },
+    TestBridgeStaticlib {
         lib_name: "elephc_curl",
         package: "elephc-curl",
         php_extensions: &["curl"],
@@ -327,6 +332,14 @@ mod bridge_extension_tests {
             test_linked_extensions(&linked),
             ["iconv", "pcntl", "posix", "curl"]
         );
+    }
+
+    /// Keeps Parallel worker-ABI changes linked against the current bridge archive.
+    #[test]
+    fn parallel_bridge_staticlib_is_selected_for_worker_fixtures() {
+        let bridges = requested_bridge_staticlibs(&["elephc_parallel"]);
+        assert_eq!(bridges.len(), 1);
+        assert_eq!(bridges[0].package, "elephc-parallel");
     }
 }
 

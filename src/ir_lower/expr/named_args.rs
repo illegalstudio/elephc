@@ -80,6 +80,7 @@ pub(super) fn lower_named_args_with_signature_options(
         }
     }
     if sig.variadic.is_some() {
+        operands = coerce_operands_to_params(ctx, sig, operands);
         if crate::func_args::sig_has_hidden_argc_param(sig) {
             let actual_count = named_plan_actual_arg_count(&plan.source_values);
             operands.push(emit_i64_at_span(ctx, actual_count as i64, call_span).value);
@@ -115,11 +116,12 @@ fn lower_planned_source_arg(
             }
         }
     }
-    let value = if plan.source_values.iter().any(|source| {
+    let reference_tail = plan.source_values.iter().any(|source| {
         source.source_index() == source_index
             && source.param_idx().is_none()
             && variadic_param_is_by_ref(sig)
-    }) {
+    });
+    let value = if reference_tail {
         let source = plan
             .source_values
             .iter()
@@ -127,6 +129,7 @@ fn lower_planned_source_arg(
             .expect("planned variadic reference source");
         lower_variadic_tail_source_value(
             ctx,
+            sig,
             source.expr(),
             true,
             None,
@@ -143,6 +146,19 @@ fn lower_planned_source_arg(
             .unwrap_or(sig.params.len() + source_index);
         let lowered = lowered_value_from_id(ctx, value);
         capture_call_argument_value(ctx, lowered, parameter, plan.source_args[source_index].span).value
+    } else if !reference_tail {
+        // Named source order needs the same entry-value snapshot as positional arguments.
+        // Earlier snapshots additionally publish the existing source-evaluation unwind root.
+        // Its consuming release clears the snapshot ledger slot, so there is only one live
+        // owner when a later argument throws into an enclosing static/method-call handler.
+        let lowered = lowered_value_from_id(ctx, value);
+        let snapshot = snapshot_call_argument(ctx, lowered, false, plan.source_args[source_index].span);
+        if source_index + 1 < plan.source_args.len() {
+            let lowered = lowered_value_from_id(ctx, snapshot);
+            root_evaluated_call_argument(ctx, lowered, plan.source_args[source_index].span).value
+        } else {
+            snapshot
+        }
     } else if source_index + 1 < plan.source_args.len() {
         let lowered = lowered_value_from_id(ctx, value);
         root_evaluated_call_argument(ctx, lowered, plan.source_args[source_index].span).value

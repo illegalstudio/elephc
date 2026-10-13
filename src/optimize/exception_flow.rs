@@ -58,6 +58,8 @@ pub(super) struct ExceptionFlowAnalysis {
     function_returns: HashMap<String, PhpType>,
     static_method_returns: HashMap<String, PhpType>,
     instance_method_returns: HashMap<String, PhpType>,
+    /// String binding and return boundaries may dispatch user code before or after the body.
+    string_bindings: HashSet<String>,
     /// Throws any destructor reachable in this program may raise, for the current round.
     ///
     /// Derived from `instance_method_throws` plus the hierarchy's destructor-enumeration
@@ -80,6 +82,30 @@ fn declared_object_reference_can_throw(signature: &FunctionSig) -> bool {
             && signature.declared_params.get(index).copied().unwrap_or(false)
             && matches!(ty, PhpType::Object(_))
     })
+}
+
+/// Records callable boundaries whose string parameters may dispatch user code.
+fn collect_string_bindings(stmts: &[Stmt], out: &mut HashSet<String>) {
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::FunctionDecl { name, params, variadic_type, variadic_by_ref, return_type, body, .. } => {
+                if super::effect_analysis::callable_binds_string(params, variadic_type.as_ref(), *variadic_by_ref)
+                    || super::return_binding_effects::may_throw(params, return_type, body) {
+                    out.insert(name.clone());
+                }
+            }
+            StmtKind::ClassDecl { name, methods, .. } => {
+                for method in methods.iter().filter(|method| method.has_body) {
+                    if super::effect_analysis::callable_binds_string(&method.params, method.variadic_type.as_ref(), method.variadic_by_ref)
+                        || super::return_binding_effects::may_throw(&method.params, &method.return_type, &method.body) {
+                        out.insert(method_effect_key(name, &method.name));
+                    }
+                }
+            }
+            StmtKind::NamespaceBlock { body, .. } => collect_string_bindings(body, out),
+            _ => {}
+        }
+    }
 }
 
 /// Installs exception summaries for one optimizer pass and restores the previous analysis.
@@ -338,6 +364,10 @@ impl ExceptionFlowAnalysis {
         let function_bodies = attach_class_contexts(function_bodies, &class_contexts);
         let static_method_bodies = attach_class_contexts(static_method_bodies, &class_contexts);
         let instance_method_bodies = attach_class_contexts(instance_method_bodies, &class_contexts);
+        // Body-only throw summaries omit entry-time Stringable dispatch. Keep
+        // these bindings open until argument-specific type proofs are available.
+        let mut string_bindings = HashSet::new();
+        collect_string_bindings(program, &mut string_bindings);
         let mut analysis = Self {
             hierarchy,
             function_throws: empty_summaries(function_bodies.keys()),
@@ -349,6 +379,7 @@ impl ExceptionFlowAnalysis {
             function_returns,
             static_method_returns,
             instance_method_returns,
+            string_bindings,
             destructor_throws: ThrownTypes::default(),
             scalar_frame_callables: HashSet::new(),
         };
@@ -408,6 +439,9 @@ impl ExceptionFlowAnalysis {
                 (
                     name.clone(),
                     self.block_throws(body.body, &HashMap::new(), body.class_context)
+                        .combined(if self.string_bindings.contains(name) {
+                            ThrownTypes::unknown()
+                        } else { ThrownTypes::default() })
                         .combined(self.scope_cleanup_throws(name)),
                 )
             })
@@ -973,7 +1007,13 @@ impl ExceptionFlowAnalysis {
         class_context: Option<&ExceptionClassContext>,
     ) -> ThrownTypes {
         match &callee.kind {
-            ExprKind::Closure { body, .. } => self.block_throws(body, bindings, class_context),
+            ExprKind::Closure { body, params, variadic_type, variadic_by_ref, return_type, .. } => {
+                let thrown = self.block_throws(body, bindings, class_context);
+                if super::effect_analysis::callable_binds_string(params, variadic_type.as_ref(), *variadic_by_ref)
+                    || super::return_binding_effects::may_throw(params, return_type, body) {
+                    thrown.combined(ThrownTypes::unknown())
+                } else { thrown }
+            }
             ExprKind::FirstClassCallable(CallableTarget::Function(name)) => self
                 .function_throws
                 .get(name.as_str())

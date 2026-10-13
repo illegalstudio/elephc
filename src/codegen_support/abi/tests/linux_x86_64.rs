@@ -503,7 +503,10 @@ fn test_emit_write_stdout_linux_x86_64_routes_through_stdout_write() {
 /// Constructs a PIC-mode x86_64/Linux emitter for verifying the GOT-routed
 /// data-reference sequences used by `--emit cdylib` artifacts.
 fn test_emitter_x86_pic() -> Emitter {
-    Emitter::new_pic(Target::new(Platform::Linux, Arch::X86_64))
+    // These controls inspect the generic global/GOT path, not ctx-routed request cells.
+    let mut emitter = Emitter::new_pic(Target::new(Platform::Linux, Arch::X86_64));
+    emitter.ctx_register = false;
+    emitter
 }
 
 /// Verifies that a PIC-mode integer symbol load resolves the GOT entry through
@@ -570,13 +573,16 @@ fn test_pic_store_reg_to_symbol_protects_scratch_on_linux_x86_64() {
 #[test]
 fn test_pic_store_zero_to_symbol_writes_immediate_on_linux_x86_64() {
     let mut emitter = test_emitter_x86_pic();
-    crate::codegen_support::abi::emit_store_zero_to_symbol(&mut emitter, "_eof_flags", 0);
+    // A symbol OUTSIDE the per-context routing table: `_eof_flags` used to serve here and
+    // now lives in `_rt_ctx`, where the store needs no GOT and no scratch at all. The PIC
+    // sequence this test pins is still the one every process-global symbol takes.
+    crate::codegen_support::abi::emit_store_zero_to_symbol(&mut emitter, "_class_destruct_count", 0);
 
     assert_eq!(
         emitter.output(),
         concat!(
             "    push r11\n",
-            "    mov r11, QWORD PTR _eof_flags@GOTPCREL[rip]\n",
+            "    mov r11, QWORD PTR _class_destruct_count@GOTPCREL[rip]\n",
             "    mov QWORD PTR [r11], 0\n",
             "    pop r11\n",
         )
@@ -627,6 +633,27 @@ fn test_dec_symbol_non_pic_and_pic_on_linux_x86_64() {
             "    mov r11, QWORD PTR _http_active_max_redirects@GOTPCREL[rip]\n",
             "    dec QWORD PTR [r11]\n",
             "    pop r11\n",
+        )
+    );
+}
+
+#[test]
+/// Immediate stores and decrement operations mutate active context cells rather than global state.
+fn test_immediate_store_and_decrement_route_to_context_state() {
+    let offset = crate::codegen_support::runtime::ctx::CTX_UNSER_ACTIVE_OFFSET;
+    let mut emitter = test_emitter_x86();
+    emitter.ctx_register = true;
+    crate::codegen_support::abi::emit_store_imm_to_symbol(
+        &mut emitter,
+        "_unser_active",
+        0,
+        1,
+    );
+    crate::codegen_support::abi::emit_dec_symbol(&mut emitter, "_unser_active");
+    assert_eq!(
+        emitter.output(),
+        format!(
+            "    mov r11, 1\n    mov QWORD PTR [r14 + {offset}], r11\n    dec QWORD PTR [r14 + {offset}]\n"
         )
     );
 }

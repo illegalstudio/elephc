@@ -1712,9 +1712,6 @@ echo $out;
 /// to a ref cell, and the container pointer then lives INSIDE the cell. The split has to go
 /// through the cell so the alias observes the mutation. Pre-fix the backend declined the split
 /// and every write was lost — `1,2|1,2|1,2` where PHP prints `2,4|2,4|1,2`.
-///
-/// Binding a reference to a property leaks 4 blocks with no loop present at all, so the heap
-/// assertion is differential: the by-reference loop must add nothing to that.
 #[test]
 fn test_regression_642_by_ref_foreach_reference_property_shared_with_another_owner() {
     let setup = r#"<?php
@@ -1736,11 +1733,14 @@ $keep = $o->x;
         "the split must balance the property's own reference, got: {}",
         by_ref.stderr
     );
-    assert_eq!(
-        heap_debug_live_bytes(&by_ref.stderr),
-        heap_debug_live_bytes(&baseline.stderr),
-        "the by-reference loop must not leak beyond the reference binding itself;\nby-ref: {}\nbaseline: {}",
-        by_ref.stderr,
+    assert!(
+        by_ref.stderr.contains("leak summary: clean"),
+        "the by-reference loop and property cell must be fully released: {}",
+        by_ref.stderr
+    );
+    assert!(
+        baseline.stderr.contains("leak summary: clean"),
+        "the property reference binding itself must be fully released: {}",
         baseline.stderr
     );
 }

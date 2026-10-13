@@ -24,10 +24,11 @@ use crate::span::Span;
 use crate::source::SourceMode;
 use crate::timings::CompileTimings;
 use crate::{
-    autoload, codegen, debug_info, errors, exports, func_args, ir, ir_lower, ir_passes, lexer,
-    linker, list_id_prelude, mysqli_prelude, name_resolver, opcache_prelude, optimize, parser,
-    pdo_prelude, resolver, runtime_cache, source_map, tz_prelude, types, var_export_prelude,
-    web_prelude,
+    async_prelude, autoload, codegen, debug_info, errors, exports, func_args, ir, ir_lower,
+    ir_passes, lexer,
+    linker, list_id_prelude, mysqli_prelude, name_resolver, opcache_prelude, optimize,
+    parallel_prelude, parser, pdo_prelude, resolver, runtime_cache, source_map, tz_prelude, types,
+    var_export_prelude, web_prelude,
 };
 
 mod artifact_io;
@@ -194,6 +195,30 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     }
 
     let mut prelude_inventory = optimize::reachability::PreludeInventory::new();
+
+    // Inject the first structured Async scheduler slice. Its implementation is
+    // pure elephc-PHP over the native Fiber runtime: no reactor or bridge is
+    // linked yet, and reachability pruning removes unused bodies.
+    crate::progress::phase("async-prelude");
+    let phase_started = Instant::now();
+    let ast = async_prelude::inject_if_used(
+        ast,
+        !source_mode.strict_php_is_effective(crate::strict_php::is_requested()),
+        &mut prelude_inventory,
+    );
+    timings.record_since("async-prelude", phase_started);
+
+    // Parallel shares Async's observation-only cancellation type but owns a distinct
+    // Future/thread execution domain. Inject it after Async so both namespaces are ordinary
+    // declarations before name resolution; dedicated EIR lowering owns the blocking operations.
+    crate::progress::phase("parallel-prelude");
+    let phase_started = Instant::now();
+    let ast = parallel_prelude::inject_if_used(
+        ast,
+        !source_mode.strict_php_is_effective(crate::strict_php::is_requested()),
+        &mut prelude_inventory,
+    );
+    timings.record_since("parallel-prelude", phase_started);
     // `curl` belongs here for the same reason `pdo` does, and NOT listing it is a silent
     // no-op rather than a smaller binary: `--with-curl` force-injects the whole surface for
     // a program that reaches curl only dynamically, and declaration-reachability would then
@@ -797,6 +822,23 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
         timings.report();
         crate::progress::finish_ok(&format!("Checked '{}'", filename), timings.elapsed());
         return;
+    }
+
+    if target.is_ios() && ir_module.required_runtime_features.parallel_execution {
+        crate::progress::clear();
+        eprintln!(
+            "Elephc Parallel execution is unavailable for target '{}': iOS libraries do not yet have a host-driven worker-thread contract. Use --check for analysis, or emit for macOS/Linux.",
+            target
+        );
+        process::exit(1);
+    }
+    if target.is_ios() && ir_module.required_runtime_features.async_reactor {
+        crate::progress::clear();
+        eprintln!(
+            "Elephc Async execution is unavailable for target '{}': iOS libraries do not yet have a host-driven Fiber scheduler contract. Use --check for analysis, or emit for macOS/Linux.",
+            target
+        );
+        process::exit(1);
     }
 
     crate::progress::phase("ir-opt");

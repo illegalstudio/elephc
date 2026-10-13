@@ -256,6 +256,7 @@ pub fn scan(program: &[Stmt], web: bool) -> Vec<Sensitivity> {
         .filter_map(|watched| {
             let symbol = match watched.symbol_kind {
                 SymbolKind::Function => Symbol::function_with_args(watched.symbol, watched.args),
+                SymbolKind::QualifiedFunction => Symbol::qualified_function(watched.symbol),
                 SymbolKind::CallSite => Symbol::call_site(watched.symbol),
                 SymbolKind::Constant => Symbol::constant(watched.symbol),
                 // No syntactic form is profile-SENSITIVE: syntax either exists in a profile or
@@ -274,7 +275,10 @@ pub fn scan(program: &[Stmt], web: bool) -> Vec<Sensitivity> {
                 symbol: watched.symbol,
                 span,
                 detail: watched.detail,
-                is_function: watched.symbol_kind == SymbolKind::Function,
+                is_function: matches!(
+                    watched.symbol_kind,
+                    SymbolKind::Function | SymbolKind::QualifiedFunction
+                ),
             })
         })
         .collect();

@@ -357,9 +357,8 @@ pub fn emit_ftoa_repr(emitter: &mut Emitter) {
 
     // -- write "[-]XXX" straight into the concat buffer and publish the cursor --
     emitter.label("__rt_ftoa_repr_emit");
-    abi::emit_symbol_address(emitter, "x15", "_concat_off");
-    emitter.instruction("ldr x16, [x15]");                                      // current concat write offset
-    abi::emit_symbol_address(emitter, "x17", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x16");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x17");
     emitter.instruction("add x1, x17, x16");                                    // result start = concat_buf + offset
     emitter.instruction("mov x11, x1");                                         // x11 = write cursor, x1 = result start
     emitter.instruction("tbz x9, #63, __rt_ftoa_repr_body");                    // skip the sign byte for non-negative values
@@ -371,7 +370,7 @@ pub fn emit_ftoa_repr(emitter: &mut Emitter) {
     emitter.instruction("strb w14, [x11], #1");                                 // emit the third literal byte
     emitter.instruction("sub x2, x11, x1");                                     // result length = cursor - start
     emitter.instruction("add x16, x16, x2");                                    // advance the concat cursor past the literal
-    emitter.instruction("str x16, [x15]");                                      // publish the updated concat offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x16"); // publish the updated concat offset (ctx-relative in ctx mode)
     emitter.instruction("ret");                                                 // return pointer (x1) and length (x2)
 }
 
@@ -411,8 +410,8 @@ fn emit_ftoa_repr_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edi, 70");                                         // ASCII 'F' as the third literal byte
 
     emitter.label("__rt_ftoa_repr_emit_x");
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // current concat write offset
-    abi::emit_symbol_address(emitter, "r11", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r10");             // current concat write offset
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r11");
     emitter.instruction("lea rax, [r11 + r10]");                                // result start = concat_buf + offset
     emitter.instruction("mov r8, rax");                                         // r8 = write cursor, rax = result start
     emitter.instruction("test r9, r9");                                         // is the sign bit set?
@@ -427,7 +426,7 @@ fn emit_ftoa_repr_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, r8");                                         // write cursor, one past the last byte
     emitter.instruction("sub rdx, rax");                                        // result length = cursor - start
     emitter.instruction("add r10, rdx");                                        // advance the concat cursor past the literal
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_concat_off", 0);            // publish the updated concat offset
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r10");            // publish the updated concat offset
     emitter.instruction("ret");                                                 // return pointer (rax) and length (rdx)
 }
 

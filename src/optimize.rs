@@ -11,7 +11,7 @@
 use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{
     BinOp, CallableTarget, CastType, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind,
-    InstanceOfTarget, Program, Stmt, StmtKind, TypeExpr,
+    InstanceOfTarget, Program, StaticReceiver, Stmt, StmtKind, TypeExpr,
 };
 use crate::span::Span;
 use crate::codegen_support::platform::Target;
@@ -31,12 +31,15 @@ mod generator_bodies;
 mod namespace_fallbacks;
 mod propagate;
 mod target_guards;
+mod worker_entry_effects;
+mod return_binding_effects;
 pub mod reachability;
 
 use binding_decisions::{with_local_binding_decision_spans, with_mixed_storage_locals};
 use control::*;
 use effect_analysis::{
-    collect_instance_dispatch_metadata, compute_program_callable_effects, method_effect_key,
+    collect_instance_dispatch_metadata, compute_program_callable_effects,
+    compute_program_callable_effects_with_initial_function_effects, method_effect_key,
 };
 use effects::*;
 use exception_flow::{with_exception_flow_analysis, ExceptionFlowAnalysis};
@@ -55,6 +58,7 @@ thread_local! {
     static ACTIVE_INSTANCE_DISPATCH_METADATA: RefCell<Option<Rc<InstanceDispatchMetadata>>> = const { RefCell::new(None) };
     static ACTIVE_CLASS_EFFECT_CONTEXT: RefCell<Option<ClassEffectContext>> = const { RefCell::new(None) };
     static ACTIVE_CALLABLE_ALIAS_EFFECTS: RefCell<Option<HashMap<String, Effect>>> = const { RefCell::new(None) };
+    static ACTIVE_PARALLEL_ENUM_CASES: RefCell<Option<Rc<HashSet<String>>>> = const { RefCell::new(None) };
     static ACTIVE_FOLD_TARGET: RefCell<Option<Target>> = const { RefCell::new(None) };
     static ACTIVE_FOLD_USER_FUNCTIONS: RefCell<Option<HashSet<String>>> = const { RefCell::new(None) };
     static ACTIVE_TARGET_GUARD_CONDITION: RefCell<bool> = const { RefCell::new(false) };
@@ -514,6 +518,22 @@ struct Effect {
     /// whether a call can rewrite top-level locals; deliberately excluded from
     /// `is_observable` so DCE and pruning decisions are unchanged.
     writes_globals: bool,
+    /// True when execution can touch PHP storage that is process-global rather than `_rt_ctx`
+    /// local: `global` variables, static locals, or static properties. Parallel workers must
+    /// reject this independently from the optimizer's broader side-effect model.
+    uses_process_global_storage: bool,
+    /// True when execution can access mutable process-global runtime state that is not PHP
+    /// global storage, such as the environment, libc timezone configuration, or runtime scratch.
+    /// This stays separate from generic EIR global effects so context-owned registries and
+    /// ordinary worker-local resource operations are not rejected by accident.
+    uses_process_global_runtime_state: bool,
+    /// True when execution can enter `Elephc\Parallel\run()`. The bounded v1 executor is not
+    /// reentrant, so worker-callable validation consumes this transitive bit.
+    enters_parallel_scope: bool,
+    /// True when execution can enter `Elephc\Async\run()`. A Parallel worker has no v1
+    /// contract for hosting a cooperative root scheduler, so worker-callable validation rejects
+    /// this transitively rather than allowing a context-local scheduler to emerge accidentally.
+    enters_async_scope: bool,
 }
 
 impl Effect {
@@ -522,6 +542,10 @@ impl Effect {
         has_side_effects: false,
         may_throw: false,
         writes_globals: false,
+        uses_process_global_storage: false,
+        uses_process_global_runtime_state: false,
+        enters_parallel_scope: false,
+        enters_async_scope: false,
     };
 
     /// Converts shared EIR effect metadata into the AST optimizer's coarse safety model.
@@ -538,6 +562,12 @@ impl Effect {
             ),
             may_throw: effects.intersects(crate::ir::Effects::MAY_THROW | crate::ir::Effects::MAY_WARN),
             writes_globals: effects.intersects(crate::ir::Effects::WRITES_GLOBAL | crate::ir::Effects::MAY_WARN),
+            // EIR global effects also cover runtime-owned process state (for example resource
+            // registries); only the AST/callable analysis can distinguish PHP global storage.
+            uses_process_global_storage: false,
+            uses_process_global_runtime_state: false,
+            enters_parallel_scope: false,
+            enters_async_scope: false,
         };
         if effects.intersects(
             crate::ir::Effects::READS_FS
@@ -569,12 +599,42 @@ impl Effect {
         self
     }
 
+    /// Marks this effect as touching process-global PHP storage.
+    fn with_process_global_storage(mut self) -> Self {
+        self.uses_process_global_storage = true;
+        self
+    }
+
+    /// Marks this effect as accessing mutable process-global runtime state.
+    fn with_process_global_runtime_state(mut self) -> Self {
+        self.uses_process_global_runtime_state = true;
+        self
+    }
+
+    /// Marks this effect as entering a Parallel structured scope.
+    fn with_parallel_scope(mut self) -> Self {
+        self.enters_parallel_scope = true;
+        self
+    }
+
+    /// Marks this effect as entering an Async structured scope.
+    fn with_async_scope(mut self) -> Self {
+        self.enters_async_scope = true;
+        self
+    }
+
     /// Combines two effects. The result is observable if either operand is observable.
     fn combine(self, other: Self) -> Self {
         Self {
             has_side_effects: self.has_side_effects || other.has_side_effects,
             may_throw: self.may_throw || other.may_throw,
             writes_globals: self.writes_globals || other.writes_globals,
+            uses_process_global_storage: self.uses_process_global_storage
+                || other.uses_process_global_storage,
+            uses_process_global_runtime_state: self.uses_process_global_runtime_state
+                || other.uses_process_global_runtime_state,
+            enters_parallel_scope: self.enters_parallel_scope || other.enters_parallel_scope,
+            enters_async_scope: self.enters_async_scope || other.enters_async_scope,
         }
     }
 
@@ -625,16 +685,22 @@ struct InstanceDispatchMetadata {
 /// Holds the body and never-return metadata for a function during effect analysis.
 #[derive(Clone, Debug)]
 struct FunctionEffectBody<'a> {
+    params: &'a [(String, Option<TypeExpr>, Option<Expr>, bool)],
+    return_type: &'a Option<TypeExpr>,
     body: &'a [Stmt],
     declared_never: bool,
+    binds_string: bool,
 }
 
 /// Holds the body, class context, and never-return metadata for a static method during effect analysis.
 #[derive(Clone, Debug)]
 struct StaticMethodBody<'a> {
+    params: &'a [(String, Option<TypeExpr>, Option<Expr>, bool)],
+    return_type: &'a Option<TypeExpr>,
     context: ClassEffectContext,
     body: &'a [Stmt],
     declared_never: bool,
+    binds_string: bool,
 }
 
 /// Holds callable summaries and dispatch metadata shared by optimizer passes.
@@ -646,11 +712,287 @@ struct CallableEffectAnalysis {
     instance_dispatch_metadata: Rc<InstanceDispatchMetadata>,
 }
 
+/// Parallel-specific projection of the shared fixed-point callable-effect analysis.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ParallelCallableSafety {
+    pub(crate) uses_process_global_storage: bool,
+    pub(crate) uses_process_global_runtime_state: bool,
+    pub(crate) enters_parallel_scope: bool,
+    pub(crate) enters_async_scope: bool,
+}
+
+/// Returns whether a user-declared native function has an explicit worker-safety contract.
+///
+/// Native declarations are opaque to the compiler, so Parallel fails closed unless a symbol is
+/// explicitly reviewed here. Registry builtins do not pass through this check.
+pub(crate) fn parallel_extern_is_worker_safe(name: &str) -> bool {
+    matches!(
+        crate::names::php_symbol_key(name.trim_start_matches('\\')).as_str(),
+        "atoi"
+    )
+}
+
+impl ParallelCallableSafety {
+    /// Projects the worker-safety flags from the conservative callable effect summary.
+    fn from_effect(effect: Effect) -> Self {
+        Self {
+            uses_process_global_storage: effect.uses_process_global_storage,
+            uses_process_global_runtime_state: effect.uses_process_global_runtime_state,
+            enters_parallel_scope: effect.enters_parallel_scope,
+            enters_async_scope: effect.enters_async_scope,
+        }
+    }
+}
+
+/// Reuses the optimizer's exhaustive AST walk and transitive call graph during type checking.
+pub(crate) struct ParallelSafetyAnalysis {
+    callable_effects: CallableEffectAnalysis,
+    worker_entry_effects: CallableEffectAnalysis,
+    enum_case_keys: HashSet<String>,
+}
+
+impl ParallelSafetyAnalysis {
+    /// Builds transitive callable summaries and worker-entry projections under the enum inventory.
+    pub(crate) fn from_program(
+        program: &[Stmt],
+        extern_callback_functions: impl IntoIterator<Item = String>,
+    ) -> Self {
+        let enum_case_keys = collect_parallel_enum_case_keys(program);
+        let callable_effects = with_active_parallel_enum_cases(&enum_case_keys, || {
+            CallableEffectAnalysis::from_program_with_extern_callbacks(
+                program,
+                extern_callback_functions,
+            )
+        });
+        let worker_entry_effects = with_active_parallel_enum_cases(&enum_case_keys, || {
+            worker_entry_effects::project(program, &callable_effects)
+        });
+        Self {
+            worker_entry_effects,
+            callable_effects,
+            enum_case_keys,
+        }
+    }
+
+    /// Selects worker-entry or ordinary effects for a callable under this program's enum context.
+    pub(crate) fn callable_safety(&self, callable: &Expr) -> ParallelCallableSafety {
+        with_active_parallel_enum_cases(&self.enum_case_keys, || {
+            with_callable_effect_analysis(if worker_entry_effects::direct_target(callable) {
+                &self.worker_entry_effects
+            } else { &self.callable_effects }, || {
+                let effect = worker_entry_effects::callable_effect(callable);
+                ParallelCallableSafety::from_effect(effect)
+            })
+        })
+    }
+
+    /// Includes statically analyzed callable aliases captured by a nested closure.
+    pub(crate) fn callable_safety_with_aliases(
+        &self,
+        callable: &Expr,
+        aliases: &HashMap<String, ParallelCallableSafety>,
+    ) -> ParallelCallableSafety {
+        let aliases = aliases
+            .iter()
+            .map(|(name, safety)| {
+                let mut effect = Effect::PURE
+                    .with_side_effects()
+                    .with_may_throw()
+                    .with_writes_globals();
+                if safety.uses_process_global_storage {
+                    effect = effect.with_process_global_storage();
+                }
+                if safety.uses_process_global_runtime_state {
+                    effect = effect.with_process_global_runtime_state();
+                }
+                if safety.enters_parallel_scope {
+                    effect = effect.with_parallel_scope();
+                }
+                if safety.enters_async_scope {
+                    effect = effect.with_async_scope();
+                }
+                (name.clone(), effect)
+            })
+            .collect();
+        with_active_parallel_enum_cases(&self.enum_case_keys, || {
+            with_callable_effect_analysis(if worker_entry_effects::direct_target(callable) {
+                &self.worker_entry_effects
+            } else { &self.callable_effects }, || {
+                with_callable_alias_effects(aliases, || {
+                    ParallelCallableSafety::from_effect(worker_entry_effects::callable_effect(callable))
+                })
+            })
+        })
+    }
+}
+
+/// Inventories declared enum singleton keys that cannot cross isolated worker heaps.
+fn collect_parallel_enum_case_keys(program: &[Stmt]) -> HashSet<String> {
+    /// Visits declaration-containing blocks without conflating enum cases with ordinary constants.
+    fn visit(stmts: &[Stmt], keys: &mut HashSet<String>) {
+        for stmt in stmts {
+            match &stmt.kind {
+                StmtKind::EnumDecl { name, cases, .. } => {
+                    let class = php_symbol_key(name.trim_start_matches('\\'));
+                    keys.extend(cases.iter().map(|case| format!("{class}::{}", case.name)));
+                }
+                StmtKind::Synthetic(body)
+                | StmtKind::NamespaceBlock { body, .. }
+                | StmtKind::While { body, .. }
+                | StmtKind::DoWhile { body, .. }
+                | StmtKind::For { body, .. }
+                | StmtKind::Foreach { body, .. } => visit(body, keys),
+                StmtKind::IfDef {
+                    then_body,
+                    else_body,
+                    ..
+                } => {
+                    visit(then_body, keys);
+                    if let Some(body) = else_body {
+                        visit(body, keys);
+                    }
+                }
+                StmtKind::If {
+                    then_body,
+                    elseif_clauses,
+                    else_body,
+                    ..
+                } => {
+                    visit(then_body, keys);
+                    for (_, body) in elseif_clauses {
+                        visit(body, keys);
+                    }
+                    if let Some(body) = else_body {
+                        visit(body, keys);
+                    }
+                }
+                StmtKind::Switch { cases, default, .. } => {
+                    for (_, body) in cases {
+                        visit(body, keys);
+                    }
+                    if let Some(body) = default {
+                        visit(body, keys);
+                    }
+                }
+                StmtKind::Try {
+                    try_body,
+                    catches,
+                    finally_body,
+                } => {
+                    visit(try_body, keys);
+                    for catch in catches {
+                        visit(&catch.body, keys);
+                    }
+                    if let Some(body) = finally_body {
+                        visit(body, keys);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut keys = HashSet::new();
+    visit(program, &mut keys);
+    keys
+}
+
+/// Installs one program's enum inventory and restores the previous analysis context on unwind.
+fn with_active_parallel_enum_cases<R>(
+    enum_case_keys: &HashSet<String>,
+    f: impl FnOnce() -> R,
+) -> R {
+    struct RestoreActiveEnumCases(Option<Rc<HashSet<String>>>);
+
+    impl Drop for RestoreActiveEnumCases {
+        /// Restores the enclosing enum inventory even when the analysis callback panics.
+        fn drop(&mut self) {
+            ACTIVE_PARALLEL_ENUM_CASES.with(|slot| {
+                slot.replace(self.0.take());
+            });
+        }
+    }
+
+    ACTIVE_PARALLEL_ENUM_CASES.with(|slot| {
+        let previous = slot.replace(Some(Rc::new(enum_case_keys.clone())));
+        let _restore = RestoreActiveEnumCases(previous);
+        f()
+    })
+}
+
+/// Resolves static receivers and class context before classifying an enum singleton read.
+pub(in crate::optimize) fn parallel_enum_case_access_is_process_global(
+    receiver: &StaticReceiver,
+    case: &str,
+) -> bool {
+    let class = match receiver {
+        StaticReceiver::Generic(_) => return true,
+        StaticReceiver::Named(name) => Some(name.to_string()),
+        StaticReceiver::Self_ | StaticReceiver::Static | StaticReceiver::Parent => {
+            ACTIVE_CLASS_EFFECT_CONTEXT.with(|slot| {
+                let context = slot.borrow();
+                let context = context.as_ref()?;
+                match receiver {
+                    StaticReceiver::Parent => context.parent_name.clone(),
+                    _ => Some(context.class_name.clone()),
+                }
+            })
+        }
+    };
+    let Some(class) = class else {
+        return false;
+    };
+    let key = format!("{}::{case}", php_symbol_key(class.trim_start_matches('\\')));
+    ACTIVE_PARALLEL_ENUM_CASES.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .is_some_and(|enum_cases| enum_cases.contains(&key))
+    })
+}
+
+/// Reports whether a class names any process-global enum singleton in the active inventory.
+pub(in crate::optimize) fn parallel_enum_class_access_is_process_global(class_name: &str) -> bool {
+    let class = php_symbol_key(class_name.trim_start_matches('\\'));
+    let prefix = format!("{class}::");
+    ACTIVE_PARALLEL_ENUM_CASES.with(|slot| {
+        slot.borrow().as_ref().is_some_and(|enum_cases| {
+            enum_cases.iter().any(|enum_case| enum_case.starts_with(&prefix))
+        })
+    })
+}
+
 impl CallableEffectAnalysis {
     /// Computes the conservative callable summaries once for a post-typecheck program.
     fn from_program(program: &[Stmt]) -> Self {
         let (function_effects, static_method_effects, instance_method_effects) =
             compute_program_callable_effects(program);
+        Self {
+            function_effects,
+            static_method_effects,
+            instance_method_effects,
+            instance_dispatch_metadata: Rc::new(collect_instance_dispatch_metadata(program)),
+        }
+    }
+
+    /// Computes summaries with external callback boundaries seeded as process-global effects.
+    fn from_program_with_extern_callbacks(
+        program: &[Stmt],
+        extern_callback_functions: impl IntoIterator<Item = String>,
+    ) -> Self {
+        let callback_effect = Effect::PURE
+            .with_side_effects()
+            .with_may_throw()
+            .with_writes_globals()
+            .with_process_global_storage();
+        let initial_function_effects = extern_callback_functions
+            .into_iter()
+            .map(|name| (name, callback_effect))
+            .collect();
+        let (function_effects, static_method_effects, instance_method_effects) =
+            compute_program_callable_effects_with_initial_function_effects(
+                program,
+                initial_function_effects,
+            );
         Self {
             function_effects,
             static_method_effects,

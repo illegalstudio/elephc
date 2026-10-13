@@ -296,8 +296,6 @@ pub(super) fn lower_throwable_get_previous(
             }
             if result_is_mixed {
                 emit_box_current_value_as_mixed(ctx.emitter, &object_ty);
-            } else {
-                abi::emit_incref_if_refcounted(ctx.emitter, &object_ty);
             }
             ctx.emitter
                 .instruction(&format!("b {}", done_label)); // skip null materialization
@@ -329,8 +327,6 @@ pub(super) fn lower_throwable_get_previous(
             }
             if result_is_mixed {
                 emit_box_current_value_as_mixed(ctx.emitter, &object_ty);
-            } else {
-                abi::emit_incref_if_refcounted(ctx.emitter, &object_ty);
             }
             ctx.emitter
                 .instruction(&format!("jmp {}", done_label)); // skip null materialization

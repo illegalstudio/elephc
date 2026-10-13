@@ -71,29 +71,29 @@ fn x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable chain traversal frame
     emitter.instruction("push r12");                                            // preserve the enclosing cleanup-state register
     emitter.instruction("push r13");                                            // preserve the suspended exception register
-    emitter.instruction("push r14");                                            // preserve the new-chain cursor register
+    emitter.instruction("push rbx");                                            // preserve the new-chain cursor without borrowing the context register
     emitter.instruction("push r15");                                            // preserve the old-chain cursor and maintain SysV call alignment
     emitter.instruction("mov r12, rsi");                                        // retain the enclosing pending-exception state
     emitter.instruction("mov r13, rdi");                                        // retain the consumed suspended exception owner
-    abi::emit_load_symbol_to_reg(emitter, "r14", "_exc_value", 0);
+    abi::emit_load_symbol_to_reg(emitter, "rbx", "_exc_value", 0);
     emitter.label("__rt_cleanup_chain_previous_outer");
     emitter.instruction("mov r15, r13");                                        // restart the old ancestor scan for this new-chain node
     emitter.label("__rt_cleanup_chain_previous_inner");
-    emitter.instruction("cmp r15, r14");                                        // detect existing ancestry or a prospective chain cycle
+    emitter.instruction("cmp r15, rbx");                                        // detect existing ancestry or a prospective chain cycle
     emitter.instruction("je __rt_cleanup_chain_previous_duplicate");            // consume duplicate ownership without extending either chain
     emitter.instruction("mov rax, r15");                                        // pass the old ancestor using the native slot accessor convention
     emitter.instruction("call __rt_throwable_previous");                        // borrow the previous object from its actual raw or boxed storage
     emitter.instruction("mov r15, rax");                                        // retain the next old ancestor
     emitter.instruction("test r15, r15");                                       // check whether the old chain still has ancestors
     emitter.instruction("jnz __rt_cleanup_chain_previous_inner");               // finish the old-chain intersection scan
-    emitter.instruction("mov rax, r14");                                        // pass the current new-chain node through the same accessor
+    emitter.instruction("mov rax, rbx");                                        // pass the current new-chain node through the same accessor
     emitter.instruction("call __rt_throwable_previous");                        // borrow the next previous object or zero
     emitter.instruction("test rax, rax");                                       // recognize a checked vacant previous slot
     emitter.instruction("jz __rt_cleanup_chain_previous_append");               // transfer ownership only at the end of the new chain
-    emitter.instruction("mov r14, rax");                                        // advance the new-chain cursor
+    emitter.instruction("mov rbx, rax");                                        // advance the new-chain cursor
     emitter.instruction("jmp __rt_cleanup_chain_previous_outer");               // check the next new-chain node against all prior ancestors
     emitter.label("__rt_cleanup_chain_previous_append");
-    emitter.instruction("mov rdi, r14");                                        // provide the destination Throwable through the C argument convention
+    emitter.instruction("mov rdi, rbx");                                        // provide the destination Throwable through the C argument convention
     emitter.instruction("mov rsi, r13");                                        // consume the suspended owner into the destination previous property
     emitter.instruction("call __rt_throwable_append_previous");                 // fill raw or boxed storage with balanced ownership
     emitter.instruction("jmp __rt_cleanup_chain_previous_done");                // restore caller state after appending
@@ -104,7 +104,7 @@ fn x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_cleanup_call");                              // consume redundant ownership under the same protected cleanup boundary
     emitter.label("__rt_cleanup_chain_previous_done");
     emitter.instruction("pop r15");                                             // restore the caller old-chain cursor
-    emitter.instruction("pop r14");                                             // restore the caller new-chain cursor
+    emitter.instruction("pop rbx");                                             // restore the caller new-chain cursor
     emitter.instruction("pop r13");                                             // restore the caller suspended-owner register
     emitter.instruction("pop r12");                                             // restore the enclosing cleanup state
     emitter.instruction("pop rbp");                                             // recover native caller linkage

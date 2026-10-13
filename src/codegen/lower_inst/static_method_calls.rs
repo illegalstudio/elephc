@@ -14,6 +14,16 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
     let target = method_name_data(ctx, inst)?.to_string();
     let (receiver_label, method_name) = parse_static_method_target(&target)?;
     let receiver = resolve_static_method_receiver(ctx, receiver_label)?;
+    if php_symbol_key(&receiver) == "elephc\\parallel\\taskgroup"
+        && php_symbol_key(method_name) == "__assertfibersuspendcallableguard"
+    {
+        return callables::lower_parallel_fiber_suspend_callable_guard(ctx, inst);
+    }
+    if php_symbol_key(&receiver) == "elephc\\async\\__scheduler"
+        && php_symbol_key(method_name) == "__assertfibersuspendcallableguard"
+    {
+        return callables::lower_async_fiber_suspend_callable_guard(ctx, inst);
+    }
     if is_static_fiber_get_current_call(&receiver, method_name) {
         return lower_static_fiber_get_current(ctx, inst);
     }

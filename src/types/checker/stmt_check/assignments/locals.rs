@@ -408,7 +408,8 @@ impl Checker {
 ///
 /// When `ty` is `Callable`, extracts and stores the callable signature, closure return
 /// type, capture list, and first-class callable target on the checker. When `ty` is not
-/// callable, clears any previously stored metadata for `name`.
+/// callable, clears any previously stored metadata for `name`; statically selected function-name
+/// strings retain only their Parallel safety summary so nested closures can preserve it.
 ///
 /// This ensures that subsequent uses of the variable can resolve its callable signature
 /// and closure metadata. Handles closures, variables, array access, and first-class callables.
@@ -428,13 +429,38 @@ pub(super) fn update_callable_assignment_metadata(
         }
     }
     update_callable_array_assignment_metadata(checker, name, callable_source, env)?;
+    let parallel_safety = checker.parallel_callable_safety_for_expr(callable_source);
+    checker.parallel_transfer_safe_callable_returns.remove(name);
+    checker.parallel_callable_safety.remove(name);
+
+    if *ty == PhpType::Str && is_statically_known_callable_string(checker, callable_source) {
+        if let Some(safety) = parallel_safety {
+            checker
+                .parallel_callable_safety
+                .insert(name.to_string(), safety);
+        }
+    }
 
     if *ty == PhpType::Callable {
         if let Some(sig) = checker.resolve_expr_callable_sig(callable_source, env)? {
+            let parallel_return_safe =
+                checker.parallel_callable_return_is_safe(callable_source, env)?;
             checker
                 .closure_return_types
                 .insert(name.to_string(), sig.return_type.clone());
             checker.callable_sigs.insert(name.to_string(), sig);
+            if parallel_return_safe {
+                checker
+                    .parallel_transfer_safe_callable_returns
+                    .insert(name.to_string());
+            } else {
+                checker.parallel_transfer_safe_callable_returns.remove(name);
+            }
+            if let Some(safety) = parallel_safety {
+                checker
+                    .parallel_callable_safety
+                    .insert(name.to_string(), safety);
+            }
             if let ExprKind::Closure {
                 captures,
                 capture_refs,
@@ -507,6 +533,7 @@ pub(super) fn update_callable_assignment_metadata(
             checker.closure_return_types.remove(name);
             checker.callable_sigs.remove(name);
             checker.callable_captures.remove(name);
+            checker.parallel_transfer_safe_callable_returns.remove(name);
             checker.first_class_callable_targets.remove(name);
         }
     } else if is_callable_array_type(ty) {
@@ -547,9 +574,47 @@ pub(super) fn update_callable_assignment_metadata(
         checker.closure_return_types.remove(name);
         checker.callable_sigs.remove(name);
         checker.callable_captures.remove(name);
+        checker.parallel_transfer_safe_callable_returns.remove(name);
         checker.first_class_callable_targets.remove(name);
     }
     Ok(())
+}
+
+/// Recognizes string callable values whose runtime target set is statically closed.
+fn is_statically_known_callable_string(checker: &Checker, expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::StringLiteral(_) => true,
+        ExprKind::Ternary {
+            then_expr,
+            else_expr,
+            ..
+        }
+        | ExprKind::ShortTernary {
+            value: then_expr,
+            default: else_expr,
+        }
+        | ExprKind::NullCoalesce {
+            value: then_expr,
+            default: else_expr,
+        } => {
+            is_statically_known_callable_string(checker, then_expr)
+                && is_statically_known_callable_string(checker, else_expr)
+        }
+        ExprKind::Match { arms, default, .. } => {
+            !arms.is_empty()
+                && arms.iter().all(|(_, value)| {
+                    is_statically_known_callable_string(checker, value)
+                })
+                && default.as_ref().map_or(true, |value| {
+                    is_statically_known_callable_string(checker, value)
+                })
+        }
+        ExprKind::NamedArg { value, .. } => {
+            is_statically_known_callable_string(checker, value)
+        }
+        ExprKind::Variable(name) => checker.parallel_callable_safety.contains_key(name),
+        _ => false,
+    }
 }
 
 /// Updates static `ReflectionClass` metadata for one assigned local.
@@ -584,29 +649,40 @@ fn reflection_class_assignment_target(
     source: &Expr,
     env: &TypeEnv,
 ) -> Option<String> {
-    let ExprKind::NewObject { class_name, args } = &source.kind else {
-        return None;
-    };
-    if php_symbol_key(class_name.as_str().trim_start_matches('\\')) != "reflectionclass" {
-        return None;
-    }
-    let class_arg = reflection_class_constructor_arg(args)?;
-    match &class_arg.kind {
-        ExprKind::StringLiteral(class_name) => {
-            resolve_class_name(checker, class_name).map(str::to_string)
+    checker.reflection_class_constructor_target(source, env)
+}
+
+impl Checker {
+    /// Resolves a statically known ReflectionClass constructor for assignments and inline calls.
+    pub(crate) fn reflection_class_constructor_target(
+        &self,
+        source: &Expr,
+        env: &TypeEnv,
+    ) -> Option<String> {
+        let ExprKind::NewObject { class_name, args } = &source.kind else {
+            return None;
+        };
+        if php_symbol_key(class_name.as_str().trim_start_matches('\\')) != "reflectionclass" {
+            return None;
         }
-        ExprKind::ClassConstant { receiver } => {
-            resolve_static_receiver_class(checker, receiver, class_arg.span).ok()
+        let class_arg = reflection_class_constructor_arg(args)?;
+        match &class_arg.kind {
+            ExprKind::StringLiteral(class_name) => {
+                resolve_class_name(self, class_name).map(str::to_string)
+            }
+            ExprKind::ClassConstant { receiver } => {
+                resolve_static_receiver_class(self, receiver, class_arg.span).ok()
+            }
+            _ => match env
+                .get(variable_name(class_arg).unwrap_or_default())
+                .cloned()
+                .unwrap_or_else(|| crate::types::checker::infer_expr_type_syntactic(class_arg))
+                .codegen_repr()
+            {
+                PhpType::Object(class_name) if !class_name.is_empty() => Some(class_name),
+                _ => None,
+            },
         }
-        _ => match env
-            .get(variable_name(class_arg).unwrap_or_default())
-            .cloned()
-            .unwrap_or_else(|| crate::types::checker::infer_expr_type_syntactic(class_arg))
-            .codegen_repr()
-        {
-            PhpType::Object(class_name) if !class_name.is_empty() => Some(class_name),
-            _ => None,
-        },
     }
 }
 
@@ -1032,6 +1108,19 @@ fn merge_local_assignment_type(
             ));
         }
         if let Some(merged_ty) = merged_ty {
+            // A by-reference capture has already promoted this binding to a shared cell. When a
+            // later outer assignment changes the runtime representation, both the enclosing frame
+            // and the closure's hidden capture parameter must view that cell as boxed `Mixed`.
+            // Keeping the creation-time type makes the store land through (for example) a null
+            // cell while the closure continues to read null instead of the newly assigned object.
+            if checker.ref_aliased_locals.contains(name)
+                && existing.codegen_repr() != merged_ty.codegen_repr()
+            {
+                checker.ref_cell_mixed_locals.insert((
+                    checker.current_loop_storage_scope.clone(),
+                    name.to_string(),
+                ));
+            }
             if &merged_ty != existing {
                 env.insert(name.to_string(), merged_ty);
             }
@@ -1222,6 +1311,20 @@ fn copy_callable_metadata(checker: &mut Checker, dest: &str, src: &str) {
     } else {
         checker.callable_captures.remove(dest);
     }
+    if checker.parallel_transfer_safe_callable_returns.contains(src) {
+        checker
+            .parallel_transfer_safe_callable_returns
+            .insert(dest.to_string());
+    } else {
+        checker.parallel_transfer_safe_callable_returns.remove(dest);
+    }
+    if let Some(safety) = checker.parallel_callable_safety.get(src).copied() {
+        checker
+            .parallel_callable_safety
+            .insert(dest.to_string(), safety);
+    } else {
+        checker.parallel_callable_safety.remove(dest);
+    }
     if let Some(target) = checker.callable_array_targets.get(src).cloned() {
         checker
             .callable_array_targets
@@ -1249,6 +1352,8 @@ fn clear_callable_metadata(checker: &mut Checker, dest: &str) {
     checker.closure_return_types.remove(dest);
     checker.callable_sigs.remove(dest);
     checker.callable_captures.remove(dest);
+    checker.parallel_transfer_safe_callable_returns.remove(dest);
+    checker.parallel_callable_safety.remove(dest);
     checker.callable_array_targets.remove(dest);
     checker.first_class_callable_targets.remove(dest);
 }

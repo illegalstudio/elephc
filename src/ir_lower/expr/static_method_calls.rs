@@ -17,6 +17,10 @@ pub(super) fn lower_static_method_call(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
+    // This is a scope-admission check, so reject before evaluating arguments. A
+    // forbidden suspend cannot transfer a live Parallel scope to caller code.
+    maybe_emit_parallel_parent_fiber_suspend_guard(ctx, receiver, method, expr.span);
+
     // `Closure::bind($closure, $newThis [, $scope])` — static form of bindTo.
     if let StaticReceiver::Named(name) = receiver {
         if name.trim_start_matches('\\') == "Closure"
@@ -185,7 +189,7 @@ pub(super) fn lower_static_method_call(
         ctx, sig.as_ref(), &return_alias, &result_type, expr.span,
     );
     begin_call_argument_evaluation(ctx);
-    let operands = lower_args_with_signature(ctx, sig.as_ref(), call_args);
+    let operands = lower_args_with_eir_signature(ctx, sig.as_ref(), call_args);
     let mut operands =
         coerce_int_backed_enum_string_argument(ctx, receiver, dispatch_method, operands, expr);
     let name = format!("{}::{}", receiver_name(receiver), dispatch_method);
@@ -224,6 +228,48 @@ pub(super) fn lower_static_method_call(
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
     let call = take_prepublished_call_result(ctx, result_staging, call, expr.span);
     finish_reference_return_value(ctx, call, reference_staging, expr.span)
+}
+
+/// Emits the v1 guard that prevents the owner Fiber from suspending while it holds a live
+/// Parallel root scope. Scheduler-internal Async suspension is exempt because its ready-queue
+/// bookkeeping is the supported cooperative wake path; a raw user Fiber suspension is not.
+fn maybe_emit_parallel_parent_fiber_suspend_guard(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    method: &str,
+    span: Span,
+) {
+    let is_fiber_suspend = php_symbol_key(method) == "suspend"
+        && static_receiver_class_name(ctx, receiver)
+            .is_some_and(|class_name| php_symbol_key(&class_name) == "fiber");
+    if !is_fiber_suspend
+        || !ctx
+            .extern_functions
+            .contains_key("elephc_parallel_parent_scope_active")
+        || async_scheduler_owns_fiber_suspend(ctx.owner_name())
+    {
+        return;
+    }
+
+    let guard = ctx.intern_string("Elephc\\Parallel\\TaskGroup::__assertFiberSuspendAllowed");
+    ctx.emit_void(
+        Op::StaticMethodCall,
+        Vec::new(),
+        Some(Immediate::Data(guard)),
+        Op::StaticMethodCall.default_effects(),
+        Some(span),
+    );
+}
+
+/// Identifies the four scheduler methods whose Fiber suspension represents a managed wakeup.
+fn async_scheduler_owns_fiber_suspend(owner_name: &str) -> bool {
+    matches!(
+        php_symbol_key(owner_name.trim_start_matches('\\')).as_str(),
+        "elephc\\async\\__scheduler::awaittask"
+            | "elephc\\async\\__scheduler::reschedulecurrent"
+            | "elephc\\async\\__scheduler::sleepcurrent"
+            | "elephc\\async\\__scheduler::awaitio"
+    )
 }
 
 /// Returns preserved late-static return syntax for EIR static dispatch.
@@ -318,15 +364,25 @@ pub(super) fn coerce_int_backed_enum_string_argument(
         ),
         _ => return operands,
     };
+    let source = LoweredValue {
+        value: operands[0],
+        ir_type: ctx.builder.value_type(operands[0]),
+    };
     let message_data = ctx.intern_string(&message);
     let coerced = ctx.emit_value(
         op,
-        vec![operands[0]],
+        vec![source.value],
         Some(Immediate::Data(message_data)),
         PhpType::Int,
         op.default_effects(),
         Some(expr.span),
     );
+    // The enum coercion reads/unboxes its operand but cannot consume it: a Mixed
+    // array read owns a temporary box, whereas a parameter/local load borrows its
+    // caller's storage. Release only the former after a successful coercion.
+    if ctx.value_is_owning_temporary(source) {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(expr.span));
+    }
     operands[0] = coerced.value;
     operands
 }
@@ -378,6 +434,7 @@ pub(super) fn lower_static_method_descriptor_call(
     };
     let result_staging = prepublish_call_result(ctx, &result_type, expr.span);
     let descriptor = lower_first_class_callable(ctx, &target, expr);
+    maybe_emit_parallel_fiber_suspend_callback_guard(ctx, descriptor, expr.span);
     let (descriptor, descriptor_owner) = root_owned_call_operand(ctx, descriptor, expr.span);
     let mut operands = vec![descriptor.value];
     operands.extend(lower_args_with_signature(ctx, wrapper_sig.as_ref(), args));
@@ -385,7 +442,7 @@ pub(super) fn lower_static_method_descriptor_call(
         ctx,
         Op::ExprCall,
         operands,
-        callable_profile_immediate(),
+        callable_profile_immediate(ctx),
         result_type,
         expr.span,
     );
@@ -423,7 +480,7 @@ pub(super) fn lower_static_method_descriptor_value_call(
         ctx,
         Op::ExprCall,
         operands,
-        callable_profile_immediate(),
+        callable_profile_immediate(ctx),
         result_type,
         expr.span,
     );

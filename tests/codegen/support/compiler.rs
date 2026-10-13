@@ -304,6 +304,10 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let resolved = elephc::resolver::resolve(ast, dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved).expect("alias collection failed");
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
+    let resolved =
+        elephc::async_prelude::inject_if_used(resolved, true, &mut prelude_inventory);
+    let resolved =
+        elephc::parallel_prelude::inject_if_used(resolved, true, &mut prelude_inventory);
     // Surface usage is decided BEFORE injection, mirroring `pipeline::compile`:
     // the harness seeds `set_linked_extensions` from the same bits so
     // `extension_loaded('PDO'/'mysqli')` agrees between `compile_and_run` and

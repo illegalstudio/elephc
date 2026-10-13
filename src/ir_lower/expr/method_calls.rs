@@ -51,6 +51,11 @@ pub(super) fn lower_method_call(
         terminate_method_call_on_null(ctx, method);
         return null_value;
     }
+    if op == Op::MethodCall && is_parallel_task_group_spawn(ctx, object.value, method) {
+        let spawned = lower_parallel_spawn(ctx, object, args, expr);
+        release_owning_receiver_temporary(ctx, object, expr.span);
+        return spawned;
+    }
     if op == Op::MethodCall {
         if let Some(value) =
             lower_reflection_function_invoke_call(ctx, Some(object_expr), method, args, expr)
@@ -85,7 +90,7 @@ pub(super) fn lower_method_call(
     if op == Op::MethodCall
         && is_reflection_class_new_instance_without_constructor_call(ctx, object.value, method)
     {
-        return lower_reflection_class_new_instance_without_constructor(ctx, object, args, expr);
+        return lower_reflection_class_new_instance_without_constructor(ctx, Some(object_expr), object, args, expr);
     }
     if op == Op::MethodCall {
         if let Some(value) = lower_reflection_class_static_property_value_call(
@@ -109,7 +114,7 @@ pub(super) fn lower_method_call(
         if let Some(value) =
             lower_reflection_property_value_call(ctx, Some(object_expr), method, args, expr)
         {
-            return value;
+            return stabilize_borrowed_result_and_release_receiver(ctx, object, value, expr.span);
         }
     }
     if matches!(
@@ -135,6 +140,21 @@ pub(super) fn lower_method_call(
     let mut operands = vec![object.value];
     let sig = method_call_argument_signature(ctx, object_expr, object.value, dispatch_method);
     promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
+    let user_owner = singular_object_class(&ctx.builder.value_php_type(object.value))
+        .and_then(|(class, _)| {
+            let class = class.trim_start_matches('\\');
+            // Fiber switching consumes transferred receivers/arguments in its
+            // private runtime ABI, including escape. It is not a user-method
+            // call and must not also get this caller-side cleanup handler.
+            if php_symbol_key(class) == "fiber" || crate::types::builtin_classes::intrinsic_class_names()
+                .any(|intrinsic| php_symbol_key(intrinsic) == php_symbol_key(class)) {
+                return None;
+            }
+            let info = ctx.classes.get(class)?;
+            let key = php_symbol_key(dispatch_method);
+            let implementation = info.method_impl_classes.get(&key).map(String::as_str).unwrap_or(class);
+            Some(format!("{implementation}::{key}"))
+        });
     // A by-reference-returning method transfers a lease that must outlive this caller's
     // argument and receiver cleanup, so its staging is published before the arguments.
     let reference_staging = begin_reference_return_call(ctx, sig.as_ref(), expr.span);
@@ -143,12 +163,32 @@ pub(super) fn lower_method_call(
     // and the result is only an SSA temporary until this staging holds it. Both the result type
     // and the alias summary are resolved from the receiver and the method alone, so they are
     // available here, before any argument expression runs.
-    let return_alias = method_return_arg_alias(ctx, object.value, dispatch_method);
+    let return_alias = match ctx.builder.value_php_type(object.value).codegen_repr() {
+        PhpType::Object(class_name)
+            if php_symbol_key(class_name.trim_start_matches('\\'))
+                == "elephc\\async\\__scheduler"
+                && php_symbol_key(dispatch_method) == "runroot" =>
+        {
+            ReturnArgAlias::None
+        }
+        PhpType::Object(class_name)
+            if php_symbol_key(class_name.trim_start_matches('\\'))
+                == "elephc\\async\\taskgroup"
+                && php_symbol_key(dispatch_method) == "spawn" =>
+        {
+            ReturnArgAlias::None
+        }
+        _ => method_return_arg_alias(ctx, object.value, dispatch_method),
+    };
     let result_staging = prepublish_user_call_result(
         ctx, sig.as_ref(), &return_alias, &result_type, expr.span,
     );
     begin_call_argument_evaluation(ctx);
-    let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
+    let arg_values = if let Some(owner) = &user_owner {
+        lower_args_with_eir_user_function_signature(ctx, owner, sig.as_ref(), args)
+    } else {
+        lower_args_with_eir_signature(ctx, sig.as_ref(), args)
+    };
     let mut arg_values = arg_values;
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
     let roots = root_user_call_operands(
@@ -165,7 +205,7 @@ pub(super) fn lower_method_call(
         op,
         operands,
         Some(Immediate::Data(data)),
-        result_type,
+        result_type.clone(),
         op.default_effects(),
         Some(expr.span),
     );
@@ -184,9 +224,54 @@ pub(super) fn lower_method_call(
         expr.span,
     );
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
-    release_owning_receiver_temporary(ctx, object, expr.span);
+    if fiber_switch_transfers_receiver(ctx, object, dispatch_method) {
+        ctx.builder.set_value_ownership(object.value, Ownership::Owned);
+    } else {
+        release_owning_receiver_temporary(ctx, object, expr.span);
+    }
     let call = take_prepublished_call_result(ctx, result_staging, call, expr.span);
     finish_reference_return_value(ctx, call, reference_staging, expr.span)
+}
+
+/// Selects the dedicated spawn lowering only when the compiler's Parallel bridge is present.
+fn is_parallel_task_group_spawn(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    method: &str,
+) -> bool {
+    // A user program can legally declare a same-named class when it has not opted into the
+    // Parallel prelude. The dedicated worker ABI exists only with that prelude's bridge extern,
+    // so the class name alone must never select special lowering.
+    if php_symbol_key(method) != "spawn"
+        || !ctx
+            .extern_functions
+            .contains_key("elephc_parallel_job_input_php_prepare")
+    {
+        return false;
+    }
+    matches!(
+        ctx.builder.value_php_type(object).codegen_repr(),
+        PhpType::Object(ref class_name)
+            if php_symbol_key(class_name.trim_start_matches('\\'))
+                == "elephc\\parallel\\taskgroup"
+    )
+}
+
+/// Returns whether a Fiber switching method transfers an owning receiver temporary to runtime.
+pub(super) fn fiber_switch_transfers_receiver(
+    ctx: &LoweringContext<'_, '_>,
+    object: LoweredValue,
+    method: &str,
+) -> bool {
+    matches!(
+        ctx.builder.value_php_type(object.value).codegen_repr(),
+        PhpType::Object(ref class_name) if php_symbol_key(class_name.trim_start_matches('\\')) == "fiber"
+    ) && matches!(php_symbol_key(method).as_str(), "start" | "resume" | "throw")
+        && ctx.value_is_owning_temporary(object)
+        // A named local owns its own frame slot and must keep that ownership until its
+        // explicit unset/epilogue. The Fiber ABI only consumes expression temporaries whose
+        // ordinary post-call release would otherwise be skipped by a switch/longjmp.
+        && !matches!(ctx.builder.value_defining_op(object.value), Some(Op::LoadLocal))
 }
 
 /// Lowers the `Closure` rebinding methods on a closure (`Callable`) receiver:
@@ -247,7 +332,13 @@ pub(super) fn lower_closure_bind_method(
         let bound = root_descriptor_callback(ctx, bound, PhpType::Mixed, expr.span);
         let arg_container =
             lower_untyped_descriptor_invoker_arg_container(ctx, call_args, expr.span);
-        emit_callable_descriptor_invoke(ctx, bound, arg_container, expr.span)
+        // This invocation feeds the outer bind/call cleanup, even when the PHP
+        // statement ignores the final method result. Keep its value live until
+        // that outer layer has adopted it into its own result staging.
+        let discarded_depth = ctx.discarded_result_depth.take();
+        let result = emit_callable_descriptor_invoke(ctx, bound, arg_container, expr.span);
+        ctx.discarded_result_depth = discarded_depth;
+        result
     } else {
         bound
     };
@@ -255,6 +346,7 @@ pub(super) fn lower_closure_bind_method(
     if let Some(slot) = receiver_owner {
         retire_owned_call_operand(ctx, slot, expr.span);
     }
+    let result = discard_result_before_callback(ctx, result_staging.as_ref(), result, closure_owner, expr.span);
     if let Some(slot) = closure_owner {
         retire_owned_call_operand(ctx, slot, expr.span);
     }

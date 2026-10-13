@@ -25,6 +25,8 @@
 //! - `json_support` holds shared helpers for the JSON/serialize check hooks.
 //! - Add `pub mod <name>;` here for every new system builtin home.
 
+pub mod __elephc_async_gc_collect;
+pub mod __elephc_async_monitor_event;
 pub mod __elephc_class_has_constructor;
 pub mod __elephc_gmmktime_raw;
 pub mod __elephc_initialize_pdo_statement;

@@ -2,7 +2,7 @@
 title: "__elephc_object_prop_name() - internals"
 description: "Compiler internals for __elephc_object_prop_name(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1127
+  order: 1132
 ---
 
 ## `__elephc_object_prop_name()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/__elephc_object_prop_name.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/__elephc_object_prop_name.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:701](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L701) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

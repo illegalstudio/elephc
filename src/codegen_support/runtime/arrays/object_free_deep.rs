@@ -38,11 +38,10 @@ pub fn emit_object_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
 
     // -- null and heap-range checks --
     emitter.instruction("cbz x0, __rt_object_free_deep_done");                  // skip null objects
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x9");
     emitter.instruction("cmp x0, x9");                                          // is the object below the heap buffer?
     emitter.instruction("b.lo __rt_object_free_deep_done");                     // skip non-heap pointers
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_off");
-    emitter.instruction("ldr x10, [x10]");                                      // load the current heap offset
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "x10"); // x10 = current heap offset (ctx-relative in ctx mode)
     emitter.instruction("add x10, x9, x10");                                    // compute the current heap end
     emitter.instruction("cmp x0, x10");                                         // is the object at or beyond the heap end?
     emitter.instruction("b.hs __rt_object_free_deep_done");                     // skip invalid pointers
@@ -132,6 +131,7 @@ pub fn emit_object_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x11", "_fiber_class_id", 0); // x11 = compile-time class id of the built-in Fiber class
     emitter.instruction("cmp x10, x11");                                        // is the receiver a Fiber instance?
     emitter.instruction("b.ne __rt_object_free_deep_not_fiber");                // skip the fiber-specific cleanup path for non-Fiber receivers
+    emit_suspended_coroutine_frame_cleanup(emitter, "fiber");
     emitter.instruction(&format!("ldr x9, [x0, #{}]", crate::codegen_support::runtime::FIBER_STACK_BASE_OFFSET)); // x9 = fiber stack_base (mapping start returned by mmap)
     emitter.instruction("cbz x9, __rt_object_free_deep_fiber_no_stack");        // skip when the stack was already released by an earlier free pass
     emitter.instruction(&format!("ldr x10, [x0, #{}]", crate::codegen_support::runtime::FIBER_STACK_SIZE_OFFSET)); // x10 = total mmap'd length, exactly what munmap needs
@@ -148,6 +148,25 @@ pub fn emit_object_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction(&format!("ldr x0, [x0, #{}]", crate::codegen_support::runtime::FIBER_TRANSFER_VALUE_OFFSET)); // x0 = boxed Mixed transfer_value owned by the Fiber
     super::deep_cleanup::invoke(emitter, "__rt_decref_mixed", "x0");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the saved Fiber object pointer after transfer cleanup
+    emitter.instruction(&format!("ldr x0, [x0, #{}]", crate::codegen_support::runtime::FIBER_DESCRIPTOR_ARGBOX_OFFSET)); // x0 = descriptor argument box parked across a suspended callback
+    emitter.instruction("bl __rt_decref_mixed");                                // release a dynamic-invoker argument container when a suspended Fiber is destroyed
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the saved Fiber object pointer after descriptor argument cleanup
+    emitter.instruction(&format!("ldr x10, [x0, #{}]", crate::codegen_support::runtime::FIBER_CALLABLE_OFFSET)); // x10 = active callable owner, cleared only after terminal entry cleanup
+    emitter.instruction("cbz x10, __rt_object_free_deep_fiber_start_args_done"); // terminal entry already consumed every start argument
+    emitter.instruction(&format!("ldr x9, [x0, #{}]", crate::codegen_support::runtime::FIBER_START_ARG_COUNT_OFFSET)); // x9 = number of boxed start arguments still owned by a suspended Fiber
+    emitter.instruction("str x9, [sp, #16]");                                   // preserve the start-argument count across nested decref calls
+    for i in 0..crate::codegen_support::runtime::FIBER_START_ARGS_MAX {
+        let skip_label = format!("__rt_object_free_deep_fiber_start_arg_skip_{}", i);
+        emitter.instruction("ldr x9, [sp, #16]");                               // reload the retained start-argument count
+        emitter.instruction(&format!("cmp x9, #{}", i + 1));                    // does the Fiber still own this start-argument slot?
+        emitter.instruction(&format!("b.lt {}", skip_label));                   // skip slots beyond the recorded argument count
+        emitter.instruction("ldr x0, [sp, #0]");                                // reload the saved Fiber object pointer
+        emitter.instruction(&format!("ldr x0, [x0, #{}]", crate::codegen_support::runtime::FIBER_START_ARGS_OFFSET + i * 8)); // x0 = boxed Mixed start argument
+        emitter.instruction("bl __rt_decref_mixed");                            // release the suspended Fiber's start-argument owner
+        emitter.label(&skip_label);
+    }
+    emitter.label("__rt_object_free_deep_fiber_start_args_done");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the Fiber after start-argument cleanup
     emitter.instruction(&format!("str xzr, [x0, #{}]", crate::codegen_support::runtime::FIBER_TRANSFER_VALUE_OFFSET)); // clear transfer_value.lo after releasing it
     emitter.instruction(&format!("str xzr, [x0, #{}]", crate::codegen_support::runtime::FIBER_TRANSFER_VALUE_OFFSET + 8)); // clear transfer_value.hi to match the empty slot
     emitter.instruction(&format!("ldr x0, [x0, #{}]", crate::codegen_support::runtime::FIBER_PENDING_THROW_OFFSET)); // x0 = pending Throwable object parked by Fiber::throw/escape
@@ -270,6 +289,7 @@ pub fn emit_object_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction("ldr x14, [x9, x10]");                                  // load the property payload pointer / low word
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload the descriptor pointer for this property slot
     emitter.instruction("ldrb w15, [x11, x12]");                                // load the compile-time property tag
+    emitter.instruction("tbnz x15, #7, __rt_object_free_deep_release_ref_cell"); // reference properties store a shared ref-cell pointer
     emitter.instruction("cmp x15, #1");                                         // is this a compile-time string property?
     emitter.instruction("b.eq __rt_object_free_deep_release_runtime");          // strings always release through the uniform helper
     emitter.instruction("cmp x15, #4");                                         // is this a compile-time indexed-array property?
@@ -292,6 +312,14 @@ pub fn emit_object_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     super::deep_cleanup::invoke(emitter, "__rt_decref_any", "x0");
     emitter.instruction("ldr x12, [sp, #24]");                                  // restore the property index after the helper call
     emitter.instruction("b __rt_object_free_deep_next");                        // callable descriptors use a separate release helper
+
+    emitter.label("__rt_object_free_deep_release_ref_cell");
+    emitter.instruction("mov x0, x14");                                         // pass the object-owned reference-cell pointer
+    emitter.instruction("and x1, x15, #0x7f");                                  // pass the underlying property payload type tag
+    emitter.instruction("str x12, [sp, #24]");                                  // preserve the property index across shared cell release
+    emitter.instruction("bl __rt_ref_cell_release");                            // drop the object's owner while captured closures may keep the cell alive
+    emitter.instruction("ldr x12, [sp, #24]");                                  // restore the property index after shared cell release
+    emitter.instruction("b __rt_object_free_deep_next");                        // continue scanning declared properties
 
     emitter.label("__rt_object_free_deep_release_callable");
     emitter.instruction("mov x0, x14");                                         // pass the stored callable descriptor to its capture-aware release helper
@@ -422,6 +450,7 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFe
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r11", "_fiber_class_id", 0); // r11 = compile-time class id of the built-in Fiber class
     emitter.instruction("cmp r10, r11");                                        // is the receiver a Fiber instance?
     emitter.instruction("jne __rt_object_free_deep_not_fiber");                 // skip the fiber-specific cleanup path for non-Fiber receivers
+    emit_suspended_coroutine_frame_cleanup(emitter, "fiber_x86");
     emitter.instruction(&format!("mov rdi, QWORD PTR [rax + {}]", crate::codegen_support::runtime::FIBER_STACK_BASE_OFFSET)); // rdi = fiber stack_base
     emitter.instruction("test rdi, rdi");                                       // does this Fiber still own a mapped stack?
     emitter.instruction("je __rt_object_free_deep_fiber_no_stack");             // skip when the stack was already released
@@ -437,6 +466,26 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFe
     emitter.instruction(&format!("mov rax, QWORD PTR [rax + {}]", crate::codegen_support::runtime::FIBER_TRANSFER_VALUE_OFFSET)); // rax = boxed Mixed transfer_value owned by the Fiber
     super::deep_cleanup::invoke(emitter, "__rt_decref_mixed", "rax");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the saved Fiber object pointer after transfer cleanup
+    emitter.instruction(&format!("mov rax, QWORD PTR [rax + {}]", crate::codegen_support::runtime::FIBER_DESCRIPTOR_ARGBOX_OFFSET)); // rax = descriptor argument box parked across a suspended callback
+    emitter.instruction("call __rt_decref_mixed");                              // release a dynamic-invoker argument container when a suspended Fiber is destroyed
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the saved Fiber object pointer after descriptor argument cleanup
+    emitter.instruction(&format!("mov r10, QWORD PTR [rax + {}]", crate::codegen_support::runtime::FIBER_CALLABLE_OFFSET)); // r10 = active callable owner, cleared only after terminal entry cleanup
+    emitter.instruction("test r10, r10");                                       // is this Fiber still suspended or not yet terminally cleaned?
+    emitter.instruction("je __rt_object_free_deep_fiber_start_args_done");      // terminal entry already consumed every start argument
+    emitter.instruction(&format!("mov r10, QWORD PTR [rax + {}]", crate::codegen_support::runtime::FIBER_START_ARG_COUNT_OFFSET)); // r10 = number of boxed start arguments still owned by a suspended Fiber
+    emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // preserve the start-argument count across nested decref calls
+    for i in 0..crate::codegen_support::runtime::FIBER_START_ARGS_MAX {
+        let skip_label = format!("__rt_object_free_deep_fiber_start_arg_skip_{}", i);
+        emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                   // reload the retained start-argument count
+        emitter.instruction(&format!("cmp r10, {}", i + 1));                    // does the Fiber still own this start-argument slot?
+        emitter.instruction(&format!("jl {}", skip_label));                     // skip slots beyond the recorded argument count
+        emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                    // reload the saved Fiber object pointer
+        emitter.instruction(&format!("mov rax, QWORD PTR [rax + {}]", crate::codegen_support::runtime::FIBER_START_ARGS_OFFSET + i * 8)); // rax = boxed Mixed start argument
+        emitter.instruction("call __rt_decref_mixed");                          // release the suspended Fiber's start-argument owner
+        emitter.label(&skip_label);
+    }
+    emitter.label("__rt_object_free_deep_fiber_start_args_done");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the Fiber after start-argument cleanup
     emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::codegen_support::runtime::FIBER_TRANSFER_VALUE_OFFSET)); // clear transfer_value.lo after releasing it
     emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::codegen_support::runtime::FIBER_TRANSFER_VALUE_OFFSET + 8)); // clear transfer_value.hi to match the empty slot
     emitter.instruction(&format!("mov rax, QWORD PTR [rax + {}]", crate::codegen_support::runtime::FIBER_PENDING_THROW_OFFSET)); // rax = pending Throwable object parked by Fiber::throw/escape
@@ -546,6 +595,8 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFe
     emitter.instruction("mov rax, QWORD PTR [r11 + rcx]");                      // load the low word of the current property slot as the potential heap-backed child pointer
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the per-class property-tag descriptor pointer after any nested helper call
     emitter.instruction("movzx r8, BYTE PTR [r11 + r10]");                      // load the compile-time property tag for the current property slot
+    emitter.instruction("test r8b, 0x80");                                      // does this slot store an object-owned reference cell?
+    emitter.instruction("jnz __rt_object_free_deep_release_ref_cell_x86");      // shared reference cells use their own owner count
     emitter.instruction("cmp r8, 1");                                           // does the property hold a persisted string pointer?
     emitter.instruction("je __rt_object_free_deep_release_runtime");            // strings release through the uniform x86_64 decref_any helper
     emitter.instruction("cmp r8, 4");                                           // does the property hold a nested indexed-array pointer?
@@ -565,6 +616,12 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFe
     emitter.label("__rt_object_free_deep_release_runtime");
     super::deep_cleanup::invoke(emitter, "__rt_decref_any", "rax");
     emitter.instruction("jmp __rt_object_free_deep_next");                      // callable descriptors use a separate release helper
+
+    emitter.label("__rt_object_free_deep_release_ref_cell_x86");
+    emitter.instruction("mov rdx, r8");                                         // copy the descriptor byte before masking the reference flag
+    emitter.instruction("and rdx, 0x7f");                                       // pass the underlying property payload type tag
+    emitter.instruction("call __rt_ref_cell_release");                          // drop the object's owner while captured closures may keep the cell alive
+    emitter.instruction("jmp __rt_object_free_deep_next");                      // continue scanning declared properties
 
     emitter.label("__rt_object_free_deep_release_callable");
     super::deep_cleanup::invoke(emitter, "__rt_callable_descriptor_release", "rax");
@@ -634,6 +691,56 @@ fn emit_generator_mixed_field_release_x86_64(emitter: &mut Emitter, offset: usiz
     emitter.comment(&format!("released Generator::{}", name));
 }
 
+/// Runs activation cleanup callbacks before unmapping a suspended Fiber or Generator stack.
+///
+/// The caller owns the thread's active cleanup chain; a suspended coroutine's chain is parked
+/// in its object. Walk that chain while the coroutine stack remains mapped, then restore the
+/// caller's chain before the object or stack can be reclaimed. Reload the saved object into
+/// the integer result register on both paths; cleanup callbacks clobber that register.
+fn emit_suspended_coroutine_frame_cleanup(emitter: &mut Emitter, label_prefix: &str) {
+    let call_frame_offset = crate::codegen_support::runtime::fibers::FIBER_OWN_CALL_FRAME_OFFSET;
+    let done = format!("__rt_object_free_deep_{}_frame_cleanup_done", label_prefix);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x9, [sp, #0]");                            // reload the coroutine object before checking its parked frame chain
+            emitter.instruction(&format!("ldr x10, [x9, #{}]", call_frame_offset)); // x10 = cleanup chain saved when this coroutine suspended
+            emitter.instruction(&format!("cbz x10, {done}"));                   // terminal or never-started coroutines have no parked PHP locals
+            emitter.instruction("str x10, [sp, #24]");                          // preserve the coroutine chain across nested cleanup calls
+            crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x11", "_exc_call_frame_top", 0);
+            emitter.instruction("str x11, [sp, #8]");                           // preserve the caller's active cleanup chain
+            emitter.instruction("ldr x9, [sp, #0]");                            // reload the object after symbol-address materialization
+            emitter.instruction(&format!("str xzr, [x9, #{}]", call_frame_offset)); // clear ownership before releasing suspended locals
+            emitter.instruction("ldr x10, [sp, #24]");                          // install the suspended coroutine's cleanup chain
+            crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_call_frame_top", 0);
+            emitter.instruction("mov x0, #0");                                  // unwind every activation owned by the suspended coroutine
+            emitter.instruction("bl __rt_exception_cleanup_frames");            // release local owners while their stack is still mapped
+            emitter.instruction("ldr x10, [sp, #8]");                           // restore the caller's cleanup chain
+            crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_call_frame_top", 0);
+            emitter.label(&done);
+            emitter.instruction("ldr x0, [sp, #0]");                            // restore the coroutine pointer before the caller reads its stack fields
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                // reload the coroutine object before checking its parked frame chain
+            emitter.instruction(&format!("mov r11, QWORD PTR [r10 + {}]", call_frame_offset)); // r11 = cleanup chain saved when this coroutine suspended
+            emitter.instruction("test r11, r11");                               // does this coroutine still own active PHP locals?
+            emitter.instruction(&format!("jz {done}"));                         // terminal or never-started coroutines need no frame cleanup
+            emitter.instruction("mov QWORD PTR [rbp - 24], r11");               // preserve the coroutine chain across nested cleanup calls
+            crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
+            emitter.instruction("mov QWORD PTR [rbp - 16], r10");               // preserve the caller's active cleanup chain
+            emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                // reload the object after symbol-address materialization
+            emitter.instruction(&format!("mov QWORD PTR [r10 + {}], 0", call_frame_offset)); // clear ownership before releasing suspended locals
+            emitter.instruction("mov r10, QWORD PTR [rbp - 24]");               // install the suspended coroutine's cleanup chain
+            crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_call_frame_top", 0);
+            emitter.instruction("xor edi, edi");                                // unwind every activation owned by the suspended coroutine
+            emitter.instruction("call __rt_exception_cleanup_frames");          // release local owners while their stack is still mapped
+            emitter.instruction("mov r10, QWORD PTR [rbp - 16]");               // restore the caller's cleanup chain
+            crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_call_frame_top", 0);
+            emitter.label(&done);
+            emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                // restore the coroutine pointer before the caller reads its stack fields
+        }
+    }
+}
+
 /// Releases all runtime-owned storage of a fiber-shaped Generator on AArch64:
 /// the coroutine stack (munmap), the boxed `transfer_value`, the pending
 /// Throwable, every boxed `start_args` cell, and the persistent
@@ -648,6 +755,8 @@ fn emit_generator_coroutine_release_aarch64(emitter: &mut Emitter) {
     let transfer = crate::codegen_support::runtime::FIBER_TRANSFER_VALUE_OFFSET;
     let pending = crate::codegen_support::runtime::FIBER_PENDING_THROW_OFFSET;
     let start_args = crate::codegen_support::runtime::FIBER_START_ARGS_OFFSET as usize;
+
+    emit_suspended_coroutine_frame_cleanup(emitter, "generator");
 
     // -- return the coroutine stack to the kernel --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the Generator pointer for stack release
@@ -698,6 +807,8 @@ fn emit_generator_coroutine_release_x86_64(emitter: &mut Emitter) {
     let pending = crate::codegen_support::runtime::FIBER_PENDING_THROW_OFFSET;
     let start_args = crate::codegen_support::runtime::FIBER_START_ARGS_OFFSET as usize;
 
+    emit_suspended_coroutine_frame_cleanup(emitter, "generator_x86");
+
     // -- return the coroutine stack to the kernel --
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the Generator pointer for stack release
     emitter.instruction(&format!("mov rdi, QWORD PTR [rax + {}]", stack_base)); // rdi = coroutine stack base (mmap start)
@@ -742,6 +853,28 @@ mod tests {
     use crate::codegen_support::platform::{Arch, Platform, Target};
 
     use super::*;
+
+    /// Both cleanup and no-chain exits restore the saved coroutine pointer on every target.
+    #[test]
+    fn suspended_coroutine_cleanup_restores_its_object_pointer_on_all_targets() {
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(target).unwrap();
+            for prefix in ["fiber", "generator"] {
+                let mut emitter = Emitter::new(target);
+                emit_suspended_coroutine_frame_cleanup(&mut emitter, prefix);
+                let asm = emitter.output();
+                let label = format!("__rt_object_free_deep_{prefix}_frame_cleanup_done:\n");
+                let (_, exit) = asm.split_once(&label).expect("shared cleanup/no-chain exit");
+                let reload = if target.arch == Arch::X86_64 {
+                    "mov rax, QWORD PTR [rbp - 8]"
+                } else {
+                    "ldr x0, [sp, #0]"
+                };
+                assert!(exit.trim_start().starts_with(reload), "{target:?}/{prefix}: {exit}");
+                assert!(asm.contains("__rt_exception_cleanup_frames"), "{target:?}/{prefix}");
+            }
+        }
+    }
 
     /// Verifies that ARM64 object destruction dispatches callable properties to
     /// the descriptor-aware release helper instead of the generic heap decref.

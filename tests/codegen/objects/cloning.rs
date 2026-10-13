@@ -10,6 +10,25 @@
 
 use super::*;
 
+/// A private hook refusal cannot allocate a duplicate or run its destructor.
+#[test]
+fn test_clone_private_hook_denial_does_not_destruct_a_copy() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class PrivateCloneOwner {
+    private function __clone(): void {}
+    public function __destruct() { echo 'destruct|'; }
+}
+$original = new PrivateCloneOwner();
+try { $duplicate = clone $original; }
+catch (Error $error) { echo 'caught|'; }
+echo 'alive|';
+unset($original);
+"#);
+    assert!(out.success, "{} {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "caught|alive|destruct|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Verifies cloning declared scalar/string properties creates an independent object slot copy.
 #[test]
 fn test_clone_copies_declared_properties_independently() {

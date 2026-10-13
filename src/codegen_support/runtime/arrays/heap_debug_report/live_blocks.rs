@@ -15,11 +15,11 @@ pub(super) fn emit_live_blocks(emitter: &mut Emitter) {
     emitter.label_global("__rt_heap_debug_live_blocks");
     abi::emit_frame_prologue(emitter, 80);
     let value = abi::int_result_reg(emitter);
-    abi::emit_symbol_address(emitter, value, "_heap_buf");
+    super::super::super::ctx::emit_heap_base_address(emitter, value);
     abi::store_at_offset(emitter, value, 8);
-    abi::emit_load_symbol_to_reg(emitter, value, "_heap_off", 0);
+    super::super::super::ctx::emit_heap_off_load(emitter, value);
     let scratch = match emitter.target.arch { Arch::AArch64 => "x9", Arch::X86_64 => "r10" };
-    abi::emit_symbol_address(emitter, scratch, "_heap_buf");
+    super::super::super::ctx::emit_heap_base_address(emitter, scratch);
     match emitter.target.arch {
         Arch::AArch64 => emitter.instruction("add x0, x0, x9"),                 // compute the exclusive managed-heap end
         Arch::X86_64 => emitter.instruction("add rax, r10"),                    // compute the exclusive managed-heap end
@@ -80,7 +80,7 @@ pub(super) fn emit_live_blocks(emitter: &mut Emitter) {
     }
     write_label(emitter, "_heap_dbg_block_offset", 24);
     abi::load_at_offset(emitter, value, 8);
-    abi::emit_symbol_address(emitter, scratch, "_heap_buf");
+    super::super::super::ctx::emit_heap_base_address(emitter, scratch);
     match emitter.target.arch {
         Arch::AArch64 => emitter.instruction("sub x0, x0, x9"),                 // report a heap-relative offset without disclosing an address
         Arch::X86_64 => emitter.instruction("sub rax, r10"),                    // report a heap-relative offset without disclosing an address
@@ -159,9 +159,10 @@ mod tests {
     fn live_block_reports_are_bounded_and_non_allocating_on_all_targets() {
         for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let mut emitter = Emitter::new(Target::parse(target).unwrap());
+            emitter.ctx_register = true;
             emit_live_blocks(&mut emitter);
             let asm = emitter.output();
-            assert!(asm.contains("_heap_off") && asm.contains("__rt_heap_debug_live_blocks_next:"), "{target}");
+            assert!(!asm.contains("_heap_off") && !asm.contains("_heap_buf") && asm.contains("__rt_heap_debug_live_blocks_next:"), "{target}");
             assert!(asm.contains("cmp x0, #64") || asm.contains("cmp rax, 64"), "{target}");
             assert_eq!(asm.matches("__rt_itoa").count(), 4, "{target}");
             assert!(!asm.contains("__rt_heap_alloc") && !asm.contains("__rt_incref"), "{target}");

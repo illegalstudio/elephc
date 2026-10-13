@@ -2,7 +2,7 @@
 title: "mb_strrpos() - internals"
 description: "Compiler internals for mb_strrpos(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 883
+  order: 884
 ---
 
 ## `mb_strrpos()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_strrpos.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_strrpos.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:700](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L700) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:701](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L701) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

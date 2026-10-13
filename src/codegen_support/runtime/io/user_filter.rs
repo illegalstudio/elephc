@@ -663,11 +663,12 @@ pub fn emit_user_filter_release_fd(emitter: &mut Emitter) {
     emitter.comment("--- runtime: user_filter_release_fd ---");
     emitter.label_global("__rt_user_filter_release_fd");
 
-    // Frame: 32 bytes — saved fd + x29/x30.
-    emitter.instruction("sub sp, sp, #32");                                     // allocate runtime stack frame
-    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
+    // Frame: fd, first/current object, padding, and x29/x30.
+    emitter.instruction("sub sp, sp, #48");                                     // allocate runtime stack frame
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish runtime frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save fd across the onClose calls
+    emitter.instruction("str xzr, [sp, #8]");                                   // default to no read instance for write-only filters
 
     for dir in 0..2usize {
         let skip = format!("__rt_ufrf_dir{}_skip", dir);
@@ -679,7 +680,16 @@ pub fn emit_user_filter_release_fd(emitter: &mut Emitter) {
         }
         abi::emit_symbol_address(emitter, "x9", "_user_filter_instances");
         emitter.instruction("ldr x11, [x9, x10, lsl #3]");                      // obj at instances[slot]
+        emitter.instruction("str xzr, [x9, x10, lsl #3]");                      // detach the table owner before running user code
         emitter.instruction(&format!("cbz x11, {}", skip));                     // no instance attached → skip
+        if dir == 0 {
+            emitter.instruction("str x11, [sp, #8]");                           // remember the read instance for read/write deduplication
+        } else {
+            emitter.instruction("ldr x12, [sp, #8]");                           // load the already-released read instance, if any
+            emitter.instruction("cmp x11, x12");                                // do both direction slots name one filter object?
+            emitter.instruction(&format!("b.eq {}", skip));                     // release and notify a dual-direction instance only once
+        }
+        emitter.instruction("str x11, [sp, #16]");                              // preserve the unique instance across onClose
         // Look up onClose method (vtable slot 2 = offset 16).
         emitter.instruction("ldr x12, [x11]");                                  // class_id at obj head
         abi::emit_symbol_address(emitter, "x13", "_user_filter_vtable_ptrs");
@@ -689,20 +699,14 @@ pub fn emit_user_filter_release_fd(emitter: &mut Emitter) {
         emitter.instruction("mov x0, x11");                                     // $this for the call
         emitter.instruction("blr x14");                                         // call onClose($this) — return discarded
         emitter.label(&no_method);
-        // Clear the instance slot now that onClose has run (or was absent).
-        emitter.instruction("ldr x0, [sp, #0]");                                // reload fd (clobbered by the call)
-        emitter.instruction("add x10, x0, x0");                                 // advance runtime pointer or counter
-        if dir == 1 {
-            emitter.instruction("add x10, x10, #1");                            // advance runtime pointer or counter
-        }
-        abi::emit_symbol_address(emitter, "x9", "_user_filter_instances");
-        emitter.instruction("str xzr, [x9, x10, lsl #3]");                      // store runtime value
+        emitter.instruction("ldr x0, [sp, #16]");                               // reload the detached instance owner
+        emitter.instruction("bl __rt_decref_any");                              // release the table's unique ownership after onClose
         emitter.label(&skip);
     }
 
     emitter.instruction("ldr x0, [sp, #0]");                                    // restore caller's x0 = fd
-    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #32");                                     // release runtime stack frame
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release runtime stack frame
     emitter.instruction("ret");                                                 // return to caller
 }
 
@@ -714,8 +718,9 @@ fn emit_user_filter_release_fd_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // save caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish runtime frame pointer
-    emitter.instruction("sub rsp, 16");                                         // allocate runtime stack frame
+    emitter.instruction("sub rsp, 32");                                         // allocate fd and detached-instance spill slots
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save fd
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // default to no read instance for write-only filters
 
     for dir in 0..2usize {
         let skip = format!("__rt_ufrf_dir{}_skip_x86", dir);
@@ -728,31 +733,98 @@ fn emit_user_filter_release_fd_linux_x86_64(emitter: &mut Emitter) {
         }
         abi::emit_symbol_address(emitter, "r9", "_user_filter_instances");      // load runtime data address
         emitter.instruction("mov r11, QWORD PTR [r9 + r10 * 8]");               // obj
+        emitter.instruction("mov QWORD PTR [r9 + r10 * 8], 0");                 // detach the table owner before running user code
         emitter.instruction("test r11, r11");                                   // check whether the runtime value is zero
         emitter.instruction(&format!("jz {}", skip));                           // branch when the checked value is zero or equal
-        emitter.instruction("mov r12, QWORD PTR [r11]");                        // class_id
-        abi::emit_symbol_address(emitter, "r13", "_user_filter_vtable_ptrs");   // load runtime data address
-        emitter.instruction("mov r13, QWORD PTR [r13 + r12 * 8]");              // vtable
-        emitter.instruction("mov r14, QWORD PTR [r13 + 16]");                   // slot 2 = onClose
-        emitter.instruction("test r14, r14");                                   // check whether the runtime value is zero
-        emitter.instruction(&format!("jz {}", no_method));                      // branch when the checked value is zero or equal
-        emitter.instruction("mov rdi, r11");                                    // $this
-        emitter.instruction("call r14");                                        // call external helper
-        emitter.label(&no_method);
-        // Clear the slot.
-        emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                    // prepare SysV call argument
-        emitter.instruction("mov r10, rdi");                                    // move runtime value between registers
-        emitter.instruction("add r10, r10");                                    // advance runtime pointer or counter
-        if dir == 1 {
-            emitter.instruction("add r10, 1");                                  // advance runtime pointer or counter
+        if dir == 0 {
+            emitter.instruction("mov QWORD PTR [rbp - 16], r11");               // remember the read instance for read/write deduplication
+        } else {
+            emitter.instruction("cmp r11, QWORD PTR [rbp - 16]");               // do both direction slots name one filter object?
+            emitter.instruction(&format!("je {}", skip));                       // release and notify a dual-direction instance only once
         }
-        abi::emit_symbol_address(emitter, "r9", "_user_filter_instances");      // load runtime data address
-        emitter.instruction("mov QWORD PTR [r9 + r10 * 8], 0");                 // store runtime value
+        emitter.instruction("mov QWORD PTR [rbp - 24], r11");                   // preserve the unique instance across onClose
+        emitter.instruction("mov r10, QWORD PTR [r11]");                        // class_id
+        abi::emit_symbol_address(emitter, "r9", "_user_filter_vtable_ptrs");    // load runtime data address
+        emitter.instruction("mov r11, QWORD PTR [r9 + r10 * 8]");               // vtable
+        emitter.instruction("mov rcx, QWORD PTR [r11 + 16]");                   // slot 2 = onClose
+        emitter.instruction("test rcx, rcx");                                   // check whether the runtime value is zero
+        emitter.instruction(&format!("jz {}", no_method));                      // branch when the checked value is zero or equal
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                   // $this for the detached instance
+        emitter.instruction("call rcx");                                        // call onClose on the unique filter instance
+        emitter.label(&no_method);
+        emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                   // reload the detached instance owner
+        emitter.instruction("call __rt_decref_any");                            // release the table's unique ownership after onClose
         emitter.label(&skip);
     }
 
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // preserve fd
-    emitter.instruction("add rsp, 16");                                         // release runtime stack frame
+    emitter.instruction("add rsp, 32");                                         // release runtime stack frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return to caller
+}
+
+/// Emits fatal-only filter cleanup that releases unique instances without invoking `onClose`.
+pub fn emit_user_filter_abandon_fd(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_user_filter_abandon_fd_x86_64(emitter);
+        return;
+    }
+    emitter.blank();
+    emitter.comment("--- runtime: user_filter_abandon_fd ---");
+    emitter.label_global("__rt_user_filter_abandon_fd");
+    emitter.instruction("sub sp, sp, #48");                                     // reserve fd, two instances, and saved frame state
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // preserve frame pointer and return address
+    emitter.instruction("add x29, sp, #32");                                    // establish the fatal cleanup frame
+    emitter.instruction("str x0, [sp, #0]");                                    // retain the descriptor across decref calls
+    emitter.instruction("add x10, x0, x0");                                     // first instance slot = fd multiplied by two
+    abi::emit_symbol_address(emitter, "x9", "_user_filter_instances");
+    emitter.instruction("add x13, x9, x10, lsl #3");                            // address both adjacent direction slots
+    emitter.instruction("ldr x11, [x13]");                                      // load the read-direction filter instance
+    emitter.instruction("ldr x12, [x13, #8]");                                  // load the write-direction filter instance
+    emitter.instruction("stp xzr, xzr, [x13]");                                 // detach both table owners before any destructor can escape
+    emitter.instruction("stp x11, x12, [sp, #8]");                              // preserve both detached instances
+    emitter.instruction("mov x0, x11");                                         // release the read-direction owner first
+    emitter.instruction("bl __rt_decref_any");                                  // deep-release the unique instance and its properties
+    emitter.instruction("ldp x11, x12, [sp, #8]");                              // reload identities after the decref call
+    emitter.instruction("cmp x12, x11");                                        // did both direction slots share one instance?
+    emitter.instruction("b.eq __rt_user_filter_abandon_done");                  // one table owner must be released only once
+    emitter.instruction("mov x0, x12");                                         // release a distinct write-direction instance
+    emitter.instruction("bl __rt_decref_any");                                  // deep-release the second unique instance
+    emitter.label("__rt_user_filter_abandon_done");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // restore the caller's descriptor result
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore caller frame state
+    emitter.instruction("add sp, sp, #48");                                     // release the fatal cleanup frame
+    emitter.instruction("ret");                                                 // return after both direction slots are empty
+}
+
+/// Detaches both filter directions, releasing a shared x86_64 instance only once.
+fn emit_user_filter_abandon_fd_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: user_filter_abandon_fd ---");
+    emitter.label_global("__rt_user_filter_abandon_fd");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the fatal cleanup frame
+    emitter.instruction("sub rsp, 32");                                         // reserve fd and two detached-instance slots
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // retain the descriptor across decref calls
+    emitter.instruction("lea r10, [rdi + rdi]");                                // first instance slot = fd multiplied by two
+    abi::emit_symbol_address(emitter, "r9", "_user_filter_instances");
+    emitter.instruction("mov r11, QWORD PTR [r9 + r10 * 8]");                   // load the read-direction filter instance
+    emitter.instruction("mov rcx, QWORD PTR [r9 + r10 * 8 + 8]");               // load the write-direction filter instance
+    emitter.instruction("mov QWORD PTR [r9 + r10 * 8], 0");                     // detach the read-direction table owner
+    emitter.instruction("mov QWORD PTR [r9 + r10 * 8 + 8], 0");                 // detach the write-direction table owner
+    emitter.instruction("mov QWORD PTR [rbp - 16], r11");                       // preserve the detached read instance
+    emitter.instruction("mov QWORD PTR [rbp - 24], rcx");                       // preserve the detached write instance
+    emitter.instruction("mov rax, r11");                                        // release the read-direction owner first
+    emitter.instruction("call __rt_decref_any");                                // deep-release the unique instance and its properties
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the read instance identity
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                       // reload the write instance identity
+    emitter.instruction("cmp rcx, r11");                                        // did both direction slots share one instance?
+    emitter.instruction("je __rt_user_filter_abandon_done_x86");                // one table owner must be released only once
+    emitter.instruction("mov rax, rcx");                                        // release a distinct write-direction instance
+    emitter.instruction("call __rt_decref_any");                                // deep-release the second unique instance
+    emitter.label("__rt_user_filter_abandon_done_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // restore the caller's descriptor result
+    emitter.instruction("add rsp, 32");                                         // release the fatal cleanup frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return after both direction slots are empty
 }

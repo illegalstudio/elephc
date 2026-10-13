@@ -250,4 +250,3 @@ echo $t;
     assert_eq!(out.stdout, "1:1,2,3", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
-

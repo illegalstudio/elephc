@@ -15,6 +15,70 @@
 
 use crate::support::*;
 
+/// Named variadic trace arguments keep entry values while func_get_args stays positional-only.
+#[test]
+fn test_core_backtrace_regression_named_tail_keeps_entry_snapshot_and_keys() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function captureNamedTrace(int $fixed = 7, mixed ...$rest): void {
+    $rest[0] = 99;
+    $rest["named"] = 88;
+    foreach (debug_backtrace() as $frame) {
+        if ($frame["function"] === "captureNamedTrace") {
+            echo json_encode($frame["args"]), "|", json_encode(func_get_args()), "|";
+        }
+    }
+    ob_start();
+    debug_print_backtrace(0, 1);
+    $printed = ob_get_clean();
+    echo str_contains($printed, "named: 22") ? "named|" : "bad|";
+}
+captureNamedTrace(11, 12, named: 22);
+captureNamedTrace(named: 22);
+"#);
+    assert_eq!(out.stdout,
+        "{\"0\":11,\"1\":12,\"named\":22}|[11,12]|named|{\"named\":22}|[]|named|",
+        "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Typed named string tails preserve entry values and include the final iterator entry.
+#[test]
+fn test_core_backtrace_regression_named_string_tail_keeps_entry_values() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function namedValues(string ...$values): mixed {
+    $values["last"] = "changed";
+    foreach (debug_backtrace() as $frame) {
+        if ($frame["function"] === "namedValues") return $frame["args"];
+    }
+    return [];
+}
+echo json_encode(namedValues(first: "one", last: "two"));
+"#);
+    assert_eq!(out.stdout, "{\"first\":\"one\",\"last\":\"two\"}", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Reference tails reflect callee updates, but returned trace cells do not alias caller storage.
+#[test]
+fn test_core_backtrace_regression_named_reference_tail_returns_independent_cells() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function namedReferences(mixed &...$values): mixed {
+    $values["named"] = 42;
+    foreach (debug_backtrace() as $frame) {
+        if ($frame["function"] === "namedReferences") return $frame["args"];
+    }
+    return [];
+}
+$value = 1;
+$trace = namedReferences(named: $value);
+echo json_encode($trace), "|", $value, "|";
+$trace["named"] = 99;
+echo $value;
+"#);
+    assert_eq!(out.stdout, "{\"named\":42}|42|42", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Opaque eval traces include eval and suspended AOT frames, while options and limits compose.
 #[test]
 fn test_core_backtrace_regression_mixed_boundary() {

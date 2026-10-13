@@ -214,6 +214,20 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         },
     },
     BridgeStaticlib {
+        lib_name: "elephc_parallel",
+        env_var: "ELEPHC_PARALLEL_LIB_DIR",
+        crate_name: "elephc-parallel",
+        flag_name: "parallel",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        php_extensions: &[],
+        monitoring: MonitoringPolicy::Infrastructure {
+            reason: "isolated Parallel worker and transfer infrastructure",
+        },
+    },
+    BridgeStaticlib {
         lib_name: "elephc_web",
         env_var: "ELEPHC_WEB_LIB_DIR",
         crate_name: "elephc-web",

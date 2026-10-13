@@ -24,7 +24,7 @@ use super::*;
 /// type-check) and returns `Ok` if no errors were reported, or `Err(message)`
 /// on the first compile error. The image prelude is injected at the same point
 /// as in `src/pipeline.rs`.
-fn check_image(src: &str) -> Result<(), String> {
+pub(crate) fn check_image(src: &str) -> Result<(), String> {
     let tokens = tokenize(src).map_err(|e| e.message.clone())?;
     let ast = parse(&tokens).map_err(|e| e.message.clone())?;
     let defines: HashSet<String> = HashSet::new();

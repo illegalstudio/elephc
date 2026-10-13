@@ -82,6 +82,8 @@ mod stream_socket_server_v6;
 mod build_sockaddr_in6;
 mod opendir_glob;
 mod socket_scheme;
+mod async_poll;
+mod async_monitor;
 mod format_sockaddr;
 mod data_stream;
 mod stream_filter;
@@ -123,6 +125,7 @@ mod stream_isatty;
 mod stream_select;
 mod stream_set_blocking;
 mod stream_set_timeout;
+mod stream_ownership;
 mod streams_ext;
 mod symlink;
 mod tempnam;
@@ -243,15 +246,20 @@ pub(crate) use stream_socket_shutdown::emit_stream_socket_shutdown;
 pub(crate) use unix_socket_client::emit_unix_socket_client;
 pub(crate) use unix_socket_server::emit_unix_socket_server;
 pub(crate) use stream_isatty::emit_stream_isatty;
+pub(crate) use async_poll::{emit_async_fd, emit_async_poll};
+pub(crate) use async_monitor::emit_async_monitor_event;
 pub(crate) use stream_select::emit_stream_select;
 pub(crate) use stream_set_blocking::emit_stream_set_blocking;
 pub(crate) use stream_set_timeout::emit_stream_set_timeout;
+pub(crate) use stream_ownership::{
+    emit_stream_owner_clear, emit_stream_owner_drain, emit_stream_owner_mark,
+};
 pub(crate) use streams_ext::emit_streams_ext;
 pub(crate) use symlink::emit_symlink;
 pub(crate) use tempnam::emit_tempnam;
 pub(crate) use user_filter::{
     emit_apply_user_stream_filter, emit_resolve_user_filter_id,
-    emit_stream_filter_attach_user, emit_stream_filter_register,
+    emit_stream_filter_attach_user, emit_stream_filter_register, emit_user_filter_abandon_fd,
     emit_user_filter_release_fd,
 };
 pub(crate) use user_filter_brigade::emit_user_filter_brigade_invoke;
@@ -259,7 +267,7 @@ pub(crate) use user_wrapper::{
     emit_box_wrapper_stat_result, emit_user_wrapper_fclose, emit_user_wrapper_feof,
     emit_user_wrapper_fflush, emit_user_wrapper_flock, emit_user_wrapper_fread,
     emit_user_wrapper_fseek, emit_user_wrapper_fstat, emit_user_wrapper_ftell,
-    emit_user_wrapper_ftruncate, emit_user_wrapper_fwrite,
+    emit_user_wrapper_abandon_all, emit_user_wrapper_ftruncate, emit_user_wrapper_fwrite,
 };
 pub(crate) use user_wrapper_unbox::emit_wrapper_unbox_int;
 pub(crate) use path_is_wrapper::emit_path_is_wrapper;

@@ -28,6 +28,36 @@ fn lower_function(source: &str, target: &str, name: &str) -> (crate::ir::Module,
     (module, function)
 }
 
+/// A descriptor's retained cell replaces the creator's snapshot owner immediately after construction.
+#[test]
+fn by_value_mixed_capture_retires_creator_snapshot_on_every_target() {
+    let source = r#"<?php
+function captureOwner(mixed $value): callable {
+    return static function () use ($value): mixed { return $value; };
+}
+$callback = captureOwner($argc);
+echo $callback();
+"#;
+    for target in TARGETS {
+        let (module, function) = lower_function(source, target, "captureOwner");
+        let (creation, descriptor) = function.instructions.iter().enumerate()
+            .find(|(_, inst)| inst.op == Op::ClosureNew).expect("capturing descriptor");
+        let operand = descriptor.operands[0];
+        let load = function.instructions.iter().find(|inst| inst.result == Some(operand))
+            .expect("snapshot capture load");
+        let Some(Immediate::LocalSlot(slot)) = load.immediate else { panic!("{target}: snapshot slot"); };
+        assert_eq!(load.op, Op::LoadLocal, "{target}");
+        assert!(function.locals[slot.as_raw() as usize].name.as_ref().unwrap().contains("#capture"), "{target}");
+        let retirement = function.instructions[creation + 1..].iter().find(|inst| {
+            inst.op == Op::ReleaseLocalSlot && inst.immediate == Some(Immediate::LocalSlot(slot))
+        }).expect("creator must not keep a second capture owner until frame exit");
+        assert_eq!(retirement.effects, Op::ReleaseLocalSlot.default_effects(),
+            "{target}: retirement must retain the validated cleanup contract");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
 /// By-reference array normalization retires the concrete view after boxing and before storage.
 #[test]
 fn by_ref_array_promotion_releases_its_owned_view_on_every_target() {

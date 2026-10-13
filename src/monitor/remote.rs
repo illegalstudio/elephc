@@ -219,6 +219,7 @@ pub(crate) fn run_probe_host(cmd: &MonitorCommand, socket: &str) -> i32 {
         // during argument validation, because warning and exiting 0 told a
         // pipeline it had a file when it had none.
         print!("{}", instrument_table(&graph));
+        print!("{}", scheduler_table(&folded));
         return 0;
     }
     let display = folded_text_to_display(&folded);

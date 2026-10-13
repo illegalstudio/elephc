@@ -412,6 +412,12 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.blank();
     ctx.emitter.entry_label();
     abi::emit_frame_prologue(ctx.emitter, ctx.frame_size);
+    // The ctx-register mode installs the per-context state pointer (x28/r14)
+    // before any state read or write runs: concat base capture, heap helpers,
+    // and the runtime's ctx-gated emitters all address state relative to it.
+    ctx.emitter
+        .comment("install the per-context runtime state pointer");
+    abi::emit_call_label(ctx.emitter, "__rt_ctx_init");
     capture_concat_base(ctx);
     emit_callee_saved_saves(ctx);
     ctx.emitter.comment("save argc/argv to globals");
@@ -621,7 +627,7 @@ fn retain_owned_parameter_local(emitter: &mut Emitter, offset: usize, ty: &PhpTy
 /// Captures the caller-visible concat-buffer offset as this frame's reset base.
 fn capture_concat_base(ctx: &mut FunctionContext<'_>) {
     let scratch = abi::temp_int_reg(ctx.emitter.target);
-    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_concat_off", 0);
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(ctx.emitter, scratch);
     abi::store_at_offset(ctx.emitter, scratch, ctx.concat_base_offset);
 }
 
@@ -647,6 +653,7 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     emit_main_local_epilogue_cleanup(ctx);
     emit_main_static_local_cleanup(ctx);
     emit_main_global_epilogue_cleanup(ctx);
+    super::enum_singletons::emit_enum_slot_cleanup(ctx);
     emit_main_static_property_cleanup(ctx);
     if module_uses_resource_inventory_cleanup(ctx.module) {
         abi::emit_call_label(ctx.emitter, "__rt_resource_inventory_reset");
@@ -1070,8 +1077,9 @@ fn emit_main_local_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
     emit_ref_cell_owner_epilogue_cleanup(ctx);
     for (name, slot, ty, offset) in main_cleanup_locals(ctx) {
         ctx.emitter.comment(&format!("epilogue cleanup ${}", name));
-        emit_owned_local_cleanup(ctx, slot, offset, &ty);
+        emit_owned_local_epilogue_cleanup(ctx, slot, offset, &ty);
     }
+    emit_ref_cell_owner_epilogue_cleanup(ctx);
     emit_eval_scope_epilogue_cleanup(ctx);
     emit_eval_context_epilogue_cleanup(ctx);
 }
@@ -1475,7 +1483,7 @@ fn emit_function_local_epilogue_cleanup(
     emit_ref_cell_owner_epilogue_cleanup_for(ctx, ref_cell_owners);
     for (name, slot, ty, offset) in cleanup_locals {
         ctx.emitter.comment(&format!("epilogue cleanup ${}", name));
-        emit_owned_local_cleanup(ctx, slot, offset, &ty);
+        emit_owned_local_epilogue_cleanup(ctx, slot, offset, &ty);
     }
     for (name, offset) in eval_scopes {
         ctx.emitter.comment(&format!("epilogue cleanup {}", name));
@@ -1597,6 +1605,60 @@ pub(super) fn emit_owned_local_cleanup(
     if let Some(done) = done {
         ctx.emitter.label(&done);
     }
+}
+
+/// Releases an owned local at frame exit, including a fallback ref-cell created directly by a
+/// by-reference closure capture.
+///
+/// Explicit `PromoteLocalRefCell` operations place ownership in a hidden `LocalKind::RefCell`
+/// slot. A closure capture performs the same runtime promotion during `ClosureNew` lowering and
+/// has no hidden owner, so the promoted local itself owns the cell. The runtime state bit selects
+/// raw versus cell cleanup; when an explicit owner exists and is non-null, its later cleanup owns
+/// the cell and this path must not release it twice.
+fn emit_owned_local_epilogue_cleanup(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+    offset: usize,
+    ty: &PhpType,
+) {
+    let Some(state_offset) = ctx.ref_cell_state_offset(slot) else {
+        emit_owned_local_cleanup(ctx, slot, offset, ty);
+        return;
+    };
+    let ref_cell = ctx.next_label("owned_local_epilogue_ref_cell");
+    let done = ctx.next_label("owned_local_epilogue_done");
+    let state_reg = abi::int_result_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, state_reg, state_offset);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbnz {}, {}", state_reg, ref_cell)); // release the promoted cell instead of interpreting its pointer as the raw value
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {}, {}", state_reg, state_reg)); // inspect the local's runtime representation at frame exit
+            ctx.emitter.instruction(&format!("jne {}", ref_cell));              // promoted locals require cell-and-payload cleanup
+        }
+    }
+    emit_owned_local_cleanup(ctx, slot, offset, ty);
+    ctx.emit_branch(&done);
+    ctx.emitter.label(&ref_cell);
+    if let Some(owner_slot) = ctx.ref_cell_owner_for_slot(slot) {
+        if let Ok(owner_offset) = ctx.local_offset(owner_slot) {
+            abi::load_at_offset(ctx.emitter, state_reg, owner_offset);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction(&format!("cbnz {}, {}", state_reg, done)); // the non-null hidden owner releases this same cell below
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction(&format!("test {}, {}", state_reg, state_reg)); // check whether the hidden owner adopted the promoted cell
+                    ctx.emitter.instruction(&format!("jne {}", done));          // defer cell cleanup to the hidden owner
+                }
+            }
+        }
+    }
+    let cell_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, cell_reg, offset);
+    abi::emit_release_local_ref_cell(ctx.emitter, cell_reg, ty);
+    ctx.emitter.label(&done);
 }
 
 /// Returns whether a local kind can own values through ordinary `StoreLocal`.
@@ -2061,6 +2123,16 @@ fn emit_instr_init(ctx: &mut FunctionContext<'_>) {
         ctx.emitter,
         scratch,
         &target.extern_symbol("elephc_instr_unpark_fn"),
+        0,
+    );
+    // Seventh slot: scheduler lifecycle transitions. The runtime wrapper also
+    // checks the active-window word before tail-calling this hook.
+    let scheduler_fn = target.extern_symbol("elephc_instr_scheduler_event");
+    abi::emit_symbol_address(ctx.emitter, scratch, &scheduler_fn);
+    abi::emit_store_reg_to_symbol(
+        ctx.emitter,
+        scratch,
+        &target.extern_symbol("elephc_instr_scheduler_fn"),
         0,
     );
     let request = target.extern_symbol("elephc_instr_request");

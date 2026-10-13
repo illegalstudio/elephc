@@ -49,6 +49,7 @@ pub(super) fn emit_error_handler_invoke(emitter: &mut Emitter) {
         emitter, scratch, arg0,
         crate::codegen_support::callable_descriptor::CALLABLE_DESC_INVOKER_OFFSET,
     );
+    crate::codegen_support::callable_descriptor::emit_global_weak_invoker_context(emitter);
     abi::emit_call_reg(emitter, scratch);
     abi::emit_store_to_address(emitter, result, stack, 72);
     abi::emit_reg_move(emitter, arg0, stack);

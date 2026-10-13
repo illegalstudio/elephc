@@ -52,6 +52,7 @@ pub(super) fn emit_runtime_builtin_invoker_inline(
             captures: &[],
             mbstring_operation: None,
             mbstring_variable_ref_warnings: true,
+            parallel_fiber_suspend_guard: parallel_fiber_suspend_guard(ctx),
             owns_string_return: false,
             php_return_status: false,
             defaults: &defaults,
@@ -74,6 +75,7 @@ pub(super) fn emit_runtime_builtin_invoker_inline(
         sig,
         captures: &[],
         mbstring_operation: Some(operation),
+        parallel_fiber_suspend_guard: parallel_fiber_suspend_guard(ctx),
         mbstring_variable_ref_warnings: false,
         owns_string_return: sig.return_type.codegen_repr() == PhpType::Str,
         php_return_status: false,
@@ -135,6 +137,7 @@ pub(super) fn emit_runtime_callable_invoker_in_class(
         owns_string_return,
         php_return_status,
         defaults: &defaults,
+        parallel_fiber_suspend_guard: parallel_fiber_suspend_guard(ctx),
     };
     // Out of line, not spliced into the function that first needed it: see
     // `Emitter::begin_out_of_line` for the branch-range failure that splicing caused.
@@ -144,6 +147,44 @@ pub(super) fn emit_runtime_callable_invoker_in_class(
     ctx.shared
         .cache_runtime_callable_invoker(sig, captures, owns_string_return, php_return_status, &defaults, &label);
     label
+}
+
+/// Returns the TaskGroup error entry when the Parallel prelude is present in this module.
+fn parallel_fiber_suspend_guard(
+    ctx: &FunctionContext<'_>,
+) -> Option<(u64, String)> {
+    if !ctx.module.required_runtime_features.parallel_execution {
+        return None;
+    }
+    ctx.module
+        .class_infos
+        .iter()
+        .find(|(name, _)| crate::names::php_symbol_key(name) == "elephc\\parallel\\taskgroup")
+        .filter(|(name, _)| {
+            ctx.module.class_methods.iter().any(|function| {
+                function.flags.is_static
+                    && function
+                        .name
+                        .rsplit_once("::")
+                        .is_some_and(|(class, method)| {
+                            crate::names::php_symbol_key(class)
+                                == crate::names::php_symbol_key(name)
+                                && crate::names::php_symbol_key(method)
+                                    == crate::names::php_symbol_key(
+                                        "__assertFiberSuspendAllowed",
+                                    )
+                        })
+            })
+        })
+        .map(|(name, info)| {
+            (
+                info.class_id,
+                crate::names::static_method_symbol(
+                    name,
+                    &crate::names::php_symbol_key("__assertFiberSuspendAllowed"),
+                ),
+            )
+        })
 }
 
 /// Emits a synthetic EIR builtin wrapper so callable descriptors can use the PHP ABI.

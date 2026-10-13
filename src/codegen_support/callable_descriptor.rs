@@ -13,7 +13,7 @@
 //!   capture/receiver metadata available to runtime dispatch without changing the
 //!   one-word callable ABI.
 //! - The optional invoker slot points at a generated uniform runtime adapter whose
-//!   ABI is `(descriptor, argument array) -> Mixed`.
+//!   ABI v4 is `(descriptor, argument array, invocation_scope: i64, strict_types: u64) -> Mixed`.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::data_section::{DataSection, DataWord};
@@ -37,6 +37,8 @@ pub(crate) const CALLABLE_DESC_KIND_INSTANCE_METHOD: u64 =
     CallableDescriptorShape::InstanceMethod as u64;
 
 pub(crate) const CALLABLE_DESC_ENTRY_OFFSET: usize = 8;
+pub(crate) const CALLABLE_DESC_PHP_NAME_OFFSET: usize = 16;
+pub(crate) const CALLABLE_DESC_PHP_NAME_LEN_OFFSET: usize = 24;
 #[allow(dead_code)]
 pub(crate) const CALLABLE_DESC_SIGNATURE_OFFSET: usize = 32;
 #[allow(dead_code)]
@@ -277,6 +279,20 @@ pub(crate) fn emit_load_invoker_from_descriptor(
     descriptor_reg: &str,
 ) {
     abi::emit_load_from_address(emitter, dest_reg, descriptor_reg, CALLABLE_DESC_INVOKER_OFFSET);
+}
+
+/// Materializes the physical invocation's scalar-binding policy (0 weak, 1 strict).
+/// Must run immediately before the indirect invoke, after argument/container setup.
+pub(crate) fn emit_invoker_binding_policy(emitter: &mut Emitter, strict_types: bool) {
+    let register = abi::int_arg_reg_name(emitter.target, 3);
+    abi::emit_load_int_immediate(emitter, register, i64::from(strict_types));
+}
+
+/// Materializes ABI v4 context for internal dispatch with no lexical PHP caller.
+/// C adapters and Fiber entry calls bind weakly; they must not reuse stale scope registers.
+pub(crate) fn emit_global_weak_invoker_context(emitter: &mut Emitter) {
+    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 2), -1);
+    emit_invoker_binding_policy(emitter, false);
 }
 
 /// Retains the callable descriptor pointer currently held in the integer result register.
@@ -579,7 +595,7 @@ fn encoded_default(kind: u64, lo: DataWord, hi: u64) -> EncodedDefault {
 }
 
 /// Returns the callable descriptor type tag for a PHP codegen type.
-fn type_tag(ty: &PhpType) -> u64 {
+pub(crate) fn type_tag(ty: &PhpType) -> u64 {
     match ty.codegen_repr() {
         PhpType::Int => 0,
         PhpType::Str => 1,

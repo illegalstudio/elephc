@@ -229,9 +229,41 @@ impl Checker {
         let Some((owner_name, param_name)) = owner else {
             return;
         };
+        self.record_callable_param_sig(owner_name, param_name, sig);
+    }
+
+    /// Records one call-site specialization for a callable parameter.
+    ///
+    /// A PHP function body is compiled once, while a `callable` parameter may receive closures
+    /// with distinct return contracts at different call sites. Retaining whichever signature was
+    /// seen last narrows the shared body and can coerce an earlier result to the wrong runtime
+    /// representation. Keep the common call ABI, but widen a conflicting result to `mixed`.
+    pub(crate) fn record_callable_param_sig(
+        &mut self,
+        owner_name: &str,
+        param_name: &str,
+        incoming: FunctionSig,
+    ) -> bool {
         let key = (owner_name.to_string(), param_name.to_string());
-        if self.callable_param_sigs.get(&key) != Some(&sig) {
-            self.callable_param_sigs.insert(key, sig);
+        let Some(existing) = self.callable_param_sigs.get(&key) else {
+            self.callable_param_sigs.insert(key, incoming);
+            return true;
+        };
+        if existing == &incoming {
+            return false;
         }
+
+        // This is intentionally a result-only join. The common dynamic closure call still uses
+        // the callable parameter's established argument ABI, while a mixed result preserves the
+        // PHP value shape for every caller of the one compiled function body.
+        let mut widened = existing.clone();
+        widened.return_type = PhpType::Mixed;
+        widened.declared_return = false;
+        widened.by_ref_return = false;
+        if existing == &widened {
+            return false;
+        }
+        self.callable_param_sigs.insert(key, widened);
+        true
     }
 }

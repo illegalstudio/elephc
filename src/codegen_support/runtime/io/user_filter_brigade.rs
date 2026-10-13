@@ -402,20 +402,20 @@ fn emit_user_filter_brigade_invoke_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r11, r11");                                       // check whether the runtime value is zero
     emitter.instruction("jz __rt_ufbi_empty_x");                                // branch when the checked value is zero or equal
 
-    // Use r12 = array base, r13 = length, r14 = bucket index, r15 = write cursor.
+    // Use r12 = array base, r13 = length, rbx = bucket index, r15 = write cursor.
     emitter.instruction("mov QWORD PTR [rbp - 96], r12");                       // save callee-saved regs
     emitter.instruction("mov QWORD PTR [rbp - 104], r13");                      // store runtime value
-    emitter.instruction("mov QWORD PTR [rbp - 112], r14");                      // store runtime value
+    emitter.instruction("mov QWORD PTR [rbp - 112], rbx");                      // store runtime value
     emitter.instruction("mov QWORD PTR [rbp - 120], r15");                      // store runtime value
     emitter.instruction("lea r12, [r10 + 24]");                                 // first payload slot
     emitter.instruction("mov r13, r11");                                        // length
-    emitter.instruction("xor r14, r14");                                        // bucket index
+    emitter.instruction("xor rbx, rbx");                                        // bucket index
     emitter.instruction("xor r15, r15");                                        // write cursor
 
     emitter.label("__rt_ufbi_walk_loop_x");
-    emitter.instruction("cmp r14, r13");                                        // compare runtime values for the next branch
+    emitter.instruction("cmp rbx, r13");                                        // compare runtime values for the next branch
     emitter.instruction("jge __rt_ufbi_walk_done_x");                           // branch when comparison is at least target
-    emitter.instruction("mov rdi, QWORD PTR [r12 + r14 * 8]");                  // Mixed(bucket)
+    emitter.instruction("mov rdi, QWORD PTR [r12 + rbx * 8]");                  // Mixed(bucket)
     emitter.instruction("test rdi, rdi");                                       // check whether the runtime value is zero
     emitter.instruction("jz __rt_ufbi_walk_next_x");                            // branch when the checked value is zero or equal
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // move runtime value between registers
@@ -447,7 +447,7 @@ fn emit_user_filter_brigade_invoke_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_ufbi_copy_done_x");
 
     emitter.label("__rt_ufbi_walk_next_x");
-    emitter.instruction("inc r14");                                             // advance runtime pointer or counter
+    emitter.instruction("inc rbx");                                             // advance runtime pointer or counter
     emitter.instruction("jmp __rt_ufbi_walk_loop_x");                           // continue at target label
 
     emitter.label("__rt_ufbi_walk_done_x");
@@ -455,7 +455,7 @@ fn emit_user_filter_brigade_invoke_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, r15");                                        // result len
     emitter.instruction("mov r12, QWORD PTR [rbp - 96]");                       // restore callee-saved regs
     emitter.instruction("mov r13, QWORD PTR [rbp - 104]");                      // move runtime value between registers
-    emitter.instruction("mov r14, QWORD PTR [rbp - 112]");                      // move runtime value between registers
+    emitter.instruction("mov rbx, QWORD PTR [rbp - 112]");                      // move runtime value between registers
     emitter.instruction("mov r15, QWORD PTR [rbp - 120]");                      // move runtime value between registers
     emitter.instruction("mov rsp, rbp");                                        // move runtime value between registers
     emitter.instruction("pop rbp");                                             // restore caller frame pointer

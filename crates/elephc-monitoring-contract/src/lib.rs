@@ -12,9 +12,118 @@
 
 use std::time::Instant;
 
+/// Execution domain carried by scheduler monitoring events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum SchedulerDomain {
+    /// Cooperative Fibers sharing one runtime context.
+    Async = 1,
+    /// Isolated worker contexts scheduled by the operating system.
+    Parallel = 2,
+}
+
+/// State entered by a task at one scheduler transition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum SchedulerState {
+    Created = 1,
+    Runnable = 2,
+    Running = 3,
+    WaitingTask = 4,
+    Sleeping = 5,
+    WaitingIo = 6,
+    Cancelling = 7,
+    Completed = 8,
+    Failed = 9,
+    Cancelled = 10,
+}
+
+impl SchedulerState {
+    /// Decodes the stable scheduler-event ABI value.
+    pub const fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            1 => Some(Self::Created),
+            2 => Some(Self::Runnable),
+            3 => Some(Self::Running),
+            4 => Some(Self::WaitingTask),
+            5 => Some(Self::Sleeping),
+            6 => Some(Self::WaitingIo),
+            7 => Some(Self::Cancelling),
+            8 => Some(Self::Completed),
+            9 => Some(Self::Failed),
+            10 => Some(Self::Cancelled),
+            _ => None,
+        }
+    }
+}
+
+/// Cause attached to a scheduler state transition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum SchedulerWakeReason {
+    None = 0,
+    Spawn = 1,
+    Dispatch = 2,
+    Yield = 3,
+    Await = 4,
+    Dependency = 5,
+    Timer = 6,
+    IoReady = 7,
+    IoTimeout = 8,
+    Cancellation = 9,
+    Completion = 10,
+    Failure = 11,
+}
+
+impl SchedulerWakeReason {
+    /// Decodes the stable scheduler-event ABI value.
+    pub const fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::None),
+            1 => Some(Self::Spawn),
+            2 => Some(Self::Dispatch),
+            3 => Some(Self::Yield),
+            4 => Some(Self::Await),
+            5 => Some(Self::Dependency),
+            6 => Some(Self::Timer),
+            7 => Some(Self::IoReady),
+            8 => Some(Self::IoTimeout),
+            9 => Some(Self::Cancellation),
+            10 => Some(Self::Completion),
+            11 => Some(Self::Failure),
+            _ => None,
+        }
+    }
+}
+
+/// Packs one state and wake reason into the fourth scheduler-event ABI word.
+pub const fn scheduler_transition(state: SchedulerState, reason: SchedulerWakeReason) -> u32 {
+    ((state as u32) << 8) | reason as u32
+}
+
+/// Decodes one packed scheduler transition, rejecting unknown or reserved bits.
+pub const fn decode_scheduler_transition(
+    transition: u32,
+) -> Option<(SchedulerState, SchedulerWakeReason)> {
+    if transition & !0xffff != 0 {
+        return None;
+    }
+    let state = match SchedulerState::from_u8((transition >> 8) as u8) {
+        Some(state) => state,
+        None => return None,
+    };
+    let reason = match SchedulerWakeReason::from_u8(transition as u8) {
+        Some(reason) => reason,
+        None => return None,
+    };
+    Some((state, reason))
+}
+
 /// The externally visible I/O category attributed by the monitor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IoKind {
+    /// Generic descriptor readiness waits owned by the Async reactor.
+    Descriptor,
     /// Database statements, kept separate for query budgets and N+1 analysis.
     Database,
     /// Outgoing network transfers such as curl requests.
@@ -309,6 +418,20 @@ mod tests {
         assert_eq!(EXCLUDED_WAIT.load(Ordering::Relaxed), 600);
         hooks.note_wait_excluding(100, 200);
         assert_eq!(EXCLUDED_WAIT.load(Ordering::Relaxed), 600);
+    }
+
+    /// Scheduler state and wake reason share one stable, validated ABI word.
+    #[test]
+    fn scheduler_transition_round_trips_and_rejects_unknown_bits() {
+        let encoded = scheduler_transition(SchedulerState::WaitingIo, SchedulerWakeReason::Await);
+        assert_eq!(
+            decode_scheduler_transition(encoded),
+            Some((SchedulerState::WaitingIo, SchedulerWakeReason::Await))
+        );
+        assert_eq!(decode_scheduler_transition(0), None);
+        assert_eq!(decode_scheduler_transition(0x01_0000), None);
+        assert_eq!(decode_scheduler_transition(0x0b00), None);
+        assert_eq!(decode_scheduler_transition(0x010c), None);
     }
 
     /// Verifies traceparent validation rejects injection and zero-identity shapes.

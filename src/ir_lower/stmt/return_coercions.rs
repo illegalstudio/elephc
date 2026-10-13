@@ -21,6 +21,9 @@ pub(super) fn coerce_to_return_type(
     if value.ir_type == ctx.return_type {
         return value;
     }
+    if ctx.return_type_is_declared && ctx.return_php_type == PhpType::Str {
+        return super::string_return_boundary::lower(ctx, value, span.unwrap_or_else(Span::synthetic));
+    }
     match ctx.return_type {
         IrType::I64 => {
             if let Some(verified) = declared_int_return_boundary(ctx, value, span) {
@@ -36,14 +39,26 @@ pub(super) fn coerce_to_return_type(
         IrType::Heap(_) if ctx.return_php_type.codegen_repr() == PhpType::Mixed => {
             ctx.box_value_as_mixed(value, ctx.return_php_type.clone(), span)
         }
-        IrType::Heap(_) => ctx.emit_value(
-            Op::RuntimeCall,
-            vec![value.value],
-            None,
-            ctx.return_php_type.clone(),
-            effects_lookup::runtime_effects(),
-            span,
-        ),
+        IrType::Heap(_) => {
+            let source_is_boxed = matches!(
+                ctx.builder.value_php_type(value.value).codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_)
+            );
+            let coerced = ctx.emit_value(
+                Op::RuntimeCall,
+                vec![value.value],
+                None,
+                ctx.return_php_type.clone(),
+                effects_lookup::runtime_effects(),
+                span,
+            );
+            // Concrete heap extraction retains the returned payload independently. Retire an
+            // owning source box after extraction; a borrowed local or parameter remains live.
+            if source_is_boxed && ctx.value_is_owning_temporary(value) {
+                crate::ir_lower::ownership::release_if_owned(ctx, value, span);
+            }
+            coerced
+        }
         IrType::Void => value,
     }
 }
@@ -255,6 +270,10 @@ pub(super) fn coerce_to_string(
     value: LoweredValue,
     span: Option<Span>,
 ) -> LoweredValue {
+    if ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Bool {
+        return ctx.emit_value(Op::BoolToStr, vec![value.value], None, PhpType::Str,
+            Op::BoolToStr.default_effects(), span);
+    }
     match value.ir_type {
         IrType::Str => value,
         IrType::I64 | IrType::TaggedScalar => ctx.emit_value(
@@ -283,4 +302,3 @@ pub(super) fn coerce_to_string(
         ),
     }
 }
-

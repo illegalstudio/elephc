@@ -12,7 +12,8 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use super::hash_layout::NEXT_INDEX_OFFSET;
 
 /// Records a newly inserted integer key, preserving all registers except the documented scratch set.
-/// ARM uses x13-x15; x86 uses r11/r13/r14. The caller supplies a unique branch-label prefix.
+/// ARM uses x13-x15; x86 uses r11/r13. The reserved runtime context register stays untouched.
+/// The caller supplies a unique branch-label prefix.
 pub(super) fn record_insert(emitter: &mut Emitter, hash: &str, entry: &str, prefix: &str) {
     let done = format!("{prefix}_next_index_done");
     if emitter.target.arch == Arch::AArch64 {
@@ -32,10 +33,10 @@ pub(super) fn record_insert(emitter: &mut Emitter, hash: &str, entry: &str, pref
         emitter.instruction(&format!("mov r13, QWORD PTR [{entry} + 8]"));      // recover the inserted signed integer key
         emitter.instruction(&format!("cmp r13, QWORD PTR [{hash} + {NEXT_INDEX_OFFSET}]")); // compare against the persistent signed counter
         emitter.instruction(&format!("jl {done}"));                             // preserve history when inserting a smaller key
-        emitter.instruction("mov r14, r13");                                    // preserve the original key for overflow saturation
-        emitter.instruction("add r14, 1");                                      // compute the successor with signed overflow flags
-        emitter.instruction("cmovo r14, r13");                                  // keep PHP_INT_MAX instead of wrapping negative
-        emitter.instruction(&format!("mov QWORD PTR [{hash} + {NEXT_INDEX_OFFSET}], r14")); // publish the persistent next index
+        emitter.instruction("mov r11, r13");                                    // preserve the original key for overflow saturation
+        emitter.instruction("add r11, 1");                                      // compute the successor with signed overflow flags
+        emitter.instruction("cmovo r11, r13");                                  // keep PHP_INT_MAX instead of wrapping negative
+        emitter.instruction(&format!("mov QWORD PTR [{hash} + {NEXT_INDEX_OFFSET}], r11")); // publish the persistent next index
     }
     emitter.label(&done);
 }

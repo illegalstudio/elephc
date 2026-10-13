@@ -72,6 +72,8 @@ use super::*;
         );
         let variants = [
             RuntimeFeatures { regex: true, ..RuntimeFeatures::none() },
+            RuntimeFeatures { async_reactor: true, ..RuntimeFeatures::none() },
+            RuntimeFeatures { parallel_execution: true, ..RuntimeFeatures::none() },
             RuntimeFeatures { mbstring: true, ..RuntimeFeatures::none() },
             RuntimeFeatures { mbregex: true, ..RuntimeFeatures::none() },
             RuntimeFeatures { mbstring_mime: true, ..RuntimeFeatures::none() },
@@ -85,6 +87,7 @@ use super::*;
             RuntimeFeatures { generator: true, ..RuntimeFeatures::none() },
             RuntimeFeatures { popen_resource: true, ..RuntimeFeatures::none() },
             RuntimeFeatures { directory_resource: true, ..RuntimeFeatures::none() },
+            RuntimeFeatures { ctx_register: false, ..RuntimeFeatures::none() },
             RuntimeFeatures { handler_state: true, ..RuntimeFeatures::none() },
             RuntimeFeatures { object_clone: true, ..RuntimeFeatures::none() },
         ];

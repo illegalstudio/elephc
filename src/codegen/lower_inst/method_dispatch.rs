@@ -184,6 +184,15 @@ pub(super) fn lower_mixed_method_candidate_call(
     candidate: &MixedMethodCandidate,
     method_name: &str,
 ) -> Result<()> {
+    if is_fiber_start_call(&candidate.class_name, method_name) {
+        return lower_mixed_fiber_start_from_reg(ctx, inst, receiver_reg);
+    }
+    if is_fiber_resume_call(&candidate.class_name, method_name) {
+        return lower_mixed_fiber_resume_from_reg(ctx, inst, receiver_reg);
+    }
+    if is_fiber_throw_call(&candidate.class_name, method_name) {
+        return lower_mixed_fiber_throw_from_reg(ctx, inst, receiver_reg);
+    }
     // Built-in Throwables implement the standard Throwable surface through compact intrinsics,
     // not through class vtable slots — those slots stay empty for builtins. Dispatching this
     // candidate dynamically would load a null slot and branch to it, so route it to the same

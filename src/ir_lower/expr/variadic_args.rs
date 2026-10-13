@@ -24,7 +24,7 @@ pub(super) fn lower_named_variadic_tail_array(
     tail: &[crate::types::call_args::PlannedSourceValue],
     source_values: &[crate::ir::ValueId],
 ) -> LoweredValue {
-    if tail.iter().any(|source| source.key().is_some()) {
+    if tail.iter().any(|source| source.key().is_some()) || variadic_capture_uses_hash(sig) {
         return lower_named_variadic_tail_hash(ctx, sig, tail, source_values);
     }
     let span = tail
@@ -43,6 +43,7 @@ pub(super) fn lower_named_variadic_tail_array(
         Op::ArrayNew.default_effects(),
         Some(span),
     );
+    let array = protect_variadic_container(ctx, array, span);
     let elem_ty = indexed_array_literal_element_type(&array_ty);
     let by_ref_variadic = variadic_param_is_by_ref(sig);
     if count_metadata {
@@ -55,6 +56,7 @@ pub(super) fn lower_named_variadic_tail_array(
         }
         let value = lower_variadic_tail_source_value(
             ctx,
+            sig,
             source.expr(),
             by_ref_variadic,
             Some(source_values[source.source_index()]),
@@ -102,6 +104,7 @@ pub(super) fn lower_named_variadic_tail_hash(
         Op::HashNew.default_effects(),
         Some(span),
     );
+    let hash = protect_variadic_container(ctx, hash, span);
     let mut next_positional_key = 0usize;
     let by_ref_variadic = variadic_param_is_by_ref(sig);
     for source in tail {
@@ -117,6 +120,7 @@ pub(super) fn lower_named_variadic_tail_hash(
         };
         let value = lower_variadic_tail_source_value(
             ctx,
+            sig,
             source.expr(),
             by_ref_variadic,
             Some(source_values[source.source_index()]),
@@ -129,6 +133,7 @@ pub(super) fn lower_named_variadic_tail_hash(
             Op::HashSet.default_effects(),
             Some(source.expr().span),
         );
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(source.expr().span));
     }
     hash
 }
@@ -151,6 +156,36 @@ pub(super) fn lower_variadic_tail_array(
     tail: &[Expr],
     actual_count: usize,
 ) -> LoweredValue {
+    let source_values = prepare_variadic_tail_values(ctx, sig, tail);
+    lower_variadic_tail_array_from_values(ctx, sig, tail, &source_values, actual_count)
+}
+
+/// Evaluates all tail sources before any declared element conversion can run.
+pub(super) fn prepare_variadic_tail_values(
+    ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSig, tail: &[Expr],
+) -> Vec<ValueId> {
+    let by_ref = variadic_param_is_by_ref(sig);
+    tail.iter().map(|item| {
+        if by_ref {
+            if let ExprKind::Variable(name) = &item.kind {
+                let marker = lower_invoker_ref_variadic_arg_marker(ctx, name, item.span);
+                return super::arg_evaluation::hold_argument_snapshot(ctx, marker, item.span);
+            }
+        }
+        let value = lower_expr(ctx, item);
+        snapshot_call_argument(ctx, value, by_ref, item.span)
+    }).collect()
+}
+
+/// Packs already snapshotted sources, binding after regular arguments are bound.
+pub(super) fn lower_variadic_tail_array_from_values(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    tail: &[Expr],
+    source_values: &[ValueId],
+    actual_count: usize,
+) -> LoweredValue {
+    debug_assert_eq!(tail.len(), source_values.len());
     let span = tail
         .first()
         .map(|arg| arg.span)
@@ -168,6 +203,7 @@ pub(super) fn lower_variadic_tail_array(
         Op::ArrayNew.default_effects(),
         Some(span),
     );
+    let array = protect_variadic_container(ctx, array, span);
     let elem_ty = indexed_array_literal_element_type(&array_ty);
     let by_ref_variadic = variadic_param_is_by_ref(sig);
     if crate::func_args::sig_collects_optional_arg_count(sig) {
@@ -180,8 +216,12 @@ pub(super) fn lower_variadic_tail_array(
             span,
         );
     }
-    for item in tail {
-        let value = lower_variadic_tail_source_value(ctx, item, by_ref_variadic, None, &array_ty);
+    for (item, source) in tail.iter().zip(source_values) {
+        let value = if by_ref_variadic && matches!(item.kind, ExprKind::Variable(_)) {
+            lowered_value_from_id(ctx, *source)
+        } else {
+            lower_variadic_tail_source_value(ctx, sig, item, by_ref_variadic, Some(*source), &array_ty)
+        };
         ctx.emit_void(
             Op::ArrayPush,
             vec![array.value, value.value],
@@ -239,6 +279,7 @@ fn push_func_args_count(
 /// Lowers one value stored into a variadic tail container.
 pub(super) fn lower_variadic_tail_source_value(
     ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
     expr: &Expr,
     by_ref_variadic: bool,
     prelowered: Option<crate::ir::ValueId>,
@@ -260,8 +301,39 @@ pub(super) fn lower_variadic_tail_source_value(
     }
     let value = prelowered
         .map(|value| lowered_value_from_id(ctx, value))
-        .unwrap_or_else(|| lower_expr(ctx, expr));
-    coerce_variadic_tail_value(ctx, value, array_ty, expr.span)
+        .unwrap_or_else(|| {
+            let value = lower_expr(ctx, expr);
+            let snapshot = snapshot_call_argument(ctx, value, by_ref_variadic, expr.span);
+            lowered_value_from_id(ctx, snapshot)
+        });
+    // The capture's physical Array/Hash element type is not its PHP declaration.
+    // Reuse scalar binding with the declared variadic element before storage boxing.
+    let value = if !by_ref_variadic {
+        if let Some(index) = sig.variadic.as_ref()
+            .and_then(|name| sig.params.iter().position(|(param, _)| param == name))
+        {
+            if let Some(Some(declared)) = sig.param_type_exprs.get(index) {
+                let mut binding = sig.clone();
+                binding.params[index].1 = ctx.type_expr_to_php_type_for_value(declared);
+                coerce_scalar_arg_to_param_storage(ctx, &binding, index, value, expr)
+            } else { value }
+        } else { value }
+    } else { value };
+    let stored = coerce_variadic_tail_value(ctx, value, array_ty, expr.span);
+    if stored.value != value.value {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
+    }
+    stored
+}
+
+/// Newly allocated collectors are independent owners, unlike speculative local
+/// array unboxes. Keep partially filled collectors alive and cleanup-safe while
+/// later element binding may throw; success transfers the owner to call cleanup.
+fn protect_variadic_container(
+    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span,
+) -> LoweredValue {
+    let held = super::arg_evaluation::hold_argument_snapshot(ctx, value, span);
+    lowered_value_from_id(ctx, held)
 }
 
 /// Returns whether the synthetic variadic parameter slot is by-reference.
@@ -290,9 +362,21 @@ pub(super) fn variadic_tail_value_type(sig: &FunctionSig) -> PhpType {
         .find(|(name, _)| name == variadic_name)
         .map(|(_, ty)| match ty.codegen_repr() {
             PhpType::Array(elem_ty) => variadic_container_element_type(*elem_ty),
+            PhpType::AssocArray { value, .. } => variadic_container_element_type(*value),
             other => variadic_container_element_type(other),
         })
         .unwrap_or(PhpType::Mixed)
+}
+
+/// Returns whether this EIR variadic slot stores its full numeric/string-key shape as a hash.
+fn variadic_capture_uses_hash(sig: &FunctionSig) -> bool {
+    let Some(variadic_name) = sig.variadic.as_deref() else {
+        return false;
+    };
+    sig.params
+        .iter()
+        .find(|(name, _)| name == variadic_name)
+        .is_some_and(|(_, ty)| matches!(ty.codegen_repr(), PhpType::AssocArray { .. }))
 }
 
 /// Returns the runtime array type used for a variadic parameter slot.
@@ -309,6 +393,9 @@ pub(super) fn variadic_array_type(sig: &FunctionSig) -> PhpType {
         .map(|(_, ty)| match ty.codegen_repr() {
             PhpType::Array(elem_ty) => {
                 PhpType::Array(Box::new(variadic_container_element_type(*elem_ty)))
+            }
+            PhpType::AssocArray { value, .. } => {
+                PhpType::Array(Box::new(variadic_container_element_type(*value)))
             }
             other => PhpType::Array(Box::new(variadic_container_element_type(other))),
         })

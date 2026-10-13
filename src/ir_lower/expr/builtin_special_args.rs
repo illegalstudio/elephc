@@ -135,6 +135,33 @@ pub(super) fn lower_preg_replace_callback_args(
         let subject = persist_call_arg_if_string(ctx, subject, args[2].span);
         return vec![pattern.value, callback.value, subject.value];
     }
+    if ctx
+        .extern_functions
+        .contains_key("elephc_parallel_parent_scope_active")
+        && !crate::types::call_args::has_named_args(args)
+        && !args.iter().any(is_spread_arg)
+    {
+        if let Some(sig) = sig {
+            let mut lowered = Vec::with_capacity(args.len());
+            for (index, arg) in args.iter().enumerate() {
+                let value = lower_arg_with_signature(ctx, sig, index, arg);
+                if index == 1 {
+                    let callback = LoweredValue {
+                        value,
+                        ir_type: ctx.builder.value_type(value),
+                    };
+                    super::descriptor_invoke::maybe_emit_parallel_fiber_suspend_callback_guard_with_pending(
+                        ctx,
+                        callback,
+                        arg.span,
+                        &lowered,
+                    );
+                }
+                lowered.push(value);
+            }
+            return lowered;
+        }
+    }
     let Some(callback) = preg_replace_static_callback(ctx, &args[1]) else {
         return lower_args_with_signature(ctx, sig, args);
     };
