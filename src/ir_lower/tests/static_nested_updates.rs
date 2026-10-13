@@ -50,6 +50,7 @@ function stringCompound(): void { NestedUpdate::$items[0][0] += 1; }
 function stringIntermediate(): void { ++NestedUpdate::$items[0][0][1]; }
 function stringIntermediateCompound(): void { NestedUpdate::$items[0][0][1] += 1; }
 function nestedPostfix(): mixed { return NestedUpdate::$items[0][0][1]++; }
+function falseParentUpdate(): mixed { return ++NestedUpdate::$items[0][0][1]; }
 set_error_handler(function($level, $message) { return true; });
 ++NestedUpdate::$items[0][0]["before"];
 ++ConcreteUpdate::$items[1][0];
@@ -110,6 +111,12 @@ echo json_encode(NestedUpdate::$items);
     let postfix = module.functions.iter().find(|function| function.name == "nestedPostfix").unwrap();
     assert!(postfix.instructions.iter().any(|inst| inst.op == Op::MixedClone),
         "{target}: the postfix result owns an independent old-value box");
+    let false_parent = module.functions.iter().find(|function| function.name == "falseParentUpdate").unwrap();
+    assert!(false_parent.blocks.iter().any(|block| block.name.starts_with("static.update.false.promote")),
+        "{target}: false parents take a write-context promotion path");
+    assert!(false_parent.instructions.iter().any(|inst| inst.immediate == Some(
+        Immediate::RuntimeCall(RuntimeCallTarget::WriteDiagnostic))),
+        "{target}: false promotion retains PHP's deprecation channel");
     for name in ["variableStringKey", "promotedStringKey", "promotedMixedKey", "promotedNullableKey"] {
         let function = module.functions.iter().find(|function| function.name == name).unwrap();
         assert!(function.instructions.iter().any(|inst| inst.op == Op::ZeroLocalSlot),

@@ -306,6 +306,7 @@ fn lower_static_update_key_and_guard(
             crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
         }
     }
+    super::static_false_parent::normalize_for_update(ctx, parent, span);
     let array = ctx.emit_value(Op::TypePredicate, vec![parent.value],
         Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Array)), PhpType::Bool,
         Op::TypePredicate.default_effects(), Some(span));

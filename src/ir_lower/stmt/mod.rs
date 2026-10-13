@@ -45,6 +45,7 @@ mod conditionals;
 mod loops;
 mod array_write_core;
 mod nested_array_writes;
+mod static_false_parent;
 mod array_write_storage;
 mod typed_foreach;
 mod switches;

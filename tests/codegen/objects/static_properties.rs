@@ -9,6 +9,87 @@
 
 use super::*;
 
+/// False parent promotion is attached before the deprecation and preserves the ordinary leaf warning.
+#[test]
+fn test_static_prefix_ninth_review_false_parent() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class C { public static array $items = [[false]]; }
+set_error_handler(function(int $level, string $message): bool {
+    echo $level, ':', json_encode(C::$items), '|'; return true;
+});
+$result = ++C::$items[0][0][1];
+echo $result, ':', json_encode(C::$items);
+restore_error_handler(); C::$items = [];
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "8192:[[[]]]|2:[[[]]]|1:[[{\"1\":1}]]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A throwing conversion handler leaves the attached array empty without starting the update.
+#[test]
+fn test_static_prefix_ninth_review_false_handler_throw() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class C { public static array $items = [[false]]; }
+set_error_handler(function(int $level, string $message): bool {
+    echo $level, ':', json_encode(C::$items), '|'; throw new Error('handler');
+});
+try { ++C::$items[0][0][1]; } catch (Error $e) { echo $e->getMessage(), ':', json_encode(C::$items); }
+restore_error_handler(); C::$items = [];
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "8192:[[[]]]|handler:[[[]]]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Postfix and compound writes preserve null results, associative keys and independent COW copies.
+#[test]
+fn test_static_prefix_ninth_review_false_cow_updates() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class C { public static array $items = [[false]]; }
+$copy = C::$items;
+set_error_handler(function(int $level, string $message): bool { echo $level, '|'; return true; });
+$old = C::$items[0][0][1]++;
+echo json_encode($old), ':', json_encode(C::$items), ':', json_encode($copy), '|';
+C::$items = ['parent' => false];
+C::$items['parent']['leaf'] += 4;
+echo json_encode(C::$items);
+restore_error_handler(); C::$items = []; unset($copy);
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "8192|2|null:[[{\"1\":1}]]:[[false]]|8192|2|{\"parent\":{\"leaf\":4}}", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Every computed dimension is evaluated once before promotion and missing-key diagnostics.
+#[test]
+fn test_static_prefix_ninth_review_false_computed_keys() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class C { public static array $items = [false]; }
+function outer(): int { echo 'P'; return 0; }
+function middle(): int { echo 'M'; return 0; }
+function leaf(): int { echo 'L'; return 1; }
+set_error_handler(function(int $level, string $message): bool { echo $level, '|'; return true; });
+$result = ++C::$items[outer()][middle()][leaf()];
+echo $result, ':', json_encode(C::$items);
+restore_error_handler(); C::$items = [];
+"#);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "PML8192|2|2|1:[[{\"1\":1}]]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// False-parent write contexts and handler cleanup have the same behavior with IR passes disabled.
+#[test]
+fn test_static_prefix_ninth_review_false_without_ir_opt() {
+    crate::support::without_ir_opt(|| {
+        test_static_prefix_ninth_review_false_parent();
+        test_static_prefix_ninth_review_false_handler_throw();
+        test_static_prefix_ninth_review_false_cow_updates();
+        test_static_prefix_ninth_review_false_computed_keys();
+    });
+}
+
 /// Verifies a nested static update reads its intermediate ArrayAccess offset exactly once.
 fn verify_static_arrayaccess_update(operation: &str, expected: &str) {
     let out = compile_and_run_with_heap_debug(&format!(r#"<?php

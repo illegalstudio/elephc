@@ -30,6 +30,7 @@ pub(super) fn lower(
         RuntimeCallTarget::ArrayFetchForWrite | RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed => {
             super::lower_array_fetch_for_write_runtime_call(ctx, inst)
         }
+        RuntimeCallTarget::WriteDiagnostic => lower_diagnostic(ctx, inst),
         RuntimeCallTarget::MixedCellPromoteToHash(sort) => {
             lower_mixed_cell_promote_to_hash(ctx, inst, sort, false)
         }
@@ -54,6 +55,18 @@ pub(super) fn lower(
             super::runtime_functions::lower(ctx, inst, target)
         }
     }
+}
+
+/// Forwards a complete diagnostic through PHP's masks and catchable error-handler dispatch.
+fn lower_diagnostic(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    // -- materialize borrowed diagnostic bytes in the native handler ABI --
+    ctx.load_value_to_result(expect_operand(inst, 0)?)?;
+    if ctx.emitter.target.arch == crate::codegen::platform::Arch::X86_64 {
+        abi::emit_reg_move(ctx.emitter, "rdi", "rax");
+        abi::emit_reg_move(ctx.emitter, "rsi", "rdx");
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+    Ok(())
 }
 
 /// Promotes an independent cell copy and transfers one hash owner to a literal unpack operation.
