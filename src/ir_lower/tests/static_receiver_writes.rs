@@ -52,6 +52,19 @@ function writeHookResult(Hook $box): int { return C::$o->items[computedKey()] = 
 function writeIndexedHook(Hook $box): void { StaticBuckets::$items[0]->v = $box->indexed; }
 function writeIndexedHookResult(Hook $box): int { return StaticBuckets::$items[computedKey()]->v = $box->indexed; }
 function writeIndexedHookCompound(Hook $box): void { StaticBuckets::$items[0]->v += $box->indexed; }
+class GetterRoot {
+    public array $last = [];
+    public array $children { &get { $this->last = [new IndexedLeaf()]; return $this->last; } }
+}
+class GetterHolder { public GetterRoot $child; public function __construct() { $this->child = new GetterRoot(); } }
+class GetterRows {
+    public array $last = [];
+    public array $children { &get { $this->last = [[new IndexedLeaf()]]; return $this->last; } }
+}
+class GetterOwner { public static ?GetterRoot $root = null; public static ?GetterHolder $holder = null; public static ?GetterRows $rows = null; }
+function writeGetterCompound(): int { return GetterOwner::$root->children[computedKey()]->v += replace(); }
+function writeChildGetterCompound(): void { GetterOwner::$holder->child->children[computedKey()]->v += replace(); }
+function writeInterleavedGetterCompound(): int { return GetterOwner::$rows->children[0][computedKey()]->v += replace(); }
 function writeHookArrayCompound(Hook $box): void { C::$o->items[0] += $box->value; }
 function writeHookChildCompound(Hook $box): void { R::$root->child->items[0] += $box->value; }
 function writeHookNestedCompound(Hook $box): void { C::$o->nested[0][0] += $box->value; }
@@ -149,6 +162,16 @@ C::$nullable->items[] = 3;
         let guard = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::IsNull).unwrap();
         let read = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::PropGet).unwrap();
         assert!(rhs < guard && guard < read, "{target}: {name} rejects null before reading its first missing property");
+    }
+    for name in ["writeGetterCompound", "writeChildGetterCompound", "writeInterleavedGetterCompound"] {
+        let function = module.functions.iter().find(|function| function.name == name).unwrap();
+        assert_eq!(function.instructions.iter().filter(|inst|
+            inst.op == crate::ir::Op::LoadStaticProperty).count(), 1,
+            "{target}: {name} shares one indexed receiver across compound read and write");
+        let rhs = function.instructions.iter().rposition(|inst| inst.op == crate::ir::Op::Call).unwrap();
+        let receiver = function.instructions.iter().position(|inst|
+            inst.op == crate::ir::Op::LoadStaticProperty).unwrap();
+        assert!(rhs < receiver, "{target}: {name} captures its RHS before the shared receiver");
     }
     for name in ["writeComputedNested", "writeComputedLeaf", "writeComputedCompound", "writeNullChain"] {
         let function = module.functions.iter().find(|function| function.name == name).unwrap();

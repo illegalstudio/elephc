@@ -4,8 +4,10 @@
 //! Called from:
 //! - `crate::ir_lower::stmt::typed_foreach` when the loop source is a property access.
 //! - `crate::ir_lower::stmt::nested_array_writes` for boxed property write roots.
+//! - Assignment lowering for delayed static receivers, including array-interleaved chains.
 //!
 //! Key details:
+//! - Delayed static chains retain each selected child before retiring its parent lease.
 //! - Emits a borrowed `PropGetForWrite` when the receiver is a statically known non-null object
 //!   and the final property is a fixed container slot. Frontend and backend slot classification
 //!   are mirrored over the same class metadata so the two sides cannot silently disagree.
@@ -21,11 +23,12 @@
 
 use super::*;
 
-/// Recognizes pure static-property receiver chains whose traversal follows the RHS of a write.
+/// Recognizes static-property receiver chains through property and indexed reads after the RHS.
 pub(crate) fn is_static_property_write_chain(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::StaticPropertyAccess { .. } => true,
         ExprKind::PropertyAccess { object, .. } => is_static_property_write_chain(object),
+        ExprKind::ArrayAccess { array, .. } => is_static_property_write_chain(array),
         _ => false,
     }
 }
@@ -42,6 +45,15 @@ pub(crate) fn lower_static_property_write_chain_with_operands(
     ctx: &mut LoweringContext<'_, '_>, expr: &Expr, operands: &[ValueId], span: Span,
 ) -> crate::ir_lower::stmt::property_write_receiver::PropertyWriteReceiver {
     use crate::ir_lower::stmt::property_write_receiver::PropertyWriteReceiver;
+    if let ExprKind::ArrayAccess { array, index } = &expr.kind {
+        let parent = lower_static_property_write_chain_with_operands(ctx, array, operands, span);
+        let ty = ctx.builder.value_php_type(parent.value.value);
+        let borrowed = ctx.emit_value(Op::Borrow, vec![parent.value.value], None, ty,
+            Op::Borrow.default_effects(), Some(span));
+        ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+        let child = lower_array_access_from_lowered_receiver(ctx, borrowed, index, expr);
+        return capture_static_write_child(ctx, parent, child, span);
+    }
     let ExprKind::PropertyAccess { object, property } = &expr.kind else {
         let value = lower_expr(ctx, expr);
         return PropertyWriteReceiver::new(ctx, value, span);
@@ -55,11 +67,21 @@ pub(crate) fn lower_static_property_write_chain_with_operands(
         Op::Borrow.default_effects(), Some(span));
     ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
     let child = lower_property_get_from_value(ctx, borrowed, property, Op::PropGet, expr);
+    capture_static_write_child(ctx, parent, child, span)
+}
+
+/// Acquires an indexed/property child before retiring the lease that made its read possible.
+fn capture_static_write_child(
+    ctx: &mut LoweringContext<'_, '_>,
+    parent: crate::ir_lower::stmt::property_write_receiver::PropertyWriteReceiver,
+    child: LoweredValue,
+    span: Span,
+) -> crate::ir_lower::stmt::property_write_receiver::PropertyWriteReceiver {
     let child = if ctx.value_is_owning_temporary(child) { child } else {
         crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, child, Some(span))
     };
     parent.finish(ctx, span);
-    PropertyWriteReceiver::new(ctx, child, span)
+    crate::ir_lower::stmt::property_write_receiver::PropertyWriteReceiver::new(ctx, child, span)
 }
 
 /// Lowers the source of a by-reference `foreach` whose receiver is an object property.

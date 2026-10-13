@@ -8,7 +8,73 @@
 //! - No local alias masks early destruction when RHS evaluation replaces the static owner.
 //! - Nullable array receivers must mutate the declared slot and retire unwind pins.
 
-use crate::support::compile_and_run_with_heap_debug;
+use crate::support::{compile_and_run_with_heap_debug, without_ir_opt};
+
+/// Checks one array-interleaved static receiver with a fresh child on each legal reference getter.
+fn verify_compound_static_getter(receiver: &str, key: &str, statement: bool, nested: bool, expected: &str) {
+    let target = format!("{receiver}->children[{key}]->v");
+    let write = if statement { format!("{target} += rhs();") }
+        else { format!("$result = ({target} += rhs()); echo ':', $result;") };
+    let child = if nested { "[[new Leaf($this->reads * 10)]]" } else { "[new Leaf($this->reads * 10)]" };
+    let stored = if nested { "[0][0]" } else { "[0]" };
+    verify(&format!(r#"<?php
+class Leaf {{
+    public int $v;
+    public function __construct(int $v) {{ $this->v = $v; }}
+    public function __destruct() {{ echo 'D', $this->v; }}
+}}
+class Root {{
+    public int $reads = 0;
+    public array $last = [];
+    public array $children {{
+        &get {{ echo 'G'; $this->reads++; $this->last = {child}; return $this->last; }}
+    }}
+}}
+class Holder {{ public Root $child; public function __construct() {{ $this->child = new Root(); }} }}
+class C {{ public static ?Root $root = null; public static ?Holder $holder = null; public static array $roots = []; }}
+function pick(): int {{ echo 'K'; return 0; }}
+function rhs(): int {{ echo 'R'; return 5; }}
+C::$root = new Root(); C::$holder = new Holder(); C::$roots = [new Root()];
+{write}
+echo ':', {receiver}->last{stored}->v, ':', {receiver}->reads;
+C::$root = null; C::$holder = null; C::$roots = [];
+"#), expected);
+}
+
+/// Expression compounds read one freshly selected child and write that exact child.
+#[test]
+fn test_static_receiver_eighth_review_getter_expression() {
+    verify_compound_static_getter("C::$root", "0", false, false, "RG:15:15:1D15");
+}
+
+/// Discarded compounds preserve computed-key order and do not replay the getter.
+#[test]
+fn test_static_receiver_eighth_review_getter_statement() {
+    verify_compound_static_getter("C::$root", "pick()", true, false, "KRG:15:1D15");
+}
+
+/// A pure property prefix before the array still selects the indexed child only once.
+#[test]
+fn test_static_receiver_eighth_review_child_getter() {
+    verify_compound_static_getter("C::$holder->child", "pick()", false, false, "KRG:15:15:1D15");
+}
+
+/// Multiple getter-produced dimensions still retain and update one selected child.
+#[test]
+fn test_static_receiver_eighth_review_interleaved_getter() {
+    verify_compound_static_getter("C::$root", "0][pick()", false, true, "KRG:15:15:1D15");
+}
+
+/// Receiver caching and cleanup also hold when IR optimization is disabled.
+#[test]
+fn test_static_receiver_eighth_review_without_ir_opt() {
+    without_ir_opt(|| {
+        test_static_receiver_eighth_review_getter_expression();
+        test_static_receiver_eighth_review_getter_statement();
+        test_static_receiver_eighth_review_child_getter();
+        test_static_receiver_eighth_review_interleaved_getter();
+    });
+}
 
 /// Checks one indexed property target against an RHS hook that replaces its static owner.
 fn verify_indexed_static_property(target: &str, hook: &str, compound: bool, expected: &str) {
