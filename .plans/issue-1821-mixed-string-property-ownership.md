@@ -8,7 +8,7 @@
 - [x] Retire adopted string source boxes after runtime-name stores.
 - [x] Verify original cases, runtime dispatch, and borrowed-owner lifetime on/off.
 - [x] Verify affected executable targets and emit/assemble all supported targets.
-- [ ] Publish a linked PR and inspect exact-head CI.
+- [x] Publish a linked PR and inspect exact-head CI.
 
 ## Provenance
 
@@ -59,3 +59,11 @@ for the borrowed-owner property-write control.
 - Final compiler SHA-256: `51da71cb233e4c79e2f9ec0d42315cd7471b0bc63b6a126fe12c63247957db91`.
 
 No full local suite was run. CI supplies the full target matrix after push.
+
+## Publication
+
+Code commit: `1c162ce8cbe5e24e2267e940e353d1b01701411b`.
+PR: https://github.com/illegalstudio/elephc/pull/1838 (draft, closes #1821).
+GitHub confirmed the exact code head; no failed checks were reported at the
+initial inspection. Full CI completion remains pending. This plan-only follow-up
+does not change the validated compiler or regressions.
