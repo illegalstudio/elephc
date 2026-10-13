@@ -32,6 +32,9 @@ function fail(): int { throw new Error("stop"); }
 function finalKey(): int { echo "key"; return 0; }
 function scalarUpdate(): void { ++NestedUpdate::$items[0][0][finalKey()]; }
 function stringUpdate(): void { --NestedUpdate::$items[0][0]; }
+function stringCompound(): void { NestedUpdate::$items[0][0] += 1; }
+function stringIntermediate(): void { ++NestedUpdate::$items[0][0][1]; }
+function stringIntermediateCompound(): void { NestedUpdate::$items[0][0][1] += 1; }
 function nestedPostfix(): mixed { return NestedUpdate::$items[0][0][1]++; }
 set_error_handler(function($level, $message) { return true; });
 ++NestedUpdate::$items[0][0]["before"];
@@ -84,10 +87,12 @@ echo json_encode(NestedUpdate::$items);
     let key = scalar.instructions.iter().position(|inst| inst.op == Op::Call).unwrap();
     let guard = scalar.instructions.iter().rposition(|inst| inst.op == Op::TypePredicate).unwrap();
     assert!(key < guard, "{target}: final computed key runs before the scalar-parent guard");
-    let string = module.functions.iter().find(|function| function.name == "stringUpdate").unwrap();
-    assert!(string.blocks.iter().any(|block| block.name.starts_with("static.update.string")
-        && matches!(block.terminator, Some(crate::ir::Terminator::Throw { .. }))),
-        "{target}: string offsets have their distinct catchable incdec error");
+    for name in ["stringUpdate", "stringCompound", "stringIntermediate", "stringIntermediateCompound"] {
+        let string = module.functions.iter().find(|function| function.name == name).unwrap();
+        assert!(string.blocks.iter().any(|block| block.name.starts_with("static.update.string")
+            && matches!(block.terminator, Some(crate::ir::Terminator::Throw { .. }))),
+            "{target}: {name} has a distinct catchable string-parent error");
+    }
     let postfix = module.functions.iter().find(|function| function.name == "nestedPostfix").unwrap();
     assert!(postfix.instructions.iter().any(|inst| inst.op == Op::MixedClone),
         "{target}: the postfix result owns an independent old-value box");

@@ -142,9 +142,11 @@ fn lower_boxed_static_nested_update(
     let ExprKind::ArrayAccess { array: read_array, index: read_key } = &read.kind else { unreachable!() };
     let ExprKind::ArrayAccess { array: write_array, index: write_key } = &write.kind else { unreachable!() };
     let incdec = matches!(update, ElementUpdate::IncDec { .. });
-    let parent = lower_static_update_parent(ctx, read_array, write_array, incdec, span);
+    let parent = lower_static_update_parent(ctx, read_array, write_array, span);
     let (pinned, owner) = root_static_update_receiver(ctx, parent, span);
-    lower_static_update_key_and_guard(ctx, pinned, read_key, incdec, span);
+    let string_error = if incdec { "Cannot increment/decrement string offsets" }
+        else { "Cannot use assign-op operators with string offsets" };
+    lower_static_update_key_and_guard(ctx, pinned, read_key, string_error, span);
     let current = lower_array_access_from_lowered_receiver(ctx, pinned, write_key, read);
     let current_ty = ctx.builder.value_php_type(current.value);
     if let ExprKind::Assignment { prelude, .. } = &source_value.kind {
@@ -207,16 +209,16 @@ fn lower_static_update_parent(
     ctx: &mut LoweringContext<'_, '_>,
     read: &Expr,
     write: &Expr,
-    incdec: bool,
     span: Span,
 ) -> LoweredValue {
     let ExprKind::ArrayAccess { array: read_array, index: read_key } = &read.kind else {
         return lower_expr(ctx, read);
     };
     let ExprKind::ArrayAccess { array: write_array, index: write_key } = &write.kind else { unreachable!() };
-    let receiver = lower_static_update_parent(ctx, read_array, write_array, incdec, span);
+    let receiver = lower_static_update_parent(ctx, read_array, write_array, span);
     let (pinned, owner) = root_static_update_receiver(ctx, receiver, span);
-    lower_static_update_key_and_guard(ctx, pinned, read_key, incdec, span);
+    lower_static_update_key_and_guard(ctx, pinned, read_key,
+        "Cannot use string offset as an array", span);
     let probe = lower_array_access_from_lowered_receiver(ctx, pinned, write_key, read);
     if ctx.value_is_owning_temporary(probe) {
         crate::ir_lower::ownership::release_if_owned(ctx, probe, Some(span));
@@ -240,9 +242,9 @@ fn lower_static_update_parent(
     parent
 }
 
-/// Runs each captured dimension before rejecting a scalar parent with a catchable Error.
+/// Runs captured dimensions and selects the leaf or intermediate string-parent Error.
 fn lower_static_update_key_and_guard(
-    ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, read_key: &Expr, incdec: bool, span: Span,
+    ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, read_key: &Expr, string_error: &str, span: Span,
 ) {
     if !matches!(read_key.kind, ExprKind::IntLiteral(_) | ExprKind::StringLiteral(_)) {
         let key = lower_expr(ctx, read_key);
@@ -265,20 +267,18 @@ fn lower_static_update_key_and_guard(
         else_target: invalid, else_args: Vec::new(),
     });
     ctx.builder.position_at_end(invalid);
-    if incdec {
-        let string = ctx.emit_value(Op::TypePredicate, vec![parent.value],
-            Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::String)), PhpType::Bool,
-            Op::TypePredicate.default_effects(), Some(span));
-        let string_error = ctx.builder.create_named_block("static.update.string", Vec::new());
-        let scalar = ctx.builder.create_named_block("static.update.scalar", Vec::new());
-        ctx.builder.terminate(Terminator::CondBr {
-            cond: string.value, then_target: string_error, then_args: Vec::new(),
-            else_target: scalar, else_args: Vec::new(),
-        });
-        ctx.builder.position_at_end(string_error);
-        lower_throw_access_error(ctx, "Cannot increment/decrement string offsets", span);
-        ctx.builder.position_at_end(scalar);
-    }
+    let string = ctx.emit_value(Op::TypePredicate, vec![parent.value],
+        Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::String)), PhpType::Bool,
+        Op::TypePredicate.default_effects(), Some(span));
+    let string_block = ctx.builder.create_named_block("static.update.string", Vec::new());
+    let scalar = ctx.builder.create_named_block("static.update.scalar", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: string.value, then_target: string_block, then_args: Vec::new(),
+        else_target: scalar, else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(string_block);
+    lower_throw_access_error(ctx, string_error, span);
+    ctx.builder.position_at_end(scalar);
     lower_throw_access_error(ctx, "Cannot use a scalar value as an array", span);
     ctx.builder.position_at_end(present);
 }

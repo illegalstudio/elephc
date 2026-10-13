@@ -9,6 +9,48 @@
 
 use super::*;
 
+/// Checks one rejected string-parent update without mutating or retaining its static storage.
+fn verify_static_string_parent_error(operation: &str, effects: &str, message: &str) {
+    let out = compile_and_run_with_heap_debug(&format!(r#"<?php
+class T {{ public static array $items = ['ab', 10]; }}
+function keyA(): int {{ echo 'a'; return 0; }}
+function keyB(): int {{ echo 'b'; return 1; }}
+try {{ {operation}; }}
+catch (Error $e) {{ echo $e->getMessage(), '|', json_encode(T::$items); }}
+"#));
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, format!("{effects}{message}|[\"ab\",10]"), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A compound operation on a string offset uses the assign-op diagnostic.
+#[test]
+fn test_static_prefix_seventh_review_string_compound_leaf() {
+    verify_static_string_parent_error("T::$items[0][0] += 1", "",
+        "Cannot use assign-op operators with string offsets");
+}
+
+/// A string used as an intermediate increment dimension is not a direct offset increment.
+#[test]
+fn test_static_prefix_seventh_review_string_intermediate_incdec() {
+    verify_static_string_parent_error("++T::$items[0][0][1]", "",
+        "Cannot use string offset as an array");
+}
+
+/// A deeper compound target also rejects the intermediate string as an array.
+#[test]
+fn test_static_prefix_seventh_review_string_intermediate_compound() {
+    verify_static_string_parent_error("T::$items[0][0][1] += 1", "",
+        "Cannot use string offset as an array");
+}
+
+/// Every computed dimension is evaluated before an intermediate string-parent error.
+#[test]
+fn test_static_prefix_seventh_review_string_intermediate_key_effects() {
+    verify_static_string_parent_error("++T::$items[0][keyA()][keyB()]", "ab",
+        "Cannot use string offset as an array");
+}
+
 /// Postfix reads create null parents before invoking the undefined-leaf warning handler.
 #[test]
 fn test_static_prefix_latest_review_postfix_autovivification() {
