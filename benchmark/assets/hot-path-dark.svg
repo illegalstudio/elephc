@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="300" viewBox="0 0 1000 300" role="img" aria-labelledby="title desc">
+<title id="title">Buffer and array storage benchmark history</title>
+<desc id="desc">CI process execution medians in milliseconds. Lower is better. Lines break when environment or fixture changes.</desc>
+<rect width="1000" height="300" rx="16" fill="#0b1220"/>
+<text x="28.0" y="40.0" fill="#eef3fa" font-family="ui-monospace,monospace" font-size="22" font-weight="700">ELEPHC / Buffer and array storage</text>
+<text x="28.0" y="67.0" fill="#a8b7cb" font-family="ui-monospace,monospace" font-size="13" font-weight="400">Latest: no CI samples yet | 0 saved samples | recent 90 days</text>
+<text x="28.0" y="128.0" fill="#eef3fa" font-family="ui-monospace,monospace" font-size="14" font-weight="400">The next successful main-branch benchmark run will populate this suite.</text>
+<text x="28.0" y="265.0" fill="#a8b7cb" font-family="ui-monospace,monospace" font-size="11" font-weight="400">Process execution only; compile/link excluded. Shared CI runners have timing noise.</text>
+<text x="28.0" y="284.0" fill="#a8b7cb" font-family="ui-monospace,monospace" font-size="11" font-weight="400">Legacy runner/workload metadata is unknown. Environment/fixture changes start a new line.</text>
+</svg>

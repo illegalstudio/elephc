@@ -254,8 +254,8 @@ Completed for the current subset:
 
 Completed:
 
-- `scripts/benchmark_magician.py` benchmark suite with fixtures under
-  `benchmarks/magician/cases/`;
+- `benchmark/run.py --suite magician` benchmark suite with fixtures under
+  `benchmark/cases/magician/`;
 - parse cache and parse-error cache;
 - include cache with metadata validation;
 - lookup cache for eval/native symbols;
@@ -751,8 +751,8 @@ git diff --check
 For manual benchmarks:
 
 ```bash
-python3 scripts/benchmark_magician.py --case algebra_heavy --iterations 5 --warmup 1
-python3 scripts/benchmark_magician.py --case literal_scalar_aot --iterations 5 --warmup 1
+python3 benchmark/run.py --suite magician --case algebra_heavy --iterations 5 --warmup 1
+python3 benchmark/run.py --suite magician --case literal_scalar_aot --iterations 5 --warmup 1
 ```
 
 ## Risks

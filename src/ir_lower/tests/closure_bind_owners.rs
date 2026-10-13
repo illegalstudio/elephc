@@ -131,12 +131,14 @@ echo $bound();
         .unwrap_or_else(|error| panic!("{name}: {error:?}"));
 }
 
-/// Gives dynamic-eval compilation on each supported target an independent CI timeout.
+/// Gives every target its own CI timeout while preserving the shared eval-dispatch checks.
 macro_rules! dynamic_eval_bind_target_test {
-    ($name:ident, $target:literal) => {
-        /// Checks that dynamic-eval closure rebinding uses Magician dispatch on one target.
+    ($test:ident, $target:literal) => {
+        /// Dynamic eval closure binding uses Magician dispatch and emits valid target assembly.
         #[test]
-        fn $name() { check_dynamic_eval_closure_bind_uses_eval_static_dispatch($target); }
+        fn $test() {
+            check_dynamic_eval_closure_bind_uses_eval_static_dispatch($target);
+        }
     };
 }
 

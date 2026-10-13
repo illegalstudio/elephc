@@ -286,7 +286,7 @@
       "label": "area:magician",
       "patterns": [
         "^crates/elephc-magician/",
-        "^benchmarks/magician/",
+        "^benchmark/cases/magician/",
         "^src/magician(?:_|/|\\.rs$)"
       ]
     },
@@ -304,7 +304,8 @@
         "^\\.github/",
         "^\\.config/",
         "^Dockerfile",
-        "^scripts/"
+        "^scripts/",
+        "^benchmark/"
       ]
     }
   ],

@@ -121,7 +121,7 @@ elephc --emit-asm --source-map hello.php
 
 `--source-map` writes a `hello.map` JSON file next to `hello.s`. The map records which emitted assembly lines came from which PHP source lines and columns.
 
-If you want to compare elephc against the PHP interpreter and equivalent C fixtures, see the [benchmark suite](https://github.com/illegalstudio/elephc/blob/main/benchmarks/README.md).
+If you want to compare elephc against the PHP interpreter and equivalent C fixtures, see the [benchmark suite](https://github.com/illegalstudio/elephc/blob/main/benchmark/README.md).
 
 ## Next steps
 

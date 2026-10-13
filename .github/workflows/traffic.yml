@@ -10,9 +10,15 @@ on:
 # only bypass actor. The default token needs no write access here.
 permissions:
   contents: read
+  actions: read
+
+concurrency:
+  group: repository-stats-publication
+  cancel-in-progress: false
 
 jobs:
   collect:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       # Pinned to a full commit SHA rather than the `v2` tag: this step receives
@@ -36,7 +42,10 @@ jobs:
           # this replaces the personal access token this step used to carry.
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          gh api repos/${{ github.repository }}/traffic/clones > /tmp/api_clones.json
+          STATS_TEMP_DIR="$(mktemp -d)"
+          trap 'rm -rf "$STATS_TEMP_DIR"' EXIT
+          export CLONES_INPUT="$STATS_TEMP_DIR/clones.json"
+          gh api repos/${{ github.repository }}/traffic/clones > "$CLONES_INPUT"
 
           DATA_FILE=.github/traffic/clones.json
           BADGE_FILE=.github/traffic/clones-badge.json
@@ -48,8 +57,9 @@ jobs:
 
           python3 <<'PYEOF'
           import json
+          import os
 
-          with open("/tmp/api_clones.json") as f:
+          with open(os.environ["CLONES_INPUT"]) as f:
               api = json.load(f)
 
           with open(".github/traffic/clones.json") as f:
@@ -90,18 +100,24 @@ jobs:
                 --light-output .github/traffic/star-history-light.svg \
                 --dark-output .github/traffic/star-history-dark.svg
 
-      - name: Commit updated stats
+      - name: Refresh benchmark histories and SVG reports
+        env:
+          # Artifact reads use the scoped workflow token. Only Git publication
+          # uses the existing Illegal Bot installation identity.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -B benchmark/fetch.py --repo "${{ github.repository }}"
+          python3 -B benchmark/report.py
+
+      - name: Publish updated stats and benchmarks
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
         run: |
-          # Unlike the workflow token, an App token *does* trigger workflows on
-          # push. `[skip ci]` keeps this nightly bookkeeping commit from starting
-          # a full CI run on main, matching the behaviour before the bot.
+          # The publisher merges measurements into a fresh temporary checkout
+          # of main and retries normal pushes if main advances during collection.
+          # `[skip ci]` avoids triggering another benchmark/CI run from this App push.
           BOT_ID=$(gh api "/users/${APP_SLUG}%5Bbot%5D" --jq .id)
           git config user.name "${APP_SLUG}[bot]"
           git config user.email "${BOT_ID}+${APP_SLUG}[bot]@users.noreply.github.com"
-          git add .github/traffic/
-          git diff --cached --quiet && echo "No changes" && exit 0
-          git commit -m "chore: update repository stats [skip ci]"
-          git push
+          python3 -B benchmark/publish.py

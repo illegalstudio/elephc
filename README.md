@@ -70,6 +70,21 @@ The flagship showcase: a real-time 3D renderer that loads original DOOM WAD file
 
 See [showcases/doom/](showcases/doom/) for full source and build instructions.
 
+## Benchmarks
+
+CI measures native execution against equivalent C and PHP fixtures, plus
+Magician eval and buffer/array workloads. The nightly statistics workflow keeps
+the histories and graphs current. Times exclude compilation and linking.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="benchmark/assets/native-dark.svg">
+  <img src="benchmark/assets/native-light.svg" alt="Native benchmark execution medians and recent trends" width="1000">
+</picture>
+
+See [benchmark/](benchmark/README.md) for every suite, generated reports,
+measurement methodology, and the interactive dashboard. Shared CI runner
+timings are useful for trends.
+
 ## Why
 
 My first "serious programming" book was *PHP 4 and MySQL*. After years of experimenting with code, that book turned my passion into a profession. I've worked with many languages over the past 20 years, but PHP is the one that has most consistently put food on the table.
@@ -809,7 +824,7 @@ The **[docs/](docs/)** directory is a complete wiki covering every aspect of the
 
 If you're new to compilers or assembly, start from the top and work your way down. No prior low-level knowledge required.
 
-For runnable language samples, see `examples/`. For the benchmark harness and CI trend artifacts that compare elephc against PHP and equivalent C fixtures, see `benchmarks/README.md`. For a focused perf comparison, see `benchmarks/hot-path-buffer-vs-arrays`.
+For runnable language samples, see `examples/`. For the benchmark harness and CI trend artifacts that compare elephc against PHP and equivalent C fixtures, see `benchmark/README.md`. For the buffer and array storage comparison, see `benchmark/cases/hot-path/buffer-vs-arrays/`.
 
 ## License
 

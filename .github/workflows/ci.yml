@@ -2188,6 +2188,18 @@ jobs:
       - name: Check undersized frame rejection in release mode
         run: cargo test -p elephc --release --lib test_emit_frame_
 
+  benchmark-tooling:
+    name: Benchmark tooling
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check benchmark tooling and generated reports
+        run: |
+          python3 -B -m unittest discover -s benchmark/tests -v
+          python3 -B benchmark/report.py
+          git diff --exit-code -- benchmark/assets
+
   test:
     name: Build & Test
     runs-on: ubuntu-latest
@@ -2222,6 +2234,7 @@ jobs:
       - security-audit
       - action-pins
       - frame-assertions-release
+      - benchmark-tooling
     if: always()
     steps:
       - name: Verify test jobs
@@ -2256,10 +2269,13 @@ jobs:
           test "${{ needs.security-audit.result }}" = "success"
           test "${{ needs.action-pins.result }}" = "success"
           test "${{ needs.frame-assertions-release.result }}" = "success"
+          test "${{ needs.benchmark-tooling.result }}" = "success"
 
   benchmark:
     name: Benchmark Suite
     runs-on: macos-15  # Apple Silicon runner
+    env:
+      BENCHMARK_RUNNER: macos-15
     # The benchmark suite does a full release build and only tracks trends, so it
     # runs on pushes to main rather than on every pull request.
     if: github.ref == 'refs/heads/main'
@@ -2271,27 +2287,26 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
 
+      - name: Set up PHP benchmark baseline
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.5'
+          coverage: none
+          tools: none
+          ini-values: opcache.enable_cli=0, opcache.jit=0
+
       - name: Build release binary
         run: cargo build --release
 
-      - name: Run benchmark suite
-        run: python3 scripts/benchmark_suite.py --iterations 3 --warmup 1 --json benchmark-results.json --markdown benchmark-results.md
-
-      - name: Run magician benchmark suite
-        run: python3 scripts/benchmark_magician.py --iterations 3 --warmup 1 --json magician-benchmark-results.json --markdown magician-benchmark-results.md
+      - name: Run all benchmark suites
+        run: python3 -B benchmark/run.py --suite all --require-baselines --no-build --iterations 3 --warmup 1 --json benchmark-results/results.json --markdown benchmark-results/results.md
 
       - name: Publish benchmark summary
-        run: |
-          cat benchmark-results.md >> "$GITHUB_STEP_SUMMARY"
-          printf '\n## Magician eval benchmark suite\n\n' >> "$GITHUB_STEP_SUMMARY"
-          cat magician-benchmark-results.md >> "$GITHUB_STEP_SUMMARY"
+        run: cat benchmark-results/results.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload benchmark results
         uses: actions/upload-artifact@v7
         with:
           name: benchmark-results
-          path: |
-            benchmark-results.json
-            benchmark-results.md
-            magician-benchmark-results.json
-            magician-benchmark-results.md
+          path: benchmark-results/
+          if-no-files-found: error

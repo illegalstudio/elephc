@@ -401,7 +401,7 @@ The following files are classified rather than structurally split: their size co
 - `scripts/docs/builtin_registry.json` — 54532 LoC
 - `crates/elephc-image/tools/api_spec.json` — 10168 LoC
 - `showcases/doom/demo.gif` — 3250 LoC
-- `.benchmarks/series.json` — 1804 LoC
+- `benchmark/data/native.json`: generated benchmark history
 - `crates/elephc-tz/data/location.data` — 598 LoC
 - `crates/elephc-tz/data/transitions.data` — 598 LoC
 
