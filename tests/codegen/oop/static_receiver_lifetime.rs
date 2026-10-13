@@ -10,6 +10,81 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Checks one indexed property target against an RHS hook that replaces its static owner.
+fn verify_indexed_static_property(target: &str, hook: &str, compound: bool, expected: &str) {
+    verify(&format!(r#"<?php
+class Leaf {{ public int $v; public function __construct(int $v) {{ $this->v = $v; }} }}
+class O {{ public array $items; public function __construct(int $v) {{ $this->items = [new Leaf($v)]; }} }}
+class Root {{ public O $child; public function __construct(int $v) {{ $this->child = new O($v); }} }}
+class C {{ public static ?O $o = null; public static ?Root $root = null; public static array $items = []; }}
+class Hook {{
+    public int $object {{ get {{ echo 'H'; C::$o = new O(7); return 9; }} }}
+    public int $child {{ get {{ echo 'H'; C::$root = new Root(7); return 9; }} }}
+    public int $array {{ get {{ echo 'H'; C::$items = [new Leaf(7)]; return 9; }} }}
+}}
+function pick(): int {{ echo 'K'; return 0; }}
+C::$o = new O(1); C::$root = new Root(1); C::$items = [new Leaf(1)];
+$hook = new Hook();
+$result = ({target} {} $hook->{hook});
+echo ':', $result, ':', {};
+C::$o = null; C::$root = null; C::$items = [];
+"#, if compound { "+=" } else { "=" }, target.replace("pick()", "0")), expected);
+}
+
+/// An indexed property after a static object fetch uses the replacement object once.
+#[test]
+fn test_static_receiver_seventh_review_indexed_object_plain() {
+    verify_indexed_static_property("C::$o->items[0]->v", "object", false, "H:9:9");
+}
+
+/// Nested object traversal still delays its array-element property receiver.
+#[test]
+fn test_static_receiver_seventh_review_indexed_child_plain() {
+    verify_indexed_static_property("C::$root->child->items[0]->v", "child", false, "H:9:9");
+}
+
+/// Properties on elements of a static array capture their replayable RHS once.
+#[test]
+fn test_static_receiver_seventh_review_indexed_static_array_plain() {
+    verify_indexed_static_property("C::$items[0]->v", "array", false, "H:9:9");
+}
+
+/// Computed keys precede the hook and the assignment result does not replay it.
+#[test]
+fn test_static_receiver_seventh_review_indexed_object_key() {
+    verify_indexed_static_property("C::$o->items[pick()]->v", "object", false, "KH:9:9");
+}
+
+/// Child array keys are captured before selecting the post-hook static owner.
+#[test]
+fn test_static_receiver_seventh_review_indexed_child_key() {
+    verify_indexed_static_property("C::$root->child->items[pick()]->v", "child", false, "KH:9:9");
+}
+
+/// Static array-element keys are evaluated once before the replayable RHS hook.
+#[test]
+fn test_static_receiver_seventh_review_indexed_static_array_key() {
+    verify_indexed_static_property("C::$items[pick()]->v", "array", false, "KH:9:9");
+}
+
+/// Compound property reads use the new indexed static-object element.
+#[test]
+fn test_static_receiver_seventh_review_indexed_object_compound() {
+    verify_indexed_static_property("C::$o->items[pick()]->v", "object", true, "KH:16:16");
+}
+
+/// Compound child-element writes preserve source key and RHS ordering.
+#[test]
+fn test_static_receiver_seventh_review_indexed_child_compound() {
+    verify_indexed_static_property("C::$root->child->items[pick()]->v", "child", true, "KH:16:16");
+}
+
+/// Compound element properties on static arrays read after the replacing hook.
+#[test]
+fn test_static_receiver_seventh_review_indexed_static_array_compound() {
+    verify_indexed_static_property("C::$items[pick()]->v", "array", true, "KH:16:16");
+}
+
 /// Statement-position local compounds reuse their fractional parent key diagnosis.
 #[test]
 fn test_static_receiver_latest_review_local_statement_float_key() {

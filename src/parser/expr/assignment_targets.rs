@@ -18,11 +18,12 @@ use crate::parser::stmt::{
 };
 use crate::span::Span;
 
-/// Recognizes pure property traversal rooted in a delayed static-property load.
+/// Recognizes property and indexed traversal rooted in a delayed static-property load.
 pub(super) fn static_property_receiver_chain(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::StaticPropertyAccess { .. } => true,
         ExprKind::PropertyAccess { object, .. } => static_property_receiver_chain(object),
+        ExprKind::ArrayAccess { array, .. } => static_property_receiver_chain(array),
         _ => false,
     }
 }

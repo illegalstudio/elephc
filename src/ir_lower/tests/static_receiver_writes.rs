@@ -15,9 +15,11 @@ fn verify(target: &str) {
 class O { public int $v = 1; public array $items = [1]; public array $nested = [[1]]; }
 class Root { public O $child; public function __construct() { $this->child = new O(); } }
 class C { public static O $o; public static ?O $nullable = null; public static int $n = 1; }
+class IndexedLeaf { public int $v = 1; }
 class Hook {
     public int $value { get { C::$o = new O(); return 7; } }
     public int $bare { get { C::$n = 7; return 9; } }
+    public int $indexed { get { StaticBuckets::$items = [new IndexedLeaf()]; return 9; } }
 }
 class R { public static Root $root; public static ?Root $nullable = null; }
 function replace(): int { C::$o = new O(); return 9; }
@@ -47,6 +49,9 @@ function writeHook(Hook $box): void { C::$o->v = $box->value; }
 function writeHookIndexed(Hook $box): void { C::$o->items[0] = $box->value; }
 function writeHookDynamic(Hook $box, string $name): void { C::$o->$name = $box->value; }
 function writeHookResult(Hook $box): int { return C::$o->items[computedKey()] = $box->value; }
+function writeIndexedHook(Hook $box): void { StaticBuckets::$items[0]->v = $box->indexed; }
+function writeIndexedHookResult(Hook $box): int { return StaticBuckets::$items[computedKey()]->v = $box->indexed; }
+function writeIndexedHookCompound(Hook $box): void { StaticBuckets::$items[0]->v += $box->indexed; }
 function writeHookArrayCompound(Hook $box): void { C::$o->items[0] += $box->value; }
 function writeHookChildCompound(Hook $box): void { R::$root->child->items[0] += $box->value; }
 function writeHookNestedCompound(Hook $box): void { C::$o->nested[0][0] += $box->value; }
@@ -124,7 +129,8 @@ C::$nullable->items[] = 3;
     }
     for name in ["writeHook", "writeHookIndexed", "writeHookDynamic", "writeHookResult",
         "writeHookArrayCompound", "writeHookChildCompound", "writeHookNestedCompound", "writeStaticHookResult",
-        "writeNestedFractionalHook", "writeBareStaticHook"] {
+        "writeNestedFractionalHook", "writeBareStaticHook", "writeIndexedHook", "writeIndexedHookResult",
+        "writeIndexedHookCompound"] {
         let function = module.functions.iter().find(|function| function.name == name).unwrap();
         let calls: Vec<_> = function.instructions.iter().enumerate()
             .filter(|(_, inst)| inst.op == crate::ir::Op::MethodCall).collect();
@@ -132,7 +138,7 @@ C::$nullable->items[] = 3;
         let receiver = function.instructions.iter().position(|inst|
             inst.op == crate::ir::Op::LoadStaticProperty).unwrap();
         assert!(calls[0].0 < receiver, "{target}: {name} fetches the receiver after its RHS");
-        if name == "writeHookResult" {
+        if matches!(name, "writeHookResult" | "writeIndexedHookResult") {
             let key = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::Call).unwrap();
             assert!(key < calls[0].0, "{target}: computed dimensions precede the RHS hook");
         }

@@ -13,7 +13,9 @@ use super::*;
 #[test]
 fn test_parse_static_receiver_third_review_replayable_rhs_capture() {
     for receiver in ["Holder", "self", "parent", "static"] {
-        for tail in ["->v", "->$name", "->items[0]", "->items[pickKey()]"] {
+        for tail in ["->v", "->$name", "->items[0]", "->items[pickKey()]",
+            "->items[0]->v", "->items[pickKey()]->v", "->child->items[pickKey()]->v",
+            "[0]->v", "[pickKey()]->$name"] {
             let source = format!("<?php {receiver}::$object{tail} = $box->value;");
             let statements = parse_source(&source);
             let StmtKind::ExprStmt(expression) = &statements[0].kind else { panic!("{source}"); };
