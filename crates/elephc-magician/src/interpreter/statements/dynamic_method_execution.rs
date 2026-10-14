@@ -67,6 +67,8 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    let specialized = specialize_generic_method(class_name, method, &evaluated_args, context, values)?;
+    let method = &specialized;
     let qualified_method_name =
         format!("{}::{}", class_name.trim_start_matches('\\'), method.name());
     let static_names = static_var_names(method.body());
@@ -110,6 +112,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
         &binding_params,
         &scope_parameter_is_by_ref,
         &evaluated_args,
+        context,
         values,
     );
     frame.bind_scope(&method_scope);
@@ -213,6 +216,8 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    let specialized = specialize_generic_method(class_name, method, &evaluated_args, context, values)?;
+    let method = &specialized;
     let qualified_method_name =
         format!("{}::{}", class_name.trim_start_matches('\\'), method.name());
     let static_names = static_var_names(method.body());
@@ -255,6 +260,7 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
         &binding_params,
         &scope_parameter_is_by_ref,
         &evaluated_args,
+        context,
         values,
     );
     frame.bind_scope(&method_scope);

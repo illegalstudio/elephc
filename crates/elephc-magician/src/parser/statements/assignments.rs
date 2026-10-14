@@ -139,7 +139,7 @@ impl Parser {
         &mut self,
         require_semicolon: bool,
     ) -> Result<Vec<EvalStmt>, EvalParseError> {
-        let class_name = self.parse_qualified_name()?;
+        let class_name = self.parse_class_reference_name(true)?;
         let class_name = self.resolve_static_class_name(class_name);
         self.expect(TokenKind::DoubleColon)?;
         let TokenKind::DollarIdent(property) = self.current() else {
@@ -320,7 +320,7 @@ impl Parser {
         } else {
             None
         };
-        let class_name = self.parse_qualified_name()?;
+        let class_name = self.parse_class_reference_name(true)?;
         let class_name = self.resolve_static_class_name(class_name);
         self.expect(TokenKind::DoubleColon)?;
         let TokenKind::DollarIdent(property) = self.current() else {

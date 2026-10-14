@@ -44,6 +44,7 @@ mod unary_logic;
 mod lazy_branches;
 mod pipe;
 mod assignments;
+mod assignment_rhs_capture;
 mod static_property_updates;
 use static_property_updates::{finish_static_compound_receiver, guard_static_compound_property_read};
 mod function_calls;

@@ -46,7 +46,10 @@ pub(super) fn eval_named_callable_with_call_user_func_values(
             values,
         );
     }
-    if let Some(function) = context.function(name).cloned() {
+    if let Some(function) = match context.function(name).cloned() {
+        Some(function) => Some(function),
+        None => generic_function_for_call(name, &positional_args(evaluated_args.clone()), context, values)?,
+    } {
         let evaluated_args = positional_args(evaluated_args);
         let parameter_is_by_ref = eval_call_user_func_by_value_ref_flags(
             function.name(),
@@ -120,7 +123,10 @@ pub(super) fn eval_named_callable_with_call_user_func_args(
             values,
         );
     }
-    if let Some(function) = context.function(name).cloned() {
+    if let Some(function) = match context.function(name).cloned() {
+        Some(function) => Some(function),
+        None => generic_function_for_call(name, &evaluated_args, context, values)?,
+    } {
         let parameter_is_by_ref = eval_call_user_func_by_value_ref_flags(
             function.name(),
             function.params(),

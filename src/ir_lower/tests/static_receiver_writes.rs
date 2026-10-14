@@ -91,6 +91,15 @@ function dispatch(): void {
         if ($value instanceof Named) { echo $value->name(); }
     }
 }
+class LeasePayload {}
+class LeaseBox { public ?LeasePayload $child = null; public int $v = 0; }
+class LeaseParent {
+    public LeaseBox $child { get { LeaseHolder::$root = null; return new LeaseBox(); } }
+    public function __destruct() { throw new Exception('parent'); }
+}
+class LeaseHolder { public static ?LeaseBox $box = null; public static ?LeaseParent $root = null; }
+function writeCapturedLease(LeaseBox $source): void { LeaseHolder::$box->child = $source->child; }
+function writeChildLease(): void { LeaseHolder::$root->child->v = 7; }
 C::$o = new O(); C::$nullable = new O();
 R::$root = new Root();
 write(); writeNested(); writeChild();
@@ -216,6 +225,31 @@ C::$nullable->items[] = 3;
             inst.op == crate::ir::Op::Release && inst.operands == [acquire.result.unwrap()]),
             "{target}: borrowed RHS does not hide the receiver release");
     }
+    let captured = module.functions.iter().find(|function| function.name == "writeCapturedLease").unwrap();
+    let (slot, _) = captured.locals.iter().enumerate().find(|(_, local)|
+        local.name.as_deref().is_some_and(|name| name.starts_with("__elephc_assign_expr_")))
+        .expect("generated RHS capture");
+    let slot = crate::ir::LocalSlotId::from_raw(slot as u32);
+    let push = captured.instructions.iter().position(|inst|
+        inst.op == crate::ir::Op::PushCallOperandOwner
+            && inst.immediate == Some(crate::ir::Immediate::LocalSlot(slot))).expect("actual capture root");
+    let write = captured.instructions.iter().position(|inst|
+        inst.op == crate::ir::Op::PropSet).expect("property write");
+    let retire = captured.instructions.iter().position(|inst|
+        inst.op == crate::ir::Op::ReleaseLocalSlot
+            && inst.immediate == Some(crate::ir::Immediate::LocalSlot(slot))).expect("actual capture retirement");
+    assert!(push < write && write < retire, "{target}: the generated slot has an expression-scoped owner");
+    let child = module.functions.iter().find(|function| function.name == "writeChildLease").unwrap();
+    let parent = child.instructions.iter().find(|inst|
+        inst.op == crate::ir::Op::Acquire && inst.immediate == Some(crate::ir::Immediate::Bool(true)))
+        .expect("parent lifetime lease").result.unwrap();
+    let getter = child.instructions.iter().position(|inst|
+        inst.op == crate::ir::Op::MethodCall).expect("child getter");
+    let retire_parent = child.instructions.iter().position(|inst|
+        inst.op == crate::ir::Op::Release && inst.operands == [parent]).expect("retire parent");
+    assert!(child.instructions[getter + 1..retire_parent].iter().any(|inst|
+        inst.op == crate::ir::Op::PushCallOperandOwner),
+        "{target}: publish the child before the parent's destructor can throw");
     crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
 }
 

@@ -18,6 +18,10 @@ pub(in crate::interpreter) fn store_borrowed_static_property(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    let value = match context.static_property_alias(class_name, property_name) {
+        Some(EvalReferenceTarget::Cell { cell }) if values.is_reference(*cell)? => *cell,
+        _ => value,
+    };
     if context.static_property(class_name, property_name) == Some(value) {
         return Ok(());
     }
@@ -676,7 +680,7 @@ pub(super) fn eval_static_property_reference_target(
     class_name: &str,
     property_name: &str,
     source_name: &str,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalReferenceTarget, EvalStatus> {
@@ -684,6 +688,11 @@ pub(super) fn eval_static_property_reference_target(
         return Ok(target);
     }
     if context.current_function().is_some() {
+        if !generic_local_contracts(scope, source_name, context).is_empty() {
+            if let Some(cell) = eval_persistent_variable_reference(source_name, context, scope, values)? {
+                return Ok(EvalReferenceTarget::Cell { cell });
+            }
+        }
         let cell =
             visible_scope_cell(context, scope, source_name).map_or_else(|| values.null(), Ok)?;
         return Ok(EvalReferenceTarget::Cell { cell });
@@ -712,7 +721,8 @@ pub(super) fn eval_static_reference_target_write(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    if matches!(target, EvalReferenceTarget::Cell { .. }) {
+    if let EvalReferenceTarget::Cell { cell } = target {
+        if values.is_reference(cell)? { return write_back_method_ref_target(&EvalReferenceTarget::Cell { cell }, value, context, values); }
         context.bind_static_property_alias(
             class_name,
             property_name,

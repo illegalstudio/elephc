@@ -72,6 +72,12 @@ impl EvalInterface {
         }
     }
 
+    /// Replaces inherited interface names with their concrete specializations.
+    pub(crate) fn with_parents(mut self, parents: Vec<String>) -> Self {
+        self.parents = parents;
+        self
+    }
+
     /// Returns a copy of this interface with source-location metadata attached.
     pub const fn with_source_location(mut self, source_location: EvalSourceLocation) -> Self {
         self.source_location = Some(source_location);

@@ -578,6 +578,15 @@ whose summary says its result may be one of its arguments, because that argument
 release is guarded by a runtime alias comparison and rooting both would release one
 shared reference twice.
 
+Delayed static writes root the actual generated RHS capture slot for the
+assignment, rather than rooting a second copy and leaving the original owner in
+the frame. The result acquires independent ownership before that slot retires.
+Its unwind record is detached before publishing the result's temporary record,
+because owner pops are strictly LIFO. Selected property or indexed children use
+the same handoff: detach the parent records without releasing their leases,
+publish the child, then release the parent leases. A throwing parent destructor
+can therefore retire both the child and RHS before entering a same-frame catch.
+
 Ordinary descriptor calls box the referenced value before releasing the cell.
 Cell-owner lookup validates allocation boundaries before adopting an unknown
 pointer, so borrowed frame and inline-array addresses never become heap owners.

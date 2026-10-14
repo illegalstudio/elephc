@@ -74,7 +74,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// discarded that spelling, so reusing them would keep producing lowercase diagnostics.
 /// BUMPED TO 13 because first-class function callable names now also retain source
 /// spelling. Version-12 entries still discarded capitalization on this expression path.
-pub(crate) const FORMAT_VERSION: u32 = 13;
+/// BUMPED TO 14 for retained generic declarations, structural signatures, and typed locals,
+/// combined with source-spelling preservation from main and qualified PHPDoc inheritance.
+/// Both prior layouts must be refused.
+/// BUMPED TO 15 because native class-like keyword casing now preserves member PHPDoc types.
+/// Stored declarations parsed with the earlier annotation rewrite must be refused.
+/// BUMPED TO 16 because class-reference type-list lookahead now preserves PHP comparisons.
+/// Previously stored parse failures for those valid expressions must be reparsed.
+pub(crate) const FORMAT_VERSION: u32 = 16;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///

@@ -13,6 +13,7 @@
 //!   file already parsed as one program (`segments::parse_script`), from the cache when
 //!   the OPcache cache is enabled. Inline HTML is part of that program as `echo`
 //!   statements, so the replay below only runs it.
+//! - Whole included programs share strict-mode checks and template hoisting with direct eval.
 
 use super::*;
 use crate::parse_cache::parse_fragment_cached;
@@ -160,8 +161,7 @@ fn eval_execute_include_program(
         .unwrap_or_default();
     context.set_call_site(file.clone(), dir, 1);
     context.set_file_magic_override(Some(file));
-    let result = seed_named_cli_superglobals(program, context, scope, values)
-        .and_then(|()| execute_statements(program.statements(), context, scope, values));
+    let result = execute_program_statements(program, context, scope, values);
     context.set_call_site(previous.0, previous.1, previous.2);
     context.set_file_magic_override(previous.3);
     result

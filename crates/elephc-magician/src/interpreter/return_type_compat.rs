@@ -413,6 +413,11 @@ fn eval_return_variant_accepts_actual_variant(
     context: &ElephcEvalContext,
 ) -> bool {
     match (expected_variant, actual_variant) {
+        (EvalParameterTypeVariant::Generic(expected), EvalParameterTypeVariant::Generic(actual)) => generic_signature_accepts(actual, expected, context),
+        (EvalParameterTypeVariant::Generic(expected), EvalParameterTypeVariant::Class(actual)) => crate::parser::generics::parse_type_string(actual).is_ok_and(|actual| generic_signature_accepts(&actual, expected, context)),
+        (EvalParameterTypeVariant::Class(expected), EvalParameterTypeVariant::Generic(actual)) => generic_signature_accepts(actual, &elephc_generics::Type::atom(expected), context),
+        (EvalParameterTypeVariant::Object, EvalParameterTypeVariant::Generic(elephc_generics::Type::Apply(name, _))) if name != "array" => true,
+        (EvalParameterTypeVariant::Array, EvalParameterTypeVariant::Generic(elephc_generics::Type::Apply(name, _))) if name == "array" => true,
         (_, EvalParameterTypeVariant::Never) => true,
         (EvalParameterTypeVariant::Never, _) => false,
         (EvalParameterTypeVariant::Void, _) | (_, EvalParameterTypeVariant::Void) => false,

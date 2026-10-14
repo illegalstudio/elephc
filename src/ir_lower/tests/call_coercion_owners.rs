@@ -288,9 +288,8 @@ eval_class_name_target_test!(eval_class_name_results_release_ios_sim_arm64, "ios
 eval_class_name_target_test!(eval_class_name_results_release_linux_aarch64, "linux-aarch64");
 eval_class_name_target_test!(eval_class_name_results_release_linux_x86_64, "linux-x86_64");
 
-/// Echo retires widened-slot string copies while concrete parameter reads remain borrowed.
-#[test]
-fn echo_retires_widened_string_reads_but_preserves_concrete_borrows() {
+/// Checks echo ownership for one target without combining five compiler cycles in one test.
+fn assert_echo_string_read_owners_for_target(target: &str) {
     use crate::ir::{Immediate, Op};
     use crate::types::PhpType;
     let source = r#"<?php
@@ -305,36 +304,64 @@ for ($i = 0; $i < 2; $i++) {
 function echoConcreteString(string $text): void { echo $text, $text; }
 echoConcreteString("borrowed");
 "#;
-    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-        let module = super::lower_source_at_for_target(
-            source, std::path::Path::new("main.php"), std::path::Path::new("."),
-            crate::codegen::platform::Target::parse(target).unwrap(),
-        );
-        let mut detached_reads = 0;
-        let mut borrowed_reads = 0;
-        for function in &module.functions {
-            for echo in function.instructions.iter().filter(|inst| inst.op == Op::EchoValue) {
-                let value = echo.operands[0];
-                let Some(load) = function.instructions.iter().find(|inst| inst.result == Some(value)) else {
-                    continue;
-                };
-                if load.op != Op::LoadLocal || load.result_php_type != PhpType::Str { continue; }
-                let Some(Immediate::LocalSlot(slot)) = load.immediate else { continue; };
-                let released = function.instructions.iter().any(|inst| {
-                    inst.op == Op::Release && inst.operands == [value]
-                });
-                if function.locals[slot.as_raw() as usize].php_type.codegen_repr() == PhpType::Mixed {
-                    detached_reads += 1;
-                    assert!(released, "{target}: a widened string read owns its detached copy");
-                } else if function.name == "echoConcreteString" {
-                    borrowed_reads += 1;
-                    assert!(!released, "{target}: concrete string reads must retain their caller owner");
-                }
+    let module = super::lower_source_at_for_target(
+        source, std::path::Path::new("main.php"), std::path::Path::new("."),
+        crate::codegen::platform::Target::parse(target).unwrap(),
+    );
+    let mut detached_reads = 0;
+    let mut borrowed_reads = 0;
+    for function in &module.functions {
+        for echo in function.instructions.iter().filter(|inst| inst.op == Op::EchoValue) {
+            let value = echo.operands[0];
+            let Some(load) = function.instructions.iter().find(|inst| inst.result == Some(value)) else {
+                continue;
+            };
+            if load.op != Op::LoadLocal || load.result_php_type != PhpType::Str { continue; }
+            let Some(Immediate::LocalSlot(slot)) = load.immediate else { continue; };
+            let released = function.instructions.iter().any(|inst| {
+                inst.op == Op::Release && inst.operands == [value]
+            });
+            if function.locals[slot.as_raw() as usize].php_type.codegen_repr() == PhpType::Mixed {
+                detached_reads += 1;
+                assert!(released, "{target}: a widened string read owns its detached copy");
+            } else if function.name == "echoConcreteString" {
+                borrowed_reads += 1;
+                assert!(!released, "{target}: concrete string reads must retain their caller owner");
             }
         }
-        assert!(detached_reads > 0 && borrowed_reads > 0, "{target}: both storage paths must be exercised");
-        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
+    assert!(detached_reads > 0 && borrowed_reads > 0, "{target}: both storage paths must be exercised");
+    crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+}
+
+/// Echo retires widened reads and preserves concrete borrows on macOS AArch64.
+#[test]
+fn echo_retires_widened_string_reads_but_preserves_concrete_borrows_macos_aarch64() {
+    assert_echo_string_read_owners_for_target("macos-aarch64");
+}
+
+/// Echo retires widened reads and preserves concrete borrows on iOS devices.
+#[test]
+fn echo_retires_widened_string_reads_but_preserves_concrete_borrows_ios_arm64() {
+    assert_echo_string_read_owners_for_target("ios-arm64");
+}
+
+/// Echo retires widened reads and preserves concrete borrows on the iOS Simulator.
+#[test]
+fn echo_retires_widened_string_reads_but_preserves_concrete_borrows_ios_sim_arm64() {
+    assert_echo_string_read_owners_for_target("ios-sim-arm64");
+}
+
+/// Echo retires widened reads and preserves concrete borrows on Linux AArch64.
+#[test]
+fn echo_retires_widened_string_reads_but_preserves_concrete_borrows_linux_aarch64() {
+    assert_echo_string_read_owners_for_target("linux-aarch64");
+}
+
+/// Echo retires widened reads and preserves concrete borrows on Linux x86_64.
+#[test]
+fn echo_retires_widened_string_reads_but_preserves_concrete_borrows_linux_x86_64() {
+    assert_echo_string_read_owners_for_target("linux-x86_64");
 }
 
 /// Class-name metadata cannot keep a boxed object read alive after introspection finishes.

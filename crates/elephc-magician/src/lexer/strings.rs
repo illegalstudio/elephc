@@ -468,7 +468,7 @@ fn tokenize_interpolated_fragment(
     part.extend(
         fragment
             .into_iter()
-            .filter(|token| *token.kind() != TokenKind::Eof)
+            .filter(|token| !matches!(token.kind(), TokenKind::Eof | TokenKind::DocComment(_)))
             .map(|token| Token::new(token.into_kind(), line)),
     );
     part.push(Token::new(TokenKind::RParen, line));

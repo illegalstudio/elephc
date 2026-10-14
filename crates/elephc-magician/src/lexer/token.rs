@@ -13,17 +13,24 @@
 use crate::eval_ir::EvalMagicConst;
 
 /// One token plus its eval-fragment source line.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub(crate) struct Token {
     kind: TokenKind,
     line: i64,
+    phpdoc: bool,
 }
 
 impl Token {
     /// Creates one token at the given eval-fragment line.
     pub(crate) const fn new(kind: TokenKind, line: i64) -> Self {
-        Self { kind, line }
+        Self { kind, line, phpdoc: false }
     }
+
+    /// Marks synthesized portable annotation tokens without losing their source line.
+    pub(crate) fn with_phpdoc(mut self, enabled: bool) -> Self { self.phpdoc = enabled; self }
+
+    /// Returns whether this token came from a supported PHPDoc annotation.
+    pub(crate) fn phpdoc(&self) -> bool { self.phpdoc }
 
     /// Returns the parser-visible token kind.
     pub(crate) fn kind(&self) -> &TokenKind {
@@ -42,8 +49,9 @@ impl Token {
 }
 
 /// Token kinds used by the initial eval fragment parser.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub(crate) enum TokenKind {
+    DocComment(String),
     DollarLBrace,
     DollarIdent(String),
     Ident(String),

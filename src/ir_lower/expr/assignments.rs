@@ -56,6 +56,11 @@ pub(super) fn lower_assignment_expr(
     }
     if assigned_name.is_none() {
         if let Some(result_target) = result_target {
+            let rhs_owner = if compound_receiver.is_none() {
+                super::assignment_rhs_capture::publish_static_assignment_rhs(
+                    ctx, target, value, result_target, prelude, expr.span,
+                )
+            } else { None };
             // The non-local write evaluates the value itself. Lowering it beforehand leaves
             // an unused read (or repeats a side effect) before the target is written.
             lower_non_local_assignment_write_with_diagnosed_key(
@@ -63,7 +68,9 @@ pub(super) fn lower_assignment_expr(
             );
             let result = lower_expr(ctx, result_target);
             finish_static_compound_receiver(ctx, compound_receiver, expr.span);
-            return result;
+            return super::assignment_rhs_capture::finish_static_assignment_rhs(
+                ctx, rhs_owner, result, expr.span,
+            );
         }
     }
     let static_callable = assigned_name.and_then(|_| static_callable_binding_for_expr(ctx, value));

@@ -32,6 +32,7 @@ crate-type = ["staticlib", "rlib"]
 curl = ["elephc-builtin-contract/curl"]
 
 [dependencies]
+elephc-generics = { path = "../elephc-generics" }
 elephc-builtin-contract = { path = "../elephc-builtin-contract" }
 elephc-crypto = { path = "../elephc-crypto" }
 elephc-iconv = { path = "../elephc-iconv" }

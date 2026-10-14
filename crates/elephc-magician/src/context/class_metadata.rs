@@ -55,6 +55,11 @@ impl ElephcEvalContext {
             if let Some(method) = class.method(method_name) {
                 return Some((class.name().to_string(), method.clone()));
             }
+            if let Some((base, _)) = method_name.split_once('<') {
+                if let Some(method) = class.method(base).filter(|method| method.generic_template().is_some()) {
+                    return Some((class.name().to_string(), method.renamed(method_name)));
+                }
+            }
             current_name = class.parent()?.to_string();
         }
     }

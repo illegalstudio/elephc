@@ -110,6 +110,7 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
         &binding_params,
         &scope_parameter_is_by_ref,
         &evaluated_args,
+        context,
         values,
     );
     frame.bind_scope(&function_scope);
@@ -455,6 +456,7 @@ fn eval_closure_with_optional_binding(
         &binding_params,
         &scope_parameter_is_by_ref,
         &evaluated_args,
+        context,
         values,
     );
     frame.bind_scope(&function_scope);
@@ -661,7 +663,7 @@ fn visit_static_var_declarations(
             | EvalStmt::Foreach { body, .. }
             | EvalStmt::For { body, .. }
             | EvalStmt::While { body, .. } => visit_static_var_declarations(body, seen, visitor),
-            EvalStmt::FunctionDecl { .. } => {}
+            EvalStmt::FunctionDecl { .. } | EvalStmt::GenericDecl(_) => {}
             EvalStmt::If {
                 then_branch,
                 else_branch,
@@ -725,6 +727,7 @@ fn visit_static_var_declarations(
             | EvalStmt::StaticPropertyIncDec { .. }
             | EvalStmt::StaticPropertyReferenceBind { .. }
             | EvalStmt::StaticPropertySet { .. }
+            | EvalStmt::TypedVar { .. }
             | EvalStmt::StoreVar { .. }
             | EvalStmt::Throw(_)
             | EvalStmt::TraitDecl(_)

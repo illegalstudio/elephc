@@ -10,6 +10,165 @@
 
 use crate::support::{compile_and_run_with_heap_debug, without_ir_opt};
 
+/// A captured property RHS loses its temporary owner before the next PHP statement.
+#[test]
+fn test_static_receiver_scope_rhs_retirement() {
+    verify(r#"<?php
+class Leaf { public function __destruct() { echo 'D'; } }
+class Box { public ?Leaf $child = null; }
+class Holder { public static ?Box $value = null; }
+function scenario(): void {
+    Holder::$value = new Box(); $source = new Box();
+    for ($i = 0; $i < 8; $i++) {
+        $source->child = new Leaf();
+        Holder::$value->child = $source->child;
+        $source->child = null; Holder::$value->child = null;
+        echo 'A';
+    }
+    Holder::$value = null;
+}
+scenario();
+"#, &"DA".repeat(8));
+}
+
+/// Securing the assignment result preserves its owner after the generated RHS capture retires.
+#[test]
+fn test_static_receiver_scope_rhs_result() {
+    verify(r#"<?php
+class Leaf { public function __destruct() { echo 'D'; } }
+class Box { public ?Leaf $child = null; }
+class Holder { public static ?Box $value = null; }
+function scenario(): void {
+    Holder::$value = new Box(); $source = new Box();
+    for ($i = 0; $i < 8; $i++) {
+        $source->child = new Leaf();
+        $saved = (Holder::$value->child = $source->child);
+        $source->child = null; Holder::$value->child = null;
+        echo $saved instanceof Leaf ? 'H' : 'bad';
+        unset($saved); echo 'A';
+    }
+    Holder::$value = null;
+}
+scenario();
+"#, &"HDA".repeat(8));
+}
+
+/// Null-receiver errors unwind the real generated capture before entering a same-frame catch.
+#[test]
+fn test_static_receiver_scope_rhs_null_error() {
+    verify(r#"<?php
+class Leaf { public function __destruct() { echo 'D'; } }
+class Box { public ?Leaf $child = null; }
+class Holder { public static ?Box $value = null; }
+function scenario(): void {
+    for ($i = 0; $i < 8; $i++) {
+        try { Holder::$value->child = new Leaf(); }
+        catch (Error $error) { echo 'C'; unset($error); }
+    }
+    echo 'A';
+}
+scenario();
+"#, &("DC".repeat(8) + "A"));
+}
+
+/// A fresh child is unwind-visible while its last parent lease runs a throwing destructor.
+#[test]
+fn test_static_receiver_scope_child_throwing_parent() {
+    verify(r#"<?php
+class Leaf { public int $v = 0; public function __destruct() { echo 'L', $this->v; } }
+class ParentBox {
+    public Leaf $child { get { Holder::$value = null; return new Leaf(); } }
+    public function __destruct() { echo 'P'; throw new Exception('parent'); }
+}
+class Holder { public static ?ParentBox $value = null; }
+for ($i = 0; $i < 8; $i++) {
+    Holder::$value = new ParentBox();
+    try { Holder::$value->child->v = 7; }
+    catch (Exception $error) { echo 'C'; unset($error); }
+}
+"#, &"PL0C".repeat(8));
+}
+
+/// Child and captured RHS owners retire in LIFO order when the selected parent throws.
+#[test]
+fn test_static_receiver_scope_owned_rhs_throwing_parent() {
+    verify(r#"<?php
+class Payload { public function __destruct() { echo 'D'; } }
+class Leaf { public ?Payload $value = null; public function __destruct() { echo 'L'; } }
+class ParentBox {
+    public Leaf $child { get { Holder::$value = null; return new Leaf(); } }
+    public function __destruct() { echo 'P'; throw new Exception('parent'); }
+}
+class Holder { public static ?ParentBox $value = null; }
+for ($i = 0; $i < 8; $i++) {
+    Holder::$value = new ParentBox();
+    try { Holder::$value->child->value = new Payload(); }
+    catch (Exception $error) { echo 'C'; unset($error); }
+}
+"#, &"PLDC".repeat(8));
+}
+
+/// Array COW, heap strings and boxed results survive capture retirement without retaining frame owners.
+#[test]
+fn test_static_receiver_scope_container_and_string_results() {
+    verify(r#"<?php
+class Leaf { public function __destruct() { echo 'D'; } }
+class Holder {
+    public static array $items = [];
+    public static string $text = '';
+    public static mixed $value = null;
+}
+function capture(mixed $input): mixed { return Holder::$value = $input; }
+for ($i = 0; $i < 8; $i++) {
+    $items = [1, 2]; $saved = (Holder::$items = $items);
+    Holder::$items[0] = 7;
+    echo json_encode($saved), ':', json_encode(Holder::$items), '|';
+    unset($items, $saved); Holder::$items = [];
+    $text = str_repeat('x', 3); $savedText = (Holder::$text = $text);
+    Holder::$text = ''; unset($text); echo $savedText, '|'; unset($savedText);
+    $boxed = capture(['item' => new Leaf()]);
+    Holder::$value = null; echo $boxed['item'] instanceof Leaf ? 'H' : 'bad';
+    unset($boxed); echo '|';
+}
+"#, &"[1,2]:[7,2]|xxx|HD|".repeat(8));
+}
+
+/// Container, string and boxed-result ownership remains correct without EIR optimization.
+#[test]
+fn test_static_receiver_scope_container_and_string_results_no_ir_opt() {
+    without_ir_opt(test_static_receiver_scope_container_and_string_results);
+}
+
+/// Capture retirement is independent of EIR optimization.
+#[test]
+fn test_static_receiver_scope_rhs_retirement_no_ir_opt() {
+    without_ir_opt(test_static_receiver_scope_rhs_retirement);
+}
+
+/// Assignment-result ownership is preserved without EIR optimization.
+#[test]
+fn test_static_receiver_scope_rhs_result_no_ir_opt() {
+    without_ir_opt(test_static_receiver_scope_rhs_result);
+}
+
+/// Null-error capture cleanup remains correct without EIR optimization.
+#[test]
+fn test_static_receiver_scope_rhs_null_error_no_ir_opt() {
+    without_ir_opt(test_static_receiver_scope_rhs_null_error);
+}
+
+/// Child unwind publication remains correct without EIR optimization.
+#[test]
+fn test_static_receiver_scope_child_throwing_parent_no_ir_opt() {
+    without_ir_opt(test_static_receiver_scope_child_throwing_parent);
+}
+
+/// Combined child and RHS unwind order remains correct without EIR optimization.
+#[test]
+fn test_static_receiver_scope_owned_rhs_throwing_parent_no_ir_opt() {
+    without_ir_opt(test_static_receiver_scope_owned_rhs_throwing_parent);
+}
+
 /// Checks one array-interleaved static receiver with a fresh child on each legal reference getter.
 fn verify_compound_static_getter(receiver: &str, key: &str, statement: bool, nested: bool, expected: &str) {
     let target = format!("{receiver}->children[{key}]->v");

@@ -254,6 +254,79 @@ callable invocation. This mode is separate from the nested-write fetch, which
 COW-normalizes the outer container and detaches the selected zval before
 mutation.
 
+## Runtime generic specialization
+
+`crates/elephc-generics` owns structural type terms, conflict detection, written argument binding,
+dependent defaults, and the specialization depth limit shared by the compiler and Magician.
+Compiler adapters live in `src/generics/shared.rs`; runtime dispatch lives in
+`crates/elephc-magician/src/interpreter/generics/` and its parent module.
+
+The Magician parser retains an `EvalGenericTemplate` containing a declaration prototype, lexer
+tokens, lexical imports/namespace, and the token indexes of actual type-parameter uses. Replay
+substitutes those positions only, preserving unrelated identifiers and literal bytes. Constructor
+slots have separate lexical identities so promotion and shadowing remain correct.
+Class-reference type arguments are consumed only after lookahead parses a complete list;
+ordinary comparisons after `instanceof` or `new` remain expression operators.
+PHPDoc inheritance edits match the complete written parent name within the tag's `extends` or
+`implements` clause, with at most one inserted list per parent and native arguments taking priority.
+
+Runtime dispatch borrows arguments after their single source-order evaluation, completes bindings,
+checks bounds, and replays a concrete ordinary declaration. Functions and classes enter the normal
+context registries; method specializations are cached by declaring class and concrete method name.
+Eval and included-program entry share strict-PHP checks, CLI-global seeding, and direct
+template hoisting through `execute_program_statements`.
+Nested statement lists register and validate templates only when execution reaches their
+declaration, preserving return, throw, break, and continue behavior and redeclaration errors.
+Constructor inference omits null and empty arrays using concrete runtime tags, so zero-property
+native objects still contribute their class types.
+Class relation registration instantiates generic parents, interfaces, and traits before ordinary
+validation. A recursion guard rejects cyclic generic inheritance, and type growth is bounded.
+Signature compatibility projects concrete bindings through class and interface ancestors,
+including specializations that have not yet entered the runtime registry. Variance checks
+run again before specialization or cached class access, using the current dependency registry
+so later trait, class-parent, or interface declarations cannot invalidate an earlier promise.
+They include public and protected trait members and nested trait uses, with method-local slots
+shielded from enclosing template substitutions. Qualified adaptations resolve against the
+complete trait-use list before the effective imported method surface is checked.
+Class identities put class and constructor slots in a single argument list. Constructor slots
+remain part of the registry key; class-shaped inference and variance compare only class slots.
+Written lists extending beyond class slots bind the combined class/constructor parameters, so
+concrete names and parent references resolve independently of specialization cache order.
+Failed initialization releases the allocated receiver on property-default, argument-binding, or
+constructor errors and suppresses its destructor. An escaped `$this` retains class/property
+metadata until its remaining owners release it, matching PHP's failed-construction behavior.
+
+Generated-code context calls and callable dispatch use the same specialization resolver before
+ordinary binding. The public context-call entry points live in `interpreter/context_calls.rs`;
+first-class function callables may retain a template name until arguments determine its slots.
+
+Structural `EvalParameterTypeVariant::Generic` contracts validate boxed arrays and typed callbacks
+at existing argument and return boundaries. Indexed contracts reject associative storage. Typed
+local writes validate before mutation, including nullable and union array arms, normalized keys,
+and the existing contents of a selected union arm. Local reference groups collect every declared
+contract. Persistent wrappers carry those contracts in `context/local_types.rs`, so aliases,
+reference parameters, captures, and returned array references enforce the same constraints.
+The metadata borrows runtime storage and uses allocation retirement tokens to prevent contracts
+from following reused addresses. Rejected typed declarations restore the previous local contract,
+and property writes preserve shared wrappers while validating before mutation.
+Replacing a wrapper's value refreshes its element aliases and cursor metadata from the RHS
+before releasing the previous payload; a replacement without metadata clears the old entries.
+Array-element writeback copies the live receiver's metadata onto its shallow clone before
+replacing shared storage, including nested `Cell` targets. Updating one element preserves
+sibling references and the current or exhausted array cursor.
+Independent value copies retain their ordinary COW semantics.
+Float and bool keys use a temporary integer
+cell for contract validation; that cell is released on success and failure, while storage receives
+the original key so native normalization and diagnostics keep their existing operands. No new
+value representation or target-specific ABI is introduced. PHPDoc token provenance preserves strict
+mode acceptance; `EvalProgram` records native syntax for rejection before execution. File-cache
+format 16 includes the retained templates, tokens, imports, structural types, and typed locals,
+alongside preserved source spelling for direct and first-class function calls. It invalidates
+older generic and ordinary eval entries, including incorrectly rewritten PHPDoc parents and
+member annotations discarded after uppercase or mixed-case native class-like keywords.
+Version 16 also invalidates stored parse errors for valid comparisons after class references.
+The format guard covers the combined serialized IR and its corresponding type sources.
+
 ## Parsing and cache
 
 Dynamic source is parsed into Magician's immutable EvalIR. The process-wide

@@ -18,7 +18,7 @@ pub(in crate::interpreter) fn eval_function_callable_expr(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let lookup_name = call_lookup_name(name.trim_start_matches('\\'));
-    if eval_function_probe_exists(context, &lookup_name) {
+    if eval_function_probe_exists(context, &lookup_name) || generic_function_is_callable(&lookup_name, context) {
         return eval_closure_object_expr(
             EvalClosureObjectTarget::Named(lookup_name.into_owned()),
             context,
@@ -27,7 +27,7 @@ pub(in crate::interpreter) fn eval_function_callable_expr(
     }
     if let Some(fallback_name) = fallback_name {
         let fallback_lookup_name = call_lookup_name(fallback_name.trim_start_matches('\\'));
-        if eval_function_probe_exists(context, &fallback_lookup_name) {
+        if eval_function_probe_exists(context, &fallback_lookup_name) || generic_function_is_callable(&fallback_lookup_name, context) {
             return eval_closure_object_expr(
                 EvalClosureObjectTarget::Named(fallback_lookup_name.into_owned()),
                 context,

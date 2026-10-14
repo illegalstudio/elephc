@@ -102,6 +102,14 @@ impl EvalEnum {
         }
     }
 
+    /// Replaces interface and trait references with their concrete specializations.
+    pub(crate) fn with_relations(mut self, interfaces: Vec<String>, traits: Vec<String>, adaptations: Vec<EvalTraitAdaptation>) -> Self {
+        self.interfaces = interfaces;
+        self.traits = traits;
+        self.trait_adaptations = adaptations;
+        self
+    }
+
     /// Returns a copy of this enum with source-location metadata attached.
     pub const fn with_source_location(mut self, source_location: EvalSourceLocation) -> Self {
         self.source_location = Some(source_location);

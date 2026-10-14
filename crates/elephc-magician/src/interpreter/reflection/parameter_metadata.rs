@@ -300,6 +300,9 @@ pub(super) fn eval_reflection_named_type_variant_metadata(
     allows_null: bool,
 ) -> Option<EvalReflectionNamedTypeMetadata> {
     match variant {
+        EvalParameterTypeVariant::Generic(ty) => Some(EvalReflectionNamedTypeMetadata {
+            name: ty.to_string(), allows_null, is_builtin: matches!(ty, elephc_generics::Type::Apply(name, _) if name == "array"),
+        }),
         EvalParameterTypeVariant::Array => {
             Some(eval_reflection_builtin_named_type("array", allows_null))
         }

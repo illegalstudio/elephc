@@ -12,11 +12,13 @@
 //!   `<?` / `<?php` tags.
 //! - File and directory metadata are supplied by the eval context at execution time.
 
+pub(crate) mod generics;
+mod docblocks;
 mod cursor;
 mod expressions;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) mod repl;
-mod state;
+pub(crate) mod state;
 mod statements;
 
 #[cfg(test)]

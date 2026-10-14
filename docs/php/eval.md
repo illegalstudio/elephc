@@ -127,8 +127,8 @@ ABI. AOT literals without writes skip scope materialization when they need no
 caller values or can receive read-only values as direct EIR parameters. Known
 writes use the same core scope cells from an internal EIR function.
 
-Because a scope cell is always boxed `Mixed`, a local read or written inside
-`eval()` may change type freely — `eval('$a = 1; $a = "ciao"; echo $a;')`
+Because a scope cell is always boxed `Mixed`, an untyped local read or written inside
+`eval()` may change type freely: `eval('$a = 1; $a = "ciao"; echo $a;')`
 compiles and runs the same in every mode. This is unrelated to
 [`--strict-locals`](../compiling/cli-reference.md#strict-locals-mode), which
 only tightens the AOT checker's monomorphic-local rule for ordinary compiled
@@ -337,6 +337,24 @@ Post-barrier native direct calls and string-literal `call_user_func()` callbacks
 currently accept simple positional arguments. Post-barrier
 `call_user_func_array()` callbacks can pass indexed or string-keyed argument
 containers to eval-declared functions.
+
+## Generics
+
+Magician supports native generic declarations and the supported PHPStan/Psalm annotations from
+[Generics](../beyond-php/generics.md#generics-in-magician). Functions, classes, interfaces, traits,
+methods, and constructors specialize lazily from written type arguments or evaluated argument
+types. Templates and concrete specializations persist across eval calls and runtime includes.
+
+Bounds, defaults, variance, structural array contracts, typed callable signatures, and substituted
+typed locals are checked at runtime. Binding and specialized contract failures throw catchable
+`TypeError` values. Generic classes have distinct names and static state per specialization.
+Class and constructor arguments may be written together, such as `Pair<int, string>`, before
+any inferred instantiation, including in parent references. Typed arrays validate float and bool
+keys as their stored integer type, following PHP array-key normalization.
+Native syntax requires ordinary mode; PHPDoc templates also work under `--strict-php`.
+
+Specialization reuses the existing call binder and boxed value ABI. It does not change the
+supported expression subset or give interpreted calls AOT's native storage representation.
 
 ## Classes and objects
 

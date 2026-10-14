@@ -12,6 +12,8 @@ use super::*;
 /// Dynamic eval statements that operate on a materialized activation scope.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub enum EvalStmt {
+    GenericDecl(Box<EvalGenericTemplate>),
+    TypedVar { name: String, declared: EvalParameterType, value: EvalExpr },
     ArrayAppendVar {
         name: String,
         value: EvalExpr,

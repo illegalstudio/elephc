@@ -22,8 +22,14 @@ pub(in crate::interpreter) fn eval_declared_return_control_value(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match control {
-        EvalControl::None => eval_declared_implicit_return_value(return_type, values),
-        EvalControl::ReturnVoid => eval_declared_void_return_value(return_type, values),
+        EvalControl::None | EvalControl::ReturnVoid => {
+            let result = if matches!(control, EvalControl::None) { eval_declared_implicit_return_value(return_type, values) }
+                else { eval_declared_void_return_value(return_type, values) };
+            if result == Err(EvalStatus::RuntimeFatal) && context.current_function().is_some_and(|name| name.contains('<')) {
+                return eval_throw_type_error("Missing return value for specialized return type", context, values);
+            }
+            result
+        }
         EvalControl::Return(value) => {
             let result = eval_declared_explicit_return_value(
                 return_type,
@@ -167,6 +173,9 @@ fn eval_declared_return_value(
         return Ok(value);
     }
     if return_type.is_intersection() {
+        if context.current_function().is_some_and(|name| name.contains('<')) {
+            return eval_throw_type_error("Return value does not satisfy the specialized intersection type", context, values);
+        }
         return Err(EvalStatus::RuntimeFatal);
     }
     for variant in return_type.variants() {
@@ -175,6 +184,10 @@ fn eval_declared_return_value(
         {
             return Ok(coerced);
         }
+    }
+    if return_type.variants().iter().any(|ty| matches!(ty, EvalParameterTypeVariant::Generic(_)))
+        || context.current_function().is_some_and(|name| name.contains('<')) {
+        return eval_throw_type_error(&format!("Return value does not satisfy {}", crate::eval_ir::generic_type(return_type)), context, values);
     }
     Err(EvalStatus::RuntimeFatal)
 }
@@ -235,6 +248,7 @@ fn eval_declared_return_variant_accepts_exact(
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     match variant {
+        EvalParameterTypeVariant::Generic(ty) => generic_value_accepts(ty, value, context, values),
         EvalParameterTypeVariant::Array => Ok(matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC)),
         EvalParameterTypeVariant::Bool => Ok(tag == EVAL_TAG_BOOL),
         EvalParameterTypeVariant::Callable => Ok(matches!(

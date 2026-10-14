@@ -80,8 +80,7 @@ fn capture_static_write_child(
     let child = if ctx.value_is_owning_temporary(child) { child } else {
         crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, child, Some(span))
     };
-    parent.finish(ctx, span);
-    crate::ir_lower::stmt::property_write_receiver::PropertyWriteReceiver::new(ctx, child, span)
+    parent.handoff(ctx, child, span)
 }
 
 /// Lowers the source of a by-reference `foreach` whose receiver is an object property.

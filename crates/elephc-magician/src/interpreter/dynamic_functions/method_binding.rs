@@ -576,6 +576,9 @@ pub(in crate::interpreter) fn eval_method_parameter_value(
         return Ok(value);
     }
     if param_type.is_intersection() {
+        if context.current_function().is_some_and(|name| name.contains('<')) {
+            return eval_throw_type_error("Value does not satisfy the specialized intersection type", context, values);
+        }
         return Err(EvalStatus::RuntimeFatal);
     }
     for variant in param_type.variants() {
@@ -585,11 +588,15 @@ pub(in crate::interpreter) fn eval_method_parameter_value(
             return Ok(coerced);
         }
     }
+    if param_type.variants().iter().any(|ty| matches!(ty, EvalParameterTypeVariant::Generic(_)))
+        || context.current_function().is_some_and(|name| name.contains('<')) {
+        return eval_throw_type_error(&format!("Value does not satisfy {}", crate::eval_ir::generic_type(param_type)), context, values);
+    }
     Err(EvalStatus::RuntimeFatal)
 }
 
 /// Returns whether a value satisfies one eval parameter type without scalar coercion.
-fn eval_method_parameter_type_accepts_exact(
+pub(in crate::interpreter) fn eval_method_parameter_type_accepts_exact(
     param_type: &EvalParameterType,
     value: RuntimeCellHandle,
     context: &ElephcEvalContext,
@@ -624,6 +631,7 @@ fn eval_method_parameter_variant_accepts_exact(
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     match variant {
+        EvalParameterTypeVariant::Generic(ty) => generic_value_accepts(ty, value, context, values),
         EvalParameterTypeVariant::Array => Ok(matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC)),
         EvalParameterTypeVariant::Bool => Ok(tag == EVAL_TAG_BOOL),
         EvalParameterTypeVariant::Callable => Ok(matches!(
@@ -659,6 +667,9 @@ fn eval_method_parameter_class_accepts(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
+    if let Some(template) = context.generic_template(class_name).filter(|template| !matches!(template.prototype.as_ref(), EvalStmt::FunctionDecl { .. })) {
+        return generic_value_accepts(&erased_generic_type(template), value, context, values);
+    }
     let target = eval_method_parameter_runtime_class_name(class_name, context)?;
     if tag == EVAL_TAG_CALLABLE {
         return Ok(target.eq_ignore_ascii_case("Closure"));

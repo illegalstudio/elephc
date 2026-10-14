@@ -278,6 +278,15 @@ impl EvalClass {
         }
     }
 
+    /// Replaces inheritance and trait names with their concrete runtime specializations.
+    pub(crate) fn with_specialized_relations(mut self, parent: Option<String>, interfaces: Vec<String>, traits: Vec<String>, adaptations: Vec<EvalTraitAdaptation>) -> Self {
+        self.parent = parent;
+        self.interfaces = interfaces;
+        self.traits = traits;
+        self.trait_adaptations = adaptations;
+        self
+    }
+
     /// Returns a copy of this class with source-location metadata attached.
     pub const fn with_source_location(mut self, source_location: EvalSourceLocation) -> Self {
         self.source_location = Some(source_location);

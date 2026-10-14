@@ -97,9 +97,9 @@ pub(in crate::interpreter) fn visible_scope_cell(
         .map(RuntimeCellHandle::borrowed)
 }
 
-/// Stores a variable cell, redirecting `global` aliases to the global scope.
+/// Validates a variable write and consumes owned input on rejection, following global aliases.
 pub(in crate::interpreter) fn set_scope_cell(
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     name: impl Into<String>,
     cell: RuntimeCellHandle,
@@ -107,10 +107,25 @@ pub(in crate::interpreter) fn set_scope_cell(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
     let name = name.into();
+    if let Err(status) = validate_generic_local_contracts(scope, &name, cell, context, values) {
+        if ownership == ScopeCellOwnership::Owned { let _ = eval_release_value(context, values, cell); }
+        return Err(status);
+    }
+    let result = set_scope_cell_unchecked(context, scope, name, cell, ownership, values);
+    if result.is_err() && ownership == ScopeCellOwnership::Owned { let _ = eval_release_value(context, values, cell); }
+    result
+}
+
+/// Applies a validated write without repeating the destination's contract checks.
+fn set_scope_cell_unchecked(
+    context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, name: String,
+    cell: RuntimeCellHandle, ownership: ScopeCellOwnership, values: &mut impl RuntimeValueOps,
+) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
     if let Some(reference) = visible_scope_cell(context, scope, &name) {
         if values.is_reference(reference)? {
             if reference == cell { return Ok(Vec::new()); }
             let previous = values.reference_replace(reference, cell)?;
+            context.copy_array_metadata(cell, reference);
             if let Some(global) = eval_superglobal_scope(context, scope, &name) {
                 unsafe { global.as_mut() }.ok_or(EvalStatus::RuntimeFatal)?.mark_reference_changed(&name);
             } else if let Some(global_name) = scope.global_alias_target(&name).map(str::to_string) {
@@ -133,25 +148,33 @@ pub(in crate::interpreter) fn set_scope_cell(
     })
 }
 
-/// Transfers a freshly acquired owner into local or global storage, balancing identical aliases.
+/// Consumes a fresh owner on success or failure, balancing identical local and global aliases.
 pub(in crate::interpreter) fn set_owned_scope_cell(
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     name: String,
     cell: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
-    if let Some(reference) = visible_scope_cell(context, scope, &name) {
-        if values.is_reference(reference)? {
-            let same_owner = reference == cell;
-            let mut replaced = set_scope_cell(context, scope, name, cell, ScopeCellOwnership::Owned, values)?;
-            if same_owner { replaced.push(cell); }
-            return Ok(replaced);
-        }
+    if let Err(status) = validate_generic_local_contracts(scope, &name, cell, context, values) {
+        let _ = eval_release_value(context, values, cell);
+        return Err(status);
     }
-    update_scope_cell(context, scope, name, |scope, name| {
-        scope.set_owned_respecting_references(name, cell)
-    })
+    let result = (|| {
+        if let Some(reference) = visible_scope_cell(context, scope, &name) {
+            if values.is_reference(reference)? {
+                let same_owner = reference == cell;
+                let mut replaced = set_scope_cell_unchecked(context, scope, name, cell, ScopeCellOwnership::Owned, values)?;
+                if same_owner { replaced.push(cell); }
+                return Ok(replaced);
+            }
+        }
+        update_scope_cell(context, scope, name, |scope, name| {
+            scope.set_owned_respecting_references(name, cell)
+        })
+    })();
+    if result.is_err() { let _ = eval_release_value(context, values, cell); }
+    result
 }
 
 /// Applies a storage mutation to the actual scope behind a local or global alias.
@@ -183,12 +206,26 @@ fn update_scope_cell(
 
 /// Creates a PHP reference alias between two eval-visible variable names.
 pub(in crate::interpreter) fn set_reference_alias(
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     target: &str,
     source: &str,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+    if let Some(declared) = scope.local_type(target).cloned() {
+        let current = visible_scope_cell(context, scope, source);
+        let value = current.map_or_else(|| values.null(), Ok)?;
+        let checked = validate_generic_local(&declared, target, value, context, values);
+        if current.is_none() { let released = eval_release_value(context, values, value); checked.and(released)?; }
+        else { checked?; }
+    }
+    let mut types = generic_local_contracts(scope, source, context);
+    if let Some(declared) = scope.local_type(target).filter(|ty| !types.contains(ty)) { types.push(declared.clone()); }
+    if !types.is_empty() {
+        if let Some(reference) = eval_persistent_variable_reference(source, context, scope, values)? {
+            context.bind_local_reference_types(reference, &types);
+        }
+    }
     if let Some(global_name) = scope.global_alias_target(source).map(str::to_string) {
         scope.mark_global_alias_to(target.to_string(), global_name);
         return Ok(Vec::new());
@@ -203,6 +240,7 @@ pub(in crate::interpreter) fn set_reference_alias(
             || values.null().map(|cell| (cell, ScopeCellOwnership::Owned)),
             |entry| Ok((entry.cell(), entry.flags().ownership)),
         )?;
+    if values.is_reference(cell)? { context.bind_local_reference_types(cell, &types); }
     Ok(scope.set_reference(target.to_string(), source.to_string(), cell, ownership))
 }
 

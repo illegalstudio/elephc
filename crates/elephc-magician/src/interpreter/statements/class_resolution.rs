@@ -175,66 +175,81 @@ pub(super) fn eval_dynamic_class_new_object_with_ref_mode(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let object = eval_dynamic_class_allocate_object(class, context, caller_scope, values)?;
-    if let Some((constructor_class, constructor)) =
-        context.class_method(class.name(), "__construct")
-    {
-        if validate_eval_member_access(&constructor_class, constructor.visibility(), context)
-            .is_err()
+    let initialized = (|| {
+        if let Some((constructor_class, constructor)) =
+            context.class_method(class.name(), "__construct")
         {
-            let _ = values.release(object);
-            return eval_throw_method_access_error(
+            if validate_eval_member_access(&constructor_class, constructor.visibility(), context)
+                .is_err()
+            {
+                return eval_throw_method_access_error(
+                    &constructor_class,
+                    constructor.name(),
+                    constructor.visibility(),
+                    context,
+                    values,
+                );
+            }
+            let result = eval_dynamic_method_with_values_and_ref_mode(
                 &constructor_class,
-                constructor.name(),
-                constructor.visibility(),
-                context,
-                values,
-            );
-        }
-        let result = eval_dynamic_method_with_values_and_ref_mode(
-            &constructor_class,
-            class.name(),
-            &constructor,
-            object,
-            constructor.parameter_is_by_ref(),
-            evaluated_args,
-            by_ref_mode,
-            context,
-            values,
-        )?;
-        eval_release_value(context, values, result)?;
-    } else if !evaluated_args.is_empty() {
-        if let Some(parent) = context.class_native_parent_name(class.name()) {
-            eval_native_constructor_with_evaluated_args_and_ref_mode(
-                &parent,
+                class.name(),
+                &constructor,
                 object,
+                constructor.parameter_is_by_ref(),
                 evaluated_args,
                 by_ref_mode,
                 context,
                 values,
             )?;
-        } else {
-            return Err(EvalStatus::RuntimeFatal);
-        }
-    } else if let Some(parent) = context.class_native_parent_name(class.name()) {
-        if eval_aot_method_dispatch_metadata_in_hierarchy(
-            &parent,
-            "__construct",
-            context,
-            values,
-        )?
-        .is_some()
-        {
-            eval_native_constructor_with_evaluated_args_and_ref_mode(
+            eval_release_value(context, values, result)?;
+        } else if !evaluated_args.is_empty() {
+            if let Some(parent) = context.class_native_parent_name(class.name()) {
+                eval_native_constructor_with_evaluated_args_and_ref_mode(
+                    &parent,
+                    object,
+                    evaluated_args,
+                    by_ref_mode,
+                    context,
+                    values,
+                )?;
+            } else {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+        } else if let Some(parent) = context.class_native_parent_name(class.name()) {
+            if eval_aot_method_dispatch_metadata_in_hierarchy(
                 &parent,
-                object,
-                Vec::new(),
-                by_ref_mode,
+                "__construct",
                 context,
                 values,
-            )?;
+            )?
+            .is_some()
+            {
+                eval_native_constructor_with_evaluated_args_and_ref_mode(
+                    &parent,
+                    object,
+                    Vec::new(),
+                    by_ref_mode,
+                    context,
+                    values,
+                )?;
+            }
         }
+        Ok(())
+    })();
+    if let Err(status) = initialized {
+        discard_failed_dynamic_object(object, context, values);
+        return Err(status);
     }
     Ok(object)
+}
+
+/// Releases a partial receiver while preserving its error and suppressing its destructor.
+fn discard_failed_dynamic_object(object: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps) {
+    if let Ok(identity) = values.object_identity(object) {
+        // An escaped `$this` retains class metadata, but PHP never runs its failed receiver's destructor.
+        context.suppress_dynamic_object_destructor(identity);
+    }
+    let _ = values.release(object);
 }
 
 /// Creates a PHP shallow clone and invokes an eval-declared `__clone()` hook when present.
@@ -667,43 +682,50 @@ pub(super) fn eval_dynamic_class_allocate_object(
         .class_native_parent_name(class.name())
         .unwrap_or_else(|| String::from("stdClass"));
     let object = values.new_object(&backing_class)?;
-    let identity = values.object_identity(object)?;
-    context.register_dynamic_object(identity, class.name());
-    let mut class_chain = context.class_chain(class.name());
-    if class_chain.is_empty() {
-        class_chain.push(class.clone());
-    }
-    for class in &class_chain {
-        for property in class
-            .properties()
-            .iter()
-            .filter(|property| !property.is_static() && !property.is_abstract())
-        {
-            let value = if let Some(default) = property.default() {
-                Some(eval_class_like_member_default(
-                    class.name(),
-                    property.trait_origin(),
-                    default,
-                    context,
-                    caller_scope,
-                    values,
-                )?)
-            } else if property.property_type().is_none() {
-                Some(values.null()?)
-            } else {
-                None
-            };
-            let storage_name = eval_instance_property_storage_name(class.name(), property);
-            if let Some(value) = value {
-                let written = eval_with_native_property_storage_scope(
-                    class.name(), &storage_name, context, values,
-                    |values| values.property_set(object, &storage_name, value),
-                );
-                let released = release_expr_result(value, context, values);
-                written.and(released)?;
-                context.mark_dynamic_property_initialized(identity, &storage_name);
+    let initialized = (|| {
+        let identity = values.object_identity(object)?;
+        context.register_dynamic_object(identity, class.name());
+        let mut class_chain = context.class_chain(class.name());
+        if class_chain.is_empty() {
+            class_chain.push(class.clone());
+        }
+        for class in &class_chain {
+            for property in class
+                .properties()
+                .iter()
+                .filter(|property| !property.is_static() && !property.is_abstract())
+            {
+                let value = if let Some(default) = property.default() {
+                    Some(eval_class_like_member_default(
+                        class.name(),
+                        property.trait_origin(),
+                        default,
+                        context,
+                        caller_scope,
+                        values,
+                    )?)
+                } else if property.property_type().is_none() {
+                    Some(values.null()?)
+                } else {
+                    None
+                };
+                let storage_name = eval_instance_property_storage_name(class.name(), property);
+                if let Some(value) = value {
+                    let written = eval_with_native_property_storage_scope(
+                        class.name(), &storage_name, context, values,
+                        |values| values.property_set(object, &storage_name, value),
+                    );
+                    let released = release_expr_result(value, context, values);
+                    written.and(released)?;
+                    context.mark_dynamic_property_initialized(identity, &storage_name);
+                }
             }
         }
+        Ok(())
+    })();
+    if let Err(status) = initialized {
+        discard_failed_dynamic_object(object, context, values);
+        return Err(status);
     }
     Ok(object)
 }

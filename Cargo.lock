@@ -690,6 +690,7 @@ dependencies = [
  "elephc-builtin-contract",
  "elephc-crypto",
  "elephc-curl",
+ "elephc-generics",
  "elephc-image",
  "elephc-magician",
  "elephc-mbstring",
@@ -764,6 +765,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "elephc-generics"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "elephc-iconv"
 version = "0.1.0"
 
@@ -792,6 +800,7 @@ dependencies = [
  "elephc-bcmath",
  "elephc-builtin-contract",
  "elephc-crypto",
+ "elephc-generics",
  "elephc-iconv",
  "elephc-mbstring",
  "elephc-pcntl",

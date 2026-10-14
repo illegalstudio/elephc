@@ -22,5 +22,6 @@ mod magic_comments;
 mod namespaces;
 mod operators;
 mod static_members;
+mod generics;
 mod support;
 mod trait_adaptations;

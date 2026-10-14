@@ -170,6 +170,7 @@ impl Parser {
             TokenKind::Ident(member) => {
                 let member = member.clone();
                 self.advance();
+                let member = self.parse_written_name(member, false)?;
                 self.parse_named_object_member_postfix(object, member, nullsafe)
             }
             TokenKind::DollarIdent(name) => {

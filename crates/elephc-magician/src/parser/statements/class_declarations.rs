@@ -20,6 +20,8 @@ impl Parser {
         &mut self,
         attributes: Vec<EvalAttribute>,
     ) -> Result<Vec<EvalStmt>, EvalParseError> {
+        let template_start = self.pos;
+        let type_scope = self.type_parameters.len();
         let (is_abstract, is_final, is_readonly_class) = self.parse_class_decl_modifiers()?;
         if !matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "class")) {
             return Err(EvalParseError::UnsupportedConstruct);
@@ -27,14 +29,18 @@ impl Parser {
         let source_start_line = self.current_line();
         self.advance();
         let name = self.parse_class_like_decl_name()?;
+        let name_index = self.pos - 1;
+        let header_start = self.pos;
+        let generic_parameters = self.parse_generic_parameters()?;
+        let header_end = self.pos;
         let parent = self.parse_class_parent_clause()?;
         let interfaces = self.parse_class_interface_clause()?;
         let body = self.parse_class_body_members(is_readonly_class)?;
         let source_location = EvalSourceLocation::new(source_start_line, body.source_end_line);
         self.consume_semicolon();
-        Ok(vec![EvalStmt::ClassDecl(
+        let declaration = EvalStmt::ClassDecl(
             EvalClass::with_class_modifiers_traits_adaptations_and_constants(
-                name,
+                name.clone(),
                 is_abstract,
                 is_final,
                 is_readonly_class,
@@ -48,7 +54,14 @@ impl Parser {
             )
             .with_source_location(source_location)
             .with_attributes(attributes),
-        )])
+        );
+        self.type_parameters.truncate(type_scope);
+        self.type_parameter_origins.truncate(type_scope);
+        let constructor_generic = matches!(&declaration, EvalStmt::ClassDecl(class) if class.method("__construct").is_some_and(|method| method.generic_template().is_some()));
+        if generic_parameters.is_empty() && !constructor_generic { return Ok(vec![declaration]); }
+        let template = self.retain_template(template_start, name_index, header_start, header_end,
+            name, generic_parameters, declaration);
+        Ok(vec![EvalStmt::GenericDecl(Box::new(template))])
     }
 
     /// Parses `class [(args)] [extends Parent] [implements Iface, ...] { ... }` after `new`.

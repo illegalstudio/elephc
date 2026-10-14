@@ -228,7 +228,7 @@ impl Parser {
     }
 
     /// Parses one PHP type declaration and returns retained eval metadata.
-    pub(super) fn parse_type_decl(
+    pub(in crate::parser) fn parse_type_decl(
         &mut self,
         position: EvalTypePosition,
     ) -> Result<Option<EvalParameterType>, EvalParseError> {
@@ -291,8 +291,34 @@ impl Parser {
     ) -> Result<Option<EvalParameterTypeVariant>, EvalParseError> {
         match self.current() {
             TokenKind::Ident(_) | TokenKind::Backslash => {
+                let type_index = self.pos;
                 let name = self.parse_qualified_name()?;
-                self.type_variant_from_name(name, position)
+                if !name.absolute { self.mark_type_parameter_use(type_index, &name.name); }
+                let mut variant = self.type_variant_from_name(name, position)?;
+                if matches!(self.current(), TokenKind::Less) {
+                    let args = self.parse_type_arguments()?;
+                    let base = match &variant {
+                        Some(EvalParameterTypeVariant::Array) => "array".to_string(),
+                        Some(EvalParameterTypeVariant::Class(name)) => name.clone(),
+                        _ => return Err(EvalParseError::UnsupportedConstruct),
+                    };
+                    if base == "array" && (args.is_empty() || args.len() > 2
+                        || (args.len() == 2 && !matches!(&args[0], elephc_generics::Type::Atom(name) if ["int", "string", "mixed"].contains(&name.as_str()) || self.type_parameters.contains(name)))) {
+                        return Err(EvalParseError::UnsupportedConstruct);
+                    }
+                    variant = Some(EvalParameterTypeVariant::Generic(elephc_generics::Type::Apply(base, args)));
+                } else if matches!(variant, Some(EvalParameterTypeVariant::Callable)) && self.consume(TokenKind::LParen) {
+                    self.native_generic_syntax |= !self.token_phpdoc.get(self.pos.saturating_sub(1)).copied().unwrap_or(false);
+                    let mut params = Vec::new();
+                    if !self.consume(TokenKind::RParen) {
+                        loop { params.push(self.parse_generic_type()?); if !self.consume(TokenKind::Comma) { break; } }
+                        self.expect(TokenKind::RParen)?;
+                    }
+                    self.expect(TokenKind::Colon)?;
+                    let ret = self.parse_generic_type()?;
+                    variant = Some(EvalParameterTypeVariant::Generic(elephc_generics::Type::Callable(params, Box::new(ret))));
+                }
+                Ok(variant)
             }
             _ => Err(EvalParseError::UnexpectedToken),
         }
@@ -304,11 +330,15 @@ impl Parser {
         name: ParsedQualifiedName,
         position: EvalTypePosition,
     ) -> Result<Option<EvalParameterTypeVariant>, EvalParseError> {
+        if !name.absolute && self.type_parameters.contains(&name.name) {
+            return Ok(Some(EvalParameterTypeVariant::Class(name.name)));
+        }
         if !name.absolute {
             let lower = name.name.to_ascii_lowercase();
             let builtin = match lower.as_str() {
                 "array" => Some(EvalParameterTypeVariant::Array),
                 "bool" => Some(EvalParameterTypeVariant::Bool),
+                "false" => Some(EvalParameterTypeVariant::Generic(elephc_generics::Type::atom("false"))),
                 "callable" if matches!(position, EvalTypePosition::Property) => {
                     return Err(EvalParseError::UnsupportedConstruct);
                 }

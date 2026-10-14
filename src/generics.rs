@@ -23,6 +23,7 @@ pub mod classes;
 mod constructors;
 pub(crate) use constructors::parameter_name;
 pub mod methods;
+mod shared;
 mod site_scope;
 mod splice;
 pub mod variance;
@@ -59,7 +60,7 @@ pub struct GenericContext {
 /// The upper bound on monomorphization rounds.
 ///
 /// A backstop, not the primary defence: polymorphic recursion is caught by
-/// [`MAX_TYPE_ARGUMENT_DEPTH`] at the instantiation that creates it, which can name the type.
+/// [`elephc_generics::MAX_TYPE_ARGUMENT_DEPTH`] at the instantiation that creates it, which can name the type.
 /// Exceeding this bound means something grew that depth did not describe, so it is an ERROR —
 /// compiling on regardless would emit a program missing instantiations its call sites need.
 pub const MAX_INSTANTIATION_ROUNDS: usize = 16;
@@ -272,7 +273,7 @@ pub enum InferError {
     },
     /// The inferred type has no source spelling, so the template cannot be rewritten for it.
     Unspellable { param: String, ty: String },
-    /// The type argument is nested deeper than [`MAX_TYPE_ARGUMENT_DEPTH`].
+    /// The type argument is nested deeper than [`elephc_generics::MAX_TYPE_ARGUMENT_DEPTH`].
     ///
     /// This is what polymorphic recursion looks like from the inside: `f<T>()` calling
     /// `f<array<T>>()` instantiates `f<int>`, then `f<array<int>>`, then
@@ -280,28 +281,6 @@ pub enum InferError {
     /// signal because it is what actually grows; the instantiation COUNT does not distinguish
     /// a runaway from a template a program simply uses with many types.
     TooDeep { param: String, ty: String },
-}
-
-/// How deeply a type argument may nest before it is treated as polymorphic recursion.
-///
-/// Eight is far past anything a program writes by hand — `array<array<array<int>>>` is three —
-/// while still terminating a runaway in a handful of rounds.
-pub const MAX_TYPE_ARGUMENT_DEPTH: usize = 8;
-
-/// Returns how deeply `ty` nests, counting the outermost constructor as depth 1.
-fn type_expr_depth(ty: &TypeExpr) -> usize {
-    match ty {
-        TypeExpr::Nullable(inner) | TypeExpr::Array(inner) | TypeExpr::Buffer(inner) => {
-            1 + type_expr_depth(inner)
-        }
-        TypeExpr::AssocArray { key, value } => {
-            1 + type_expr_depth(key).max(type_expr_depth(value))
-        }
-        TypeExpr::Union(members) | TypeExpr::Intersection(members) => {
-            1 + members.iter().map(type_expr_depth).max().unwrap_or(0)
-        }
-        _ => 1,
-    }
 }
 
 /// Infers a type argument for every type parameter from the actual argument types.
@@ -356,32 +335,10 @@ pub fn infer_bindings_with_args(
         }
         unify(&names, declared, actual, &mut bound)?;
     }
-    let mut ordered: Bindings = Vec::with_capacity(type_params.len());
-    for param in type_params {
-        // A default is what an unconstrained parameter falls back to. Without one, nothing
-        // determines the parameter and guessing `mixed` would give up exactly the storage the
-        // annotation exists to pin, so it stays an error.
-        let ty = match bound.iter().find(|(name, _)| name == &param.name) {
-            Some((_, ty)) => ty.clone(),
-            // A default may NAME an earlier type parameter (`<T, U = T>`), which is a type only
-            // once that parameter is bound. `ordered` already holds every parameter declared
-            // before this one — they are filled in declaration order — so substituting through it
-            // turns `U = T` into `U = int` instead of leaving a name nothing downstream resolves.
-            None => param
-                .default
-                .clone()
-                .ok_or_else(|| InferError::Unconstrained(param.name.clone()))?
-                .substitute_type_params(&ordered),
-        };
-        if type_expr_depth(&ty) > MAX_TYPE_ARGUMENT_DEPTH {
-            return Err(InferError::TooDeep {
-                param: param.name.clone(),
-                ty: describe(&ty),
-            });
-        }
-        ordered.push((param.name.clone(), ty));
-    }
-    Ok(ordered)
+    let inferred = bound.iter().map(|(name, ty)| (name.clone(), shared::to_shared(ty))).collect();
+    elephc_generics::finish(&shared::parameters(type_params), &inferred)
+        .map(|bindings| bindings.into_iter().map(|(name, ty)| (name, shared::from_shared(ty))).collect())
+        .map_err(shared::infer_error)
 }
 
 /// Places a call's arguments at the declaration positions they bind to.
@@ -609,53 +566,11 @@ fn unify_type_exprs(
     actual: &TypeExpr,
     bound: &mut Vec<(String, TypeExpr)>,
 ) -> Result<(), InferError> {
-    match declared {
-        TypeExpr::Named(name) if type_params.iter().any(|param| param == name.as_str()) => {
-            let param = name.as_str().to_string();
-            if let Some((_, existing)) = bound.iter().find(|(existing, _)| existing == &param) {
-                if existing != actual {
-                    return Err(InferError::Conflict {
-                        param,
-                        first: describe(existing),
-                        second: describe(actual),
-                    });
-                }
-                return Ok(());
-            }
-            bound.push((param, actual.clone()));
-            Ok(())
-        }
-        TypeExpr::Nullable(inner) => unify_type_exprs(type_params, inner, actual, bound),
-        TypeExpr::Array(inner) => match actual {
-            TypeExpr::Array(actual) => unify_type_exprs(type_params, inner, actual, bound),
-            _ => Ok(()),
-        },
-        TypeExpr::AssocArray { key, value } => match actual {
-            TypeExpr::AssocArray {
-                key: actual_key,
-                value: actual_value,
-            } => {
-                unify_type_exprs(type_params, key, actual_key, bound)?;
-                unify_type_exprs(type_params, value, actual_value, bound)
-            }
-            _ => Ok(()),
-        },
-        TypeExpr::GenericClass { name, args } => match actual {
-            TypeExpr::GenericClass {
-                name: actual_name,
-                args: actual_args,
-            } if actual_name.as_str().eq_ignore_ascii_case(name.as_str())
-                && actual_args.len() == args.len() =>
-            {
-                for (declared, actual) in args.iter().zip(actual_args.iter()) {
-                    unify_type_exprs(type_params, declared, actual, bound)?;
-                }
-                Ok(())
-            }
-            _ => Ok(()),
-        },
-        _ => Ok(()),
-    }
+    let mut bindings = bound.iter().map(|(name, ty)| (name.clone(), shared::to_shared(ty))).collect();
+    elephc_generics::unify(type_params, &shared::to_shared(declared), &shared::to_shared(actual), &mut bindings)
+        .map_err(shared::infer_error)?;
+    *bound = bindings.into_iter().map(|(name, ty)| (name, shared::from_shared(ty))).collect();
+    Ok(())
 }
 
 /// Decodes an instantiated class name back into the type it denotes.
@@ -759,31 +674,14 @@ pub fn bindings_from_written_arguments(
     type_params: &[TypeParam],
     written: &[TypeExpr],
 ) -> Result<Bindings, WrittenError> {
-    if written.len() > type_params.len() {
-        return Err(WrittenError::TooMany {
-            written: written.len(),
-            declared: type_params.len(),
-        });
-    }
-    let mut bindings = Bindings::new();
-    for (index, param) in type_params.iter().enumerate() {
-        let argument = match written.get(index) {
-            Some(argument) => argument.clone(),
-            // Same dependent default as the inferred path: `identity<int>` leaves `U` to its
-            // default `T`, which is only a type once `T` is bound. The bindings built so far are
-            // the earlier parameters, in declaration order.
-            None => param
-                .default
-                .clone()
-                .ok_or_else(|| WrittenError::Unbound {
-                    param: param.name.clone(),
-                    written: written.len(),
-                })?
-                .substitute_type_params(&bindings),
-        };
-        bindings.push((param.name.clone(), argument));
-    }
-    Ok(bindings)
+    let arguments = written.iter().map(shared::to_shared).collect::<Vec<_>>();
+    elephc_generics::written(&shared::parameters(type_params), &arguments)
+        .map(|bindings| bindings.into_iter().map(|(name, ty)| (name, shared::from_shared(ty))).collect())
+        .map_err(|error| match error {
+            elephc_generics::Error::TooMany { written, declared } => WrittenError::TooMany { written, declared },
+            elephc_generics::Error::Unbound { param, written } => WrittenError::Unbound { param, written },
+            _ => unreachable!("written binding never performs inference"),
+        })
 }
 
 /// Splits `map<string>` into its base name and its decoded type arguments.

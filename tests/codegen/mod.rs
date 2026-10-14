@@ -27,6 +27,7 @@ mod lfc;
 mod benchmarks;
 mod echo_vars;
 mod eval;
+mod eval_generics;
 mod symbol_catalog;
 mod eval_builtin_parity;
 mod eval_callable_ref_errors;

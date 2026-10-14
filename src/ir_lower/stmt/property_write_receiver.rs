@@ -81,6 +81,19 @@ impl PropertyWriteReceiver {
         }
     }
 
+    /// Publishes a selected child before retiring parent leases that may run throwing destructors.
+    pub(crate) fn handoff(
+        self, ctx: &mut LoweringContext<'_, '_>, child: LoweredValue, span: Span,
+    ) -> Self {
+        // Detach parent records without releasing, then publish the child at the LIFO top.
+        crate::ir_lower::expr::unpin_in_flight_owners(ctx, self.pins, span);
+        let child = Self::new(ctx, child, span);
+        for value in self.owners.into_iter().rev() {
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+        }
+        child
+    }
+
     /// Retires the unwind record and releases precisely the receiver's independent lease.
     pub(crate) fn finish(self, ctx: &mut LoweringContext<'_, '_>, span: Span) {
         crate::ir_lower::expr::unpin_in_flight_owners(ctx, self.pins, span);
