@@ -212,13 +212,13 @@ fn buffer_element_accepts_assignment(expected: &PhpType, actual: &PhpType) -> bo
 /// Validates a nested array assignment like `$arr[$i] = $value` where the target itself is an array access.
 ///
 /// Type-checks the array, index, and value expressions, then validates that the array type supports
-/// nested offset assignment. Allows `Mixed` and objects implementing `ArrayAccess`; rejects strings
-/// and plain arrays.
+/// nested offset assignment. Allows arrays and boxed write parents, including false conversion;
+/// objects retain their existing ArrayAccess validation.
 ///
 /// Errors:
 /// - Target is not an array access expression
 /// - Target is a string (string offset assignment not supported)
-/// - Target type does not support nested assignment (not `Mixed` or `ArrayAccess`)
+/// - Target type does not support nested assignment
 pub(super) fn check_nested_array_assign(
     checker: &mut Checker,
     target: &Expr,
@@ -236,6 +236,9 @@ pub(super) fn check_nested_array_assign(
     checker.infer_type_with_assignment_effects(value, env)?;
     match arr_ty {
         PhpType::Mixed => Ok(()),
+        PhpType::Array(_) | PhpType::AssocArray { .. } => Ok(()),
+        PhpType::Bool | PhpType::False | PhpType::Void
+            if matches!(array.kind, ExprKind::ArrayAccess { .. }) => Ok(()),
         PhpType::Str => Err(CompileError::new(
             span,
             "String offset assignment is not supported",

@@ -51,6 +51,9 @@ function stringIntermediate(): void { ++NestedUpdate::$items[0][0][1]; }
 function stringIntermediateCompound(): void { NestedUpdate::$items[0][0][1] += 1; }
 function nestedPostfix(): mixed { return NestedUpdate::$items[0][0][1]++; }
 function falseParentUpdate(): mixed { return ++NestedUpdate::$items[0][0][1]; }
+function falsePlainWrite(mixed $key): void { NestedUpdate::$items[0][0][$key] = 9; }
+function falsePlainAppend(): void { NestedUpdate::$items[0][0][] = 9; }
+function falseLocalWrite(bool $flag): void { $items = [[$flag]]; $items[0][0][1] = 9; }
 set_error_handler(function($level, $message) { return true; });
 ++NestedUpdate::$items[0][0]["before"];
 ++ConcreteUpdate::$items[1][0];
@@ -117,6 +120,21 @@ echo json_encode(NestedUpdate::$items);
     assert!(false_parent.instructions.iter().any(|inst| inst.immediate == Some(
         Immediate::RuntimeCall(RuntimeCallTarget::WriteDiagnostic))),
         "{target}: false promotion retains PHP's deprecation channel");
+    assert!(false_parent.instructions.iter().any(|inst| inst.immediate == Some(
+        Immediate::RuntimeCall(RuntimeCallTarget::MixedCellHasOtherOwner))),
+        "{target}: handler detachment is checked without acquiring another parent owner");
+    assert!(false_parent.blocks.iter().any(|block| block.name.starts_with("static.update.detached.null")),
+        "{target}: a detached promoted cell bypasses the missing-key read");
+    for name in ["falsePlainWrite", "falsePlainAppend", "falseLocalWrite"] {
+        let function = module.functions.iter().find(|function| function.name == name).unwrap();
+        assert!(function.blocks.iter().any(|block| block.name.starts_with("nested.false.capture")),
+            "{target}: {name} captures conversion exceptions before opcode completion");
+        assert!(function.instructions.iter().any(|inst| inst.op == Op::CatchBind),
+            "{target}: {name} takes the in-flight exception into owned storage");
+        assert!(function.instructions.iter().any(|inst| inst.immediate == Some(
+            Immediate::RuntimeCall(RuntimeCallTarget::ExceptionChain))),
+            "{target}: {name} preserves callback exception priority on completion errors");
+    }
     for name in ["variableStringKey", "promotedStringKey", "promotedMixedKey", "promotedNullableKey"] {
         let function = module.functions.iter().find(|function| function.name == name).unwrap();
         assert!(function.instructions.iter().any(|inst| inst.op == Op::ZeroLocalSlot),

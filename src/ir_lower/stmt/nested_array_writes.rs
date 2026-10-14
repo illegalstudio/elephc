@@ -18,6 +18,10 @@ pub(super) fn lower_nested_array_assign(
     span: Span,
 ) {
     let update = desugared_element_update(value, span, |read| read == target);
+    if update.is_none() {
+        super::nested_plain_writes::lower_store(ctx, target, value, span);
+        return;
+    }
     if matches!(update, Some(ElementUpdate::Compound | ElementUpdate::IncDec { .. }))
         && nested_target_has_static_array_root(ctx, target)
     {
@@ -54,7 +58,7 @@ pub(super) fn lower_nested_array_assign(
 }
 
 /// Gives a concrete mixed-element root the existing relocating local writeback protocol.
-fn bind_concrete_static_update_root(
+pub(super) fn bind_concrete_static_update_root(
     ctx: &mut LoweringContext<'_, '_>, read: &Expr, write: &Expr,
 ) -> Option<(Expr, Expr)> {
     let mut root = read;
@@ -118,6 +122,13 @@ fn snapshot_nested_update_keys(
     )
 }
 
+/// Limits one-level static append fusion to boxed or mixed-element storage.
+pub(super) fn static_root_supports_attached_fetch(ctx: &LoweringContext<'_, '_>, root: &Expr) -> bool {
+    let ExprKind::StaticPropertyAccess { receiver, property } = &root.kind else { return false; };
+    static_property_type(ctx, receiver, property).is_some_and(|ty|
+        ty.codegen_repr() == PhpType::Mixed || static_root_has_mixed_elements(&ty))
+}
+
 /// Recognizes static PHP array cells whose nested parents support write-context lookup.
 fn nested_static_root_is_boxed(ctx: &LoweringContext<'_, '_>, target: &Expr) -> bool {
     match &target.kind {
@@ -146,8 +157,10 @@ fn lower_boxed_static_nested_update(
     let (pinned, owner) = root_static_update_receiver(ctx, parent, span);
     let string_error = if incdec { "Cannot increment/decrement string offsets" }
         else { "Cannot use assign-op operators with string offsets" };
-    lower_static_update_key_and_guard(ctx, pinned, read_key, string_error, span);
-    let current = lower_array_access_from_lowered_receiver(ctx, pinned, write_key, read);
+    let attached = lower_static_update_key_and_guard(ctx, pinned, read_key, string_error, span);
+    let current = super::static_false_parent::read_update_leaf(
+        ctx, pinned, write_key, read, attached, span,
+    );
     let current_ty = ctx.builder.value_php_type(current.value);
     if let ExprKind::Assignment { prelude, .. } = &source_value.kind {
         if let Some(Stmt { kind: StmtKind::Assign { name, .. }, .. }) = prelude.first() {
@@ -299,14 +312,14 @@ fn lower_static_update_array_parent(
 /// Runs captured dimensions and selects the leaf or intermediate string-parent Error.
 fn lower_static_update_key_and_guard(
     ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, read_key: &Expr, string_error: &str, span: Span,
-) {
+) -> LoweredValue {
     if !matches!(read_key.kind, ExprKind::IntLiteral(_) | ExprKind::StringLiteral(_)) {
         let key = lower_expr(ctx, read_key);
         if ctx.value_is_owning_temporary(key) {
             crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
         }
     }
-    super::static_false_parent::normalize_for_update(ctx, parent, span);
+    let attached = super::static_false_parent::normalize_for_update(ctx, parent, span);
     let array = ctx.emit_value(Op::TypePredicate, vec![parent.value],
         Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Array)), PhpType::Bool,
         Op::TypePredicate.default_effects(), Some(span));
@@ -336,14 +349,19 @@ fn lower_static_update_key_and_guard(
     ctx.builder.position_at_end(scalar);
     lower_throw_access_error(ctx, "Cannot use a scalar value as an array", span);
     ctx.builder.position_at_end(present);
+    attached
 }
 
 /// Transfers a pending receiver into an unwind-visible owner and returns its borrowed view.
-fn root_static_update_receiver(
+pub(super) fn root_static_update_receiver(
     ctx: &mut LoweringContext<'_, '_>,
     receiver: LoweredValue,
     span: Span,
 ) -> (LoweredValue, Option<crate::ir::LocalSlotId>) {
+    let ty = ctx.builder.value_php_type(receiver.value);
+    if !crate::ir::Ownership::php_type_needs_lifetime_tracking(&ty) {
+        return (receiver, None);
+    }
     let receiver = if ctx.value_is_owning_temporary(receiver) {
         receiver
     } else {
@@ -358,7 +376,7 @@ fn root_static_update_receiver(
 }
 
 /// Restricts the update protocol to class-static array chains, leaving ordinary store timing intact.
-fn nested_target_has_static_array_root(ctx: &LoweringContext<'_, '_>, target: &Expr) -> bool {
+pub(super) fn nested_target_has_static_array_root(ctx: &LoweringContext<'_, '_>, target: &Expr) -> bool {
     match &target.kind {
         ExprKind::ArrayAccess { array, .. } => nested_target_has_static_array_root(ctx, array),
         ExprKind::StaticPropertyAccess { receiver, property } => {
@@ -456,7 +474,14 @@ pub(super) fn lower_nested_assign_parent(
     expr: &Expr,
     span: Span,
 ) -> LoweredValue {
-    lower_nested_assign_parent_with_diagnosed_key(ctx, expr, span, false)
+    lower_nested_assign_parent_with_diagnosed_key_inner(ctx, expr, span, false, false)
+}
+
+/// Defers false conversion until a plain store or append has finished evaluating its RHS.
+pub(super) fn lower_nested_assign_parent_for_store(
+    ctx: &mut LoweringContext<'_, '_>, expr: &Expr, span: Span,
+) -> LoweredValue {
+    lower_nested_assign_parent_with_diagnosed_key_inner(ctx, expr, span, false, true)
 }
 
 /// Reuses key diagnoses when the same parent chain was already read by a captured update.
@@ -465,6 +490,14 @@ fn lower_nested_assign_parent_with_diagnosed_key(
     expr: &Expr,
     span: Span,
     key_already_diagnosed: bool,
+) -> LoweredValue {
+    lower_nested_assign_parent_with_diagnosed_key_inner(ctx, expr, span, key_already_diagnosed, false)
+}
+
+/// Traverses an attached parent with the caller's key-diagnostic and conversion timing.
+fn lower_nested_assign_parent_with_diagnosed_key_inner(
+    ctx: &mut LoweringContext<'_, '_>, expr: &Expr, span: Span,
+    key_already_diagnosed: bool, convert_false: bool,
 ) -> LoweredValue {
     let ExprKind::ArrayAccess { array, index } = &expr.kind else {
         if let ExprKind::Variable(name) = &expr.kind {
@@ -489,8 +522,13 @@ fn lower_nested_assign_parent_with_diagnosed_key(
     }
     // Boxed Mixed receivers: chains recurse with for-write semantics; other
     // receiver shapes evaluate once as plain reads of the receiver cell.
-    let receiver = lower_nested_assign_parent_with_diagnosed_key(ctx, array, span, key_already_diagnosed);
+    let receiver = lower_nested_assign_parent_with_diagnosed_key_inner(
+        ctx, array, span, key_already_diagnosed, convert_false,
+    );
     if ctx.builder.value_php_type(receiver.value).codegen_repr() == PhpType::Mixed {
+        if convert_false {
+            return super::nested_plain_writes::fetch_parent(ctx, receiver, index, expr.span);
+        }
         let key = lower_expr(ctx, index);
         let parent = ctx.emit_value(
             Op::RuntimeCall,
@@ -514,12 +552,12 @@ fn lower_nested_assign_parent_with_diagnosed_key(
 }
 
 /// Lowers `$local[key]` as the parent of a nested assignment when the local
-/// holds a concrete container (`array<mixed>` or a Mixed-valued assoc array):
+/// holds a concrete indexed or associative container:
 /// `__rt_array_ensure_elem_for_write` autovivifies the element in write
 /// context, the possibly promoted/reallocated container is stored back into
 /// the local, and the guaranteed-present element is re-read as the parent
 /// cell. Returns `None` for shapes without a concrete for-write lowering
-/// (typed element arrays or unsupported key expressions).
+/// (unsupported receiver or key expressions).
 pub(super) fn lower_local_parent_fetch_for_write(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
@@ -537,16 +575,14 @@ fn lower_local_parent_fetch_for_write_inner(
     let span = parent_expr.span;
     let local_ty = ctx.local_type(name);
     match local_ty.codegen_repr() {
-        PhpType::Array(elem_ty)
-            if elem_ty.codegen_repr() == PhpType::Mixed
-                || is_empty_indexed_array_element(elem_ty.as_ref()) =>
+        PhpType::Array(_) =>
         {
             let key_ty = match &index.kind {
                 ExprKind::Variable(name) => ctx.local_type(name).codegen_repr(),
                 _ => index_expr_key_type(ctx, index),
             };
             match key_ty {
-                PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void => {
+                PhpType::Int | PhpType::Float | PhpType::Bool => {
                     let array_value = ctx.load_local(name, Some(span));
                     let key = lower_expr(ctx, index);
                     let key = coerce_array_key_to_int_at_span(ctx, key, Some(index.span), key_already_diagnosed);
@@ -579,7 +615,7 @@ fn lower_local_parent_fetch_for_write_inner(
                     );
                     Some(cell)
                 }
-                PhpType::Str | PhpType::Mixed | PhpType::TaggedScalar => {
+                PhpType::Str | PhpType::Mixed | PhpType::TaggedScalar | PhpType::Void => {
                     // A string, boxed key, or nullable scalar can select a hash key:
                     // promote to a Mixed-valued hash, whose key conversion
                     // preserves string/numeric keys and null's empty-string key. The
@@ -601,9 +637,9 @@ fn lower_local_parent_fetch_for_write_inner(
                 _ => None,
             }
         }
-        PhpType::AssocArray { value, .. } if value.codegen_repr() == PhpType::Mixed => {
+        PhpType::AssocArray { key, .. } => {
             let hash_value = ctx.load_local(name, Some(span));
-            let assoc_ty = ctx.local_type(name);
+            let assoc_ty = PhpType::AssocArray { key, value: Box::new(PhpType::Mixed) };
             ctx.prepare_mutated_local_owner(name, hash_value, assoc_ty.clone(), Some(span));
             Some(lower_hash_parent_fetch_for_write(ctx, name, hash_value, assoc_ty, index, span, key_already_diagnosed))
         }

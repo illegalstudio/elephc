@@ -58,6 +58,9 @@ mod static_property_writes;
 mod property_array_writes;
 mod metadata_control;
 mod nested_append;
+mod nested_write_sources;
+mod nested_plain_writes;
+mod nested_false_errors;
 mod return_coercions;
 mod repr_fixpoint;
 mod static_property_helpers;
@@ -229,10 +232,14 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         // Nested appends are parser-generated read/push/write-back groups. Fuse the recognized
         // shape so a missing inner bucket is auto-vivified and a local bucket can be detached
         // before mutation; every other synthetic group keeps ordinary block lowering.
-        StmtKind::Synthetic(body) => match nested_append::recognize(ctx, body) {
-            Some(group) => nested_append::lower(ctx, &group, stmt.span),
-            None => lower_block(ctx, body),
-        },
+        StmtKind::Synthetic(body) => {
+            if !nested_append::try_lower_array_root(ctx, body, stmt.span) {
+                match nested_append::recognize(ctx, body) {
+                    Some(group) => nested_append::lower(ctx, &group, stmt.span),
+                    None => lower_block(ctx, body),
+                }
+            }
+        }
         StmtKind::Try {
             try_body,
             catches,

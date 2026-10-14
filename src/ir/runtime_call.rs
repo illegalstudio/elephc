@@ -80,6 +80,8 @@ pub enum RuntimeCallTarget {
     ArrayFetchForWriteAlreadyDiagnosed,
     /// Sends one complete PHP warning or deprecation line through the shared handler dispatcher.
     WriteDiagnostic,
+    /// Tests whether a pinned Mixed cell still has an owner besides the pending write.
+    MixedCellHasOtherOwner,
     /// Borrows a boxed PHP array and returns an independently owned hash for literal unpacking.
     /// Rejects non-array values without mutating the original cell or its payload.
     ArrayUnpackToHash,
@@ -144,6 +146,9 @@ impl RuntimeCallTarget {
             }),
             RuntimeCallTarget::WriteDiagnostic => Some(RuntimeCallSignature::Fixed {
                 parameters: &[IrType::Str], result: IrType::Void,
+            }),
+            RuntimeCallTarget::MixedCellHasOtherOwner => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Mixed)], result: IrType::I64,
             }),
             RuntimeCallTarget::MixedCellPromoteToHash(_)
             | RuntimeCallTarget::MixedCellPromoteAttachedToHash(_)
@@ -211,6 +216,7 @@ impl RuntimeCallTarget {
             RuntimeCallTarget::ArrayFetchForWrite => "array.fetch_for_write",
             RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed => "array.fetch_for_write_already_diagnosed",
             RuntimeCallTarget::WriteDiagnostic => "diagnostic.write",
+            RuntimeCallTarget::MixedCellHasOtherOwner => "mixed.has_other_owner",
             RuntimeCallTarget::ArrayUnpackToHash => "array.unpack_to_hash",
             RuntimeCallTarget::MixedCellPromoteToHash(ArrayKeySort::Ascending) => {
                 "array.mixed_cell_promote_to_hash_ksort"
