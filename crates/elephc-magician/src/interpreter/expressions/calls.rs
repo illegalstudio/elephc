@@ -180,6 +180,12 @@ fn eval_call_with_error_name(
         return eval_builtin_call(name, args, context, scope, values);
     }
 
+    let (base, written) = split_generic_name(name)?;
+    if let Some(template) = context.generic_function_template(&base).cloned() {
+        if matches!(template.prototype.as_ref(), EvalStmt::FunctionDecl { .. }) {
+            return eval_generic_function(&template, written.as_deref(), args, context, scope, values);
+        }
+    }
     if let Some(function) = context.function(name).cloned() {
         return eval_dynamic_function(&function, args, context, scope, values);
     }
@@ -208,6 +214,12 @@ pub(in crate::interpreter) fn eval_namespaced_call(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let lookup_name = call_lookup_name(name);
+    let (base, written) = split_generic_name(&lookup_name)?;
+    if let Some(template) = context.generic_function_template(&base).cloned() {
+        if matches!(template.prototype.as_ref(), EvalStmt::FunctionDecl { .. }) {
+            return eval_generic_function(&template, written.as_deref(), args, context, scope, values);
+        }
+    }
     if let Some(function) = context.function(&lookup_name).cloned() {
         return eval_dynamic_function(&function, args, context, scope, values);
     }
@@ -256,8 +268,10 @@ fn eval_dynamic_call_with_callback(
         }
     }
     let callback = eval_callable(callback, context, values)?;
-    with_eval_call_arguments(args, context, scope, values, |arguments, context, _, values| {
-        eval_evaluated_callable_with_call_array_args(&callback, arguments, context, values)
+    callback.with_values(context, values, |callback, context, values| {
+        with_eval_call_arguments(args, context, scope, values, |arguments, context, _, values| {
+            eval_evaluated_callable_with_call_array_args(&callback, arguments, context, values)
+        })
     })
 }
 

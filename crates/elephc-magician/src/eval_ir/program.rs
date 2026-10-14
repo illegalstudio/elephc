@@ -20,6 +20,7 @@ pub const EVAL_CLI_POPULATED_SUPERGLOBALS: [&str; 7] =
 /// Parsed eval fragment lowered into dynamic by-name statements.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct EvalProgram {
+    native_generic_syntax: bool,
     source_len: usize,
     statements: Vec<EvalStmt>,
     #[serde(with = "cli_superglobal_names")]
@@ -62,11 +63,18 @@ impl EvalProgram {
     /// Creates an EvalIR program for a source fragment and statement list.
     pub fn new(source_len: usize, statements: Vec<EvalStmt>) -> Self {
         Self {
+            native_generic_syntax: false,
             source_len,
             statements,
             cli_superglobals: Vec::new(),
         }
     }
+
+    /// Records whether source used native generic syntax forbidden in strict PHP mode.
+    pub(crate) fn with_native_generic_syntax(mut self, enabled: bool) -> Self { self.native_generic_syntax = enabled; self }
+
+    /// Returns whether source used native generic syntax.
+    pub(crate) fn native_generic_syntax(&self) -> bool { self.native_generic_syntax }
 
     /// Records the CLI-populated superglobals (without `$`) this fragment's code names.
     pub fn with_cli_superglobals(mut self, names: Vec<&'static str>) -> Self {

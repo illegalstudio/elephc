@@ -36,6 +36,7 @@ pub(super) fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str)
         | EvalStmt::Continue
         | EvalStmt::ClassDecl(_)
         | EvalStmt::EnumDecl(_)
+        | EvalStmt::GenericDecl(_)
         | EvalStmt::FunctionDecl { .. }
         | EvalStmt::Global { .. }
         | EvalStmt::GcCollect
@@ -264,6 +265,7 @@ pub(super) fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str)
         }
         EvalStmt::StaticPropertySet { value, .. }
         | EvalStmt::StaticPropertyArrayAppend { value, .. }
+        | EvalStmt::TypedVar { value, .. }
         | EvalStmt::StoreVar { value, .. } => {
             eval_expr_uses_this_property(value, property_name)
         }

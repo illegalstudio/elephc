@@ -168,6 +168,8 @@ pub(super) fn eval_new_object_result(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    let concrete = ensure_generic_class(class_name, Some(&args), "__construct", context, scope, values)?;
+    let class_name = concrete.as_str();
     if let Some(object) =
         eval_reflection_owner_new_object(class_name, args.clone(), context, values)?
     {

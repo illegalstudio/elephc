@@ -12,6 +12,7 @@ use super::*;
 /// Public method metadata for a runtime eval class.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct EvalClassMethod {
+    generic_template: Option<Box<EvalGenericTemplate>>,
     name: String,
     trait_origin: Option<String>,
     trait_origin_method: Option<String>,
@@ -38,7 +39,8 @@ pub struct EvalClassMethod {
 impl PartialEq for EvalClassMethod {
     /// Compares class method metadata while ignoring retained source-location decoration.
     fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
+        self.generic_template == other.generic_template
+            && self.name == other.name
             && self.trait_origin == other.trait_origin
             && self.trait_origin_method == other.trait_origin_method
             && self.attributes == other.attributes
@@ -101,6 +103,7 @@ impl EvalClassMethod {
         let parameter_is_by_ref = vec![false; params.len()];
         let parameter_is_variadic = vec![false; params.len()];
         Self {
+            generic_template: None,
             name: name.into(),
             trait_origin: None,
             trait_origin_method: None,
@@ -129,6 +132,12 @@ impl EvalClassMethod {
         self
     }
 
+    /// Attaches syntax retained for a method's independent type parameters.
+    pub(crate) fn with_generic_template(mut self, template: EvalGenericTemplate) -> Self { self.generic_template = Some(Box::new(template)); self }
+
+    /// Returns the method template, if the method has its own generic parameters.
+    pub(crate) fn generic_template(&self) -> Option<&EvalGenericTemplate> { self.generic_template.as_deref() }
+
     /// Returns the PHP-visible method name.
     pub fn name(&self) -> &str {
         &self.name
@@ -140,6 +149,13 @@ impl EvalClassMethod {
             self.trait_origin = Some(trait_name.into());
             self.trait_origin_method = Some(self.name.clone());
         }
+        self
+    }
+
+    /// Preserves trait declaration origins when replaying a concrete generic method.
+    pub(crate) fn with_original_trait_origin(mut self, original: &Self) -> Self {
+        self.trait_origin = original.trait_origin.clone();
+        self.trait_origin_method = original.trait_origin_method.clone();
         self
     }
 

@@ -83,6 +83,13 @@ impl EvalTrait {
         }
     }
 
+    /// Replaces nested trait uses with their concrete specializations.
+    pub(crate) fn with_traits(mut self, traits: Vec<String>, adaptations: Vec<EvalTraitAdaptation>) -> Self {
+        self.traits = traits;
+        self.trait_adaptations = adaptations;
+        self
+    }
+
     /// Returns a copy of this trait with source-location metadata attached.
     pub const fn with_source_location(mut self, source_location: EvalSourceLocation) -> Self {
         self.source_location = Some(source_location);

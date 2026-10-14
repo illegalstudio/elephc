@@ -20,9 +20,15 @@ impl Parser {
         &mut self,
         attributes: Vec<EvalAttribute>,
     ) -> Result<Vec<EvalStmt>, EvalParseError> {
+        let template_start = self.pos;
+        let type_scope = self.type_parameters.len();
         let source_start_line = self.current_line();
         self.advance();
         let name = self.parse_class_like_decl_name()?;
+        let name_index = self.pos - 1;
+        let header_start = self.pos;
+        let generic_parameters = self.parse_generic_parameters()?;
+        let header_end = self.pos;
         self.expect(TokenKind::LBrace)?;
         let mut traits = Vec::new();
         let mut trait_adaptations = Vec::new();
@@ -47,9 +53,9 @@ impl Parser {
             )?;
         };
         self.consume_semicolon();
-        Ok(vec![EvalStmt::TraitDecl(
+        let declaration = EvalStmt::TraitDecl(
             EvalTrait::with_constants_traits_adaptations(
-                name,
+                name.clone(),
                 constants,
                 properties,
                 methods,
@@ -58,7 +64,13 @@ impl Parser {
             )
             .with_source_location(EvalSourceLocation::new(source_start_line, source_end_line))
             .with_attributes(attributes),
-        )])
+        );
+        self.type_parameters.truncate(type_scope);
+        self.type_parameter_origins.truncate(type_scope);
+        if generic_parameters.is_empty() { return Ok(vec![declaration]); }
+        let template = self.retain_template(template_start, name_index, header_start, header_end,
+            name, generic_parameters, declaration);
+        Ok(vec![EvalStmt::GenericDecl(Box::new(template))])
     }
 
     /// Parses one property or method from an eval trait body.

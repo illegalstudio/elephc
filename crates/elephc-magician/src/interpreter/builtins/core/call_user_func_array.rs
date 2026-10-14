@@ -34,7 +34,7 @@ pub(in crate::interpreter) fn eval_builtin_call_user_func_array(
         return eval_literal_func_args_array_call(name, arg_array, context, scope, values);
     }
     let callback = eval_owned_expr(callback, context, scope, values)?;
-    if let Ok(EvaluatedCallable::Named { name, .. }) = eval_callable_from_scope(callback, context, scope, values) {
+    if let Some(name) = eval_owned_argument_callback_name(callback, context, Some(scope), values)? {
         if eval_builtin_uses_owned_arguments(&name) {
             let result = eval_builtin_call_array_expr(&name, arg_array, context, scope, values);
             return finish_eval_argument_values(result, [callback], context, values);

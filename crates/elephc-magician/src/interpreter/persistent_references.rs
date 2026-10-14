@@ -13,7 +13,7 @@ use super::*;
 /// Obtains stable reference storage for a local or captured variable while its scope is live.
 pub(in crate::interpreter) fn eval_persistent_variable_reference(
     local: &str,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
@@ -39,14 +39,14 @@ pub(in crate::interpreter) fn eval_persistent_variable_reference(
 fn promote_array_reference_variable(
     scope: *mut ElephcEvalScope,
     name: &str,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let source = unsafe { scope.as_mut() }.ok_or(EvalStatus::RuntimeFatal)?;
-    if let Some(global_name) = source.global_alias_target(name) {
+    if let Some(global_name) = source.global_alias_target(name).map(str::to_string) {
         let global_scope = context.global_scope_ptr().ok_or(EvalStatus::RuntimeFatal)?;
         if global_scope != scope || global_name != name {
-            return promote_array_reference_variable(global_scope, global_name, context, values);
+            return promote_array_reference_variable(global_scope, &global_name, context, values);
         }
     } else if let Some(global_scope) =
         eval_superglobal_global_scope(context, name).filter(|global| *global != scope)
@@ -57,8 +57,11 @@ fn promote_array_reference_variable(
     let (value, ownership) = source.entry(name).filter(|entry| entry.flags().is_visible())
         .map(|entry| (entry.cell(), entry.flags().ownership))
         .map_or_else(|| values.null().map(|value| (value, ScopeCellOwnership::Owned)), Ok)?;
-    if values.is_reference(value)? { return Ok(value); }
+    let types = generic_local_contracts(source, name, context);
+    if values.is_reference(value)? { context.bind_local_reference_types(value, &types); return Ok(value); }
     let reference = values.reference_new(value)?;
+    context.copy_array_metadata(value, reference);
+    context.bind_local_reference_types(reference, &types);
     for old in source.set_reference(name.to_string(), name.to_string(), value, ownership) {
         values.release(old)?;
     }

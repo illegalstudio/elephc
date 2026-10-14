@@ -259,16 +259,11 @@ fn publish_native_function_ref_value(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     if let EvalReferenceTarget::Variable { scope, name } = target {
-        let replaced = unsafe { scope.as_mut() }
-            .ok_or(EvalStatus::RuntimeFatal)
-            .and_then(|scope| set_owned_scope_cell(context, scope, name.clone(), value, values));
-        let replaced = match replaced {
-            Ok(replaced) => replaced,
-            Err(status) => {
-                let _ = eval_release_value(context, values, value);
-                return Err(status);
-            }
+        let Some(scope) = (unsafe { scope.as_mut() }) else {
+            let _ = eval_release_value(context, values, value);
+            return Err(EvalStatus::RuntimeFatal);
         };
+        let replaced = set_owned_scope_cell(context, scope, name.clone(), value, values)?;
         let mut result = Ok(());
         for replaced in replaced {
             let released = eval_release_value(context, values, replaced);

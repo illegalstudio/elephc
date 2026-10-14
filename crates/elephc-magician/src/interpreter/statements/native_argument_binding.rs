@@ -163,13 +163,7 @@ fn write_back_native_ref_target(
         return Ok(());
     }
     let retained = values.retain(value)?;
-    let replaced = match set_owned_scope_cell(context, scope, name.clone(), retained, values) {
-        Ok(replaced) => replaced,
-        Err(status) => {
-            let _ = eval_release_value(context, values, retained);
-            return Err(status);
-        }
-    };
+    let replaced = set_owned_scope_cell(context, scope, name.clone(), retained, values)?;
     for cell in replaced { eval_release_value(context, values, cell)?; }
     Ok(())
 }

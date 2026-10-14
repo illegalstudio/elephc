@@ -239,21 +239,21 @@ pub(super) fn eval_magic_const(
         EvalMagicConst::File => values.string(&context.eval_file_magic()),
         EvalMagicConst::Dir => values.string(context.call_dir()),
         EvalMagicConst::Line(line) => values.int(*line),
-        EvalMagicConst::Function => values.string(
+        EvalMagicConst::Function => values.string(&generic_source_symbol(
             context
                 .current_magic_function()
                 .or_else(|| context.current_function())
                 .unwrap_or(""),
-        ),
-        EvalMagicConst::Method => values.string(
+        )),
+        EvalMagicConst::Method => values.string(&generic_source_symbol(
             context
                 .current_magic_method()
                 .or_else(|| context.current_function())
                 .unwrap_or(""),
-        ),
-        EvalMagicConst::Class => values.string(context.current_magic_class().unwrap_or("")),
+        )),
+        EvalMagicConst::Class => values.string(&generic_source_symbol(context.current_magic_class().unwrap_or(""))),
         EvalMagicConst::Namespace => values.string(""),
-        EvalMagicConst::Trait => values.string(context.current_magic_trait().unwrap_or("")),
+        EvalMagicConst::Trait => values.string(&generic_source_symbol(context.current_magic_trait().unwrap_or(""))),
     }
 }
 
@@ -325,4 +325,16 @@ mod curl_constant_fallback_tests {
             Some(EvalPredefinedConstant::Int(i64::MAX))
         ));
     }
+}
+
+/// Removes specialization arguments from PHP magic constants while preserving namespace spelling.
+fn generic_source_symbol(name: &str) -> String {
+    let mut depth = 0usize;
+    name.chars().filter(|ch| {
+        match ch {
+            '<' => { depth += 1; false }
+            '>' if depth > 0 => { depth -= 1; false }
+            _ => depth == 0,
+        }
+    }).collect()
 }

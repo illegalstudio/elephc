@@ -146,7 +146,7 @@ fn eval_pcntl_signal(
             EvalPcntlSignalHandler::Disposition(disposition),
         )
     } else {
-        eval_callable(handler, context, values)?;
+        eval_callable(handler, context, values)?.release(context, values)?;
         let retained = values.retain(handler)?;
         (2, EvalPcntlSignalHandler::Callable(retained))
     };

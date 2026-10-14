@@ -66,8 +66,9 @@ impl Parser {
 
     /// Retains source spelling while resolving first-class function names and fallback metadata.
     pub(super) fn function_callable_expr(&self, name: String) -> EvalExpr {
-        if let Some(imported) = self.imports.resolve_function(&name) {
-            return Self::function_callable_value(imported.to_string(), None);
+        let (base, suffix) = name.find('<').map_or((name.as_str(), ""), |index| (&name[..index], &name[index..]));
+        if let Some(imported) = self.imports.resolve_function(base) {
+            return Self::function_callable_value(format!("{imported}{suffix}"), None);
         }
         if self.namespace.is_empty() {
             Self::function_callable_value(name, None)

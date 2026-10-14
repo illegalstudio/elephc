@@ -40,7 +40,7 @@ pub(in crate::interpreter) fn eval_builtin_call_user_func(
         };
     }
     let callback = eval_owned_expr(&args[0], context, scope, values)?;
-    if let Ok(EvaluatedCallable::Named { name, .. }) = eval_callable_from_scope(callback, context, scope, values) {
+    if let Some(name) = eval_owned_argument_callback_name(callback, context, Some(scope), values)? {
         if eval_builtin_uses_owned_arguments(&name) {
             let arguments = args[1..].iter().cloned().map(EvalCallArg::positional).collect::<Vec<_>>();
             let result = eval_builtin_call_by_value(&name, &arguments, context, scope, values);

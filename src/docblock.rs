@@ -298,13 +298,7 @@ fn parse_block(lines: &[&str]) -> DocBlock {
 /// `*` reads the tall shape and silently ignores the short one, so both markers come off here,
 /// and the leading `*` after them, in that order.
 fn strip_comment_markers(line: &str) -> String {
-    line.trim()
-        .trim_start_matches("/**")
-        .trim_end_matches("*/")
-        .trim()
-        .trim_start_matches('*')
-        .trim()
-        .to_string()
+    elephc_generics::strip_comment_markers(line)
 }
 
 /// Splits a `@template` tag from its body, reading the variance the tag name carries.
@@ -313,16 +307,9 @@ fn strip_comment_markers(line: &str) -> String {
 /// the parameter (`+T`). Both reach the same `TypeParam`. The hyphenated forms are tested first
 /// only for clarity; they cannot collide with `@template ` because that one requires the space.
 fn strip_template_tag(trimmed: &str) -> Option<(&str, Variance)> {
-    for (tag, variance) in [
-        ("@template-covariant ", Variance::Covariant),
-        ("@template-contravariant ", Variance::Contravariant),
-        ("@template ", Variance::Invariant),
-    ] {
-        if let Some(rest) = trimmed.strip_prefix(tag) {
-            return Some((rest, variance));
-        }
-    }
-    None
+    elephc_generics::strip_template_tag(trimmed).map(|(rest, variance)| (rest, match variance {
+        1 => Variance::Covariant, -1 => Variance::Contravariant, _ => Variance::Invariant,
+    }))
 }
 
 /// Parses `T`, `T of Foo`, `T = string`, or `T of Foo = Foo`.

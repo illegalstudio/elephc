@@ -201,6 +201,7 @@ impl EvalFunction {
 /// One supported eval method parameter type atom.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum EvalParameterTypeVariant {
+    Generic(elephc_generics::Type),
     Array,
     Bool,
     Callable,

@@ -491,6 +491,10 @@ pub(crate) fn eval_property_set_result(
         .dynamic_property_alias(identity, &storage_property_name)
         .cloned()
     {
+        let storage = match &target {
+            EvalReferenceTarget::Cell { cell } if values.is_reference(*cell)? => *cell,
+            _ => value,
+        };
         eval_reference_target_write(
             identity,
             &storage_property_name,
@@ -502,7 +506,7 @@ pub(crate) fn eval_property_set_result(
         context.mark_dynamic_property_initialized(identity, &storage_property_name);
         return eval_with_native_property_storage_scope(
             &object_class_name, &storage_property_name, context, values,
-            |values| values.property_set(object, &storage_property_name, value),
+            |values| values.property_set(object, &storage_property_name, storage),
         );
     }
     eval_with_native_property_storage_scope(
@@ -668,7 +672,7 @@ pub(super) fn eval_property_reference_target(
     object_identity: u64,
     storage_property_name: &str,
     source_name: &str,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalReferenceTarget, EvalStatus> {
@@ -676,6 +680,11 @@ pub(super) fn eval_property_reference_target(
         return Ok(target);
     }
     if context.current_function().is_some() {
+        if !generic_local_contracts(scope, source_name, context).is_empty() {
+            if let Some(cell) = eval_persistent_variable_reference(source_name, context, scope, values)? {
+                return Ok(EvalReferenceTarget::Cell { cell });
+            }
+        }
         let cell =
             visible_scope_cell(context, scope, source_name).map_or_else(|| values.null(), Ok)?;
         return Ok(EvalReferenceTarget::Cell { cell });
@@ -767,7 +776,8 @@ pub(super) fn eval_reference_target_write(
         let scope = unsafe { scope.as_mut() }.ok_or(EvalStatus::RuntimeFatal)?;
         return write_back_owned_variable_ref_target(scope, name, value, context, values);
     }
-    if matches!(target, EvalReferenceTarget::Cell { .. }) {
+    if let EvalReferenceTarget::Cell { cell } = target {
+        if values.is_reference(cell)? { return write_back_method_ref_target(&EvalReferenceTarget::Cell { cell }, value, context, values); }
         context.bind_dynamic_property_alias(
             object_identity,
             storage_property_name,

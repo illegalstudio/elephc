@@ -88,7 +88,7 @@ impl Parser {
             }
             TokenKind::Backslash => self.parse_qualified_name_expr(),
             TokenKind::Ident(_)
-                if matches!(self.peek(), TokenKind::Backslash | TokenKind::DoubleColon) =>
+                if matches!(self.peek(), TokenKind::Backslash | TokenKind::DoubleColon | TokenKind::Less) =>
             {
                 self.parse_qualified_name_expr()
             }
@@ -201,10 +201,18 @@ impl Parser {
 
     /// Parses an explicitly qualified call or constant-fetch expression.
     pub(in crate::parser) fn parse_qualified_name_expr(&mut self) -> Result<EvalExpr, EvalParseError> {
-        let name = self.parse_qualified_name()?;
+        let type_index = self.pos;
+        let mut name = self.parse_qualified_name()?;
+        name.name = self.parse_written_name(name.name, false)?;
         if self.consume(TokenKind::DoubleColon) {
+            if !name.absolute { self.mark_type_parameter_use(type_index, &name.name); }
             let class_name = self.resolve_static_class_name(name);
             return self.parse_static_member_expr(class_name);
+        }
+        if !name.absolute && !name.name.split('<').next().unwrap_or("").contains('\\') && matches!(self.current(), TokenKind::LParen) {
+            if self.consume_first_class_callable_marker() { return Ok(self.function_callable_expr(name.name)); }
+            let args = self.parse_call_args()?;
+            return Ok(self.call_expr(name.name, args));
         }
         let name = self.resolve_qualified_name(name);
         if matches!(self.current(), TokenKind::LParen) {

@@ -124,6 +124,9 @@ pub(crate) fn eval_dynamic_destructor_for_object_cell(
     else {
         return Ok(false);
     };
+    if context.dynamic_object_destructor_is_finished(identity) {
+        return Ok(true);
+    }
     let Some((declaring_class, method)) = context.class_method(&class_name, "__destruct") else {
         return Ok(false);
     };
@@ -339,149 +342,8 @@ pub(super) fn eval_array_without_key_result(
     Ok(rebuilt)
 }
 
-/// Executes `$var[] = value` and dispatches object writes through `ArrayAccess::offsetSet()`.
-pub(super) fn eval_array_append_var_stmt(
-    name: &str,
-    value: &EvalExpr,
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
-    let existing = scope_entry(context, scope, name)
-        .filter(|entry| entry.flags().is_visible())
-        .map(|entry| (entry.cell(), entry.flags().ownership));
-    if let Some((object, _)) = existing {
-        if values.type_tag(object)? != EVAL_TAG_OBJECT {
-            return eval_non_object_array_append_var_stmt(
-                name, value, existing, context, scope, values,
-            );
-        }
-        let offset = values.null()?;
-        let value = eval_expr(value, context, scope, values)?;
-        if !eval_array_access_object_matches(object, context, values)? {
-            return Err(EvalStatus::RuntimeFatal);
-        }
-        let result =
-            eval_method_call_result(object, "offsetSet", vec![offset, value], context, values)?;
-        values.release(result)?;
-        return Ok(());
-    }
-
-    eval_non_object_array_append_var_stmt(name, value, existing, context, scope, values)
-}
-
-/// Executes the non-object `$var[] = value` path with the existing array semantics.
-pub(super) fn eval_non_object_array_append_var_stmt(
-    name: &str,
-    value: &EvalExpr,
-    existing: Option<(RuntimeCellHandle, ScopeCellOwnership)>,
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
-    let mut ownership = ScopeCellOwnership::Owned;
-    let array = if let Some((cell, flags_ownership)) = existing {
-        if values.is_array_like(cell)? {
-            let tag = values.type_tag(cell)?;
-            if !matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
-                return Err(EvalStatus::UnsupportedConstruct);
-            }
-            ownership = flags_ownership;
-            cell
-        } else {
-            values.array_new(1)?
-        }
-    } else {
-        values.array_new(1)?
-    };
-    let array = eval_array_append_value(array, value, context, scope, values)?;
-    for replaced in set_scope_cell(context, scope, name.to_string(), array, ownership, values)? {
-        values.release(replaced)?;
-    }
-    Ok(())
-}
-
-/// Executes `$var[index] = value` and dispatches object writes through `ArrayAccess::offsetSet()`.
-pub(super) fn eval_array_set_var_stmt(
-    name: &str,
-    index: &EvalExpr,
-    value: &EvalExpr,
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
-    let existing = scope_entry(context, scope, name)
-        .filter(|entry| entry.flags().is_visible())
-        .map(|entry| (entry.cell(), entry.flags().ownership));
-    if let Some((object, _)) = existing {
-        if values.type_tag(object)? != EVAL_TAG_OBJECT {
-            return eval_non_object_array_set_var_stmt(
-                name, index, value, existing, context, scope, values,
-            );
-        }
-        let index = eval_expr(index, context, scope, values)?;
-        let value = eval_expr(value, context, scope, values)?;
-        if !eval_array_access_object_matches(object, context, values)? {
-            return Err(EvalStatus::RuntimeFatal);
-        }
-        let result =
-            eval_method_call_result(object, "offsetSet", vec![index, value], context, values)?;
-        values.release(result)?;
-        return Ok(());
-    }
-
-    eval_non_object_array_set_var_stmt(name, index, value, existing, context, scope, values)
-}
-
-/// Writes a local array element while retaining operands and updating persistent references.
-pub(super) fn eval_non_object_array_set_var_stmt(
-    name: &str,
-    index: &EvalExpr,
-    value: &EvalExpr,
-    existing: Option<(RuntimeCellHandle, ScopeCellOwnership)>,
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
-    let array = if let Some((cell, _)) = existing {
-        if values.is_array_like(cell)? {
-            values.retain(cell)?
-        } else {
-            values.array_new(1)?
-        }
-    } else {
-        values.array_new(1)?
-    };
-    let mut operands = vec![array];
-    let mut result = (|| {
-        let index = eval_owned_array_set_index(index, context, scope, values)?;
-        operands.push(index);
-        let value = eval_owned_expr(value, context, scope, values)?;
-        operands.push(value);
-        let replacement = eval_array_set_target_for_index(array, index, values)?;
-        if replacement != array {
-            operands.push(replacement);
-            context.clone_array_element_aliases(array, replacement, None);
-        }
-        eval_array_element_reference_write(replacement, index, value, context, values)?;
-        values.array_set(replacement, index, value)?;
-        if scope_entry(context, scope, name).is_some_and(|entry| {
-            entry.flags().is_visible() && entry.cell() == replacement
-        }) {
-            // An in-place write preserves the slot's existing owner or call-frame borrow.
-            return Ok(());
-        }
-        write_back_owned_variable_ref_target(scope, name, replacement, context, values)
-    })();
-    for operand in operands.into_iter().rev() {
-        let released = eval_release_value(context, values, operand);
-        if result.is_ok() { result = released; }
-    }
-    result
-}
-
 /// Propagates an array-element reference write without borrowing the array's value owner.
-fn eval_array_element_reference_write(
+pub(super) fn eval_array_element_reference_write(
     array: RuntimeCellHandle,
     index: RuntimeCellHandle,
     value: RuntimeCellHandle,
@@ -495,7 +357,7 @@ fn eval_array_element_reference_write(
             let scope = unsafe { scope.as_mut() }.ok_or(EvalStatus::RuntimeFatal)?;
             write_back_owned_variable_ref_target(scope, &name, value, context, values)
         }
-        EvalReferenceTarget::Cell { cell } if values.reference_is_shared(cell)? => {
+        EvalReferenceTarget::Cell { cell } if !context.local_reference_types(cell).is_empty() || values.reference_is_shared(cell)? => {
             write_back_method_ref_target(&target, value, context, values)
         }
         EvalReferenceTarget::Cell { .. } => {
@@ -660,6 +522,9 @@ pub(super) fn eval_static_property_array_set_result(
     };
     let array = eval_array_set_target_for_index(array, index, values)?;
     let value = eval_property_array_set_value(array, index, op, value, context, scope, values)?;
+    for declared in context.local_reference_types(array) {
+        validate_generic_local_element(Some(&declared), array, index, value, context, values)?;
+    }
     let array = values.array_set(array, index, value)?;
     eval_static_property_set_result(class_name, property, array, context, values)
 }

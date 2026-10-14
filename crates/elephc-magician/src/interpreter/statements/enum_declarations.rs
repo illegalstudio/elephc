@@ -16,8 +16,14 @@ pub(in crate::interpreter) fn execute_enum_decl_stmt(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    let interfaces = enum_decl.interfaces().iter().map(|name| ensure_generic_class(name, None, "", context, scope, values)).collect::<Result<_, _>>()?;
+    let traits: Vec<String> = enum_decl.traits().iter().map(|name| ensure_generic_class(name, None, "", context, scope, values)).collect::<Result<_, _>>()?;
+    let adaptations = concrete_trait_adaptations(enum_decl.trait_adaptations(), &traits);
+    let concrete = enum_decl.clone().with_relations(interfaces, traits, adaptations);
+    let enum_decl = &concrete;
     let name = enum_decl.name().trim_start_matches('\\');
-    if context.has_enum(name)
+    if context.generic_template(name).is_some()
+        || context.has_enum(name)
         || context.has_class(name)
         || context.has_interface(name)
         || context.has_trait(name)

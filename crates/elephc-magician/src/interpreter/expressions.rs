@@ -18,7 +18,7 @@ mod evaluation;
 mod owned;
 
 use owned::*;
-pub(in crate::interpreter) use owned::eval_output_expr;
+pub(in crate::interpreter) use owned::{copy_scope_value, eval_output_expr};
 
 pub(in crate::interpreter) use evaluation::{
     eval_array_access_object_matches, eval_array_get_result, eval_binary_result, eval_closure_object_expr,
@@ -244,8 +244,9 @@ fn eval_expr_with_result_ownership(
             method,
             args,
         } => with_eval_method_arguments(args, context, scope, values, |evaluated_args, context, scope, values| {
+            let concrete = ensure_generic_class(class_name, Some(&evaluated_args), method, context, scope, values)?;
             eval_static_method_call_result_from_scope(
-                class_name,
+                &concrete,
                 method,
                 evaluated_args,
                 scope,
@@ -256,13 +257,20 @@ fn eval_expr_with_result_ownership(
         EvalExpr::StaticPropertyGet {
             class_name,
             property,
-        } => eval_static_property_get_with_result_ownership(class_name, property, context, values, own_result),
+        } => {
+            let concrete = ensure_generic_class(class_name, None, "", context, scope, values)?;
+            eval_static_property_get_with_result_ownership(&concrete, property, context, values, own_result)
+        },
         EvalExpr::ClassConstantFetch {
             class_name,
             constant,
-        } => eval_class_constant_fetch_result(class_name, constant, context, values),
+        } => {
+            let concrete = ensure_generic_class(class_name, None, "", context, scope, values)?;
+            eval_class_constant_fetch_result(&concrete, constant, context, values)
+        },
         EvalExpr::ClassNameFetch { class_name } => {
-            eval_class_name_fetch_result(class_name, context, values)
+            let concrete = ensure_generic_class(class_name, None, "", context, scope, values)?;
+            eval_class_name_fetch_result(&concrete, context, values)
         }
         EvalExpr::MethodCall {
             object,

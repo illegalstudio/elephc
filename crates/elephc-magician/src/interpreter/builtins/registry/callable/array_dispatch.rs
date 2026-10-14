@@ -169,7 +169,10 @@ pub(in crate::interpreter) fn eval_callable_with_values(
             values,
         );
     }
-    if let Some(function) = context.function(name).cloned() {
+    if let Some(function) = match context.function(name).cloned() {
+        Some(function) => Some(function),
+        None => generic_function_for_call(name, &positional_args(evaluated_args.clone()), context, values)?,
+    } {
         return eval_dynamic_function_with_values(&function, evaluated_args, context, values);
     }
     if let Some(function) = context.native_function(name) {
@@ -229,7 +232,10 @@ pub(in crate::interpreter) fn eval_callable_with_call_array_args(
             values,
         );
     }
-    if let Some(function) = context.function(name).cloned() {
+    if let Some(function) = match context.function(name).cloned() {
+        Some(function) => Some(function),
+        None => generic_function_for_call(name, &evaluated_args, context, values)?,
+    } {
         return eval_dynamic_function_with_evaluated_args_and_ref_mode(
             &function,
             function.parameter_is_by_ref(),

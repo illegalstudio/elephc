@@ -15,6 +15,8 @@ mod array_dispatch;
 mod call_user_func;
 mod execution;
 mod object_dispatch;
+mod ownership;
+pub(in crate::interpreter) use ownership::*;
 mod static_dispatch;
 
 use super::*;
@@ -78,32 +80,34 @@ pub(in crate::interpreter) fn eval_call_user_func_array_with_values_from_scope(
         context,
         values,
     )?;
-    if !values.is_array_like(arg_array)? {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    with_eval_array_call_arguments(arg_array, context, values, |evaluated_args, context, values| {
-        if let EvaluatedCallable::Named { name, .. } = &callback {
-            if let Some(forbidden) = eval_forbidden_dynamic_scope_builtin(name) {
-                if forbidden != "get_defined_vars" || callback_is_object {
-                    return eval_throw_forbidden_dynamic_scope_builtin(forbidden, context, values);
-                }
-            }
-            if name.eq_ignore_ascii_case("get_defined_vars") {
-                if let Some(lexical_scope) = lexical_scope {
-                    if evaluated_args.iter().any(|arg| arg.name.is_some()) {
-                        return Err(EvalStatus::RuntimeFatal);
-                    }
-                    let evaluated_values =
-                        evaluated_args.iter().map(|arg| arg.value).collect::<Vec<_>>();
-                    return eval_get_defined_vars_from_scope(
-                        &evaluated_values,
-                        lexical_scope,
-                        values,
-                    );
-                }
-            }
+    callback.with_values(context, values, |callback, context, values| {
+        if !values.is_array_like(arg_array)? {
+            return Err(EvalStatus::RuntimeFatal);
         }
-        eval_evaluated_callable_with_call_array_args(&callback, evaluated_args, context, values)
+        with_eval_array_call_arguments(arg_array, context, values, |evaluated_args, context, values| {
+            if let EvaluatedCallable::Named { name, .. } = &callback {
+                if let Some(forbidden) = eval_forbidden_dynamic_scope_builtin(name) {
+                    if forbidden != "get_defined_vars" || callback_is_object {
+                        return eval_throw_forbidden_dynamic_scope_builtin(forbidden, context, values);
+                    }
+                }
+                if name.eq_ignore_ascii_case("get_defined_vars") {
+                    if let Some(lexical_scope) = lexical_scope {
+                        if evaluated_args.iter().any(|arg| arg.name.is_some()) {
+                            return Err(EvalStatus::RuntimeFatal);
+                        }
+                        let evaluated_values =
+                            evaluated_args.iter().map(|arg| arg.value).collect::<Vec<_>>();
+                        return eval_get_defined_vars_from_scope(
+                            &evaluated_values,
+                            lexical_scope,
+                            values,
+                        );
+                    }
+                }
+            }
+            eval_evaluated_callable_with_call_array_args(&callback, evaluated_args, context, values)
+        })
     })
 }
 
@@ -120,24 +124,26 @@ pub(in crate::interpreter) fn eval_call_user_func_with_values_from_scope(
     let callback_is_object = values.type_tag(*callback)? == EVAL_TAG_OBJECT;
     let callback =
         eval_call_user_func_callback(*callback, "call_user_func", lexical_scope, context, values)?;
-    if let EvaluatedCallable::Named { name, .. } = &callback {
-        if let Some(forbidden) = eval_forbidden_dynamic_scope_builtin(name) {
-            if forbidden != "get_defined_vars" || callback_is_object {
-                return eval_throw_forbidden_dynamic_scope_builtin(forbidden, context, values);
+    callback.with_values(context, values, |callback, context, values| {
+        if let EvaluatedCallable::Named { name, .. } = &callback {
+            if let Some(forbidden) = eval_forbidden_dynamic_scope_builtin(name) {
+                if forbidden != "get_defined_vars" || callback_is_object {
+                    return eval_throw_forbidden_dynamic_scope_builtin(forbidden, context, values);
+                }
+            }
+            if name.eq_ignore_ascii_case("get_defined_vars") {
+                if let Some(lexical_scope) = lexical_scope {
+                    return eval_get_defined_vars_from_scope(callback_args, lexical_scope, values);
+                }
             }
         }
-        if name.eq_ignore_ascii_case("get_defined_vars") {
-            if let Some(lexical_scope) = lexical_scope {
-                return eval_get_defined_vars_from_scope(callback_args, lexical_scope, values);
-            }
-        }
-    }
-    eval_evaluated_callable_with_call_user_func_values(
-        &callback,
-        callback_args.to_vec(),
-        context,
-        values,
-    )
+        eval_evaluated_callable_with_call_user_func_values(
+            &callback,
+            callback_args.to_vec(),
+            context,
+            values,
+        )
+    })
 }
 
 /// Normalizes a `call_user_func*` callback and maps non-invokable objects to PHP's TypeError.
@@ -147,10 +153,13 @@ fn eval_call_user_func_callback(
     lexical_scope: Option<&ElephcEvalScope>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<EvaluatedCallable, EvalStatus> {
+) -> Result<ResolvedEvalCallable, EvalStatus> {
     match eval_callable_with_optional_scope(callback, context, lexical_scope, values) {
         Ok(callback) => {
-            eval_validate_call_user_func_callback(&callback, function_name, context, values)?;
+            if let Err(status) = eval_validate_call_user_func_callback(&callback.callable, function_name, context, values) {
+                let _ = callback.release(context, values);
+                return Err(status);
+            }
             Ok(callback)
         }
         Err(EvalStatus::UnsupportedConstruct) if values.type_tag(callback)? == EVAL_TAG_OBJECT => {
@@ -170,7 +179,7 @@ pub(in crate::interpreter) fn eval_callable(
     callback: RuntimeCellHandle,
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<EvaluatedCallable, EvalStatus> {
+) -> Result<ResolvedEvalCallable, EvalStatus> {
     eval_callable_with_optional_scope(callback, context, None, values)
 }
 
@@ -180,7 +189,7 @@ pub(in crate::interpreter) fn eval_callable_from_scope(
     context: &ElephcEvalContext,
     scope: &ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
-) -> Result<EvaluatedCallable, EvalStatus> {
+) -> Result<ResolvedEvalCallable, EvalStatus> {
     eval_callable_with_optional_scope(callback, context, Some(scope), values)
 }
 
@@ -205,14 +214,14 @@ pub(in crate::interpreter) fn eval_callable_with_optional_scope(
     context: &ElephcEvalContext,
     lexical_scope: Option<&ElephcEvalScope>,
     values: &mut impl RuntimeValueOps,
-) -> Result<EvaluatedCallable, EvalStatus> {
+) -> Result<ResolvedEvalCallable, EvalStatus> {
     eval_callable_with_optional_scope_and_array_receiver(
         callback,
         context,
         lexical_scope,
         values,
     )
-    .map(|(callback, _)| callback)
+    .map(|(callback, owner)| ResolvedEvalCallable::new(callback, owner))
 }
 
 /// Normalizes one callback while preserving ownership supplied by an array read.
@@ -567,4 +576,23 @@ pub(in crate::interpreter) fn eval_string_callable(
         name: display_name.to_ascii_lowercase(),
         display_name,
     })
+}
+
+
+/// Probes the owned-argument builtin fast path without retaining an array receiver read.
+pub(in crate::interpreter) fn eval_owned_argument_callback_name(
+    callback: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    lexical_scope: Option<&ElephcEvalScope>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<String>, EvalStatus> {
+    let Ok(resolved) = eval_callable_with_optional_scope(callback, context, lexical_scope, values) else {
+        return Ok(None);
+    };
+    let name = match &resolved.callable {
+        EvaluatedCallable::Named { name, .. } if eval_builtin_uses_owned_arguments(name) => Some(name.clone()),
+        _ => None,
+    };
+    resolved.release(context, values)?;
+    Ok(name)
 }

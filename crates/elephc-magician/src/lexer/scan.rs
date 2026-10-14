@@ -74,6 +74,11 @@ impl<'a> Lexer<'a> {
             return Ok(vec![Token::new(TokenKind::Eof, self.line)]);
         };
         let line = self.line;
+        if self.source[self.pos..].starts_with("/**") {
+            let start = self.pos;
+            self.skip_block_comment()?;
+            return Ok(vec![Token::new(TokenKind::DocComment(self.source[start..self.pos].to_string()), line)]);
+        }
         if ch == '"' {
             return self.lex_double_quoted(line);
         }
@@ -530,6 +535,7 @@ impl<'a> Lexer<'a> {
                 (Some('/'), Some('/')) => self.skip_line_comment(),
                 (Some('#'), Some('[')) => return Ok(()),
                 (Some('#'), _) => self.skip_line_comment(),
+                (Some('/'), Some('*')) if self.source[self.pos..].starts_with("/**") => return Ok(()),
                 (Some('/'), Some('*')) => self.skip_block_comment()?,
                 _ => return Ok(()),
             }

@@ -103,6 +103,27 @@ fn test_repl_persistent_eval_session() {
     assert!(!fixture.0.join("cache-root/elephc/repl/history").exists());
 }
 
+/// Generic declarations specialize across REPL submissions and survive a rejected binding.
+#[test]
+fn test_repl_generics_persist_and_recover() {
+    let fixture = Fixture::new();
+    let output = fixture.run(concat!(
+        "function Identity<T>(T $value): T { return $value; }\n",
+        "iDENTITY<int>(42)\n",
+        "$f = IDentity<string>(...); echo 'bound';\n",
+        "$f('ok')\n",
+        "class Box<T> { public function __construct(private T $value) {} public function get(): T { return $this->value; } }\n",
+        "(new Box<int>(7))->get()\n",
+        "Identity<int>('bad')\n",
+        "Identity('recovered')\n",
+    ), &[]);
+    assert_eq!(output.status.code(), Some(1), "the rejected binding marks the piped session failed");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "int(42)\nboundstring(2) \"ok\"\nint(7)\nstring(9) \"recovered\"\n");
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.starts_with("TypeError:"), "{error}");
+    assert_eq!(error.lines().count(), 1, "{error}");
+}
+
 /// Syntax errors and escaping Throwable values preserve committed state and process later input.
 #[test]
 fn test_repl_recovers_without_replaying_effects() {

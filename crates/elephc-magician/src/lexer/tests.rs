@@ -567,3 +567,13 @@ fn a_comment_inside_a_complex_interpolation_is_inert() {
         assert_eq!(kinds(source), plain, "{source}");
     }
 }
+
+/// Retains generic PHPDoc comments while ordinary block and line comments remain trivia.
+#[test]
+fn generic_doc_comments_keep_lines_and_content() {
+    let tokens = tokenize("/* ignored */\n/** @template T */\nfunction id() {}").unwrap();
+    assert!(matches!(tokens[0].kind(), TokenKind::DocComment(comment) if comment == "/** @template T */"));
+    assert_eq!(tokens[0].line(), 2);
+    assert!(matches!(tokens[1].kind(), TokenKind::Ident(name) if name == "function"));
+    assert_eq!(tokens[1].line(), 3);
+}

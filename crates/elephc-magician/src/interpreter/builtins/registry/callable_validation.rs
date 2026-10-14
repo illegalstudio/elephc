@@ -126,6 +126,7 @@ fn eval_validate_named_callable(
 ) -> Result<(), EvalStatus> {
     if context.has_closure(name)
         || context.has_function(name)
+        || generic_function_is_callable(name, context)
         || eval_function_probe_exists(context, name)
     {
         return Ok(());

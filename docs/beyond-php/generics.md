@@ -86,6 +86,70 @@ Two rules are worth knowing before you start:
 - Everything here is an elephc extension except the docblock form. `--strict-php` rejects the
   native syntax and accepts the annotations.
 
+## Generics in Magician
+
+Dynamic `eval()`, runtime includes, and the REPL accept generic functions, classes, interfaces,
+traits, methods, and constructor templates. Written arguments, inference, bounds, dependent
+defaults, variance, `array<T>`, `array<K, V>`, and typed callable signatures use the same binding
+rules as AOT. Enums may implement concrete generic interfaces and declare generic methods;
+they do not declare their own template parameters.
+
+```php
+<?php
+$source = $argc > 1 ? $argv[1] :
+    'function identity<T>(T $value): T { return $value; } echo identity(42);';
+eval($source);   // 42, through the runtime interpreter
+```
+
+Magician specializes from already evaluated argument values. It retains each template's lexical
+namespace, imports, source lines, and type positions, then registers concrete declarations in
+the persistent eval context. Repeated calls reuse function, class, and method specializations;
+subsequent eval calls in that context can use the same templates. Generic classes retain separate
+identities and static storage, just as in AOT.
+
+Unconditional templates at the top level of an eval program support forward calls.
+Runtime included programs use the same rule and retain include returns and once semantics.
+Declarations inside functions, loops, or conditional blocks register when execution reaches
+their statement. A return, break, or continue skips later declarations in that block, and
+executing the same nested declaration again is a redeclaration error.
+Before specializing a class, Magician rechecks its variance against currently registered
+traits, parents, and interfaces, including dependencies declared later in a nested block.
+
+Magician renders class and constructor arguments in one concrete identity: a `Pair<T>` with a
+constructor-local `U` produces `Pair<int, string>` for `new Pair<int>(7, 'seven')`. Constructor
+arguments distinguish concrete storage; class inference and variance use the declared class slots.
+The combined spelling also works directly: `new Pair<int, string>(7, 'seven')`, or a parent
+reference such as `extends Pair<int, string>`, resolves without a previous instantiation.
+Writing only class arguments still infers constructor arguments; writing constructor arguments
+uses their declared defaults for any omitted trailing slots.
+
+Missing or conflicting arguments, violated bounds, invalid variance declarations, and rejected
+specialized argument/return contracts raise catchable `TypeError` values. Native generic syntax
+is rejected before execution under `--strict-php`; supported PHPDoc annotations work in both
+modes. Typed local declarations also retain their substituted contracts during assignment.
+References share those contracts: writes through aliases, reference parameters, closure captures,
+and references returned inside arrays must satisfy every typed alias. Independent value copies
+remain unconstrained by the original local's declaration. Compatible child return types project
+their generic arguments through inherited class and interface contracts. Trait variance checks
+use the effective method visibility after trait aliases and overrides, resolving qualified
+adaptations such as `Put::put as private` against the complete trait-use list.
+Nullable and union array locals validate writes against an array arm that accepts their existing
+contents. An indexed `array<T>` requires integer keys and rejects associative values; numeric
+string keys such as `'0'`, floats, and booleans use their normalized integer type for write
+validation. Null keys become the empty string, so `array<string, V>` accepts them while
+`array<T>` rejects them. `array<K, V>` checks that same stored key type against `K`.
+Local offset writes select the receiver after evaluating the index and value, so an operand's
+reassignment determines the storage being written. When a union local holds a string, indexed
+writes update its bytes and append attempts raise `Error`. Other scalars also raise `Error`
+on array writes and retain their value. Only null
+and false become arrays, and the resulting writes still need to satisfy an array arm.
+Numeric string offsets on string receivers accept PHP whitespace, including vertical tab.
+
+Execution still uses Magician's boxed runtime cells. AOT's native storage and performance figures
+below apply to compiled code. Generic syntax does not extend other parts of the
+[supported eval subset](../php/eval.md#current-limitations); use an ordinary typed closure for
+callback inference in Magician. See `examples/eval-generics/main.php` for a complete example.
+
 ## Why it matters
 
 Elephc already specializes an untyped `array` parameter to the element type it sees at the

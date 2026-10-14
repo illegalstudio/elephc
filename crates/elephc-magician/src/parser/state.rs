@@ -22,9 +22,15 @@ static ANONYMOUS_CLASS_COUNTER: AtomicUsize = AtomicUsize::new(0);
 static CLOSURE_FUNCTION_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 /// Parses tokenized eval fragments into EvalIR.
+#[derive(Clone)]
 pub(super) struct Parser {
+    pub(super) type_parameters: Vec<String>,
+    pub(super) type_parameter_origins: Vec<usize>,
+    pub(super) type_parameter_uses: HashMap<usize, usize>,
+    pub(super) native_generic_syntax: bool,
     pub(super) tokens: Vec<TokenKind>,
     pub(super) token_lines: Vec<i64>,
+    pub(super) token_phpdoc: Vec<bool>,
     pub(super) pos: usize,
     pub(super) source_len: usize,
     pub(super) namespace: String,
@@ -39,8 +45,8 @@ pub(super) struct ParsedQualifiedName {
 }
 
 /// Import alias tables active for the current namespace declaration region.
-#[derive(Default)]
-pub(super) struct NamespaceImports {
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default, PartialEq)]
+pub(crate) struct NamespaceImports {
     classes: HashMap<String, String>,
     functions: HashMap<String, String>,
     constants: HashMap<String, String>,
@@ -108,11 +114,18 @@ impl NamespaceImports {
 impl Parser {
     /// Creates a parser over tokens produced from a source fragment.
     pub(super) fn new(tokens: Vec<Token>, source_len: usize) -> Self {
+        let tokens = super::docblocks::apply(tokens);
+        let token_phpdoc = tokens.iter().map(Token::phpdoc).collect();
         let token_lines = tokens.iter().map(Token::line).collect();
         let tokens = tokens.into_iter().map(Token::into_kind).collect();
         Self {
+            type_parameters: Vec::new(),
+            type_parameter_origins: Vec::new(),
+            type_parameter_uses: HashMap::new(),
+            native_generic_syntax: false,
             tokens,
             token_lines,
+            token_phpdoc,
             pos: 0,
             source_len,
             namespace: String::new(),
@@ -128,7 +141,7 @@ impl Parser {
             statements.extend(self.parse_stmt()?);
         }
         let cli_superglobals = self.named_cli_superglobals();
-        Ok(EvalProgram::new(self.source_len, statements).with_cli_superglobals(cli_superglobals))
+        Ok(EvalProgram::new(self.source_len, statements).with_cli_superglobals(cli_superglobals).with_native_generic_syntax(self.native_generic_syntax))
     }
 
     /// Returns the CLI-populated superglobals any `$name` token of the fragment spells.
