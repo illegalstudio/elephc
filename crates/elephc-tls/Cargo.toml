@@ -13,7 +13,7 @@ crate-type = ["staticlib", "rlib"]
 # rustls 0.23 with the ring crypto backend keeps the dependency footprint
 # musl-compatible (used by the Docker test images) and avoids the heavier
 # aws-lc-rs prerequisites.
-rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
+rustls = { version = "0.23.46", default-features = false, features = ["std", "ring", "tls12"] }
 webpki-roots = "0.26"
 # Pure-Rust PEM parser for the ssl.cafile stream-context option (a custom CA
 # bundle). musl-friendly (no C deps), so the Docker test images stay happy.
