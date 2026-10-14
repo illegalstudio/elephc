@@ -1,13 +1,48 @@
 //! Purpose:
-//! Verifies caller ownership when a concrete object argument is returned through Mixed storage.
+//! Verifies balanced ownership at object/Mixed call and return boundaries.
 //!
 //! Called from:
 //! - The AST-to-EIR unit test module.
 //!
 //! Key details:
 //! - Mixed boxing retains the object payload, so the caller's evaluation pin must retire separately.
+//! - Owned assignment-result cells retire only after their object return payload is secured.
 
 use crate::ir::Op;
+
+/// An owned assignment cell is retired after its independently owned object return is secured.
+#[test]
+fn owned_mixed_assignment_results_release_after_object_return_unboxing_on_all_targets() {
+    let source = r#"<?php
+class C {
+    protected static $instance;
+    public static function set($instance) { return static::$instance = $instance; }
+}
+var_dump(C::set(new C()));
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        let setter = module.class_methods.iter().find(|function| function.name == "C::set")
+            .expect("static setter fixture");
+        let (unbox_index, unbox) = setter.instructions.iter().enumerate().find(|(_, inst)|
+            inst.op == Op::MixedUnbox && setter.value(inst.operands[0]).unwrap().ownership
+                == crate::ir::Ownership::Owned).expect("owned Mixed return boundary");
+        assert_eq!(setter.value(unbox.result.unwrap()).unwrap().ownership, crate::ir::Ownership::Owned,
+            "{target}: the object payload must outlive its source cell");
+        assert!(setter.instructions[unbox_index + 1..].iter().any(|inst|
+            inst.op == Op::Release && inst.operands == unbox.operands),
+            "{target}: the independent assignment result must retire after extracting its payload");
+        let unbox = setter.instructions.iter().find(|inst| inst.op == Op::MixedUnbox
+            && setter.value(inst.operands[0]).unwrap().ownership != crate::ir::Ownership::Owned)
+            .expect("borrowed Mixed static-storage boundary");
+        assert!(!setter.instructions.iter().any(|inst|
+            inst.op == Op::Release && inst.operands == unbox.operands),
+            "{target}: a rooted borrowed read is not an independent result cell");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
 
 /// Object argument pins are rooted and retired independently of Mixed results on every target.
 #[test]

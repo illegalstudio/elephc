@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Preserves statement ordering, CFG shape, EIR effects, and ownership contracts.
+//! - Owned Mixed-to-object returns retain their payload before retiring the source cell.
 
 use super::*;
 
@@ -35,6 +36,19 @@ pub(super) fn coerce_to_return_type(
         }
         IrType::Heap(_) if ctx.return_php_type.codegen_repr() == PhpType::Mixed => {
             ctx.box_value_as_mixed(value, ctx.return_php_type.clone(), span)
+        }
+        IrType::Heap(_) if matches!(ctx.return_php_type.codegen_repr(), PhpType::Object(_))
+            && matches!(ctx.builder.value_php_type(value.value).codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_)) =>
+        {
+            // Assignment expressions can hand this boundary an independent owned cell.
+            // Retain the returned object before retiring that cell, not just the frame local.
+            let result = ctx.emit_owned_value(Op::MixedUnbox, vec![value.value], None,
+                ctx.return_php_type.clone(), Op::mixed_unbox_effects(&ctx.return_php_type), span);
+            if ctx.value_is_owning_temporary(value) {
+                crate::ir_lower::ownership::release_if_owned(ctx, value, span);
+            }
+            result
         }
         IrType::Heap(_) => ctx.emit_value(
             Op::RuntimeCall,

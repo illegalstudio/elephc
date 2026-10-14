@@ -1015,6 +1015,12 @@ echo "done";
     );
 }
 
+/// Retiring the independently owned setter result does not depend on EIR optimization.
+#[test]
+fn test_regression_untyped_static_setter_object_overwrite_stays_bounded_no_ir_opt() {
+    without_ir_opt(test_regression_untyped_static_setter_object_overwrite_stays_bounded);
+}
+
 /// Regression test: array literals with spread build their result through
 /// `__rt_array_push_refcounted` for refcounted elements. The non-spread element
 /// path retained the element via `retain_borrowed_heap_arg` and again inside the
