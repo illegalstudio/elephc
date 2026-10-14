@@ -67,9 +67,8 @@ fn eval_catch_predicates_retire_raw_throwable_adapter_boxes_linux_x86_64() {
     assert_eval_catch_predicates_retire_raw_throwable_adapter_boxes("linux-x86_64");
 }
 
-/// Every ABI publishes eval scope writes before propagating an exception, with bounded cleanup.
-#[test]
-fn eval_throw_writeback_is_bounded_before_unwinding_on_all_targets() {
+/// Checks bounded eval scope writeback before unwinding for one independently scheduled target.
+fn check_eval_throw_writeback_is_bounded_before_unwinding(target: &str) {
     let source = r#"<?php
 function catchReloadedEval(string $source): void {
     global $marker;
@@ -81,29 +80,56 @@ $marker = "old";
 $source = '$local = "after"; $marker = "new"; throw new Exception("stop"); // ' . $argc;
 catchReloadedEval($source);
 "#;
-    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-        let module = super::lower_source_at_for_target(
-            source, std::path::Path::new("main.php"), std::path::Path::new("."),
-            crate::codegen::platform::Target::parse(target).unwrap(),
-        );
-        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-        let (_, reload) = asm.split_once("reload eval scope before propagating its pending exception")
-            .expect("runtime eval scope reload");
-        let (reload, finish) = reload.split_once("finish guarded eval scope writeback")
-            .expect("guarded scope completion");
-        assert!(reload.contains("publish eval local replacement"), "{target}: {reload}");
-        assert!(reload.contains("publish eval global replacement"), "{target}: {reload}");
-        assert!(reload.contains("__rt_cleanup_invoke"), "{target}: {reload}");
-        let throw = finish.find("__rt_throw_current").expect("delayed native throw");
-        let restored = if target == "linux-x86_64" { "add rsp, 192" } else { "add sp, sp, #192" };
-        assert!(finish[..throw].contains(restored), "{target}: {finish}");
-        assert_eq!(finish[..throw].matches("detach temporary call operand owner").count(), 2, "{target}");
-    }
+    let module = super::lower_source_at_for_target(
+        source, std::path::Path::new("main.php"), std::path::Path::new("."),
+        crate::codegen::platform::Target::parse(target).unwrap(),
+    );
+    let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    let (_, reload) = asm.split_once("reload eval scope before propagating its pending exception")
+        .expect("runtime eval scope reload");
+    let (reload, finish) = reload.split_once("finish guarded eval scope writeback")
+        .expect("guarded scope completion");
+    assert!(reload.contains("publish eval local replacement"), "{target}: {reload}");
+    assert!(reload.contains("publish eval global replacement"), "{target}: {reload}");
+    assert!(reload.contains("__rt_cleanup_invoke"), "{target}: {reload}");
+    let throw = finish.find("__rt_throw_current").expect("delayed native throw");
+    let restored = if target == "linux-x86_64" { "add rsp, 192" } else { "add sp, sp, #192" };
+    assert!(finish[..throw].contains(restored), "{target}: {finish}");
+    assert_eq!(finish[..throw].matches("detach temporary call operand owner").count(), 2, "{target}");
 }
 
-/// Eval reload retires displaced local owners through target-native stores and release helpers.
+/// Eval scope writes are published with bounded cleanup before unwinding on macOS ARM64.
 #[test]
-fn eval_local_reload_releases_previous_owners_on_all_targets() {
+fn eval_throw_writeback_is_bounded_before_unwinding_macos_aarch64() {
+    check_eval_throw_writeback_is_bounded_before_unwinding("macos-aarch64");
+}
+
+/// Eval scope writes are published with bounded cleanup before unwinding on iOS device ARM64.
+#[test]
+fn eval_throw_writeback_is_bounded_before_unwinding_ios_arm64() {
+    check_eval_throw_writeback_is_bounded_before_unwinding("ios-arm64");
+}
+
+/// Eval scope writes are published with bounded cleanup before unwinding on iOS Simulator ARM64.
+#[test]
+fn eval_throw_writeback_is_bounded_before_unwinding_ios_sim_arm64() {
+    check_eval_throw_writeback_is_bounded_before_unwinding("ios-sim-arm64");
+}
+
+/// Eval scope writes are published with bounded cleanup before unwinding on Linux ARM64.
+#[test]
+fn eval_throw_writeback_is_bounded_before_unwinding_linux_aarch64() {
+    check_eval_throw_writeback_is_bounded_before_unwinding("linux-aarch64");
+}
+
+/// Eval scope writes are published with bounded cleanup before unwinding on Linux x86_64.
+#[test]
+fn eval_throw_writeback_is_bounded_before_unwinding_linux_x86_64() {
+    check_eval_throw_writeback_is_bounded_before_unwinding("linux-x86_64");
+}
+
+/// Checks eval reload owner retirement for one independently scheduled target.
+fn check_eval_local_reload_releases_previous_owners(target: &str) {
     let source = r#"<?php
 function reloadOwnedLocal(string $code, mixed $value): mixed {
     eval($code);
@@ -112,20 +138,48 @@ function reloadOwnedLocal(string $code, mixed $value): mixed {
 $code = '$value = "new"; // ' . $argc;
 echo reloadOwnedLocal($code, "old");
 "#;
-    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-        let module = super::lower_source_at_for_target(
-            source, std::path::Path::new("main.php"), std::path::Path::new("."),
-            crate::codegen::platform::Target::parse(target).unwrap(),
-        );
-        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-        let mut replacements = 0;
-        for section in asm.split("publish eval local replacement before retiring the previous owner").skip(1) {
-            let (replacement, _) = section.split_once("eval local replacement owns its native payload").unwrap();
-            assert!(replacement.contains("__rt_decref_mixed") || replacement.contains("__rt_heap_free_safe"), "{target}: {replacement}");
-            replacements += 1;
-        }
-        assert!(replacements >= 2, "{target}: present and missing entries must both retire their old owners");
+    let module = super::lower_source_at_for_target(
+        source, std::path::Path::new("main.php"), std::path::Path::new("."),
+        crate::codegen::platform::Target::parse(target).unwrap(),
+    );
+    let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    let mut replacements = 0;
+    for section in asm.split("publish eval local replacement before retiring the previous owner").skip(1) {
+        let (replacement, _) = section.split_once("eval local replacement owns its native payload").unwrap();
+        assert!(replacement.contains("__rt_decref_mixed") || replacement.contains("__rt_heap_free_safe"), "{target}: {replacement}");
+        replacements += 1;
     }
+    assert!(replacements >= 2, "{target}: present and missing entries must both retire their old owners");
+}
+
+/// Eval reload retires displaced local owners on macOS ARM64.
+#[test]
+fn eval_local_reload_releases_previous_owners_macos_aarch64() {
+    check_eval_local_reload_releases_previous_owners("macos-aarch64");
+}
+
+/// Eval reload retires displaced local owners on iOS device ARM64.
+#[test]
+fn eval_local_reload_releases_previous_owners_ios_arm64() {
+    check_eval_local_reload_releases_previous_owners("ios-arm64");
+}
+
+/// Eval reload retires displaced local owners on iOS Simulator ARM64.
+#[test]
+fn eval_local_reload_releases_previous_owners_ios_sim_arm64() {
+    check_eval_local_reload_releases_previous_owners("ios-sim-arm64");
+}
+
+/// Eval reload retires displaced local owners on Linux ARM64.
+#[test]
+fn eval_local_reload_releases_previous_owners_linux_aarch64() {
+    check_eval_local_reload_releases_previous_owners("linux-aarch64");
+}
+
+/// Eval reload retires displaced local owners on Linux x86_64.
+#[test]
+fn eval_local_reload_releases_previous_owners_linux_x86_64() {
+    check_eval_local_reload_releases_previous_owners("linux-x86_64");
 }
 
 /// Checks first-store retirement and assembly emission for one independently scheduled target.
@@ -293,34 +347,61 @@ fn process_local_first_writes_preserve_entry_initialization_on_all_targets() {
     }
 }
 
-/// Runtime eval roots its code buffer and releases discarded profiled results on every target.
-#[test]
-fn profiled_eval_owns_its_result_and_roots_its_source_on_all_targets() {
+/// Checks eval source rooting and discarded-result cleanup for one independently scheduled target.
+fn check_profiled_eval_owns_its_result_and_roots_its_source(target: &str) {
     let source = r#"<?php
         function discard_profiled_eval(string $source): void { eval($source); }
         discard_profiled_eval("return null; // " . $argc);
     "#;
-    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-        let module = super::lower_source_at_for_target(
-            source, std::path::Path::new("main.php"), std::path::Path::new("."),
-            crate::codegen::platform::Target::parse(target).unwrap(),
-        );
-        let function = module.functions.iter().find(|function| function.name == "discard_profiled_eval").unwrap();
-        let index = function.instructions.iter().position(|inst| {
-            inst.op == Op::LanguageConstructCall && matches!(inst.immediate, Some(Immediate::ProfiledData { .. }))
-        }).unwrap();
-        let call = &function.instructions[index];
-        assert_eq!(call.result_ownership, Ownership::Owned, "{target}");
-        let result = call.result.unwrap();
-        assert!(function.instructions[index + 1..].iter().any(|inst| {
-            inst.op == Op::Release && inst.operands == [result]
-        }), "{target}: discarded eval results need cleanup");
-        let root = function.instructions[..index].iter().find(|inst| {
-            inst.op == Op::StoreLocal && inst.operands == [call.operands[0]]
-        }).expect("the source must be visible to exceptional frame cleanup");
-        assert!(function.instructions[index + 1..].iter().any(|inst| {
-            inst.op == Op::ReleaseLocalSlot && inst.immediate == root.immediate
-        }), "{target}: normal return must clear and retire the source root");
-        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-    }
+    let module = super::lower_source_at_for_target(
+        source, std::path::Path::new("main.php"), std::path::Path::new("."),
+        crate::codegen::platform::Target::parse(target).unwrap(),
+    );
+    let function = module.functions.iter().find(|function| function.name == "discard_profiled_eval").unwrap();
+    let index = function.instructions.iter().position(|inst| {
+        inst.op == Op::LanguageConstructCall && matches!(inst.immediate, Some(Immediate::ProfiledData { .. }))
+    }).unwrap();
+    let call = &function.instructions[index];
+    assert_eq!(call.result_ownership, Ownership::Owned, "{target}");
+    let result = call.result.unwrap();
+    assert!(function.instructions[index + 1..].iter().any(|inst| {
+        inst.op == Op::Release && inst.operands == [result]
+    }), "{target}: discarded eval results need cleanup");
+    let root = function.instructions[..index].iter().find(|inst| {
+        inst.op == Op::StoreLocal && inst.operands == [call.operands[0]]
+    }).expect("the source must be visible to exceptional frame cleanup");
+    assert!(function.instructions[index + 1..].iter().any(|inst| {
+        inst.op == Op::ReleaseLocalSlot && inst.immediate == root.immediate
+    }), "{target}: normal return must clear and retire the source root");
+    crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+}
+
+/// Runtime eval roots its source and releases its discarded result on macOS ARM64.
+#[test]
+fn profiled_eval_owns_its_result_and_roots_its_source_macos_aarch64() {
+    check_profiled_eval_owns_its_result_and_roots_its_source("macos-aarch64");
+}
+
+/// Runtime eval roots its source and releases its discarded result on iOS device ARM64.
+#[test]
+fn profiled_eval_owns_its_result_and_roots_its_source_ios_arm64() {
+    check_profiled_eval_owns_its_result_and_roots_its_source("ios-arm64");
+}
+
+/// Runtime eval roots its source and releases its discarded result on iOS Simulator ARM64.
+#[test]
+fn profiled_eval_owns_its_result_and_roots_its_source_ios_sim_arm64() {
+    check_profiled_eval_owns_its_result_and_roots_its_source("ios-sim-arm64");
+}
+
+/// Runtime eval roots its source and releases its discarded result on Linux ARM64.
+#[test]
+fn profiled_eval_owns_its_result_and_roots_its_source_linux_aarch64() {
+    check_profiled_eval_owns_its_result_and_roots_its_source("linux-aarch64");
+}
+
+/// Runtime eval roots its source and releases its discarded result on Linux x86_64.
+#[test]
+fn profiled_eval_owns_its_result_and_roots_its_source_linux_x86_64() {
+    check_profiled_eval_owns_its_result_and_roots_its_source("linux-x86_64");
 }
