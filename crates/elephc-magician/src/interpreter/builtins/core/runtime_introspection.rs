@@ -263,14 +263,15 @@ fn eval_get_exception_handler(
 /// Validates one handler callback using the direct call's lexical scope when available.
 fn normalize_handler(
     callback: RuntimeCellHandle,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     scope: Option<&ElephcEvalScope>,
     values: &mut impl RuntimeValueOps,
-) -> Result<EvaluatedCallable, EvalStatus> {
-    match scope {
+) -> Result<(), EvalStatus> {
+    let callback = match scope {
         Some(scope) => eval_callable_from_scope(callback, context, scope, values),
         None => eval_callable(callback, context, values),
-    }
+    }?;
+    callback.release(context, values)
 }
 
 /// Returns an independent copy of a previous error handler or PHP null.
@@ -390,7 +391,9 @@ fn dispatch_user_error_handler(
     }
     let callback = eval_callable(handler.callback, context, values)?;
     let suspended = context.suspend_error_handler().expect("active handler was just checked");
-    let result = eval_evaluated_callable_with_values(&callback, callback_args, context, values);
+    let result = callback.with_values(context, values, |callback, context, values| {
+        eval_evaluated_callable_with_values(callback, callback_args, context, values)
+    });
     if let Some(discarded) = context.resume_error_handler(suspended) {
         values.release(discarded.callback)?;
     }

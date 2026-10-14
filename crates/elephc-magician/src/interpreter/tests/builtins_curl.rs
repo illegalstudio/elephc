@@ -517,3 +517,65 @@ fn silent_callback_slot_retains_nothing_but_still_releases_what_it_replaces() {
         "silencing must release the callable it replaced"
     );
 }
+
+/// A later normalization failure retires prior receiver leases without entering the transfer.
+#[test]
+fn curl_callback_frame_partial_setup_releases_receivers() {
+    use super::super::{execute_program_with_context, parse_fragment, ElephcEvalScope};
+    use crate::interpreter::builtins::eval_curl_with_callback_frame;
+    use crate::stream_resources::EvalCurlCallbackSlot;
+
+    for separate_handles in [false, true] {
+        let mut context = ElephcEvalContext::new();
+        let mut values = FakeOps::default();
+        let mut scope = ElephcEvalScope::new();
+        let program = parse_fragment(
+            b"class CurlFrameReceiver { public function write() {} } $object = new CurlFrameReceiver();",
+        ).unwrap();
+        let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+        values.release(result).unwrap();
+        let object = scope.visible_cell("object").unwrap();
+        let method = values.string("write").unwrap();
+        let valid = values.alloc(FakeValue::Array(vec![object.owned(), method]));
+        let invalid = values.alloc(FakeValue::Array(vec![]));
+        let first = context.stream_resources_mut().open_curl_easy_handle(42);
+        let second = if separate_handles {
+            context.stream_resources_mut().open_curl_easy_handle(43)
+        } else { first };
+        context.stream_resources_mut().set_curl_easy_callback(
+            first, 0, EvalCurlCallbackSlot::Callable(valid), &mut values,
+        ).unwrap();
+        // Inject invalid state below CURLOPT validation to reach partial frame rollback.
+        context.stream_resources_mut().set_curl_easy_callback(
+            second, 1, EvalCurlCallbackSlot::Callable(invalid), &mut values,
+        ).unwrap();
+        let owners = values.cell_owners[&(object.as_ptr() as usize)];
+        let released = values.releases.len();
+        let mut entered_transfer = false;
+        let handles = if separate_handles { vec![first, second] } else { vec![first] };
+        let result = eval_curl_with_callback_frame(&handles, &mut context, &mut values, || {
+            entered_transfer = true;
+        });
+        assert!(result.is_err());
+        assert!(!entered_transfer);
+        assert!(values.releases[released..].contains(&object));
+        assert_eq!(values.cell_owners[&(object.as_ptr() as usize)], owners);
+        context.stream_resources_mut().release_curl_easy_private_values(&mut values);
+    }
+}
+
+/// The direct curl_init route retires a temporary URL even when the bridge cannot create a handle.
+#[test]
+fn curl_init_releases_temporary_url_on_failure() {
+    use super::super::{execute_program_with_context, parse_fragment, ElephcEvalScope};
+
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let program = parse_fragment(b"curl_init('http://localhost/ownership');").unwrap();
+    if let Ok(result) = execute_program_with_context(&mut context, &program, &mut scope, &mut values) {
+        values.release(result).unwrap();
+    }
+    assert!(!values.cell_owners.is_empty());
+    assert!(values.cell_owners.values().all(|owners| *owners == 0), "{:?}", values.cell_owners);
+}

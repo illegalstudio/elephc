@@ -1721,3 +1721,112 @@ fn eval_rejected_curl_init_leaves_the_handle_surface_healthy() {
 // `..._are_visible_on_85` (magician unit tests, `--features curl`), which drive the profile
 // directly through `eval_php_profile::scoped_profile`. The AOT half already has its own
 // coverage in `tests/error_tests/curl.rs`.
+
+/// Array-method receivers survive clearing their own slot and are retired after each transfer.
+#[test]
+fn eval_curl_array_callback_receiver_ownership() {
+    if skip_without_curl_native("eval_curl_array_callback_receiver_ownership") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let source = r#"
+class CurlReceiverOwnership {
+    public string $label = "alive";
+    public function write($handle, $chunk) {
+        $self = $this;
+        echo "callback\n";
+        curl_setopt($handle, CURLOPT_WRITEFUNCTION, null);
+        echo "cleared:" . $self->label . "\n";
+        return strlen($chunk);
+    }
+    public function __destruct() { echo "drop\n"; }
+}
+for ($i = 0; $i < 3; $i++) {
+    $handle = curl_init("__URL__");
+    $receiver = new CurlReceiverOwnership();
+    curl_setopt($handle, CURLOPT_WRITEFUNCTION, [$receiver, "write"]);
+    unset($receiver);
+    var_dump(curl_exec($handle));
+    unset($handle);
+}
+echo "DONE\n";
+"#.replace("__URL__", &server.url("/hello"));
+    let variants = [
+        source.replace("$i < 3", "$i < 0"),
+        source.replace("$i < 3", "$i < 1"),
+        source.clone(),
+    ];
+    let args: Vec<_> = variants.iter().map(|code| [code.as_str()]).collect();
+    let argvs: Vec<_> = args.iter().map(|arg| arg.as_slice()).collect();
+    let outputs = compile_and_run_with_heap_debug_per_argv(
+        "<?php if ($argc < 0) { curl_version(); } eval($argv[1]);",
+        &argvs,
+    );
+    for (out, transfers) in outputs.iter().zip([0, 1, 3]) {
+        assert!(out.success, "{}", out.stderr);
+        assert_eq!(out.stdout, format!("{}DONE\n", "callback\ncleared:alive\ndrop\nbool(true)\n".repeat(transfers)));
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    }
+}
+
+/// Curl callbacks retire arguments/results on borrowed string returns and thrown exceptions.
+#[test]
+fn eval_curl_array_callback_result_and_throw_ownership() {
+    if skip_without_curl_native("eval_curl_array_callback_result_and_throw_ownership") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let cases = [
+        (r#"class CurlUploadReceiver {
+ public string $payload = "uploaded-by-eval";
+ public bool $done = false;
+ public function read($handle, $fd, $maximum) {
+  if ($this->done) { return ""; }
+  $this->done = true;
+  return $this->payload;
+ }
+ public function __destruct() { echo "drop\n"; }
+}
+$handle=curl_init("__URL__");
+curl_setopt($handle,CURLOPT_UPLOAD,true);
+curl_setopt($handle,CURLOPT_INFILESIZE,16);
+curl_setopt($handle,CURLOPT_RETURNTRANSFER,true);
+$receiver=new CurlUploadReceiver();
+curl_setopt($handle,CURLOPT_READFUNCTION,[$receiver,"read"]);
+unset($receiver);
+$response=curl_exec($handle);
+echo str_contains($response,"uploaded-by-eval") ? "uploaded\n" : "missing\n";
+curl_setopt($handle,CURLOPT_READFUNCTION,null);
+unset($response,$handle);
+echo "DONE\n";
+"#, "uploaded\ndrop\nDONE\n"),
+        (r#"class CurlThrowReceiver {
+ public function write($handle,$chunk) {
+  curl_setopt($handle,CURLOPT_WRITEFUNCTION,null);
+  throw new RuntimeException("stop");
+ }
+ public function __destruct() { echo "drop\n"; }
+}
+$handle=curl_init("__URL__");
+curl_setopt($handle,CURLOPT_WRITEFUNCTION,[new CurlThrowReceiver(),"write"]);
+try { curl_exec($handle); } catch (RuntimeException $error) {
+ echo "caught:",$error->getMessage(),"\n";
+ unset($error);
+}
+unset($handle);
+echo "DONE\n";
+"#, "drop\ncaught:stop\nDONE\n"),
+    ];
+    let sources: Vec<_> = cases.iter().map(|(source, _)| source.replace("__URL__", &server.url("/echo"))).collect();
+    let args: Vec<_> = sources.iter().map(|source| [source.as_str()]).collect();
+    let argvs: Vec<_> = args.iter().map(|arg| arg.as_slice()).collect();
+    let outputs = compile_and_run_with_heap_debug_per_argv(
+        "<?php if ($argc < 0) { curl_version(); } eval($argv[1]);",
+        &argvs,
+    );
+    for (out, (_, expected)) in outputs.iter().zip(cases) {
+        assert!(out.success, "{}", out.stderr);
+        assert_eq!(out.stdout, expected);
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    }
+}

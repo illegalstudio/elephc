@@ -268,8 +268,10 @@ fn eval_dynamic_call_with_callback(
         }
     }
     let callback = eval_callable(callback, context, values)?;
-    with_eval_call_arguments(args, context, scope, values, |arguments, context, _, values| {
-        eval_evaluated_callable_with_call_array_args(&callback, arguments, context, values)
+    callback.with_values(context, values, |callback, context, values| {
+        with_eval_call_arguments(args, context, scope, values, |arguments, context, _, values| {
+            eval_evaluated_callable_with_call_array_args(&callback, arguments, context, values)
+        })
     })
 }
 

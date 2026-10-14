@@ -32,6 +32,7 @@ mod symbol_catalog;
 mod eval_builtin_parity;
 mod eval_callable_ref_errors;
 mod eval_callables;
+mod eval_callback_receiver_ownership;
 mod eval_closures;
 mod eval_constructors;
 mod eval_reflection_invocation;
