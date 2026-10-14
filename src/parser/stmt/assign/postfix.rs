@@ -64,6 +64,12 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
         return Err(CompileError::new(span, "Invalid assignment target"));
     }
 
+    // Dynamic writes use the expression parser's shared target/RHS stabilization. An
+    // Assignment without its prelude/result target evaluates the RHS again during EIR lowering.
+    if !is_append && matches!(lhs_expr.kind, ExprKind::DynamicPropertyAccess { .. }) {
+        return Ok(None);
+    }
+
     *pos = assign_pos + 1;
     let rhs = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
@@ -142,19 +148,6 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
             property,
             value,
         },
-        ExprKind::DynamicPropertyAccess { object, property } => StmtKind::ExprStmt(Expr::new(
-            ExprKind::Assignment {
-                target: Box::new(Expr::new(
-                    ExprKind::DynamicPropertyAccess { object, property },
-                    lhs_span,
-                )),
-                value: Box::new(value),
-                result_target: None,
-                prelude: Vec::new(),
-                conditional_value_temp: None,
-            },
-            span,
-        )),
         _ => return Err(CompileError::new(span, "Invalid assignment target")),
     };
 

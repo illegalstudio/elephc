@@ -296,3 +296,24 @@ fn test_null_coalesce_assignment_expression_stabilizes_computed_mutated_index() 
         other => panic!("expected Echo, got {:?}", other),
     }
 }
+
+/// A statement-form dynamic write shares its stabilized RHS with its result.
+#[test]
+fn test_dynamic_property_assignment_statement_stabilizes_the_rhs_once() {
+    let stmts = parse_source("<?php $box->$key = make();");
+    let StmtKind::ExprStmt(expr) = &stmts[0].kind else {
+        panic!("expected an assignment expression statement: {:?}", stmts[0]);
+    };
+    let ExprKind::Assignment { target, value, result_target, prelude, .. } = &expr.kind else {
+        panic!("expected an assignment expression: {:?}", expr);
+    };
+    assert!(matches!(target.kind, ExprKind::DynamicPropertyAccess { .. }));
+    assert_eq!(prelude.len(), 1);
+    let ExprKind::Variable(value_name) = &value.kind else {
+        panic!("expected the stabilized RHS: {:?}", value);
+    };
+    let Some(result) = result_target else {
+        panic!("expected the stabilized assignment result");
+    };
+    assert!(matches!(&result.kind, ExprKind::Variable(name) if name == value_name));
+}
