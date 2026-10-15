@@ -127,17 +127,18 @@ behind a flag.
 - **ir-opt** — the [EIR optimization passes](optimization.md#eir-optimization-passes)
   run a fixed-point driver over each function: identity arithmetic folding,
   local peephole rewrites, scalar local promotion, immutable-local load classification, checked-integer
-  sinking, integer range and induction-variable analysis, boxed checked-numeric
+  sinking, canonical loop optimization, integer range and induction-variable analysis, boxed checked-numeric
   chain fusion, constant folding,
   common-subexpression elimination,
   loop-invariant code motion, CFG-aware dead-instruction elimination, dead-store
-  elimination, and branch simplification. In
+  elimination, branch simplification, and concat scratch-state optimization. In
   debug/test builds the function is re-validated after every pass. This phase
   can be turned off with [`--no-ir-opt`](optimization.md#eir-optimization-passes).
 - **ir-print** — only present with [`--emit-ir`](output-and-diagnostics.md#--emit-ir);
   formats the optimized or unoptimized EIR textual form, prints it to stdout,
   and stops before runtime preparation or code generation.
-- **codegen** — EIR is lowered to target assembly through the default backend.
+- **codegen** — EIR is lowered to target assembly through the default backend,
+  including late target-aware instruction selection and machine peepholes.
   See [The Code Generator](../internals/the-codegen.md).
 - **write-asm / source-map** — the generated assembly and optional source-map
   sidecar are materialized before runtime-object preparation.

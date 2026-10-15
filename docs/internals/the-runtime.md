@@ -760,7 +760,7 @@ Extern callback trampolines use the same descriptor invoker from a C-facing entr
 
 ## Array routines
 
-**Source:** `src/codegen_support/runtime/arrays/` (204 top-level files plus 7 nested target/debug helpers)
+**Source:** `src/codegen_support/runtime/arrays/` (205 top-level files plus 7 nested target/debug helpers)
 
 ### Core allocation
 
@@ -945,7 +945,7 @@ path for from a leaf helper.
 
 ## System routines
 
-**Source:** `src/codegen_support/runtime/system/` (45 top-level files plus 43 files in nested date, JSON, serialization, and parsing modules; 88 files recursively)
+**Source:** `src/codegen_support/runtime/system/` (46 top-level files plus 44 files in nested date, JSON, serialization, and parsing modules; 90 files recursively)
 
 ### `__rt_build_argv` — Build $argv array
 
@@ -1115,8 +1115,9 @@ The unserializer keeps the fixed runtime-emission order in `unserialize/mod.rs`.
 
 **Files:** `system/preg_strip.rs`, `system/pcre_to_posix.rs`,
 `system/mb_ereg_match.rs`, `system/preg_match.rs`,
-`system/preg_match_all.rs`, `system/preg_replace.rs`,
-`system/preg_replace_callback.rs`, `system/preg_split.rs`; the embedded shim
+`system/preg_match_all.rs`, `system/preg_match_all_capture.rs`,
+`system/preg_replace.rs`, `system/preg_replace_callback.rs`,
+`system/preg_split.rs`; the embedded shim
 source is `src/native_deps/recipes/pcre2_shim.c`.
 
 Generated runtime assembly calls only the versioned
@@ -1143,6 +1144,7 @@ a package.
 | `__rt_preg_match` | Test if a regex matches the subject string. Compiles the pattern, executes once, frees | pattern + subject strings | `x0` = 1 (match) or 0 (no match) |
 | `__rt_preg_match_capture` | Test once and materialize PHP's optional `$matches` array from the shim-reported slot count and fixed offset pairs, omitting trailing unmatched captures while keeping interior unmatched captures as empty strings | pattern + subject strings | match flag plus matches array pointer |
 | `__rt_preg_match_all` | Count all non-overlapping matches by repeatedly executing the regex with advancing offsets | pattern + subject strings | `x0` = match count |
+| `__rt_preg_match_all_capture` | Fill `preg_match_all()`'s by-reference `$matches` for numbered groups. `PREG_PATTERN_ORDER` uses `$matches[group][match]`, `PREG_SET_ORDER` uses `$matches[match][group]`, `PREG_OFFSET_CAPTURE` boxes `[value, offset]`, and `PREG_UNMATCHED_AS_NULL` uses null (offset `-1` with offset capture). Unsupported extra flag bits, or both order bits at once, return count 0 and `[]` | pattern + subject strings + flags | `x0`/`rax` = match count, `x1`/`rdx` = matches array |
 | `__rt_preg_replace` | Replace all regex matches with a replacement string. Builds the result incrementally in the concat buffer and expands `$0`..`$99` / `\0`..`\99` from the PCRE2 capture vector | pattern + replacement + subject | `x1`/`x2` = result string |
 | `__rt_preg_replace_callback` | Replace all regex matches using shim-sized fixed-pair capture storage, building an indexed `$matches` string array, invoking the callback, and appending its string result while preserving concat-buffer state across callback prologues | pattern + callback + subject | `x1`/`x2` = result string |
 | `__rt_preg_split` | Split the subject string at regex match boundaries using shim-sized fixed-pair capture storage. Applies limit, no-empty, delimiter-capture, and offset-capture flags; dynamic flags return boxed Mixed slots to preserve layout | pattern + subject strings, limit, flags | `x0` = array pointer |
