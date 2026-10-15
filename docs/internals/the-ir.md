@@ -518,8 +518,10 @@ ownership marker in `x15` on AArch64 or `r11` on x86_64. A `Call` result with
 restores it after cleanup. Descriptor invokers consume the marker by retaining a
 borrowed result or transferring an owned result into the boxed return cell. This
 is a private compiler protocol; the public C ABI still returns one owned raw
-cell and exposes no ownership marker. Typed string returns keep their dedicated
-persist and ownership-transfer boxing path and do not consume this marker.
+cell and exposes no ownership marker. Typed string returns consume this marker.
+When `php_return_status` is set, `restore_concat_offset_after_nested_call` calls
+`emit_branch_if_owned` for `PhpType::Str`, which tests `x15` on AArch64 and
+`r11` on x86_64.
 
 ## Effects
 
@@ -764,6 +766,29 @@ detaches the selected zval; the ordinary dynamic read clones that cell without m
 All mutating operations must preserve copy-on-write. The builder emits
 `ArrayEnsureUnique`/`HashEnsureUnique` before mutation unless prior ownership
 proofs make it unnecessary.
+
+#### Associative literal spreads
+
+An associative literal that interleaves explicit keys, spreads, and bare values is kept as an
+ordered `ArrayLiteralMixed` entry list until EIR lowering. Lowering allocates the destination
+hash once and visits entries in source order: keyed entries use `HashSet`, spread entries use
+`HashSpread`, and a bare value uses the runtime hash-append path. A bare value after a spread must
+get its integer key at run time because the spread's length is not known while parsing; assigning
+the parser's static cursor could overwrite a key contributed by the spread.
+
+Spreading a hash copies its values in insertion order, preserving string keys and renumbering
+integer keys according to PHP unpacking. Spreading an indexed array first emits `ArrayToHash`,
+which consumes the array reference it receives and first copies each source slot with its
+original runtime value tag. Refcounted payloads are retained and strings are persisted.
+This spread path requests a Mixed-valued result, so `ArrayToHash` then calls
+`__rt_hash_to_mixed`, which boxes each unboxed entry, including scalar values, in a separate
+Mixed cell.
+`HashSpread` then copies that promoted hash into the destination. Lowering always acquires a reference for the
+promotion to consume, so a borrowed source (a local, a global, a property, a static) keeps the
+reference it started with. The promoted hash is released after `HashSpread`, and an owning
+temporary source (a call result, a nested literal) is released too, since nothing else owns it
+once the promotion has consumed the acquired reference. This keeps COW owners intact and avoids
+both double releases and leaked temporary arrays.
 
 `ArrayCloneShallow` also carries the one aliasing case a by-reference builtin cannot
 resolve at runtime: a `$replacement` that IS the receiver. `array_splice($a, 1, 1, $a)`

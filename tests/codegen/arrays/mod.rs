@@ -38,6 +38,7 @@ mod mixed_append_autovivify;
 mod assoc_set_ops;
 mod bare_array_values;
 mod assoc_spread;
+mod assoc_literal_spreads;
 mod widened_signatures;
 mod write_evaluation_order;
 mod float_key_diagnostics;
