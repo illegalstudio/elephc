@@ -953,6 +953,18 @@ pub(super) fn lower_dynamic_property_fetch_from_value(
     let result_type = dynamic_property_get_result_type(ctx, object.value, property, expr);
     let property = lower_expr(ctx, property);
     let property = coerce_runtime_property_name(ctx, property, expr.span);
+    lower_dynamic_property_fetch_from_operands(ctx, object, property, result_type, mode, expr)
+}
+
+/// Fetches a property with an already evaluated name, sharing ordinary getter and ownership rules.
+pub(super) fn lower_dynamic_property_fetch_from_operands(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: LoweredValue,
+    result_type: PhpType,
+    mode: PropertyFetchMode,
+    expr: &Expr,
+) -> LoweredValue {
     let result = ctx.emit_value(
         Op::DynamicPropGet,
         vec![object.value, property.value],

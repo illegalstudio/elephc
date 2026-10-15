@@ -27,7 +27,8 @@ use super::*;
 pub(crate) fn is_static_property_write_chain(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::StaticPropertyAccess { .. } => true,
-        ExprKind::PropertyAccess { object, .. } => is_static_property_write_chain(object),
+        ExprKind::PropertyAccess { object, .. }
+        | ExprKind::DynamicPropertyAccess { object, .. } => is_static_property_write_chain(object),
         ExprKind::ArrayAccess { array, .. } => is_static_property_write_chain(array),
         _ => false,
     }
@@ -52,6 +53,31 @@ pub(crate) fn lower_static_property_write_chain_with_operands(
             Op::Borrow.default_effects(), Some(span));
         ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
         let child = lower_array_access_from_lowered_receiver(ctx, borrowed, index, expr);
+        return capture_static_write_child(ctx, parent, child, span);
+    }
+    if let ExprKind::DynamicPropertyAccess { object, property } = &expr.kind {
+        let mut parent = lower_static_property_write_chain_with_operands(ctx, object, operands, span);
+        let name = lower_expr(ctx, property);
+        let name = property_access::coerce_runtime_property_name(ctx, name, span);
+        parent.narrow_for_dynamic_array(ctx, name, operands, span);
+        let result_type = property_access::dynamic_property_get_result_type(
+            ctx, parent.value.value, property, expr,
+        );
+        // An unknown name can miss even when every declared slot has one concrete type.
+        // Keep that null result representable and guard the next write-context hop.
+        let result_type = if matches!(property.kind, ExprKind::StringLiteral(_)) {
+            result_type
+        } else { nullable_result_type(result_type) };
+        let ty = ctx.builder.value_php_type(parent.value.value);
+        let borrowed = ctx.emit_value(Op::Borrow, vec![parent.value.value], None, ty,
+            Op::Borrow.default_effects(), Some(span));
+        ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+        let pins = pin_in_flight_owners(ctx, &[name.value], span);
+        let child = property_access::lower_dynamic_property_fetch_from_operands(
+            ctx, borrowed, name, result_type, PropertyFetchMode::Read, expr,
+        );
+        unpin_in_flight_owners(ctx, pins, span);
+        crate::ir_lower::ownership::release_if_owned(ctx, name, Some(span));
         return capture_static_write_child(ctx, parent, child, span);
     }
     let ExprKind::PropertyAccess { object, property } = &expr.kind else {

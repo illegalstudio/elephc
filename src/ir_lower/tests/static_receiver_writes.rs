@@ -45,6 +45,8 @@ function writeComputedLeaf(): void { StaticBuckets::$items[0][computedKey()] = r
 function writeComputedCompound(): void { StaticBuckets::$items[computedKey()][0] += replace(); }
 function writeFractionalCompound(): void { StaticBuckets::$items[1.5][0] += replace(); }
 function writeNullChain(): void { R::$nullable->child->v = replace(); }
+function writeDynamicHop(string $name): void { R::$nullable->$name->v = replace(); }
+function writeDynamicHopCompound(string $name): void { R::$nullable->$name->v += replace(); }
 function writeHook(Hook $box): void { C::$o->v = $box->value; }
 function writeHookIndexed(Hook $box): void { C::$o->items[0] = $box->value; }
 function writeHookDynamic(Hook $box, string $name): void { C::$o->$name = $box->value; }
@@ -114,7 +116,7 @@ C::$nullable->items[] = 3;
         std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
     for name in ["write", "writeNested", "writeChild", "writeNull", "writeStaticNested", "writeStaticAppend",
         "writeStaticElement", "writeStaticCompound", "writeStaticNestedElement", "writeInterface", "writeCompoundNull",
-        "writeBareStaticCall"] {
+        "writeBareStaticCall", "writeDynamicHop", "writeDynamicHopCompound"] {
         let function = module.functions.iter().find(|function| function.name == name).unwrap();
         let rhs = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::Call).unwrap();
         let receiver = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::LoadStaticProperty).unwrap();
@@ -137,6 +139,14 @@ C::$nullable->items[] = 3;
                     "{target}: a static-array probe borrows the published class slot");
             }
         }
+    }
+    for name in ["writeDynamicHop", "writeDynamicHopCompound"] {
+        let function = module.functions.iter().find(|function| function.name == name).unwrap();
+        let guard = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::IsNull).unwrap();
+        let read = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::DynamicPropGet).unwrap();
+        assert!(guard < read, "{target}: {name} guards null before its dynamic intermediate read");
+        assert_eq!(function.instructions.iter().filter(|inst|
+            inst.op == crate::ir::Op::DynamicPropGet).count(), 1, "{target}: {name} fetches its dynamic hop once");
     }
     for name in ["writeInterface", "writeCompoundNull"] {
         let function = module.functions.iter().find(|function| function.name == name).unwrap();

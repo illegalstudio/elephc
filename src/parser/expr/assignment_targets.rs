@@ -22,7 +22,8 @@ use crate::span::Span;
 pub(super) fn static_property_receiver_chain(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::StaticPropertyAccess { .. } => true,
-        ExprKind::PropertyAccess { object, .. } => static_property_receiver_chain(object),
+        ExprKind::PropertyAccess { object, .. }
+        | ExprKind::DynamicPropertyAccess { object, .. } => static_property_receiver_chain(object),
         ExprKind::ArrayAccess { array, .. } => static_property_receiver_chain(array),
         _ => false,
     }

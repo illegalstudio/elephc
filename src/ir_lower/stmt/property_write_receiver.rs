@@ -40,6 +40,16 @@ impl PropertyWriteReceiver {
         self.narrow_for_write(ctx, WritePropertyName::Literal(property), "modify", operands, span);
     }
 
+    /// Guards a runtime-name intermediate hop while keeping its name and pending RHS unwind-visible.
+    pub(crate) fn narrow_for_dynamic_array(
+        &mut self, ctx: &mut LoweringContext<'_, '_>, property: LoweredValue,
+        operands: &[crate::ir::ValueId], span: Span,
+    ) {
+        let mut protected = vec![property.value];
+        protected.extend_from_slice(operands);
+        self.narrow_for_write(ctx, WritePropertyName::Runtime(property), "modify", &protected, span);
+    }
+
     /// Guards a direct write after its RHS runs and retires that RHS if the null Error unwinds.
     pub(crate) fn narrow_for_assignment(
         &mut self, ctx: &mut LoweringContext<'_, '_>, property: &str, value: LoweredValue, span: Span,
