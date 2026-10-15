@@ -1613,6 +1613,38 @@ with escaping uses keep their defining block. Merged block definitions receive
 updated placement metadata. Cross-block cascades converge through the fixed-point
 driver.
 
+### Concat Scratch-State Optimization
+
+The concat scratch-state transform (`src/ir_passes/concat_reset.rs`) removes or
+coalesces statement-boundary `concat_reset` instructions when CFG dataflow proves
+`_concat_off` is already at the frame base or post-dominated by a later reset across
+concat-inert operations. Every function prologue captures `_concat_off` into its
+stack frame's `concat_base_offset`, and `concat_reset` rewinds `_concat_off` to that
+frame base; AST-to-EIR lowering already emits `acquire` / `str_persist` for any string
+that outlives a statement before emitting the original statement-boundary `concat_reset`.
+
+The pass runs two greatest-fixed-point analyses over reachable blocks:
+
+1. **Forward clean-state elimination** tracks whether `_concat_off` is guaranteed
+   to equal `concat_base_offset` on entry to each block and across each
+   instruction. Function entry starts clean; `try_push_handler` targets start
+   dirty because exception unwinding can arrive from a dirty statement inside the
+   `try` region; `concat_reset` establishes the clean state; instructions on an
+   audited concat-inert allowlist (scalar and checked arithmetic, destructor-free
+   local/container operations, by-value concrete array iterators, and non-string scalar
+   coercions) preserve it; and any instruction that can allocate, read, modify, or
+   observe concat scratch (including `alloc_concat`, `bool_to_str`, output, user/runtime/extern
+   calls, `eval`, `Mixed`-to-string coercions, and potentially destructor-bearing
+   stores or releases on objects, callables, or resources) marks the state dirty. Any
+   `concat_reset` reached in a clean state is neutralized to `nop`, removing
+   statement-boundary resets inside arithmetic-only and concrete-array loop bodies
+   while keeping any required reset before the loop.
+2. **Backward unobserved-reset coalescing** tracks whether every path from a
+   program point is guaranteed to hit another `concat_reset` before any
+   non-inert instruction, `may_throw` / `may_fatal` instruction, or function exit.
+   An earlier `concat_reset` whose outgoing paths all hit a later reset without
+   intervening observation is neutralized to `nop`.
+
 ### Small-Function Inlining
 
 `src/ir_passes/inline.rs` is a **cross-function**, module-level pass (not a member

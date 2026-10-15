@@ -1390,9 +1390,11 @@ These helpers support `stdClass`, `json_decode()` object results, boxed Mixed pr
 
 ## SPL and iterable routines
 
-**Source:** `src/codegen_support/runtime/spl/` (3 files including `mod.rs`)
+**Source:** `src/codegen_support/runtime/spl/` (4 files: `fixed_array.rs`, `doubly_linked_list.rs`, `offset_convert.rs`, `mod.rs`)
 
 These helpers back SPL container classes whose PHP surface needs custom runtime storage. `SplDoublyLinkedList` (and its `SplStack` / `SplQueue` subclasses) store a class id, an owned indexed array of boxed `Mixed` cells, an iterator index, and iterator-mode bits. `SplFixedArray` stores a class id and a fixed-size storage array of owned boxed `Mixed` cells (or null for unset/null slots). Mutating methods take ownership of the boxed `Mixed` arguments prepared by call lowering, and resize/overwrite paths release any replaced cell first.
+
+`ArrayAccess` offsets for both families funnel through `__rt_spl_offset_convert`, which applies the PHP offset rules of the receiver: a canonical integer string is an index for `SplFixedArray` while the linked-list family weak-coerces any numeric one (mode 0/1/2 selects the family, and mode 2 gives `offsetSet(null)` its own append meaning). A rejected offset answers the receiver's exact `Cannot access offset of type <type>` / `... must be of type ?int` spelling through `__rt_spl_throw_offset_type`; the owned offset box is released before any diagnostic that may dispatch to a user error handler. `_spl_offset_type_rows` and `_spl_fixed_offset_type_prefix` / `_spl_fixed_offset_type_suffix` / `_spl_float_string_prefix` / `_spl_float_string_suffix` hold those spellings and the float-string deprecation words.
 
 ### SplDoublyLinkedList / SplStack / SplQueue
 
@@ -1419,6 +1421,13 @@ These helpers back SPL container classes whose PHP surface needs custom runtime 
 | `__rt_spl_fixed_offset_exists` / `__rt_spl_fixed_offset_get` / `__rt_spl_fixed_offset_set` / `__rt_spl_fixed_offset_unset` | `ArrayAccess` operations with bounds checking |
 | `__rt_spl_fixed_to_array` / `__rt_spl_fixed_from_array` / `__rt_spl_fixed_copy_from_array` | Convert to / build from a PHP array |
 | `__rt_spl_fixed_unserialize` | Serialization helper |
+
+### Shared SPL offset conversion
+
+| Routine | What it does |
+|---|---|
+| `__rt_spl_offset_convert` | Convert a boxed `mixed` offset under the receiver's rules: mode 0 uses `SplFixedArray`'s array-key ones (a canonical integer string is an index), mode 1 the linked-list family's weak `int $index` coercion with null reading as 0, mode 2 the `offsetSet(null)` append form. Answers the converted index or, on rejection, the exact type spelling taken from `_spl_offset_type_rows`; consumes the owned offset box, releasing it before any diagnostic that may reach a user error handler |
+| `__rt_spl_throw_offset_type` | Raise `TypeError` spelling the rejected offset's type: `<prefix><type><suffix>` concatenated, persisted, and thrown as a canonical 56-byte Throwable stamped with `_spl_type_error_class_id`; never returns |
 
 ## Generator routines
 

@@ -27,6 +27,7 @@ use crate::ir::{DataPool, Function, Module};
 use super::branch_simplify::BranchSimplify;
 use super::checked_int_sink::CheckedIntSink;
 use super::checked_numeric_chain::CheckedNumericChain;
+use super::concat_reset::ConcatResetElim;
 use super::const_fold::ConstFold;
 use super::cse::Cse;
 use super::dead_inst::DeadInst;
@@ -80,7 +81,8 @@ pub trait IrPass {
 /// canonical loop optimization, integer range specialization, boxed numeric-chain
 /// fusion, constant folding, common-subexpression elimination, loop-invariant
 /// code motion, dead instruction elimination,
-/// dead store elimination, and branch simplification.
+/// dead store elimination, branch simplification, and concat scratch-state
+/// optimization.
 /// The cross-function small-function inliner is not a member here; it runs as a
 /// module-level phase in `optimize_module`, interleaved with these passes.
 ///
@@ -117,6 +119,7 @@ fn default_passes() -> Vec<Box<dyn IrPass>> {
         Box::new(DeadInst),
         Box::new(DeadStore),
         Box::new(BranchSimplify),
+        Box::new(ConcatResetElim),
     ]
 }
 
@@ -149,14 +152,18 @@ fn default_passes() -> Vec<Box<dyn IrPass>> {
 pub fn optimize_module(module: &mut Module) {
     let passes = default_passes();
 
-    for _ in 0..MAX_MODULE_ITERATIONS {
+    for round in 0..MAX_MODULE_ITERATIONS {
         let mut changed = false;
 
         // Module-level cross-function inliner.
-        changed |= super::inline::inline_small_functions(module);
+        let inlined = super::inline::inline_small_functions(module);
+        changed |= inlined;
         #[cfg(debug_assertions)]
         if let Err(e) = crate::ir::validate_module(module) {
             panic!("inline_small_functions produced invalid module: {:?}", e);
+        }
+        if round > 0 && !inlined {
+            return; // module-level fixed point reached
         }
 
         // Per-function fixed-point passes over every function-like body.

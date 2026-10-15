@@ -1118,7 +1118,7 @@ elephc uses a **free-list allocator with reference counting plus a targeted cycl
 
 ### Unboxing a Mixed hands back a reference
 
-`Op::MixedUnbox` extracts concrete storage from a checked Mixed source. Typed local/property assignment, call-parameter coercion and object-return coercion emit it for their supported payloads. Its lowering ends in `emit_unbox_mixed_to_owned_refcounted_result`, so a refcounted payload carries its own reference rather than borrowing the box's.
+`Op::MixedUnbox` extracts concrete storage from a checked Mixed source. Its callers include typed local/property assignment (`coerce_typed_assign_value`), call-argument and closure coercion, static method-call receivers, typed foreach slots, object-return coercion, and merge temps that retain a `??`-kept `?C` cell as an object or callable (#1628). Its lowering ends in `emit_unbox_mixed_to_owned_refcounted_result`, so a refcounted payload carries its own reference rather than borrowing the box's.
 
 An object return can consume an independent Mixed assignment-result cell, not just borrow a frame local. Return coercion first acquires the object payload and then releases that owned cell. Borrowed parameter/local cells retain their existing frame cleanup instead; releasing them as independent return temporaries would retire the same owner twice.
 

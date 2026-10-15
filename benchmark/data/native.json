@@ -3,7 +3,7 @@
   "suite": "native",
   "branch": "main",
   "sampling": "latest-per-UTC-day-and-platform",
-  "points": 149,
+  "points": 150,
   "series": [
     {
       "date": "2026-04-24",
@@ -20215,12 +20215,12 @@
     },
     {
       "date": "2026-10-13",
-      "timestamp": "2026-10-13T10:19:41Z",
-      "measurement_timestamp": "2026-10-13T10:16:06Z",
-      "commit": "11ed84e6acd8819fac11952f096693d7ee5b5435",
-      "run_id": 38380456489,
+      "timestamp": "2026-10-13T12:42:06Z",
+      "measurement_timestamp": "2026-10-13T12:38:34Z",
+      "commit": "ea49e1b0f1f4ec74910f1ada8a8933409b7fd662",
+      "run_id": 38396942712,
       "run_attempt": 1,
-      "artifact_id": 11803473432,
+      "artifact_id": 11814352110,
       "environment": {
         "runner": "macos-15",
         "os": "Darwin",
@@ -20240,31 +20240,31 @@
           "metadata": {},
           "variants": {
             "elephc": {
-              "median_ms": 16.125208999937968,
+              "median_ms": 21.503958999915085,
               "samples_ms": [
-                24.1499589999421,
-                15.082375000019965,
-                16.125208999937968
+                26.770458999976654,
+                21.503958999915085,
+                16.212167000048794
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "php": {
-              "median_ms": 97.37020800002938,
+              "median_ms": 90.97779199998968,
               "samples_ms": [
-                88.86812499986263,
-                97.37020800002938,
-                100.43925000013587
+                102.6604999999563,
+                83.47529200000281,
+                90.97779199998968
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "c": {
-              "median_ms": 7.515999999895939,
+              "median_ms": 6.285542000000532,
               "samples_ms": [
-                7.515999999895939,
-                8.29733299997315,
-                5.211874999986321
+                6.285542000000532,
+                4.776999999990039,
+                6.669624999972257
               ],
               "skipped": false,
               "detail": "3 runs"
@@ -20277,31 +20277,31 @@
           "metadata": {},
           "variants": {
             "elephc": {
-              "median_ms": 38.09737500000665,
+              "median_ms": 34.36495899995862,
               "samples_ms": [
-                32.6956250000876,
-                38.09737500000665,
-                46.2785409999924
+                34.36495899995862,
+                33.74066700007461,
+                35.471833999963565
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "php": {
-              "median_ms": 116.38587499987807,
+              "median_ms": 86.66333299993312,
               "samples_ms": [
-                116.38587499987807,
-                109.85120800000914,
-                136.18525000015325
+                86.66333299993312,
+                73.61533400001008,
+                98.31437499997264
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "c": {
-              "median_ms": 6.36058400004913,
+              "median_ms": 4.672041000048921,
               "samples_ms": [
-                6.36058400004913,
-                6.8434999998316925,
-                6.295375000036074
+                4.672041000048921,
+                4.844667000043046,
+                4.60641699999087
               ],
               "skipped": false,
               "detail": "3 runs"
@@ -20314,31 +20314,165 @@
           "metadata": {},
           "variants": {
             "elephc": {
-              "median_ms": 24.681957999973747,
+              "median_ms": 28.449582999996892,
               "samples_ms": [
-                24.681957999973747,
-                21.92629199998919,
-                28.41004099991551
+                26.265958999942995,
+                29.748417000064364,
+                28.449582999996892
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "php": {
-              "median_ms": 123.78833299999314,
+              "median_ms": 88.57945799991285,
               "samples_ms": [
-                129.58074999983182,
-                123.78833299999314,
-                93.60495800001445
+                90.73399999999765,
+                81.60812500000247,
+                88.57945799991285
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "c": {
-              "median_ms": 5.491957999993247,
+              "median_ms": 3.786042000001544,
               "samples_ms": [
-                9.99804100001711,
-                5.491957999993247,
-                4.741666999962035
+                4.357415999947989,
+                3.51916700003585,
+                3.786042000001544
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "date": "2026-10-14",
+      "timestamp": "2026-10-14T22:04:36Z",
+      "measurement_timestamp": "2026-10-14T22:00:30Z",
+      "commit": "0dd7acd0c7b2e733f9c8bb9f74450d623ebd4b5a",
+      "run_id": 38642646762,
+      "run_attempt": 1,
+      "artifact_id": 11931134713,
+      "environment": {
+        "runner": "macos-15",
+        "os": "Darwin",
+        "architecture": "arm64",
+        "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "php": "PHP 8.5.11 (cli) (built: Sep 22 2026 13:32:06) (NTS)",
+        "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+        "php_mode": "CLI; OPcache/JIT disabled",
+        "measurement": "process-wall",
+        "iterations": 3,
+        "warmup": 1
+      },
+      "cases": [
+        {
+          "case": "array_sum",
+          "fixture_sha256": "cd5f78e52ebe065976e53310982085e4ac0a2e8ca6dbaedf48bde4a6ff258ec3",
+          "metadata": {},
+          "variants": {
+            "elephc": {
+              "median_ms": 18.997041000034187,
+              "samples_ms": [
+                18.997041000034187,
+                15.154166999991503,
+                25.73258299992176
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "php": {
+              "median_ms": 148.4517499999356,
+              "samples_ms": [
+                153.17804199992224,
+                148.4517499999356,
+                135.59524999993755
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "c": {
+              "median_ms": 4.679124999938722,
+              "samples_ms": [
+                4.400499999974272,
+                4.679124999938722,
+                6.508957999926679
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        },
+        {
+          "case": "string_concat",
+          "fixture_sha256": "8eefa2984accdf0bdfb8f70f0feb7f18e1b1015dc42d175b7cea52e5c4abdfaf",
+          "metadata": {},
+          "variants": {
+            "elephc": {
+              "median_ms": 42.6567920000025,
+              "samples_ms": [
+                42.6567920000025,
+                39.263249999976324,
+                42.9337079999641
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "php": {
+              "median_ms": 86.65250000001379,
+              "samples_ms": [
+                78.18954100002884,
+                86.65250000001379,
+                105.41987499993866
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "c": {
+              "median_ms": 8.530500000006214,
+              "samples_ms": [
+                6.442500000048312,
+                8.530500000006214,
+                8.904250000000502
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        },
+        {
+          "case": "sum_loop",
+          "fixture_sha256": "f86fcb87f6a1fdbe99506038a7d8d3507d1fa7cfc8f9721311907ecc917a9986",
+          "metadata": {},
+          "variants": {
+            "elephc": {
+              "median_ms": 24.358541999959016,
+              "samples_ms": [
+                22.306707999973696,
+                26.722666999944522,
+                24.358541999959016
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "php": {
+              "median_ms": 94.41995899999256,
+              "samples_ms": [
+                94.41995899999256,
+                91.65737500006799,
+                104.6495830000822
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "c": {
+              "median_ms": 5.6757080000124915,
+              "samples_ms": [
+                5.140916999948786,
+                5.6757080000124915,
+                10.59300000008534
               ],
               "skipped": false,
               "detail": "3 runs"

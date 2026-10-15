@@ -20,6 +20,7 @@ mod checked_int_sink;
 mod checked_numeric_chain;
 mod cfg;
 mod clobber;
+mod concat_reset;
 mod const_fold;
 mod cse;
 mod dead_inst;
