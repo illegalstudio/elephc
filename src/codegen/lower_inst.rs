@@ -38,6 +38,7 @@ mod call_argument_unpack;
 mod checked_int_to_int;
 mod checked_numeric_chain;
 mod runtime_functions;
+mod strength_reduction;
 pub(crate) mod builtins;
 pub(in crate::codegen) mod callables;
 mod callable_guards;
@@ -154,6 +155,28 @@ pub(super) use runtime_wrappers::{
 
 const BORROWED_MIXED_ARG_CELL_BYTES: usize = 32;
 
+/// Emits a fused integer compare's flags for its block's `cond_br` and returns the predicate
+/// that holds when the branch's then-edge must be taken.
+pub(super) fn emit_fused_int_compare(
+    ctx: &mut FunctionContext<'_>,
+    inst_id: InstId,
+) -> Result<CmpPredicate> {
+    let inst = ctx
+        .function
+        .instruction(inst_id)
+        .cloned()
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst_id.as_raw()))?;
+    immediate_operands::emit_int_compare(ctx, &inst)
+}
+
+/// Returns the target condition suffix (`lt` / `l`, ...) for an integer compare predicate.
+pub(super) fn int_condition_suffix(arch: Arch, predicate: CmpPredicate) -> Result<&'static str> {
+    match arch {
+        Arch::AArch64 => aarch64_condition(predicate),
+        Arch::X86_64 => x86_64_condition(predicate),
+    }
+}
+
 /// Lowers one EIR instruction by opcode.
 pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) -> Result<()> {
     ctx.begin_instruction(inst_id);
@@ -164,6 +187,10 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst_id.as_raw()))?;
     core_builtins::prepare_backtrace_call_site(ctx, &inst)?;
     if inst.result.is_some_and(|value| ctx.allocation.rematerialized(value).is_some()) {
+        return Ok(());
+    }
+    if ctx.is_fused_compare(inst_id) {
+        // The block's `cond_br` emits this compare and branches on its flags directly.
         return Ok(());
     }
     match inst.op {

@@ -41,6 +41,30 @@ fn operation_asm(target: Target, op: Op, constant: i64, left: bool) -> String {
     generate_user_asm_from_ir(&module, false, false).unwrap()
 }
 
+/// Returns true when some instruction matches `pattern`, where `x*` stands for any one
+/// 64-bit AArch64 register and `r*` for any x86_64 register: allocated operands are read in
+/// place instead of being copied into the result register first.
+fn has_instruction(asm: &str, pattern: &str) -> bool {
+    asm.lines().map(str::trim).any(|line| matches_pattern(line, pattern))
+}
+
+/// Matches one instruction line against a pattern with register wildcards.
+fn matches_pattern(line: &str, pattern: &str) -> bool {
+    let wildcard = [pattern.find("x*"), pattern.find("r*")].into_iter().flatten().min();
+    let Some(at) = wildcard else {
+        return line == pattern;
+    };
+    let (head, tail) = (&pattern[..at], &pattern[at + 2..]);
+    let first = &pattern[at..at + 1];
+    let Some(rest) = line.strip_prefix(head).and_then(|rest| rest.strip_prefix(first)) else {
+        return false;
+    };
+    let register = rest.bytes().take_while(u8::is_ascii_alphanumeric).count();
+    (first == "r" || rest.bytes().take(register).all(|b| b.is_ascii_digit()))
+        && register > 0
+        && matches_pattern(&rest[register..], tail)
+}
+
 /// Checks arithmetic and mask immediates without a standalone constant definition.
 #[test]
 fn rematerialize_integer_assembly_all_targets() {
@@ -49,24 +73,27 @@ fn rematerialize_integer_assembly_all_targets() {
         let arm = target.arch == Arch::AArch64;
         for left in [false, true] {
             let asm = operation_asm(target, Op::IAdd, 4096, left);
-            assert!(asm.contains(if arm { "add x0, x0, #1, lsl #12" } else { "add rax, 4096" }), "{name}: {asm}");
+            assert!(if arm { has_instruction(&asm, "add x0, x*, #1, lsl #12") } else { asm.contains("add rax, 4096") }, "{name}: {asm}");
             assert!(!asm.contains(if arm { "mov x0, #4096" } else { "mov rax, 4096" }), "{asm}");
             let asm = operation_asm(target, Op::IBitAnd, 255, left);
-            assert!(asm.contains(if arm { "and x0, x0, #0xff" } else { "and rax, 255" }), "{name}: {asm}");
+            assert!(if arm { has_instruction(&asm, "and x0, x*, #0xff") } else { asm.contains("and rax, 255") }, "{name}: {asm}");
         }
         for (op, arm_form, x86_form) in [
-            (Op::ISub, "add x0, x0, #7", "sub rax, -7"),
-            (Op::IBitOr, "orr x0, x0, #0xfffffffffffffff9", "or rax, -7"),
+            (Op::ISub, "add x0, x*, #7", "sub rax, -7"),
+            (Op::IBitOr, "orr x0, x*, #0xfffffffffffffff9", "or rax, -7"),
         ] {
             let asm = operation_asm(target, op, -7, false);
-            assert!(asm.contains(if arm { arm_form } else { x86_form }), "{asm}");
+            assert!(if arm { has_instruction(&asm, arm_form) } else { asm.contains(x86_form) }, "{asm}");
         }
         let asm = operation_asm(target, Op::IBitXor, 0x00ff_00ff_00ff_00ff, false);
-        assert!(asm.contains(if arm { "eor x0, x0, #0xff00ff00ff00ff" } else { "xor rax, r10" }), "{name}: {asm}");
+        assert!(if arm { has_instruction(&asm, "eor x0, x*, #0xff00ff00ff00ff") } else { asm.contains("xor rax, r10") }, "{name}: {asm}");
         let asm = operation_asm(target, Op::IAdd, i64::MAX, false);
-        assert!(asm.contains(if arm { "add x0, x0, x10" } else { "add rax, r10" }), "{name}: {asm}");
+        assert!(if arm { has_instruction(&asm, "add x0, x*, x10") } else { asm.contains("add rax, r10") }, "{name}: {asm}");
+        // Profitable constant multiplies are strength-reduced; the rest keep the multiplier.
         let asm = operation_asm(target, Op::IMul, 3, false);
-        assert!(asm.contains(if arm { "mul x0, x0, x10" } else { "imul rax, 3" }), "{name}: {asm}");
+        assert!(asm.contains(if arm { "add x0, x0, x0, lsl #1" } else { "lea rax, [rax + rax*2]" }), "{name}: {asm}");
+        let asm = operation_asm(target, Op::IMul, 11, false);
+        assert!(if arm { has_instruction(&asm, "mul x0, x*, x10") } else { asm.contains("imul rax, 11") }, "{name}: {asm}");
     }
 }
 
@@ -77,11 +104,11 @@ fn rematerialize_comparison_assembly_all_targets() {
         let target = Target::parse(name).unwrap();
         let arm = target.arch == Arch::AArch64;
         let asm = operation_asm(target, Op::ICmp, -4096, true);
-        assert!(asm.contains(if arm { "cmn x0, #1, lsl #12" } else { "cmp rax, -4096" }), "{name}: {asm}");
+        assert!(has_instruction(&asm, if arm { "cmn x*, #1, lsl #12" } else { "cmp r*, -4096" }), "{name}: {asm}");
         assert!(asm.contains(if arm { "cset x0, gt" } else { "setg al" }), "{name}: {asm}");
         for n in [i64::MIN, i64::MAX, 0xffff_ffff] {
             let asm = operation_asm(target, Op::ICmp, n, false);
-            assert!(asm.contains(if arm { "cmp x0, x10" } else { "cmp rax, r10" }), "{name}, {n}: {asm}");
+            assert!(has_instruction(&asm, if arm { "cmp x*, x10" } else { "cmp r*, r10" }), "{name}, {n}: {asm}");
         }
     }
 }
@@ -113,7 +140,7 @@ fn rematerialize_checked_immediate_keeps_overflow_path() {
     }
 }
 
-/// Immediate and register forms use one conditional skip over the cold overflow path.
+/// Immediate and register forms use one not-taken overflow branch into the cold tail.
 #[test]
 fn rematerialize_checked_arithmetic_has_one_fast_path_branch() {
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
@@ -121,25 +148,25 @@ fn rematerialize_checked_arithmetic_has_one_fast_path_branch() {
         for op in [Op::ICheckedAddToInt, Op::ICheckedSubToInt, Op::ICheckedMulToInt] {
             for constant in [3, -3, 0x1234_5678_9abc_def0] {
                 let asm = operation_asm(target, op, constant, false);
-                let skip = match (target.arch, op) {
-                    (Arch::AArch64, Op::ICheckedMulToInt) => "b.eq ",
-                    (Arch::AArch64, _) => "b.vc ",
-                    (Arch::X86_64, _) => "jno ",
+                let enter = match (target.arch, op) {
+                    (Arch::AArch64, Op::ICheckedMulToInt) => "b.ne ",
+                    (Arch::AArch64, _) => "b.vs ",
+                    (Arch::X86_64, _) => "jo ",
                 };
                 let branches: Vec<_> = asm.lines().map(str::trim).filter(|line| {
                     line.contains("checked_int_to_int_") && !line.ends_with(':')
                 }).collect();
-                assert_eq!(branches.len(), 1, "{name}: {asm}");
-                assert!(branches[0].starts_with(skip), "{name}: {asm}");
-                assert!(branches[0].contains("checked_int_to_int_done"), "{name}: {asm}");
-                let cold = asm.lines().position(|line| {
-                    line.contains("checked_int_to_int_overflow") && line.ends_with(':')
+                assert_eq!(branches.len(), 2, "{name}: {asm}");
+                assert!(branches[0].starts_with(enter), "{name}: {asm}");
+                assert!(branches[0].contains("checked_int_to_int_overflow"), "{name}: {asm}");
+                assert!(branches[1].contains("checked_int_to_int_done"), "{name}: {asm}");
+                let label = |prefix: &str| asm.lines().position(|line| {
+                    line.contains(prefix) && line.ends_with(':')
                 }).unwrap();
                 let convert = asm.lines().position(|line| line.contains("__rt_php_float_to_int")).unwrap();
-                let done = asm.lines().position(|line| {
-                    line.contains("checked_int_to_int_done") && line.ends_with(':')
-                }).unwrap();
-                assert!(cold < convert && convert < done, "{name}: {asm}");
+                // The in-range result falls through `done`; the cold conversion lives after it.
+                assert!(label("checked_int_to_int_done") < label("checked_int_to_int_overflow"), "{name}: {asm}");
+                assert!(label("checked_int_to_int_overflow") < convert, "{name}: {asm}");
             }
         }
     }

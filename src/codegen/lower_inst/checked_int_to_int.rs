@@ -6,7 +6,8 @@
 //! - `crate::codegen::lower_inst::lower_instruction()` for `IChecked*ToInt` opcodes.
 //!
 //! Key details:
-//! - One conditional branch skips the cold overflow path; overflow falls through.
+//! - The in-range result falls through; one conditional branch enters the cold overflow path,
+//!   which is deferred to the function's out-of-line tail and jumps back after reporting.
 //! - These opcodes exist because `checked_int_sink` proved every observation of the value is a
 //!   PHP `int`, which is what lets the result live in a raw slot with no Mixed cell.
 //! - That proof is exactly what an overflow breaks. php promotes to float; a raw slot cannot
@@ -72,7 +73,7 @@ pub(super) fn lower_checked_int_to_int(
     let done_label = ctx.next_label("checked_int_to_int_done");
 
     if let Some(usage) = &immediate {
-        emit_immediate_checked(ctx, &usage.encoding, &done_label);
+        emit_immediate_checked(ctx, &usage.encoding, &overflow_label);
     } else {
         match ctx.emitter.target.arch {
             Arch::AArch64 => emit_aarch64_checked(
@@ -81,7 +82,7 @@ pub(super) fn lower_checked_int_to_int(
                 result_reg,
                 rhs_reg,
                 saved_lhs_reg,
-                &done_label,
+                &overflow_label,
             ),
             Arch::X86_64 => emit_x86_64_checked(
                 ctx,
@@ -89,31 +90,60 @@ pub(super) fn lower_checked_int_to_int(
                 result_reg,
                 rhs_reg,
                 saved_lhs_reg,
-                &done_label,
+                &overflow_label,
             ),
         }
     }
-
-    ctx.emitter.label(&overflow_label);
-    // `Immediate::Bool(true)` means an explicit `(int)` cast observed this value, and php's own
-    // answer there is the promoted double converted back to an int. Anything else means the
-    // narrowing came from a raw int SLOT, where php would have kept the float — so the program
-    // stops rather than print a number php never produces.
-    if matches!(inst.immediate, Some(Immediate::Bool(true))) {
-        if let Some(usage) = &immediate {
-            load_integer_operand(ctx, inst.operands[usage.constant_index], rhs_reg, inst)?;
-        }
-        emit_overflow_conversion(ctx, op, saved_lhs_reg, rhs_reg);
-        abi::emit_php_float_to_int(ctx.emitter, result_reg);
-    } else {
-        emit_int_overflow_fatal(ctx);
-    }
     ctx.emitter.label(&done_label);
+
+    let constant_index = immediate.as_ref().map(|usage| usage.constant_index);
+    ctx.emit_cold_path(|ctx| {
+        ctx.emitter.label(&overflow_label);
+        // `Immediate::Bool(true)` means an explicit `(int)` cast observed this value, and php's
+        // own answer there is the promoted double converted back to an int. Anything else means
+        // the narrowing came from a raw int SLOT, where php would have kept the float — so the
+        // program stops rather than print a number php never produces.
+        if matches!(inst.immediate, Some(Immediate::Bool(true))) {
+            if let Some(index) = constant_index {
+                load_integer_operand(ctx, inst.operands[index], rhs_reg, inst)?;
+            }
+            emit_overflow_conversion(ctx, op, saved_lhs_reg, rhs_reg);
+            abi::emit_php_float_to_int(ctx.emitter, result_reg);
+        } else {
+            emit_int_overflow_fatal(ctx);
+        }
+        abi::emit_jump(ctx.emitter, &done_label);
+        Ok(())
+    })?;
     store_if_result(ctx, inst)
 }
 
+/// Branches to the cold overflow path when the signed-overflow condition holds.
+///
+/// AArch64 uses the wide form (`b.<ok> 1f; b overflow; 1:`) so the deferred cold tail stays
+/// reachable in any function size; the machine peephole folds it into one `b.<overflow>` when
+/// the function is small enough. `ok` / `overflow` are AArch64 conditions, `x86_jump` the
+/// x86_64 jcc mnemonic.
+pub(super) fn emit_overflow_branch(
+    ctx: &mut FunctionContext<'_>,
+    ok: &str,
+    x86_jump: &str,
+    overflow: &str,
+) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("b.{ok} 1f"));                     // keep the in-range result on the fallthrough path
+            ctx.emitter.instruction(&format!("b {overflow}"));                  // enter the out-of-line overflow path
+            ctx.emitter.label("1");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("{x86_jump} {overflow}"));         // enter the out-of-line overflow path
+        }
+    }
+}
+
 /// Uses overflow-setting immediate forms and reconstructs no right operand on the fast path.
-fn emit_immediate_checked(ctx: &mut FunctionContext<'_>, immediate: &IntImmediate, done: &str) {
+fn emit_immediate_checked(ctx: &mut FunctionContext<'_>, immediate: &IntImmediate, overflow: &str) {
     let reg = abi::int_result_reg(ctx.emitter);
     let saved = abi::tertiary_scratch_reg(ctx.emitter);
     // -- retain the original input for PHP overflow promotion --
@@ -121,23 +151,22 @@ fn emit_immediate_checked(ctx: &mut FunctionContext<'_>, immediate: &IntImmediat
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("{}s {reg}, {reg}, {}", immediate.mnemonic, immediate.operand)); // compute the scalar result with signed overflow flags
-            ctx.emitter.instruction(&format!("b.vc {done}"));                   // skip overflow reconstruction and conversion when the result fits
         }
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!("{} {reg}, {}", immediate.mnemonic, immediate.operand)); // compute the scalar result with signed overflow flags
-            ctx.emitter.instruction(&format!("jno {done}"));                    // skip overflow reconstruction and conversion when the result fits
         }
     }
+    emit_overflow_branch(ctx, "vc", "jo", overflow);
 }
 
-/// Emits the AArch64 scalar fast path, falling through only when overflow occurs.
+/// Emits the AArch64 scalar fast path, branching to `overflow_label` only on overflow.
 fn emit_aarch64_checked(
     ctx: &mut FunctionContext<'_>,
     op: CheckedIntOp,
     result_reg: &str,
     rhs_reg: &str,
     saved_lhs_reg: &str,
-    done_label: &str,
+    overflow_label: &str,
 ) {
     // -- compute the scalar result and detect signed overflow --
     ctx.emitter.instruction(&format!("mov {}, {}", saved_lhs_reg, result_reg)); // preserve the original left operand for overflow promotion
@@ -146,13 +175,13 @@ fn emit_aarch64_checked(
             ctx.emitter.instruction(
                 &format!("adds {}, {}, {}", result_reg, result_reg, rhs_reg)
             );                                                                  // compute addition and set the signed-overflow flag
-            ctx.emitter.instruction(&format!("b.vc {}", done_label));           // keep the scalar result when signed addition did not overflow
+            emit_overflow_branch(ctx, "vc", "jo", overflow_label);
         }
         CheckedIntOp::Sub => {
             ctx.emitter.instruction(
                 &format!("subs {}, {}, {}", result_reg, result_reg, rhs_reg)
             );                                                                  // compute subtraction and set the signed-overflow flag
-            ctx.emitter.instruction(&format!("b.vc {}", done_label));           // keep the scalar result when signed subtraction did not overflow
+            emit_overflow_branch(ctx, "vc", "jo", overflow_label);
         }
         CheckedIntOp::Mul => {
             let high_reg = abi::symbol_scratch_reg(ctx.emitter);
@@ -165,19 +194,19 @@ fn emit_aarch64_checked(
             ctx.emitter.instruction(
                 &format!("cmp {}, {}, asr #63", high_reg, result_reg)
             );                                                                  // compare the high product with the low half's sign extension
-            ctx.emitter.instruction(&format!("b.eq {}", done_label));           // keep the scalar result when the signed product fits in I64
+            emit_overflow_branch(ctx, "eq", "jne", overflow_label);
         }
     }
 }
 
-/// Emits the x86_64 scalar fast path, falling through only when overflow occurs.
+/// Emits the x86_64 scalar fast path, branching to `overflow_label` only on overflow.
 fn emit_x86_64_checked(
     ctx: &mut FunctionContext<'_>,
     op: CheckedIntOp,
     result_reg: &str,
     rhs_reg: &str,
     saved_lhs_reg: &str,
-    done_label: &str,
+    overflow_label: &str,
 ) {
     // -- compute the scalar result and detect signed overflow --
     ctx.emitter.instruction(&format!("mov {}, {}", saved_lhs_reg, result_reg)); // preserve the original left operand for overflow promotion
@@ -189,7 +218,7 @@ fn emit_x86_64_checked(
     ctx.emitter.instruction(
         &format!("{} {}, {}", mnemonic, result_reg, rhs_reg)
     );                                                                          // compute the scalar result and set the signed-overflow flag
-    ctx.emitter.instruction(&format!("jno {}", done_label));                    // keep the scalar result when signed arithmetic did not overflow
+    emit_overflow_branch(ctx, "vc", "jo", overflow_label);
 }
 
 /// Reports an integer overflow the narrowed slot cannot represent, and exits.

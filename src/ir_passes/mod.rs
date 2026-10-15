@@ -53,6 +53,8 @@ pub use dominance::{compute_dominance, DominanceInfo};
 pub use driver::optimize_module;
 pub use intervals::{build_intervals, LiveInterval};
 pub use liveness::{compute_liveness, LivenessInfo};
+pub(crate) use cfg::successors;
+pub(crate) use liveness::terminator_uses;
 pub use loops::{compute_loops, LoopInfo, NaturalLoop};
 pub use regalloc::allocate_registers;
 pub use rematerialize::ScalarConstant;
