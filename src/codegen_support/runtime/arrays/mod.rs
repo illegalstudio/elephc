@@ -112,6 +112,7 @@ mod array_walk_boxed;
 mod array_walk_recursive;
 mod asort;
 mod assoc_diff_intersect;
+mod hash_value_diff_intersect;
 mod decref_any;
 mod decref_array;
 mod decref_hash;
@@ -415,6 +416,7 @@ pub use array_walk_recursive::emit_array_walk_recursive;
 pub use asort::emit_asort;
 /// Emit associative sort helper.
 pub use assoc_diff_intersect::emit_assoc_diff_intersect;
+pub use hash_value_diff_intersect::emit_hash_value_diff_intersect;
 /// Emit associative diff/intersect helper (array_diff_assoc / array_intersect_assoc).
 pub use decref_any::emit_decref_any;
 /// Emit generic reference decrement helper.

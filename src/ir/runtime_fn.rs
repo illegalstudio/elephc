@@ -1223,16 +1223,20 @@ impl RuntimeFnId {
                     & !crate::ir::Effects::BLOCKING_IO.bits()
                     & !crate::ir::Effects::NETWORK_IO.bits(),
             ),
+            // Value-set comparisons may invoke user __toString methods, warn, or throw.
+            RuntimeFnId::ArrayDiff | RuntimeFnId::ArrayDiffAssoc |
+            RuntimeFnId::ArrayIntersect | RuntimeFnId::ArrayIntersectAssoc =>
+                crate::ir::Effects::from_bits_retain(
+                    crate::ir::Effects::all().bits()
+                        & !crate::ir::Effects::BLOCKING_IO.bits()
+                        & !crate::ir::Effects::NETWORK_IO.bits(),
+                ),
             RuntimeFnId::Abs |
             RuntimeFnId::Acos |
             RuntimeFnId::ArrayColumn |
             RuntimeFnId::ArrayCombine |
-            RuntimeFnId::ArrayDiff |
-            RuntimeFnId::ArrayDiffAssoc |
             RuntimeFnId::ArrayDiffKey |
             RuntimeFnId::ArrayFillKeys |
-            RuntimeFnId::ArrayIntersect |
-            RuntimeFnId::ArrayIntersectAssoc |
             RuntimeFnId::ArrayIntersectKey |
             RuntimeFnId::ArrayIsList |
             RuntimeFnId::ArrayKeyExists |
@@ -2396,6 +2400,14 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayColumn
                 | RuntimeFnId::ArrayCombine
                 | RuntimeFnId::ArrayDiff
+                // The key and assoc set operations build their result with `__rt_hash_new`,
+                // exactly like `array_diff`/`array_intersect`, so it never aliases an operand.
+                // In the default `MayAliasArguments` bucket an owned literal operand was never
+                // released: `array_diff_key([5 => 1, 6 => 2], [5 => 0])` leaked 4 blocks a call.
+                | RuntimeFnId::ArrayDiffAssoc
+                | RuntimeFnId::ArrayDiffKey
+                | RuntimeFnId::ArrayIntersectAssoc
+                | RuntimeFnId::ArrayIntersectKey
                 | RuntimeFnId::ArrayFill
                 | RuntimeFnId::ArrayFillKeys
                 // Every `array_flip` lowering allocates its destination table before writing a

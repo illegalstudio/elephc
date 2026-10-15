@@ -1450,9 +1450,15 @@ fn materialize_hash_concrete_value_aarch64(
             ctx.emitter.instruction("mov x3, xzr");                             // null associative-array payloads use a zero low word
             ctx.emitter.instruction("mov x4, xzr");                             // null associative-array payloads use a zero high word
         }
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float => {
+        PhpType::Int | PhpType::Bool | PhpType::Float => {
             ctx.load_value_to_reg(value, "x3")?;
             ctx.emitter.instruction("mov x4, xzr");                             // scalar associative-array payloads leave the high value word empty
+        }
+        PhpType::Callable => {
+            ctx.load_value_to_result(value)?;
+            retain_hash_refcounted_value_if_borrowed(ctx, value, value_ty)?;
+            ctx.emitter.instruction("mov x3, x0");                              // pass the retained callable descriptor as the hash value low word
+            ctx.emitter.instruction("mov x4, xzr");                             // callable descriptors leave the high value word empty
         }
         PhpType::Str => {
             ctx.load_string_value_to_regs(value, "x1", "x2")?;
@@ -1487,9 +1493,15 @@ fn materialize_hash_concrete_value_x86_64(
             ctx.emitter.instruction("xor rcx, rcx");                            // null associative-array payloads use a zero low word
             ctx.emitter.instruction("xor r8, r8");                              // null associative-array payloads use a zero high word
         }
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float => {
+        PhpType::Int | PhpType::Bool | PhpType::Float => {
             ctx.load_value_to_reg(value, "rcx")?;
             ctx.emitter.instruction("xor r8, r8");                              // scalar associative-array payloads leave the high value word empty
+        }
+        PhpType::Callable => {
+            ctx.load_value_to_result(value)?;
+            retain_hash_refcounted_value_if_borrowed(ctx, value, value_ty)?;
+            ctx.emitter.instruction("mov rcx, rax");                            // pass the retained callable descriptor as the hash value low word
+            ctx.emitter.instruction("xor r8, r8");                              // callable descriptors leave the high value word empty
         }
         PhpType::Str => {
             ctx.load_string_value_to_regs(value, "rax", "rdx")?;
