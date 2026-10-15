@@ -688,6 +688,7 @@ src/
 ├── runtime_cache.rs     # Preassembled runtime object cache
 ├── source_map.rs        # Assembly/source-map sidecar emission
 ├── monitor/             # Exact, sampled, local, remote, service, and export profiling
+├── repl/                # Interactive eval session: parsing, cached native host, and history
 ├── call_graph.rs        # Profiling call-graph aggregation and DOT/HTML rendering
 ├── pprof_encode.rs      # Profiling export in pprof protobuf form
 ├── probe_key.rs         # Monitoring build-key creation and validation

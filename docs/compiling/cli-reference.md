@@ -462,9 +462,9 @@ Elephc CLI process, not a signed iOS application bundle.
 
 | Flag | Values | Default | Env override | Description |
 |---|---|---|---|---|
-| `--ir-opt=on\|off` | `on`, `off` | `on` | `ELEPHC_IR_OPT` | Toggle the EIR optimization passes: identity folding, peepholes, constant folding, common-subexpression elimination, loop-invariant code motion, dead-instruction elimination, dead-store elimination, branch simplification, and the cross-function small-function inliner — run to a module-level fixed point. |
+| `--ir-opt=on\|off` | `on`, `off` | `on` | `ELEPHC_IR_OPT` | Toggle the EIR optimization passes in `src/ir_passes/`, including scalar promotion, canonical loop optimization, integer range analysis, concat scratch-state optimization, and the cross-function small-function inliner, run to a module-level fixed point. |
 | `--no-ir-opt` | — | — | `ELEPHC_IR_OPT=off` | Shorthand for `--ir-opt=off`. |
-| `--regalloc=linear\|stack` | `linear`, `stack` | `linear` | `ELEPHC_REGALLOC` | Register allocator: linear-scan, or stack-only fallback. |
+| `--regalloc=linear\|stack` | `linear`, `stack` | `linear` | `ELEPHC_REGALLOC` | Register allocator: linear-scan with cost-aware constant rematerialization, or stack-only fallback. |
 | `--null-repr=sentinel\|tagged` | `sentinel`, `tagged` | `tagged` | `ELEPHC_NULL_REPR` | Representation for null-capable scalar slots. |
 
 See [Optimization and codegen controls](optimization.md).

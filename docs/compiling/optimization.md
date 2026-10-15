@@ -349,6 +349,20 @@ The fourteenth registered pass simplifies the control-flow graph:
 Functions that use exception handling are skipped, because their handler blocks
 are reachable through implicit edges that the terminator graph does not show.
 
+### Concat scratch-state optimization
+
+The fifteenth registered pass (`src/ir_passes/concat_reset.rs`) removes or
+coalesces statement-boundary `concat_reset` operations when dataflow proves no
+scratch string can be live or consumed between resets. A forward analysis drops
+a reset that already finds `_concat_off` at the frame's `concat_base_offset`.
+A backward analysis drops an earlier reset when every outgoing path reaches a
+later reset before any instruction can allocate, read, or observe concat
+scratch, throw, or leave the function.
+
+Calls, output, `eval`, exception-handler entries, and stores or releases that
+may run a destructor stay barriers. Arithmetic-only and concrete-array loops
+can lose redundant resets inside the body while keeping one before the loop.
+
 ### Small-function inlining
 
 As part of the module-level fixed point, a cross-function pass inlines calls to small
@@ -402,7 +416,12 @@ for the cost model and the exact patterns.
 
 The EIR backend uses a linear-scan register allocator (Poletto–Sarkar) by
 default, keeping hot scalar values in registers across calls instead of spilling
-them to the stack on every use.
+them to the stack on every use. Scalar constants use reconstruction recipes:
+cheap values are rebuilt at each use, including as a target-legal immediate,
+and a constant stays in a register only when its estimated loop savings exceed
+materialization and live-range cost. `--regalloc=stack` keeps backing slots as
+a diagnostic baseline. See
+[Scalar Constants and Immediate Operands](../internals/the-codegen.md#scalar-constants-and-immediate-operands).
 
 ```bash
 # Default: linear-scan registers

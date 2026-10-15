@@ -5,6 +5,28 @@ Releases are listed newest first.
 
 ## [Unreleased]
 
+## [0.27.3] - 2026-10-15
+
+- Added `elephc repl`, an interactive PHP session driven by `eval()` that keeps variables, references, functions, classes, and constants between submissions, with multiline input, line editing, history, and a cached native host.
+- Added native generic declarations and PHPDoc templates to `eval()` and the REPL for functions, classes, interfaces, traits, methods, and constructors, using the same inference, bounds, defaults, variance, and typed array and callable rules as ahead-of-time compilation.
+- Added by-reference `$matches` for `preg_match_all()`, including `PREG_PATTERN_ORDER`, `PREG_SET_ORDER`, `PREG_OFFSET_CAPTURE`, and `PREG_UNMATCHED_AS_NULL`.
+- Improved canonical EIR loops by sharing equivalent induction variables, hoisting invariant bounds, and simplifying loop tests and back edges.
+- Improved scalar code by rematerializing constants and using target-legal immediate operands when that is cheaper than a spill slot.
+- Improved string building by dropping redundant concat scratch resets when later code cannot observe that storage.
+- Improved native code with late target-aware instruction selection: profitable constant multiplies lower to shifts and adds, integer tests branch on compare flags, redundant moves and jumps are removed, and checked-overflow paths are placed after hot blocks.
+- Security: updated the bundled `rustls` dependency from 0.23.45 to 0.23.46, closing RUSTSEC-2026-0346, RUSTSEC-2026-0347, RUSTSEC-2026-0348, and RUSTSEC-2026-0349.
+- Fixed a spread inside an associative array literal, which the parser dropped, so `[...$values, "key" => $value]` keeps the spread entries and does not free the source array.
+- Fixed `$value ??= new C()` and `$value ?? null` so a nullable object or callable stays a real value instead of crashing or reading the wrong cell.
+- Fixed `SplFixedArray`, `SplDoublyLinkedList`, `SplStack`, and `SplQueue` offsets to follow PHP numeric-string, float, and null rules, and to name the rejected type.
+- Fixed `var_dump()`, `print_r()`, and `var_export()` hiding the private compiler slots of builtin Reflection classes, including on user subclasses.
+- Fixed `eval()` callbacks written as `[$object, 'method']` leaking the receiver after the call.
+- Fixed `eval()` reference replacement and element writeback so alias and cursor metadata stay on the live value, and a failed constructor releases the partial object without running its destructor.
+- Fixed fresh `SplStack` values so offset 0 is the top of the stack.
+- Fixed a `mixed` receiver storing a matching value into an untyped property whose storage was refined from its default.
+- Fixed `elephc monitor` frame names for generators and namespaced declarations.
+- Fixed Linux x86_64 array helpers retaining copied heap elements in `rdi` while `__rt_incref` reads `rax`, which could free a value the result still referenced.
+- Fixed Linux x86_64 `stream_context_set_option()` so a nested options array is retained from `rax`, the register `__rt_incref` reads.
+
 ## [0.27.2] - 2026-10-08
 
 - Added compile-time generics for functions, classes, interfaces, methods, and traits, with inference, bounds, defaults, variance, typed arrays and callables, and PHPDoc template support; `--strict-php` accepts PHPDoc templates and rejects native generic syntax.
@@ -747,7 +769,8 @@ Releases are listed newest first.
 ## [0.1.0] - 2026-03-22
 - Initial compiler: echo, variables, integers, arithmetic and string concatenation, comparison operators, control flow (`if`/`while`/`for`/`break`/`continue`), functions, logical/assignment/increment operators.
 
-[Unreleased]: https://github.com/illegalstudio/elephc/compare/v0.27.2...HEAD
+[Unreleased]: https://github.com/illegalstudio/elephc/compare/v0.27.3...HEAD
+[0.27.3]: https://github.com/illegalstudio/elephc/compare/v0.27.2...v0.27.3
 [0.27.2]: https://github.com/illegalstudio/elephc/compare/v0.27.1...v0.27.2
 [0.27.1]: https://github.com/illegalstudio/elephc/compare/v0.27.0...v0.27.1
 [0.27.0]: https://github.com/illegalstudio/elephc/compare/v0.26.6...v0.27.0
