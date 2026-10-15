@@ -31,7 +31,7 @@ pub(super) fn lower_store(
         ctx.emit_void(Op::RuntimeCall, vec![parent.value, key.value, value.value], None,
             effects_lookup::runtime_effects(), Some(span));
     });
-    guard_scalar_parent(ctx, parent, span);
+    guard_scalar_parent(ctx, parent, None, span);
     ctx.emit_void(Op::RuntimeCall, vec![parent.value, key.value, value.value], None,
         effects_lookup::runtime_effects(), Some(span));
     retire_owner(ctx, key_owner, span);
@@ -57,7 +57,7 @@ pub(super) fn lower_append(
         ctx.emit_void(Op::MixedArrayAppend, vec![parent.value, value.value], None,
             Op::MixedArrayAppend.default_effects(), Some(span));
     });
-    guard_scalar_parent(ctx, parent, span);
+    guard_scalar_parent(ctx, parent, None, span);
     ctx.emit_void(Op::MixedArrayAppend, vec![parent.value, value.value], None,
         Op::MixedArrayAppend.default_effects(), Some(span));
     retire_owner(ctx, parent_owner, span);
@@ -66,8 +66,25 @@ pub(super) fn lower_append(
 }
 
 /// Rejects non-array scalar parents after false conversion, leaving string-offset handling intact.
-fn guard_scalar_parent(ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, span: Span) {
+fn guard_scalar_parent(
+    ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue,
+    string_error: Option<&str>, span: Span,
+) {
     if ctx.builder.value_php_type(parent.value).codegen_repr() != PhpType::Mixed { return; }
+    if let Some(message) = string_error {
+        let string = ctx.emit_value(Op::TypePredicate, vec![parent.value],
+            Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::String)), PhpType::Bool,
+            Op::TypePredicate.default_effects(), Some(span));
+        let invalid = ctx.builder.create_named_block("nested.store.string.error", Vec::new());
+        let non_string = ctx.builder.create_named_block("nested.store.non-string", Vec::new());
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: string.value, then_target: invalid, then_args: Vec::new(),
+            else_target: non_string, else_args: Vec::new(),
+        });
+        ctx.builder.position_at_end(invalid);
+        lower_throw_access_error(ctx, message, span);
+        ctx.builder.position_at_end(non_string);
+    }
     let boolean = ctx.emit_value(Op::TypePredicate, vec![parent.value],
         Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Bool)), PhpType::Bool,
         Op::TypePredicate.default_effects(), Some(span));
@@ -106,7 +123,7 @@ pub(super) fn fetch_parent(
         ctx.emit_void(Op::RuntimeCall, vec![receiver.value, key.value, null.value], None,
             effects_lookup::runtime_effects(), Some(span));
     });
-    guard_scalar_parent(ctx, receiver, span);
+    guard_scalar_parent(ctx, receiver, Some("Cannot use string offset as an array"), span);
     let child = ctx.emit_value(Op::RuntimeCall, vec![receiver.value, key.value],
         Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
         PhpType::Mixed, effects_lookup::runtime_effects(), Some(span));

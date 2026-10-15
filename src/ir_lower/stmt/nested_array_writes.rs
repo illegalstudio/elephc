@@ -20,7 +20,7 @@ pub(super) fn lower_nested_array_assign(
     let update = desugared_element_update(value, span, |read| read == target);
     if let Some(ElementUpdate::NullCoalesce { read, default }) = update {
         let mut snapshots = Vec::new();
-        let (read, write) = snapshot_nested_update_keys(ctx, read, &mut snapshots);
+        let (read, write) = snapshot_nested_update_keys(ctx, read, &mut snapshots, false);
         crate::ir_lower::expr::lower_null_coalesce_update_stmt_to(ctx, &read, &write, default, span);
         retire_update_keys(ctx, snapshots, span);
         return;
@@ -42,7 +42,7 @@ pub(super) fn lower_nested_array_assign(
             *right = Box::new(super::nested_write_sources::capture(ctx, right, &mut sources));
         }
         let mut snapshots = Vec::new();
-        let (read, write) = snapshot_nested_update_keys(ctx, &target, &mut snapshots);
+        let (read, write) = snapshot_nested_update_keys(ctx, &target, &mut snapshots, true);
         if let Some((read, write)) = bind_concrete_static_update_root(ctx, &read, &write) {
             lower_boxed_static_nested_update(ctx, &read, &write, update.unwrap(), &value, value.span);
         } else if nested_static_root_is_boxed(ctx, &target)
@@ -115,12 +115,16 @@ fn snapshot_nested_update_keys(
     ctx: &mut LoweringContext<'_, '_>,
     target: &Expr,
     snapshots: &mut Vec<String>,
+    capture_bare_variables: bool,
 ) -> (Expr, Expr) {
     let ExprKind::ArrayAccess { array, index } = &target.kind else {
         return (target.clone(), target.clone());
     };
-    let (read_array, write_array) = snapshot_nested_update_keys(ctx, array, snapshots);
-    if matches!(index.kind, ExprKind::IntLiteral(_) | ExprKind::StringLiteral(_)) {
+    let (read_array, write_array) =
+        snapshot_nested_update_keys(ctx, array, snapshots, capture_bare_variables);
+    if matches!(index.kind, ExprKind::IntLiteral(_) | ExprKind::StringLiteral(_))
+        || (!capture_bare_variables && matches!(index.kind, ExprKind::Variable(_)))
+    {
         return (
             Expr::new(ExprKind::ArrayAccess { array: Box::new(read_array), index: index.clone() }, target.span),
             Expr::new(ExprKind::ArrayAccess { array: Box::new(write_array), index: index.clone() }, target.span),

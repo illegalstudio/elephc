@@ -143,7 +143,7 @@ set_error_handler(function(int $level, string $message): bool { echo $level, '|'
 D::$items[0][0][$key] ??= ($key = 2);
 echo json_encode(D::$items), ':', $key;
 restore_error_handler(); D::$items = [];
-"#, r#"8192|[[{"1":2}]]:2"#);
+"#, r#"8192|[[{"2":2}]]:2"#);
 }
 
 /// Coalescing key selection remains stable without optimization.
@@ -210,4 +210,141 @@ write(0); write(1.5);
 #[test]
 fn test_nested_write_eleventh_review_scalar_fetch_and_append_no_ir_opt() {
     without_ir_opt(test_nested_write_eleventh_review_scalar_fetch_and_append);
+}
+
+/// Boxed Mixed and union float keys report their PHP value instead of raw payload bits.
+#[test]
+fn test_nested_write_twelfth_review_boxed_float_key_diagnostics() {
+    assert_write(r#"<?php
+function mixedKey(): mixed { return 0.5; }
+function unionKey(): int|float { return 0.5; }
+function updateMixed(mixed $key): void {
+    $items = [[false]];
+    $items[$key][0][1] += 4;
+    echo json_encode($items), '|';
+}
+function updateUnion(int|float $key): void {
+    $items = [[false]];
+    $items[$key][0][1] += 4;
+    echo json_encode($items), '|';
+}
+set_error_handler(function(int $level, string $message): bool {
+    echo $level, ':', $message, '|'; return true;
+});
+updateMixed(mixedKey()); updateUnion(unionKey());
+restore_error_handler();
+"#, "8192:Implicit conversion from float 0.5 to int loses precision|8192:Automatic conversion of false to array is deprecated|2:Undefined array key 1|[[{\"1\":4}]]|".repeat(2).as_str());
+}
+
+/// Boxed float-key diagnostics remain value-correct without EIR optimization.
+#[test]
+fn test_nested_write_twelfth_review_boxed_float_key_diagnostics_no_ir_opt() {
+    without_ir_opt(test_nested_write_twelfth_review_boxed_float_key_diagnostics);
+}
+
+/// Boxed integer keys report the integer payload in missing-key diagnostics.
+#[test]
+fn test_nested_write_twelfth_review_boxed_integer_key_diagnostics() {
+    assert_write(r#"<?php
+function mixedKey(): mixed { return 0; }
+function unionKey(): int|float { return 0; }
+function updateMixed(mixed $key): void {
+    $items = [[false]]; ++$items[$key][0][1]; echo json_encode($items), '|';
+}
+function updateUnion(int|float $key): void {
+    $items = [[false]]; ++$items[$key][0][1]; echo json_encode($items), '|';
+}
+set_error_handler(function(int $level, string $message): bool {
+    echo $level, ':', $message, '|'; return true;
+});
+updateMixed(mixedKey()); updateUnion(unionKey());
+restore_error_handler();
+"#, "8192:Automatic conversion of false to array is deprecated|2:Undefined array key 1|[[{\"1\":1}]]|".repeat(2).as_str());
+}
+
+/// Boxed integer-key diagnostics remain value-correct without EIR optimization.
+#[test]
+fn test_nested_write_twelfth_review_boxed_integer_key_diagnostics_no_ir_opt() {
+    without_ir_opt(test_nested_write_twelfth_review_boxed_integer_key_diagnostics);
+}
+
+/// A string used as an intermediate parent throws instead of silently dropping the write.
+#[test]
+fn test_nested_write_twelfth_review_string_intermediate_parent() {
+    assert_write(r#"<?php
+function write(mixed $parent): void {
+    $items = [[$parent]]; $copy = $items;
+    try { $items[0][0][1][2] = 9; }
+    catch (Error $error) { echo $error->getMessage(), ':'; }
+    echo json_encode($items), ':', json_encode($copy);
+    unset($items, $copy, $error);
+}
+write('abc');
+"#, "Cannot use string offset as an array:[[\"abc\"]]:[[\"abc\"]]");
+}
+
+/// Intermediate string-parent errors remain catchable without EIR optimization.
+#[test]
+fn test_nested_write_twelfth_review_string_intermediate_parent_no_ir_opt() {
+    without_ir_opt(test_nested_write_twelfth_review_string_intermediate_parent);
+}
+
+/// Compound and incdec updates convert statically false local elements in write context.
+#[test]
+fn test_nested_write_twelfth_review_static_false_updates() {
+    assert_write(r#"<?php
+$items = [false, false]; $copy = $items;
+set_error_handler(function(int $level, string $message): bool { echo $level, '|'; return true; });
+$items[0][1] += 4;
+++ $items[1][1];
+echo json_encode($items), ':', json_encode($copy);
+restore_error_handler(); unset($items, $copy);
+"#, r#"8192|2|8192|2|[{"1":4},{"1":1}]:[false,false]"#);
+}
+
+/// Statically false local updates compile and run without EIR optimization.
+#[test]
+fn test_nested_write_twelfth_review_static_false_updates_no_ir_opt() {
+    without_ir_opt(test_nested_write_twelfth_review_static_false_updates);
+}
+
+/// False-or-null write parents retain both legal autovivification paths.
+#[test]
+fn test_nested_write_twelfth_review_false_null_union_parent() {
+    assert_write(r#"<?php
+function parentValue(int $which): false|null { return $which ? false : null; }
+$items = [parentValue(1), parentValue(0)]; $copy = $items;
+set_error_handler(function(int $level, string $message): bool { echo $level, '|'; return true; });
+$items[0][1] = 9;
+$items[1][1] = 8;
+echo json_encode($items), ':', json_encode($copy);
+restore_error_handler(); unset($items, $copy);
+"#, r#"8192|[{"1":9},{"1":8}]:[false,null]"#);
+}
+
+/// False-or-null write parents remain accepted without EIR optimization.
+#[test]
+fn test_nested_write_twelfth_review_false_null_union_parent_no_ir_opt() {
+    without_ir_opt(test_nested_write_twelfth_review_false_null_union_parent);
+}
+
+/// Local nested incdec uses null and string value rules instead of arithmetic assignment.
+#[test]
+fn test_nested_write_twelfth_review_local_incdec_semantics() {
+    assert_write(r#"<?php
+$items = [[null, 'az']];
+set_error_handler(function(int $level, string $message): bool {
+    echo $level, ':', $message, '|'; return true;
+});
+--$items[0][0];
+++$items[0][1];
+echo json_encode($items);
+restore_error_handler(); unset($items);
+"#, "[[null,\"ba\"]]");
+}
+
+/// Local nested incdec semantics remain correct without EIR optimization.
+#[test]
+fn test_nested_write_twelfth_review_local_incdec_semantics_no_ir_opt() {
+    without_ir_opt(test_nested_write_twelfth_review_local_incdec_semantics);
 }
