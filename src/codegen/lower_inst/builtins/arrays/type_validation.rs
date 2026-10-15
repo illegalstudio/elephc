@@ -64,23 +64,25 @@ pub(super) fn eight_byte_callback_value_type(ty: PhpType, name: &str) -> Result<
     }
 }
 
-/// Stores the void sentinel, boxing it when the EIR builtin result slot is Mixed-like.
-pub(super) fn store_void_builtin_result(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
-    );
+/// Stores php's `true`, boxing it when the EIR builtin result slot is Mixed-like.
+///
+/// The in-place array builtins — every sort, `shuffle`, `array_walk` — answer `true` in php, and
+/// used to store the VOID SENTINEL here. That was invisible while the registry declared them
+/// `Void`, and it would not have stayed invisible: the sentinel is non-zero, so `var_dump` would
+/// have printed `bool(true)` by accident while `sort($a) === true` answered false.
+pub(super) fn store_true_builtin_result(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
     if inst.result.is_some()
         && matches!(
             inst.result_php_type.codegen_repr(),
             PhpType::Mixed | PhpType::Union(_)
         )
     {
-        emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Void);
+        emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
     }
     store_if_result(ctx, inst)
 }
+
 
 /// Returns the indexed-array slot type produced by the selected `array_map()` runtime helper.
 pub(super) fn array_map_callback_result_element_type(return_ty: &PhpType) -> Result<PhpType> {

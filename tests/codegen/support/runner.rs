@@ -1774,3 +1774,78 @@ pub(crate) fn assemble_and_run_expect_failure(
     combined.push_str(&String::from_utf8(output.stderr).unwrap());
     combined
 }
+
+/// The V8 flag that ungates WebAssembly's exception-handling proposal on an engine that has it
+/// but has not stabilized it.
+///
+/// The wasm32-wasi backend emits the FINAL encoding — `try_table` with an `exnref` catch clause —
+/// so a module whose program contains a `try` needs the proposal enabled. Node stabilized it at
+/// some point between the versions a developer may have installed, and an engine that gates it
+/// rejects the module at COMPILE time with `Invalid opcode 0x1f (enable with
+/// --experimental-wasm-exnref)`. The flag names the proposal the module already uses.
+const WASM_EXNREF_FLAG: &str = "--experimental-wasm-exnref";
+
+/// The extra arguments every `node` this suite spawns is given, probed once.
+///
+/// The probe asks whether the engine ACCEPTS the flag, not whether it needs it: an engine with
+/// the proposal on by default still takes it as a no-op, while one that dropped the flag rejects
+/// it — and passing a flag the engine does not know is a startup error on every run, which is
+/// the failure mode this avoids. `node --<flag> -e "0"` exits zero exactly when the flag is
+/// understood.
+///
+/// Probed rather than assumed because the alternative is a parity number that silently tracks
+/// whichever node is installed: the same example corpus scored nine fewer matches on an engine
+/// that gates the proposal, with no change to the compiler.
+fn node_extra_args() -> &'static [&'static str] {
+    static ARGS: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+    ARGS.get_or_init(|| {
+        let accepted = Command::new("node")
+            .arg(WASM_EXNREF_FLAG)
+            .arg("-e")
+            .arg("0")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false);
+        if accepted {
+            vec![WASM_EXNREF_FLAG]
+        } else {
+            Vec::new()
+        }
+    })
+}
+
+/// A `node` command already carrying whatever this engine needs to run an elephc module.
+///
+/// Every spawn in the codegen suite goes through here — including the `--version` probes, for
+/// which the extra arguments are inert — so no test has to know which proposals its program
+/// reaches or which engine is installed.
+pub(crate) fn node_command() -> Command {
+    let mut command = Command::new("node");
+    command.args(node_extra_args());
+    command
+}
+
+/// Reports whether `node` cannot be started, printing the skip reason when it cannot.
+///
+/// With `ELEPHC_TEST_REQUIRE_WASM_HOSTS` set (CI installs both hosts and sets it) a missing
+/// `node` fails the test instead.
+///
+/// The WASM tests compile first and only then run the module under `node`; returning silently
+/// without it would let them pass as if they had checked the output. The message names the
+/// running test so a skipped run is visible with `--nocapture` and in a failing-job log.
+pub(crate) fn node_missing_skips_test() -> bool {
+    if node_command().arg("--version").output().is_ok() {
+        return false;
+    }
+    let thread = std::thread::current();
+    let test = thread.name().unwrap_or("<unnamed test>");
+    assert!(
+        std::env::var_os("ELEPHC_TEST_REQUIRE_WASM_HOSTS").is_none(),
+        "{test}: `node` cannot be started although ELEPHC_TEST_REQUIRE_WASM_HOSTS is set"
+    );
+    eprintln!(
+        "SKIPPED {test}: `node` is not installed or not on PATH, so the compiled wasm32-wasi \
+         module was not executed"
+    );
+    true
+}

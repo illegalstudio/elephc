@@ -87,6 +87,11 @@ pub(super) fn lower_static_array_push(
             expr.span,
         );
     }
+    // A statement-position `array_push($a, $v);` — the common form, whose value nothing reads —
+    // answers null and pays for neither the reload nor the length read below.
+    if ctx.expression_result_is_discarded(expr.span) {
+        return Some(super::scalar_literals::lower_null(ctx, expr));
+    }
     // PHP returns the new element count. Reading it from the final array rather than tracking it
     // across the appends also gives the value-less form its answer for free.
     let array_value = ctx.load_local(array_name, Some(args[0].span));

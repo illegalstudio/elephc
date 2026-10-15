@@ -1,0 +1,54 @@
+{
+  "$schema": "elephc.wasm-php-oracle-matrix.v1",
+  "id": "float_edges",
+  "shard": 1,
+  "description": "NaN, infinity, and positive/negative zero strict identity observations.",
+  "logical_args": [
+    "float",
+    "-0"
+  ],
+  "stdin_base64": "",
+  "preamble": "$oraclePositiveZero = 0.0;\n$oracleNegativeZero = -0.0;\n$oracleNan = NAN;",
+  "cases": [
+    {
+      "id": "float_nan_not_identical",
+      "type": "bool",
+      "expression": "$oracleNan !== $oracleNan"
+    },
+    {
+      "id": "float_nan_identical",
+      "type": "bool",
+      "expression": "$oracleNan === $oracleNan"
+    },
+    {
+      "id": "float_signed_zero_identical",
+      "type": "bool",
+      "expression": "$oraclePositiveZero === $oracleNegativeZero"
+    },
+    {
+      "id": "float_signed_zero_not_identical",
+      "type": "bool",
+      "expression": "$oraclePositiveZero !== $oracleNegativeZero"
+    },
+    {
+      "id": "float_nan_infinity_cross",
+      "type": "bool",
+      "expression": "$oracleNan !== INF"
+    },
+    {
+      "id": "float_infinity_sign_cross",
+      "type": "bool",
+      "expression": "INF !== -INF"
+    },
+    {
+      "id": "float_infinity_identity",
+      "type": "bool",
+      "expression": "INF === INF"
+    },
+    {
+      "id": "float_negative_infinity_cross",
+      "type": "bool",
+      "expression": "-INF !== INF"
+    }
+  ]
+}

@@ -241,10 +241,16 @@ pub(in crate::ir_lower) fn array_access_expr_value_type_for_ir(
     .codegen_repr();
     match array_ty {
         PhpType::Array(elem_ty) => {
-            Some(array_access_element_result_type(normalize_value_php_type(*elem_ty).codegen_repr()))
+            Some(array_access_element_result_type(
+                ctx,
+                normalize_value_php_type(*elem_ty).codegen_repr(),
+            ))
         }
         PhpType::AssocArray { value, .. } => {
-            Some(array_access_element_result_type(normalize_value_php_type(*value).codegen_repr()))
+            Some(array_access_element_result_type(
+                ctx,
+                normalize_value_php_type(*value).codegen_repr(),
+            ))
         }
         PhpType::Str => Some(PhpType::Str),
         PhpType::Mixed | PhpType::Union(_) => Some(PhpType::Mixed),

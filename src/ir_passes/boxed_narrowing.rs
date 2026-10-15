@@ -48,7 +48,8 @@ pub(super) fn blocked_results(function: &Function, scalar: IrType) -> HashSet<Va
 fn accepts_scalar(function: &Function, user: &Instruction, scalar: IrType) -> bool {
     match user.op {
         Op::Cast => matches!(user.immediate,
-            Some(Immediate::CastTarget(IrType::I64 | IrType::F64 | IrType::Str))),
+            Some(Immediate::CastTarget(IrType::I64 | IrType::F64 | IrType::Str)
+                | Immediate::ExplicitCastTarget(IrType::I64 | IrType::F64 | IrType::Str))),
         Op::StoreLocal | Op::InitStaticLocal | Op::StoreRefCell => {
             let Some(Immediate::LocalSlot(slot)) = user.immediate else { return false; };
             let Some(local) = function.locals.get(slot.as_raw() as usize) else { return false; };

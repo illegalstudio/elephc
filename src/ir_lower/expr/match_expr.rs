@@ -36,6 +36,7 @@ pub(super) fn lower_match(
                 Op::StrictEq.default_effects(),
                 Some(expr.span),
             );
+            release_binary_operand_temporary(ctx, condition, expr.span);
             ctx.builder.terminate(Terminator::CondBr {
                 cond: matched.value,
                 then_target: result_block,
@@ -48,6 +49,7 @@ pub(super) fn lower_match(
         }
         ctx.builder.position_at_end(result_block);
         store_expr_into_temp(ctx, &temp_name, result_type.clone(), result, expr.span);
+        release_binary_operand_temporary(ctx, subject, expr.span);
         branch_to(ctx, merge);
         if let Some(fallthrough) = fallthrough {
             ctx.builder.position_at_end(fallthrough);
@@ -55,8 +57,10 @@ pub(super) fn lower_match(
     }
     if let Some(default) = default {
         store_expr_into_temp(ctx, &temp_name, result_type.clone(), default, expr.span);
+        release_binary_operand_temporary(ctx, subject, expr.span);
         branch_to(ctx, merge);
     } else if !ctx.builder.insertion_block_is_terminated() {
+        release_binary_operand_temporary(ctx, subject, expr.span);
         let message = ctx.intern_string("Fatal error: unhandled match case\n");
         ctx.builder.terminate(Terminator::Fatal { message });
     }

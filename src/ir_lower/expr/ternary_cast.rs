@@ -75,7 +75,7 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
     let result = ctx.emit_value(
         Op::Cast,
         vec![value.value],
-        Some(Immediate::CastTarget(value_ir_type(&php_type))),
+        Some(Immediate::ExplicitCastTarget(value_ir_type(&php_type))),
         php_type,
         Op::Cast.default_effects(),
         Some(expr.span),

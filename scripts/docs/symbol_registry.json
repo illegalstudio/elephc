@@ -21646,6 +21646,60 @@
       },
       "bundled": true,
       "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "SEEK_CUR",
+      "route": "predefined",
+      "since": null,
+      "value": 1
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "SEEK_END",
+      "route": "predefined",
+      "since": null,
+      "value": 2
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "SEEK_SET",
+      "route": "predefined",
+      "since": null,
+      "value": 0
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
         "reason": "eval-implementation-pending",
         "supported": false
       },

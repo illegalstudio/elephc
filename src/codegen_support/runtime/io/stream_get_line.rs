@@ -172,6 +172,13 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     emit_symbol_address(emitter, "x9", "_eof_flags");
     emitter.instruction("mov w10, #1");                                         // EOF marker value
     emitter.instruction("strb w10, [x9, x0]");                                  // record EOF for this descriptor
+    // Reaching EOF with NOTHING gathered is php's `false`, and it is only distinguishable
+    // from a genuine empty line here: an empty line stops at a DELIMITER and keeps its
+    // (non-null) reservation pointer. A null pointer carries `false` to the caller the same
+    // way `__rt_getenv` reports an absent variable.
+    emitter.instruction("ldr x2, [sp, #56]");                                   // bytes gathered so far
+    emitter.instruction("cbnz x2, __rt_stream_get_line_done");                  // some bytes: an ordinary line
+    emitter.instruction("str xzr, [sp, #48]");                                  // no bytes at EOF: null pointer = false
 
     emitter.label("__rt_stream_get_line_done");
     emitter.instruction("ldr x1, [sp, #48]");                                   // return the result start pointer
@@ -323,6 +330,14 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the file descriptor
     abi::emit_symbol_address(emitter, "r10", "_eof_flags");                     // eof-flag table base address
     emitter.instruction("mov BYTE PTR [r10 + r9], 1");                          // record EOF for this descriptor
+    // Reaching EOF with NOTHING gathered is php's `false`, and it is only distinguishable
+    // from a genuine empty line here: an empty line stops at a DELIMITER and keeps its
+    // (non-null) reservation pointer. A null pointer carries `false` to the caller the same
+    // way `__rt_getenv` reports an absent variable.
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // bytes gathered so far
+    emitter.instruction("test rdx, rdx");                                       // did the line gather anything?
+    emitter.instruction("jne __rt_stream_get_line_done_x86");                   // some bytes: an ordinary line
+    emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // no bytes at EOF: null pointer = false
 
     emitter.label("__rt_stream_get_line_done_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // return the result start pointer

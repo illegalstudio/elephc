@@ -135,19 +135,57 @@ fn strict_scalar_kind(ty: &PhpType) -> Option<StrictScalar> {
     }
 }
 
-/// Reports why `declare(strict_types=1)` forbids binding `actual` to a declared `expected`
-/// parameter, or `None` when PHP performs the binding in strict mode too.
+/// The typed write a strict-mode rejection is about, which decides the `TypeError` php throws.
+///
+/// The three sites share one rule and three messages. Quoting the wrong one would send a reader
+/// looking for a diagnostic php never prints, so the site travels with the check.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum StrictBindingSite {
+    /// A declared parameter: `f(): Argument #1 ($x) must be of type int, bool given`.
+    Parameter,
+    /// A declared return type: `f(): Return value must be of type int, bool returned`.
+    ReturnValue,
+    /// A typed property: `Cannot assign bool to property C::$v of type int`.
+    Property,
+}
+
+impl StrictBindingSite {
+    /// Renders php's own `TypeError` text and the cast advice for this site.
+    fn advice(self, expected: &str, actual: &str) -> String {
+        match self {
+            StrictBindingSite::Parameter => format!(
+                "throws `TypeError: ... must be of type {expected}, {actual} given`; add an \
+                 explicit `({expected})` cast at the call site"
+            ),
+            StrictBindingSite::ReturnValue => format!(
+                "throws `TypeError: ... Return value must be of type {expected}, {actual} \
+                 returned`; add an explicit `({expected})` cast to the returned expression"
+            ),
+            StrictBindingSite::Property => format!(
+                "throws `TypeError: Cannot assign {actual} to property ... of type {expected}`; \
+                 add an explicit `({expected})` cast to the assigned value"
+            ),
+        }
+    }
+}
+
+/// Reports why `declare(strict_types=1)` forbids writing `actual` into a declared `expected`
+/// slot, or `None` when PHP performs the same write in strict mode too.
 ///
 /// PHP keeps exactly one implicit conversion under the directive — widening `int` to a declared
 /// `float` — and throws `TypeError` for every other scalar pair, including the `bool`→`int`,
 /// `int`→`string` and numeric-string→`int` conversions its coercive mode performs silently.
 /// Verified against PHP 8.4.20 for the full 4x4 scalar matrix.
 ///
+/// The rule is the same at all three typed writes php applies it to — a parameter, a declared
+/// return type, and a typed property — which is why `site` changes only the message.
+///
 /// Returns `None` for any pair involving a non-scalar declared type: strict mode does not change
 /// how those bind, so the caller's normal compatibility rules stay in charge.
 pub(crate) fn strict_param_binding_rejection(
     expected: &PhpType,
     actual: &PhpType,
+    site: StrictBindingSite,
 ) -> Option<String> {
     let expected_kind = strict_scalar_kind(expected)?;
     let actual_kind = strict_scalar_kind(actual)?;
@@ -159,11 +197,8 @@ pub(crate) fn strict_param_binding_rejection(
     }
     Some(format!(
         "`declare(strict_types=1)` is active in this file, so PHP performs no conversion here \
-         and throws `TypeError: ... must be of type {}, {} given`; add an explicit `({})` cast \
-         at the call site",
-        expected_kind.php_name(),
-        actual_kind.php_name(),
-        expected_kind.php_name()
+         and {}",
+        site.advice(expected_kind.php_name(), actual_kind.php_name())
     ))
 }
 
@@ -499,7 +534,9 @@ mod tests {
         ];
         for expected in &scalars {
             for actual in &scalars {
-                let accepted = strict_param_binding_rejection(expected, actual).is_none();
+                let accepted =
+                    strict_param_binding_rejection(expected, actual, StrictBindingSite::Parameter)
+                        .is_none();
                 let should_accept = expected == actual
                     || (*expected == PhpType::Float && *actual == PhpType::Int);
                 assert_eq!(
@@ -515,32 +552,68 @@ mod tests {
     /// arrays, unions, `callable` and class types keep the acceptance rules they already had.
     #[test]
     fn strict_types_ignores_non_scalar_declarations() {
-        assert!(strict_param_binding_rejection(&PhpType::Mixed, &PhpType::Int).is_none());
-        assert!(strict_param_binding_rejection(&PhpType::Int, &PhpType::Mixed).is_none());
-        assert!(strict_param_binding_rejection(&PhpType::Callable, &PhpType::Str).is_none());
+        let site = StrictBindingSite::Parameter;
+        assert!(strict_param_binding_rejection(&PhpType::Mixed, &PhpType::Int, site).is_none());
+        assert!(strict_param_binding_rejection(&PhpType::Int, &PhpType::Mixed, site).is_none());
+        assert!(strict_param_binding_rejection(&PhpType::Callable, &PhpType::Str, site).is_none());
         assert!(strict_param_binding_rejection(
             &PhpType::Array(Box::new(PhpType::Int)),
-            &PhpType::Str
+            &PhpType::Str,
+            site
         )
         .is_none());
         assert!(strict_param_binding_rejection(
             &PhpType::Union(vec![PhpType::Int, PhpType::Str]),
-            &PhpType::Bool
+            &PhpType::Bool,
+            site
         )
         .is_none());
         // `false` is a subtype of `bool`, not a distinct scalar for binding purposes.
-        assert!(strict_param_binding_rejection(&PhpType::Bool, &PhpType::False).is_none());
+        assert!(strict_param_binding_rejection(&PhpType::Bool, &PhpType::False, site).is_none());
     }
 
     /// Verifies the strict diagnostic names PHP's `TypeError` types and suggests the cast that
     /// makes the call legal, so the message is actionable rather than just a refusal.
+    ///
+    /// One rule, three messages: php throws a differently worded `TypeError` at a parameter, at a
+    /// declared return type, and at a typed property, and quoting the wrong one would send a
+    /// reader looking for a diagnostic php never prints.
     #[test]
     fn strict_types_diagnostic_names_the_php_type_error() {
-        let detail = strict_param_binding_rejection(&PhpType::Int, &PhpType::Str)
-            .expect("string into int is rejected under strict_types");
+        let detail = strict_param_binding_rejection(
+            &PhpType::Int,
+            &PhpType::Str,
+            StrictBindingSite::Parameter,
+        )
+        .expect("string into int is rejected under strict_types");
         assert!(detail.contains("declare(strict_types=1)"), "{}", detail);
         assert!(detail.contains("must be of type int, string given"), "{}", detail);
         assert!(detail.contains("`(int)` cast"), "{}", detail);
+
+        let returned = strict_param_binding_rejection(
+            &PhpType::Int,
+            &PhpType::Bool,
+            StrictBindingSite::ReturnValue,
+        )
+        .expect("bool out of an int return is rejected under strict_types");
+        assert!(
+            returned.contains("Return value must be of type int, bool returned"),
+            "{}",
+            returned
+        );
+
+        let assigned = strict_param_binding_rejection(
+            &PhpType::Int,
+            &PhpType::Bool,
+            StrictBindingSite::Property,
+        )
+        .expect("bool into an int property is rejected under strict_types");
+        assert!(
+            assigned.contains("Cannot assign bool to property"),
+            "{}",
+            assigned
+        );
+        assert!(assigned.contains("of type int"), "{}", assigned);
     }
 
     /// Verifies a scalar bound to `string` becomes an explicit `(string)` cast, which is the

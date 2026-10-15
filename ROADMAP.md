@@ -1162,10 +1162,13 @@ real-world validation rather than by speculative pass work.
 
 ## v0.30.x — WebAssembly target
 
-- [ ] WASM codegen backend
-- [ ] `.wat` / `.wasm` emission
-- [ ] WASI support for I/O
-- [ ] NPM package generation
+- [x] WASM codegen backend
+- [x] `.wat` / `.wasm` emission
+- [x] WASI support for I/O
+- [x] NPM package generation
+
+The target remains experimental. How to use it, and what it supports today, is
+described in [`docs/specs/wasm-compliance.md`](docs/specs/wasm-compliance.md).
 
 ## Deferred ideas
 

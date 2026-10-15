@@ -4,3 +4,5 @@ main
 *.jpg
 *.jpeg
 *.png
+*.wasm
+*.wat

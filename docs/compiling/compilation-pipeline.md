@@ -44,12 +44,12 @@ Physical source (.php or .lfc)
   -> typecheck          Type checking, generic specialization, and warnings
   -> exports-scan       collect #[Export] functions (cdylib)
   -> opt-prop           AST constant propagation
-  -> opt-post           prune constant control flow
-  -> opt-norm           control-flow normalization
-  -> dce                AST dead-code elimination
+  -> opt-post           prune constant control flow (native targets)
+  -> opt-norm           control-flow normalization (native targets)
+  -> dce                AST dead-code elimination (native targets)
   -> decl-reach         drop unreachable functions, classes, and methods
   -> ir-lower           AST -> EIR lowering + EIR validation
-  -> ir-opt             EIR optimization passes (fixed-point driver)
+  -> ir-opt             EIR optimization passes (native targets)
   -> ir-print           print EIR and stop (with --emit-ir)
   -> codegen            EIR -> target assembly
   -> write-asm          write the generated assembly
@@ -115,8 +115,13 @@ before EIR lowering. It remains conservative around `eval`, dynamic calls,
 `unserialize`, and Reflection. The forced preludes `--with-pdo`, `--with-mysqli`,
 `--with-tz`, and `--with-image` are roots; `--web` keeps only the web surface
 reachable from its bootstrap and user program. See
-[The Optimizer](../internals/the-optimizer.md). These always run; they are not
-behind a flag.
+[The Optimizer](../internals/the-optimizer.md).
+
+Constant folding and propagation run for every target. The current
+`wasm32-wasi` path deliberately skips **opt-post**, **opt-norm**, and **dce** so
+its capability audit observes every PHP diagnostic and coercion boundary before
+deciding whether the target can lower it; native targets always run those three
+passes, and they are not behind a flag.
 
 ## Back end: EIR and code generation
 
@@ -124,7 +129,8 @@ behind a flag.
   intermediate representation, then validated once for structural, type,
   dominance, ownership, and effect invariants. See
   [The EIR Design](../internals/the-ir.md).
-- **ir-opt** — the [EIR optimization passes](optimization.md#eir-optimization-passes)
+- **ir-opt** — on native targets, the
+  [EIR optimization passes](optimization.md#eir-optimization-passes)
   run a fixed-point driver over each function: identity arithmetic folding,
   local peephole rewrites, scalar local promotion, immutable-local load classification, checked-integer
   sinking, integer range and induction-variable analysis, boxed checked-numeric
@@ -134,21 +140,25 @@ behind a flag.
   elimination, and branch simplification. In
   debug/test builds the function is re-validated after every pass. This phase
   can be turned off with [`--no-ir-opt`](optimization.md#eir-optimization-passes).
+  `wasm32-wasi` currently keeps unoptimized EIR for the same capability-audit
+  reason, regardless of `--ir-opt`.
 - **ir-print** — only present with [`--emit-ir`](output-and-diagnostics.md#--emit-ir);
   formats the optimized or unoptimized EIR textual form, prints it to stdout,
   and stops before runtime preparation or code generation.
-- **codegen** — EIR is lowered to target assembly through the default backend.
-  See [The Code Generator](../internals/the-codegen.md).
+- **codegen** — native EIR is lowered to target assembly through the default
+  backend. `wasm32-wasi` instead produces, assembles, and validates WAT/WASM in
+  memory, then publishes the requested WebAssembly artifacts. See
+  [The Code Generator](../internals/the-codegen.md).
 - **write-asm / source-map** — the generated assembly and optional source-map
   sidecar are materialized before runtime-object preparation.
-- **runtime-cache** — the hand-written runtime is assembled once and cached in
-  `~/.cache/elephc/`, then reused across compiles. See
+- **runtime-cache** — for native targets, the hand-written runtime is assembled
+  once and cached in `~/.cache/elephc/`, then reused across compiles. See
   [The Runtime](../internals/the-runtime.md).
 
 ## Tail: assemble and link
 
-The generated assembly is written out and assembled into an object file. Only
-on a final-link path, logical [managed native
+For native targets, generated assembly is written out and assembled into an
+object file. Only on a final-link path, logical [managed native
 requirements](native-dependencies.md) are resolved read-only from the project
 lock and verified cache receipts. Those exact archives, the cached runtime
 object, bridge inputs, and any [extra
@@ -156,6 +166,11 @@ libraries](linking-and-conditional-compilation.md) become one typed ordered link
 plan for the final binary. This resolution does not install or repair packages
 and is folded into the untimed setup immediately before the `assemble`/`link`
 timing labels.
+
+The `wasm32-wasi` target ([Targets](targets.md#webassembly-partial-parity))
+bypasses this native `as`/`ld` tail entirely. Instead of emitting native
+assembly, the `src/codegen_wasm` backend emits a WebAssembly module
+(`.wat`/`.wasm`) from the same EIR, so no system assembler or linker runs.
 
 ## Inspecting intermediate stages
 

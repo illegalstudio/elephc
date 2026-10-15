@@ -31,7 +31,7 @@ builtin! {
 /// key type: `Int` for an indexed array, the declared key type for an associative one. An
 /// unannotated closure parameter inherits that type; explicit declarations stay
 /// authoritative. Arity (exactly 2) is pre-validated by the registry.
-/// Returns `Ok(PhpType::Void)`.
+/// Returns `Ok(PhpType::Bool)`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     let key_ty = crate::types::checker::builtins::array_key_type(&arr_ty);
@@ -45,5 +45,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         cx.env,
         &label,
     )?;
-    Ok(PhpType::Void)
+    Ok(PhpType::Bool)
 }

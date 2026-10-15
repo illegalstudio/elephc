@@ -13,6 +13,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
+use crate::codegen_support::platform::Target;
 use crate::ir::{
     BlockId, Builder, DataId, DataPool, Effects, Function, Immediate, IrType, LocalKind,
     LocalSlotId, Op, Ownership, ValueId,
@@ -250,6 +251,7 @@ const EVAL_ARGV_LOCAL_NAME: &str = "argv";
 pub(crate) struct LoweringContext<'m, 'f> {
     pub builder: Builder<'f>,
     pub data: &'m mut DataPool,
+    pub target: Target,
     pub local_slots: HashMap<String, LocalSlotId>,
     pub local_kinds: HashMap<String, LocalKind>,
     pub local_types: TypeEnv,
@@ -374,6 +376,17 @@ pub(crate) struct LoweringContext<'m, 'f> {
     array_conversions: HashMap<String, PhpType>,
     /// Whether the current statement lowering is a disposable discovery pass.
     speculating: bool,
+    /// The span of the expression whose value its STATEMENT discards, while it is being lowered.
+    ///
+    /// A SPAN rather than a flag, because "this statement throws its value away" says nothing
+    /// about the sub-expressions inside it: `var_dump(array_push($a, 9) === 2);` discards
+    /// `var_dump`'s result, and the push's value is very much read. Only the node whose own span
+    /// matches may skip producing a value.
+    ///
+    /// Only a builtin whose answer costs something to produce consults this — `array_push` has to
+    /// re-read the array's length to answer php's new count, and `array_push($a, $v);` in
+    /// statement position would otherwise pay for a value nothing reads.
+    discarded_result_span: Option<Span>,
     pub return_type: IrType,
     pub return_php_type: PhpType,
     /// `true` when the function SOURCE declares a return type, as opposed to one inferred
@@ -414,6 +427,23 @@ pub(crate) struct LoweringContext<'m, 'f> {
 }
 
 impl<'m, 'f> LoweringContext<'m, 'f> {
+    /// Runs `body` with `span` marked as the expression whose value its statement discards.
+    pub(crate) fn lowering_discarded_result<T>(
+        &mut self,
+        span: Span,
+        body: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let previous = std::mem::replace(&mut self.discarded_result_span, Some(span));
+        let produced = body(self);
+        self.discarded_result_span = previous;
+        produced
+    }
+
+    /// Whether the expression at `span` is the one its statement throws away.
+    pub(crate) fn expression_result_is_discarded(&self, span: Span) -> bool {
+        self.discarded_result_span == Some(span)
+    }
+
     /// Creates a lowering context over one function builder and shared module data.
     pub(crate) fn new(
         builder: Builder<'f>,
@@ -452,6 +482,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         in_main: bool,
         all_global_var_names: HashSet<String>,
         source_path: Option<String>,
+        target: Target,
         web: bool,
     ) -> Self {
         // All decision maps are keyed BY SPAN and consulted at every `unset` argument and every
@@ -480,6 +511,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         Self {
             builder,
             data,
+            target,
             local_slots: HashMap::new(),
             local_kinds: HashMap::new(),
             local_types: env,
@@ -532,6 +564,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             foreach_int_key_locals: HashSet::new(),
             array_conversions: HashMap::new(),
             speculating: false,
+            discarded_result_span: None,
             return_type,
             return_php_type,
             return_type_is_declared: false,
@@ -1510,7 +1543,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     .get(name)
                     .copied()
                     .unwrap_or(LocalKind::PhpLocal);
-                (kind == LocalKind::PhpLocal
+                (matches!(kind, LocalKind::PhpLocal | LocalKind::ClosureCapture)
                     && !crate::names::is_generated_local_name(name))
                 .then_some((name.clone(), *slot))
             })
@@ -1526,7 +1559,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 .get(&name)
                 .copied()
                 .unwrap_or(LocalKind::PhpLocal);
-            if kind == LocalKind::PhpLocal
+            if matches!(kind, LocalKind::PhpLocal | LocalKind::ClosureCapture)
                 && !crate::names::is_generated_local_name(&name)
                 && eval_barrier_can_widen(&ty)
             {
@@ -1595,7 +1628,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let widen_names = write_names
             .iter()
             .filter(|name| {
-                self.local_kinds.get(*name).copied() == Some(LocalKind::PhpLocal)
+                self.local_kinds
+                    .get(*name)
+                    .copied()
+                    .is_some_and(|kind| {
+                        matches!(kind, LocalKind::PhpLocal | LocalKind::ClosureCapture)
+                    })
                     && self
                         .local_slots
                         .get(*name)
@@ -2129,6 +2167,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             );
         let store_retains_value = uses_global
             || previous_kind == LocalKind::PhpLocal
+            || previous_kind == LocalKind::ClosureCapture
             || static_local_store_needs_string_retain;
         // Retain before cleanup because a borrowed result can alias the old slot.
         let value = if store_retains_value
@@ -2155,6 +2194,29 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         } else {
             value
         };
+        // A by-value capture normally holds the DESCRIPTOR's borrow until its first
+        // reassignment, which is why its kind is excluded from plain store cleanup: releasing
+        // there would free a value the descriptor still owns.
+        //
+        // That stops being true when the slot's FRAME storage outgrows the type the capture was
+        // declared with. The prologue then MATERIALIZES a fresh Mixed cell from the borrowed
+        // value — `frame.rs` calls it `converted_to_owned_mixed` and skips the parameter retain
+        // for exactly that reason — so the slot owns an allocation and this store overwrites it.
+        // Without a release here the cell and the string it persisted leaked once per CALL.
+        //
+        // Whether the prologue boxed is only settled once every store in the body has widened the
+        // slot, and the first store can be the one that has not widened it yet. So the decision
+        // is left to `lower_release_local_slot`, which reads the FINAL frame type and skips a
+        // capture the prologue did not box.
+        if !uses_global && previous_kind == LocalKind::ClosureCapture && !is_ref_bound {
+            self.emit_void(
+                Op::ReleaseLocalSlot,
+                Vec::new(),
+                Some(Immediate::LocalSlot(slot)),
+                Op::ReleaseLocalSlot.default_effects(),
+                span,
+            );
+        }
         if !uses_global
             && local_kind_uses_plain_store_cleanup(previous_kind)
             && previous_slot.is_some_and(|slot| self.initialized_slots.contains(&slot))
@@ -2272,6 +2334,16 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             && ref_store_source_owner.is_none()
         {
             crate::ir_lower::ownership::release_if_owned(self, source, span);
+        }
+        // This was the FIRST reassignment of a by-value closure capture: the slot's
+        // descriptor borrow was intentionally not released, and the slot now owns the
+        // value just stored. Demote it to `PhpLocal` so subsequent writes release the
+        // prior owned value, and record it so every function exit releases the final
+        // owned value (the epilogue otherwise excludes capture-param-named slots).
+        if previous_kind == LocalKind::ClosureCapture && !uses_global && !is_ref_bound {
+            self.local_kinds.insert(name.to_string(), LocalKind::PhpLocal);
+            self.builder.set_local_kind(slot, LocalKind::PhpLocal);
+            self.builder.mark_reassigned_capture_slot(slot);
         }
         value
     }
@@ -3657,7 +3729,15 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let Some(inst) = self.builder.value_defining_instruction(value) else {
             return false;
         };
-        if inst.op != Op::Cast || inst.immediate != Some(Immediate::CastTarget(IrType::Str)) {
+        if inst.op != Op::Cast
+            || !matches!(
+                inst.immediate,
+                Some(
+                    Immediate::CastTarget(IrType::Str)
+                        | Immediate::ExplicitCastTarget(IrType::Str)
+                )
+            )
+        {
             return false;
         }
         let Some(source) = inst.operands.first().copied() else {
@@ -3677,9 +3757,15 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         inst.op == Op::Cast
             && matches!(
                 inst.immediate,
-                Some(Immediate::CastTarget(IrType::Heap(
-                    crate::ir::IrHeapKind::Hash | crate::ir::IrHeapKind::Mixed
-                )))
+                Some(
+                    Immediate::CastTarget(IrType::Heap(
+                        crate::ir::IrHeapKind::Hash | crate::ir::IrHeapKind::Mixed
+                    ))
+                    // `(array) $obj` written in the source: the same fresh storage.
+                    | Immediate::ExplicitCastTarget(IrType::Heap(
+                        crate::ir::IrHeapKind::Hash | crate::ir::IrHeapKind::Mixed
+                    ))
+                )
             )
     }
 
@@ -4502,6 +4588,32 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         LoweredValue { value, ir_type }
     }
 
+    /// Emits a value with an explicit EIR storage type while preserving richer
+    /// PHP metadata.
+    ///
+    /// This is reserved for representations such as `container|null`, where a
+    /// concrete nullable pointer is more precise than the default boxed-Union
+    /// storage selected by `value_ir_type`.
+    pub(crate) fn emit_value_with_ir_type(
+        &mut self,
+        op: Op,
+        operands: Vec<ValueId>,
+        immediate: Option<Immediate>,
+        ir_type: IrType,
+        php_type: PhpType,
+        effects: Effects,
+        span: Option<Span>,
+    ) -> LoweredValue {
+        let ownership = Ownership::for_php_type(&php_type);
+        let value = self
+            .builder
+            .emit_with_effects(
+                op, operands, immediate, ir_type, php_type, ownership, effects, span,
+            )
+            .expect("value opcode produces a value");
+        LoweredValue { value, ir_type }
+    }
+
     /// Emits a value-producing opcode whose result is an unconditional owned reference.
     ///
     /// This is reserved for runtime transfers such as `CatchBind`, where the opcode clears
@@ -4925,6 +5037,20 @@ pub(super) fn container_mutation_released_value_type(php_type: &PhpType) -> Opti
 /// Direct `Call` instructions are closed through the user-function call graph instead. Treating
 /// their deliberately broad default effects as an immediate opaque boundary would discard the
 /// precise harmless-call summaries that closure binding relies on.
+/// Whether a keyed hash access whose only diagnostic is php's key coercion is statically silent.
+///
+/// `HashSet`, `HashUnset`, `HashIsset` and `HashGetSilent` carry `MAY_WARN` for a float, null
+/// or boxed key — `$h[1.5] = 1` deprecates the lossy conversion, and an error handler can run
+/// user code there. An `int` or `string` key reaches the table as is and never warns, so it
+/// must not count as a user-code boundary: it would erase an escaped closure's static identity
+/// and send `Closure::bind($f, $o, C::class)` down the scope-less runtime binder.
+fn hash_key_coercion_cannot_warn(op: Op, operand_types: &[PhpType]) -> bool {
+    matches!(op, Op::HashSet | Op::HashUnset | Op::HashIsset | Op::HashGetSilent)
+        && operand_types
+            .get(1)
+            .is_some_and(|key| matches!(key.codegen_repr(), PhpType::Int | PhpType::Str))
+}
+
 pub(super) fn instruction_has_opaque_user_code_boundary(
     op: Op,
     immediate: Option<&Immediate>,
@@ -4947,9 +5073,11 @@ pub(super) fn instruction_has_opaque_user_code_boundary(
             | Op::StoreStaticLocal
             | Op::StoreRefCell
     );
+    let may_warn = effects.contains(Effects::MAY_WARN)
+        && !hash_key_coercion_cannot_warn(op, operand_types);
     if !releases_only
         && op != Op::Call
-        && effects.intersects(Effects::MAY_WARN | Effects::OUTPUT)
+        && (may_warn || effects.contains(Effects::OUTPUT))
     {
         return true;
     }
@@ -4990,7 +5118,10 @@ pub(super) fn instruction_has_opaque_user_code_boundary(
         return true;
     }
     if op == Op::Cast
-        && matches!(immediate, Some(Immediate::CastTarget(IrType::Str)))
+        && matches!(
+            immediate,
+            Some(Immediate::CastTarget(IrType::Str) | Immediate::ExplicitCastTarget(IrType::Str))
+        )
         && operand_types
             .first()
             .is_some_and(php_type_may_reach_user_object)

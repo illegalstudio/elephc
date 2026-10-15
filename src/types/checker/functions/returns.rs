@@ -357,6 +357,13 @@ impl Checker {
     /// functions (value required and must be assignable to `expected`), and nullability
     /// via `declared_type_accepts_null`. Delegates to `require_compatible_arg_type` for
     /// the final assignability check.
+    ///
+    /// Under `declare(strict_types=1)` the same scalar gate applies here that applies at a
+    /// parameter: PHP coerces a return value in coercive mode and throws
+    /// `TypeError: f(): Return value must be of type int, bool returned` in strict mode, keeping
+    /// only the `int` to `float` widening. The directive that governs a RETURN is the one in the
+    /// file the function is DECLARED in — unlike an argument, which follows the call site — and
+    /// that is the file being checked when this runs.
     pub(crate) fn require_compatible_return_type(
         &self,
         expected: &PhpType,
@@ -391,7 +398,14 @@ impl Checker {
 
         Self::require_matching_array_element_storage(expected, actual, span, context)?;
 
-        self.require_compatible_arg_type(expected, actual, span, context)
+        self.require_compatible_arg_type(expected, actual, span, context)?;
+        self.require_strict_types_param_binding(
+            expected,
+            actual,
+            span,
+            context,
+            crate::types::param_binding::StrictBindingSite::ReturnValue,
+        )
     }
 
     /// Rejects a declared `array<T>` return whose body produces an array with a DIFFERENT

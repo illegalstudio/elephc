@@ -18,6 +18,30 @@ pub(super) fn lower_throw_exception(ctx: &mut FunctionContext<'_>, inst: &Instru
     super::super::lower_term::lower_throw_value(ctx, value)
 }
 
+/// Lowers the exact static offset-on-null warning currently emitted by EIR.
+pub(super) fn lower_warn(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if !inst.operands.is_empty() {
+        return Err(CodegenIrError::invalid_module(format!(
+            "{} expects no operands",
+            inst.op.name()
+        )));
+    }
+    let data = expect_data(inst)?;
+    let message = ctx
+        .module
+        .data
+        .strings
+        .get(data.as_raw() as usize)
+        .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))?;
+    if message != crate::codegen_support::runtime::array_offset_on_null_warning() {
+        return Err(CodegenIrError::unsupported(format!(
+            "static warning {message:?}"
+        )));
+    }
+    super::arrays::emit_array_offset_on_null_warning(ctx);
+    Ok(())
+}
+
 /// Lowers a static-message catchable PHP `Error` without evaluating later operands.
 pub(super) fn lower_throw_error(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if !inst.operands.is_empty() {

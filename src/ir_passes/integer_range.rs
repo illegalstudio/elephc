@@ -468,7 +468,10 @@ fn instruction_range(
             hi: !operand(0)?.lo,
         }),
         (Op::ICmp, _) => Some(IntRange { lo: 0, hi: 1 }),
-        (Op::Cast, Some(Immediate::CastTarget(IrType::I64))) => {
+        (
+            Op::Cast,
+            Some(Immediate::CastTarget(IrType::I64) | Immediate::ExplicitCastTarget(IrType::I64)),
+        ) => {
             if inst.result_php_type == PhpType::Bool {
                 Some(IntRange { lo: 0, hi: 1 })
             } else if inst.result_php_type == PhpType::Int

@@ -120,8 +120,18 @@ fn instruction_is_mixed_string_site(
 ) -> bool {
     let matches_op = match mode {
         MixedStringContextMode::Result => {
+            // `(string) $mixed` and `strval($mixed)` reach the `__toString` ladder exactly as an
+            // implicit coercion does; the two immediates differ only in recording where the cast
+            // came from. Reading only one of them left a function that reaches the ladder without
+            // the nested-call register's save slot, which is the hazard the caller documents.
             inst.op == crate::ir::Op::Cast
-                && inst.immediate == Some(crate::ir::Immediate::CastTarget(IrType::Str))
+                && matches!(
+                    inst.immediate,
+                    Some(
+                        crate::ir::Immediate::CastTarget(IrType::Str)
+                            | crate::ir::Immediate::ExplicitCastTarget(IrType::Str)
+                    )
+                )
         }
         MixedStringContextMode::Stdout => inst.op == crate::ir::Op::EchoValue,
     };

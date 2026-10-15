@@ -72,7 +72,7 @@ sidebar:
 | [`stream_filter_remove()`](./io/stream_filter_remove.md) | `(resource $stream_filter): bool` | `bool` | ✓ | ✓ |
 | [`stream_get_contents()`](./io/stream_get_contents.md) | `(resource $stream, ?int $length = null, int $offset = -1): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_get_filters()`](./io/stream_get_filters.md) | `(): array` | `array` | ✓ | ✓ |
-| [`stream_get_line()`](./io/stream_get_line.md) | `(resource $stream, int $length, string $ending = ''): string` | `string` | ✓ | ✓ |
+| [`stream_get_line()`](./io/stream_get_line.md) | `(resource $stream, int $length, string $ending = ''): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_get_meta_data()`](./io/stream_get_meta_data.md) | `(resource $stream): array` | `array` | ✓ | ✓ |
 | [`stream_get_transports()`](./io/stream_get_transports.md) | `(): array` | `array` | ✓ | ✓ |
 | [`stream_get_wrappers()`](./io/stream_get_wrappers.md) | `(): array` | `array` | ✓ | ✓ |

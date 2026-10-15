@@ -98,6 +98,10 @@ fn lower_on_compiler_stack(
     let mut module = Module::new(target);
     module.source_path = source_path.map(canonical_source_path);
     module.web = web;
+    // PHP scopes `strict_types` per file and the parser stamps it onto every statement it
+    // produced, so the whole-module answer is the OR over the program's statements. Include
+    // resolution has already inlined every file, so this sees all of them.
+    module.strict_types = program.iter().any(|stmt| stmt.strict_types);
     let constants = crate::codegen::collect_constants(program, target);
     let builtin_constants = crate::codegen::collect_constants(&Vec::new(), target);
     module.user_defined_constants = constants

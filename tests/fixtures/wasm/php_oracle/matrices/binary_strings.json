@@ -1,0 +1,54 @@
+{
+  "$schema": "elephc.wasm-php-oracle-matrix.v1",
+  "id": "binary_strings",
+  "shard": 2,
+  "description": "Binary, embedded-NUL, empty, equal, and strict-prefix string observations.",
+  "logical_args": [
+    "binary",
+    "a:b"
+  ],
+  "stdin_base64": "",
+  "preamble": "$oracleBinary = \"a\\0b\\xFF\";\n$oracleBinaryCopy = \"a\\0b\\xFF\";\n$oracleBinaryPrefix = \"a\\0b\";",
+  "cases": [
+    {
+      "id": "string_binary_payload",
+      "type": "string",
+      "expression": "$oracleBinary"
+    },
+    {
+      "id": "string_nul_prefix_payload",
+      "type": "string",
+      "expression": "\"\\0prefix\""
+    },
+    {
+      "id": "string_empty_payload",
+      "type": "string",
+      "expression": "\"\""
+    },
+    {
+      "id": "string_binary_identity",
+      "type": "bool",
+      "expression": "$oracleBinary === $oracleBinaryCopy"
+    },
+    {
+      "id": "string_binary_prefix_distinct",
+      "type": "bool",
+      "expression": "$oracleBinary !== $oracleBinaryPrefix"
+    },
+    {
+      "id": "string_prefix_strict_distinct",
+      "type": "bool",
+      "expression": "\"prefix\" !== \"prefix-longer\""
+    },
+    {
+      "id": "string_nul_position_distinct",
+      "type": "bool",
+      "expression": "\"a\\0b\" !== \"ab\\0\""
+    },
+    {
+      "id": "string_colon_newline_payload",
+      "type": "string",
+      "expression": "\"left:right\\nnext\""
+    }
+  ]
+}

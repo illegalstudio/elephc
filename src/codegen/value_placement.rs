@@ -48,8 +48,13 @@ fn publishes_runtime_ownership_status(func: &Function, value: ValueId) -> bool {
     if matches!(instruction.op, Op::Call | Op::FunctionVariantCall) {
         return true;
     }
+    // `(string) $mixed` written in the source carries ExplicitCastTarget and publishes the same
+    // runtime marker through the shared string-cast lowering.
     if instruction.op != Op::Cast
-        || instruction.immediate != Some(Immediate::CastTarget(IrType::Str))
+        || !matches!(
+            instruction.immediate,
+            Some(Immediate::CastTarget(IrType::Str) | Immediate::ExplicitCastTarget(IrType::Str))
+        )
     {
         return false;
     }

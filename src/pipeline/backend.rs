@@ -367,7 +367,11 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
 
     crate::progress::phase("assemble");
     let phase_started = Instant::now();
-    linker::assemble(target, &output_paths.asm, &output_paths.obj);
+    let object_path = output_paths
+        .obj
+        .as_deref()
+        .expect("a native build plans an object path");
+    linker::assemble(target, &output_paths.asm, object_path);
     timings.record_since("assemble", phase_started);
 
     for (lib_name, flag_name) in linker::bridges_in(&planned_link_libraries) {
@@ -384,13 +388,13 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     if matches!(emit, Emit::Staticlib) {
         // The consuming project performs the final link and supplies bridge and
         // managed-native archives alongside this library.
-        linker::archive(&output_paths.bin, &output_paths.obj, &runtime_object.path);
+        linker::archive(&output_paths.bin, object_path, &runtime_object.path);
     } else {
         let linked = linker::link_with_plan_and_inputs(
             target,
             emit,
             &output_paths.bin,
-            &output_paths.obj,
+            object_path,
             &runtime_object.path,
             &link_plan,
             &forced_bridge_libs,
@@ -447,7 +451,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         }
     }
     if !keep_obj_for_debug {
-        let _ = fs::remove_file(&output_paths.obj);
+        let _ = fs::remove_file(object_path);
     }
 
     // Write the build key next to the binary: `elephc monitor <address> --key`

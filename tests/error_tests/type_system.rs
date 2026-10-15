@@ -1486,6 +1486,16 @@ fn test_error_strict_types_rejects_bool_into_int_parameter() {
     );
 }
 
+/// Verifies a function declared in a STRICT file still refuses `return true` for `: int`,
+/// even when it is first reached from a coercive file (the return follows the declaring file).
+#[test]
+fn test_error_strict_types_return_refused_in_declaring_strict_file() {
+    expect_error(
+        "<?php declare(strict_types=1); function f(): int { return true; } echo f();",
+        "return type expects int, got bool",
+    );
+}
+
 /// Verifies the strict diagnostic identifies the directive as the reason and suggests the cast
 /// that makes the call legal, rather than reading as a plain type mismatch.
 #[test]

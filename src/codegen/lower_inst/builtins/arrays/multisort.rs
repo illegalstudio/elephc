@@ -293,10 +293,7 @@ fn finish_array_multisort(
         "array_multisort(): Array sizes are inconsistent",
     );
     ctx.emitter.label(&success);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
-    );
-    store_if_result(ctx, inst)
+    // php answers `true`, and the registry declares `Bool`: storing the void sentinel here made
+    // `array_multisort($a, $b) === true` false while `var_dump` happened to print `bool(true)`.
+    store_true_builtin_result(ctx, inst)
 }

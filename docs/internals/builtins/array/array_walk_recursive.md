@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function array_walk_recursive(array $array, callable $callback): void
+function array_walk_recursive(array $array, callable $callback): bool
 ```
 
 ## What the type checker enforces

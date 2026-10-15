@@ -1,0 +1,205 @@
+{
+  "$schema": "elephc.wasm-php-oracle-contract.v2",
+  "references": {
+    "inventory": "docs/specs/wasm-inventory.json",
+    "specification": "docs/specs/wasm-compliance.md"
+  },
+  "protocol": {
+    "format": "@<idlen>:<id>:<typelen>:<type>:<payloadlen>:<payload>\\n",
+    "encoding": "lengths are unsigned decimal byte counts; id/type are ASCII"
+  },
+  "execution": {
+    "guest_program": "oracle.php",
+    "guest_env": {
+      "LANG": "C.UTF-8",
+      "LC_ALL": "C.UTF-8",
+      "TZ": "UTC"
+    },
+    "guest_preopens": {},
+    "timeout_seconds": 10,
+    "max_output_bytes": 1048576
+  },
+  "shard_count": 4,
+  "fixtures": [
+    {
+      "id": "scalar_strict",
+      "shard": 0,
+      "matrix": "matrices/scalar_strict.json",
+      "source": "generated/scalar_strict.php",
+      "logical_args": [
+        "scalar",
+        ""
+      ],
+      "stdin_base64": "",
+      "frames": [
+        {
+          "id": "scalar_int_value",
+          "type": "int"
+        },
+        {
+          "id": "scalar_bool_true",
+          "type": "bool"
+        },
+        {
+          "id": "scalar_bool_false",
+          "type": "bool"
+        },
+        {
+          "id": "scalar_null_value",
+          "type": "null"
+        },
+        {
+          "id": "scalar_null_identity",
+          "type": "bool"
+        },
+        {
+          "id": "scalar_int_bool_cross",
+          "type": "bool"
+        },
+        {
+          "id": "scalar_zero_false_cross",
+          "type": "bool"
+        },
+        {
+          "id": "scalar_null_false_cross",
+          "type": "bool"
+        },
+        {
+          "id": "scalar_string_int_cross",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "id": "float_edges",
+      "shard": 1,
+      "matrix": "matrices/float_edges.json",
+      "source": "generated/float_edges.php",
+      "logical_args": [
+        "float",
+        "-0"
+      ],
+      "stdin_base64": "",
+      "frames": [
+        {
+          "id": "float_nan_not_identical",
+          "type": "bool"
+        },
+        {
+          "id": "float_nan_identical",
+          "type": "bool"
+        },
+        {
+          "id": "float_signed_zero_identical",
+          "type": "bool"
+        },
+        {
+          "id": "float_signed_zero_not_identical",
+          "type": "bool"
+        },
+        {
+          "id": "float_nan_infinity_cross",
+          "type": "bool"
+        },
+        {
+          "id": "float_infinity_sign_cross",
+          "type": "bool"
+        },
+        {
+          "id": "float_infinity_identity",
+          "type": "bool"
+        },
+        {
+          "id": "float_negative_infinity_cross",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "id": "binary_strings",
+      "shard": 2,
+      "matrix": "matrices/binary_strings.json",
+      "source": "generated/binary_strings.php",
+      "logical_args": [
+        "binary",
+        "a:b"
+      ],
+      "stdin_base64": "",
+      "frames": [
+        {
+          "id": "string_binary_payload",
+          "type": "string"
+        },
+        {
+          "id": "string_nul_prefix_payload",
+          "type": "string"
+        },
+        {
+          "id": "string_empty_payload",
+          "type": "string"
+        },
+        {
+          "id": "string_binary_identity",
+          "type": "bool"
+        },
+        {
+          "id": "string_binary_prefix_distinct",
+          "type": "bool"
+        },
+        {
+          "id": "string_prefix_strict_distinct",
+          "type": "bool"
+        },
+        {
+          "id": "string_nul_position_distinct",
+          "type": "bool"
+        },
+        {
+          "id": "string_colon_newline_payload",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "id": "object_identity_match",
+      "shard": 3,
+      "matrix": "matrices/object_identity_match.json",
+      "source": "generated/object_identity_match.php",
+      "logical_args": [
+        "objects",
+        "match"
+      ],
+      "stdin_base64": "",
+      "frames": [
+        {
+          "id": "object_alias_identity",
+          "type": "bool"
+        },
+        {
+          "id": "object_distinct_identity",
+          "type": "bool"
+        },
+        {
+          "id": "object_null_cross_type",
+          "type": "bool"
+        },
+        {
+          "id": "object_match_alias",
+          "type": "bool"
+        },
+        {
+          "id": "object_match_owning_temporaries",
+          "type": "bool"
+        },
+        {
+          "id": "string_match_owning_temporaries",
+          "type": "bool"
+        },
+        {
+          "id": "string_strict_owning_temporaries",
+          "type": "bool"
+        }
+      ]
+    }
+  ]
+}

@@ -277,6 +277,7 @@ impl Checker {
                             &actual_ty,
                             arg.span,
                             &format!("Function '{}' variadic parameter ${}", name, vname),
+                            crate::types::param_binding::StrictBindingSite::Parameter,
                         )?;
                     }
                     self.require_compatible_arg_type(

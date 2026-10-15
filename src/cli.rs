@@ -126,7 +126,7 @@ Subcommands:
                           (see `elephc monitor --help`)
 
 Modes:
-  --web                   Compile as a prefork HTTP server
+  --web                   Compile as a prefork HTTP server (native only)
   --web-isolation MODE    worker (default) | pool | request; requires --web
   --strict-php            Reject elephc extensions in tagged PHP source; .lfc remains extension-enabled
   --strict-locals         Make an incompatible local retype (e.g. int then string) a compile error instead of a warning
@@ -134,21 +134,22 @@ Modes:
 Output modes:
   --check                 Type-check only, no codegen (mutually exclusive with --emit-ir/--emit-asm)
   --emit-ir               Emit EIR text instead of compiling
-  --emit-asm              Emit assembly (.s) instead of linking
-  --emit KIND             Output kind: executable (default) | cdylib | staticlib
+  --emit-asm              Emit readable assembly (.s; .wat for WASM) instead of linking
+  --emit KIND             Output kind: executable (default) | cdylib | staticlib | npm (WASM only)
                           Aliases: exe/bin | dylib/shared | static/lib (`lib` is staticlib)
 
 Target:
   --target TARGET         macos-aarch64 | ios-arm64 | ios-sim-arm64 |
-                          linux-aarch64 | linux-x86_64 (default: host)
+                          linux-aarch64 | linux-x86_64 | wasm32-wasi
+                          (windows-x86_64 recognized, backend pending; default: host)
   --php-version VERSION   8.0 through 8.6 (detected; fallback: 8.5)
 
 Codegen:
-  --heap-size=BYTES       Fixed heap size in bytes (default: 8388608)
-  --null-repr=MODE        tagged (default) | sentinel
-  --regalloc=MODE         linear (default) | stack
+  --heap-size=BYTES       Fixed native heap size in bytes (default: 8388608)
+  --null-repr=MODE        Native null representation: tagged (default) | sentinel
+  --regalloc=MODE         Native register allocator: linear (default) | stack
   --ir-opt=on|off         EIR optimization passes (default: on; --no-ir-opt is an alias for --ir-opt=off)
-  --gc-stats              Print GC statistics at exit
+  --gc-stats              Print native GC statistics at exit
   --counters              Embed per-function call counters (BSS) and print exact call
                           counts to stderr at exit
   --with-monitoring       Embed the profiling capability, dormant until `elephc monitor`
@@ -161,22 +162,22 @@ Codegen:
   --with-monitoring=NAMES Embed it for the named functions only (comma list; trailing
                           `*` matches by prefix; name `{main}` for the top-level root;
                           or use @file with one name per line)
-  --heap-debug            Enable heap debug instrumentation
+  --heap-debug            Enable native heap debug instrumentation
   --define SYMBOL         Define a symbol for `ifdef` conditional compilation
   --ini KEY=VALUE         Bake an INI directive override (OPcache and mbstring startup)
   --strict-opcache        Throw when opcache_invalidate() targets AOT-frozen code
 
 Linking:
-  --link LIB, -l LIB      Extra library to link
-  --link-path DIR, -L DIR Extra library search path
-  --framework NAME        macOS framework to link
-  --with-NAME             Force an optional capability ({CAPABILITIES})
+  --link LIB, -l LIB      Extra native library to link
+  --link-path DIR, -L DIR Extra native library search path
+  --framework NAME        Native macOS framework to link
+  --with-NAME             Force an optional native capability ({CAPABILITIES})
 
 Diagnostics:
   --timings               Show a per-phase timing table on stderr
   --quiet, -q             Disable progress lines and colorized output
-  --source-map            Emit a .map source map alongside the assembly
-  --debug-info            Embed DWARF line info for debuggers
+  --source-map            Emit a native .map source map alongside the assembly
+  --debug-info            Embed native DWARF line info for debuggers
   --keep-symbols          Keep the symbol table (stripped by default; for profilers)
 
 Other:
@@ -325,6 +326,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     }
 
     let mut heap_size: usize = 8_388_608; // 8MB default
+    let mut heap_size_overridden = false;
     let mut gc_stats = false;
     let mut counters = false;
     let mut instrument = crate::codegen::Instrumentation::Off;
@@ -354,16 +356,24 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut quiet = false;
     let mut with_crates: HashSet<String> = HashSet::new();
     let mut ini_overrides: Vec<(String, String)> = Vec::new();
-    let mut null_repr = match std::env::var("ELEPHC_NULL_REPR").as_deref() {
-        Ok("tagged") => crate::codegen::NullRepr::Tagged,
-        Ok("sentinel") => crate::codegen::NullRepr::Sentinel,
+    let null_repr_env = std::env::var("ELEPHC_NULL_REPR").ok();
+    // Environment defaults are native test-harness policy, not explicit user
+    // requests. Only a CLI flag should make WASM reject the native-only knob.
+    let mut null_repr_overridden = false;
+    let mut null_repr = match null_repr_env.as_deref() {
+        Some("tagged") => crate::codegen::NullRepr::Tagged,
+        Some("sentinel") => crate::codegen::NullRepr::Sentinel,
         _ => crate::codegen::NullRepr::default(),
     };
     // The register allocator is on by default; an env override lets the test
     // harness compile the whole suite under the stack fallback for comparison.
-    let mut regalloc_linear = match std::env::var("ELEPHC_REGALLOC").as_deref() {
-        Ok("stack") => false,
-        Ok("linear") => true,
+    let regalloc_env = std::env::var("ELEPHC_REGALLOC").ok();
+    // As above, the environment selects the native default without turning it
+    // into an explicit target-specific option.
+    let mut regalloc_overridden = false;
+    let mut regalloc_linear = match regalloc_env.as_deref() {
+        Some("stack") => false,
+        Some("linear") => true,
         _ => true,
     };
     // EIR optimization passes are on by default; an env override lets the test
@@ -379,6 +389,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
         let arg = &args[i];
         if let Some(val) = arg.strip_prefix("--heap-size=") {
             heap_size = parse_heap_size(val);
+            heap_size_overridden = true;
         } else if arg == "--target" {
             i += 1;
             target = parse_required_target(args, i);
@@ -453,8 +464,10 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
             // so it isn't mistaken for an unknown flag.
         } else if let Some(value) = arg.strip_prefix("--null-repr=") {
             null_repr = parse_null_repr(value);
+            null_repr_overridden = true;
         } else if let Some(value) = arg.strip_prefix("--regalloc=") {
             regalloc_linear = parse_regalloc(value);
+            regalloc_overridden = true;
         } else if let Some(value) = arg.strip_prefix("--ir-opt=") {
             ir_opt = parse_ir_opt(value);
         } else if arg == "--no-ir-opt" {
@@ -563,6 +576,29 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
         fail("--emit-ir, --emit-asm, and --check are mutually exclusive");
     }
     if let Err(message) = validate_target_output(target, emit, check_only, emit_ir) {
+        fail(message);
+    }
+    if let Err(message) = validate_emit_target(emit, target, emit_asm) {
+        fail(message);
+    }
+    let wasm_options = WasmCliOptions {
+        web,
+        source_map: emit_source_map,
+        debug_info: emit_debug_info,
+        gc_stats,
+        heap_debug,
+        heap_size: heap_size_overridden,
+        null_repr: null_repr_overridden,
+        regalloc: regalloc_overridden,
+        native_linking: !extra_link_libs.is_empty()
+            || !extra_link_paths.is_empty()
+            || !extra_frameworks.is_empty(),
+        bridge_crates: !with_crates.is_empty(),
+        counters,
+        monitoring: !matches!(instrument, crate::codegen::Instrumentation::Off),
+        keep_symbols,
+    };
+    if let Err(message) = validate_wasm_options(target, &wasm_options) {
         fail(message);
     }
     if web && check_only {
@@ -756,23 +792,118 @@ fn parse_php_version(value: &str) -> crate::web_prelude::PhpVersion {
     })
 }
 
+/// Validates target-specific output kinds and combinations before compilation.
+fn validate_emit_target(emit: Emit, target: Target, emit_asm: bool) -> Result<(), &'static str> {
+    if matches!(emit, Emit::NpmPackage) && !target.is_wasm() {
+        return Err("--emit npm requires --target wasm32-wasi");
+    }
+    if matches!(emit, Emit::NpmPackage) && emit_asm {
+        return Err("--emit npm cannot be combined with --emit-asm");
+    }
+    if matches!(emit, Emit::Cdylib) && target.is_wasm() {
+        return Err("--emit cdylib is not yet supported for --target wasm32-wasi");
+    }
+    // The WASM planner does not read `emit`: a staticlib request produced an ordinary command
+    // module under a `.wasm` name, which is not the library that was asked for.
+    if matches!(emit, Emit::Staticlib) && target.is_wasm() {
+        return Err("--emit staticlib is not yet supported for --target wasm32-wasi");
+    }
+    Ok(())
+}
+
+/// Records CLI surfaces whose implementation is currently native-backend-only.
+#[derive(Default)]
+struct WasmCliOptions {
+    web: bool,
+    source_map: bool,
+    debug_info: bool,
+    gc_stats: bool,
+    heap_debug: bool,
+    heap_size: bool,
+    null_repr: bool,
+    regalloc: bool,
+    native_linking: bool,
+    bridge_crates: bool,
+    counters: bool,
+    monitoring: bool,
+    keep_symbols: bool,
+}
+
+/// Rejects native-only options for the WASM target instead of silently ignoring
+/// them after the pipeline branches into `codegen_wasm`.
+fn validate_wasm_options(
+    target: Target,
+    options: &WasmCliOptions,
+) -> Result<(), &'static str> {
+    if !target.is_wasm() {
+        return Ok(());
+    }
+    if options.web {
+        return Err("--web is not yet supported for --target wasm32-wasi");
+    }
+    if options.source_map {
+        return Err("--source-map is not yet supported for --target wasm32-wasi");
+    }
+    if options.debug_info {
+        return Err("--debug-info is not yet supported for --target wasm32-wasi");
+    }
+    if options.gc_stats {
+        return Err("--gc-stats is not yet supported for --target wasm32-wasi");
+    }
+    if options.heap_debug {
+        return Err("--heap-debug is not yet supported for --target wasm32-wasi");
+    }
+    if options.heap_size {
+        return Err("--heap-size is not yet configurable for --target wasm32-wasi");
+    }
+    if options.null_repr {
+        return Err("--null-repr is not configurable for --target wasm32-wasi");
+    }
+    if options.regalloc {
+        return Err("--regalloc does not apply to --target wasm32-wasi");
+    }
+    if options.counters {
+        return Err("--counters is not yet supported for --target wasm32-wasi");
+    }
+    if options.keep_symbols {
+        return Err("--keep-symbols is not supported for --target wasm32-wasi");
+    }
+    // Checked before the bridge crates: the flag adds the monitoring bridges to them, and the
+    // generic bridge message would name a flag the user never typed.
+    if options.monitoring {
+        return Err("--with-monitoring is not yet supported for --target wasm32-wasi");
+    }
+    if options.native_linking {
+        return Err("--link, --link-path, and --framework are not supported for --target wasm32-wasi");
+    }
+    if options.bridge_crates {
+        return Err("--with-CRATE bridge linking is not supported for --target wasm32-wasi");
+    }
+    Ok(())
+}
+
 /// Parse the required emit-kind argument at the given index, or fail if missing.
 fn parse_required_emit(args: &[String], index: usize) -> Emit {
     if index < args.len() {
         parse_emit(&args[index])
     } else {
-        fail("Missing emit kind after --emit (expected: executable, cdylib, staticlib)")
+        fail("Missing emit kind after --emit (expected: executable, cdylib, staticlib, npm)")
     }
 }
 
 /// Parse an emit-kind string into an `Emit` value, or fail with an error message.
+///
+/// `npm`/`npm-package` selects WebAssembly NPM-package output and is only valid
+/// with `--target wasm32-wasi`; that cross-flag constraint is enforced in
+/// `parse_args` once the target is known.
 fn parse_emit(value: &str) -> Emit {
     match value {
         "executable" | "exe" | "bin" => Emit::Executable,
         "cdylib" | "dylib" | "shared" => Emit::Cdylib,
         "staticlib" | "static" | "lib" => Emit::Staticlib,
+        "npm" | "npm-package" => Emit::NpmPackage,
         other => fail(&format!(
-            "Invalid --emit kind '{}': expected one of: executable, cdylib, staticlib",
+            "Invalid --emit kind '{}': expected one of: executable, cdylib, staticlib, npm",
             other
         )),
     }
@@ -1012,6 +1143,7 @@ mod tests {
         assert_eq!(parse_emit("executable"), Emit::Executable);
         assert_eq!(parse_emit("cdylib"), Emit::Cdylib);
         assert_eq!(parse_emit("staticlib"), Emit::Staticlib);
+        assert_eq!(parse_emit("npm"), Emit::NpmPackage);
     }
 
     /// Verifies the accepted aliases map to their canonical variants so users coming
@@ -1024,6 +1156,7 @@ mod tests {
         assert_eq!(parse_emit("shared"), Emit::Cdylib);
         assert_eq!(parse_emit("static"), Emit::Staticlib);
         assert_eq!(parse_emit("lib"), Emit::Staticlib);
+        assert_eq!(parse_emit("npm-package"), Emit::NpmPackage);
     }
 
     /// Verifies `lib` is advertised as a static-library alias rather than being
@@ -1055,6 +1188,120 @@ mod tests {
                 false,
             )
             .is_ok()
+        );
+    }
+
+    /// Verifies WASM accepts command/NPM output but rejects native cdylibs and
+    /// the contradictory NPM-plus-WAT-only combination.
+    #[test]
+    fn wasm_emit_combinations_are_validated() {
+        let wasm = Target::wasm();
+        assert_eq!(
+            validate_emit_target(Emit::Executable, wasm, false),
+            Ok(())
+        );
+        assert_eq!(
+            validate_emit_target(Emit::NpmPackage, wasm, false),
+            Ok(())
+        );
+        assert_eq!(
+            validate_emit_target(Emit::Cdylib, wasm, false),
+            Err("--emit cdylib is not yet supported for --target wasm32-wasi")
+        );
+        assert_eq!(
+            validate_emit_target(Emit::Staticlib, wasm, false),
+            Err("--emit staticlib is not yet supported for --target wasm32-wasi")
+        );
+        assert_eq!(
+            validate_emit_target(Emit::NpmPackage, wasm, true),
+            Err("--emit npm cannot be combined with --emit-asm")
+        );
+    }
+
+    /// Verifies NPM packaging cannot be selected for an ordinary native target.
+    #[test]
+    fn native_target_rejects_npm_output() {
+        assert_eq!(
+            validate_emit_target(Emit::NpmPackage, Target::detect_host(), false),
+            Err("--emit npm requires --target wasm32-wasi")
+        );
+    }
+
+    /// Verifies native-only codegen and linker options are rejected for WASM
+    /// rather than being silently ignored by the pipeline's early return.
+    #[test]
+    fn wasm_rejects_native_only_options() {
+        let wasm = Target::wasm();
+        assert_eq!(
+            validate_wasm_options(
+                wasm,
+                &WasmCliOptions {
+                    source_map: true,
+                    ..WasmCliOptions::default()
+                },
+            ),
+            Err("--source-map is not yet supported for --target wasm32-wasi")
+        );
+        assert_eq!(
+            validate_wasm_options(
+                wasm,
+                &WasmCliOptions {
+                    counters: true,
+                    ..WasmCliOptions::default()
+                },
+            ),
+            Err("--counters is not yet supported for --target wasm32-wasi")
+        );
+        assert_eq!(
+            validate_wasm_options(
+                wasm,
+                &WasmCliOptions {
+                    keep_symbols: true,
+                    ..WasmCliOptions::default()
+                },
+            ),
+            Err("--keep-symbols is not supported for --target wasm32-wasi")
+        );
+        // The monitoring flag also adds bridge crates; its own message must win.
+        assert_eq!(
+            validate_wasm_options(
+                wasm,
+                &WasmCliOptions {
+                    monitoring: true,
+                    bridge_crates: true,
+                    ..WasmCliOptions::default()
+                },
+            ),
+            Err("--with-monitoring is not yet supported for --target wasm32-wasi")
+        );
+        assert_eq!(
+            validate_wasm_options(
+                wasm,
+                &WasmCliOptions {
+                    native_linking: true,
+                    ..WasmCliOptions::default()
+                },
+            ),
+            Err("--link, --link-path, and --framework are not supported for --target wasm32-wasi")
+        );
+        assert_eq!(
+            validate_wasm_options(
+                wasm,
+                &WasmCliOptions {
+                    bridge_crates: true,
+                    ..WasmCliOptions::default()
+                },
+            ),
+            Err("--with-CRATE bridge linking is not supported for --target wasm32-wasi")
+        );
+        assert_eq!(
+            validate_wasm_options(Target::detect_host(), &WasmCliOptions {
+                source_map: true,
+                native_linking: true,
+                bridge_crates: true,
+                ..WasmCliOptions::default()
+            }),
+            Ok(())
         );
     }
 

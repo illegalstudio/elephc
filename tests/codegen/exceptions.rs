@@ -478,6 +478,110 @@ echo from_catch();
     assert_eq!(out, "Ftfc");
 }
 
+/// Verifies EVERY exit out of one `try` runs the finalizer, not just the first one lowered.
+///
+/// A `finally` frame used to be consumed by the exit that reached it first: the pop that stops a
+/// `return` inside a finalizer from re-entering the frame it is already running was never undone,
+/// so a second `return` further down the same body found an empty stack and left without running
+/// anything. `try { if ($n > 1) { return "big"; } return "small"; } finally { echo "[fin]"; }`
+/// printed the finalizer for the first branch and nothing for the second — a wrong ANSWER in
+/// shipped code rather than a refusal, and identical on both backends.
+///
+/// Every shape that leaves a protected body is covered, because the pop is shared by all of them:
+/// three returns, a `continue` and a `break` out of a loop body, nested finalizers that must both
+/// run inner-first for each exit, and two throws through one finalizer. Every expected byte is
+/// php-src 8.5's own output for the same program.
+#[test]
+fn test_exception_finally_runs_on_every_exit_not_just_the_first() {
+    let out = compile_and_run(
+        r#"<?php
+function threeReturns(int $n): string {
+    try {
+        if ($n === 1) {
+            return "one";
+        }
+        if ($n === 2) {
+            return "two";
+        }
+        return "many";
+    } finally {
+        echo "[f1]";
+    }
+}
+
+function loopExits(): string {
+    $seen = "";
+    foreach ([1, 2, 3, 4] as $v) {
+        try {
+            if ($v === 2) {
+                continue;
+            }
+            if ($v === 4) {
+                break;
+            }
+            $seen .= "v" . $v;
+        } finally {
+            echo "[f2:" . $v . "]";
+        }
+    }
+    return $seen;
+}
+
+function nested(int $n): string {
+    try {
+        try {
+            if ($n === 1) {
+                return "inner-one";
+            }
+            return "inner-many";
+        } finally {
+            echo "[inner]";
+        }
+    } finally {
+        echo "[outer]";
+    }
+}
+
+function thrower(int $n): string {
+    try {
+        try {
+            if ($n === 1) {
+                throw new RuntimeException("one");
+            }
+            throw new RuntimeException("other");
+        } finally {
+            echo "[f3]";
+        }
+    } catch (RuntimeException $e) {
+        return $e->getMessage();
+    }
+}
+
+echo threeReturns(1), "\n";
+echo threeReturns(2), "\n";
+echo threeReturns(3), "\n";
+echo loopExits(), "\n";
+echo nested(1), "\n";
+echo nested(2), "\n";
+echo thrower(1), "\n";
+echo thrower(2), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "[f1]one\n",
+            "[f1]two\n",
+            "[f1]many\n",
+            "[f2:1][f2:2][f2:3][f2:4]v1v3\n",
+            "[inner][outer]inner-one\n",
+            "[inner][outer]inner-many\n",
+            "[f3]one\n",
+            "[f3]other\n",
+        )
+    );
+}
+
 /// A break inside a finally block exits the while loop that encloses the try.
 /// The finally block itself runs, then break transfers control out of the loop.
 /// Verifies the loop is entered, the try body prints 1, and finally runs the

@@ -24,7 +24,7 @@ use crate::errors::CompileError;
 use crate::parser::ast::Expr;
 use crate::span::Span;
 use crate::types::param_binding::{
-    classify_param_binding, strict_param_binding_rejection, ParamBinding,
+    classify_param_binding, strict_param_binding_rejection, ParamBinding, StrictBindingSite,
 };
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
@@ -59,7 +59,13 @@ impl Checker {
         owner: Option<(&str, &str)>,
         by_ref: bool,
     ) -> Result<(), CompileError> {
-        self.require_strict_types_param_binding(expected, actual, arg.span, context)?;
+        self.require_strict_types_param_binding(
+            expected,
+            actual,
+            arg.span,
+            context,
+            StrictBindingSite::Parameter,
+        )?;
         if Self::types_compatible(expected, actual) || self.type_accepts(expected, actual) {
             return Ok(());
         }
@@ -154,11 +160,12 @@ impl Checker {
         actual: &PhpType,
         span: Span,
         context: &str,
+        site: StrictBindingSite,
     ) -> Result<(), CompileError> {
         if !self.strict_types {
             return Ok(());
         }
-        match strict_param_binding_rejection(expected, actual) {
+        match strict_param_binding_rejection(expected, actual, site) {
             Some(detail) => Err(Self::binding_mismatch_error(
                 expected, actual, span, context, &detail,
             )),

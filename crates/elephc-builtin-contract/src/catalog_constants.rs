@@ -358,6 +358,11 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("PSFS_FLAG_FLUSH_INC", Standard, ConstValue::Int(1)),
     constant!("PSFS_FLAG_NORMAL", Standard, ConstValue::Int(0)),
     constant!("PSFS_PASS_ON", Standard, ConstValue::Int(2)),
+    // fseek's whence. php-src fixes these at 0/1/2, which are also the numbers WASI's
+    // `fd_seek` uses, so they need no translation at a stream call.
+    constant!("SEEK_CUR", Standard, ConstValue::Int(1)),
+    constant!("SEEK_END", Standard, ConstValue::Int(2)),
+    constant!("SEEK_SET", Standard, ConstValue::Int(0)),
     constant!("SID", Session, ConstValue::Str(""), route: Dynamic),
     constant!("SORT_ASC", Standard, ConstValue::Int(4)),
     constant!("SORT_DESC", Standard, ConstValue::Int(3)),

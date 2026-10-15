@@ -3,3 +3,5 @@
 main
 compressed.bin
 bz2packed.bin
+*.wasm
+*.wat

@@ -205,6 +205,51 @@ echo $x;
     assert_eq!(out, "7");
 }
 
+/// Verifies `??=` reads its target with ISSET semantics, so a missing key is silent.
+///
+/// `??` and `??=` both test for a missing value rather than report one, and php-src prints
+/// nothing for either. The `??=` path whose right-hand side MUTATES the index variable lowered
+/// its target as an ordinary expression instead, which emits the WARNING-producing read:
+///
+/// ```text
+///   $i = [10, 20];  $k = 5;  $i[$k] ??= ($k = 0);
+///   php-src:      (nothing)
+///   before this:  Warning: Undefined array key 5
+/// ```
+///
+/// This is the shared EIR, so the warning appeared on BOTH backends. The plain read at the end
+/// is the control in the other direction: suppressing too much would silence it too, and php-src
+/// does warn there.
+#[test]
+fn test_null_coalesce_assignment_read_is_silent_but_plain_read_warns() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$i = [10, 20];
+$k = 5;
+$r = ($i[$k] ??= ($k = 0));
+echo $r, "|", $i[0], "\n";
+$m = [1, 2];
+$m[7] ??= "written";
+echo $m[7], "\n";
+$plain = $m[11];
+echo $plain === null ? "null" : $plain, "\n";
+"#,
+    );
+    // php-src's own answers: the RHS runs, the index it mutated is where the write lands.
+    assert_eq!(out.stdout, "0|0\nwritten\nnull\n");
+    assert!(
+        !out.stderr.contains("Undefined array key 5")
+            && !out.stderr.contains("Undefined array key 7"),
+        "`??=` must not warn about the key it is testing for: {}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("Undefined array key 11"),
+        "a PLAIN read of a missing key must still warn: {}",
+        out.stderr
+    );
+}
+
 /// Verifies null-coalescing assignment (`??=`) skips the right-hand side when the variable is
 /// non-null; the fallback function must not be called.
 #[test]

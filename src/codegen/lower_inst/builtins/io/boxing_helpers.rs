@@ -111,6 +111,50 @@ pub(super) fn box_stream_string_or_false_on_empty_result(
     }
 }
 
+/// Boxes a raw string slice as `string|false`, keyed on the POINTER rather than the length.
+///
+/// The sibling above tests the LENGTH, which is right for a read that answers `false` only at
+/// EOF-with-no-bytes AND can never answer a legitimate empty string. It is wrong wherever an
+/// empty result is a real value: `stream_get_line` on a leading delimiter answers `""` while
+/// EOF answers `false`, and both are zero-length. Helpers that must separate the two return a
+/// NULL pointer for the false case and a live pointer for the empty string.
+pub(super) fn box_string_or_false_on_null_pointer_result(
+    ctx: &mut FunctionContext<'_>,
+    label_prefix: &str,
+) {
+    let false_label = ctx.next_label(&format!("{}_false", label_prefix));
+    let done_label = ctx.next_label(&format!("{}_done", label_prefix));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x1, {}", false_label));       // a null pointer is the false answer
+            ctx.emitter.instruction("mov x0, #1");                              // select runtime tag 1 for the string
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the false boxing
+            ctx.emitter.label(&false_label);
+            ctx.emitter.instruction("mov x1, #0");                              // false carries a zero payload
+            ctx.emitter.instruction("mov x2, #0");                              // bool Mixed payloads have no high word
+            ctx.emitter.instruction("mov x0, #3");                              // select runtime tag 3 for boolean false
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done_label);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // did the helper answer a real pointer?
+            ctx.emitter.instruction(&format!("je {}", false_label));            // a null pointer is the false answer
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the string pointer as the Mixed low word
+            ctx.emitter.instruction("mov rsi, rdx");                            // pass its length as the Mixed high word
+            ctx.emitter.instruction("mov eax, 1");                              // select runtime tag 1 for the string
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the false boxing
+            ctx.emitter.label(&false_label);
+            ctx.emitter.instruction("xor edi, edi");                            // false carries a zero payload
+            ctx.emitter.instruction("xor esi, esi");                            // bool Mixed payloads have no high word
+            ctx.emitter.instruction("mov eax, 3");                              // select runtime tag 3 for boolean false
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done_label);
+        }
+    }
+}
+
 /// Boxes a non-negative stream descriptor as a PHP resource or false on failure.
 ///
 /// The resource is tagged with scope-cleanup kind 1 (native stream fd, closed via

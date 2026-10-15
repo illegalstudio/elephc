@@ -24,8 +24,7 @@ Shared contract with a dedicated compiler language-construct implementation.
 
 ## EIR and runtime boundary
 
-- **Concrete helpers referenced directly by this lowering**:
-  - `__rt_mixed_is_empty`
+_Lowered by a dedicated compiler language-construct path._
 
 ## Signature summary
 

@@ -456,6 +456,56 @@ pub fn runtime_fn_arity_bounds(
     resolved
 }
 
+/// Names the PHP function and parameter behind one typed runtime call's argument position.
+///
+/// A backend composing php-src's `F(): Argument #N ($p) …` diagnostics needs both names, and the
+/// EIR carries only the runtime target. That target is not always enough: several PHP names can
+/// share one (`count` and `sizeof` both reach `RuntimeFnId::Count`), and php-src reports the name
+/// AS WRITTEN, which the target cannot recover. An ambiguous target therefore answers `None`
+/// rather than guessing an alias — a message naming the wrong function is worse than not raising
+/// it here.
+///
+/// Both ways a builtin can name a runtime target are searched, because they are unrelated fields:
+/// a `RuntimeFnId` sits in `semantics.runtime_functions`, while the unary-string family
+/// (`strtoupper`, `strrev`, …) carries its target only in `semantics.lowering`.
+///
+/// `index` is zero-based; php-src's `Argument #N` is one-based, which is the caller's to render.
+pub fn runtime_call_sole_parameter(
+    target: crate::ir::RuntimeCallTarget,
+    index: usize,
+) -> Option<(&'static str, String, PhpType)> {
+    let mut resolved: Option<&BuiltinDef> = None;
+    for def in registry().values() {
+        let names_target = match target {
+            crate::ir::RuntimeCallTarget::Function(runtime_fn)
+            | crate::ir::RuntimeCallTarget::ProfiledFunction {
+                target: runtime_fn, ..
+            } => def.spec.semantics.runtime_functions.contains(runtime_fn),
+            other => {
+                matches!(
+                    def.spec.semantics.lowering,
+                    crate::builtins::semantics::BuiltinLowering::Runtime(declared)
+                        if declared == other
+                )
+            }
+        };
+        if !names_target {
+            continue;
+        }
+        if resolved.is_some() {
+            return None;
+        }
+        resolved = Some(def);
+    }
+    let def = resolved?;
+    // A variadic tail's name is not the parameter php-src reports for a surplus position.
+    if def.variadic.is_some() && index + 1 >= def.params.len() {
+        return None;
+    }
+    let (name, php_type) = def.params.get(index)?;
+    Some((def.name, name.clone(), php_type.clone()))
+}
+
 /// Validates the argument count for a named builtin and returns a standard arity error on mismatch.
 ///
 /// Uses the registry's enforced arity contract and compares it against

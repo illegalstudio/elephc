@@ -102,6 +102,23 @@ fn test_strict_types_of_the_callee_file_does_not_bind_the_caller() {
     assert_eq!(out, "1");
 }
 
+/// Verifies a RETURN value is governed by the file that DECLARES the function: a coercive
+/// included file returning `true` for `: int` yields `1` even though the includer is strict.
+#[test]
+fn test_strict_types_return_follows_the_declaring_file() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php\ndeclare(strict_types=1);\nrequire __DIR__ . '/f.php';\necho f(), \"\\n\";\n",
+            ),
+            ("f.php", "<?php\nfunction f(): int { return true; }\n"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "1\n");
+}
+
 /// Verifies a callback invoked by an internal function keeps coercive binding under
 /// `strict_types=1`. PHP calls it from the engine's own frame, which never carries the
 /// directive, so `array_map('g', [true, false, 2])` converts the booleans instead of throwing.

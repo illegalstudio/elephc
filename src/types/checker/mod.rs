@@ -1166,6 +1166,12 @@ pub(crate) struct FnDecl {
     /// Attribute groups attached to the original `function` declaration.
     /// Currently consulted only for `#[\Deprecated]` detection.
     pub attributes: Vec<crate::parser::ast::AttributeGroup>,
+    /// Whether the file that DECLARES this function opened with `declare(strict_types=1)`.
+    ///
+    /// A function body is resolved lazily, from whichever call site reaches it first, so the
+    /// checker's ambient `strict_types` is the caller's file. A return value is governed by the
+    /// declaring file instead, so the declaration carries its own stamp.
+    pub strict_types: bool,
 }
 
 /// Runs the type checker on `program` for the given `target` with default

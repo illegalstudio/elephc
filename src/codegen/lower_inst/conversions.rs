@@ -558,9 +558,14 @@ fn emit_resource_display_id_to_int(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Returns the cast target immediate attached to a `Cast` instruction.
+///
+/// The two spellings name the same conversion and differ only in where it came from: a
+/// source-level `(int) $v` or `intval($v)` carries `ExplicitCastTarget`, an internal coercion
+/// carries `CastTarget`. Only the wasm32-wasi capability audit reads them apart — php diagnoses
+/// the two differently — and this backend, which has no such audit, lowers both the same way.
 fn expect_cast_target(inst: &Instruction) -> Result<IrType> {
     match inst.immediate {
-        Some(Immediate::CastTarget(target)) => Ok(target),
+        Some(Immediate::CastTarget(target) | Immediate::ExplicitCastTarget(target)) => Ok(target),
         Some(Immediate::StringOffsetCast) => Ok(IrType::I64),
         _ => Err(CodegenIrError::invalid_module(format!(
             "{} missing cast target immediate",

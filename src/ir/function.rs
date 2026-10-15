@@ -77,6 +77,17 @@ pub struct Function {
     /// it did not own. A read-only `array` parameter called in a loop therefore died with
     /// `heap debug detected bad refcount` under `-O`, while `-O0` was clean.
     pub no_epilogue_cleanup_slots: std::collections::HashSet<LocalSlotId>,
+    /// By-value closure-capture slots that the body REASSIGNED at least once.
+    ///
+    /// A capture param slot enters the body as a borrow the closure descriptor
+    /// owns and frees; the first reassignment transfers ownership of the stored
+    /// value to the slot (see `ir_lower::context::store_local`). Such a slot is
+    /// no longer a descriptor borrow, so every function exit must release it
+    /// (unless it is the directly-returned value, which moves out). Only the WASM
+    /// `Return` epilogue (`codegen_wasm::function`) consults this set; the native
+    /// backend does not read it. Empty for non-closures and for captures that are
+    /// never reassigned.
+    pub reassigned_capture_slots: std::collections::HashSet<LocalSlotId>,
 }
 
 impl Function {
@@ -100,6 +111,7 @@ impl Function {
             lexical_class: None,
             flags: FunctionFlags::default(),
             no_epilogue_cleanup_slots: std::collections::HashSet::new(),
+            reassigned_capture_slots: std::collections::HashSet::new(),
         }
     }
 
@@ -205,6 +217,10 @@ pub struct FunctionFlags {
     pub is_method: bool,
     pub is_closure: bool,
     pub is_generator: bool,
+    /// For a generator: a `yield` sits inside a `try` that has a `finally` block. php runs that
+    /// `finally` when the suspended generator is destroyed; a backend that drops frames without
+    /// resuming them cannot, and refuses the function instead.
+    pub yield_in_try_finally: bool,
     pub is_fiber_wrapper: bool,
     pub is_callback_wrapper: bool,
     pub is_runtime_callable_invoker: bool,
@@ -215,4 +231,12 @@ pub struct FunctionFlags {
     /// property-default init thunks and builtin class methods (Reflection, SPL,
     /// DateTime) lowered into the module. Consumed by source-map emission.
     pub is_synthetic: bool,
+    /// For a closure, the number of trailing `params` that are capture params
+    /// (appended after the visible user params, in source order). Set by the EIR
+    /// closure lowerer (`lower_closure_function_with_signature`) so backends that
+    /// build a per-closure wrapper from the `Function` alone — without the
+    /// `ClosureNew` instruction in hand — can recover the visible/capture split.
+    /// Native uses it to keep capture parameters borrowed until reassignment; the
+    /// WASM backend also reads it to split wrapper unboxing.
+    pub closure_capture_count: usize,
 }

@@ -142,7 +142,12 @@ pub(super) fn eval_literal_scope_read_param_supported_by_lowering(
     if ctx.is_ref_bound_local(name) {
         return false;
     }
-    if ctx.local_kinds.get(name).copied() != Some(LocalKind::PhpLocal) {
+    if !ctx
+        .local_kinds
+        .get(name)
+        .copied()
+        .is_some_and(|kind| matches!(kind, LocalKind::PhpLocal | LocalKind::ClosureCapture))
+    {
         return false;
     }
     let Some(ty) = ctx.local_types.get(name) else {
@@ -168,7 +173,12 @@ pub(super) fn eval_literal_scope_read_array_param_supported_by_lowering(
     if ctx.is_ref_bound_local(name) {
         return false;
     }
-    if ctx.local_kinds.get(name).copied() != Some(LocalKind::PhpLocal) {
+    if !ctx
+        .local_kinds
+        .get(name)
+        .copied()
+        .is_some_and(|kind| matches!(kind, LocalKind::PhpLocal | LocalKind::ClosureCapture))
+    {
         return false;
     }
     let Some(ty) = ctx.local_types.get(name) else {
@@ -194,7 +204,12 @@ pub(super) fn eval_literal_scope_read_assoc_array_param_supported_by_lowering(
     if ctx.is_ref_bound_local(name) {
         return false;
     }
-    if ctx.local_kinds.get(name).copied() != Some(LocalKind::PhpLocal) {
+    if !ctx
+        .local_kinds
+        .get(name)
+        .copied()
+        .is_some_and(|kind| matches!(kind, LocalKind::PhpLocal | LocalKind::ClosureCapture))
+    {
         return false;
     }
     let Some(ty) = ctx.local_types.get(name) else {
@@ -220,7 +235,12 @@ pub(super) fn eval_literal_scope_read_float_predicate_param_supported_by_lowerin
     if ctx.is_ref_bound_local(name) {
         return false;
     }
-    if ctx.local_kinds.get(name).copied() != Some(LocalKind::PhpLocal) {
+    if !ctx
+        .local_kinds
+        .get(name)
+        .copied()
+        .is_some_and(|kind| matches!(kind, LocalKind::PhpLocal | LocalKind::ClosureCapture))
+    {
         return false;
     }
     let Some(ty) = ctx.local_types.get(name) else {

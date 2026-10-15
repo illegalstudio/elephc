@@ -92,7 +92,10 @@ pub fn prepare_runtime_object_for_emit(
     emit: Emit,
 ) -> Result<PreparedRuntimeObject, String> {
     match emit {
-        Emit::Executable => {
+        // `NpmPackage` is wasm-only and never reaches the native runtime cache — the WebAssembly
+        // path returns before it — but it packages a command module, so it shares the
+        // executable's runtime shape.
+        Emit::Executable | Emit::NpmPackage => {
             prepare_runtime_object_with_mode(heap_size, target, features, false, false)
         }
         Emit::Cdylib => prepare_runtime_object_with_mode(heap_size, target, features, true, true),

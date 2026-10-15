@@ -596,6 +596,7 @@ impl Checker {
                         &ty,
                         arg.span,
                         &format!("Function '{}' variadic parameter ${}", name, vname),
+                        crate::types::param_binding::StrictBindingSite::Parameter,
                     )?;
                 }
                 arg_idx += 1;

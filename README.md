@@ -273,7 +273,8 @@ xattr -cr elephc
 ## Usage
 
 > **Important:** elephc lowers every build through the EIR pipeline and the
-> target-aware assembly emitter.
+> selected target backend. Native targets emit assembly; the experimental
+> `wasm32-wasi` target emits an exactly planned and validated WebAssembly module.
 
 ```bash
 # Compile tagged PHP or tagless LFC source to a native binary
@@ -365,11 +366,19 @@ elephc native install --locked
 
 # Explicit target selection
 # Supported targets today: macos-aarch64, ios-arm64, ios-sim-arm64,
-# linux-aarch64, linux-x86_64
+# linux-aarch64, linux-x86_64, and the experimental wasm32-wasi
 elephc --target ios-arm64 --emit staticlib module.php
 elephc --target ios-sim-arm64 --emit staticlib module.php
 elephc --target linux-aarch64 hello.php
 elephc --target linux-x86_64 hello.php
+
+# Experimental WASI Preview 1 command module
+elephc --target wasm32-wasi hello.php
+wasmer run hello.wasm
+
+# Experimental Node.js package for the same WASI command
+elephc --target wasm32-wasi --emit npm hello.php
+node hello-npm/index.mjs
 
 # Compile a standalone prefork HTTP server binary
 elephc --web app.php                          # fastest; trusted application code
@@ -757,6 +766,7 @@ src/
 │   ├── frame/           # Function frame analysis and placement
 │   ├── lower_inst/      # Instruction, builtin, object, callable, and runtime lowering
 │   └── runtime_metadata/ # Runtime feature and symbol metadata collected by codegen
+├── codegen_wasm/        # Experimental EIR → validated WASI WebAssembly backend
 ├── codegen_support/     # Shared ABI/runtime/target helpers used by codegen
 │   ├── abi/             # Target-aware calling-convention, frame, symbol, and value helpers
 │   ├── platform/        # Target definitions and assembler/linker tooling
@@ -792,7 +802,7 @@ crates/
 
 ## Tests
 
-14,000+ Rust test cases across lexer, parser, codegen, runtime, and error reporting. Each codegen test compiles inline PHP source to a native binary, runs it, and asserts stdout.
+14,000+ Rust test cases across lexer, parser, codegen, runtime, and error reporting. Each native codegen test compiles inline PHP source to a native binary, runs it, and asserts stdout; WASM tests also cover capability rejection, WAT/WASM validation, artifact publication, and execution under the pinned WASI hosts.
 
 ```bash
 cargo test                      # all tests

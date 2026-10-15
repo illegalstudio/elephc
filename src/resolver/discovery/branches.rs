@@ -203,17 +203,22 @@ pub(super) fn discover_if_tail(
 }
 
 /// Generates a unique group identifier for mutually exclusive declaration branches.
-/// Format: `"{owner_path}:{line}:{col}"` where `owner` is the last path in `include_chain`,
+/// Format: `"{owner_path}:{line}:{col}"` (owner relative to the main source's directory) where
+/// `owner` is the last path in `include_chain`,
 /// or `base_dir` if the chain is empty. Used to correlate branches that cannot both be active.
 pub(super) fn exclusive_group_id(
     span: crate::span::Span,
     base_dir: &Path,
     include_chain: &[PathBuf],
 ) -> String {
-    let owner = include_chain
-        .last()
-        .map(|path| path.to_string_lossy().into_owned())
-        .unwrap_or_else(|| base_dir.to_string_lossy().into_owned());
+    // The id is hashed into include-variant symbols, so the owner is spelled relative to the
+    // main source's directory (compilation-local) rather than as an absolute path.
+    let owner = match include_chain.last() {
+        Some(path) => crate::resolver::identity_path(path),
+        None => crate::resolver::identity_path(
+            &std::fs::canonicalize(base_dir).unwrap_or_else(|_| base_dir.to_path_buf()),
+        ),
+    };
     format!("{}:{}:{}", owner, span.line, span.col)
 }
 

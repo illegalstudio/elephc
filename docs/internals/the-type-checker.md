@@ -178,6 +178,8 @@ Because a `Span` carries no file identity, elephc cannot always tell apart two D
 
 `Checker::check_stmt` installs `Stmt::strict_types` on `Checker::strict_types` and restores the outer value afterwards, so the setting always reflects the file the *call site* was written in — matching PHP, where a strict file calling into a coercive one is strict and a coercive file calling a function declared in a strict one is not. `Checker::require_strict_types_param_binding` then runs *before* `types_compatible`, because the widenings PHP drops in strict mode (`bool`→`int`, `int`→`bool`, …) are ones `types_compatible` accepts on its own. `Checker::with_internal_callback_binding` suspends the flag while validating a callback that an internal function invokes (`array_map`, `usort`, …), which PHP calls from an engine frame that never carries the directive.
 
+The same gate runs at the other two typed writes PHP applies the directive to: `require_compatible_return_type` for a declared scalar return, and `check_object_property_write` for a typed scalar property. One rule, three `TypeError` wordings — `StrictBindingSite` travels with the check so the diagnostic quotes the one php actually throws at that site rather than the parameter one at all three. A RETURN follows the file the function is DECLARED in rather than the call site's, which is what `Checker::strict_types` already holds while the declaration is being checked.
+
 None of this is affected by the permissive local retyping described in [Local retyping and strict locals mode](#local-retyping-and-strict-locals-mode) above: a **declared** type stays strict regardless of `strict_types` or `--strict-locals`.
 
 ```php

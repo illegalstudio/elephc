@@ -221,7 +221,19 @@ pub(super) fn lower_array_access_from_value(
     expr: &Expr,
     warn_on_missing: bool,
 ) -> LoweredValue {
-    let mut index_value = lower_expr(ctx, index);
+    let index_value = lower_expr(ctx, index);
+    lower_array_access_from_values(ctx, array_value, index_value, index, expr, warn_on_missing)
+}
+
+/// Lowers array access once both receiver and index have been evaluated in PHP order.
+fn lower_array_access_from_values(
+    ctx: &mut LoweringContext<'_, '_>,
+    array_value: LoweredValue,
+    mut index_value: LoweredValue,
+    index: &Expr,
+    expr: &Expr,
+    warn_on_missing: bool,
+) -> LoweredValue {
     let op = match array_value.ir_type {
         IrType::Heap(IrHeapKind::Array) => {
             let index_ty = lowered_index_expr_key_type(ctx, index, index_value.value);
@@ -293,14 +305,38 @@ pub(super) fn lower_array_access_from_value(
         let warning_flag = emit_bool_literal(ctx, warn_on_missing, Some(expr.span));
         operands.push(warning_flag.value);
     }
-    let result = ctx.emit_value(
-        op,
-        operands,
-        (op == Op::StrCharAt).then_some(Immediate::Bool(warn_on_missing)),
-        result_type,
-        op.default_effects(),
-        Some(expr.span),
-    );
+    let immediate = (op == Op::StrCharAt).then_some(Immediate::Bool(warn_on_missing));
+    let result = if matches!(op, Op::HashGet | Op::HashGetSilent) {
+        if let Some(ir_type) = nullable_hash_container_ir_type(&result_type) {
+            ctx.emit_value_with_ir_type(
+                op,
+                operands,
+                immediate,
+                ir_type,
+                result_type,
+                op.default_effects(),
+                Some(expr.span),
+            )
+        } else {
+            ctx.emit_value(
+                op,
+                operands,
+                immediate,
+                result_type,
+                op.default_effects(),
+                Some(expr.span),
+            )
+        }
+    } else {
+        ctx.emit_value(
+            op,
+            operands,
+            immediate,
+            result_type,
+            op.default_effects(),
+            Some(expr.span),
+        )
+    };
     // An owning boxed index temporary (e.g. `$B[$i + 1]` on the mixed-key read
     // path) is consumed by the read without any runtime refcount operation on
     // the key, and the result is freshly allocated storage that never aliases
@@ -337,7 +373,11 @@ fn coerce_string_offset_to_int(
     }
 }
 
-/// Lowers nullable receiver indexing without evaluating the index on a null receiver.
+/// Lowers nullable indexing while preserving PHP's eager index evaluation and diagnostics.
+///
+/// php evaluates the index even when the receiver is null, then warns `Trying to access array
+/// offset on null` and answers null — so the index is lowered once, before the null test, and
+/// both arms consume it.
 pub(super) fn lower_nullable_array_access(
     ctx: &mut LoweringContext<'_, '_>,
     array_value: LoweredValue,
@@ -345,6 +385,7 @@ pub(super) fn lower_nullable_array_access(
     expr: &Expr,
     warn_on_missing: bool,
 ) -> LoweredValue {
+    let index_value = lower_expr(ctx, index);
     let is_null = ctx.emit_value(
         Op::IsNull,
         vec![array_value.value],
@@ -373,6 +414,18 @@ pub(super) fn lower_nullable_array_access(
     });
 
     ctx.builder.position_at_end(null_block);
+    if warn_on_missing {
+        let warning =
+            ctx.intern_string(crate::codegen_support::runtime::array_offset_on_null_warning());
+        ctx.emit_void(
+            Op::Warn,
+            Vec::new(),
+            Some(Immediate::Data(warning)),
+            Op::Warn.default_effects(),
+            Some(expr.span),
+        );
+    }
+    release_coerced_source_if_owned(ctx, index_value, Some(index.span));
     // The read arm releases an owning call result after indexing it. The null arm
     // has no read to consume that result, so retire it before storing boxed null.
     release_owning_receiver_temporary(ctx, array_value, expr.span);
@@ -381,7 +434,8 @@ pub(super) fn lower_nullable_array_access(
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(read_block);
-    let read_value = lower_array_access_from_value(ctx, array_value, index, expr, warn_on_missing);
+    let read_value =
+        lower_array_access_from_values(ctx, array_value, index_value, index, expr, warn_on_missing);
     store_value_into_temp(ctx, &temp_name, result_type, read_value, expr.span);
     branch_to(ctx, merge);
 
@@ -456,18 +510,37 @@ pub(super) fn array_access_result_type(
 ) -> PhpType {
     match op {
         Op::StrCharAt => PhpType::Str,
-        Op::ArrayGet | Op::ArrayGetSilent => match ctx.builder.value_php_type(array).codegen_repr() {
-            PhpType::Array(elem_ty) => {
-                array_access_element_result_type(normalize_value_php_type(*elem_ty))
+        Op::ArrayGet | Op::ArrayGetSilent => {
+            let source_type = ctx.builder.value_php_type(array).codegen_repr();
+            match &source_type {
+                PhpType::Array(elem_ty) => array_access_element_result_type(
+                    ctx,
+                    normalize_value_php_type((**elem_ty).clone()),
+                ),
+                PhpType::Union(_) => match nullable_container_member(&source_type) {
+                    Some(PhpType::Array(elem_ty)) => {
+                        array_access_element_result_type(ctx, normalize_value_php_type(*elem_ty))
+                    }
+                    _ => fallback_expr_type(expr),
+                },
+                _ => fallback_expr_type(expr),
             }
-            _ => fallback_expr_type(expr),
-        },
-        Op::HashGet | Op::HashGetSilent => match ctx.builder.value_php_type(array).codegen_repr() {
-            PhpType::AssocArray { value, .. } => {
-                array_access_element_result_type(normalize_value_php_type(*value))
+        }
+        Op::HashGet | Op::HashGetSilent => {
+            let source_type = ctx.builder.value_php_type(array).codegen_repr();
+            match &source_type {
+                PhpType::AssocArray { value, .. } => {
+                    hash_access_element_result_type(ctx, normalize_value_php_type((**value).clone()))
+                }
+                PhpType::Union(_) => match nullable_container_member(&source_type) {
+                    Some(PhpType::AssocArray { value, .. }) => {
+                        hash_access_element_result_type(ctx, normalize_value_php_type(*value))
+                    }
+                    _ => fallback_expr_type(expr),
+                },
+                _ => fallback_expr_type(expr),
             }
-            _ => fallback_expr_type(expr),
-        },
+        }
         Op::BufferGet => match ctx.builder.value_php_type(array).codegen_repr() {
             PhpType::Buffer(elem_ty) => normalize_value_php_type(*elem_ty),
             _ => fallback_expr_type(expr),
@@ -481,13 +554,72 @@ pub(super) fn array_access_result_type(
     }
 }
 
-/// Returns the materialized result type for a PHP array read, including miss-capable int reads.
-pub(crate) fn array_access_element_result_type(element_ty: PhpType) -> PhpType {
-    if crate::codegen::sentinels::null_repr_is_tagged() && matches!(element_ty, PhpType::Int) {
-        PhpType::TaggedScalar
+/// Returns the materialized result type for a PHP array read, preserving null on a miss.
+pub(crate) fn array_access_element_result_type(
+    ctx: &LoweringContext<'_, '_>,
+    element_ty: PhpType,
+) -> PhpType {
+    if crate::codegen::sentinels::null_repr_is_tagged() {
+        match element_ty {
+            PhpType::Int => PhpType::TaggedScalar,
+            PhpType::Bool | PhpType::Str if ctx.target.is_wasm() => PhpType::Mixed,
+            other => other,
+        }
     } else {
         element_ty
     }
+}
+
+/// Returns a null-capable result type for associative-array reads.
+///
+/// WASM gives concrete containers a `T|null` PHP type while retaining their
+/// exact EIR pointer storage, so misses remain null and hits can still feed
+/// typed chained consumers. Integer reads use the allocation-free tagged scalar
+/// pair; other values use Mixed.
+fn hash_access_element_result_type(
+    ctx: &LoweringContext<'_, '_>,
+    element_ty: PhpType,
+) -> PhpType {
+    if ctx.target.is_wasm() {
+        match element_ty {
+            PhpType::Int => PhpType::TaggedScalar,
+            ty @ (PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)) => {
+                PhpType::Union(vec![ty, PhpType::Void])
+            }
+            _ => PhpType::Mixed,
+        }
+    } else {
+        array_access_element_result_type(ctx, element_ty)
+    }
+}
+
+/// Returns the concrete EIR pointer storage for a nullable hash-container
+/// result, or `None` for boxed/scalar result types.
+fn nullable_hash_container_ir_type(php_type: &PhpType) -> Option<IrType> {
+    nullable_container_member(php_type).map(|container| IrType::from_php(&container))
+}
+
+/// Returns the single concrete member from an exact two-member
+/// `container|null` union.
+fn nullable_container_member(php_type: &PhpType) -> Option<PhpType> {
+    let PhpType::Union(members) = php_type else {
+        return None;
+    };
+    if members.len() != 2
+        || !members
+            .iter()
+            .any(|member| matches!(member, PhpType::Void | PhpType::Never))
+    {
+        return None;
+    }
+    let container = members
+        .iter()
+        .find(|member| !matches!(member, PhpType::Void | PhpType::Never))?;
+    matches!(
+        container,
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)
+    )
+    .then(|| container.clone())
 }
 
 /// Returns the EIR result type for object indexing routed through `ArrayAccess::offsetGet`.

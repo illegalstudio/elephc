@@ -898,19 +898,6 @@ RETURN_TYPE_OVERRIDES: Dict[str, str] = {
     "stream_context_get_params": "array",
     "stream_get_meta_data": "array",
     "iterator_to_array": "array",
-    # Sorting/array mutating functions that return true on success.
-    "arsort": "bool",
-    "asort": "bool",
-    "krsort": "bool",
-    "ksort": "bool",
-    "rsort": "bool",
-    "shuffle": "bool",
-    "sort": "bool",
-    "natcasesort": "bool",
-    "natsort": "bool",
-    "uasort": "bool",
-    "uksort": "bool",
-    "usort": "bool",
     # `$format`/`$mode` select the result shape at run time in reference PHP; the registry
     # records the coarse `Mixed` that covers both shapes for the whole arity.
     "str_word_count": "array|int",

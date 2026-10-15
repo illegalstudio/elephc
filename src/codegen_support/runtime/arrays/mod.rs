@@ -567,6 +567,8 @@ pub use sort_int::emit_sort_int;
 pub use sort_str::emit_sort_str;
 /// Emit undefined integer array key warning helper.
 pub use undefined_array_key_warning::emit_undefined_array_key_warning;
+/// Select the exact array-offset-on-null warning for the active PHP profile.
+pub(crate) use undefined_array_key_warning::array_offset_on_null_warning;
 pub use float_key_to_int::emit_float_key_to_int;
 /// Emit user-defined sort helper.
 pub use php_compare_slots::emit_php_compare_slots;

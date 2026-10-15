@@ -267,12 +267,12 @@ fn variant_local_name(occurrence: &FunctionOccurrence) -> String {
         .exclusive_branch
         .map(|branch| branch.to_string())
         .unwrap_or_default();
-    let canonical = occurrence.canonical.to_string_lossy();
+    let canonical = super::include_once::identity_path(&occurrence.canonical);
     format!(
         "{}{}_{}",
         INCLUDE_VARIANT_PREFIX,
         stable_hash_hex(&[
-            canonical.as_ref(),
+            &canonical,
             &occurrence.public_key,
             occurrence.exclusive_group.as_deref().unwrap_or(""),
             &branch,

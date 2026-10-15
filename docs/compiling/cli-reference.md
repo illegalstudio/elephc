@@ -256,8 +256,8 @@ services. See [Profiling](../beyond-php/profiling.md) for both in full.
 | Flag | Values | Default | Description |
 |---|---|---|---|
 | `<source-file>` | path | — | Required. A tagged `.php` or tagless `.lfc` file to compile. Other suffixes retain tagged-PHP behavior. |
-| `--emit KIND` / `--emit=KIND` | `executable` (`exe`, `bin`), `cdylib` (`dylib`, `shared`), `staticlib` (`static`, `lib`) | `executable` | Output artifact kind. `cdylib` builds a C-ABI shared library; `staticlib` builds a C-ABI archive. `lib` is an alias of `staticlib`, not `cdylib`. |
-| `--emit-asm` | — | off | Write generated assembly and stop before runtime-object preparation, native assembly, or linking; no target assembler is required. |
+| `--emit KIND` / `--emit=KIND` | `executable` (`exe`, `bin`), `cdylib` (`dylib`, `shared`), `staticlib` (`static`, `lib`), `npm` (`npm-package`) | `executable` | Output artifact kind. `cdylib` builds a C-ABI shared library; `staticlib` builds a C-ABI archive. `lib` is an alias of `staticlib`, not `cdylib`. `npm` writes a Node.js ESM/WASI package to `<stem>-npm/` and requires `--target wasm32-wasi`. |
+| `--emit-asm` | — | off | Write generated assembly and stop before runtime-object preparation, native assembly, or linking; no target assembler is required. Native targets write `.s`; `wasm32-wasi` writes `.wat`. |
 | `--emit-ir` | — | off | Print the EIR textual form and stop. |
 | `--check` | — | off | Run checks and write nothing; exported code also receives EIR cdylib call-graph safety validation. |
 | `--strict-php` | — | off | Reject elephc extensions in every physical PHP-mode file; `.lfc` remains extension-enabled. See [Strict PHP mode](#strict-php-mode). |
@@ -271,8 +271,14 @@ services. See [Profiling](../beyond-php/profiling.md) for both in full.
 
 `--emit-ir`, `--emit-asm`, and `--check` are mutually exclusive. `--web` cannot
 be combined with `--check`, either library emit kind (`cdylib` or `staticlib`),
-`--emit-asm`, or `--emit-ir`. See
-[Output formats and diagnostics](output-and-diagnostics.md).
+`--emit-asm`, or `--emit-ir`. `--emit npm` requires `--target wasm32-wasi` and
+cannot be combined with `--emit-asm`. WASM cdylib/reactor output is not
+implemented yet. See [Output formats and diagnostics](output-and-diagnostics.md).
+
+The WASM pipeline rejects native-only options rather than silently ignoring
+them. This currently includes `--web`, `--source-map`, `--debug-info`,
+`--gc-stats`, `--heap-debug`, explicit `--heap-size`, `--null-repr`, or
+`--regalloc` overrides, native linker flags, and `--with-CRATE`.
 
 ### Where the profile comes from
 
@@ -451,21 +457,26 @@ status and headers with `http_response_code()` and `header()`. See
 
 | Flag | Values | Default | Description |
 |---|---|---|---|
-| `--target TARGET` / `--target=TARGET` | `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64` (plus alias spellings; recognized future targets produce an unsupported-backend diagnostic) | host platform | Select the compilation target. iOS is ARM64-only and emits libraries for an app host, not standalone app executables. |
+| `--target TARGET` / `--target=TARGET` | `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`, `wasm32-wasi` (plus alias spellings; recognized future native targets produce an unsupported-backend diagnostic) | host platform | Select the compilation target. iOS is ARM64-only and emits libraries for an app host, not standalone app executables. |
 
 See [Targets and cross-compilation](targets.md) for the full list of accepted
 spellings. For `ios-arm64` and `ios-sim-arm64`, use `--emit staticlib` (normally)
 or `--emit cdylib`; `--emit executable` is rejected because it would be an
 Elephc CLI process, not a signed iOS application bundle.
 
+The `wasm32-wasi` target compiles the active EIR module to WebAssembly instead
+of native machine code. `--emit npm` is only valid together with
+`--target wasm32-wasi`; it creates a Node.js 20+ package exposing `run()` from
+`index.mjs` and supporting direct execution with `node index.mjs`.
+
 ## Optimization and code generation
 
 | Flag | Values | Default | Env override | Description |
 |---|---|---|---|---|
-| `--ir-opt=on\|off` | `on`, `off` | `on` | `ELEPHC_IR_OPT` | Toggle the EIR optimization passes: identity folding, peepholes, constant folding, common-subexpression elimination, loop-invariant code motion, dead-instruction elimination, dead-store elimination, branch simplification, and the cross-function small-function inliner — run to a module-level fixed point. |
+| `--ir-opt=on\|off` | `on`, `off` | `on` | `ELEPHC_IR_OPT` | Toggle the native-target EIR optimization passes: identity folding, peepholes, constant folding, common-subexpression elimination, loop-invariant code motion, dead-instruction elimination, dead-store elimination, branch simplification, and the cross-function small-function inliner. The current WASM capability path keeps EIR unoptimized regardless of this setting. |
 | `--no-ir-opt` | — | — | `ELEPHC_IR_OPT=off` | Shorthand for `--ir-opt=off`. |
-| `--regalloc=linear\|stack` | `linear`, `stack` | `linear` | `ELEPHC_REGALLOC` | Register allocator: linear-scan, or stack-only fallback. |
-| `--null-repr=sentinel\|tagged` | `sentinel`, `tagged` | `tagged` | `ELEPHC_NULL_REPR` | Representation for null-capable scalar slots. |
+| `--regalloc=linear\|stack` | `linear`, `stack` | `linear` | `ELEPHC_REGALLOC` | Native register allocator: linear-scan, or stack-only fallback. |
+| `--null-repr=sentinel\|tagged` | `sentinel`, `tagged` | `tagged` | `ELEPHC_NULL_REPR` | Native representation for null-capable scalar slots. |
 
 See [Optimization and codegen controls](optimization.md).
 
@@ -484,7 +495,7 @@ See [Linking, heap, and conditional compilation](linking-and-conditional-compila
 
 | Flag | Values | Default | Description |
 |---|---|---|---|
-| `--heap-size=BYTES` | integer ≥ 65536 | `8388608` (8 MB) | Size of the program's runtime heap. |
+| `--heap-size=BYTES` | integer ≥ 65536 | `8388608` (8 MB) | Size of the native program's runtime heap. |
 | `--define SYMBOL` / `--define=SYMBOL` | symbol name | — | Define a compile-time symbol for `ifdef` (repeatable). |
 
 ## Strict PHP mode

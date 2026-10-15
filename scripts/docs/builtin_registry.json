@@ -16396,7 +16396,11 @@
       },
       "effects": {
         "kind": "static",
-        "names": []
+        "names": [
+          "reads_heap",
+          "may_fatal",
+          "may_warn"
+        ]
       },
       "lowering": {
         "kind": "runtime_call",
@@ -20287,7 +20291,7 @@
           "type": "callable"
         }
       ],
-      "return_type": "void",
+      "return_type": "bool",
       "variadic": null
     },
     "since": null,
@@ -20425,7 +20429,7 @@
           "type": "callable"
         }
       ],
-      "return_type": "void",
+      "return_type": "bool",
       "variadic": null
     },
     "since": null,
@@ -41755,9 +41759,7 @@
       "notes": [
         "Lowers `empty()` for concrete scalar and array-like operands."
       ],
-      "runtime_helpers": [
-        "__rt_mixed_is_empty"
-      ],
+      "runtime_helpers": [],
       "sig_arm": null,
       "sig_file": "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
       "sig_line": null
@@ -125958,7 +125960,7 @@
           "type": "string"
         }
       ],
-      "return_type": "string",
+      "return_type": "mixed",
       "variadic": null
     },
     "since": null,

@@ -30,7 +30,7 @@ builtin! {
 /// Infers the array value element type and validates both comparator arguments with that type.
 /// Closure bodies receive contextual hints for unannotated
 /// parameters, while `Mixed`/`Never` elements leave explicit declarations authoritative.
-/// Arity (exactly 2) is pre-validated by the registry. Returns `Ok(PhpType::Void)`.
+/// Arity (exactly 2) is pre-validated by the registry. Returns `Ok(PhpType::Bool)`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     let cmp_ty = crate::types::checker::builtins::array_element_type(&arr_ty);
@@ -44,5 +44,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         cx.env,
         &label,
     )?;
-    Ok(PhpType::Void)
+    Ok(PhpType::Bool)
 }

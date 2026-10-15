@@ -5,7 +5,8 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - `check` validates that the first argument is a stream resource before returning `Str`.
+//! - `check` validates that the first argument is a stream resource before returning
+//!   php's `string|false`.
 //! - `ending` is optional (defaults to empty string). Arguments are pre-inferred by the registry.
 
 use crate::builtins::spec::BuiltinCheckCtx;
@@ -20,7 +21,11 @@ builtin! {
     ),
 }
 
-/// Validates the stream resource argument and returns `Str`.
+/// Validates the stream resource argument and returns php's `string|false`.
+///
+/// `false` is what EOF answers when nothing could be read — and it is genuinely distinct from
+/// the empty string a leading delimiter produces, measured on php-src 8.5.6: reading `"\nx"`
+/// gives `""`, then `"x"`, then `false`. Declaring a plain `Str` here collapsed the two.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     crate::types::checker::builtins::io::common::ensure_stream_resource(
         cx.checker,
@@ -28,5 +33,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         &cx.args[0],
         cx.env,
     )?;
-    Ok(PhpType::Str)
+    Ok(cx.checker.normalize_union_type(vec![PhpType::Str, PhpType::False]))
 }

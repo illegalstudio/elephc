@@ -3283,7 +3283,15 @@ unlink("sgl_cap.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies compiled PHP output for stream get line loop terminates at eof.
+/// Verifies the `while (!feof($f))` loop terminates, and counts what php counts.
+///
+/// The loop runs THREE times over `"x\ny\n"`: `"x"`, `"y"`, then the read that finds nothing
+/// and answers `false` — which is what finally sets `feof`. `$line !== ""` is a STRICT
+/// comparison, so that `false` does not equal the empty string and the counter advances a
+/// third time. `php -n` prints 3.
+///
+/// It used to assert 2, back when `stream_get_line`'s narrowed `Str` result collapsed `false`
+/// into `""`. The loop's termination — the property this test is named for — is unchanged.
 #[test]
 fn test_stream_get_line_loop_terminates_at_eof() {
     let (out, dir) = compile_and_run_in_dir(
@@ -3300,7 +3308,7 @@ fclose($f);
 unlink("sgl_eof.txt");
 "#,
     );
-    assert_eq!(out, "2");
+    assert_eq!(out, "3", "php -n's own answer");
     let _ = fs::remove_dir_all(&dir);
 }
 

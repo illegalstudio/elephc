@@ -434,6 +434,77 @@ fn test_ref_alias_array_element_nonzero_index() {
     assert_eq!(out, "99");
 }
 
+/// A by-reference closure capture keeps PHP's integer-overflow promotion.
+///
+/// `$n += 3` on `PHP_INT_MAX` produces a float in PHP. The captured cell used to carry a
+/// narrow `Int` payload, so the promoted `Mixed` was silently narrowed back and the result
+/// saturated at `PHP_INT_MAX` instead of becoming a double. The same arithmetic outside a
+/// closure was always correct, which is what made the cell the culprit.
+#[test]
+fn test_by_ref_capture_preserves_integer_overflow_promotion() {
+    let out = compile_and_run(
+        r#"<?php
+        function make(): callable {
+            $n = PHP_INT_MAX;
+            return function() use (&$n) { $n += 3; return $n; };
+        }
+        $f = make();
+        $r = $f();
+        echo $r, "|", gettype($r);"#,
+    );
+    assert_eq!(out, "9.2233720368548E+18|double");
+}
+
+/// The same arithmetic without a closure capture: the control that proved the promotion
+/// itself was never broken, only its round trip through the reference cell.
+#[test]
+fn test_integer_overflow_promotion_without_capture() {
+    let out = compile_and_run(
+        r#"<?php $n = PHP_INT_MAX; $n += 3; echo $n, "|", gettype($n);"#,
+    );
+    assert_eq!(out, "9.2233720368548E+18|double");
+}
+
+/// A by-reference capture that never overflows keeps its ordinary integer result.
+#[test]
+fn test_by_ref_capture_without_overflow_stays_integer() {
+    let out = compile_and_run(
+        r#"<?php
+        function make(): callable {
+            $n = 20;
+            return function() use (&$n) { $n += 3; return $n; };
+        }
+        $f = make();
+        $r = $f();
+        echo $r, "|", gettype($r);"#,
+    );
+    assert_eq!(out, "23|integer");
+}
+
+/// A by-reference capture the body only READS keeps its integer cell, even when the variable is
+/// already a reference.
+///
+/// A widening arm keyed on arithmetic that merely read the capture (`echo $a + 2`) relabeled the
+/// cell `Mixed` without converting it, so the integer 40 was dereferenced as a boxed cell and the
+/// program crashed on the next read. A read cannot promote the stored value; the write path that
+/// can (`$n += 1`) widens and converts on its own, as the overflow test above shows.
+#[test]
+fn test_by_ref_capture_read_only_arithmetic_keeps_its_cell() {
+    let out = compile_and_run(
+        r#"<?php
+$a = 40;
+$b = &$a;
+$f = function () use (&$a) { echo $a + 2, "\n"; };
+$f();
+echo $a, "\n";
+$b = 5;
+$f();
+echo $a, "\n";
+"#,
+    );
+    assert_eq!(out, "42\n40\n7\n5\n");
+}
+
 /// Keeps a captured reference and its originally typed array on the same boxed storage representation.
 #[test]
 fn test_ref_alias_array_element_capture_retyping() {

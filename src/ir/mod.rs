@@ -10,6 +10,7 @@
 //!   are immutable metadata assigned when instructions are built.
 
 mod block;
+pub(crate) mod class_relations;
 mod runtime_fn;
 mod builder;
 mod effects;
@@ -44,7 +45,7 @@ pub use function::{
 pub use instr::{
     BuiltinId, CheckedNumericChainImmediate, CmpPredicate, CoreBuiltinOp, GcControlOp, Immediate,
     InstId, Instruction, IterStartMetadata, MixedNumericOp, Op, PassOrigin, PhpTypePredicate,
-    PropertyFetchMode, RuntimeId,
+    PropertyFetchMode, RuntimeId, ARRAY_OFFSET_ON_NULL_WARNING, ARRAY_OFFSET_ON_NULL_WARNING_PHP82,
 };
 pub use module::{
     ClassTable, CloneOverrideApplicator, DataId, DataPool, EnumTable, ExternDecl, ExternParamDecl,

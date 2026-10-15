@@ -125,6 +125,7 @@ impl Checker {
                         span: stmt.span,
                         body: body.clone(),
                         attributes: stmt.attributes.clone(),
+                        strict_types: stmt.strict_types,
                     },
                 );
             }

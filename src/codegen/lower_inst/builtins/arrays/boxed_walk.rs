@@ -60,6 +60,6 @@ pub(super) fn lower_boxed_array_walk(
     );
     abi::emit_call_label(ctx.emitter, "__rt_array_walk_boxed");
     abi::emit_release_temporary_stack(ctx.emitter, CALLBACK_STACK_BYTES);
-    store_void_builtin_result(ctx, inst)?;
+    store_true_builtin_result(ctx, inst)?;
     Ok(true)
 }

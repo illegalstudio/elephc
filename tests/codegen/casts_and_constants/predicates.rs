@@ -418,3 +418,30 @@ var_dump($two ** ($argc + 2), $two ** ($argc + 61), $two ** ($argc + 62), $ten *
     assert_eq!(lines[0], "int(8)");
     assert_eq!(lines[2], "float(9.223372036854776E+18)");
 }
+
+/// Verifies every spelling of PHP string truthiness agrees, including the `"0"` trap.
+///
+/// PHP has exactly TWO falsy strings, `""` and the single byte `"0"` — `"00"`, `"0.0"` and
+/// `" "` are all TRUE. `empty()` used to test the string LENGTH alone, so `empty("0")`
+/// answered false where php-src 8.5.6 answers true, while `if`, `!`, `(bool)` and `&&` on
+/// the same value were already right. The values arrive through an array so none of the
+/// five sites can be folded at compile time, and the four spellings are compared to each
+/// other as well as to php's own answers.
+#[test]
+fn test_string_truthiness_spellings_agree_on_the_zero_string() {
+    let out = compile_and_run(
+        r#"<?php
+$vals = ["", "0", "00", "0.0", "x", " ", "false"];
+foreach ($vals as $v) {
+    echo $v ? "1" : "0";
+    echo empty($v) ? "0" : "1";
+    echo (bool)$v ? "1" : "0";
+    echo !$v ? "0" : "1";
+    echo "\n";
+}
+"#,
+    );
+    // php -n's own answers: "" and "0" are falsy, everything else truthy — and all four
+    // spellings agree on every row, which is what the repeated digit in each line means.
+    assert_eq!(out, "0000\n0000\n1111\n1111\n1111\n1111\n1111\n");
+}

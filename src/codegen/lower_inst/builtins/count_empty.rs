@@ -253,9 +253,13 @@ pub(in crate::codegen::lower_inst) fn lower_empty(ctx: &mut FunctionContext<'_>,
         PhpType::Void | PhpType::Never => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
         }
+        // `empty()` is `!(bool)$x`, so the STRING arm is the negation of string truthiness —
+        // not a length test. PHP has TWO falsy strings, `""` and `"0"`, and testing the length
+        // alone answered `empty("0") === false` where php-src 8.5.6 answers true. Routing
+        // through the shared predicate keeps one copy of that rule for every consumer.
         PhpType::Str => {
-            ctx.load_value_to_result(value)?;
-            emit_string_length_zero_bool(ctx);
+            predicates::emit_string_truthiness(ctx, value)?;
+            invert_bool_result(ctx);
         }
         PhpType::TaggedScalar => {
             emit_tagged_scalar_empty_bool(ctx, value)?;
@@ -403,22 +407,6 @@ pub(in crate::codegen::lower_inst) fn emit_x86_64_float_zero_from_flags(ctx: &mu
     ctx.emitter.instruction("sete al");                                         // materialize true when the float operand is ordered-equal to zero
     ctx.emitter.instruction("setnp r10b");                                      // materialize whether the comparison was ordered
     ctx.emitter.instruction("and al, r10b");                                    // a NAN is not empty, so clear the unordered case
-}
-
-/// Emits true when the loaded string length register is zero.
-pub(in crate::codegen::lower_inst) fn emit_string_length_zero_bool(ctx: &mut FunctionContext<'_>) {
-    let len_reg = abi::string_result_regs(ctx.emitter).1;
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp {}, #0", len_reg));           // compare the empty() string length against zero
-            ctx.emitter.instruction("cset x0, eq");                             // return true when the string length is zero
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp {}, 0", len_reg));            // compare the empty() string length against zero
-            ctx.emitter.instruction("sete al");                                 // materialize true when the string length is zero
-            ctx.emitter.instruction("movzx rax, al");                           // widen the boolean byte into the integer result register
-        }
-    }
 }
 
 /// Inverts a canonical 0/1 boolean result in the integer result register.

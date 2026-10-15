@@ -10,3 +10,5 @@ ViewProtocolIOS
 ViewProtocol.app/
 ViewProtocolIOS.app/
 simulator.png
+*.wasm
+*.wat

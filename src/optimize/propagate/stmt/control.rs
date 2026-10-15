@@ -397,7 +397,11 @@ pub(super) fn propagate_if_stmt(
     // `else if` spelled as two words is a nested `If` in the else body and was never affected,
     // which is what made this look like an `elseif` parsing problem rather than a merge one.
     let condition_value = scalar_value(&condition);
-    let then_taken = condition_value.as_ref().map(|value| value.truthy());
+    // NAN has no diagnostic-free truthiness — PHP 8.5 reports every NAN-to-bool coercion — so a
+    // chain conditioned on one is merged rather than decided.
+    let then_taken = condition_value
+        .as_ref()
+        .and_then(|value| value.diagnostic_free_truthiness());
     let next_env = match then_taken {
         Some(true) => then_env,
         Some(false) if propagated_elseifs.is_empty() => else_env.unwrap_or_default(),

@@ -13,6 +13,12 @@ use super::context::LoweringContext;
 
 /// Replaces only the two checker-provided constructor bodies, leaving user overrides untouched.
 pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>) -> bool {
+    // The compact builtin layout this operation hides is the native backend's. The WASM backend
+    // lays every Throwable out as an ordinary object, so the checker-provided body — plain
+    // property writes — already serves builtins and subclasses alike there.
+    if ctx.target.is_wasm() {
+        return false;
+    }
     let Some((class, method)) = ctx.owner_name().rsplit_once("::") else {
         return false;
     };

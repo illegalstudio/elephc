@@ -410,21 +410,7 @@ pub(crate) fn patch_builtin_exception_signatures(checker: &mut Checker) {
             sig.return_type = PhpType::Str;
         }
     }
-    for class_name in [
-        "Error",
-        "TypeError",
-        "ArgumentCountError",
-        "ValueError",
-        "ArithmeticError",
-        "DivisionByZeroError",
-        "AssertionError",
-        "UnhandledMatchError",
-        "Exception",
-        "RuntimeException",
-        "ReflectionException",
-        "JsonException",
-        "FiberError",
-    ] {
+    for class_name in PATCHED_THROWABLE_CLASSES {
         if let Some(class_info) = checker.classes.get_mut(class_name) {
             if let Some(sig) = class_info.methods.get_mut("__construct") {
                 if let Some(param) = sig.params.get_mut(0) {
@@ -465,6 +451,62 @@ pub(crate) fn patch_builtin_exception_signatures(checker: &mut Checker) {
             if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("__toString")) {
                 sig.return_type = PhpType::Str;
             }
+        }
+    }
+    sync_inherited_throwable_signatures(checker);
+}
+
+/// The builtin Throwable classes whose method signatures `patch_builtin_exception_signatures`
+/// corrects after their schemas are built.
+const PATCHED_THROWABLE_CLASSES: [&str; 13] = [
+    "Error",
+    "TypeError",
+    "ArgumentCountError",
+    "ValueError",
+    "ArithmeticError",
+    "DivisionByZeroError",
+    "AssertionError",
+    "UnhandledMatchError",
+    "Exception",
+    "RuntimeException",
+    "ReflectionException",
+    "JsonException",
+    "FiberError",
+];
+
+/// Mirrors the patched builtin Throwable signatures into every subclass's inherited copy.
+///
+/// A subclass copies its parent's signatures when its schema is built, before the patch above
+/// runs, so `class NotFound extends Exception {}` kept the placeholder `int` return on its
+/// inherited `__construct` while the body it dispatches to answers `void`. Calls planned on
+/// the subclass read that copy, so it must describe the body that actually runs.
+fn sync_inherited_throwable_signatures(checker: &mut Checker) {
+    let mut inherited = Vec::new();
+    for (class_name, class_info) in &checker.classes {
+        for (method, impl_class) in &class_info.method_impl_classes {
+            if impl_class == class_name || !PATCHED_THROWABLE_CLASSES.contains(&impl_class.as_str()) {
+                continue;
+            }
+            if let Some(source) = checker
+                .classes
+                .get(impl_class)
+                .and_then(|source| source.methods.get(method))
+            {
+                inherited.push((class_name.clone(), method.clone(), source.clone()));
+            }
+        }
+    }
+    for (class_name, method, source) in inherited {
+        let Some(sig) = checker
+            .classes
+            .get_mut(&class_name)
+            .and_then(|class_info| class_info.methods.get_mut(&method))
+        else {
+            continue;
+        };
+        sig.return_type = source.return_type;
+        for (param, (_, source_ty)) in sig.params.iter_mut().zip(source.params) {
+            param.1 = source_ty;
         }
     }
 }

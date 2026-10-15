@@ -32,6 +32,7 @@ mod fibers;
 mod frame;
 mod function_variants;
 mod literal_defaults;
+pub(crate) use literal_defaults::{literal_default_value, LiteralArrayElement, LiteralDefaultValue};
 mod local_analysis;
 mod mbstring_configuration;
 pub(crate) mod lower_inst;
@@ -160,11 +161,18 @@ impl Instrumentation {
 /// merged once into the host's final binary by the host's own linker, exactly
 /// like the executable path, whose non-PIC output is already PC-relative and
 /// already yields PIE binaries.
+///
+/// `NpmPackage` is only valid with the `wasm32-wasi` target: it produces a
+/// directory containing the compiled `.wasm` module, an ESM loader that runs it
+/// under `node:wasi`, a `package.json`, and a README. For all native codegen and
+/// linking decisions it behaves exactly like `Executable` (a command module with
+/// a `_start` entry); the difference is purely in how the artifact is packaged.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum Emit {
     Executable,
     Cdylib,
     Staticlib,
+    NpmPackage,
 }
 
 impl Emit {
@@ -343,7 +351,9 @@ pub fn generate_user_asm_from_ir_with_options_and_features(
         // binary, so it needs no GOT indirection, but it still exposes the same
         // recoverable host boundary as a cdylib.
         Emit::Staticlib => Emitter::new_staticlib(module.target),
-        Emit::Executable => Emitter::new(module.target),
+        // NpmPackage is wasm-only and never reaches this native backend, but it
+        // behaves like Executable for codegen; keep the match exhaustive.
+        Emit::Executable | Emit::NpmPackage => Emitter::new(module.target),
     };
     if module.target.arch == Arch::X86_64 {
         emitter.emit_text_prelude();
@@ -536,7 +546,9 @@ fn finalize_user_asm(
         // An executable exports only its entry point. Everything else is `.globl` purely so the
         // two objects can find each other, and a `.globl` is an export — hence a dead-strip root,
         // which is why unreferenced per-class machinery survived stripping.
-        Emit::Executable => {
+        // NpmPackage is wasm-only and never reaches this native backend; it packages a
+        // command module, so it exports exactly what an executable exports.
+        Emit::Executable | Emit::NpmPackage => {
             exported.insert(module.target.extern_symbol("main"));
         }
     }

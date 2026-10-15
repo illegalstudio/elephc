@@ -2,3 +2,5 @@
 *.o
 main
 greeting.txt
+*.wasm
+*.wat

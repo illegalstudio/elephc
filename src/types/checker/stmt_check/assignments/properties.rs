@@ -417,11 +417,18 @@ fn check_object_property_write(
         // would forbid a program PHP accepts whenever the runtime value happens to fit.
         let defers_to_runtime_property_typing = matches!(val_ty, PhpType::Mixed);
         if class_info.visible_property_is_declared(property) && !defers_to_runtime_property_typing {
-            checker.require_compatible_arg_type(
+            let context = format!("Property {}::${}", class_name, property);
+            checker.require_compatible_arg_type(&expected_ty, val_ty, span, &context)?;
+            // `declare(strict_types=1)` governs every typed WRITE, not only arguments: PHP
+            // throws `TypeError: Cannot assign bool to property C::$v of type int` for the same
+            // pair it rejects at a parameter, and performs the same one exception — the `int` to
+            // `float` widening. Verified on php-src 8.5.
+            checker.require_strict_types_param_binding(
                 &expected_ty,
                 val_ty,
                 span,
-                &format!("Property {}::${}", class_name, property),
+                &context,
+                crate::types::param_binding::StrictBindingSite::Property,
             )?;
         }
     }

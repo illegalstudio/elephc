@@ -210,6 +210,14 @@ fn lower_property_assign_value(
     // concrete temporary payload just like a declared property store does.
     let property_ty = object_property_type(ctx, object.value, property).unwrap_or(PhpType::Mixed);
     release_property_assignment_source_after_retaining_store(ctx, &property_ty, value, span);
+    // The RECEIVER can be an owning temporary too — `$c->o->n = 5` reads `$c->o`, and a
+    // dynamic-property read hands back a reference the caller owns. `PropSet` writes THROUGH
+    // that receiver without consuming it, so nothing else would ever drop it; the read path
+    // already releases the same intermediate, which is why only a nested WRITE leaked. The
+    // readonly-throw branch above guards this the same way, on this same value.
+    if ctx.value_is_owning_temporary(object) {
+        crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
+    }
 }
 
 /// Boxes a concrete value assigned through a receiver whose CLASS is only known at run time.

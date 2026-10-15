@@ -8,7 +8,7 @@ sidebar:
 ## stream_get_line()
 
 ```php
-function stream_get_line(resource $stream, int $length, string $ending = ''): string
+function stream_get_line(resource $stream, int $length, string $ending = ''): mixed
 ```
 
 Gets line from stream resource up to a given delimiter.
@@ -18,7 +18,7 @@ Gets line from stream resource up to a given delimiter.
 - `$length` (`int`)
 - `$ending` (`string`), default `''`, optional
 
-**Returns**: `string`
+**Returns**: `mixed`
 
 ## Availability
 

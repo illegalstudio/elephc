@@ -7,7 +7,7 @@ sidebar:
 
 ## declare
 
-`declare(strict_types=1);` switches the file to PHP's strict parameter binding.
+`declare(strict_types=1);` switches the file to PHP's strict binding at every typed write — parameters, declared return types and typed properties.
 Like PHP, the directive is scoped to the **physical file it appears in**: it does
 not propagate into files that file includes, it does not reach back into the file
 that included it, and it is the file containing the *call site* — not the file

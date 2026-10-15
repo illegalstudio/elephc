@@ -355,7 +355,7 @@ Add the explicit cast the call site means — `takesInt((int) $f)`, `takesFloat(
 
 ### Strict types
 
-A file that opens with `declare(strict_types=1);` gets PHP's strict parameter binding: a declared scalar parameter accepts only an argument of exactly that type, plus the single widening of `int` into a declared `float`. Every conversion in the tables above becomes a compile error naming the `TypeError` PHP would throw at run time.
+A file that opens with `declare(strict_types=1);` gets PHP's strict binding at every typed write: a declared scalar parameter, a declared scalar return type, and a typed scalar property each accept only a value of exactly that type, plus the single widening of `int` into a declared `float`. Every conversion in the tables above becomes a compile error naming the `TypeError` PHP would throw at run time — `must be of type int, bool given` at a parameter, `Return value must be of type int, bool returned` at a return, and `Cannot assign bool to property C::$v of type int` at a property.
 
 | Argument type → | `int` | `float` | `string` | `bool` |
 |---|---|---|---|---|
@@ -392,13 +392,13 @@ echo fromLooseFile();       // 1 — the call above lives in a coercive file
 echo coerceHere(true);      // compile error — this call lives in a strict file
 ```
 
-**What the directive covers.** Declared by-value parameters of user functions, methods, static methods, constructors, closures, arrow functions, first-class callables, declared variadic element types, and `call_user_func`/`call_user_func_array` — which forward the caller's frame in PHP and therefore stay strict.
+**What the directive covers.** Declared by-value parameters of user functions, methods, static methods, constructors, closures, arrow functions, first-class callables, declared variadic element types, and `call_user_func`/`call_user_func_array` — which forward the caller's frame in PHP and therefore stay strict. Declared scalar **return types** and typed scalar **property assignments** are covered too; unlike an argument, which follows the file the CALL SITE is written in, a return follows the file the function is DECLARED in, as in PHP.
 
 **What it does not cover.**
 
 - **Callbacks invoked by other internal functions** (`array_map`, `usort`, `array_walk`, `preg_replace_callback`, …) keep coercive binding, matching PHP: the engine calls them from its own frame, which never carries the directive. `array_map('g', [true])` still passes `1` to `g(int $i)` in a strict file.
 - **Builtin function arguments** keep their own per-builtin rules; the directive does not tighten them. PHP throws `TypeError` for `strlen(42)` under `strict_types=1` while elephc still applies each builtin's own argument checking.
-- **Return types, typed property assignments and typed constants** are unaffected; PHP also applies `strict_types` to those.
+- **Typed class constants** are unaffected; PHP also applies `strict_types` to those.
 - **Positional spread arguments** (`f(...$args)`) and **variadic parameters of an inline closure literal** (`function (int ...$xs) {}`) are not checked against the declared parameter type, in strict or coercive mode.
 - **Values whose type is only known at run time** (`mixed`, union-typed and array-element values) are not rejected: elephc cannot raise PHP's runtime `TypeError` at a parameter boundary, so such a binding is left to the existing compatibility rules.
 

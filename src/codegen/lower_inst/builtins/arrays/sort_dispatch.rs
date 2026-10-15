@@ -229,12 +229,7 @@ pub(super) fn lower_indexed_array_sort(
         int_helper
     };
     abi::emit_call_label(ctx.emitter, helper);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
-    );
-    store_if_result(ctx, inst)
+    store_true_builtin_result(ctx, inst)
 }
 
 /// Calls the mutating shuffle helper for indexed arrays whose payload slots are pointer-sized.
@@ -256,12 +251,7 @@ pub(super) fn lower_indexed_array_shuffle(ctx: &mut FunctionContext<'_>, inst: &
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_shuffle");
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
-    );
-    store_if_result(ctx, inst)
+    store_true_builtin_result(ctx, inst)
 }
 
 /// Calls the user-sort helper with a static comparator and optional late-static environment.
@@ -322,12 +312,7 @@ pub(super) fn lower_user_sort_static_callback(
                     Ok(())
                 },
             )?;
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_result_reg(ctx.emitter),
-                0x7fff_ffff_ffff_fffe,
-            );
-            store_if_result(ctx, inst)?;
+            store_true_builtin_result(ctx, inst)?;
             return Ok(());
         }
         PhpType::Str => {
@@ -353,12 +338,7 @@ pub(super) fn lower_user_sort_static_callback(
                     Ok(())
                 },
             )?;
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_result_reg(ctx.emitter),
-                0x7fff_ffff_ffff_fffe,
-            );
-            store_if_result(ctx, inst)?;
+            store_true_builtin_result(ctx, inst)?;
             return Ok(());
         }
         _ => {}
@@ -409,12 +389,7 @@ pub(super) fn lower_user_sort_with_static_callback_binding(
     if env_bytes != 0 {
         abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
     }
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
-    );
-    store_if_result(ctx, inst)
+    store_true_builtin_result(ctx, inst)
 }
 
 /// Returns a callback label whose runtime ABI produces an integer comparison result.

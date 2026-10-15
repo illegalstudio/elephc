@@ -63,6 +63,35 @@ fn generate_project_asm(
     (user_asm, runtime_asm, runtime_features)
 }
 
+// True when the `wasmer` runtime cannot be started, after saying so on stderr. The WASM tests
+// compile first and only then run the module, so without a runtime they cannot check output;
+// returning silently would let them pass as if they had. The message names the running test so
+// a skipped run is visible with `--nocapture` and in a failing-job log.
+/// Reports whether the wasmer runtime is missing, printing the skip reason when it is.
+///
+/// With `ELEPHC_TEST_REQUIRE_WASM_HOSTS` set (CI installs both hosts and sets it) a missing
+/// `wasmer` fails the test instead.
+pub(crate) fn wasmer_missing_skips_test() -> bool {
+    if std::process::Command::new("wasmer")
+        .arg("--version")
+        .output()
+        .is_ok()
+    {
+        return false;
+    }
+    let thread = std::thread::current();
+    let test = thread.name().unwrap_or("<unnamed test>");
+    assert!(
+        std::env::var_os("ELEPHC_TEST_REQUIRE_WASM_HOSTS").is_none(),
+        "{test}: `wasmer` cannot be started although ELEPHC_TEST_REQUIRE_WASM_HOSTS is set"
+    );
+    eprintln!(
+        "SKIPPED {test}: the `wasmer` runtime is not installed or not on PATH, so the compiled \
+         wasm32-wasi module was not executed"
+    );
+    true
+}
+
 // Creates an isolated temporary directory for CLI tests using a unique prefix,
 // process ID, thread ID, and auto-incrementing counter. Used to avoid file collisions
 // when tests run in parallel.

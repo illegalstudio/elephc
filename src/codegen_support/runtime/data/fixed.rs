@@ -831,7 +831,11 @@ pub(crate) fn emit_runtime_data_fixed(
     ] {
         out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
     }
-    out.push_str(".globl _diag_array_offset_on_null\n_diag_array_offset_on_null:\n    .ascii \"Warning: Trying to access array offset on null\\n\"\n");
+    // The wording is the active PHP profile's: 8.2 says "on value of type null".
+    out.push_str(&format!(
+        ".globl _diag_array_offset_on_null\n_diag_array_offset_on_null:\n    .ascii {:?}\n",
+        crate::codegen_support::runtime::array_offset_on_null_warning()
+    ));
     // -- curl_setopt()'s unsupported-option warning, split around the option number --
     // `__rt_curl_warn_unsupported_option` derives both `write()` lengths from the same
     // two constants the bytes below are built from, so the message and the immediates

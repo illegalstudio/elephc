@@ -54,8 +54,8 @@ sidebar:
 | [`array_unique()`](./array/array_unique.md) | `(array $array): array` | `array` | ✓ | ✓ |
 | [`array_unshift()`](./array/array_unshift.md) | `(array $array, ...$values): int` | `int` | ✓ | ✓ |
 | [`array_values()`](./array/array_values.md) | `(array $array): array` | `array` | ✓ | ✓ |
-| [`array_walk()`](./array/array_walk.md) | `(array $array, callable $callback): void` | `void` | ✓ | ✓ |
-| [`array_walk_recursive()`](./array/array_walk_recursive.md) | `(array $array, callable $callback): void` | `void` | ✓ | - |
+| [`array_walk()`](./array/array_walk.md) | `(array $array, callable $callback): bool` | `bool` | ✓ | ✓ |
+| [`array_walk_recursive()`](./array/array_walk_recursive.md) | `(array $array, callable $callback): bool` | `bool` | ✓ | - |
 | [`arsort()`](./array/arsort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`asort()`](./array/asort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`call_user_func()`](./array/call_user_func.md) | `(callable $callback, ...$args): mixed` | `mixed` | ✓ | ✓ |

@@ -19,6 +19,7 @@ use crate::ir::{
 };
 use crate::types::PhpType;
 
+use super::checked_int_sink::is_cast_to_int;
 use super::driver::IrPass;
 use super::rewrite::neutralize_to_nop;
 
@@ -35,8 +36,7 @@ impl IrPass for CheckedNumericChain {
     fn is_applicable(&self, function: &Function) -> bool {
         function.instructions.iter().any(|inst| {
             inst.op == Op::Cast
-                && inst.result_php_type == PhpType::Int
-                && matches!(inst.immediate, Some(Immediate::CastTarget(IrType::I64)))
+                && is_cast_to_int(inst)
                 && inst.operands.first().is_some_and(|value| {
                     defining_instruction(function, *value)
                         .is_some_and(|(_, definition)| definition.op == Op::MixedNumericBinop)
@@ -53,10 +53,8 @@ impl IrPass for CheckedNumericChain {
             .iter()
             .enumerate()
             .filter_map(|(raw, inst)| {
-                (inst.op == Op::Cast
-                    && inst.result_php_type == PhpType::Int
-                    && matches!(inst.immediate, Some(Immediate::CastTarget(IrType::I64))))
-                .then_some(InstId::from_raw(raw as u32))
+                (inst.op == Op::Cast && is_cast_to_int(inst))
+                    .then_some(InstId::from_raw(raw as u32))
             })
             .collect();
         let mut changed = false;

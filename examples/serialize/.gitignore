@@ -2,3 +2,5 @@
 *.o
 main
 *.phar
+*.wasm
+*.wat
