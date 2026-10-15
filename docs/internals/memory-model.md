@@ -1055,7 +1055,7 @@ false-conversion exception through key-sensitive opcode completion, then transfe
 exception or chain it under a new key error without leaving an owner in both the frame and the
 in-flight exception cell.
 
-Static false-parent updates query the selected Mixed cell's reference count after notification
+Local and static false-parent updates query the selected Mixed cell's reference count after notification
 without acquiring another reference. A count of one means only the pending write pin remains;
 the leaf read is skipped and an owned null is selected instead. The ARM64 and x86_64 emitters
 read the same uniform heap header, including on the iOS targets.

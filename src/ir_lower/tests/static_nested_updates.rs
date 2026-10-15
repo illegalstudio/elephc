@@ -54,6 +54,10 @@ function falseParentUpdate(): mixed { return ++NestedUpdate::$items[0][0][1]; }
 function falsePlainWrite(mixed $key): void { NestedUpdate::$items[0][0][$key] = 9; }
 function falsePlainAppend(): void { NestedUpdate::$items[0][0][] = 9; }
 function falseLocalWrite(bool $flag): void { $items = [[$flag]]; $items[0][0][1] = 9; }
+function falseLocalCompound(array $items): void { $items[0][0][1] += 4; }
+function falseStaticCoalesce(): void { NestedUpdate::$items[0][0][1] ??= 4; }
+function recursiveFalseWrite(): void { $items = [false]; $items[0][0][1] = 9; }
+function scalarPlainWrite(mixed $value): void { $items = [[$value]]; $items[0][0][1] = 9; }
 set_error_handler(function($level, $message) { return true; });
 ++NestedUpdate::$items[0][0]["before"];
 ++ConcreteUpdate::$items[1][0];
@@ -135,6 +139,22 @@ echo json_encode(NestedUpdate::$items);
             Immediate::RuntimeCall(RuntimeCallTarget::ExceptionChain))),
             "{target}: {name} preserves callback exception priority on completion errors");
     }
+    let local = module.functions.iter().find(|function| function.name == "falseLocalCompound").unwrap();
+    assert!(local.blocks.iter().any(|block| block.name.starts_with("static.update.false.promote")),
+        "{target}: local compound updates normalize attached parents before the leaf read");
+    let coalesce = module.functions.iter().find(|function| function.name == "falseStaticCoalesce").unwrap();
+    assert!(coalesce.blocks.iter().any(|block| block.name.starts_with("coalesce_assign.default")),
+        "{target}: coalescing uses a conditional insert rather than an unconditional update");
+    assert!(coalesce.blocks.iter().any(|block| block.name.starts_with("nested.false.capture")),
+        "{target}: the lazy insert performs ordinary attached false conversion");
+    let scalar = module.functions.iter().find(|function| function.name == "scalarPlainWrite").unwrap();
+    for predicate in [crate::ir::PhpTypePredicate::Int, crate::ir::PhpTypePredicate::Float] {
+        assert!(scalar.instructions.iter().any(|inst| inst.immediate == Some(
+            Immediate::TypePredicate(predicate))), "{target}: plain writes guard {predicate:?} parents");
+    }
+    assert!(scalar.blocks.iter().any(|block| block.name.starts_with("nested.store.scalar.error")
+        && matches!(block.terminator, Some(crate::ir::Terminator::Throw { .. }))),
+        "{target}: numeric parents use a catchable EIR Error path");
     for name in ["variableStringKey", "promotedStringKey", "promotedMixedKey", "promotedNullableKey"] {
         let function = module.functions.iter().find(|function| function.name == name).unwrap();
         assert!(function.instructions.iter().any(|inst| inst.op == Op::ZeroLocalSlot),

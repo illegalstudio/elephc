@@ -18,19 +18,36 @@ pub(super) fn lower_nested_array_assign(
     span: Span,
 ) {
     let update = desugared_element_update(value, span, |read| read == target);
+    if let Some(ElementUpdate::NullCoalesce { read, default }) = update {
+        let mut snapshots = Vec::new();
+        let (read, write) = snapshot_nested_update_keys(ctx, read, &mut snapshots);
+        crate::ir_lower::expr::lower_null_coalesce_update_stmt_to(ctx, &read, &write, default, span);
+        retire_update_keys(ctx, snapshots, span);
+        return;
+    }
     if update.is_none() {
         super::nested_plain_writes::lower_store(ctx, target, value, span);
         return;
     }
     if matches!(update, Some(ElementUpdate::Compound | ElementUpdate::IncDec { .. }))
-        && nested_target_has_static_array_root(ctx, target)
+        && (nested_target_has_static_array_root(ctx, target)
+            || nested_target_has_local_array_root(ctx, target))
     {
+        let mut sources = Vec::new();
+        let target = super::nested_write_sources::capture_target(ctx, target, &mut sources);
+        let mut value = value.clone();
+        if let ExprKind::BinaryOp { right, .. } = &mut value.kind {
+            // PHP settles computed dimensions and the RHS before obtaining the writable parent.
+            // Bare variable dimensions are still captured by the subsequent read, after the RHS.
+            *right = Box::new(super::nested_write_sources::capture(ctx, right, &mut sources));
+        }
         let mut snapshots = Vec::new();
-        let (read, write) = snapshot_nested_update_keys(ctx, target, &mut snapshots);
+        let (read, write) = snapshot_nested_update_keys(ctx, &target, &mut snapshots);
         if let Some((read, write)) = bind_concrete_static_update_root(ctx, &read, &write) {
-            lower_boxed_static_nested_update(ctx, &read, &write, update.unwrap(), value, value.span);
-        } else if nested_static_root_is_boxed(ctx, target) {
-            lower_boxed_static_nested_update(ctx, &read, &write, update.unwrap(), value, value.span);
+            lower_boxed_static_nested_update(ctx, &read, &write, update.unwrap(), &value, value.span);
+        } else if nested_static_root_is_boxed(ctx, &target)
+            || nested_target_has_local_array_root(ctx, &target) {
+            lower_boxed_static_nested_update(ctx, &read, &write, update.unwrap(), &value, value.span);
         } else {
             let mut value = value.clone();
             match &mut value.kind {
@@ -42,19 +59,24 @@ pub(super) fn lower_nested_array_assign(
             }
             lower_nested_array_assign_inner(ctx, &write, &value, span, true);
         }
-        for name in snapshots {
-            // Null assignment would widen the entire frame slot, turning earlier String
-            // reloads into detached backend casts that lowering never had a chance to release.
-            let slot = ctx.local_slots[&name];
-            ctx.release_stored_local_value(&name, slot, Some(span));
-            ctx.emit_void(Op::ZeroLocalSlot, Vec::new(), Some(Immediate::LocalSlot(slot)),
-                Op::ZeroLocalSlot.default_effects(), Some(span));
-        }
+        retire_update_keys(ctx, snapshots, span);
+        super::nested_write_sources::retire(ctx, sources, span);
         return;
     }
     if let Some((_, write)) = bind_concrete_static_update_root(ctx, target, target) {
         lower_nested_array_assign_inner(ctx, &write, value, span, false);
     } else { lower_nested_array_assign_inner(ctx, target, value, span, false); }
+}
+
+/// Releases key snapshots without widening their already allocated PHP storage.
+fn retire_update_keys(ctx: &mut LoweringContext<'_, '_>, snapshots: Vec<String>, span: Span) {
+    for name in snapshots {
+        // Null assignment would widen earlier String reloads into untracked backend casts.
+        let slot = ctx.local_slots[&name];
+        ctx.release_stored_local_value(&name, slot, Some(span));
+        ctx.emit_void(Op::ZeroLocalSlot, Vec::new(), Some(Immediate::LocalSlot(slot)),
+            Op::ZeroLocalSlot.default_effects(), Some(span));
+    }
 }
 
 /// Gives a concrete mixed-element root the existing relocating local writeback protocol.
@@ -141,7 +163,17 @@ fn nested_static_root_is_boxed(ctx: &LoweringContext<'_, '_>, target: &Expr) -> 
     }
 }
 
-/// Reads and updates a leaf through the same retained write-context parent cell.
+/// Recognizes local array roots whose indexed parents need attached update traversal.
+fn nested_target_has_local_array_root(ctx: &LoweringContext<'_, '_>, target: &Expr) -> bool {
+    match &target.kind {
+        ExprKind::ArrayAccess { array, .. } => nested_target_has_local_array_root(ctx, array),
+        ExprKind::Variable(name) => matches!(ctx.local_type(name).codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed),
+        _ => false,
+    }
+}
+
+/// Reads and updates a local or static leaf through the same retained write-context parent cell.
 fn lower_boxed_static_nested_update(
     ctx: &mut LoweringContext<'_, '_>,
     read: &Expr,

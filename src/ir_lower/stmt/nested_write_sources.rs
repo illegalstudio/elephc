@@ -40,7 +40,7 @@ pub(super) fn capture_target(
 }
 
 /// Publishes one snapshot in a PHP-local slot without leaving an unrooted producer owner.
-fn capture(
+pub(super) fn capture(
     ctx: &mut LoweringContext<'_, '_>, expr: &Expr, sources: &mut Vec<WriteSource>,
 ) -> Expr {
     let value = lower_expr(ctx, expr);

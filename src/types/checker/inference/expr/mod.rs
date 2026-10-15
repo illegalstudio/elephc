@@ -13,6 +13,7 @@ use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
 use crate::types::{PhpType, TypeEnv};
 mod assignments;
+mod array_access;
 mod basic;
 mod class_refs;
 mod effects;

@@ -31,7 +31,7 @@ pub(super) fn lower_store(
         ctx.emit_void(Op::RuntimeCall, vec![parent.value, key.value, value.value], None,
             effects_lookup::runtime_effects(), Some(span));
     });
-    guard_true_parent(ctx, parent, span);
+    guard_scalar_parent(ctx, parent, span);
     ctx.emit_void(Op::RuntimeCall, vec![parent.value, key.value, value.value], None,
         effects_lookup::runtime_effects(), Some(span));
     retire_owner(ctx, key_owner, span);
@@ -57,7 +57,7 @@ pub(super) fn lower_append(
         ctx.emit_void(Op::MixedArrayAppend, vec![parent.value, value.value], None,
             Op::MixedArrayAppend.default_effects(), Some(span));
     });
-    guard_true_parent(ctx, parent, span);
+    guard_scalar_parent(ctx, parent, span);
     ctx.emit_void(Op::MixedArrayAppend, vec![parent.value, value.value], None,
         Op::MixedArrayAppend.default_effects(), Some(span));
     retire_owner(ctx, parent_owner, span);
@@ -65,16 +65,26 @@ pub(super) fn lower_append(
     super::nested_write_sources::retire(ctx, sources, span);
 }
 
-/// Rejects true after false conversion without expanding the unsupported string-offset surface.
-fn guard_true_parent(ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, span: Span) {
+/// Rejects non-array scalar parents after false conversion, leaving string-offset handling intact.
+fn guard_scalar_parent(ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, span: Span) {
     if ctx.builder.value_php_type(parent.value).codegen_repr() != PhpType::Mixed { return; }
     let boolean = ctx.emit_value(Op::TypePredicate, vec![parent.value],
         Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Bool)), PhpType::Bool,
         Op::TypePredicate.default_effects(), Some(span));
-    let invalid = ctx.builder.create_named_block("nested.store.true.error", Vec::new());
+    let integer = ctx.emit_value(Op::TypePredicate, vec![parent.value],
+        Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Int)), PhpType::Bool,
+        Op::TypePredicate.default_effects(), Some(span));
+    let float = ctx.emit_value(Op::TypePredicate, vec![parent.value],
+        Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Float)), PhpType::Bool,
+        Op::TypePredicate.default_effects(), Some(span));
+    let numeric = ctx.emit_value(Op::IBitOr, vec![integer.value, float.value], None, PhpType::Bool,
+        Op::IBitOr.default_effects(), Some(span));
+    let scalar = ctx.emit_value(Op::IBitOr, vec![boolean.value, numeric.value], None, PhpType::Bool,
+        Op::IBitOr.default_effects(), Some(span));
+    let invalid = ctx.builder.create_named_block("nested.store.scalar.error", Vec::new());
     let valid = ctx.builder.create_named_block("nested.store.parent", Vec::new());
     ctx.builder.terminate(Terminator::CondBr {
-        cond: boolean.value, then_target: invalid, then_args: Vec::new(),
+        cond: scalar.value, then_target: invalid, then_args: Vec::new(),
         else_target: valid, else_args: Vec::new(),
     });
     ctx.builder.position_at_end(invalid);
@@ -96,7 +106,7 @@ pub(super) fn fetch_parent(
         ctx.emit_void(Op::RuntimeCall, vec![receiver.value, key.value, null.value], None,
             effects_lookup::runtime_effects(), Some(span));
     });
-    guard_true_parent(ctx, receiver, span);
+    guard_scalar_parent(ctx, receiver, span);
     let child = ctx.emit_value(Op::RuntimeCall, vec![receiver.value, key.value],
         Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
         PhpType::Mixed, effects_lookup::runtime_effects(), Some(span));
