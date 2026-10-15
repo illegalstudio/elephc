@@ -508,11 +508,12 @@ fn is_instance_property_assignment_target(target: &Expr) -> bool {
     }
 }
 
-/// Finds a delayed static receiver through pure property and array-dimension traversal.
+/// Finds a delayed static receiver through literal, runtime-name, and array traversal.
 fn has_delayed_static_receiver(target: &Expr) -> bool {
     match &target.kind {
         ExprKind::StaticPropertyAccess { .. } => true,
-        ExprKind::PropertyAccess { object, .. } => has_delayed_static_receiver(object),
+        ExprKind::PropertyAccess { object, .. }
+        | ExprKind::DynamicPropertyAccess { object, .. } => has_delayed_static_receiver(object),
         ExprKind::ArrayAccess { array, .. } => has_delayed_static_receiver(array),
         _ => false,
     }
@@ -1005,8 +1006,8 @@ impl EffectfulTargetLowerer {
     }
 
     /// Stabilizes the base of a nested array access chain. Recursively processes
-    /// `ArrayAccess` and `PropertyAccess` chains; returns `Variable`, `This`,
-    /// and `StaticPropertyAccess` directly; calls `stabilize` for all other expressions.
+    /// `ArrayAccess`, `PropertyAccess`, and `DynamicPropertyAccess` chains; returns `Variable`,
+    /// `This`, and `StaticPropertyAccess` directly; calls `stabilize` for all other expressions.
     fn stabilize_array_base(&mut self, expr: Expr) -> Expr {
         let span = expr.span;
         match expr.kind {
@@ -1021,6 +1022,13 @@ impl EffectfulTargetLowerer {
                 ExprKind::PropertyAccess {
                     object: Box::new(self.stabilize_array_base(*object)),
                     property,
+                },
+                span,
+            ),
+            ExprKind::DynamicPropertyAccess { object, property } => Expr::new(
+                ExprKind::DynamicPropertyAccess {
+                    object: Box::new(self.stabilize_array_base(*object)),
+                    property: Box::new(self.stabilize(*property)),
                 },
                 span,
             ),

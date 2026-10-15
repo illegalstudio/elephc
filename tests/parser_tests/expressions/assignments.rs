@@ -69,6 +69,23 @@ fn test_parse_static_receiver_review_append_preludes() {
     }
 }
 
+/// A computed runtime-name append captures only the name before settling the RHS.
+#[test]
+fn test_parse_static_receiver_dynamic_append_prelude_order() {
+    let source = "<?php Holder::$object->{name()}[0][] = replace();";
+    let statements = parse_source(source);
+    let StmtKind::Synthetic(body) = &statements[0].kind else { panic!("{source}"); };
+    assert!(matches!(&body[0].kind, StmtKind::Assign { value, .. }
+        if matches!(&value.kind, ExprKind::FunctionCall { name, .. } if name == "name")),
+        "{source}: the computed name must precede the RHS: {body:?}");
+    assert!(matches!(&body[1].kind, StmtKind::Assign { value, .. }
+        if matches!(&value.kind, ExprKind::FunctionCall { name, .. } if name == "replace")),
+        "{source}: the RHS must precede receiver traversal: {body:?}");
+    assert!(matches!(&body[2].kind, StmtKind::Assign { value, .. }
+        if matches!(&value.kind, ExprKind::ArrayAccess { .. })),
+        "{source}: the receiver traversal must follow the RHS: {body:?}");
+}
+
 /// Named and lexical static properties remain receivers after a following object postfix.
 #[test]
 fn test_parse_static_property_object_receiver_assignments() {

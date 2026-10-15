@@ -36,6 +36,53 @@ echo ':', C::$o->child->child->v;
     assert_eq!(out, "H:9|H:16");
 }
 
+/// Nested appends through a runtime-name hop select the static receiver after the RHS.
+#[test]
+fn test_static_receiver_dynamic_nested_append_after_rhs() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Bag { public array $items = [[1]]; }
+class C { public static ?Bag $o = null; }
+function make(array $items): Bag {
+    $bag = new Bag(); $bag->items = $items; return $bag;
+}
+function name(): string { echo 'N'; return 'items'; }
+class Hook {
+    public int $value { get { echo 'H'; C::$o = make([[7]]); return 9; } }
+}
+$hook = new Hook();
+C::$o = make([[1]]);
+C::$o->{name()}[0][] = $hook->value;
+echo json_encode(C::$o->items);
+C::$o = null;
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "NH[[7,9]]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A final runtime-name compound target fetches its effectful receiver only once.
+#[test]
+fn test_static_receiver_dynamic_final_compound_receiver_once() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Leaf { public int $v = 7; }
+class Root {
+    private Leaf $stored;
+    public function __construct() { $this->stored = new Leaf(); }
+    public Leaf $child { get { echo 'G'; return $this->stored; } }
+}
+class C { public static ?Root $o = null; }
+function rhs(): int { echo 'R'; return 2; }
+$name = $argc > 0 ? 'v' : 'missing';
+C::$o = new Root();
+C::$o->child->$name += rhs();
+echo ':', C::$o->child->v;
+C::$o = null;
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "RG:G9", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A dynamic intermediate hop on null throws after the RHS rather than dropping the write.
 #[test]
 fn test_static_receiver_dynamic_review_null() {
@@ -152,6 +199,18 @@ fn test_static_receiver_dynamic_review_nonnull_slot_no_ir_opt() {
 #[test]
 fn test_static_receiver_dynamic_review_hooks_no_ir_opt() {
     without_ir_opt(test_static_receiver_dynamic_review_hooks);
+}
+
+/// Dynamic-hop nested append timing is independent of EIR optimization.
+#[test]
+fn test_static_receiver_dynamic_nested_append_after_rhs_no_ir_opt() {
+    without_ir_opt(test_static_receiver_dynamic_nested_append_after_rhs);
+}
+
+/// Final dynamic compound receiver reuse is independent of EIR optimization.
+#[test]
+fn test_static_receiver_dynamic_final_compound_receiver_once_no_ir_opt() {
+    without_ir_opt(test_static_receiver_dynamic_final_compound_receiver_once);
 }
 
 /// Dynamic null-hop diagnostics remain catchable without EIR optimization.

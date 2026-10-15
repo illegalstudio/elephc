@@ -16,6 +16,27 @@ pub(super) struct StaticCompoundReceiver {
     pub(super) target: Expr,
     receiver: PropertyWriteReceiver,
     temp: String,
+    dynamic_name: Option<StaticCompoundDynamicName>,
+}
+
+/// One runtime property name kept alive while both halves of a compound update use it.
+struct StaticCompoundDynamicName {
+    value: LoweredValue,
+    pins: Vec<PinnedInFlightOwner>,
+    temp: String,
+}
+
+/// The final property root whose receiver must be shared by a compound read and write.
+#[derive(Clone, Copy)]
+enum StaticCompoundProperty<'a> {
+    Literal { object: &'a Expr, property: &'a str },
+    Dynamic { object: &'a Expr, property: &'a Expr },
+}
+
+/// The stabilized property selector used with the cached receiver alias.
+enum CachedStaticCompoundProperty {
+    Literal(String),
+    Dynamic(Expr),
 }
 
 /// Retires the cached compound receiver after the read and write have used the same chain.
@@ -25,6 +46,12 @@ pub(super) fn finish_static_compound_receiver(
     if let Some(receiver) = receiver {
         ctx.emit_void(Op::UnsetLocal, Vec::new(), Some(Immediate::LocalSlot(ctx.local_slots[&receiver.temp])),
             Op::UnsetLocal.default_effects(), Some(span));
+        if let Some(name) = receiver.dynamic_name {
+            ctx.emit_void(Op::UnsetLocal, Vec::new(), Some(Immediate::LocalSlot(ctx.local_slots[&name.temp])),
+                Op::UnsetLocal.default_effects(), Some(span));
+            unpin_in_flight_owners(ctx, name.pins, span);
+            crate::ir_lower::ownership::release_if_owned(ctx, name.value, Some(span));
+        }
         receiver.receiver.finish(ctx, span);
     }
 }
@@ -35,7 +62,17 @@ pub(super) fn guard_static_compound_property_read(
 ) -> Option<StaticCompoundReceiver> {
     let mut root = target;
     while let ExprKind::ArrayAccess { array, .. } = &root.kind { root = array; }
-    let ExprKind::PropertyAccess { object, property } = &root.kind else { return None; };
+    let property = match &root.kind {
+        ExprKind::PropertyAccess { object, property } =>
+            StaticCompoundProperty::Literal { object, property },
+        ExprKind::DynamicPropertyAccess { object, property } =>
+            StaticCompoundProperty::Dynamic { object, property },
+        _ => return None,
+    };
+    let object = match property {
+        StaticCompoundProperty::Literal { object, .. }
+        | StaticCompoundProperty::Dynamic { object, .. } => object,
+    };
     if !is_static_property_write_chain(object) { return None; }
     let ExprKind::Variable(result) = &value.kind else { return None; };
     let StmtKind::Assign { name, value } = &stmt.kind else { return None; };
@@ -43,27 +80,55 @@ pub(super) fn guard_static_compound_property_read(
     if name != result || left.as_ref() != target { return None; }
     let rhs = ctx.with_borrowed_write_operand(|ctx| lower_expr(ctx, right));
     let mut receiver = lower_static_property_write_chain(ctx, object, rhs, span);
-    if root == target {
-        receiver.narrow_for_assignment(ctx, property, rhs, span);
-    } else {
-        receiver.narrow_for_array(ctx, property, &[rhs.value], span);
-    }
+    let (cached_property, dynamic_name) = match property {
+        StaticCompoundProperty::Literal { property, .. } => {
+            if root == target {
+                receiver.narrow_for_assignment(ctx, property, rhs, span);
+            } else {
+                receiver.narrow_for_array(ctx, property, &[rhs.value], span);
+            }
+            (CachedStaticCompoundProperty::Literal(property.to_string()), None)
+        }
+        StaticCompoundProperty::Dynamic { property, .. } => {
+            let name = lower_expr(ctx, property);
+            let name = property_access::coerce_runtime_property_name(ctx, name, span);
+            let pins = pin_in_flight_owners(ctx, &[name.value], span);
+            let name_temp = ctx.declare_hidden_temp(PhpType::Str);
+            let borrowed = ctx.emit_value(Op::Borrow, vec![name.value], None, PhpType::Str,
+                Op::Borrow.default_effects(), Some(span));
+            ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+            ctx.store_local(&name_temp, borrowed, PhpType::Str, Some(span));
+            if root == target {
+                receiver.narrow_for_dynamic_assignment(ctx, name, rhs, span);
+            } else {
+                receiver.narrow_for_dynamic_array(ctx, name, &[rhs.value], span);
+            }
+            (CachedStaticCompoundProperty::Dynamic(Expr::new(
+                ExprKind::Variable(name_temp.clone()), property.span,
+            )), Some(StaticCompoundDynamicName { value: name, pins, temp: name_temp }))
+        }
+    };
     let ty = ctx.builder.value_php_type(receiver.value.value);
     let temp = ctx.declare_hidden_temp(ty.clone());
     let borrowed = ctx.emit_value(Op::Borrow, vec![receiver.value.value], None, ty.clone(),
         Op::Borrow.default_effects(), Some(span));
     ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
     ctx.store_local(&temp, borrowed, ty, Some(span));
-    let cached_root = Expr::new(ExprKind::PropertyAccess {
-        object: Box::new(Expr::new(ExprKind::Variable(temp.clone()), object.span)),
-        property: property.clone(),
-    }, root.span);
+    let cached_root = match cached_property {
+        CachedStaticCompoundProperty::Literal(property) => Expr::new(ExprKind::PropertyAccess {
+            object: Box::new(Expr::new(ExprKind::Variable(temp.clone()), object.span)), property,
+        }, root.span),
+        CachedStaticCompoundProperty::Dynamic(property) => Expr::new(ExprKind::DynamicPropertyAccess {
+            object: Box::new(Expr::new(ExprKind::Variable(temp.clone()), object.span)),
+            property: Box::new(property),
+        }, root.span),
+    };
     let target = replace_compound_property_root(target, cached_root);
     let value = Expr::new(ExprKind::BinaryOp {
         left: Box::new(target.clone()), op: op.clone(), right: right.clone(),
     }, value.span);
     crate::ir_lower::stmt::lower_stmt(ctx, &Stmt::new(StmtKind::Assign { name: name.clone(), value }, stmt.span));
-    Some(StaticCompoundReceiver { target, receiver, temp })
+    Some(StaticCompoundReceiver { target, receiver, temp, dynamic_name })
 }
 
 /// Replaces only the guarded property root, preserving every stabilized array dimension.
