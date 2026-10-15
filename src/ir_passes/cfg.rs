@@ -48,7 +48,7 @@ pub(super) fn has_exception_handlers(func: &Function) -> bool {
 /// elimination came to neutralize stores a catch could still read. A pass that
 /// needs the exceptional path has to account for it itself; `dead_store` is the
 /// worked example.
-pub(super) fn successors(term: &Terminator) -> Vec<BlockId> {
+pub(crate) fn successors(term: &Terminator) -> Vec<BlockId> {
     match term {
         Terminator::Br { target, .. } => vec![*target],
         Terminator::CondBr {

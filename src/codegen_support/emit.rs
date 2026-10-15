@@ -205,6 +205,39 @@ impl Emitter {
         self.out_of_line.push_str(&body);
     }
 
+    /// Finishes a detached scope opened by [`Self::begin_out_of_line`] and returns its text.
+    ///
+    /// Unlike [`Self::end_out_of_line`], the body is handed back to the caller instead of being
+    /// filed after all other output, so a function emitter can place cold paths at the end of the
+    /// SAME function (keeping its branches intra-function and its section intact).
+    pub fn end_detached(&mut self, scope: OutOfLine) -> String {
+        std::mem::replace(&mut self.buf, scope.caller)
+    }
+
+    /// Returns the byte length of the text written to the current buffer so far.
+    ///
+    /// Used as a start marker for [`Self::rewrite_text_from`]; the offset stays valid across
+    /// nested out-of-line scopes because each one restores the caller's buffer intact.
+    pub fn text_len(&self) -> usize {
+        self.buf.len()
+    }
+
+    /// Replaces the text written since `start` with `rewrite(text)` when it returns `Some`.
+    ///
+    /// Late machine peepholes run on one finished function region through this hook; `None`
+    /// leaves the region untouched without copying it.
+    pub fn rewrite_text_from(&mut self, start: usize, rewrite: impl FnOnce(&str) -> Option<String>) {
+        if let Some(rewritten) = rewrite(&self.buf[start..]) {
+            self.buf.truncate(start);
+            self.buf.push_str(&rewritten);
+        }
+    }
+
+    /// Appends already formatted assembly text verbatim.
+    pub fn append_text(&mut self, text: &str) {
+        self.buf.push_str(text);
+    }
+
     /// Emits a line comment using the target's comment prefix.
     pub fn comment(&mut self, text: &str) {
         let _ = writeln!(

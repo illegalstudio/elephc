@@ -35,8 +35,11 @@ use super::shared_state::SharedCodegenState;
 use super::value_placement::ValuePlacement;
 use super::{CodegenIrError, Result};
 
+mod machine_layout;
 mod operand_owners;
 mod ref_cell_state;
+
+pub(crate) use machine_layout::MachineLayoutState;
 
 /// Runtime representation known for one local slot at the current EIR instruction.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -84,6 +87,8 @@ pub(crate) struct FunctionContext<'a> {
     pcntl_signal_handlers: bool,
     pub(super) epilogue_label: Option<String>,
     block_labels: Vec<String>,
+    /// Block order, compare fusion, and cold-path state for late machine layout.
+    pub(super) machine_layout: MachineLayoutState,
 }
 
 impl<'a> FunctionContext<'a> {
@@ -171,6 +176,7 @@ impl<'a> FunctionContext<'a> {
             pcntl_signal_handlers,
             epilogue_label,
             block_labels,
+            machine_layout: MachineLayoutState::default(),
         }
     }
 

@@ -8201,3 +8201,58 @@ mkdir("pathop://dir", 0700, true);
         "M(pathop://dir,511,8)M(pathop://dir,448,8)M(pathop://dir,448,9)"
     );
 }
+
+/// Issue #1739: repeated `stream_context_set_option()` calls on the same wrapper must not
+/// leak the nested options hash. The helper retains the sub-hash so `__rt_hash_set`'s
+/// overwrite-decref cannot free the entry the context still references; on linux-x86_64
+/// that retain must pass the pointer in `__rt_incref`'s input register (`rax`), not in the
+/// SysV argument register `rdi`.
+///
+/// The process-lifetime context stays live at exit, so the heap is never literally empty;
+/// the regression instead compares the live set after one call against five calls — it must
+/// not grow. The x86_64 register setup itself is pinned by
+/// `stream_context_set_option_4::tests::test_stream_context_set_option_4_x86_64_retains_use_incref_input_register`.
+#[test]
+fn test_stream_context_set_option_nested_hash_retain_does_not_leak() {
+    /// Builds a fixture that writes the same option `iterations` times and echoes the last
+    /// value, so a successful read-back proves the nested hash survived the overwrites.
+    fn fixture(iterations: usize) -> String {
+        format!(
+            "<?php\n\
+             $ctx = stream_context_create([\"http\" => [\"method\" => \"GET\"]]);\n\
+             for ($i = 0; $i < {iterations}; $i++) {{\n\
+                 stream_context_set_option($ctx, \"http\", \"header\", \"X-Test: \" . $i);\n\
+             }}\n\
+             $opts = stream_context_get_options($ctx);\n\
+             echo ($opts[\"http\"][\"header\"] ?? \"missing\"), \"\\n\";\n"
+        )
+    }
+
+    /// Reads the `(live_blocks, live_bytes)` pair from a heap-debug leak summary.
+    fn live_set(stderr: &str) -> (u64, u64) {
+        let summary = stderr
+            .lines()
+            .find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+            .unwrap_or_else(|| panic!("no heap-debug leak summary in:\n{stderr}"));
+        let field = |name: &str| -> u64 {
+            summary
+                .split_whitespace()
+                .find_map(|token| token.strip_prefix(name))
+                .and_then(|value| value.parse().ok())
+                .unwrap_or_else(|| panic!("missing {name} in: {summary}"))
+        };
+        (field("live_blocks="), field("live_bytes="))
+    }
+
+    let single = compile_and_run_with_heap_debug(&fixture(1));
+    let repeated = compile_and_run_with_heap_debug(&fixture(5));
+    assert!(single.success, "{}", single.stderr);
+    assert!(repeated.success, "{}", repeated.stderr);
+    assert_eq!(single.stdout, "X-Test: 0\n");
+    assert_eq!(repeated.stdout, "X-Test: 4\n");
+    assert_eq!(
+        live_set(&single.stderr),
+        live_set(&repeated.stderr),
+        "repeated stream_context_set_option() calls grew the live heap"
+    );
+}

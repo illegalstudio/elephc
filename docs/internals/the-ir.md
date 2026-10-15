@@ -518,8 +518,10 @@ ownership marker in `x15` on AArch64 or `r11` on x86_64. A `Call` result with
 restores it after cleanup. Descriptor invokers consume the marker by retaining a
 borrowed result or transferring an owned result into the boxed return cell. This
 is a private compiler protocol; the public C ABI still returns one owned raw
-cell and exposes no ownership marker. Typed string returns keep their dedicated
-persist and ownership-transfer boxing path and do not consume this marker.
+cell and exposes no ownership marker. Typed string returns consume this marker.
+When `php_return_status` is set, `restore_concat_offset_after_nested_call` calls
+`emit_branch_if_owned` for `PhpType::Str`, which tests `x15` on AArch64 and
+`r11` on x86_64.
 
 ## Effects
 
@@ -764,6 +766,29 @@ detaches the selected zval; the ordinary dynamic read clones that cell without m
 All mutating operations must preserve copy-on-write. The builder emits
 `ArrayEnsureUnique`/`HashEnsureUnique` before mutation unless prior ownership
 proofs make it unnecessary.
+
+#### Associative literal spreads
+
+An associative literal that interleaves explicit keys, spreads, and bare values is kept as an
+ordered `ArrayLiteralMixed` entry list until EIR lowering. Lowering allocates the destination
+hash once and visits entries in source order: keyed entries use `HashSet`, spread entries use
+`HashSpread`, and a bare value uses the runtime hash-append path. A bare value after a spread must
+get its integer key at run time because the spread's length is not known while parsing; assigning
+the parser's static cursor could overwrite a key contributed by the spread.
+
+Spreading a hash copies its values in insertion order, preserving string keys and renumbering
+integer keys according to PHP unpacking. Spreading an indexed array first emits `ArrayToHash`,
+which consumes the array reference it receives and first copies each source slot with its
+original runtime value tag. Refcounted payloads are retained and strings are persisted.
+This spread path requests a Mixed-valued result, so `ArrayToHash` then calls
+`__rt_hash_to_mixed`, which boxes each unboxed entry, including scalar values, in a separate
+Mixed cell.
+`HashSpread` then copies that promoted hash into the destination. Lowering always acquires a reference for the
+promotion to consume, so a borrowed source (a local, a global, a property, a static) keeps the
+reference it started with. The promoted hash is released after `HashSpread`, and an owning
+temporary source (a call result, a nested literal) is released too, since nothing else owns it
+once the promotion has consumed the acquired reference. This keeps COW owners intact and avoids
+both double releases and leaked temporary arrays.
 
 `ArrayCloneShallow` also carries the one aliasing case a by-reference builtin cannot
 resolve at runtime: a `$replacement` that IS the receiver. `array_splice($a, 1, 1, $a)`
@@ -1612,6 +1637,38 @@ handler. Forwarding parameters are substituted on each incoming edge; parameters
 with escaping uses keep their defining block. Merged block definitions receive
 updated placement metadata. Cross-block cascades converge through the fixed-point
 driver.
+
+### Concat Scratch-State Optimization
+
+The concat scratch-state transform (`src/ir_passes/concat_reset.rs`) removes or
+coalesces statement-boundary `concat_reset` instructions when CFG dataflow proves
+`_concat_off` is already at the frame base or post-dominated by a later reset across
+concat-inert operations. Every function prologue captures `_concat_off` into its
+stack frame's `concat_base_offset`, and `concat_reset` rewinds `_concat_off` to that
+frame base; AST-to-EIR lowering already emits `acquire` / `str_persist` for any string
+that outlives a statement before emitting the original statement-boundary `concat_reset`.
+
+The pass runs two greatest-fixed-point analyses over reachable blocks:
+
+1. **Forward clean-state elimination** tracks whether `_concat_off` is guaranteed
+   to equal `concat_base_offset` on entry to each block and across each
+   instruction. Function entry starts clean; `try_push_handler` targets start
+   dirty because exception unwinding can arrive from a dirty statement inside the
+   `try` region; `concat_reset` establishes the clean state; instructions on an
+   audited concat-inert allowlist (scalar and checked arithmetic, destructor-free
+   local/container operations, by-value concrete array iterators, and non-string scalar
+   coercions) preserve it; and any instruction that can allocate, read, modify, or
+   observe concat scratch (including `alloc_concat`, `bool_to_str`, output, user/runtime/extern
+   calls, `eval`, `Mixed`-to-string coercions, and potentially destructor-bearing
+   stores or releases on objects, callables, or resources) marks the state dirty. Any
+   `concat_reset` reached in a clean state is neutralized to `nop`, removing
+   statement-boundary resets inside arithmetic-only and concrete-array loop bodies
+   while keeping any required reset before the loop.
+2. **Backward unobserved-reset coalescing** tracks whether every path from a
+   program point is guaranteed to hit another `concat_reset` before any
+   non-inert instruction, `may_throw` / `may_fatal` instruction, or function exit.
+   An earlier `concat_reset` whose outgoing paths all hit a later reset without
+   intervening observation is neutralized to `nop`.
 
 ### Small-Function Inlining
 

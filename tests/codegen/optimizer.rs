@@ -33,6 +33,8 @@ mod control_flow_normalization;
 mod checked_int_sink;
 #[path = "optimizer/checked_numeric_chain.rs"]
 mod checked_numeric_chain;
+#[path = "optimizer/concat_reset.rs"]
+mod concat_reset;
 #[path = "optimizer/eir_common_subexpression.rs"]
 mod eir_common_subexpression;
 #[path = "optimizer/dead_code_elimination.rs"]
@@ -77,3 +79,4 @@ mod warning_globals;
 #[path = "optimizer/loop_optimization.rs"]
 mod loop_optimization;
 mod rematerialization;
+mod machine_peepholes;

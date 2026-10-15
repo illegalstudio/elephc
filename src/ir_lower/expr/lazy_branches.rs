@@ -117,6 +117,12 @@ pub(super) fn null_coalesce_result_type(
 ) -> PhpType {
     let value_ty = strip_void_from_union(ctx.builder.value_php_type(value)).codegen_repr();
     let default_ty = materialized_expr_type_for_merge(ctx, default).codegen_repr();
+    // `$o ?? null` can still be null. An object or callable slot has no null of its own, so a
+    // default that may be null keeps the merge nullable (boxed) instead of letting the non-null
+    // side's slot type win and then reading the stored null back as an object.
+    if matches!(value_ty, PhpType::Object(_) | PhpType::Callable) && php_type_allows_null(&default_ty) {
+        return nullable_aware_branch_merge_type(&value_ty, &default_ty);
+    }
     wider_type_for_merge(&value_ty, &default_ty)
 }
 

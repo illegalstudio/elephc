@@ -240,3 +240,11 @@ echo "Matched language keys: " . implode(", ", array_keys($matched)) . "\n";
 // String array
 $langs = ["PHP", "Rust", "ARM64"];
 echo "Compiled " . $langs[0] . " to " . $langs[2] . " with " . $langs[1] . "\n";
+
+// An unkeyed value after a spread uses the next integer key at runtime.
+$spread_keys = ["label" => "values", ...[3, 4], 5];
+echo "Spread keys: ";
+foreach ($spread_keys as $key => $value) {
+    echo $key . "=" . $value . " ";
+}
+echo "\n";

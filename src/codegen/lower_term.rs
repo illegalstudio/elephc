@@ -11,7 +11,7 @@
 //! - Generator suspension remains an explicit unsupported Phase 04 path.
 
 use crate::codegen::platform::Arch;
-use crate::ir::{BlockId, DataId, IrType, SwitchCase, Terminator, ValueId};
+use crate::ir::{BlockId, CmpPredicate, DataId, IrType, SwitchCase, Terminator, ValueId};
 use crate::types::PhpType;
 
 use crate::codegen::abi;
@@ -110,15 +110,37 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
             else_target,
             else_args,
         } => {
-            ctx.load_value_to_result(*cond)?;
+            let condition = match ctx.machine_layout.fused_compare {
+                Some(compare) => BranchCondition::Flags(super::lower_inst::emit_fused_int_compare(
+                    ctx, compare,
+                )?),
+                None => {
+                    ctx.load_value_to_result(*cond)?;
+                    BranchCondition::ResultNonzero
+                }
+            };
             validate_block_args(ctx, *then_target, then_args, "cond_br then")?;
             validate_block_args(ctx, *else_target, else_args, "cond_br else")?;
             let then_label = ctx.block_label_for_id(*then_target)?;
             let else_label = ctx.block_label_for_id(*else_target)?;
             let then_edge = edge_label(ctx, then_args, &then_label, "cond_then_args");
             let else_edge = edge_label(ctx, else_args, &else_label, "cond_else_args");
-            abi::emit_branch_if_int_result_nonzero(ctx.emitter, &then_edge);
-            abi::emit_jump(ctx.emitter, &else_edge);
+            // Edge-copy stubs are emitted right after the branch, so only a stub-free
+            // `cond_br` can fall through into the block laid out next.
+            let fallthrough = if then_args.is_empty() && else_args.is_empty() {
+                ctx.fallthrough_label()
+            } else {
+                None
+            };
+            if fallthrough.as_deref() == Some(then_label.as_str()) {
+                // The then-block is laid out next: branch away only on the inverted condition.
+                emit_conditional_jump(ctx, condition.inverted(), &else_edge)?;
+            } else {
+                emit_conditional_jump(ctx, condition, &then_edge)?;
+                if fallthrough.as_deref() != Some(else_label.as_str()) {
+                    abi::emit_jump(ctx.emitter, &else_edge);
+                }
+            }
             emit_edge_args(ctx, &then_edge, *then_target, then_args, "cond_br then")?;
             emit_edge_args(ctx, &else_edge, *else_target, else_args, "cond_br else")?;
             Ok(())
@@ -215,6 +237,8 @@ pub(super) fn lower_throw_value(ctx: &mut FunctionContext<'_>, value: ValueId) -
 }
 
 /// Lowers an unconditional branch and copies any target block parameters.
+///
+/// No jump is emitted when the target block is laid out immediately after this one.
 fn lower_branch(
     ctx: &mut FunctionContext<'_>,
     target: BlockId,
@@ -223,7 +247,85 @@ fn lower_branch(
 ) -> Result<()> {
     materialize_block_args(ctx, target, args, context)?;
     let label = ctx.block_label_for_id(target)?;
-    abi::emit_jump(ctx.emitter, &label);
+    if ctx.fallthrough_label().as_deref() != Some(label.as_str()) {
+        abi::emit_jump(ctx.emitter, &label);
+    }
+    Ok(())
+}
+
+/// What a lowered `cond_br` tests to select its then-edge.
+#[derive(Clone, Copy)]
+enum BranchCondition {
+    /// The materialized boolean in the integer result register is nonzero.
+    ResultNonzero,
+    /// The materialized boolean in the integer result register is zero.
+    ResultZero,
+    /// The flags of a fused integer compare satisfy the predicate.
+    Flags(CmpPredicate),
+}
+
+impl BranchCondition {
+    /// Returns the condition that holds exactly when `self` does not.
+    fn inverted(self) -> Self {
+        match self {
+            Self::ResultNonzero => Self::ResultZero,
+            Self::ResultZero => Self::ResultNonzero,
+            Self::Flags(predicate) => Self::Flags(invert_int_predicate(predicate)),
+        }
+    }
+}
+
+/// Returns the integer predicate that is true exactly when `predicate` is false.
+///
+/// Only used for fused integer compares, where there is no unordered (NaN) outcome.
+fn invert_int_predicate(predicate: CmpPredicate) -> CmpPredicate {
+    use CmpPredicate::*;
+    match predicate {
+        Eq => Ne,
+        Ne => Eq,
+        Slt => Sge,
+        Sge => Slt,
+        Sle => Sgt,
+        Sgt => Sle,
+        Olt => Oge,
+        Oge => Olt,
+        Ole => Ogt,
+        Ogt => Ole,
+    }
+}
+
+/// Branches to `label` when `condition` holds and falls through otherwise.
+///
+/// AArch64 flag branches use the wide form (an inverted short skip over `b`), keeping the full
+/// unconditional range in very large functions; the machine peephole folds it back into one
+/// `b.cond` once the function is proven small enough.
+fn emit_conditional_jump(
+    ctx: &mut FunctionContext<'_>,
+    condition: BranchCondition,
+    label: &str,
+) -> Result<()> {
+    match condition {
+        BranchCondition::ResultNonzero => abi::emit_branch_if_int_result_nonzero(ctx.emitter, label),
+        BranchCondition::ResultZero => abi::emit_branch_if_int_result_zero(ctx.emitter, label),
+        BranchCondition::Flags(predicate) => {
+            let arch = ctx.emitter.target.arch;
+            match arch {
+                Arch::AArch64 => {
+                    let skip = super::lower_inst::int_condition_suffix(
+                        arch,
+                        invert_int_predicate(predicate),
+                    )?;
+                    ctx.emitter.instruction(&format!("b.{skip} 1f"));           // skip the far branch when the fused compare fails
+                    ctx.emitter.instruction(&format!("b {label}"));             // take the edge selected by the fused compare
+                    ctx.emitter.label("1");
+                }
+                Arch::X86_64 => {
+                    let taken = super::lower_inst::int_condition_suffix(arch, predicate)?;
+                    ctx.emitter.instruction(&format!("j{taken} {label}"));      // branch on the fused compare flags without a boolean
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -352,6 +454,9 @@ fn materialize_block_args(
 ) -> Result<()> {
     let params = validate_block_args(ctx, target, args, context)?;
     if args.is_empty() {
+        return Ok(());
+    }
+    if super::parallel_moves::try_emit_scalar_block_moves(ctx, &params, args)? {
         return Ok(());
     }
     let mut arg_types = Vec::with_capacity(args.len());
@@ -493,13 +598,13 @@ mod tests {
         ] {
             let target = Target::parse(name).expect("supported target");
             let asm = generate_branch_arg_asm(target);
-            let move_into_home = match target.arch {
-                Arch::AArch64 => "mov x12, x0",
-                Arch::X86_64 => "mov rsi, rax",
+            let constant_into_home = match target.arch {
+                Arch::AArch64 => "mov x12, #7",
+                Arch::X86_64 => "mov rsi, 7",
             };
-            // Only the destination parameter needs a home; the constant source
-            // is reconstructed directly for the edge copy.
-            assert_eq!(asm.matches(move_into_home).count(), 1, "{name}: {asm}");
+            // Only the destination parameter needs a home; the constant source is
+            // reconstructed directly in it, with no stack round trip for the edge copy.
+            assert_eq!(asm.matches(constant_into_home).count(), 1, "{name}: {asm}");
         }
     }
 
@@ -547,7 +652,12 @@ mod tests {
             let default_edge = find_numbered_label(&asm, "_eir_main_switch_default_args");
             assert_ne!(case_edge, default_edge, "{name}: {asm}");
             assert!(branches_to(&asm, &case_edge), "{name}: {asm}");
-            assert!(branches_to(&asm, &default_edge), "{name}: {asm}");
+            // The default stub directly follows the last case compare, so it is entered by
+            // fallthrough once the redundant jump to it is removed.
+            assert!(
+                branches_to(&asm, &default_edge) || asm.contains(&format!("{case_edge}\n{default_edge}:")),
+                "{name}: {asm}"
+            );
         }
     }
 

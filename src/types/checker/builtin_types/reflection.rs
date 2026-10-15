@@ -32,6 +32,7 @@ fn dummy() -> crate::span::Span {
 use super::InterfaceDeclInfo;
 
 mod gate;
+pub(crate) use gate::REFLECTION_CLASS_NAMES;
 mod injection;
 mod ast_literals;
 mod basic_methods;

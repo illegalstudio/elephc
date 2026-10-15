@@ -12,6 +12,7 @@ mod branch_simplify_test;
 mod boxed_narrowing_test;
 mod checked_int_sink_test;
 mod checked_numeric_chain_test;
+mod concat_reset_test;
 mod const_fold_test;
 mod cse_test;
 mod dead_inst_test;

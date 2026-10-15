@@ -126,7 +126,7 @@ fn block_facts(func: &Function, block: &BasicBlock) -> BlockFacts {
 
 /// Collects every value used by a terminator: branch arguments, conditions,
 /// switch scrutinees, returned/thrown values, and generator suspend operands.
-pub(super) fn terminator_uses(term: &Terminator) -> Vec<ValueId> {
+pub(crate) fn terminator_uses(term: &Terminator) -> Vec<ValueId> {
     match term {
         Terminator::Br { args, .. } => args.clone(),
         Terminator::CondBr {

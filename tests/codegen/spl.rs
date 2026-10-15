@@ -36,3 +36,6 @@ mod recursive;
 mod regex;
 #[path = "spl/storage.rs"]
 mod storage;
+
+/// Large offset TypeError message ownership regressions.
+mod offset_errors;

@@ -32,7 +32,9 @@ use crate::names::{
 use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
+use super::block_layout;
 use super::context::FunctionContext;
+use super::machine_peephole;
 use super::fibers;
 use super::frame;
 use super::function_variants;
@@ -1277,11 +1279,36 @@ fn emit_static_property_default_value(
     Ok(())
 }
 
-/// Emits every block in table order.
+/// Emits every block in machine layout order, then the function's deferred cold paths.
+///
+/// Hot blocks keep their table order and cold (`unreachable` / `fatal` / `throw`) blocks move
+/// last. Each block knows its layout successor so terminators can fall through instead of
+/// jumping. The finished region then goes through the late machine peepholes.
 fn emit_blocks(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    let region_start = ctx.emitter.text_len();
     let blocks = ctx.function.blocks.clone();
-    for block in blocks {
-        emit_block(ctx, &block)?;
+    let order = block_layout::emission_order(ctx.function);
+    let use_counts = block_layout::value_use_counts(ctx.function);
+    ctx.begin_cold_section();
+    for (position, &index) in order.iter().enumerate() {
+        ctx.machine_layout.next_block = order.get(position + 1).map(|&next| blocks[next].id);
+        ctx.machine_layout.fused_compare =
+            block_layout::fusible_compare(ctx.function, &blocks[index], &use_counts);
+        emit_block(ctx, &blocks[index])?;
+    }
+    ctx.machine_layout.next_block = None;
+    ctx.machine_layout.fused_compare = None;
+    ctx.flush_cold_section();
+    // The text peepholes pay off in loops and in small functions (often called from loops);
+    // large loop-free bodies (generated helpers and dispatch code) skip them, keeping compile
+    // time flat. Block-level layout above still removes their jumps to the next block.
+    let region_bytes = ctx.emitter.text_len() - region_start;
+    if region_bytes <= machine_peephole::SMALL_REGION_BYTES
+        || block_layout::has_retreating_edge(ctx.function)
+    {
+        let target = ctx.emitter.target;
+        ctx.emitter
+            .rewrite_text_from(region_start, |text| machine_peephole::optimize_region(text, target));
     }
     Ok(())
 }
@@ -1307,7 +1334,7 @@ fn emit_block(ctx: &mut FunctionContext<'_>, block: &BasicBlock) -> Result<()> {
 /// Emits the source-map marker for an EIR instruction when it carries a real PHP span.
 /// The marker carries the EIR opcode spelling so v2 maps can label mappings at
 /// expression granularity.
-fn emit_instruction_source_marker(ctx: &mut FunctionContext<'_>, inst_id: InstId) -> Result<()> {
+pub(super) fn emit_instruction_source_marker(ctx: &mut FunctionContext<'_>, inst_id: InstId) -> Result<()> {
     let Some(inst) = ctx.function.instruction(inst_id) else {
         return Err(CodegenIrError::missing_entry(
             "instruction",

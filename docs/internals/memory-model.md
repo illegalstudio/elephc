@@ -1121,7 +1121,7 @@ elephc uses a **free-list allocator with reference counting plus a targeted cycl
 
 ### Unboxing a Mixed hands back a reference
 
-`Op::MixedUnbox` is the coercion behind a typed target initialized from a Mixed source — `coerce_typed_assign_value` is its only emitter, for an `object` or `callable` target, and it has two callers: a typed local (`lower_typed_assign`) and a typed property write (`lower_property_assign`). Its lowering ends in `emit_unbox_mixed_to_owned_refcounted_result`, so the payload it produces carries a reference of its OWN rather than borrowing the box's.
+`Op::MixedUnbox` is the coercion behind a typed target initialized from a Mixed source — several lowering surfaces emit it for an `object` or `callable` target: the typed-assign coercer `coerce_typed_assign_value` (reached from a typed local and a typed property write), call-argument and closure coercion, static method-call receivers, typed foreach slot coercion, and the merge-temp coercion that hands a `??`-kept `?C` cell over to an object or callable temp (#1628). Each unbox's lowering ends in `emit_unbox_mixed_to_owned_refcounted_result`, so the payload it produces carries a reference of its OWN rather than borrowing the box's.
 
 That makes it an owning temporary, and `LoweringContext::value_is_owning_temporary` says so. The distinction is not cosmetic: while the unboxed value was read as a borrow, the store that consumed it acquired a second reference, and the one slot release in the function epilogue never balanced it. The unboxed object stayed alive for the rest of the process, and so did everything it owned — five heap blocks per call for a `ReflectionAttribute`, whose name string and argument array go with it.
 
