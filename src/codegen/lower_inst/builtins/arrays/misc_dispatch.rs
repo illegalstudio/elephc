@@ -324,14 +324,16 @@ pub(super) fn require_array_like_operand(ty: PhpType, name: &str) -> Result<()> 
 
 /// Validates a two-input hash builtin operand and reports whether it must be converted to a hash.
 ///
-/// Associative arrays are used directly; scalar indexed arrays (`int`/`float`/`bool` elements) are
-/// converted to integer-keyed hashes at runtime. Any other shape is unsupported.
-pub(super) fn two_hash_operand_needs_conversion(ty: PhpType, name: &str) -> Result<bool> {
+/// Associative arrays are used directly; an indexed array whose element type `converts` accepts
+/// is converted to an integer-keyed hash at runtime. Any other shape is unsupported.
+pub(super) fn two_hash_operand_needs_conversion(
+    ty: PhpType,
+    name: &str,
+    converts: fn(&PhpType) -> bool,
+) -> Result<bool> {
     match ty.codegen_repr() {
         PhpType::AssocArray { .. } => Ok(false),
-        PhpType::Array(elem) if matches!(*elem, PhpType::Int | PhpType::Float | PhpType::Bool) => {
-            Ok(true)
-        }
+        PhpType::Array(elem) if converts(&elem.codegen_repr()) => Ok(true),
         other => Err(CodegenIrError::unsupported(format!(
             "{} hash operand PHP type {:?}",
             name, other
@@ -350,6 +352,12 @@ pub(super) fn emit_convert_indexed_to_hash(ctx: &mut FunctionContext<'_>) {
     abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");
 }
 
+/// Accepts the scalar indexed element types (`int`/`float`/`bool`) the original two-hash builtins
+/// convert.
+pub(super) fn scalar_indexed_element_converts(elem: &PhpType) -> bool {
+    matches!(elem, PhpType::Int | PhpType::Float | PhpType::Bool)
+}
+
 /// Lowers a two-input hash builtin: materializes both operands (converting scalar indexed inputs to
 /// owned hashes), calls `runtime_label`, then releases any converted temporaries.
 ///
@@ -363,11 +371,31 @@ pub(super) fn lower_two_hash_arg_builtin(
     runtime_label: &str,
     mode: Option<i64>,
 ) -> Result<()> {
+    lower_two_hash_arg_builtin_converting(
+        ctx,
+        inst,
+        name,
+        runtime_label,
+        mode,
+        scalar_indexed_element_converts,
+    )
+}
+
+/// Lowers a two-input hash builtin like [`lower_two_hash_arg_builtin`], converting any indexed
+/// operand whose element type `converts` accepts to an owned integer-keyed hash first.
+pub(super) fn lower_two_hash_arg_builtin_converting(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    runtime_label: &str,
+    mode: Option<i64>,
+    converts: fn(&PhpType) -> bool,
+) -> Result<()> {
     super::super::ensure_arg_count(inst, name, 2)?;
     let first = expect_operand(inst, 0)?;
     let second = expect_operand(inst, 1)?;
-    let conv0 = two_hash_operand_needs_conversion(ctx.value_php_type(first)?, name)?;
-    let conv1 = two_hash_operand_needs_conversion(ctx.value_php_type(second)?, name)?;
+    let conv0 = two_hash_operand_needs_conversion(ctx.value_php_type(first)?, name, converts)?;
+    let conv1 = two_hash_operand_needs_conversion(ctx.value_php_type(second)?, name, converts)?;
     let result_reg = abi::int_result_reg(ctx.emitter);
 
     // -- materialize first operand into the result register, convert if indexed, then spill --
@@ -436,12 +464,14 @@ pub(super) fn lower_two_hash_arg_builtin(
             abi::emit_call_label(ctx.emitter, runtime_label);
             ctx.emitter.instruction("sub rsp, 16");                             // reserve a slot for the result
             ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // spill the result; stack holds [result, h2, h1]
+            // `__rt_decref_hash` takes its hash in `rax`; passing it in `rdi` released the RESULT,
+            // which was still in `rax`, and leaked the temporary.
             if conv1 {
-                ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");       // reload the converted second hash temporary
+                ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");       // reload the converted second hash temporary
                 abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
             }
             if conv0 {
-                ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");       // reload the converted first hash temporary
+                ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 32]");       // reload the converted first hash temporary
                 abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
             }
             ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // restore the result hash pointer

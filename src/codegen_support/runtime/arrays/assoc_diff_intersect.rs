@@ -7,6 +7,13 @@
 //!
 //! Key details:
 //! - Values compare by PHP string cast: `(string)a === (string)b`. Temporary Mixed boxes are released to avoid leaks.
+//! - Each rendering is released after the compare: a string renders as a persisted copy that
+//!   `__rt_heap_free` releases, a number is formatted into `_concat_buf`, whose offset is put back.
+//!   Neither was, so every compared string pair leaked two blocks, and a long scan of numbers kept
+//!   advancing the scratch buffer.
+//! - On x86_64 `__rt_decref_mixed` and `__rt_incref` read their pointer from `rax`, like every
+//!   other refcount helper; this helper used to load `rdi`, so the temporary boxes were never
+//!   released and a kept heap value was never retained, freed with its source.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -28,9 +35,9 @@ pub fn emit_assoc_diff_intersect(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: assoc_diff_intersect ---");
     emitter.label_global("__rt_assoc_diff_intersect");
-    emitter.instruction("sub sp, sp, #160");                                    // allocate the diff/intersect stack frame
-    emitter.instruction("stp x29, x30, [sp, #144]");                            // save frame pointer and return address
-    emitter.instruction("add x29, sp, #144");                                   // set up the new frame pointer
+    emitter.instruction("sub sp, sp, #192");                                    // allocate the diff/intersect stack frame
+    emitter.instruction("stp x29, x30, [sp, #176]");                            // save frame pointer and return address
+    emitter.instruction("add x29, sp, #176");                                   // set up the new frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save hash1 pointer
     emitter.instruction("str x1, [sp, #8]");                                    // save hash2 pointer
     emitter.instruction("str x2, [sp, #24]");                                   // save mode (0 = diff, 1 = intersect)
@@ -61,6 +68,9 @@ pub fn emit_assoc_diff_intersect(emitter: &mut Emitter) {
     emitter.instruction("str x3, [sp, #96]");                                   // save hash2 value runtime tag
     emitter.instruction("cbz x0, __rt_assoc_diff_intersect_nomatch");           // absent key cannot form a matching pair
     emitter.comment("-- compare the two values by PHP string cast --");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    emitter.instruction("ldr x10, [x9]");                                       // read the scratch offset the renderings will advance
+    emitter.instruction("str x10, [sp, #152]");                                 // save it so both renderings can be rewound
     emitter.instruction("ldr x0, [sp, #72]");                                   // hash1 value runtime tag
     emitter.instruction("ldr x1, [sp, #56]");                                   // hash1 value low word
     emitter.instruction("ldr x2, [sp, #64]");                                   // hash1 value high word
@@ -75,6 +85,7 @@ pub fn emit_assoc_diff_intersect(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_mixed_from_value");                            // box the hash2 value, x0 = box2
     emitter.instruction("str x0, [sp, #112]");                                  // save box2 for later release
     emitter.instruction("bl __rt_mixed_cast_string");                           // cast box2 to string: x1=ptr, x2=len
+    emitter.instruction("str x1, [sp, #144]");                                  // save the hash2 rendering so it can be released
     emitter.instruction("mov x3, x1");                                          // move the hash2 string pointer into the str_eq right operand
     emitter.instruction("mov x4, x2");                                          // move the hash2 string length into the str_eq right operand
     emitter.instruction("ldr x1, [sp, #120]");                                  // reload the hash1 string pointer as the str_eq left operand
@@ -85,6 +96,13 @@ pub fn emit_assoc_diff_intersect(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_decref_mixed");                                // release the temporary hash1 value box
     emitter.instruction("ldr x0, [sp, #112]");                                  // reload box2 for release
     emitter.instruction("bl __rt_decref_mixed");                                // release the temporary hash2 value box
+    emitter.instruction("ldr x0, [sp, #120]");                                  // reload the hash1 rendering
+    emitter.instruction("bl __rt_heap_free");                                   // release a persisted rendering; scratch is ignored
+    emitter.instruction("ldr x0, [sp, #144]");                                  // reload the hash2 rendering
+    emitter.instruction("bl __rt_heap_free");                                   // release a persisted rendering; scratch is ignored
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    emitter.instruction("ldr x10, [sp, #152]");                                 // reload the scratch offset saved before rendering
+    emitter.instruction("str x10, [x9]");                                       // rewind the scratch buffer past both numeric renderings
     emitter.instruction("ldr x0, [sp, #136]");                                  // x0 = pair matches (found and string-equal values)
     emitter.instruction("b __rt_assoc_diff_intersect_decide");                  // decide whether to keep this entry
     emitter.label("__rt_assoc_diff_intersect_nomatch");
@@ -126,8 +144,8 @@ pub fn emit_assoc_diff_intersect(emitter: &mut Emitter) {
     emitter.instruction("b __rt_assoc_diff_intersect_loop");                    // continue with the next hash1 entry
     emitter.label("__rt_assoc_diff_intersect_done");
     emitter.instruction("ldr x0, [sp, #16]");                                   // x0 = result hash pointer
-    emitter.instruction("ldp x29, x30, [sp, #144]");                            // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #160");                                    // deallocate the stack frame
+    emitter.instruction("ldp x29, x30, [sp, #176]");                            // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #192");                                    // deallocate the stack frame
     emitter.instruction("ret");                                                 // return the result hash in x0
 }
 
@@ -140,7 +158,7 @@ fn emit_assoc_diff_intersect_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_assoc_diff_intersect");
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
-    emitter.instruction("sub rsp, 160");                                        // reserve local spill slots for the filter loop state
+    emitter.instruction("sub rsp, 192");                                        // reserve local spill slots for the filter loop state
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save hash1 pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save hash2 pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // save mode (0 = diff, 1 = intersect)
@@ -172,6 +190,9 @@ fn emit_assoc_diff_intersect_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // was the key present in hash2?
     emitter.instruction("je __rt_assoc_diff_intersect_nomatch");                // absent key cannot form a matching pair
     emitter.comment("-- compare the two values by PHP string cast --");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_concat_off");
+    emitter.instruction("mov r10, QWORD PTR [r11]");                            // read the scratch offset the renderings will advance
+    emitter.instruction("mov QWORD PTR [rbp - 160], r10");                      // save it so both renderings can be rewound
     emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // hash1 value runtime tag
     emitter.instruction("mov rdi, QWORD PTR [rbp - 64]");                       // hash1 value low word
     emitter.instruction("mov rsi, QWORD PTR [rbp - 72]");                       // hash1 value high word
@@ -188,16 +209,24 @@ fn emit_assoc_diff_intersect_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 120], rax");                      // save box2 for later release
     emitter.instruction("mov rdi, rax");                                        // pass box2 to the string cast helper
     emitter.instruction("call __rt_mixed_cast_string");                         // cast box2 to string: rax=ptr, rdx=len
+    emitter.instruction("mov QWORD PTR [rbp - 152], rax");                      // save the hash2 rendering so it can be released
     emitter.instruction("mov rcx, rdx");                                        // move the hash2 string length into the str_eq right length
     emitter.instruction("mov rdx, rax");                                        // move the hash2 string pointer into the str_eq right pointer
     emitter.instruction("mov rdi, QWORD PTR [rbp - 128]");                      // reload the hash1 string pointer as the str_eq left pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 136]");                      // reload the hash1 string length as the str_eq left length
     emitter.instruction("call __rt_str_eq");                                    // compare the two cast strings, rax = equal
     emitter.instruction("mov QWORD PTR [rbp - 144], rax");                      // save the value-equality result across the box releases
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 112]");                      // reload box1 for release
+    emitter.instruction("mov rax, QWORD PTR [rbp - 112]");                      // reload box1 into the register __rt_decref_mixed reads
     emitter.instruction("call __rt_decref_mixed");                              // release the temporary hash1 value box
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 120]");                      // reload box2 for release
+    emitter.instruction("mov rax, QWORD PTR [rbp - 120]");                      // reload box2 into the register __rt_decref_mixed reads
     emitter.instruction("call __rt_decref_mixed");                              // release the temporary hash2 value box
+    emitter.instruction("mov rax, QWORD PTR [rbp - 128]");                      // reload the hash1 rendering
+    emitter.instruction("call __rt_heap_free");                                 // release a persisted rendering; scratch is ignored
+    emitter.instruction("mov rax, QWORD PTR [rbp - 152]");                      // reload the hash2 rendering
+    emitter.instruction("call __rt_heap_free");                                 // release a persisted rendering; scratch is ignored
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_concat_off");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 160]");                      // reload the scratch offset saved before rendering
+    emitter.instruction("mov QWORD PTR [r11], r10");                            // rewind the scratch buffer past both numeric renderings
     emitter.instruction("mov rax, QWORD PTR [rbp - 144]");                      // rax = pair matches (found and string-equal values)
     emitter.instruction("jmp __rt_assoc_diff_intersect_decide");                // decide whether to keep this entry
     emitter.label("__rt_assoc_diff_intersect_nomatch");
@@ -220,7 +249,7 @@ fn emit_assoc_diff_intersect_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_assoc_diff_intersect_insert");                 // scalar values need no retain
     emitter.instruction("cmp r10, 7");                                          // is the value above the heap-backed tag range?
     emitter.instruction("jg __rt_assoc_diff_intersect_insert");                 // non-heap tags need no retain
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 64]");                       // load the kept heap-backed value low word
+    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // load the kept heap-backed value where __rt_incref reads it
     emitter.instruction("call __rt_incref");                                    // retain the kept heap-backed value for the result owner
     emitter.instruction("jmp __rt_assoc_diff_intersect_insert");                // continue to the insertion
     emitter.label("__rt_assoc_diff_intersect_persist");
@@ -242,8 +271,33 @@ fn emit_assoc_diff_intersect_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_assoc_diff_intersect_loop");                  // continue with the next hash1 entry
     emitter.label("__rt_assoc_diff_intersect_done");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // rax = result hash pointer
-    emitter.instruction("add rsp, 160");                                        // release the local spill slots
+    emitter.instruction("add rsp, 192");                                        // release the local spill slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the result hash in rax
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// On x86_64 every refcount helper reads `rax`: the instruction right before each release and
+    /// retain must load `rax`, and both renderings are freed with the scratch offset rewound.
+    #[test]
+    fn x86_64_refcount_calls_pass_their_pointer_in_rax() {
+        let mut emitter = Emitter::new(Target::parse("linux-x86_64").unwrap());
+        emit_assoc_diff_intersect(&mut emitter);
+        let asm = emitter.output();
+        let lines: Vec<&str> = asm.lines().map(str::trim).collect();
+        let mut refcount_calls = 0;
+        for (index, line) in lines.iter().enumerate() {
+            if line.starts_with("call __rt_decref_mixed") || line.starts_with("call __rt_incref") {
+                refcount_calls += 1;
+                assert!(lines[index - 1].starts_with("mov rax,"), "{}", lines[index - 1]);
+            }
+        }
+        assert_eq!(refcount_calls, 3);
+        assert_eq!(asm.matches("call __rt_heap_free").count(), 2);
+        assert!(asm.contains("_concat_off"));
+    }
+}
