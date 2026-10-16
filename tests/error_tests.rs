@@ -275,6 +275,8 @@ fn resolver_error(src: &str) -> elephc::errors::CompileError {
 mod locals_retype_fixtures;
 #[path = "error_tests/syntax.rs"]
 mod syntax;
+#[path = "error_tests/declare_order.rs"]
+mod declare_order;
 #[path = "error_tests/recovery.rs"]
 mod recovery;
 #[path = "error_tests/warnings.rs"]

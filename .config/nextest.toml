@@ -236,6 +236,17 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 filter = 'binary(codegen_tests) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/))'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
+# These library regressions emit one program per supported target. On macOS CI,
+# eval_class_name_results_release_bridge_cells_and_strings_on_all_targets hit
+# the 60s cap twice; allow three periods for both all-target naming conventions.
+[[profile.default.overrides]]
+filter = 'test(/_on_(all_targets|every_target)$/)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'test(/_on_(all_targets|every_target)$/)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
 # These eval fixtures live outside the Core eval GC naming family. Boxed method
 # arguments hit 60s on both macOS attempts; hook-default and post-eval instanceof
 # controls passed only on retry at 59.687s and 58.843s respectively. The latter

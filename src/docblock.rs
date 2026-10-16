@@ -34,6 +34,7 @@ use crate::parser::ast::{
     GenericDecl, Program, Stmt, StmtKind, TypeExpr, TypeParam,
     Variance,
 };
+use crate::source::SourceMode;
 
 /// The generic annotations one doc comment carries.
 #[derive(Debug, Default, Clone)]
@@ -90,8 +91,13 @@ impl DocBlock {
 ///
 /// A function or method that already carries native type parameters is left untouched: written
 /// syntax wins over an annotation, so a file can migrate one declaration at a time.
-pub fn apply(program: Program, source: &str) -> Program {
-    let blocks = collect(source);
+///
+/// `mode` is the physical file's own [`SourceMode`]. The doc comments are recovered by
+/// re-tokenizing `source`, so that tokenization must use the mode the parser did: PHP mode now
+/// accepts a tagless file as pure inline HTML, so the collector cannot infer the mode from
+/// whether `tokenize` succeeds.
+pub fn apply(program: Program, source: &str, mode: SourceMode) -> Program {
+    let blocks = collect(source, mode);
     if blocks.is_empty() {
         return program;
     }
@@ -258,8 +264,8 @@ fn lookup_inherited<'a>(written: &Name, block: &'a DocBlock) -> Option<&'a Vec<T
 }
 
 /// Extracts generic-bearing doc comments keyed by their declaration token positions.
-fn collect(source: &str) -> HashMap<(u32, u32), DocBlock> {
-    bindings::collect(source)
+fn collect(source: &str, mode: SourceMode) -> HashMap<(u32, u32), DocBlock> {
+    bindings::collect(source, mode)
 }
 
 /// Parses the annotations of one doc comment's lines.
@@ -426,12 +432,12 @@ mod tests {
     fn program_of(source: &str) -> Program {
         let tokens = crate::lexer::tokenize(source).expect("tokenizes");
         let program = crate::parser::parse(&tokens).expect("parses");
-        apply(program, source)
+        apply(program, source, SourceMode::Php)
     }
 
     /// Collects the sole generic docblock in a source fixture.
     fn block_of(source: &str) -> DocBlock {
-        let blocks = collect(source);
+        let blocks = collect(source, SourceMode::Php);
         assert_eq!(blocks.len(), 1, "expected exactly one generic doc comment");
         blocks.into_values().next().expect("one block")
     }
@@ -473,8 +479,58 @@ mod tests {
     /// association.
     #[test]
     fn skips_blank_lines_before_the_declaration() {
-        let blocks = collect("<?php\n/**\n * @template T\n */\n\n\nfunction f($a) {}\n");
+        let blocks = collect("<?php\n/**\n * @template T\n */\n\n\nfunction f($a) {}\n", SourceMode::Php);
         assert!(blocks.contains_key(&(7, 1)), "got keys {:?}", blocks.keys());
+    }
+
+    /// Line comments on either side of an annotation end at CR, LF, or CRLF like the lexer.
+    #[test]
+    fn binds_templates_through_line_comments_with_php_line_endings() {
+        let block = "/**\n * @template T of Entity\n * @param T $value\n * @return T\n */";
+        for comment in ["//", "#"] {
+            for ending in ["\r", "\n", "\r\n"] {
+                for gap in [
+                    format!("{comment} café{ending}{block}\n"),
+                    format!("{block}\n{comment} café{ending}"),
+                ] {
+                    let source = format!("<?php {gap}function f($value) {{ return $value; }}");
+                    let program = program_of(&source);
+                    let StmtKind::FunctionDecl { type_params, params, return_type, .. } = &program[0].kind else {
+                        panic!("expected a function for {source:?}");
+                    };
+                    assert_eq!(type_params.len(), 1, "source: {source:?}");
+                    assert_eq!(type_params[0].name, "T", "source: {source:?}");
+                    assert_eq!(type_params[0].bound, Some(TypeExpr::Named(Name::unqualified("Entity"))));
+                    assert_eq!(params[0].1, Some(TypeExpr::Named(Name::unqualified("T"))));
+                    assert_eq!(*return_type, Some(TypeExpr::Named(Name::unqualified("T"))));
+                }
+            }
+        }
+    }
+
+    /// A doc comment stays bound to the declaration directly below it when inline HTML or a
+    /// `?>`/`<?php` tag sits above the comment. The tag bytes are consumed without a token, so
+    /// the gap scan must step over them the way PHP's own doc-comment binding does.
+    #[test]
+    fn binds_through_inline_html_and_tags() {
+        for source in [
+            "<div>\n<?php\n/** @template T */\nfunction f() {}\n",
+            "<?php echo 1; ?>\n<?php\n/** @template T */\nfunction f() {}\n",
+            "<?php echo 1; ?>\n<div>\n<?php\n/** @template T */\nfunction f() {}\n",
+            "<?=\n1;\n?>\n<div>\n<?php\n/** @template T */\nfunction f() {}\n",
+            "<?PHP\n/** @template T */\nfunction f() {}\n",
+        ] {
+            let program = program_of(source);
+            let type_params = program
+                .iter()
+                .find_map(|stmt| match &stmt.kind {
+                    StmtKind::FunctionDecl { type_params, .. } => Some(type_params),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("expected a function declaration for {source:?}"));
+            assert_eq!(type_params.len(), 1, "source: {source:?}");
+            assert_eq!(type_params[0].name, "T", "source: {source:?}");
+        }
     }
 
     /// A doc comment with no `@template` carries no type parameter, so this pass leaves the
@@ -525,7 +581,7 @@ mod tests {
             "<?php\n/**\n * @template T\n * @param array<T> $a\n * @return T\n */\nfunction f(array $a) { return $a[0]; }\n";
         let tokens = crate::lexer::tokenize(source).expect("tokenizes");
         let program = crate::parser::parse(&tokens).expect("parses");
-        let program = apply(program, source);
+        let program = apply(program, source, SourceMode::Php);
         match &program[0].kind {
             StmtKind::FunctionDecl {
                 type_params,
@@ -557,7 +613,7 @@ mod tests {
             "<?php\n/**\n * @template T\n * @return T\n */\nfunction f<U>(U $a): U { return $a; }\n";
         let tokens = crate::lexer::tokenize(source).expect("tokenizes");
         let program = crate::parser::parse(&tokens).expect("parses");
-        let program = apply(program, source);
+        let program = apply(program, source, SourceMode::Php);
         match &program[0].kind {
             StmtKind::FunctionDecl { type_params, .. } => {
                 assert_eq!(type_params.len(), 1);
@@ -617,11 +673,16 @@ mod tests {
     /// Apparent annotations inside strings or line comments never become declaration metadata.
     #[test]
     fn ignores_docblock_markers_inside_strings_and_line_comments() {
-        let program = program_of("<?php\n$x = '/** @template T */';\n// /** @template U */\nclass C {}\n");
-        let StmtKind::ClassDecl { generics, .. } = &program[1].kind else {
-            panic!("expected a class");
-        };
-        assert!(generics.is_none());
+        for comment in ["//", "#"] {
+            for ending in ["\r", "\n", "\r\n"] {
+                let source = format!("<?php\n$x = '/** @template T */';\n{comment} /** @template U */{ending}class C {{}}\n");
+                let program = program_of(&source);
+                let StmtKind::ClassDecl { generics, .. } = &program[1].kind else {
+                    panic!("expected a class for {source:?}");
+                };
+                assert!(generics.is_none(), "source: {source:?}");
+            }
+        }
     }
 
     /// Enum methods adopt their own template parameters and annotated types.
@@ -864,7 +925,11 @@ mod tests {
         let source = "/** @template T */\n#[Marker(\n    ']'\n)]\nclass Box {}";
         let tokens = crate::lexer::tokenize_with_mode(source, crate::source::SourceMode::Lfc)
             .expect("tokenizes");
-        let program = apply(crate::parser::parse(&tokens).expect("parses"), source);
+        let program = apply(
+            crate::parser::parse(&tokens).expect("parses"),
+            source,
+            SourceMode::Lfc,
+        );
         let StmtKind::ClassDecl { generics, .. } = &program[0].kind else {
             panic!("expected a class declaration");
         };

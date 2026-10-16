@@ -88,6 +88,8 @@ mod namespaces;
 mod exceptions;
 #[path = "parser_tests/declarations.rs"]
 mod declarations;
+#[path = "parser_tests/declare_order.rs"]
+mod declare_order;
 #[path = "parser_tests/extensions.rs"]
 mod extensions;
 #[path = "parser_tests/magic_constants.rs"]

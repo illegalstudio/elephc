@@ -546,6 +546,18 @@ fn a_close_tag_in_a_line_comment_inside_an_interpolation_is_refused() {
     assert_eq!(kinds("\"{$a[/* ?> */\"k\"]}\";"), kinds(r#""{$a["k"]}";"#));
 }
 
+/// A `//` or `#` line comment ends at a bare `\r`, as the file lexer and reference PHP do.
+#[test]
+fn a_line_comment_ends_at_a_carriage_return() {
+    for source in ["// c\rfoo", "# c\rfoo", "// c\nfoo"] {
+        assert_eq!(
+            kinds(source)[0],
+            TokenKind::Ident("foo".to_string()),
+            "source: {source}"
+        );
+    }
+}
+
 /// A comment inside `{$…}` is inert to the eval lexer too: the fragment lexes exactly as it does
 /// without the comment. A quote or brace in the comment used to end the capture or open a string.
 ///

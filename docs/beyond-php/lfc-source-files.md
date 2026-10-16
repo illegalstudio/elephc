@@ -41,7 +41,8 @@ nowdoc, or comment. Only tags encountered at a code boundary are rejected.
 
 Only a case-insensitive `.lfc` suffix selects tagless mode. `.php`, `.inc`,
 extensionless files, and all other paths retain the existing tagged-PHP
-contract and must begin with `<?php`.
+contract: `<?php` opens code, leading inline HTML before it and HTML between a
+`?>` and the next open tag are allowed.
 
 ## Mixed PHP and LFC projects
 

@@ -155,12 +155,12 @@ pub(crate) fn current_strict_types() -> bool {
 
 /// Records that the file currently being parsed declared `strict_types=<enabled>`.
 ///
-/// PHP requires the directive to be a file's very first statement, so every statement created
-/// after this call belongs to the same file and inherits the flag. The enclosing
+/// Any accepted leading `strict_types=1` makes the whole file strict; a later `=0` cannot
+/// clear it. Every statement created in this parse scope inherits the resulting flag. The enclosing
 /// `ParseModeGuard` resets it when the file's parse ends, which is what keeps the directive from
 /// leaking into an included file or back out to the includer.
 pub(crate) fn declare_strict_types(enabled: bool) {
-    CURRENT_STRICT_TYPES.with(|cell| cell.set(enabled));
+    CURRENT_STRICT_TYPES.with(|cell| cell.set(cell.get() || enabled));
 }
 
 /// Applies path-dependent post-parse processing shared by every physical source loader.
@@ -185,7 +185,7 @@ pub fn finalize_physical_program(
     // Per physical file, because the lexer discards comments and they are recovered from the
     // source text by line: that only means anything while the file is still its own, before
     // include resolution splices every file into one program without rebasing line numbers.
-    let program = crate::docblock::apply(program, source);
+    let program = crate::docblock::apply(program, source, mode);
     Ok(crate::conditional::apply(program, defines))
 }
 

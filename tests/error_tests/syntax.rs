@@ -9,11 +9,61 @@
 
 use super::*;
 
-/// Verifies the error diagnostic for missing open tag.
+/// Verifies a source with no `<?php` open tag is inline HTML, not an error: PHP echoes the
+/// whole file, so `echo "hi";` outside a tag is literal output.
 #[test]
-fn test_error_missing_open_tag() {
-    // PHP code starting outside an open tag produces a "missing open tag" error.
-    expect_error("echo \"hi\";", "<?php");
+fn test_tagless_source_is_inline_html() {
+    assert!(
+        check_source("echo \"hi\";").is_ok(),
+        "a tagless source is inline HTML in PHP and must compile"
+    );
+}
+
+/// Verifies `<?= ?>` — a short echo tag with no expression — is still a syntax error.
+#[test]
+fn test_error_short_echo_without_expression() {
+    expect_error("<?= ?>", "Unexpected token");
+}
+
+/// Verifies a namespace declaration after a real statement is rejected, as PHP's fatal is:
+/// leading inline HTML counts as a statement, so `<?php namespace Foo;` after it fails.
+#[test]
+fn test_error_namespace_after_statement() {
+    for source in [
+        "<?php echo 1; namespace Foo; echo 2;",
+        "<b>\n<?php namespace Foo; echo 2;",
+    ] {
+        expect_error(
+            source,
+            "Namespace declaration statement has to be the very first statement",
+        );
+    }
+}
+
+/// Verifies `strict_types` placement is not reopened once a real statement, a namespace, inline
+/// HTML, or a nested body has intervened, even after an earlier `declare`.
+#[test]
+fn test_error_strict_types_after_a_real_statement() {
+    for source in [
+        "<?php declare(ticks=1); echo 1; declare(strict_types=1); echo 2;",
+        "<?php echo 1; declare(ticks=1); declare(strict_types=1); echo 2;",
+        "<?php declare(ticks=1); namespace A; declare(strict_types=1); echo 1;",
+        "<?php declare(ticks=1); function f() { declare(strict_types=1); } echo 1;",
+        "<?php declare(ticks=1) { declare(strict_types=1); } echo 1;",
+        "<?php declare(ticks=1); ?>text<?php declare(strict_types=1); echo 1;",
+    ] {
+        expect_error(source, "strict_types declaration must be the very first statement");
+    }
+}
+
+/// Verifies `declare(strict_types=1)` applies to the WHOLE file, so a call inside a PRECEDING
+/// `declare(ticks=...)` body is checked strictly too (PHP throws on `f(true)` there).
+#[test]
+fn test_error_strict_types_applies_to_an_earlier_declare_body() {
+    expect_error(
+        "<?php declare(ticks=1) { echo f(true); } declare(strict_types=1); function f(int $i) { return $i; }",
+        "is active in this file",
+    );
 }
 
 /// Verifies the error diagnostic for unterminated string.

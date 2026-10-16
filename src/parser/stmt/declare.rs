@@ -8,12 +8,13 @@
 //! Key details:
 //! - `strict_types` is recorded on the parser's per-file source profile
 //!   (`crate::source::declare_strict_types`), which stamps every statement parsed afterwards.
-//!   PHP requires the directive to be a file's first statement, so "afterwards" is exactly
-//!   "the rest of this file"; the type checker reads the stamp back per statement to pick
-//!   between PHP's strict and coercive parameter binding.
+//!   PHP places the directive at the head of the file — after only empty statements and earlier
+//!   `declare` calls — so "afterwards" is exactly "the rest of this file"; the type checker reads
+//!   the stamp back per statement to pick between PHP's strict and coercive parameter binding.
 //! - Every other directive (`ticks`, `encoding`) is compile-time syntax only.
 //! - Bodies lower through `Synthetic` so they execute in the enclosing scope.
 
+use super::declare_scan::{only_declares_and_empty_statements_before, skip_declare_statement};
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
 use crate::parser::ast::{Stmt, StmtKind};
@@ -41,7 +42,11 @@ pub(super) fn parse_declare(
         "Expected ')' after declare directives",
     )?;
 
-    if strict_types.is_some() && declare_pos != 1 {
+    // PHP accepts `strict_types` as the file's very first statement, or after only empty
+    // statements and earlier `declare` calls (either form): `<?php ; declare(strict_types=1);`
+    // and `<?php declare(ticks=1); declare(strict_types=1);` both print `1`. A real statement
+    // before it — inline HTML included, and anything inside a body — is not.
+    if strict_types.is_some() && !only_declares_and_empty_statements_before(tokens, declare_pos) {
         return Err(CompileError::new(
             span,
             "strict_types declaration must be the very first statement in the script",
@@ -81,6 +86,45 @@ pub(super) fn parse_declare(
     };
 
     Ok(Stmt::new(StmtKind::Synthetic(body), span))
+}
+
+/// Seeds the file's `strict_types` state before any statement is parsed.
+///
+/// PHP applies `declare(strict_types=1)` to the WHOLE file, including statements that PRECEDE the
+/// directive (a leading `declare(ticks=...)` body: `declare(ticks=1) { echo f(true); }
+/// declare(strict_types=1);` still throws on `f(true)`). The parser stamps each statement as it is
+/// created, so a directive parsed late would leave those earlier statements coercive. Scanning the
+/// leading tokens for every directive and OR-ing their values stamps the entire file. A later
+/// coercive directive cannot clear an earlier strict one. The scan stops at the
+/// first real statement, so a directive that is not legally placed seeds nothing the placement
+/// check would not reject anyway.
+pub(crate) fn preseed_strict_types(tokens: &[SpannedToken]) {
+    let mut pos = 1; // past the open tag
+    while pos < tokens.len() {
+        match &tokens[pos].0 {
+            Token::Semicolon => pos += 1,
+            Token::Declare => {
+                if let Some(enabled) = peek_strict_types(tokens, pos) {
+                    crate::source::declare_strict_types(enabled);
+                }
+                match skip_declare_statement(tokens, pos) {
+                    Some(next) => pos = next,
+                    None => return,
+                }
+            }
+            _ => return,
+        }
+    }
+}
+
+/// Returns the `strict_types` value of a `declare(...)` at `declare_pos`, if it declares one.
+fn peek_strict_types(tokens: &[SpannedToken], declare_pos: usize) -> Option<bool> {
+    let mut pos = declare_pos + 1;
+    if !matches!(tokens.get(pos)?.0, Token::LParen) {
+        return None;
+    }
+    pos += 1;
+    parse_directives(tokens, &mut pos, Span::dummy()).ok().flatten()
 }
 
 /// Parses one or more directive/literal pairs.

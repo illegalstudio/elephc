@@ -116,3 +116,42 @@ fn test_strict_types_does_not_reach_an_engine_invoked_callback() {
     );
     assert_eq!(out, "1,0,2");
 }
+
+/// Complete control tails remain inside a leading declare before a strict directive.
+#[test]
+fn test_strict_types_after_complete_declare_control_bodies() {
+    for (source, expected) in [
+        (r#"<?php declare(ticks=1) if (true) echo 1; else echo 2; declare(strict_types=1); echo 3;"#, "13"),
+        (r#"<?php declare(ticks=1) do {echo 1;} while (false); declare(strict_types=1); echo 2;"#, "12"),
+        (r#"<?php declare(ticks=1) if (true): echo 1; else: echo 2; endif; declare(strict_types=1); echo 3;"#, "13"),
+        (r#"<?php declare(ticks=1) try {echo 1;} catch (Exception $e) {echo 9;} finally {echo 2;} declare(strict_types=1); echo 3;"#, "123"),
+        (r#"<?php declare(ticks=1) if (false) {echo 9;} elseif (true) {echo 1;} else {echo 8;} declare(strict_types=1); echo 2;"#, "12"),
+        (r#"<?php declare(ticks=1) if (true) if (false) echo 9; else echo 1; else echo 8; declare(strict_types=1); echo 2;"#, "12"),
+        (r#"<?php declare(ticks=1) for ($i=0;$i<2;$i++): echo $i; endfor; declare(strict_types=1); echo 2;"#, "012"),
+        (r#"<?php declare(ticks=1) while (false): echo 9; endwhile; declare(strict_types=1); echo 2;"#, "2"),
+        (r#"<?php declare(ticks=1) foreach ([1,2] as $i): echo $i; endforeach; declare(strict_types=1); echo 3;"#, "123"),
+        (r#"<?php declare(ticks=1) switch (1): case 1: echo 1; break; default: echo 9; endswitch; declare(strict_types=1); echo 2;"#, "12"),
+    ] {
+        assert_eq!(compile_and_run(source), expected, "{source}");
+    }
+}
+
+/// Inline HTML inside a declare's alternative if body does not end that declare early.
+#[test]
+fn test_strict_types_after_inline_html_control_body() {
+    let out = compile_and_run(
+        "<?php declare(ticks=1) if (true): ?>a<?php else: ?>b<?php endif; declare(strict_types=1); echo 'c';",
+    );
+    assert_eq!(out, "ac");
+}
+
+/// Closing expression braces do not end a declare body before a following operator.
+#[test]
+fn test_strict_types_after_declare_expression_tails() {
+    for source in [
+        "<?php declare(ticks=1) match (1) {1 => 1} + 2; declare(strict_types=1); echo 3;",
+        "<?php declare(ticks=1) $f = function () {} ?? null; declare(strict_types=1); echo 3;",
+    ] {
+        assert_eq!(compile_and_run(source), "3");
+    }
+}
