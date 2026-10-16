@@ -8,6 +8,8 @@
 //! Key details:
 //! - Class metadata is shared globally after construction, so validation must reject inconsistent inheritance early.
 
+use std::collections::{HashMap, HashSet};
+
 use crate::errors::CompileError;
 use crate::parser::ast::{ClassProperty, Expr, ExprKind, Visibility};
 use crate::span::Span;
@@ -29,6 +31,7 @@ use super::{collect_attribute_args, collect_attribute_names};
 pub(super) fn apply_properties(
     state: &mut ClassBuildState,
     class: &FlattenedClass,
+    class_map: &HashMap<String, FlattenedClass>,
     checker: &Checker,
 ) -> Result<(), CompileError> {
     for prop in &class.properties {
@@ -49,7 +52,7 @@ pub(super) fn apply_properties(
                     hooks.set |= inherited.set;
                 }
             }
-            apply_instance_property(state, class, checker, prop)?;
+            apply_instance_property(state, class, class_map, checker, prop)?;
             state.property_hooks.insert(prop.name.clone(), hooks);
         }
     }
@@ -224,6 +227,7 @@ fn validate_static_property_override(
 fn apply_instance_property(
     state: &mut ClassBuildState,
     class: &FlattenedClass,
+    class_map: &HashMap<String, FlattenedClass>,
     checker: &Checker,
     prop: &ClassProperty,
 ) -> Result<(), CompileError> {
@@ -258,6 +262,7 @@ fn apply_instance_property(
         return apply_instance_property_redeclaration(
             state,
             class,
+            class_map,
             checker,
             prop,
             &parent_declaring_class,
@@ -301,8 +306,8 @@ fn apply_instance_property(
     state
         .property_visibilities
         .insert(prop.name.clone(), prop.visibility.clone());
-    apply_set_visibility(state, prop);
-    if prop.is_final {
+    apply_set_visibility(state, class, prop);
+    if property_is_effectively_final(prop) {
         state.final_properties.insert(prop.name.clone());
     } else {
         state.final_properties.remove(&prop.name);
@@ -343,6 +348,7 @@ fn apply_instance_property(
 fn apply_instance_property_redeclaration(
     state: &mut ClassBuildState,
     class: &FlattenedClass,
+    class_map: &HashMap<String, FlattenedClass>,
     checker: &Checker,
     prop: &ClassProperty,
     parent_declaring_class: &str,
@@ -368,6 +374,7 @@ fn apply_instance_property_redeclaration(
     validate_instance_property_override(
         state,
         class,
+        class_map,
         checker,
         prop,
         declared_ty.as_ref(),
@@ -405,8 +412,8 @@ fn apply_instance_property_redeclaration(
     state
         .property_visibilities
         .insert(prop.name.clone(), prop.visibility.clone());
-    apply_set_visibility(state, prop);
-    if prop.is_final {
+    apply_set_visibility(state, class, prop);
+    if property_is_effectively_final(prop) {
         state.final_properties.insert(prop.name.clone());
     }
     if class.is_readonly_class || prop.readonly {
@@ -431,7 +438,18 @@ fn apply_instance_property_redeclaration(
             .insert(prop.name.clone(), contract);
     } else {
         state.abstract_properties.remove(&prop.name);
-        state.abstract_property_hooks.remove(&prop.name);
+        if class.is_abstract && (class.is_readonly_class || prop.readonly)
+            && state.abstract_property_hooks.get(&prop.name)
+                .is_some_and(|contract| contract.set_type.is_some())
+        {
+            // Backing storage implements the getter, but the inherited setter stays abstract.
+            if let Some(contract) = state.abstract_property_hooks.get_mut(&prop.name) {
+                contract.get_type = None;
+                contract.get_by_ref = false;
+            }
+        } else {
+            state.abstract_property_hooks.remove(&prop.name);
+        }
     }
     if prop.by_ref {
         state.reference_properties.insert(prop.name.clone());
@@ -491,7 +509,7 @@ fn apply_private_parent_property_shadowing(
     state
         .property_visibilities
         .insert(prop.name.clone(), prop.visibility.clone());
-    apply_set_visibility(state, prop);
+    apply_set_visibility(state, class, prop);
     replace_active_property_flags(state, class, checker, prop)?;
     Ok(())
 }
@@ -504,7 +522,7 @@ fn replace_active_property_flags(
     checker: &Checker,
     prop: &ClassProperty,
 ) -> Result<(), CompileError> {
-    if prop.is_final {
+    if property_is_effectively_final(prop) {
         state.final_properties.insert(prop.name.clone());
     } else {
         state.final_properties.remove(&prop.name);
@@ -538,14 +556,15 @@ fn replace_active_property_flags(
 }
 
 /// Validates an instance property override against PHP inheritance rules:
-/// visibility reduction, final override attempts, readonly removal, by-reference
+/// visibility reduction, final override attempts, readonly changes, by-reference
 /// toggling, and making a concrete property abstract. For abstract parent
 /// properties, delegates to `validate_abstract_property_contract`; otherwise
-/// validates type invariance. Private parent properties are rejected as
-/// shadowing is not yet supported.
+/// validates type invariance. Private parent shadowing is handled before this
+/// validation because those declarations own separate storage slots.
 fn validate_instance_property_override(
     state: &ClassBuildState,
     class: &FlattenedClass,
+    class_map: &HashMap<String, FlattenedClass>,
     checker: &Checker,
     prop: &ClassProperty,
     declared_ty: Option<&PhpType>,
@@ -566,12 +585,52 @@ fn validate_instance_property_override(
         ));
     }
 
+    let parent_has_setter = state.property_hooks.get(&prop.name)
+        .is_none_or(|hooks| !hooks.is_virtual() || hooks.set);
+    // Abstract hooks describe access, not the readonly status of storage.
+    // Concrete virtual getters still retain the ordinary readonly invariant.
     let parent_abstract = state.abstract_properties.contains(&prop.name);
+    let parent_readonly = state.readonly_properties.contains(&prop.name);
+    let child_readonly = class.is_readonly_class || prop.readonly;
+    if parent_readonly != child_readonly && !parent_abstract {
+        let (parent_modifier, child_modifier) = if parent_readonly {
+            ("readonly", "non-readonly")
+        } else { ("non-readonly", "readonly") };
+        return Err(CompileError::new(prop.span, &format!(
+            "Cannot redeclare {parent_modifier} property {parent_declaring_class}::${} as {child_modifier} {}::${}",
+            prop.name, class.name, prop.name,
+        )));
+    }
+
+    let parent_set_visibility = state.property_set_visibilities.get(&prop.name)
+        .unwrap_or(&inherited_visibility);
+    let child_set_visibility = effective_set_visibility(class, prop);
+    if parent_has_setter
+        && visibility_rank(&child_set_visibility) < visibility_rank(parent_set_visibility)
+    {
+        // PHP normalizes equal read/write access to an omitted setter, including
+        // an explicit public(set). An implicit readonly protected setter differs.
+        let (access, suffix) = if parent_set_visibility == &inherited_visibility {
+            ("omitted", "")
+        } else {
+            (match parent_set_visibility {
+                Visibility::Public => "public(set)",
+                Visibility::Protected => "protected(set)",
+                Visibility::Private => "private(set)",
+            }, " or weaker")
+        };
+        return Err(CompileError::new(prop.span, &format!(
+            "Set access level of {}::${} must be {access} (as in class {parent_declaring_class}){suffix}",
+            class.name, prop.name,
+        )));
+    }
+
     if parent_abstract {
         validate_abstract_property_contract(
             state,
             checker,
             class,
+            class_map,
             prop,
             declared_ty,
             parent_declaring_class,
@@ -587,18 +646,6 @@ fn validate_instance_property_override(
             parent_declaring_class,
             prop.span,
         )?;
-    }
-
-    let parent_readonly = state.readonly_properties.contains(&prop.name);
-    let child_readonly = class.is_readonly_class || prop.readonly;
-    if parent_readonly && !child_readonly {
-        return Err(CompileError::new(
-            prop.span,
-            &format!(
-                "Cannot remove readonly modifier when redeclaring property: {}::${}",
-                class.name, prop.name
-            ),
-        ));
     }
 
     let parent_ref = state.reference_properties.contains(&prop.name);
@@ -635,6 +682,7 @@ fn validate_abstract_property_contract(
     state: &ClassBuildState,
     checker: &Checker,
     class: &FlattenedClass,
+    class_map: &HashMap<String, FlattenedClass>,
     prop: &ClassProperty,
     declared_ty: Option<&PhpType>,
     parent_declaring_class: &str,
@@ -669,16 +717,7 @@ fn validate_abstract_property_contract(
         }
     }
     if let Some(required_set) = contract.set_type.as_ref() {
-        if class.is_readonly_class || prop.readonly {
-            return Err(CompileError::new(
-                prop.span,
-                &format!(
-                    "Readonly property {}::${} cannot satisfy set property contract from {}",
-                    class.name, prop.name, parent_declaring_class
-                ),
-            ));
-        }
-        if !checker.type_accepts(&actual_ty, required_set) {
+        if !abstract_setter_storage_type_accepts(checker, class_map, &actual_ty, required_set) {
             return Err(CompileError::new(
                 prop.span,
                 &format!(
@@ -687,8 +726,72 @@ fn validate_abstract_property_contract(
                 ),
             ));
         }
+        if class.is_readonly_class || prop.readonly {
+            if class.is_abstract {
+                return Ok(());
+            }
+            return Err(CompileError::new(
+                prop.span,
+                &format!(
+                    "Class {} contains 1 abstract method and must therefore be declared abstract or implement the remaining method ({}::${}::set)",
+                    class.name, parent_declaring_class, prop.name
+                ),
+            ));
+        }
     }
     Ok(())
+}
+
+/// Checks setter-storage contravariance against every declaration, including classes whose
+/// alphabetic schema turn has not yet run.
+fn abstract_setter_storage_type_accepts(
+    checker: &Checker,
+    class_map: &HashMap<String, FlattenedClass>,
+    storage: &PhpType,
+    setter: &PhpType,
+) -> bool {
+    if checker.type_accepts(storage, setter) {
+        return true;
+    }
+    if let PhpType::Union(members) = setter {
+        return members.iter().all(|member| {
+            abstract_setter_storage_type_accepts(checker, class_map, storage, member)
+        });
+    }
+    if let PhpType::Union(members) = storage {
+        return members.iter().any(|member| {
+            abstract_setter_storage_type_accepts(checker, class_map, member, setter)
+        });
+    }
+    let (PhpType::Object(storage_name), PhpType::Object(setter_name)) = (storage, setter) else {
+        return false;
+    };
+    declared_class_is_a(class_map, setter_name, storage_name)
+}
+
+/// Walks the complete flattened declaration map instead of the partially built class table.
+fn declared_class_is_a(
+    class_map: &HashMap<String, FlattenedClass>,
+    class_name: &str,
+    ancestor_name: &str,
+) -> bool {
+    let canonical = |name: &str| crate::names::php_symbol_key(name.trim_start_matches('\\'));
+    let ancestor = canonical(ancestor_name);
+    let mut current = canonical(class_name);
+    let mut seen = HashSet::new();
+    while seen.insert(current.clone()) {
+        if current == ancestor {
+            return true;
+        }
+        let Some(class) = class_map.iter()
+            .find_map(|(name, class)| (canonical(name) == current).then_some(class))
+        else {
+            return false;
+        };
+        let Some(parent) = class.extends.as_deref() else { return false };
+        current = canonical(parent);
+    }
+    false
 }
 
 /// Looks up the declared type of a static property named `property` from the
@@ -916,14 +1019,30 @@ fn validate_asymmetric_visibility(prop: &ClassProperty) -> Result<(), CompileErr
     Ok(())
 }
 
-/// Records a property's PHP 8.4 asymmetric write (`set`) visibility in the build state, but only
-/// when it differs from the read visibility. A redeclaration without one clears any inherited
-/// write restriction so the property's read visibility governs writes again.
-fn apply_set_visibility(state: &mut ClassBuildState, prop: &ClassProperty) {
-    if let Some(set_visibility) = &prop.set_visibility {
+/// Computes explicit write access or the implicit protected setter of public readonly storage.
+fn effective_set_visibility(class: &FlattenedClass, prop: &ClassProperty) -> Visibility {
+    prop.set_visibility.clone().unwrap_or_else(|| {
+        if (class.is_readonly_class || prop.readonly) && prop.visibility == Visibility::Public {
+            Visibility::Protected
+        } else { prop.visibility.clone() }
+    })
+}
+
+/// A private setter is implicitly final only when it restricts a wider read visibility.
+fn property_is_effectively_final(prop: &ClassProperty) -> bool {
+    prop.is_final || (prop.set_visibility == Some(Visibility::Private)
+        && prop.visibility != Visibility::Private)
+}
+
+/// Records effective setter access while retaining explicit public(set) for readonly Reflection.
+fn apply_set_visibility(state: &mut ClassBuildState, class: &FlattenedClass, prop: &ClassProperty) {
+    let set_visibility = effective_set_visibility(class, prop);
+    let explicit_readonly_public_set = prop.set_visibility == Some(Visibility::Public)
+        && (class.is_readonly_class || prop.readonly);
+    if explicit_readonly_public_set || set_visibility != prop.visibility {
         state
             .property_set_visibilities
-            .insert(prop.name.clone(), set_visibility.clone());
+            .insert(prop.name.clone(), set_visibility);
     } else {
         state.property_set_visibilities.remove(&prop.name);
     }

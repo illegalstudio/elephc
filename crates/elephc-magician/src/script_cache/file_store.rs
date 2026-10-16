@@ -81,7 +81,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Stored declarations parsed with the earlier annotation rewrite must be refused.
 /// BUMPED TO 16 because class-reference type-list lookahead now preserves PHP comparisons.
 /// Previously stored parse failures for those valid expressions must be reparsed.
-pub(crate) const FORMAT_VERSION: u32 = 16;
+/// BUMPED TO 18 to combine generic declarations with effective readonly setter metadata
+/// and retained abstract setter contracts. Format 17 already identifies the separate
+/// native deferred-default expression layout, so it cannot identify this branch as well.
+pub(crate) const FORMAT_VERSION: u32 = 18;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///

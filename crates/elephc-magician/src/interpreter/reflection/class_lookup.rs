@@ -575,7 +575,7 @@ pub(super) fn eval_reflection_property_modifiers(
     match set_visibility {
         Some(EvalVisibility::Private) => modifiers |= 32 | 4096,
         Some(EvalVisibility::Protected) => modifiers |= 2048,
-        _ if is_readonly && visibility == EvalVisibility::Public => modifiers |= 2048,
+        None if is_readonly && visibility == EvalVisibility::Public => modifiers |= 2048,
         _ => {}
     }
     modifiers

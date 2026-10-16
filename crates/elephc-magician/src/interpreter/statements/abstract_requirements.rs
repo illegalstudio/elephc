@@ -102,7 +102,7 @@ pub(super) fn pending_class_abstract_property_requirements(
     if let Some(parent) = class.parent() {
         collect_class_abstract_property_requirements(parent, context, &mut requirements)?;
     }
-    apply_class_abstract_property_requirements(class, &mut requirements)?;
+    apply_class_abstract_property_requirements(class, context, &mut requirements)?;
     Ok(requirements.into_values().collect())
 }
 
@@ -294,7 +294,7 @@ pub(super) fn collect_class_abstract_property_requirements(
     if let Some(parent) = class.parent() {
         collect_class_abstract_property_requirements(parent, context, requirements)?;
     }
-    apply_class_abstract_property_requirements(class, requirements)
+    apply_class_abstract_property_requirements(class, context, requirements)
 }
 
 /// Applies one class's methods to the open abstract-method requirement set.
@@ -386,6 +386,7 @@ pub(super) fn apply_class_aot_parent_abstract_property_requirements(
 /// Applies one class's properties to the open abstract-property requirement set.
 pub(super) fn apply_class_abstract_property_requirements(
     class: &EvalClass,
+    context: &ElephcEvalContext,
     requirements: &mut std::collections::HashMap<String, EvalClassProperty>,
 ) -> Result<(), EvalStatus> {
     for property in class.properties() {
@@ -401,7 +402,16 @@ pub(super) fn apply_class_abstract_property_requirements(
                 requirements.insert(key, property.clone());
             }
         } else if let Some(requirement) = requirements.get(&key) {
-            class_property_satisfies_abstract_contract(property, requirement)
+            let type_compatible = property.property_type() == requirement.property_type()
+                || class.parent().and_then(|parent| context.class_property(parent, property.name()))
+                    .is_some_and(|(owner, _)| abstract_readonly_storage_type_accepts(
+                        class, property, requirement.property_type(), &owner,
+                        requirement.is_abstract() && requirement.requires_set_hook()
+                            && !requirement.requires_get_hook(), context,
+                    ));
+            class_property_satisfies_abstract_contract_in_class(
+                property, requirement, class.is_abstract(), type_compatible,
+            )
                 .then_some(())
                 .ok_or(EvalStatus::RuntimeFatal)?;
             requirements.remove(&key);
@@ -445,9 +455,20 @@ pub(super) fn class_property_satisfies_abstract_contract(
     property: &EvalClassProperty,
     requirement: &EvalClassProperty,
 ) -> bool {
+    class_property_satisfies_abstract_contract_in_class(property, requirement, false,
+        property.property_type() == requirement.property_type())
+}
+
+/// Keeps an abstract ancestor's legal readonly storage distinct from a concrete implementation.
+fn class_property_satisfies_abstract_contract_in_class(
+    property: &EvalClassProperty,
+    requirement: &EvalClassProperty,
+    abstract_class: bool,
+    type_compatible: bool,
+) -> bool {
     if property.is_abstract()
         || property.is_static()
-        || property.property_type() != requirement.property_type()
+        || !type_compatible
         || !property_contract_visibility_allows(requirement, property)
     {
         return false;
@@ -455,9 +476,26 @@ pub(super) fn class_property_satisfies_abstract_contract(
     if requirement.requires_set_hook() {
         return requirement.set_visibility() != Some(EvalVisibility::Private)
             && property_contract_write_visibility_allows(requirement, property)
-            && (property.has_set_hook() || (!property.has_get_hook() && !property.is_readonly()));
+            && (property.has_set_hook()
+                || (!property.has_get_hook() && (!property.is_readonly() || abstract_class)));
     }
     requirement.requires_get_hook()
+}
+
+/// Limits storage contravariance to abstract readonly backing slots over setter-only contracts.
+pub(super) fn abstract_readonly_storage_type_accepts(
+    class: &EvalClass,
+    property: &EvalClassProperty,
+    required_type: Option<&EvalParameterType>,
+    required_owner: &str,
+    setter_only_abstract: bool,
+    context: &ElephcEvalContext,
+) -> bool {
+    setter_only_abstract && class.is_abstract() && property.is_readonly()
+        && !property.is_abstract() && !property.is_static()
+        && !property.has_get_hook() && !property.has_set_hook()
+        && property_setter_storage_type_accepts(property.property_type(), class.name(),
+            required_type, required_owner, Some(class), context)
 }
 
 /// Returns whether one property satisfies a generated/AOT abstract parent contract.
@@ -471,14 +509,18 @@ pub(super) fn class_property_satisfies_aot_abstract_parent_requirement(
     let required = &requirement.property;
     if property.is_static() != required.is_static()
         || !property_contract_visibility_allows(required, property)
-        || !property_type_signature_matches(
+        || !(property_type_signature_matches(
             property.property_type(),
             property_owner,
             required.property_type(),
             &requirement.owner,
             pending_class,
             context,
-        )
+        ) || pending_class.is_some_and(|class| abstract_readonly_storage_type_accepts(
+            class, property, required.property_type(), &requirement.owner,
+            required.is_abstract() && required.requires_set_hook() && !required.requires_get_hook(),
+            context,
+        )))
     {
         return false;
     }
@@ -492,9 +534,11 @@ pub(super) fn class_property_satisfies_aot_abstract_parent_requirement(
         return false;
     }
     if required.requires_set_hook() {
+        let abstract_readonly_storage = pending_class.is_some_and(|class| class.is_abstract())
+            && property.is_readonly() && !property.has_get_hook();
         return required.set_visibility() != Some(EvalVisibility::Private)
             && property_contract_write_visibility_allows(required, property)
-            && class_property_supports_interface_set(property);
+            && (class_property_supports_interface_set(property) || abstract_readonly_storage);
     }
     required.requires_get_hook()
 }

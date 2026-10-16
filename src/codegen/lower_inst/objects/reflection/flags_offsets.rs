@@ -259,11 +259,12 @@ pub(super) fn reflection_property_modifiers(
     match set_visibility {
         Some(Visibility::Private) => modifiers |= 32 | 4096,
         Some(Visibility::Protected) => modifiers |= 2048,
-        Some(Visibility::Public) | None => {
+        None => {
             if is_readonly && visibility == &Visibility::Public {
                 modifiers |= 2048;
             }
         }
+        Some(Visibility::Public) => {}
     }
     modifiers
 }

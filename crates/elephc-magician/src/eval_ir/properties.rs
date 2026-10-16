@@ -143,6 +143,12 @@ impl EvalClassProperty {
         self
     }
 
+    /// Retains an inherited abstract setter without making its backing property abstract.
+    pub const fn with_inherited_abstract_setter(mut self) -> Self {
+        self.requires_set_hook = true;
+        self
+    }
+
     /// Returns a copy of this property recording whether its abstract `get` contract is declared
     /// `&get`, which `ReflectionMethod::returnsReference()` reports for the contract's hook.
     pub const fn with_get_contract_returns_by_ref(mut self, returns_by_ref: bool) -> Self {
@@ -225,13 +231,21 @@ impl EvalClassProperty {
 
     /// Returns the PHP asymmetric write visibility, if it differs from read visibility.
     pub const fn set_visibility(&self) -> Option<EvalVisibility> {
-        self.set_visibility
+        match (self.visibility, self.set_visibility) {
+            (EvalVisibility::Private, Some(EvalVisibility::Private))
+            | (EvalVisibility::Protected, Some(EvalVisibility::Protected)) => None,
+            (EvalVisibility::Public, Some(EvalVisibility::Public)) if !self.is_readonly => None,
+            _ => self.set_visibility,
+        }
     }
 
     /// Returns the visibility that applies to writes for this property.
     pub const fn write_visibility(&self) -> EvalVisibility {
         match self.set_visibility {
             Some(visibility) => visibility,
+            None if self.is_readonly && matches!(self.visibility, EvalVisibility::Public) => {
+                EvalVisibility::Protected
+            }
             None => self.visibility,
         }
     }
@@ -241,9 +255,12 @@ impl EvalClassProperty {
         self.is_static
     }
 
-    /// Returns whether this property was declared `final`.
+    /// Returns explicit finality or implicit finality from a restricted private setter.
     pub const fn is_final(&self) -> bool {
-        self.is_final
+        self.is_final || matches!(
+            (self.visibility, self.set_visibility),
+            (EvalVisibility::Public | EvalVisibility::Protected, Some(EvalVisibility::Private))
+        )
     }
 
     /// Returns whether this property was declared `readonly`.

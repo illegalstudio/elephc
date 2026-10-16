@@ -145,6 +145,15 @@ pub(super) fn lower_reflection_property_set_value(
         expr.span,
     );
     let slot = reflection_property_physical_ref(ctx, declaring_class, property)?;
+    let retained_abstract_setter = ctx.classes.get(declaring_class.trim_start_matches('\\'))
+        .is_some_and(|info| info.retained_abstract_setter(property).is_some());
+    let value = if retained_abstract_setter
+        && !matches!(ctx.builder.value_php_type(value.value).codegen_repr(), PhpType::Mixed)
+    {
+        ctx.box_value_as_mixed(value, PhpType::Mixed, Some(expr.span))
+    } else {
+        value
+    };
     let pins = pin_in_flight_owners(ctx, &[object.value, value.value], expr.span);
     ctx.emit_void(
         Op::PropSet,
@@ -154,12 +163,16 @@ pub(super) fn lower_reflection_property_set_value(
         Some(expr.span),
     );
     unpin_in_flight_owners(ctx, pins, expr.span);
-    crate::ir_lower::stmt::release_property_assignment_source_after_retaining_store(
-        ctx,
-        &property_ty,
-        value,
-        expr.span,
-    );
+    if retained_abstract_setter {
+        // The no-op setter validates its argument but adopts no storage owner.
+        if ctx.value_is_owning_temporary(value) {
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
+        }
+    } else {
+        crate::ir_lower::stmt::release_property_assignment_source_after_retaining_store(
+            ctx, &property_ty, value, expr.span,
+        );
+    }
     Some(lower_null(ctx, expr))
 }
 

@@ -1041,20 +1041,24 @@ pub(super) fn eval_reflection_aot_property_metadata(
     let is_abstract = flags & EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT != 0;
     let is_readonly = flags & EVAL_REFLECTION_MEMBER_FLAG_READONLY != 0;
     let is_virtual = flags & EVAL_REFLECTION_MEMBER_FLAG_VIRTUAL != 0;
-    let mut modifiers = eval_reflection_property_modifiers(
+    // Native flags already encode the effective setter, including implicit readonly access.
+    // An absent set bit is public, not an unspecified declaration to infer again in eval.
+    let set_visibility = if flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE_SET != 0 {
+        EvalVisibility::Private
+    } else if flags & EVAL_REFLECTION_MEMBER_FLAG_PROTECTED_SET != 0 {
+        EvalVisibility::Protected
+    } else {
+        EvalVisibility::Public
+    };
+    let modifiers = eval_reflection_property_modifiers(
         visibility,
-        None,
+        Some(set_visibility),
         is_static,
         is_final,
         is_abstract,
         is_readonly,
         is_virtual,
     );
-    if flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE_SET != 0 {
-        modifiers |= 32 | 4096;
-    } else if flags & EVAL_REFLECTION_MEMBER_FLAG_PROTECTED_SET != 0 {
-        modifiers |= 2048;
-    }
     let settable_type_metadata = type_metadata.clone();
     EvalReflectionMemberMetadata {
         declaring_class_name: Some(class_name.trim_start_matches('\\').to_string()),

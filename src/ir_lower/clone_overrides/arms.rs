@@ -205,7 +205,7 @@ fn apply_set_visibility(
         Visibility::Protected => "protected",
         Visibility::Private => "private",
     };
-    let readonly_word = if readonly { "readonly " } else { "" };
+    let readonly_word = if readonly && set_visibility != Visibility::Private { "readonly " } else { "" };
     // A write refusal is FINAL: php does not offer it to `__set()`, which is why a class with a
     // magic setter still answers `Cannot modify protected(set) readonly property …` here.
     OverrideArm::Deny(format!(

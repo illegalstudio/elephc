@@ -29,7 +29,7 @@ pub(in crate::codegen::lower_inst) fn lower_prop_set(ctx: &mut FunctionContext<'
         ensure_property_value_supported(ctx, &slot, value, &value_ty, inst)?;
         let base_reg = abi::symbol_scratch_reg(ctx.emitter);
         ctx.load_value_to_reg(object, base_reg)?;
-        return emit_property_store(ctx, value, &slot, base_reg);
+        return emit_hook_aware_property_store(ctx, value, &slot, base_reg);
     }
     if let Some(Immediate::PropertyRef { class, property }) = inst.immediate {
         let slot = resolve_initializer_property_slot(ctx, object, class, property, inst)?;
@@ -67,7 +67,7 @@ pub(in crate::codegen::lower_inst) fn lower_prop_set(ctx: &mut FunctionContext<'
     if is_promoted_reference_property_bind(ctx, object, value, &slot)? {
         return emit_reference_property_bind(ctx, value, &slot, base_reg);
     }
-    emit_property_store(ctx, value, &slot, base_reg)
+    emit_hook_aware_property_store(ctx, value, &slot, base_reg)
 }
 /// Lowers a dynamic property write (`$object->{$name} = $value`).
 pub(in crate::codegen::lower_inst) fn lower_dynamic_prop_set(
@@ -145,7 +145,7 @@ pub(super) fn lower_const_dynamic_prop_set(
     ensure_property_value_supported(ctx, &slot, value, &value_ty, inst)?;
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     ctx.load_value_to_reg(object, base_reg)?;
-    emit_property_store(ctx, value, &slot, base_reg)
+    emit_hook_aware_property_store(ctx, value, &slot, base_reg)
 }
 
 /// Lowers a runtime-name write to a statically known stdClass receiver.
@@ -341,7 +341,7 @@ pub(super) fn lower_mixed_named_prop_set(
             MixedPropertyWriteAction::Slot(slot) => {
                 let base_reg = abi::symbol_scratch_reg(ctx.emitter);
                 abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 0);
-                emit_property_store(ctx, value, slot, base_reg)?;
+                emit_hook_aware_property_store(ctx, value, slot, base_reg)?;
                 if matches!(
                     slot.php_type.codegen_repr(),
                     PhpType::Str | PhpType::Int | PhpType::Float | PhpType::Bool
@@ -473,7 +473,7 @@ fn emit_runtime_name_stacked_write_arm(
                 ensure_property_value_supported(ctx, slot, value, &value_ty, inst)?;
                 let base_reg = abi::symbol_scratch_reg(ctx.emitter);
                 abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 16);
-                emit_property_store(ctx, value, slot, base_reg)?;
+                emit_hook_aware_property_store(ctx, value, slot, base_reg)?;
                 abi::emit_release_temporary_stack(ctx.emitter, 32);
                 abi::emit_jump(ctx.emitter, done_label);
                 Ok(())
@@ -831,7 +831,7 @@ fn emit_refined_untyped_tag_guarded_store(
     ctx.emitter.label(&store_label);
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, base_offset);
-    emit_property_store(ctx, value, slot, base_reg)?;
+    emit_hook_aware_property_store(ctx, value, slot, base_reg)?;
     if matches!(
         slot.php_type.codegen_repr(),
         PhpType::Str | PhpType::Int | PhpType::Float | PhpType::Bool
@@ -1373,7 +1373,7 @@ pub(super) fn lower_runtime_mixed_prop_set(
             MixedPropertyWriteAction::Slot(slot) => {
                 let base_reg = abi::symbol_scratch_reg(ctx.emitter);
                 abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 16);
-                emit_property_store(ctx, value, slot, base_reg)?;
+                emit_hook_aware_property_store(ctx, value, slot, base_reg)?;
                 abi::emit_release_temporary_stack(ctx.emitter, 32);
                 abi::emit_jump(ctx.emitter, &done_label);
             }

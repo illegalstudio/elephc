@@ -120,7 +120,7 @@ fn emit_dynamic_plan_write(
             ensure_property_value_supported(ctx, slot, value, &value_ty, inst)?;
             let base_reg = abi::symbol_scratch_reg(ctx.emitter);
             ctx.load_value_to_reg(object, base_reg)?;
-            emit_property_store(ctx, value, slot, base_reg)
+            emit_hook_aware_property_store(ctx, value, slot, base_reg)
         }
         PropertyRuntimeAction::DynamicHash { hash_offset, .. } => {
             // The NAME comes from the arm, not from the receiver's static type: php reports the
@@ -479,7 +479,7 @@ pub(super) fn lower_nullable_prop_set(
     let done_label = ctx.next_label("nullable_prop_set_done");
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     emit_nullable_receiver_object_payload(ctx, object, &null_label, base_reg)?;
-    emit_property_store(ctx, value, &slot, base_reg)?;
+    emit_hook_aware_property_store(ctx, value, &slot, base_reg)?;
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&null_label);

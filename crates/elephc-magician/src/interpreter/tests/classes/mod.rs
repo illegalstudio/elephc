@@ -9,6 +9,7 @@
 //! - Child modules preserve the original test names for stable exact filtering.
 
 mod asymmetric_properties;
+mod readonly_setter_review;
 mod attributes;
 mod basics;
 mod hook_contracts;

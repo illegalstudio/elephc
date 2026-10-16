@@ -828,6 +828,10 @@ for those APIs, including `PropertyHookType::cases()`, `from()`, and
 and bridge-supported generated/AOT instance and static property values, bypass
 public/protected/private visibility like PHP reflection, route concrete eval
 property hooks through their accessors, and still reject readonly writes.
+Readonly storage retained over a setter-only abstract contract may have a broader
+type than the setter, matching native declarations even with a generated/AOT
+parent. A retained abstract setter validates its original argument type without
+initializing that storage, including through `ReflectionProperty::setValue()`.
 `ReflectionProperty::getRawValue()` and `setRawValue()` are supported for
 eval-declared backed instance properties, including backed property hooks, and
 for bridge-supported generated/AOT instance properties. Raw access bypasses

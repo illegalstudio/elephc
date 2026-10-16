@@ -66,7 +66,7 @@ pub(crate) fn build_class_info_recursive(
     validate_parent_constraints(&class, parent_info.as_ref())?;
 
     let mut state = ClassBuildState::from_parent(parent_info.as_ref());
-    properties::apply_properties(&mut state, &class, checker)?;
+    properties::apply_properties(&mut state, &class, class_map, checker)?;
     methods::apply_methods(&mut state, &class, checker)?;
     interfaces::collect_interfaces(&mut state, &class, class_map, checker)?;
     validate_final_constant_constraints(&class, parent_info.as_ref(), &state, checker)?;

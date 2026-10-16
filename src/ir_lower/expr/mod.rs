@@ -77,6 +77,7 @@ mod closure_calls;
 mod descriptor_calls;
 mod object_construction;
 mod property_access;
+mod property_probes;
 mod reference_returns;
 use reference_returns::{
     begin_reference_return_call, finish_reference_return_call, finish_reference_return_value,
@@ -153,6 +154,7 @@ use closure_calls::*;
 use descriptor_calls::*;
 use object_construction::*;
 use property_access::*;
+use property_probes::*;
 use method_calls::*;
 use reflection_class_calls::*;
 use reflection_method_calls::*;

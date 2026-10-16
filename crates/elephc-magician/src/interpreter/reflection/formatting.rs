@@ -477,6 +477,12 @@ pub(super) fn eval_reflection_visibility_label(visibility: EvalVisibility) -> &'
     }
 }
 
+/// Shares PHP type spelling without exposing Reflection's private metadata representation.
+pub(in crate::interpreter) fn eval_parameter_type_error_label(parameter_type: &EvalParameterType) -> Option<String> {
+    eval_reflection_parameter_type_metadata(parameter_type).as_ref()
+        .map(eval_reflection_type_metadata_to_string)
+}
+
 /// Formats retained ReflectionType metadata for `ReflectionProperty::__toString()`.
 pub(super) fn eval_reflection_type_metadata_to_string(
     type_metadata: &EvalReflectionParameterTypeMetadata,

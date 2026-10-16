@@ -9,6 +9,20 @@
 
 use super::*;
 
+/// Ordinary and interface properties reject repeated write-visibility modifiers.
+#[test]
+fn test_parse_asymmetric_property_repeated_set_modifier_rejected() {
+    for source in [
+        "<?php class C { public private(set) protected(set) int $x; }",
+        "<?php class C { public public(set) public(set) int $x; }",
+        "<?php interface C { public protected(set) protected(set) int $x { set; } }",
+    ] {
+        let tokens = tokenize(source).unwrap();
+        let error = parse(&tokens).unwrap_err();
+        assert!(error.message.contains("Multiple set visibility modifiers"), "{}", error.message);
+    }
+}
+
 /// Backed hook declarations retain defaults, including implicit backing writes in short setters.
 #[test]
 fn test_parse_backed_property_hook_defaults() {

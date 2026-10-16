@@ -18,6 +18,8 @@ use crate::span::Span;
 
 use super::{FunctionSig, PhpType};
 
+mod abstract_setters;
+
 /// Compile-time attribute argument value. Captures the subset of PHP
 /// attribute argument expressions that reflection helpers can materialize:
 /// scalars (string/int/bool/null/float), `ClassName::class` strings, symbolic

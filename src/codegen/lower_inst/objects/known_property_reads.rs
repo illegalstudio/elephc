@@ -1,5 +1,5 @@
 //! Purpose:
-//! Lowers property reads for statically known and nullable object receivers.
+//! Lowers property reads and initialization probes for known and boxed object receivers.
 //!
 //! Called from:
 //! - The object lowering facade and sibling object support modules.
@@ -465,7 +465,10 @@ pub(in crate::codegen::lower_inst) fn lower_prop_initialized(
     let object = expect_operand(inst, 0)?;
     let property = property_name_immediate(ctx, inst)?.to_string();
     if let Some((class_name, true)) = nullable_object_receiver_class(ctx, object)? {
-        return lower_nullable_prop_initialized(ctx, inst, object, &class_name, &property);
+        return lower_boxed_prop_initialized(ctx, inst, object, &class_name, &property);
+    }
+    if let Some(class_name) = union_object_member_class(ctx, object)? {
+        return lower_boxed_prop_initialized(ctx, inst, object, &class_name, &property);
     }
     let slot = resolve_property_slot(ctx, object, &property, inst)?;
     if !slot.is_declared && !slot_supports_untyped_unset_marker(&slot) {
@@ -478,19 +481,17 @@ pub(in crate::codegen::lower_inst) fn lower_prop_initialized(
     store_if_result(ctx, inst)
 }
 
-/// Probes a typed property through a NULLABLE (`?C`) receiver.
+/// Probes a property through a boxed union carrying one known object class.
 ///
-/// Such a receiver represents as a boxed `Mixed`, so the probe above has no object pointer to
-/// read the slot from and this instruction used to be refused outright — which made
-/// `isset($c->p)` a compile error and left `$c->p ?? "d"` on the ordinary read, where it fatals
-/// on an uninitialized slot. The receiver is unboxed here the same way every other nullable
-/// receiver is, and a NULL one answers `false`: that is the answer both callers want, since
-/// `isset(null->p)` is false and `null->p ?? "d"` is the default.
+/// Nullable and factory-style `C|false` receivers have boxed `Mixed` storage. Unbox and verify
+/// the object tag before inspecting its slot; scalar and null arms answer false without touching
+/// a payload as an object pointer. Readonly writes need this probe even before an instanceof
+/// narrowing, so they can distinguish permitted initialization from an initialized overwrite.
 ///
 /// The probe and the read that follows it consume the SAME unboxed value, so nothing can
-/// re-null the receiver between them — the initialized branch is only ever entered with the
+/// re-null the receiver between them: the initialized branch is only ever entered with the
 /// object this instruction just proved present.
-fn lower_nullable_prop_initialized(
+fn lower_boxed_prop_initialized(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     object: ValueId,
@@ -498,19 +499,22 @@ fn lower_nullable_prop_initialized(
     property: &str,
 ) -> Result<()> {
     let slot = resolve_property_slot_for_class(ctx, class_name, property, inst)?;
-    if !slot.is_declared && !slot_supports_untyped_unset_marker(&slot) {
-        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
-        return store_if_result(ctx, inst);
-    }
-    let null_label = ctx.next_label("prop_initialized_null_receiver");
+    let null_label = ctx.next_label("prop_initialized_non_object_receiver");
     let done_label = ctx.next_label("prop_initialized_done");
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
-    emit_nullable_receiver_object_payload(ctx, object, &null_label, base_reg)?;
-    emit_typed_property_initialized_bool(ctx, &slot, base_reg);
+    ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_mixed_object_payload_or_null(ctx, &null_label);
+    abi::emit_reg_move(ctx.emitter, base_reg, abi::int_result_reg(ctx.emitter));
+    if !slot.is_declared && !slot_supports_untyped_unset_marker(&slot) {
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+    } else {
+        emit_typed_property_initialized_bool(ctx, &slot, base_reg);
+    }
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&null_label);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0); // a null receiver has no slot to be initialized
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0); // a non-object receiver has no slot to be initialized
 
     ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)

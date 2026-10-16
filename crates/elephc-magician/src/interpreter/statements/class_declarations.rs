@@ -82,6 +82,7 @@ fn resolve_eval_inherited_property_hooks(
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalClass, EvalStatus> {
     let Some(parent) = class.parent() else { return Ok(class); };
+    let abstract_class = class.is_abstract();
     let mut properties = class.properties().to_vec();
     for property in &mut properties {
         if property.is_static() { continue; }
@@ -93,9 +94,20 @@ fn resolve_eval_inherited_property_hooks(
                 .with_hooks(property.has_get_hook() || inherited.has_get_hook(),
                     property.has_set_hook() || inherited.has_set_hook())
                 .with_virtual(property.is_virtual() && inherited.is_virtual());
+            if abstract_class && property.is_readonly() && !property.has_set_hook()
+                && inherited.requires_set_hook()
+            {
+                *property = property.clone().with_inherited_abstract_setter();
+            }
         } else {
             let native_parent = context.class_native_parent_name(parent)
                 .unwrap_or_else(|| parent.to_string());
+            if abstract_class && property.is_readonly() && !property.has_set_hook()
+                && context.native_abstract_property_requirements(&native_parent).iter()
+                    .any(|(_, contract)| contract.name() == property.name() && contract.requires_set())
+            {
+                *property = property.clone().with_inherited_abstract_setter();
+            }
             if values.reflection_property_flags(&native_parent, property.name())?
                 .is_some_and(|flags| flags & (EVAL_REFLECTION_MEMBER_FLAG_STATIC
                     | EVAL_REFLECTION_MEMBER_FLAG_PRIVATE | EVAL_REFLECTION_MEMBER_FLAG_VIRTUAL) == 0)

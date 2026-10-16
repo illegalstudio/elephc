@@ -247,6 +247,13 @@ pub(super) fn validate_method_aot_parent_override(
     if method.is_abstract() && flags & EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT == 0 {
         return Err(EvalStatus::RuntimeFatal);
     }
+    // Property validation already checks hook types. Eval accessors have no explicit return
+    // hint, unlike the generated AOT hook signature; do not compare them as ordinary methods.
+    if flags & EVAL_REFLECTION_METHOD_FLAG_PROPERTY_HOOK != 0
+        && class.properties().iter().any(|property| property.matches_hook_method(method.name()))
+    {
+        return Ok(());
+    }
     let Some(required) = eval_aot_method_signature_requirement(
         &parent,
         method.name(),

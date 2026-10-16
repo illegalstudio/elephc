@@ -105,11 +105,14 @@ pub(super) fn lower_method_call(
             return value;
         }
     }
-    if op == Op::MethodCall {
-        if let Some(value) =
-            lower_reflection_property_value_call(ctx, Some(object_expr), method, args, expr)
-        {
-            return value;
+    if op == Op::MethodCall && reflection_property_reflected_target(ctx, object_expr).is_some() {
+        // Specialized property calls still evaluate a reflector receiver. Keep its
+        // independent owner through argument/guard throws and retire it on success.
+        let pins = pin_in_flight_owners(ctx, &[object.value], expr.span);
+        let result = lower_reflection_property_value_call(ctx, Some(object_expr), method, args, expr);
+        unpin_in_flight_owners(ctx, pins, expr.span);
+        if let Some(value) = result {
+            return stabilize_borrowed_result_and_release_receiver(ctx, object, value, expr.span);
         }
     }
     if matches!(

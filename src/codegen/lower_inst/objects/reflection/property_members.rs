@@ -159,7 +159,9 @@ pub(super) fn reflection_property_hook_members(
             reflection_property_hook_method_member(
                 property_name,
                 "set",
-                declaring_class_name,
+                if has_concrete_set { declaring_class_name } else {
+                    contract.map(|contract| contract.declaring_type.clone()).or(declaring_class_name)
+                },
                 property_flags,
                 !has_concrete_set,
                 false,

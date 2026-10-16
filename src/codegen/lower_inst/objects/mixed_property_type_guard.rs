@@ -760,13 +760,14 @@ fn emit_release_untransferred_source_box(
 
 /// Throws PHP's catchable typed-property `TypeError` for this source type.
 fn emit_property_type_error(ctx: &mut FunctionContext<'_>, slot: &PropertySlot, source: &str) {
-    let message = format!(
-        "Cannot assign {} to property {}::${} of type {}",
-        source,
-        slot.class_name,
-        slot.property,
-        php_type_name(&slot.php_type)
-    );
+    let message = if let Some(prefix) = &slot.abstract_setter_type_error_prefix {
+        format!("{prefix}{source} given")
+    } else {
+        format!(
+            "Cannot assign {} to property {}::${} of type {}",
+            source, slot.class_name, slot.property, php_type_name(&slot.php_type),
+        )
+    };
     super::super::exceptions::emit_type_error(ctx, &message);
 }
 
@@ -797,22 +798,23 @@ fn emit_object_property_type_error(ctx: &mut FunctionContext<'_>, slot: &Propert
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_reg_move(ctx.emitter, result_reg, payload_reg); // the class-name lookup reads the object through the result register
     runtime_class_messages::emit_runtime_class_name_to_string_result(ctx, result_reg, "object");
-    runtime_class_messages::emit_concat_static_prefix(ctx, "Cannot assign ");
+    runtime_class_messages::emit_concat_static_prefix(ctx,
+        slot.abstract_setter_type_error_prefix.as_deref().unwrap_or("Cannot assign "));
     runtime_class_messages::emit_concat_static_suffix(
         ctx,
-        &format!(
-            " to property {}::${} of type {}",
-            slot.class_name,
-            slot.property,
-            php_type_name(&slot.php_type)
-        ),
+        &if slot.abstract_setter_type_error_prefix.is_some() {
+            String::from(" given")
+        } else {
+            format!(" to property {}::${} of type {}",
+                slot.class_name, slot.property, php_type_name(&slot.php_type))
+        },
     );
     abi::emit_call_label(ctx.emitter, "__rt_str_persist");
     super::super::exceptions::emit_type_error_from_string_result(ctx);
 }
 
 /// Spells a declared property type the way PHP spells it in a `TypeError`.
-fn php_type_name(php_type: &PhpType) -> String {
+pub(super) fn php_type_name(php_type: &PhpType) -> String {
     match php_type {
         PhpType::Int => "int".to_string(),
         PhpType::Float => "float".to_string(),

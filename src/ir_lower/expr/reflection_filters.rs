@@ -385,7 +385,8 @@ pub(super) fn reflection_property_filter_modifier_bits(
     match set_visibility {
         Some(Visibility::Private) => modifiers |= 32 | 4096,
         Some(Visibility::Protected) => modifiers |= 2048,
-        Some(Visibility::Public) | None => {
+        Some(Visibility::Public) => {}
+        None => {
             if is_readonly && visibility == &Visibility::Public {
                 modifiers |= 2048;
             }
