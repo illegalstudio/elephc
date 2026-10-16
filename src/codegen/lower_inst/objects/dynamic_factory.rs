@@ -191,7 +191,7 @@ pub(super) fn dynamic_new_candidate(
     } else {
         return Ok(None);
     };
-    let property_defaults = collect_property_defaults(class_info, inst)?;
+    let property_defaults = collect_property_defaults(ctx, class_info, inst)?;
     Ok(Some(DynamicNewCandidate {
         class_name: class_name.to_string(),
         class_id: class_info.class_id,
@@ -223,7 +223,7 @@ pub(super) fn dynamic_new_without_constructor_candidate(
     if class_interfaces_require_missing_method_symbols(ctx, class_name, class_info) {
         return Ok(None);
     }
-    let property_defaults = collect_property_defaults(class_info, inst)?;
+    let property_defaults = collect_property_defaults(ctx, class_info, inst)?;
     Ok(Some(DynamicNewCandidate {
         class_name: class_name.to_string(),
         class_id: class_info.class_id,

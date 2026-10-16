@@ -464,9 +464,12 @@ impl Checker {
         // schemas are complete, resolving the constant semantically, so nothing is waved
         // through: a missing case or an incompatible scalar constant is still reported, just
         // from the pass that can tell the difference.
-        if default_expr
-            .is_some_and(|default| matches!(default.kind, ExprKind::ScopedConstantAccess { .. }))
-        {
+        if default_expr.is_some_and(|default| {
+            matches!(
+                default.kind,
+                ExprKind::ScopedConstantAccess { .. } | ExprKind::ConstRef(_)
+            )
+        }) {
             return Ok(());
         }
         if let Some(default_expr) = default_expr {

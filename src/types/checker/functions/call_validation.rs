@@ -543,6 +543,30 @@ impl Checker {
         }
     }
 
+    /// Like [`Self::require_compatible_arg_type`], but spells both types the way PHP does
+    /// (`array`, `?int`, `string|int`) for the user-facing mismatch message.
+    pub(crate) fn require_compatible_arg_type_named(
+        &self,
+        expected: &PhpType,
+        actual: &PhpType,
+        span: crate::span::Span,
+        context: &str,
+    ) -> Result<(), CompileError> {
+        if Self::types_compatible(expected, actual) || self.type_accepts(expected, actual) {
+            Ok(())
+        } else {
+            Err(CompileError::new(
+                span,
+                &format!(
+                    "{} expects {}, got {}",
+                    context,
+                    crate::types::php_type_name(expected),
+                    crate::types::php_type_name(actual)
+                ),
+            ))
+        }
+    }
+
     /// Formats a parameter-count range as a human-readable string, e.g. `3` or `2 to 5`.
     pub(crate) fn format_fixed_or_range_arity(min_args: usize, max_args: usize) -> String {
         if min_args == max_args {

@@ -622,3 +622,177 @@ fn test_example_asymmetric_visibility_compiles_and_runs() {
         "balance: 120\ninsufficient funds\nbalance: 120\ntransfer TX-1: 35\n"
     );
 }
+
+/// A promoted `array` parameter whose default is a global array constant is typed from the
+/// constant, not the syntactic `Int` fallback, so the class compiles and reads the default
+/// (issue #1308).
+#[test]
+fn test_promoted_array_parameter_defaulting_to_a_global_constant() {
+    let out = compile_and_run(
+        r#"<?php
+const ITEMS = [1, 2];
+class Crate { public function __construct(public array $items = ITEMS) {} }
+echo count((new Crate())->items), "\n";
+"#,
+    );
+    assert_eq!(out, "2\n");
+}
+
+/// PHP resolves constant-expression defaults independently of declaration order, so the
+/// constant may be declared after the class that uses it as a default.
+#[test]
+fn test_promoted_array_default_constant_may_follow_the_class() {
+    let out = compile_and_run(
+        r#"<?php
+class Crate { public function __construct(public array $items = ITEMS) {} }
+const ITEMS = [3, 4, 5];
+echo count((new Crate())->items), "\n";
+"#,
+    );
+    assert_eq!(out, "3\n");
+}
+
+/// A NON-promoted property default naming a global constant resolves through the module's
+/// constant table, so `new Crate()` materializes it instead of failing in codegen (review
+/// follow-up for #1308).
+#[test]
+fn test_non_promoted_property_default_naming_a_global_constant() {
+    let out = compile_and_run(
+        r#"<?php
+const ITEMS = [1, 2];
+class Crate { public array $items = ITEMS; }
+$c = new Crate();
+echo count($c->items), ":", $c->items[0], ":", $c->items[1], "\n";
+"#,
+    );
+    assert_eq!(out, "2:1:2\n");
+}
+
+/// A non-promoted scalar/string property default naming a global constant resolves too.
+#[test]
+fn test_non_promoted_scalar_property_default_naming_a_global_constant() {
+    let out = compile_and_run(
+        r#"<?php
+const N = 5;
+const S = "hi";
+class Box { public int $n = N; public string $s = S; }
+$b = new Box();
+var_dump($b->n, $b->s);
+"#,
+    );
+    assert_eq!(out, "int(5)\nstring(2) \"hi\"\n");
+}
+
+/// A NON-promoted STATIC property default naming a global constant resolves too: the static
+/// initializer is the other `literal_default_value` consumer (review follow-up for #1308).
+#[test]
+fn test_non_promoted_static_property_default_naming_a_global_constant() {
+    let out = compile_and_run(
+        r#"<?php
+const ITEMS = [1, 2];
+class Box { public static array $items = ITEMS; }
+echo count(Box::$items), ":", Box::$items[0], ":", Box::$items[1], "\n";
+"#,
+    );
+    assert_eq!(out, "2:1:2\n");
+}
+
+/// A constant that names another constant is resolved transitively for a non-promoted default
+/// (review follow-up for #1308).
+#[test]
+fn test_non_promoted_default_follows_a_chained_global_constant() {
+    let out = compile_and_run(
+        r#"<?php
+const A = [1, 2];
+const B = A;
+class Box { public array $items = B; }
+echo count((new Box())->items), "\n";
+"#,
+    );
+    assert_eq!(out, "2\n");
+}
+
+/// A target-dependent PCNTL constant is materializable, so a default naming one still compiles
+/// (review follow-up for #1308). `SIGINT` is 2 on macOS and Linux; iOS has no PCNTL table.
+#[test]
+fn test_defaults_naming_a_pcntl_constant() {
+    if cfg!(target_os = "ios") {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public function __construct(public int $sig = SIGINT) {}
+    public int $term = SIGTERM;
+    public static int $again = SIGINT;
+}
+$b = new Box();
+echo $b->sig, ":", $b->term, ":", Box::$again, "\n";
+"#,
+    );
+    assert_eq!(out, "2:15:2\n");
+}
+
+/// A constant whose value is NOT a bare literal is resolved before materializing: a nested global
+/// constant (`const ITEMS = [A, 2]`), a class constant (`const N = Foo::X`) and a pure operator
+/// (`const N = A + 1`) each reach `literal_default_value` as the literal they denote, so
+/// `new Box()` reads the default instead of failing with an unsupported-backend-feature error
+/// (review follow-up for #1308).
+#[test]
+fn test_non_promoted_defaults_resolve_nested_class_and_operator_constants() {
+    let nested = compile_and_run(
+        r#"<?php
+const A = 1;
+const ITEMS = [A, 2];
+class Box { public array $items = ITEMS; }
+echo implode(",", (new Box())->items), "\n";
+"#,
+    );
+    assert_eq!(nested, "1,2\n");
+
+    let class_constant = compile_and_run(
+        r#"<?php
+class Foo { public const X = 9; }
+const N = Foo::X;
+class Box { public int $n = N; }
+echo (new Box())->n, "\n";
+"#,
+    );
+    assert_eq!(class_constant, "9\n");
+
+    let operator = compile_and_run(
+        r#"<?php
+const A = 1;
+const N = A + 1;
+class Box { public int $n = N; }
+echo (new Box())->n, "\n";
+"#,
+    );
+    assert_eq!(operator, "2\n");
+}
+
+/// The same non-literal constant values resolve for a non-promoted STATIC property default and for
+/// a promoted constructor parameter default, the other two `literal_default_value` consumers
+/// (review follow-up for #1308).
+#[test]
+fn test_static_and_promoted_defaults_resolve_non_literal_constants() {
+    let static_property = compile_and_run(
+        r#"<?php
+const A = 1;
+const ITEMS = [A, 2];
+class Box { public static array $items = ITEMS; }
+echo implode(",", Box::$items), "\n";
+"#,
+    );
+    assert_eq!(static_property, "1,2\n");
+
+    let promoted = compile_and_run(
+        r#"<?php
+const A = 1;
+const D = A + 2;
+class Box { public function __construct(public int $n = D) {} }
+echo (new Box())->n, "\n";
+"#,
+    );
+    assert_eq!(promoted, "3\n");
+}

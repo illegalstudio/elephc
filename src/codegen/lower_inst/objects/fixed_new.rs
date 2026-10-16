@@ -57,7 +57,7 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
                 class_name
             )));
         }
-        let property_defaults = collect_property_defaults(class_info, inst)?;
+        let property_defaults = collect_property_defaults(ctx, class_info, inst)?;
         // A private constructor is not inherited, so a descendant of a class that declares one
         // carries no `__construct` entry of its own. PHP still instantiates it through that
         // ancestor, so resolve the owner; it is the class itself for every other constructor.

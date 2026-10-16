@@ -8,6 +8,9 @@
 //! Key details:
 //! - The initial schema pass cannot reliably resolve inheritance or interface relationships.
 //! - Direct scoped-constant method defaults and Object-to-Object pairs are revisited.
+//! - Bare global-constant (`ConstRef`) defaults are revisited by a second `AfterConstants`
+//!   pass that runs once top-level `const` / `define()` statements have registered their types,
+//!   so a default naming a constant is typed from the constant (issue #1308).
 //! - Directly declared instance and static property defaults are revisited here too, on the same
 //!   rule: enum cases do not exist while class schemas are built, so `public Level $l =
 //!   Level::Low;` is judged once they do (issue #566). It changes WHEN a default is checked,
@@ -16,10 +19,72 @@
 
 use crate::errors::CompileError;
 use crate::names::{php_symbol_key, Name};
-use crate::parser::ast::{Expr, ExprKind, Program, StaticReceiver, StmtKind};
+use crate::parser::ast::{Expr, ExprKind, Program, StaticReceiver, Stmt, StmtKind};
 use crate::types::{traits::FlattenedClass, FunctionSig, PhpType};
 
 use super::super::{infer_expr_type_syntactic, Checker};
+
+/// Which deferred-defaults pass is running.
+///
+/// `SchemaComplete` runs right after class/interface/enum schemas exist: scoped constants and
+/// object relationships are resolvable there, but GLOBAL constants are not, because top-level
+/// `const` statements are processed later. `AfterConstants` runs once the top-level program has
+/// registered those constants and revisits only bare `ConstRef` defaults, so a property or
+/// promoted-parameter default that names a global constant is typed from the constant's declared
+/// type instead of the syntactic `Int` fallback — matching PHP's order-independent resolution of
+/// constant-expression defaults (issue #1308).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DefaultPhase {
+    SchemaComplete,
+    AfterConstants,
+}
+
+/// The top-level constant names codegen's prescan can materialize.
+///
+/// Mirrors `codegen_support::prescan::collect_constant_decls`'s scoping — top-level `const`,
+/// top-level `define("NAME", ...)`, and the bodies of `IncludeOnceGuard`/`Synthetic` wrappers —
+/// plus the shared builtin catalog, which the backend's `global_constants` also holds. A constant
+/// registered only while checking a function body is absent, so a default that names one is
+/// rejected at compile time (review follow-up for #1308).
+fn prescanned_constant_names(
+    program: &Program,
+    target: crate::codegen_support::platform::Target,
+) -> std::collections::HashSet<String> {
+    /// Recursively collects the top-level constant names from one statement list.
+    fn walk(stmts: &[Stmt], names: &mut std::collections::HashSet<String>) {
+        for stmt in stmts {
+            match &stmt.kind {
+                StmtKind::ConstDecl { name, .. } => {
+                    names.insert(name.clone());
+                }
+                StmtKind::ExprStmt(expr) => {
+                    if let ExprKind::FunctionCall { name, args } = &expr.kind {
+                        if name.as_str() == "define" && args.len() == 2 {
+                            if let ExprKind::StringLiteral(const_name) = &args[0].kind {
+                                names.insert(const_name.clone());
+                            }
+                        }
+                    }
+                }
+                StmtKind::IncludeOnceGuard { body, .. } | StmtKind::Synthetic(body) => {
+                    walk(body, names);
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut names: std::collections::HashSet<String> =
+        crate::types::predefined_constants::registered_constants()
+            .map(|constant| constant.name.to_string())
+            .collect();
+    names.extend(
+        crate::types::pcntl_constants::pcntl_int_constants(target)
+            .iter()
+            .map(|(name, _)| (*name).to_string()),
+    );
+    walk(program, &mut names);
+    names
+}
 
 /// Validates every declaration default deferred during class-like schema construction.
 /// Returns all incompatibilities so the driver can aggregate them with other schema errors.
@@ -27,15 +92,20 @@ pub(crate) fn validate_deferred_declaration_defaults(
     checker: &mut Checker,
     flattened_classes: &[FlattenedClass],
     program: &Program,
+    phase: DefaultPhase,
 ) -> Vec<CompileError> {
     let mut errors = Vec::new();
 
+    if phase == DefaultPhase::AfterConstants {
+        checker.prescanned_constants = prescanned_constant_names(program, checker.target);
+    }
+
     for class in flattened_classes {
-        validate_class_defaults(checker, &class.name, &mut errors);
+        validate_class_defaults(checker, &class.name, &mut errors, phase);
     }
     for stmt in program {
         if let StmtKind::EnumDecl { name, .. } = &stmt.kind {
-            validate_class_defaults(checker, name, &mut errors);
+            validate_class_defaults(checker, name, &mut errors, phase);
         }
     }
 
@@ -64,6 +134,7 @@ pub(crate) fn validate_deferred_declaration_defaults(
                 "Method",
                 Some(name),
                 &mut errors,
+                phase,
             );
         }
         for method_key in &interface_info.static_method_order {
@@ -83,11 +154,14 @@ pub(crate) fn validate_deferred_declaration_defaults(
                 "Method",
                 Some(name),
                 &mut errors,
+                phase,
             );
         }
     }
 
-    normalize_method_default_receivers(checker);
+    if phase == DefaultPhase::SchemaComplete {
+        normalize_method_default_receivers(checker);
+    }
 
     errors
 }
@@ -177,11 +251,16 @@ fn normalize_signature_default_receivers(
 }
 
 /// Revalidates local method and property defaults for one source-declared class or enum.
-fn validate_class_defaults(checker: &mut Checker, class_name: &str, errors: &mut Vec<CompileError>) {
+fn validate_class_defaults(
+    checker: &mut Checker,
+    class_name: &str,
+    errors: &mut Vec<CompileError>,
+    phase: DefaultPhase,
+) {
     let Some(class_info) = checker.classes.get(class_name).cloned() else {
         return;
     };
-    validate_class_property_defaults(checker, class_name, &class_info, errors);
+    validate_class_property_defaults(checker, class_name, &class_info, errors, phase);
 
     for method in &class_info.method_decls {
         let method_key = php_symbol_key(&method.name);
@@ -199,6 +278,7 @@ fn validate_class_defaults(checker: &mut Checker, class_name: &str, errors: &mut
             "Method",
             Some(class_name),
             errors,
+            phase,
         );
     }
 }
@@ -209,6 +289,7 @@ fn validate_class_property_defaults(
     class_name: &str,
     class_info: &crate::types::ClassInfo,
     errors: &mut Vec<CompileError>,
+    phase: DefaultPhase,
 ) {
     for (index, (property_name, expected_ty)) in class_info.properties.iter().enumerate() {
         let is_local_declared_property = class_info.declared_properties.contains(property_name)
@@ -228,6 +309,7 @@ fn validate_class_property_defaults(
             default,
             &format!("Property {}::${} default", class_name, property_name),
             errors,
+            phase,
         );
     }
 
@@ -255,6 +337,7 @@ fn validate_class_property_defaults(
             default,
             &format!("Static property {}::${} default", class_name, property_name),
             errors,
+            phase,
         );
     }
 }
@@ -266,6 +349,7 @@ fn validate_signature_deferred_defaults(
     callable_kind: &str,
     owner_class: Option<&str>,
     errors: &mut Vec<CompileError>,
+    phase: DefaultPhase,
 ) {
     let previous_class = checker.current_class.clone();
     checker.current_class = owner_class.map(str::to_string);
@@ -292,35 +376,96 @@ fn validate_signature_deferred_defaults(
             default,
             &format!("{} parameter ${}", callable_kind, param_name),
             errors,
+            phase,
         );
     }
     checker.current_class = previous_class;
 }
 
-/// Resolves a direct scoped-constant default semantically, or rechecks a deferred object pair.
+/// Resolves one deferred default according to `phase`.
 ///
-/// Shared by parameters and by directly declared properties: both defer a scoped constant at
-/// schema time, for the same reason — enum cases and class constants do not exist yet — so both
-/// have to be resolved here, where they do (issue #566).
+/// `SchemaComplete` resolves a direct scoped-constant default semantically and rechecks a
+/// deferred object pair; `AfterConstants` resolves a bare global-constant default from the
+/// now-registered `checker.constants`, diagnosing a name that is still unknown in a non-eval
+/// program (issue #1308). Shared by parameters and by directly declared properties: both defer a
+/// scoped constant at schema time, for the same reason — enum cases and class constants do not
+/// exist yet — so both have to be resolved here, where they do (issue #566).
 fn validate_deferred_default(
     checker: &mut Checker,
     expected_ty: &PhpType,
     default: &Expr,
     context: &str,
     errors: &mut Vec<CompileError>,
+    phase: DefaultPhase,
 ) {
-    if matches!(default.kind, ExprKind::ScopedConstantAccess { .. }) {
-        if let Err(error) = checker.validate_resolved_declared_default_type(
-            expected_ty,
-            Some(default),
-            default.span,
-            context,
-        ) {
-            errors.extend(error.flatten());
+    match phase {
+        DefaultPhase::SchemaComplete => {
+            if matches!(default.kind, ExprKind::ScopedConstantAccess { .. }) {
+                if let Err(error) = checker.validate_resolved_declared_default_type(
+                    expected_ty,
+                    Some(default),
+                    default.span,
+                    context,
+                ) {
+                    errors.extend(error.flatten());
+                }
+                return;
+            }
+            // A bare global constant is not in `checker.constants` yet: top-level `const`
+            // statements are processed after this pass. It is revisited by
+            // `DefaultPhase::AfterConstants` (issue #1308).
+            if matches!(default.kind, ExprKind::ConstRef(_)) {
+                return;
+            }
+            validate_object_default(checker, expected_ty, default, context, errors);
         }
-        return;
+        DefaultPhase::AfterConstants => {
+            if let ExprKind::ConstRef(name) = &default.kind {
+                let resolved = checker
+                    .constants
+                    .get(name.as_str())
+                    .or_else(|| checker.constants.get(name.as_str().trim_start_matches('\\')))
+                    .cloned();
+                match resolved {
+                    Some(default_ty) => {
+                        // A constant the prescan cannot materialize — registered only while
+                        // checking a function body — is rejected here: codegen folds defaults
+                        // from the top-level table, so letting it through would reach the
+                        // backend with no value (review follow-up for #1308).
+                        if !checker.prescanned_constants.contains(name.as_str())
+                            && !checker
+                                .prescanned_constants
+                                .contains(name.as_str().trim_start_matches('\\'))
+                        {
+                            errors.push(CompileError::new(
+                                default.span,
+                                &format!("Undefined constant: {}", name),
+                            ));
+                        } else if let Err(error) = checker.require_compatible_arg_type_named(
+                            expected_ty,
+                            &default_ty,
+                            default.span,
+                            context,
+                        ) {
+                            errors.extend(error.flatten());
+                        }
+                    }
+                    // A name still unknown after every top-level `const` / `define()` has been
+                    // registered is genuinely undefined. This pass runs OUTSIDE the eval barrier,
+                    // so an `eval` elsewhere in the program cannot substitute a type here the way
+                    // it can while `eval_barrier_active`; diagnose it regardless of
+                    // `program_contains_eval` (review follow-up for #1308).
+                    None => {
+                        errors.push(CompileError::new(
+                            default.span,
+                            &format!("Undefined constant: {}", name),
+                        ));
+                    }
+                }
+            }
+            // Every other default kind was already judged in the schema-complete pass.
+        }
     }
-    validate_object_default(checker, expected_ty, default, context, errors);
 }
 
 /// Checks one deferred default when both its declared and syntactic types are objects.
