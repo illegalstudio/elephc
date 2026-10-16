@@ -186,7 +186,7 @@ pub fn emit_var_dump_emit_enum_line(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #16");                                    // establish the enum-line frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the enum instance pointer
 
-    emitter.instruction("bl __rt_vd_pad");                                      // indent the enum line to the current depth
+    emitter.instruction("bl __rt_vd_pad_value");                                // indent, then write php's pending `&` marker
     abi::emit_symbol_address(emitter, "x1", "_vd_enum_prefix");                 // load the `enum(` prefix
     emitter.instruction("mov x2, #5");                                          // len("enum(") = 5
     emitter.instruction("bl __rt_vd_write");                                    // write `enum(`
@@ -240,7 +240,7 @@ fn emit_var_dump_emit_enum_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 16");                                         // allocate the enum-line frame
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the enum instance pointer
 
-    emitter.instruction("call __rt_vd_pad");                                    // indent the enum line to the current depth
+    emitter.instruction("call __rt_vd_pad_value");                              // indent, then write php's pending `&` marker
     abi::emit_symbol_address(emitter, "rsi", "_vd_enum_prefix");                // load the `enum(` prefix
     emitter.instruction("mov edx, 5");                                          // len("enum(") = 5
     emitter.instruction("call __rt_vd_write");                                  // write `enum(`

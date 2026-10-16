@@ -1434,6 +1434,11 @@ pub(crate) fn emit_runtime_data_fixed(
     // builtin sets it to 2 around a top-level array body and back to 0 after;
     // `__rt_var_dump_value` bumps it by 2 across each nested container walk.
     out.push_str(&comm_directive("_vd_indent", 8, target));
+    // _vd_ref_amp: one-shot flag a hash walker sets when the entry's runtime
+    // value tag is 11 (a live PHP reference cell); the next value-line pad
+    // (`__rt_vd_pad_value`) consumes it and writes the `&` marker php prints
+    // before the type, on every supported target. Zero by default.
+    out.push_str(&comm_directive("_vd_ref_amp", 8, target));
     // var_dump object delimiters: `object(` + class name + `)#` + the PHP object
     // handle + ` (` + initialized property count + `) {\n` opens an object on its
     // value line; the shared `_vd_brace_close` closes it. The handle is the same
@@ -1446,6 +1451,9 @@ pub(crate) fn emit_runtime_data_fixed(
     // `uninitialized(` opens the line var_dump prints for a typed property read
     // before its first write; `_vd_close_paren` closes it.
     out.push_str(".globl _vd_uninit_prefix\n_vd_uninit_prefix:\n    .ascii \"uninitialized(\"\n");
+    // `&` — the marker php's var_dump prints before the TYPE of a value whose
+    // storage is a live reference cell; written by `__rt_vd_pad_value`.
+    out.push_str(".globl _vd_amp\n_vd_amp:\n    .ascii \"&\"\n");
     // `*RECURSION*` replaces the value of a container already on the walk stack.
     out.push_str(".globl _vd_recursion_line\n_vd_recursion_line:\n    .ascii \"*RECURSION*\\n\"\n");
     // _vd_seen / _vd_seen_n: the var_dump recursion guard — a bounded stack of

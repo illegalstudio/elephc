@@ -1390,7 +1390,10 @@ impl Op {
             // concat scratch while building the carried result, and always allocates the
             // boxed Mixed cell the new value is returned in.
             StrIncDec => E::READS_HEAP | E::ALLOC_CONCAT | E::ALLOC_HEAP | E::MAY_DEOPT,
-            IterCurrentValueRef | GeneratorYield | GeneratorYieldFrom | GeneratorReturn => {
+            // Rebinding may retire a loop-carried raw owner or the previous entry-cell
+            // lease, invoking arbitrary destructor code before the new alias is published.
+            IterCurrentValueRef => E::all(),
+            GeneratorYield | GeneratorYieldFrom | GeneratorReturn => {
                 E::READS_HEAP | E::WRITES_HEAP | E::MAY_DEOPT
             }
             IterEnd => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP | E::MAY_DEOPT,

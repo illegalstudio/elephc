@@ -47,7 +47,13 @@ impl LocalSlotAnalysis {
             // dropped the prologue retain on a by-value parameter the abandon then released
             // (`function f($a, int $n) { unset($a); … }` over-released the CALLER's box, and the
             // returned string came back as heap-debug poison bytes).
-            if matches!(inst.op, Op::StoreLocal | Op::StoreRefCell | Op::ZeroLocalSlot) {
+            // A foreach reference binding also replaces the slot's raw owner. Include it
+            // even without a synthetic StoreLocal so fresh slots start at zero and
+            // overwritten by-value parameters retain their frame-owned reference.
+            if matches!(
+                inst.op,
+                Op::StoreLocal | Op::StoreRefCell | Op::ZeroLocalSlot | Op::IterCurrentValueRef
+            ) {
                 if let Some(Immediate::LocalSlot(slot)) = inst.immediate {
                     stored_slots.insert(slot);
                 }

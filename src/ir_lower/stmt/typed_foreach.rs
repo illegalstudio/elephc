@@ -294,14 +294,10 @@ pub(super) fn lower_foreach(
         // a `string` slot and echoed a pointer pair as a string.
         ctx.declare_local(value_var, value_ty.clone());
         ctx.set_local_type(value_var, value_ty.clone());
-        if value_ty == PhpType::Mixed {
-            initialize_foreach_mixed_local_if_needed(
-                ctx,
-                value_var,
-                value_needs_null_init,
-                array.span,
-            );
-        }
+        // Do not seed a by-reference value with boxed null. This preheader can run again
+        // while the local still aliases the previous traversal's last entry, so a synthetic
+        // store would overwrite that entry. IterCurrentValueRef retires raw storage only
+        // when an actual element is bound; an empty walk preserves the previous binding.
         if !value_needs_null_init {
             ctx.mark_local_initialized(value_var);
             if !ctx.is_ref_bound_local(value_var) {
@@ -325,37 +321,7 @@ pub(super) fn lower_foreach(
     let header = ctx.builder.create_named_block("foreach.next", Vec::new());
     let body_block = ctx.builder.create_named_block("foreach.body", Vec::new());
     let exit = ctx.builder.create_named_block("foreach.exit", Vec::new());
-    let first_nonempty = (value_by_ref
-        && value_needs_null_init
-        && foreach_ref_value_type(&source_ty) == PhpType::Mixed)
-        .then(|| {
-            ctx.builder
-                .create_named_block("foreach.first_nonempty", Vec::new())
-        });
-    if let Some(first_nonempty) = first_nonempty {
-        let has_next = ctx.emit_value(
-            Op::IterNext,
-            vec![iterator.value],
-            None,
-            PhpType::Bool,
-            Op::IterNext.default_effects(),
-            Some(array.span),
-        );
-        ctx.builder.terminate(Terminator::CondBr {
-            cond: has_next.value,
-            then_target: first_nonempty,
-            then_args: Vec::new(),
-            else_target: exit,
-            else_args: Vec::new(),
-        });
-
-        ctx.builder.position_at_end(first_nonempty);
-        let value_slot = ctx.declare_local(value_var, PhpType::Mixed);
-        ctx.release_stored_local_value(value_var, value_slot, Some(array.span));
-        branch_to(ctx, body_block);
-    } else {
-        branch_to(ctx, header);
-    }
+    branch_to(ctx, header);
 
     ctx.builder.position_at_end(header);
     let has_next = ctx.emit_value(
@@ -471,14 +437,16 @@ pub(super) fn lower_foreach(
     }
 }
 
-/// Reifies a property, static property, or nested element source as a local reference.
+/// Reifies a property, static property, nested element, or by-reference-returning call source as
+/// a local reference.
 ///
 /// Iterator relocation can only reload a local slot. A synthetic alias turns an addressable
 /// non-local source into such a slot without copying the container: instance properties use
 /// their promoted property cell, native static properties use their process-lifetime symbol
-/// address, and nested elements first promote their parent to hash storage and then retain the
-/// entry's tag-11 cell. Growth through any spelling writes into that same cell, so `IterNext`
-/// always reloads the live table.
+/// address, nested elements first promote their parent to hash storage and then retain the
+/// entry's tag-11 cell, and a by-reference-returning call adopts the callee's cell through
+/// [`crate::ir_lower::expr::lower_ref_assign_call`]. Growth through any spelling writes into
+/// that same cell, so `IterNext` always reloads the live table.
 fn prepare_addressable_by_ref_foreach_source(
     ctx: &mut LoweringContext<'_, '_>,
     source: &Expr,
@@ -528,6 +496,21 @@ fn prepare_addressable_by_ref_foreach_source(
                 &element,
                 source.span,
             );
+            Some(Expr::new(ExprKind::Variable(alias), source.span))
+        }
+        ExprKind::FunctionCall { name, .. }
+            if ctx
+                .functions
+                .get(name.as_str())
+                .is_some_and(|signature| signature.by_ref_return) =>
+        {
+            // A by-reference-returning callee hands the loop its own reference cell. Binding it
+            // to a managed local makes that cell the iterator origin, so the loop mutates the
+            // array the caller's variable aliases instead of a detached copy
+            // (`foreach (ref_id($array) as &$v)`), matching php's `bug67633.phpt`. A by-VALUE
+            // call stays on the ordinary path and iterates a copy, as PHP does.
+            let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
+            crate::ir_lower::expr::lower_ref_assign_call(ctx, &alias, source, source.span);
             Some(Expr::new(ExprKind::Variable(alias), source.span))
         }
         _ => None,

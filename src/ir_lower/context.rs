@@ -361,6 +361,14 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// such an address, so the alias can never transfer an owner and must not escape the frame
     /// that keeps the container alive.
     borrowed_element_ref_locals: HashSet<String>,
+    /// Bi-directional map of locals aliased through `=&` into one shared ref-cell.
+    ///
+    /// Recorded by `alias_local_ref_cell`, unlinked by `unset_local` and re-linked over old
+    /// links when a name re-targets its alias. A container retype of one partner must update
+    /// every partner's type view: the shared cell's payload type changed for all of them
+    /// (issue #1803 — `$ref =& $array` re-typed the loop local to the promoted hash while
+    /// `$array` kept lowering reads through the indexed layout and read garbage).
+    ref_alias_partners: HashMap<String, HashSet<String>>,
     ref_cell_owner_locals: HashMap<String, LocalSlotId>,
     /// foreach loop-key locals whose source is a concretely-indexed array
     /// (`Array` of a non-Mixed element type), so the runtime key is always an
@@ -528,6 +536,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             fiber_start_sigs: HashMap::new(),
             ref_bound_locals: HashSet::new(),
             borrowed_element_ref_locals: HashSet::new(),
+            ref_alias_partners: HashMap::new(),
             ref_cell_owner_locals: HashMap::new(),
             foreach_int_key_locals: HashSet::new(),
             array_conversions: HashMap::new(),
@@ -1112,6 +1121,80 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     pub(crate) fn unmark_ref_bound_local(&mut self, name: &str) {
         self.ref_bound_locals.remove(name);
         self.borrowed_element_ref_locals.remove(name);
+    }
+
+    /// Registers one bi-directional `=&` alias link between two ordinary frame locals.
+    ///
+    /// Globals, static locals, eval-scope reads and interior aliases keep storage this frame
+    /// does not own, so their container retypes cannot be mirrored through the partner map.
+    fn record_ref_alias_partner(&mut self, a: &str, b: &str) {
+        for (first, _second) in [(a, b), (b, a)] {
+            let kind = self
+                .local_kinds
+                .get(first)
+                .copied()
+                .unwrap_or(LocalKind::PhpLocal);
+            if kind != LocalKind::PhpLocal || self.local_uses_global_storage(first) {
+                return;
+            }
+        }
+        self.ref_alias_partners
+            .entry(a.to_string())
+            .or_default()
+            .insert(b.to_string());
+        self.ref_alias_partners
+            .entry(b.to_string())
+            .or_default()
+            .insert(a.to_string());
+    }
+
+    /// Drops every `=&` alias link of `name` after `unset()` breaks its binding.
+    ///
+    /// The former partners keep their own links intact: they still alias their cell with
+    /// whoever else remains, and the dropped name no longer shares storage with them.
+    fn drop_ref_alias_links(&mut self, name: &str) {
+        if let Some(partners) = self.ref_alias_partners.remove(name) {
+            for partner in partners {
+                if let Some(links) = self.ref_alias_partners.get_mut(&partner) {
+                    links.remove(name);
+                }
+            }
+        }
+    }
+
+    /// Drops `target`'s alias links before it re-targets its `=&` binding to a new source.
+    fn drop_target_ref_alias_links(&mut self, target: &str) {
+        self.drop_ref_alias_links(target);
+    }
+
+    /// Mirrors a container retype onto every local aliased into the same ref-cell.
+    ///
+    /// `$ref =& $array` makes both names read ONE heap cell, so a promotion that turns the
+    /// cell's payload into a hash changes the type view of all partners at once. Without this
+    /// the partner kept lowering reads through its original indexed layout and read garbage
+    /// off the hash header (issue #1803). Globals and static locals share storage whose type
+    /// view this retype does not own; their reads already dispatch on the heap kind.
+    fn propagate_retype_to_ref_aliases(&mut self, name: &str, php_type: &PhpType) {
+        let Some(partners) = self.ref_alias_partners.get(name).cloned() else {
+            return;
+        };
+        for partner in partners {
+            if partner == name {
+                continue;
+            }
+            let partner_kind = self
+                .local_kinds
+                .get(&partner)
+                .copied()
+                .unwrap_or(LocalKind::PhpLocal);
+            if !self.is_ref_bound_local(&partner)
+                || partner_kind != LocalKind::PhpLocal
+                || self.local_uses_global_storage(&partner)
+            {
+                continue;
+            }
+            self.local_types.insert(partner, php_type.clone());
+        }
     }
 
     /// Records that a local aliases an interior address borrowed from a live container.
@@ -2587,6 +2670,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         } else {
             self.set_local_type_impl(name, php_type.clone(), track_array_conversion);
         }
+        // A store through a shared ref-cell changes the cell's payload for every `=&` partner:
+        // mirror a container retype onto the partners' type views so their reads lower with the
+        // promoted container layout (issue #1803).
+        if track_array_conversion && is_ref_bound {
+            self.propagate_retype_to_ref_aliases(name, &php_type);
+        }
         let storage_type = self.builder.local_php_type(slot).codegen_repr();
         if release_previous
             && !is_ref_bound
@@ -2685,6 +2774,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             span,
         );
         self.unmark_ref_bound_local(name);
+        // `unset()` breaks the `=&` alias: the name stops sharing its cell with the partners.
+        self.drop_ref_alias_links(name);
         if detaches_reference {
             // UnsetLocal clears promotion state, but its null sentinel is not an inert raw
             // string pointer. Zero the old storage without widening the capture's payload ABI.
@@ -3087,6 +3178,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             span,
         );
         self.mark_ref_bound_local(target);
+        // The target's name now aliases `source`'s cell: any previous `=&` links of the target
+        // name die here, and the fresh link records this pair for container retype mirroring.
+        self.drop_target_ref_alias_links(target);
+        self.record_ref_alias_partner(target, source);
         // An alias of a borrowed interior address is itself borrowed; a managed source clears
         // any interior marker a previous binding of this name left behind.
         if self.is_borrowed_element_ref_local(source) {

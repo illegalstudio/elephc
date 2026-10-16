@@ -512,10 +512,15 @@ walkAggregate();
 /// Iterator protocol opcodes retain arbitrary callback effects until calls are explicit in EIR.
 #[test]
 fn iterator_callback_opcodes_are_conservatively_effectful() {
-    for op in [Op::IterStart, Op::IterNext, Op::IterCurrentKey, Op::IterCurrentValue] {
+    for op in [
+        Op::IterStart,
+        Op::IterNext,
+        Op::IterCurrentKey,
+        Op::IterCurrentValue,
+        Op::IterCurrentValueRef,
+    ] {
         assert_eq!(op.default_effects(), Effects::all(), "{op:?}");
     }
-    assert_ne!(Op::IterCurrentValueRef.default_effects(), Effects::all());
 }
 
 /// Builds one otherwise valid function whose IterStart names the supplied local.

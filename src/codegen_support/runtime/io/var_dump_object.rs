@@ -414,7 +414,7 @@ pub fn emit_var_dump_open_object(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #32");                                    // establish the object-header frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the object pointer across the writes
 
-    emitter.instruction("bl __rt_vd_pad");                                      // indent the object header line
+    emitter.instruction("bl __rt_vd_pad_value");                                // indent, then write php's pending `&` marker
     abi::emit_symbol_address(emitter, "x1", "_vd_object_prefix");               // load the `object(` prefix
     emitter.instruction("mov x2, #7");                                          // len("object(") = 7
     emitter.instruction("bl __rt_vd_write");                                    // write `object(`
@@ -476,7 +476,7 @@ fn emit_var_dump_open_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 16");                                         // allocate the object-header frame
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the object pointer across the writes
 
-    emitter.instruction("call __rt_vd_pad");                                    // indent the object header line
+    emitter.instruction("call __rt_vd_pad_value");                              // indent, then write php's pending `&` marker
     abi::emit_symbol_address(emitter, "rsi", "_vd_object_prefix");              // load the `object(` prefix
     emitter.instruction("mov edx, 7");                                          // len("object(") = 7
     emitter.instruction("call __rt_vd_write");                                  // write `object(`
@@ -668,7 +668,7 @@ pub fn emit_var_dump_emit_recursion_line(emitter: &mut Emitter) {
         emitter.label_global("__rt_var_dump_emit_recursion_line");
         emitter.instruction("push rbp");                                        // save caller frame pointer
         emitter.instruction("mov rbp, rsp");                                    // establish the recursion-line frame pointer
-        emitter.instruction("call __rt_vd_pad");                                // indent the recursion marker
+        emitter.instruction("call __rt_vd_pad_value");                          // indent, then write php's pending `&` marker
         abi::emit_symbol_address(emitter, "rsi", "_vd_recursion_line");         // load the `*RECURSION*\n` marker
         emitter.instruction("mov edx, 12");                                     // len("*RECURSION*\n") = 12
         emitter.instruction("call __rt_vd_write");                              // write `*RECURSION*\n`
@@ -683,7 +683,7 @@ pub fn emit_var_dump_emit_recursion_line(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #16");                                     // allocate the recursion-line frame
     emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish the recursion-line frame pointer
-    emitter.instruction("bl __rt_vd_pad");                                      // indent the recursion marker
+    emitter.instruction("bl __rt_vd_pad_value");                                // indent, then write php's pending `&` marker
     abi::emit_symbol_address(emitter, "x1", "_vd_recursion_line");              // load the `*RECURSION*\n` marker
     emitter.instruction("mov x2, #12");                                         // len("*RECURSION*\n") = 12
     emitter.instruction("bl __rt_vd_write");                                    // write `*RECURSION*\n`

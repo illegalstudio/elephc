@@ -1,7 +1,7 @@
 //! Purpose:
 //! Emits the hash-entry reference-cell helpers that back PHP reference sets stored in
 //! associative-array entries: `__rt_hash_entry_make_reference`, `__rt_hash_entry_deref`,
-//! `__rt_hash_iter_next_value` and `__rt_hash_iter_resync`.
+//! `__rt_hash_iter_next_value`, `__rt_hash_iter_resync` and `__rt_hash_iter_resync_successor`.
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::arrays`.
@@ -13,6 +13,8 @@
 //! - `__rt_hash_entry_deref` is the borrowed value view of that layout and never allocates.
 //! - `__rt_hash_iter_resync` re-derives an insertion-order cursor after the table was
 //!   reallocated by growth or copy-on-write, using the last yielded key as the anchor.
+//! - `__rt_hash_iter_resync_successor` resumes from the entry AFTER a named key, which is how a
+//!   by-reference walk that already yielded the tail reaches an element appended afterwards.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -26,8 +28,9 @@ const REFERENCE_CELL_PAYLOAD_TAG: i64 = 7;
 /// Key high word marking "this walk has no successor entry to resume from".
 ///
 /// A live key uses -1 for an integer key and a non-negative length for a string key, so -2 can
-/// never collide with one. `IterNext` stores it whenever the cursor it just produced is the
-/// post-last or done sentinel.
+/// never collide with one. `IterNext` stores it for a done cursor and for a positive cursor whose
+/// successor has no following entry. A post-last cursor instead stores the TAIL key it just
+/// yielded, so the walk can resume from that key's live successor.
 pub(super) const NO_SUCCESSOR_KEY_MARKER: i64 = -2;
 
 /// Emits every hash-entry reference helper for the current target.
@@ -36,6 +39,7 @@ pub fn emit_hash_entry_reference(emitter: &mut Emitter) {
     emit_entry_deref(emitter);
     emit_iter_next_value(emitter);
     emit_iter_resync(emitter);
+    emit_iter_resync_successor(emitter);
 }
 
 /// Emits `__rt_hash_entry_make_reference`, which promotes a boxed Mixed hash entry into a
@@ -389,6 +393,60 @@ fn emit_iter_resync(emitter: &mut Emitter) {
     }
 }
 
+/// Emits `__rt_hash_iter_resync_successor`, which resumes a walk from the entry AFTER a named key.
+///
+/// A by-reference `foreach` returns the post-last cursor (`-2`) with the tail entry, and captures
+/// the TAIL key as its anchor. If the loop body appends an element after that point — with or
+/// without a rehash — the walk must visit it, as PHP does. Probing the tail key in the live table
+/// and following its insertion-order `next` yields exactly that successor, so a fresh append is
+/// reached instead of the walk stopping at the old tail.
+///
+/// Input: argument 0 = live table pointer, argument 1 = anchor key low word,
+/// argument 2 = anchor key high word (`-1` for an integer key, a length for a string key).
+/// Output: integer result register = the successor cursor (`slot index + 1`), or `-1` when the
+/// anchor is gone or has no live successor.
+fn emit_iter_resync_successor(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: hash_iter_resync_successor ---");
+    emitter.label_global("__rt_hash_iter_resync_successor");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("stp x29, x30, [sp, #-16]!");                   // save frame pointer and return address across the probe
+            emitter.instruction("mov x29, sp");                                 // establish the successor-resync frame
+            emitter.instruction("bl __rt_hash_get");                            // locate the anchor entry in the live table
+            emitter.instruction("cbz x0, __rt_hash_iter_resync_successor_missing"); // a vanished anchor has no successor
+            emitter.instruction("ldr x9, [x4, #56]");                           // load the anchor's insertion-order successor slot
+            emitter.instruction("cmn x9, #1");                                  // did the anchor remain the tail?
+            emitter.instruction("b.eq __rt_hash_iter_resync_successor_missing"); // no appended successor to resume from
+            emitter.instruction("add x0, x9, #1");                              // encode the successor cursor as slot index plus one
+            emitter.instruction("ldp x29, x30, [sp], #16");                     // restore frame pointer and return address
+            emitter.instruction("ret");                                         // return the successor cursor to the iterator
+            emitter.label("__rt_hash_iter_resync_successor_missing");
+            emitter.instruction("mov x0, #-1");                                 // stop without reading a stale successor slot
+            emitter.instruction("ldp x29, x30, [sp], #16");                     // restore frame pointer and return address
+            emitter.instruction("ret");                                         // return the done cursor to the iterator
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rbp");                                    // preserve the caller frame pointer across the probe
+            emitter.instruction("mov rbp, rsp");                                // establish the successor-resync frame
+            emitter.instruction("call __rt_hash_get");                          // locate the anchor entry in the live table
+            emitter.instruction("test rax, rax");                               // did the live table still contain the anchor key?
+            emitter.instruction("jz __rt_hash_iter_resync_successor_missing");  // a vanished anchor has no successor
+            emitter.instruction("mov r9, QWORD PTR [r8 + 56]");                 // load the anchor's insertion-order successor slot
+            emitter.instruction("cmp r9, -1");                                  // did the anchor remain the tail?
+            emitter.instruction("je __rt_hash_iter_resync_successor_missing");  // no appended successor to resume from
+            emitter.instruction("mov rax, r9");                                 // copy the successor slot before encoding the cursor
+            emitter.instruction("add rax, 1");                                  // encode the successor cursor as slot index plus one
+            emitter.instruction("pop rbp");                                     // restore the caller frame pointer
+            emitter.instruction("ret");                                         // return the successor cursor to the iterator
+            emitter.label("__rt_hash_iter_resync_successor_missing");
+            emitter.instruction("mov rax, -1");                                 // stop without reading a stale successor slot
+            emitter.instruction("pop rbp");                                     // restore the caller frame pointer
+            emitter.instruction("ret");                                         // return the done cursor to the iterator
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -422,6 +480,7 @@ mod tests {
                 "__rt_hash_entry_deref",
                 "__rt_hash_iter_next_value",
                 "__rt_hash_iter_resync",
+                "__rt_hash_iter_resync_successor",
             ] {
                 assert!(asm.contains(symbol), "{name}: {symbol} missing");
             }
@@ -470,6 +529,34 @@ mod tests {
             assert!(asm.contains("__rt_hash_iter_resync_missing"), "{name}");
             assert!(asm.contains("__rt_hash_iter_resync_done"), "{name}");
             assert!(asm.contains("__rt_hash_get"), "{name}");
+        }
+    }
+
+    /// Pins that the tail-successor resync probes the anchor and reports done when it vanished or
+    /// stayed the tail, on every supported target.
+    #[test]
+    fn hash_iter_resync_successor_reports_done_for_a_vanished_or_final_anchor() {
+        for name in SUPPORTED_TARGETS {
+            let asm = emit_for(name);
+            assert!(
+                asm.contains("__rt_hash_iter_resync_successor_missing"),
+                "{name}: missing-anchor arm absent"
+            );
+            let body = asm
+                .split_once("__rt_hash_iter_resync_successor:")
+                .unwrap()
+                .1
+                .split_once("__rt_hash_iter_resync_successor_missing:")
+                .unwrap()
+                .0;
+            assert!(body.contains("__rt_hash_get"), "{name}: anchor probe absent");
+            // The anchor's own successor is at entry offset 56, the same word the raw walk reads.
+            let successor_load = if name == "linux-x86_64" {
+                "QWORD PTR [r8 + 56]"
+            } else {
+                "[x4, #56]"
+            };
+            assert!(body.contains(successor_load), "{name}: successor load absent");
         }
     }
 }

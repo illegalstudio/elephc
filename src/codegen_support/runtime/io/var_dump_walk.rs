@@ -329,7 +329,7 @@ pub fn emit_var_dump_emit_int_line(emitter: &mut Emitter) {
 
     // Emit "int(" after the indent pad
     emitter.instruction("mov x9, x0");                                          // preserve value across the pad and the prefix write
-    emitter.instruction("bl __rt_vd_pad");                                      // write `_vd_indent` spaces before the value
+    emitter.instruction("bl __rt_vd_pad_value");                                // indent, then write php's pending `&` marker
     crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_vd_int_prefix");
     emitter.instruction("mov x2, #4");                                          // len("int(") = 4
     emitter.instruction("bl __rt_vd_write");                                    // write x1/x2 through the ob/web-aware stdout sink (register-preserving)
@@ -360,7 +360,7 @@ fn emit_var_dump_emit_int_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 16");                                         // allocate runtime stack frame
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save value
 
-    emitter.instruction("call __rt_vd_pad");                                    // write `_vd_indent` spaces before the value
+    emitter.instruction("call __rt_vd_pad_value");                              // indent, then write php's pending `&` marker
     abi::emit_symbol_address(emitter, "rsi", "_vd_int_prefix");                 // load runtime data address
     emitter.instruction("mov edx, 4");                                          // len("int(") = 4
     emitter.instruction("call __rt_vd_write");                                  // write rsi/rdx through the ob/web-aware stdout sink (register-preserving)
@@ -396,7 +396,7 @@ pub fn emit_var_dump_emit_string_line(emitter: &mut Emitter) {
     emitter.instruction("mov x29, sp");                                         // establish runtime frame pointer
     emitter.instruction("stp x1, x2, [sp, #0]");                                // save ptr/len
 
-    emitter.instruction("bl __rt_vd_pad");                                      // write `_vd_indent` spaces before the value
+    emitter.instruction("bl __rt_vd_pad_value");                                // indent, then write php's pending `&` marker
 
     // Emit "string("
     crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_vd_str_prefix");
@@ -440,7 +440,7 @@ fn emit_var_dump_emit_string_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save ptr
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save len
 
-    emitter.instruction("call __rt_vd_pad");                                    // write `_vd_indent` spaces before the value
+    emitter.instruction("call __rt_vd_pad_value");                              // indent, then write php's pending `&` marker
     abi::emit_symbol_address(emitter, "rsi", "_vd_str_prefix");                 // load runtime data address
     emitter.instruction("mov edx, 7");                                          // len("string(") = 7
     emitter.instruction("call __rt_vd_write");                                  // write rsi/rdx through the ob/web-aware stdout sink (register-preserving)
@@ -486,7 +486,7 @@ pub fn emit_var_dump_emit_bool_line(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish runtime frame pointer
     emitter.instruction("mov x9, x0");                                          // preserve the bool payload across the pad
-    emitter.instruction("bl __rt_vd_pad");                                      // write `_vd_indent` spaces before the value
+    emitter.instruction("bl __rt_vd_pad_value");                                // indent, then write php's pending `&` marker
     emitter.instruction(&format!("cbz x9, {}", false_label));                   // value == 0 → false line
     crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_vd_bool_true_line");
     emitter.instruction("mov x2, #11");                                         // len("bool(true)\n") = 11
@@ -513,7 +513,7 @@ fn emit_var_dump_emit_bool_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish runtime frame pointer
     emitter.instruction("sub rsp, 16");                                         // allocate runtime stack frame
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the bool payload across the pad
-    emitter.instruction("call __rt_vd_pad");                                    // write `_vd_indent` spaces before the value
+    emitter.instruction("call __rt_vd_pad_value");                              // indent, then write php's pending `&` marker
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the bool payload
     emitter.instruction("test rax, rax");                                       // check whether the runtime value is zero
     emitter.instruction(&format!("jz {}", false_label));                        // branch when the checked value is zero or equal
@@ -591,7 +591,7 @@ pub fn emit_var_dump_emit_float_line(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish runtime frame pointer
 
-    emitter.instruction("bl __rt_vd_pad");                                      // write `_vd_indent` spaces (d0 survives: __rt_vd_write preserves it)
+    emitter.instruction("bl __rt_vd_pad_value");                                // indent, then write php's pending `&` marker (d0 survives: __rt_vd_write preserves it)
 
     // Emit "float("
     crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_vd_float_prefix");
@@ -734,7 +734,7 @@ pub fn emit_var_dump_emit_null_line(emitter: &mut Emitter) {
         emitter.label_global("__rt_var_dump_emit_null_line");
         emitter.instruction("push rbp");                                        // save caller frame pointer
         emitter.instruction("mov rbp, rsp");                                    // establish runtime frame pointer
-        emitter.instruction("call __rt_vd_pad");                                // write `_vd_indent` spaces before the value
+        emitter.instruction("call __rt_vd_pad_value");                          // indent, then write php's pending `&` marker
         abi::emit_symbol_address(emitter, "rsi", "_vd_null_line");              // load runtime data address
         emitter.instruction("mov edx, 5");                                      // len("NULL\n") = 5
         emitter.instruction("call __rt_vd_write");                              // write the NULL line through the ob/web-aware stdout sink
@@ -748,7 +748,7 @@ pub fn emit_var_dump_emit_null_line(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #16");                                     // allocate runtime stack frame (the indent pad needs x30 saved)
     emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish runtime frame pointer
-    emitter.instruction("bl __rt_vd_pad");                                      // write `_vd_indent` spaces before the value
+    emitter.instruction("bl __rt_vd_pad_value");                                // indent, then write php's pending `&` marker
     crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_vd_null_line");
     emitter.instruction("mov x2, #5");                                          // len("NULL\n") = 5
     emitter.instruction("bl __rt_vd_write");                                    // write the NULL line through the ob/web-aware stdout sink
@@ -774,7 +774,7 @@ pub fn emit_var_dump_emit_callable(emitter: &mut Emitter) {
     emitter.instruction("mov x29, sp");                                         // establish the Closure rendering frame
     emitter.instruction("str x0, [sp, #0]");                                    // preserve the callable descriptor across writes
 
-    emitter.instruction("bl __rt_vd_pad");                                      // indent the Closure header line
+    emitter.instruction("bl __rt_vd_pad_value");                                // indent, then write php's pending `&` marker
     abi::emit_symbol_address(emitter, "x1", "_vd_object_prefix");
     emitter.instruction("mov x2, #7");                                          // pass len("object(") to the var_dump sink
     emitter.instruction("bl __rt_vd_write");                                    // write the object prefix
@@ -817,7 +817,7 @@ fn emit_var_dump_emit_callable_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 16");                                         // reserve descriptor spill storage
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the callable descriptor across writes
 
-    emitter.instruction("call __rt_vd_pad");                                    // indent the Closure header line
+    emitter.instruction("call __rt_vd_pad_value");                              // indent, then write php's pending `&` marker
     abi::emit_symbol_address(emitter, "rsi", "_vd_object_prefix");
     emitter.instruction("mov edx, 7");                                          // pass len("object(") to the var_dump sink
     emitter.instruction("call __rt_vd_write");                                  // write the object prefix
@@ -927,6 +927,66 @@ fn emit_var_dump_pad_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// `__rt_vd_pad_value`: the value-line pad — indents like `__rt_vd_pad`, then
+/// consumes the one-shot `_vd_ref_amp` flag an associative walker sets for a
+/// live reference entry (runtime value tag 11) and writes php's `&` marker
+/// between the indent and the TYPE text (issue #1802).
+///
+/// Only value-line helpers call this; key helpers and closing-brace pads keep
+/// the plain `__rt_vd_pad`, so the flag is consumed exactly once at the first
+/// type line. Same clobber contract as `__rt_vd_pad`: `x0`-`x2` only (x86_64:
+/// `rax`/`rcx`/`rsi`/`rdx`), leaving parked values (`x9`, rbp slots, `d0`)
+/// intact. Takes no arguments.
+pub fn emit_var_dump_pad_value(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_var_dump_pad_value_linux_x86_64(emitter);
+        return;
+    }
+
+    emitter.blank();
+    emitter.comment("--- runtime: vd_pad_value ---");
+    emitter.label_global("__rt_vd_pad_value");
+
+    emitter.instruction("sub sp, sp, #16");                                     // frame: pad_value calls out, so x30 must survive
+    emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
+    emitter.instruction("bl __rt_vd_pad");                                      // write `_vd_indent` spaces first
+    abi::emit_symbol_address(emitter, "x0", "_vd_ref_amp");                     // resolve the pending-marker flag
+    emitter.instruction("ldr x1, [x0]");                                        // was this entry a live reference?
+    emitter.instruction("cbz x1, __rt_vd_pad_value_done");                      // plain values print no marker
+    emitter.instruction("str xzr, [x0]");                                       // consume the one-shot flag exactly once
+    abi::emit_symbol_address(emitter, "x1", "_vd_amp");                         // php's `&` marker sits before the TYPE
+    emitter.instruction("mov x2, #1");                                          // len("&") = 1
+    emitter.instruction("bl __rt_vd_write");                                    // write x1/x2 through the ob/web-aware stdout sink (register-preserving)
+
+    emitter.label("__rt_vd_pad_value_done");
+    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the pad-value frame
+    emitter.instruction("ret");                                                 // back to the value-line renderer
+}
+
+/// Emits the Linux x86_64 variant of `__rt_vd_pad_value`.
+fn emit_var_dump_pad_value_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: vd_pad_value ---");
+    emitter.label_global("__rt_vd_pad_value");
+
+    emitter.instruction("push rbp");                                            // save caller frame pointer (the SysV calls below need a stable rbp)
+    emitter.instruction("mov rbp, rsp");                                        // establish the pad-value frame pointer
+    emitter.instruction("call __rt_vd_pad");                                    // write `_vd_indent` spaces first
+    abi::emit_symbol_address(emitter, "rax", "_vd_ref_amp");                    // resolve the pending-marker flag
+    emitter.instruction("mov rcx, QWORD PTR [rax]");                            // was this entry a live reference?
+    emitter.instruction("test rcx, rcx");                                       // check whether the marker flag is set
+    emitter.instruction("jz __rt_vd_pad_value_done_x86");                       // plain values print no marker
+    emitter.instruction("mov QWORD PTR [rax], 0");                              // consume the one-shot flag exactly once
+    abi::emit_symbol_address(emitter, "rsi", "_vd_amp");                        // php's `&` marker sits before the TYPE
+    emitter.instruction("mov edx, 1");                                          // len("&") = 1
+    emitter.instruction("call __rt_vd_write");                                  // write rsi/rdx through the ob/web-aware stdout sink (register-preserving)
+
+    emitter.label("__rt_vd_pad_value_done_x86");
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // back to the value-line renderer
+}
+
 /// `__rt_vd_indent_push` / `__rt_vd_indent_pop`: widen / narrow `_vd_indent` by
 /// one PHP nesting level (2 spaces) around a nested container walk.
 ///
@@ -986,7 +1046,7 @@ pub fn emit_var_dump_open_container(emitter: &mut Emitter) {
     emitter.instruction("mov x29, sp");                                         // establish the header frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the container pointer across the writes
 
-    emitter.instruction("bl __rt_vd_pad");                                      // indent the value line
+    emitter.instruction("bl __rt_vd_pad_value");                                // indent, then write php's pending `&` marker
     abi::emit_symbol_address(emitter, "x1", "_vd_array_prefix");                // load the `array(` prefix
     emitter.instruction("mov x2, #6");                                          // len("array(") = 6
     emitter.instruction("bl __rt_vd_write");                                    // write `array(`
@@ -1014,7 +1074,7 @@ fn emit_var_dump_open_container_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 16");                                         // allocate the header frame
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the container pointer across the writes
 
-    emitter.instruction("call __rt_vd_pad");                                    // indent the value line
+    emitter.instruction("call __rt_vd_pad_value");                              // indent, then write php's pending `&` marker
     abi::emit_symbol_address(emitter, "rsi", "_vd_array_prefix");               // load the `array(` prefix
     emitter.instruction("mov edx, 6");                                          // len("array(") = 6
     emitter.instruction("call __rt_vd_write");                                  // write `array(`
@@ -1692,13 +1752,28 @@ pub fn emit_var_dump_hash(emitter: &mut Emitter) {
 
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload hash pointer
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload iterator cursor
-    emitter.instruction("bl __rt_hash_iter_next_value");                        // x0=next cursor, x1=key ptr, x2=key len, x3=val_lo, x4=val_hi, x5=val_tag
+    emitter.instruction("bl __rt_hash_iter_next");                              // raw walk: x5 carries 11 for live reference entries
     emitter.instruction("str x0, [sp, #8]");                                    // save the next iterator cursor
     emitter.instruction("str x1, [sp, #32]");                                   // save key ptr (or integer payload)
     emitter.instruction("str x2, [sp, #40]");                                   // save key len (-1 sentinel for integer keys)
+    emitter.instruction("cmp x5, #11");                                         // tag 11 = managed reference cell
+    emitter.instruction("b.ne __rt_vd_hash_ref_decided");                       // ordinary entries never print the marker
+    emitter.instruction("ldr w10, [x3, #-12]");                                 // the cell's uniform-header refcount: the entry plus every live aliased variable
+    emitter.instruction("cmp w10, #2");                                         // php dissolves an entry whose reference set lost its last aliased variable
+    emitter.instruction("cset x9, ge");                                         // marker shows only while another member still binds the cell
+    emitter.instruction("b __rt_vd_hash_ref_render");
+    emitter.label("__rt_vd_hash_ref_decided");
+    emitter.instruction("mov x9, #0");                                          // ordinary entries park a zero marker decision
+    emitter.label("__rt_vd_hash_ref_render");
+    emitter.instruction("bl __rt_hash_entry_deref");                            // value payload the renderer expects (a no-op for ordinary tags)
     emitter.instruction("str x3, [sp, #48]");                                   // save value low payload word
     emitter.instruction("str x4, [sp, #56]");                                   // save value high payload word
-    emitter.instruction("str x5, [sp, #64]");                                   // save value runtime tag
+    emitter.instruction("str x5, [sp, #64]");                                   // save the value-shaped runtime tag
+    // -- php names live reference entries with a leading `&` on their value line --
+    // The pad consumed by `__rt_var_dump_value` writes that marker exactly when
+    // this flag is 1, and clears it, so only this entry's line is affected.
+    abi::emit_symbol_address(emitter, "x1", "_vd_ref_amp");                     // resolve the pending-marker flag
+    emitter.instruction("str x9, [x1]");                                        // store this entry's marker decision
 
     // -- emit the key prefix --
     emitter.instruction("ldr x2, [sp, #40]");                                   // reload key len
@@ -1757,13 +1832,29 @@ fn emit_var_dump_hash_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload hash pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload iterator cursor
-    emitter.instruction("call __rt_hash_iter_next_value");                      // rax=next cursor, rdi=key ptr, rdx=key len, rcx=val_lo, r8=val_hi, r9=val_tag
+    emitter.instruction("call __rt_hash_iter_next");                            // raw walk: r9 carries 11 for live reference entries
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the next iterator cursor
     emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // save key ptr (or integer payload)
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save key len (-1 sentinel for integer keys)
+    emitter.instruction("cmp r9, 11");                                          // tag 11 = managed reference cell
+    emitter.instruction("jne __rt_vd_hash_ref_decided_x86");                    // ordinary entries never print the marker
+    emitter.instruction("mov r10d, DWORD PTR [rcx - 12]");                      // the cell's uniform-header refcount: the entry plus every live aliased variable
+    emitter.instruction("cmp r10d, 2");                                         // php dissolves an entry whose reference set lost its last aliased variable
+    emitter.instruction("setge r10b");                                          // marker shows only while another member still binds the cell
+    emitter.instruction("movzx r10, r10b");                                     // widen the byte decision to the flag word
+    emitter.instruction("jmp __rt_vd_hash_ref_render_x86");
+    emitter.label("__rt_vd_hash_ref_decided_x86");
+    emitter.instruction("xor r10, r10");                                        // ordinary entries park a zero marker decision
+    emitter.label("__rt_vd_hash_ref_render_x86");
+    emitter.instruction("call __rt_hash_entry_deref");                          // value payload the renderer expects (a no-op for ordinary tags)
     emitter.instruction("mov QWORD PTR [rbp - 56], rcx");                       // save value low payload word
     emitter.instruction("mov QWORD PTR [rbp - 64], r8");                        // save value high payload word
-    emitter.instruction("mov QWORD PTR [rbp - 72], r9");                        // save value runtime tag
+    emitter.instruction("mov QWORD PTR [rbp - 72], r9");                        // save the value-shaped runtime tag
+    // -- php names live reference entries with a leading `&` on their value line --
+    // The pad consumed by `__rt_var_dump_value` writes that marker exactly when
+    // this flag is 1, and clears it, so only this entry's line is affected.
+    abi::emit_symbol_address(emitter, "rax", "_vd_ref_amp");                    // resolve the pending-marker flag
+    emitter.instruction("mov QWORD PTR [rax], r10");                            // store this entry's marker decision
 
     emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // reload key len
     emitter.instruction("cmp rdx, -1");                                         // integer key?

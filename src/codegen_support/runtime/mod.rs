@@ -52,6 +52,8 @@ mod system;
 /// zval pack/unpack bridge helpers (elephc values ↔ PHP zval structs).
 mod zval;
 
+/// Shared associative-array layout addressing for runtime emitters and EIR codegen.
+pub(crate) use arrays::hash_layout;
 pub(crate) use data::emit_runtime_data_fixed;
 
 /// Returns the `(C entry point, runtime slot)` pairs the `elephc_curl` bridge is reached

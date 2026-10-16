@@ -58,6 +58,8 @@ mod regressions;
 mod assoc_rebind_release;
 #[path = "runtime_gc/by_ref_foreach_reference_cells.rs"]
 mod by_ref_foreach_reference_cells;
+#[path = "runtime_gc/by_ref_foreach_nested.rs"]
+mod by_ref_foreach_nested;
 #[path = "runtime_gc/compound_assign_stores.rs"]
 mod compound_assign_stores;
 #[path = "runtime_gc/assoc_chunk.rs"]

@@ -805,7 +805,16 @@ fn store_value_to_raw_ref_cell_as(
         if target_ty == PhpType::Str {
             abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
         } else {
-            abi::emit_decref_preserving_exception(ctx.emitter, &target_ty);
+            // A representation-changing store can publish a hash over an indexed array.
+            // The previous owner still has its OLD heap layout; dispatching its release by
+            // target_ty sends that array to hash_free_deep and corrupts unrelated storage.
+            // Both container layouts carry a heap-kind header, so retire by the actual kind.
+            let release_ty = if matches!(target_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+                PhpType::Iterable
+            } else {
+                target_ty.clone()
+            };
+            abi::emit_decref_preserving_exception(ctx.emitter, &release_ty);
             abi::emit_branch_if_int_result_nonzero(ctx.emitter, "__rt_throw_current");
         }
         ctx.emitter.label(&published);

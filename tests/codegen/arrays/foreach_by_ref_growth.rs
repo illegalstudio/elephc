@@ -296,3 +296,151 @@ echo substr($seen, 0, 3), "|", count($a);
     );
     assert_eq!(out, "acd|43");
 }
+
+/// Appending after the walk has already yielded the tail is visited, as PHP does (bug #67633's
+/// relative; php-src `foreach_007.phpt`).
+///
+/// The tail entry returns the post-last cursor with no successor to anchor on, so the walk used
+/// to stop before the freshly appended element. It now remembers the tail key and resumes from
+/// that key's live insertion-order successor.
+#[test]
+fn by_ref_foreach_visits_an_element_appended_after_the_tail() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1];
+foreach ($a as &$v) {
+    echo "$v\n";
+    $a[1] = 2;
+}
+"#,
+    );
+    assert_eq!(out, "1\n2\n");
+}
+
+/// The key binding sees the appended element too.
+#[test]
+fn by_ref_foreach_key_binding_sees_an_element_appended_after_the_tail() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1];
+foreach ($a as $k => &$v) {
+    echo "$k=$v\n";
+    $a[1] = 2;
+}
+"#,
+    );
+    assert_eq!(out, "0=1\n1=2\n");
+}
+
+/// An associative source resumes from the tail key's successor the same way.
+#[test]
+fn by_ref_foreach_visits_an_associative_element_appended_after_the_tail() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["x" => 1];
+foreach ($a as &$v) {
+    echo "$v\n";
+    $a["y"] = 2;
+}
+"#,
+    );
+    assert_eq!(out, "1\n2\n");
+}
+
+/// Repeated appends that force several hash grows are all visited, in insertion order.
+#[test]
+fn by_ref_foreach_visits_every_element_appended_across_repeated_growth() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1];
+foreach ($a as &$v) {
+    if (count($a) < 10) {
+        $a[] = $v + 1;
+    }
+}
+echo implode(",", $a);
+"#,
+    );
+    assert_eq!(out, "1,2,3,4,5,6,7,8,9,10");
+}
+
+/// An associative source with string keys visits every element appended across growth.
+#[test]
+fn by_ref_foreach_visits_appended_associative_elements_across_growth() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["x" => 1];
+foreach ($a as $k => &$v) {
+    echo "$k=$v\n";
+    if (count($a) < 6) {
+        $a["k" . count($a)] = $v + 1;
+    }
+}
+"#,
+    );
+    assert_eq!(out, "x=1\nk1=2\nk2=3\nk3=4\nk4=5\nk5=6\n");
+}
+
+/// Emits one fixture's assembly for `target` through the CLI and returns its text.
+fn emit_assembly_for_target(target: &str, source: &str) -> String {
+    let dir = make_cli_test_dir("elephc_foreach_by_ref_target");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, source).expect("write fixture");
+    let output = elephc_cli_command(&dir)
+        .args(["--emit-asm", "--target", target])
+        .arg(&php_path)
+        .output()
+        .expect("run elephc --emit-asm");
+    assert!(
+        output.status.success(),
+        "{target}: emitting assembly failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let assembly = fs::read_to_string(php_path.with_extension("s")).expect("read assembly");
+    let _ = fs::remove_dir_all(dir);
+    assembly
+}
+
+/// Pins the tail-resync branch's per-helper argument registers on both targets.
+///
+/// `__rt_heap_kind` reads its pointer in `x0`/`rax`, while `__rt_hash_iter_resync_successor`
+/// reads the table in `x0`/`rdi`. Loading the source into the wrong register silently disabled
+/// the whole tail resume on x86_64 while every aarch64 executable test still passed, so the
+/// caller-side sequence is pinned here for both targets.
+#[test]
+fn tail_resync_branch_passes_each_helper_its_own_argument_register() {
+    let source = "<?php\n$a = [1];\nforeach ($a as &$v) { echo \"$v\\n\"; $a[1] = 2; }\n";
+    for (target, kind_reg, resync_reg) in [
+        ("macos-aarch64", "x0", "x0"),
+        ("linux-x86_64", "rax", "rdi"),
+    ] {
+        let asm = emit_assembly_for_target(target, source);
+        let lines: Vec<&str> = asm.lines().collect();
+        let label_index = lines
+            .iter()
+            .position(|line| {
+                line.trim_end().ends_with(':') && line.contains("iter_anchor_validate_tail")
+            })
+            .unwrap_or_else(|| panic!("{target}: tail label absent"));
+        let tail = &lines[label_index..];
+        let kind_index = tail
+            .iter()
+            .position(|line| line.contains("__rt_heap_kind"))
+            .unwrap_or_else(|| panic!("{target}: heap-kind probe absent"));
+        assert!(
+            tail[kind_index - 1].contains(&format!("{kind_reg},")),
+            "{target}: heap kind needs the source in {kind_reg}, got: {}",
+            tail[kind_index - 1]
+        );
+        let resync_index = tail
+            .iter()
+            .position(|line| line.contains("__rt_hash_iter_resync_successor"))
+            .unwrap_or_else(|| panic!("{target}: successor resync absent"));
+        assert!(
+            tail[kind_index..resync_index]
+                .iter()
+                .any(|line| line.contains(&format!("{resync_reg},"))),
+            "{target}: successor resync needs the table in {resync_reg}"
+        );
+    }
+}

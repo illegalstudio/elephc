@@ -26,6 +26,57 @@ fn assert_clean(out: crate::support::ProgramOutput, expected: &str) {
     );
 }
 
+/// Promotion retires the indexed payload using its old layout, even without body writes.
+#[test]
+fn by_ref_foreach_over_an_integer_reference_alias_keeps_the_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [1, 2];
+$r =& $a;
+foreach ($r as &$v) {}
+unset($v);
+echo count($a), "|", implode(",", $a), "\n";
+"#,
+    );
+    assert_clean(out, "2|1,2\n");
+}
+
+/// Wrong-layout retirement used to corrupt entries or exhaust the heap at table boundaries.
+#[test]
+fn by_ref_foreach_over_string_reference_aliases_is_balanced_at_capacity_boundaries() {
+    for size in [1, 2, 3, 4, 7, 8, 15, 16, 17] {
+        let values = (0..size).map(|i| format!("'v{i}'")).collect::<Vec<_>>().join(",");
+        let expected = (0..size).map(|i| format!("v{i}q")).collect::<Vec<_>>().join(",");
+        let source = format!(
+            r#"<?php
+$a = [{values}];
+$r =& $a;
+foreach ($r as &$v) {{ $v .= 'q'; }}
+unset($v);
+echo implode(',', $a), '|', implode(',', $r), "\n";
+"#
+        );
+        let out = compile_and_run_with_heap_debug(&source);
+        assert_clean(out, &format!("{expected}|{expected}\n"));
+    }
+}
+
+/// Retiring the alias's old indexed owner must preserve an independent by-value copy.
+#[test]
+fn by_ref_foreach_over_a_reference_alias_preserves_array_copy_ownership() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = ['a', 'b', 'c'];
+$copy = $a;
+$r =& $a;
+foreach ($r as &$v) { $v .= 'q'; }
+unset($v);
+echo implode(",", $a), "|", implode(",", $copy), "\n";
+"#,
+    );
+    assert_clean(out, "aq,bq,cq|a,b,c\n");
+}
+
 /// A plain by-reference loop binds and releases one cell per entry with no residue.
 #[test]
 fn test_by_ref_foreach_releases_every_reference_cell() {
@@ -80,6 +131,41 @@ echo implode(",", $a), "\n";
     assert_clean(out, "3,2,3\n");
 }
 
+/// An element appended after the tail is visited and the walk stays balanced.
+#[test]
+fn by_ref_foreach_append_after_the_tail_is_balanced() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [1];
+foreach ($a as &$v) {
+    echo "$v\n";
+    $a[1] = 2;
+}
+unset($v);
+echo implode(",", $a), "\n";
+"#,
+    );
+    assert_clean(out, "1\n2\n1,2\n");
+}
+
+/// Repeated growth appends resume from the tail key and release every retained anchor.
+#[test]
+fn by_ref_foreach_growth_appends_stay_balanced() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [1];
+foreach ($a as &$v) {
+    if (count($a) < 12) {
+        $a[] = $v + 1;
+    }
+}
+unset($v);
+echo count($a), "\n";
+"#,
+    );
+    assert_clean(out, "12\n");
+}
+
 /// An indexed literal may be destroyed at loop exit while its final alias remains usable.
 #[test]
 fn indexed_literal_final_alias_outlives_the_foreach_source() {
@@ -125,6 +211,45 @@ consume();
 "#,
     );
     assert_clean(out, "2\n");
+}
+
+/// A by-reference loop over a by-value call result must not free the caller's shared array.
+///
+/// The `mixed` cell the call returns holds one reference to the array; converting the unboxed
+/// payload without acquiring its own reference consumed that one, and releasing the cell then
+/// freed an array the caller still held (issue #1790). Heap debug turns the resulting double free
+/// into an invalid-free report rather than silent corruption.
+#[test]
+fn by_ref_foreach_over_by_value_call_result_keeps_the_caller_array_alive() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function id($x) { return $x; }
+$array = ['a', 'b', 'c'];
+foreach (id($array) as &$v) {
+    $v .= 'q';
+}
+unset($v);
+echo implode(',', $array), "\n";
+"#,
+    );
+    assert_clean(out, "a,b,c\n");
+}
+
+/// The associative form of the same conversion must stay balanced too.
+#[test]
+fn by_ref_foreach_over_by_value_assoc_call_result_keeps_the_caller_array_alive() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function id($x) { return $x; }
+$array = ['k' => 'v', 'j' => 'w'];
+foreach (id($array) as &$v) {
+    $v .= 'q';
+}
+unset($v);
+echo $array['k'], "|", $array['j'], "\n";
+"#,
+    );
+    assert_clean(out, "v|w\n");
 }
 
 /// Type-changing writes through map references persist as boxed values on later reads.
