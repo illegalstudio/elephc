@@ -17,20 +17,22 @@
 //!   `__rt_mixed_unbox` first.
 //! - PHP 8 rule order, which is observable: a `bool` on either side coerces BOTH
 //!   sides to bool; then `null` (against a string it becomes `""` and a *string*
-//!   comparison happens, so `null < "0"` but `null == ""`); then two strings use
-//!   numeric-string promotion; then a number against a string parses the string and,
-//!   when that fails, compares the number's *string form* byte-wise (`0 < "a"`).
+//!   comparison happens, so `null < "0"` but `null == ""`); then two strings go to
+//!   `__rt_str_smart_cmp`, PHP's `zendi_smart_strcmp`; then a number against a string
+//!   parses the string and, when that fails, compares the number's *string form*
+//!   byte-wise (`0 < "a"`).
 //! - Number-to-string conversion goes through `__rt_itoa` / `__rt_ftoa`, which append
 //!   to the shared `_concat_buf` scratch. The cursor is saved before and restored
 //!   after the comparison, so a reduction loop cannot exhaust the buffer.
 //! - The primary result remains the spaceship ordering value. A secondary flag reports
 //!   unordered IEEE comparisons so relational consumers can return `false` for every NaN
 //!   predicate without changing spaceship's PHP result of `1`.
-//! - Known deviations: comparisons that involve a numeric *string* are resolved as
-//!   `double`s, so two integer strings beyond 2^53 can compare equal where PHP
-//!   compares them exactly (the same simplification `__rt_mixed_loose_eq` already
-//!   makes); arrays, objects, resources and callables only rank above the scalar
-//!   tags and compare equal to each other.
+//! - A number against a numeric *string* is still resolved as `double`s, so two values
+//!   beyond 2^53 can compare equal there where PHP compares them exactly. Two STRINGS
+//!   no longer share that deviation: `__rt_str_smart_cmp` classifies each side and
+//!   compares two integer strings as `zend_long`.
+//! - Known deviations: arrays, objects, resources and callables only rank above the
+//!   scalar tags and compare equal to each other.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -238,27 +240,20 @@ fn emit_php_compare_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_pcmp_pos");                                     // PHP spaceship orders unordered NaN as greater
 
     // -- string versus string --
+    // Delegated whole to `__rt_str_smart_cmp`, PHP's `zendi_smart_strcmp`. Parsing both
+    // operands into doubles here is not enough: two integer strings compare as
+    // `zend_long`, which is the only way `"9007199254740993" > "9007199254740992"` can be
+    // true, and the same helper owns the overflow and infinity fallbacks to bytes.
     emitter.label("__rt_pcmp_strings");
-    emitter.instruction("bl __rt_str_to_number");                               // parse the left string under PHP's numeric-string grammar
-    emitter.instruction("cbz x0, __rt_pcmp_str_bytes");                         // a non-numeric operand forces the byte comparison
-    emitter.instruction("str d0, [sp, #48]");                                   // save the parsed left value across the second parse
-    emitter.instruction("ldr x1, [sp, #32]");                                   // reload the right string pointer
-    emitter.instruction("ldr x2, [sp, #40]");                                   // reload the right string length
-    emitter.instruction("bl __rt_str_to_number");                               // parse the right string under PHP's numeric-string grammar
-    emitter.instruction("cbz x0, __rt_pcmp_str_bytes");                         // a non-numeric operand forces the byte comparison
-    emitter.instruction("fmov d1, d0");                                         // move the parsed right value into the comparison register
-    emitter.instruction("ldr d0, [sp, #48]");                                   // reload the parsed left value
-    emitter.instruction("b __rt_pcmp_fcmp");                                    // two numeric strings compare numerically
-    emitter.label("__rt_pcmp_str_bytes");
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the left string pointer
     emitter.instruction("ldr x2, [sp, #16]");                                   // reload the left string length
     emitter.instruction("ldr x3, [sp, #32]");                                   // reload the right string pointer
     emitter.instruction("ldr x4, [sp, #40]");                                   // reload the right string length
-    emitter.instruction("bl __rt_strcmp");                                      // compare both strings byte-wise, then by length
-    emitter.instruction("cmp x0, #0");                                          // normalize the byte difference into a three-way result
+    emitter.instruction("bl __rt_str_smart_cmp");                               // apply PHP's full string-versus-string ordering
+    emitter.instruction("cmp x0, #0");                                          // normalize the three-way result onto the shared exits
     emitter.instruction("b.lt __rt_pcmp_neg");                                  // the left string sorts first
     emitter.instruction("b.gt __rt_pcmp_pos");                                  // the right string sorts first
-    emitter.instruction("b __rt_pcmp_zero");                                    // both strings are byte-identical
+    emitter.instruction("b __rt_pcmp_zero");                                    // both strings compare equal
 
     // -- number versus string, normalized so the number is always the left operand --
     emitter.label("__rt_pcmp_num_vs_str");
@@ -560,31 +555,20 @@ fn emit_php_compare_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_pcmp_pos");                                   // PHP spaceship orders unordered NaN as greater
 
     // -- string versus string --
+    // Delegated whole to `__rt_str_smart_cmp`, PHP's `zendi_smart_strcmp`. Parsing both
+    // operands into doubles here is not enough: two integer strings compare as
+    // `zend_long`, which is the only way `"9007199254740993" > "9007199254740992"` can be
+    // true, and the same helper owns the overflow and infinity fallbacks to bytes.
     emitter.label("__rt_pcmp_strings");
-    emitter.instruction("mov rax, rsi");                                        // pass the left string pointer to the numeric parser
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // pass the left string length to the numeric parser
-    emitter.instruction("call __rt_str_to_number");                             // parse the left string under PHP's numeric-string grammar
-    emitter.instruction("test rax, rax");                                       // was the left string fully numeric?
-    emitter.instruction("jz __rt_pcmp_str_bytes");                              // a non-numeric operand forces the byte comparison
-    emitter.instruction("movsd QWORD PTR [rbp - 56], xmm0");                    // save the parsed left value across the second parse
-    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // pass the right string pointer to the numeric parser
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // pass the right string length to the numeric parser
-    emitter.instruction("call __rt_str_to_number");                             // parse the right string under PHP's numeric-string grammar
-    emitter.instruction("test rax, rax");                                       // was the right string fully numeric?
-    emitter.instruction("jz __rt_pcmp_str_bytes");                              // a non-numeric operand forces the byte comparison
-    emitter.instruction("movapd xmm1, xmm0");                                   // move the parsed right value into the comparison register
-    emitter.instruction("movsd xmm0, QWORD PTR [rbp - 56]");                    // reload the parsed left value
-    emitter.instruction("jmp __rt_pcmp_fcmp");                                  // two numeric strings compare numerically
-    emitter.label("__rt_pcmp_str_bytes");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the left string pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // reload the left string length
     emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // reload the right string pointer
     emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // reload the right string length
-    emitter.instruction("call __rt_strcmp");                                    // compare both strings byte-wise, then by length
-    emitter.instruction("cmp rax, 0");                                          // normalize the byte difference into a three-way result
+    emitter.instruction("call __rt_str_smart_cmp");                             // apply PHP's full string-versus-string ordering
+    emitter.instruction("cmp rax, 0");                                          // normalize the three-way result onto the shared exits
     emitter.instruction("jl __rt_pcmp_neg");                                    // the left string sorts first
     emitter.instruction("jg __rt_pcmp_pos");                                    // the right string sorts first
-    emitter.instruction("jmp __rt_pcmp_zero");                                  // both strings are byte-identical
+    emitter.instruction("jmp __rt_pcmp_zero");                                  // both strings compare equal
 
     // -- number versus string, normalized so the number is always the left operand --
     emitter.label("__rt_pcmp_num_vs_str");

@@ -38,6 +38,7 @@ mod exhaustive;
 mod ownership;
 mod preg_match_all_review;
 mod object_mixed_return_owners;
+mod numeric_string_comparisons;
 mod boxed_array_write_owners;
 mod boxed_array_reduce;
 mod boxed_array_aggregates;

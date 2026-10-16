@@ -37,11 +37,18 @@ pub(super) fn lower_compare(
         lhs = lhs_key;
         rhs = rhs_key;
     }
+    // Two strings ORDER through the runtime rule, not through `StrCmp`. `__rt_strcmp` is
+    // byte-lexicographic — which is right for `strcmp()` and wrong for `<`, because PHP
+    // compares two NUMERIC strings numerically: `"10" > "9"` is true, where byte order says
+    // otherwise. `__rt_php_compare`'s two-string leg already implements exactly that rule,
+    // and `emit_runtime_ordering_compare` boxes plain operands for it (issue #507).
+    let string_ordering = lhs.ir_type == IrType::Str && rhs.ir_type == IrType::Str;
     let uses_runtime_relational_compare = matches!(
         op,
         BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq
     )
-        && (needs_runtime_ordering_dispatch(ctx, lhs.value)
+        && (string_ordering
+            || needs_runtime_ordering_dispatch(ctx, lhs.value)
             || needs_runtime_ordering_dispatch(ctx, rhs.value));
     let opcode = match op {
         BinOp::StrictEq => Op::StrictEq,
