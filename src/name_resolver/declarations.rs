@@ -8,6 +8,7 @@
 //! Key details:
 //! - Declaration names become canonical before type checking and codegen symbol collection.
 //! - Generic parameter names remain bare in their declaration and method scopes.
+//! - Generic bounds and defaults still use ordinary namespace/import resolution.
 
 mod type_params;
 
@@ -130,9 +131,8 @@ pub(super) fn resolve_decl_stmt(
                 StmtKind::FunctionDecl {
                     by_ref_return: *by_ref_return,
                     name: canonical_name_for_decl(namespace, name),
-                    // Type parameter names are scoped to their own declaration and never
-                    // namespace-qualified, so they are carried through untouched.
-                    type_params: type_params.clone(),
+                    // Preserve parameter names while resolving their bounds and default types.
+                    type_params: resolve_type_params(type_params, namespace, imports, symbols),
                     params: resolve_params(params, namespace, imports, symbols),
                     param_attributes: param_attributes
                         .iter()

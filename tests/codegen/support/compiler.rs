@@ -339,9 +339,12 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let resolved = elephc::hash_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::curl_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::xml_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::dom_html_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
         elephc::autoload::run(resolved, dir, &autoload_registry).expect("autoload failed");
+    let resolved = elephc::dom_html_prelude::inject_after_autoload(resolved, &mut prelude_inventory)
+        .expect("autoload DOM prelude injection failed");
     // Mirrors `pipeline::compile`: the object-cast prelude is injected AFTER autoloading, so a
     // `(object)` cast that only appears in an autoloaded class file is still detected.
     let resolved = elephc::object_cast_prelude::inject_if_used(resolved, &mut prelude_inventory)

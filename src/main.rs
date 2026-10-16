@@ -17,6 +17,7 @@ mod codegen_support;
 mod compiler_stack;
 mod conditional;
 mod curl_prelude;
+mod dom_html_prelude;
 mod errors;
 mod eval_aot;
 mod exports;

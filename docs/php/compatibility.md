@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3180 constants).
 
-Overall coverage: functions **982 / 2169** (45%), classes **142 / 329** (43%), constants **1114 / 3180** (35%).
+Overall coverage: functions **982 / 2169** (45%), classes **150 / 329** (46%), constants **1119 / 3180** (35%).
 
 ## Coverage by PHP module
 
@@ -26,7 +26,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | [`curl`](./curl.md#functions) | 34 / 35 · 97% | 6 / 6 · 100% | 689 / 689 · 100% |
 | [`date`](./datetime.md#functions) | 48 / 48 · 100% | 15 / 15 · 100% | 3 / 17 · 18% |
 | `dba` | 0 / 15 · 0% | 0 / 1 · 0% | - |
-| `dom` | 0 / 2 · 0% | 0 / 50 · 0% | 0 / 61 · 0% |
+| [`dom`](./dom-html.md#functions) | 0 / 2 · 0% | 8 / 50 · 16% | 0 / 61 · 0% |
 | `enchant` | 0 / 25 · 0% | 0 / 2 · 0% | 0 / 3 · 0% |
 | [`exif`](./image.md#functions) | 4 / 4 · 100% | - | 1 / 1 · 100% |
 | `ffi` | - | 0 / 5 · 0% | - |
@@ -41,7 +41,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `intl` | 0 / 187 · 0% | 0 / 22 · 0% | 0 / 170 · 0% |
 | `json` | 5 / 5 · 100% | 2 / 2 · 100% | 27 / 29 · 93% |
 | `ldap` | 0 / 55 · 0% | 0 / 3 · 0% | 0 / 92 · 0% |
-| `libxml` | 0 / 8 · 0% | 0 / 1 · 0% | 0 / 28 · 0% |
+| `libxml` | 0 / 8 · 0% | 0 / 1 · 0% | 5 / 28 · 18% |
 | `mbstring` | 65 / 65 · 100% | - | 9 / 9 · 100% |
 | [`mysqli`](./mysqli.md#functions) | 84 / 106 · 79% | 4 / 6 · 67% | 52 / 110 · 47% |
 | `odbc` | 0 / 48 · 0% | 0 / 2 · 0% | 0 / 57 · 0% |

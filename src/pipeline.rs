@@ -445,6 +445,13 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
         &mut prelude_inventory,
     );
     timings.record_since("xml-prelude", phase_started);
+    // Inject the Termwind-facing DOM HTML subset only when the program names a
+    // DOM class, so other binaries never carry the HTML walker. This is an
+    // interim prelude (choice B vs draft PR #654's native libxml stack).
+    crate::progress::phase("dom-html-prelude");
+    let phase_started = Instant::now();
+    let ast = crate::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    timings.record_since("dom-html-prelude", phase_started);
 
     // The resolved `opcache.preload` path, so the web prelude can find that file's guard by
     // label and lift it out of the per-request handler. Recomputed rather than threaded down
@@ -522,6 +529,19 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
             }
         };
     timings.record_since("autoload-run", phase_started);
+
+    // Discover DOM use inside newly loaded classes, resolving only injected declarations.
+    crate::progress::phase("dom-html-autoload-prelude");
+    let phase_started = Instant::now();
+    let ast = match crate::dom_html_prelude::inject_after_autoload(ast, &mut prelude_inventory) {
+        Ok(injected) => injected,
+        Err(e) => {
+            crate::progress::clear();
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
+    timings.record_since("dom-html-autoload-prelude", phase_started);
 
     // Inject the object-cast prelude (two pure elephc-PHP functions) only when the program
     // spells a `(object)` cast, so other binaries carry nothing.

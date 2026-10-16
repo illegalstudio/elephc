@@ -30,6 +30,7 @@ mod debug_info;
 mod descriptor_ownership;
 mod descriptor_unpack_keys;
 mod destructor_catch_preservation;
+mod dom_html_review;
 mod dynamic_spreads;
 mod effects;
 mod eval_ownership;
@@ -151,6 +152,7 @@ fn try_lower_source_at_for_target(
     let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::version_prelude::inject_if_used(
         ast,
         crate::php_version::PhpVersion::default(),
@@ -164,6 +166,8 @@ fn try_lower_source_at_for_target(
         &defines,
     )
     .expect("autoload failed");
+    let ast = crate::dom_html_prelude::inject_after_autoload(ast, &mut prelude_inventory)
+        .expect("autoload DOM prelude injection failed");
     // Mirrors `pipeline::compile`, which desugars the `func_get_args()` family between
     // `autoload::run` and constant folding. Without it an example using those functions
     // reaches the checker as an undefined call, so the corpus would fail on valid PHP.

@@ -12,6 +12,7 @@ MODULE_PAGES: dict[str, str] = {
     "calendar": "calendar.md",
     "curl": "curl.md",
     "date": "datetime.md",
+    "dom": "dom-html.md",
     "exif": "image.md",
     "gd": "image.md",
     "gmagick": "image.md",

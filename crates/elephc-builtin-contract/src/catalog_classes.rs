@@ -42,6 +42,7 @@ macro_rules! class {
 
 pub(crate) static CLASSES: &[ClassContract] = &[
     class!("__ElephcCallableSessionHandler", "__elephccallablesessionhandler", Class, Elephc, Prelude, internal: true),
+    class!("__ElephcDOMNodeListIterator", "__elephcdomnodelistiterator", Class, Elephc, Prelude, internal: true),
     class!("__ElephcMysqliResultIterator", "__elephcmysqliresultiterator", Class, Elephc, Prelude, internal: true),
     class!("__ElephcPDOPgsqlLobStream", "__elephcpdopgsqllobstream", Class, Elephc, Prelude, internal: true),
     class!("__ElephcPDOSqliteBlobStream", "__elephcpdosqliteblobstream", Class, Elephc, Prelude, internal: true),
@@ -111,6 +112,14 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("DirectoryIterator", "directoryiterator", Class, Spl, CheckerInjected),
     class!("DivisionByZeroError", "divisionbyzeroerror", Class, Core, CheckerInjected),
     class!("DomainException", "domainexception", Class, Spl, CheckerInjected),
+    class!("DOMCharacterData", "domcharacterdata", Class, Dom, Prelude),
+    class!("DOMComment", "domcomment", Class, Dom, Prelude),
+    class!("DOMDocument", "domdocument", Class, Dom, Prelude),
+    class!("DOMElement", "domelement", Class, Dom, Prelude),
+    class!("DOMNode", "domnode", Class, Dom, Prelude),
+    class!("DOMNodeList", "domnodelist", Class, Dom, Prelude),
+    class!("DOMProcessingInstruction", "domprocessinginstruction", Class, Dom, Prelude),
+    class!("DOMText", "domtext", Class, Dom, Prelude),
     class!("EmptyIterator", "emptyiterator", Class, Spl, CheckerInjected),
     class!("Error", "error", Class, Core, CheckerInjected),
     class!("Exception", "exception", Class, Core, CheckerInjected),
