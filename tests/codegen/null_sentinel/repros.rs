@@ -72,3 +72,14 @@ fn test_int_at_null_sentinel_isset_is_true() {
     );
     assert_eq!(out, "set");
 }
+
+/// Null-only declarations return real PHP null without inheriting void's source restrictions.
+#[test]
+fn test_standalone_null_parameters_and_returns() {
+    let out = compile_and_run(r#"<?php
+function identity(null $value): null { return $value; }
+$closure = function (null $value): null { return $value; };
+var_dump(identity(null), $closure(null));
+"#);
+    assert_eq!(out, "NULL\nNULL\n");
+}

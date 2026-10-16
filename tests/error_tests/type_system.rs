@@ -3490,3 +3490,17 @@ fn test_declared_union_local_accepts_the_other_member_after_a_guard() {
          echo \"ok\";",
     );
 }
+
+/// Null-only returns require an explicit null value; genuine void still rejects every value.
+#[test]
+fn test_standalone_null_return_requirements() {
+    for source in [
+        "<?php function invalid(): null {}",
+        "<?php function invalid(): null { return; }",
+        "<?php function invalid(): null { return 1; }",
+        "<?php function invalid(): void { return null; }",
+        "<?php function invalid(void $value): void {}",
+    ] {
+        assert!(check_source_full(source).is_err(), "unexpectedly accepted: {source}");
+    }
+}
