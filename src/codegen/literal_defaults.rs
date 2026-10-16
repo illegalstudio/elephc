@@ -167,6 +167,11 @@ pub(crate) fn literal_default_value(
     if let Some(folded) = fold_named_class_constant(expr) {
         return literal_default_value(context, php_type, &folded, op_name);
     }
+    // A spread-free mixed literal (`[-5 => "a", "b"]`) is the hash literal the active profile
+    // makes it; see `crate::codegen::mixed_array_literals`.
+    if let Some(folded) = crate::codegen::mixed_array_literals::fold_spreadless_mixed_array_literal(expr) {
+        return literal_default_value(context, php_type, &folded, op_name);
+    }
     match (php_type, expr) {
         (PhpType::Int, ExprKind::IntLiteral(value)) => Ok(LiteralDefaultValue::Int(*value)),
         (PhpType::Int, ExprKind::Negate(inner)) => match &inner.kind {
@@ -562,6 +567,9 @@ fn literal_array_element(
     // will expect. A scalar element type cannot hold a container and is refused as before.
     // Delegating to `literal_default_value` shares the top-level arms, including PHP's implicit
     // `0,1,2,…` keys for a positional literal stored into hash storage (issue #1052).
+    if let Some(folded) = crate::codegen::mixed_array_literals::fold_spreadless_mixed_array_literal(expr) {
+        return literal_array_element(context, elem_type, &folded, op_name);
+    }
     if matches!(expr, ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)) {
         let nested_type = match elem_type.codegen_repr() {
             PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable => match expr {

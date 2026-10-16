@@ -312,6 +312,15 @@ enum ReflectionConstantValue {
         enum_name: String,
         case_name: String,
     },
+    Array(Vec<ReflectionConstantValue>),
+    AssocArray(Vec<ReflectionConstantAssocEntry>),
+}
+
+/// Metadata for one key/value pair in a Reflection constant associative array value.
+#[derive(Clone)]
+struct ReflectionConstantAssocEntry {
+    key: ReflectionDefaultArrayKey,
+    value: ReflectionConstantValue,
 }
 
 /// Compile-time parameter selector from `ReflectionParameter::__construct()`.
