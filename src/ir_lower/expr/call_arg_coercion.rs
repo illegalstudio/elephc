@@ -367,6 +367,12 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
     {
         return unbox_callable_param_storage(ctx, value, Some(arg.span));
     }
+    if param_ty == PhpType::Iterable
+        && !sig.ref_params.get(index).copied().unwrap_or(false)
+        && matches!(source_ty, PhpType::Mixed | PhpType::Union(_))
+    {
+        return unbox_iterable_param_storage(ctx, value, Some(arg.span));
+    }
     if param_ty == PhpType::Str && matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
         return coerce_to_string(ctx, value, arg);
     }
@@ -439,6 +445,21 @@ pub(super) fn unbox_callable_param_storage(
         PhpType::Callable,
         Op::mixed_unbox_effects(&PhpType::Callable),
         span,
+    );
+    release_coerced_source_if_owned(ctx, value, span);
+    result
+}
+
+/// Extracts a checked iterable's raw array, hash or Traversable pointer from a Mixed cell.
+/// The layout-neutral unbox acquires its payload before retiring the cell's source lease.
+fn unbox_iterable_param_storage(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Option<crate::span::Span>,
+) -> LoweredValue {
+    let result = ctx.emit_owned_value(
+        Op::MixedUnbox, vec![value.value], None, PhpType::Iterable,
+        Op::mixed_unbox_effects(&PhpType::Iterable), span,
     );
     release_coerced_source_if_owned(ctx, value, span);
     result
@@ -527,6 +548,13 @@ pub(super) fn coerce_operands_to_params(
             let coerced = unbox_callable_param_storage(ctx, lowered, None);
             operands[index] =
                 root_evaluated_call_argument(ctx, coerced, Span::dummy()).value;
+        } else if param_ty == PhpType::Iterable
+            && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_))
+        {
+            let lowered = LoweredValue { value, ir_type: ctx.builder.value_type(value) };
+            let coerced = unbox_iterable_param_storage(ctx, lowered, None);
+            operands[index] =
+                root_evaluated_call_argument(ctx, coerced, Span::dummy()).value;
         } else if matches!(param_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
             && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_))
         {
@@ -573,6 +601,8 @@ fn operand_needs_param_coercion(
         || (param_ty == PhpType::Str
             && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_)))
         || (param_ty == PhpType::Callable
+            && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_)))
+        || (param_ty == PhpType::Iterable
             && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_)))
         || (matches!(param_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
             && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_)))

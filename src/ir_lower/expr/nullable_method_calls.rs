@@ -108,6 +108,17 @@ pub(super) fn lower_method_call_with_receiver(
     op: Op,
     expr: &Expr,
 ) -> LoweredValue {
+    if let Some(call) = enum_interface_calls::lower_enum_interface_call(ctx, object, method, args, op, expr) {
+        return call;
+    }
+    lower_method_call_with_receiver_direct(ctx, object, method, args, op, expr)
+}
+
+/// Lowers an already selected concrete or fallback receiver without redispatching its interface.
+pub(super) fn lower_method_call_with_receiver_direct(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, method: &str,
+    args: &[Expr], op: Op, expr: &Expr,
+) -> LoweredValue {
     if op == Op::MethodCall && is_reflection_class_new_instance_call(ctx, object.value, method) {
         return lower_reflection_class_new_instance(ctx, None, object, args, expr);
     }
@@ -144,7 +155,11 @@ pub(super) fn lower_method_call_with_receiver(
         ctx, sig.as_ref(), &return_alias, &result_type, expr.span,
     );
     begin_call_argument_evaluation(ctx);
-    let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
+    let enum_args = singular_object_class(&ctx.builder.value_php_type(object.value))
+        .and_then(|(class, _)| ctx.enums.contains_key(class).then(|| class.to_string()))
+        .and_then(|class| sig.as_ref().and_then(|signature|
+            enum_method_args::lower_arguments(ctx, signature, args, &class, dispatch_method, expr.span)));
+    let arg_values = enum_args.unwrap_or_else(|| lower_args_with_signature(ctx, sig.as_ref(), args));
     let mut arg_values = arg_values;
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
     let roots = root_user_call_operands(
@@ -155,7 +170,13 @@ pub(super) fn lower_method_call_with_receiver(
         &result_type,
         expr.span,
     );
-    operands.extend(arg_values.iter().copied());
+    // Selected enum implementations may have fewer parameters than another implementor.
+    // PHP ignores surplus positionals, but their values still belong to ordinary cleanup.
+    let operand_limit = sig.as_ref().filter(|sig| sig.variadic.is_none())
+        .filter(|_| singular_object_class(&ctx.builder.value_php_type(object.value))
+            .is_some_and(|(class, _)| ctx.enums.contains_key(class)))
+        .map_or(arg_values.len(), |sig| sig.params.len());
+    operands.extend(arg_values.iter().take(operand_limit).copied());
     let data = ctx.intern_string(dispatch_method);
     let call = ctx.emit_value(
         op,

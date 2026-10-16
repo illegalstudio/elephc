@@ -705,12 +705,7 @@ impl Checker {
             });
         // The variadic collector is represented as the signature's final param
         // with no default expression, but it never contributes to minimum arity.
-        let required = sig
-            .defaults
-            .iter()
-            .take(regular_param_count)
-            .filter(|default| default.is_none())
-            .count();
+        let required = call_args::required_param_count(sig);
 
         if sig.ref_params.iter().any(|is_ref| *is_ref) && has_spread && !allow_by_ref_spread {
             return Err(CompileError::new(

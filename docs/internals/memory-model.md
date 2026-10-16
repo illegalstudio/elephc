@@ -572,7 +572,10 @@ detach an arbitrary named record. On the normal path the slot is CLEARED rather
 than released, which transfers the single reference back to the expression's
 consumer; on the unwind path the record releases it exactly once, before the catch
 body runs. The slot is declared with the exact result type the call is emitted
-with. Two cases are deliberately excluded: a by-reference-returning callee, whose
+with. Only heap-bearing results publish heap-owner records. A rejected call can leave
+a scalar result slot uninitialized, and heap cleanup must never interpret its bits
+as a pointer. For heap-bearing results, two further cases are deliberately excluded:
+a by-reference-returning callee, whose
 result is the transferred cell the reference staging already owns, and a callee
 whose summary says its result may be one of its arguments, because that argument's
 release is guarded by a runtime alias comparison and rooting both would release one
@@ -1109,7 +1112,9 @@ elephc uses a **free-list allocator with reference counting plus a targeted cycl
 
 ### Unboxing a Mixed hands back a reference
 
-`Op::MixedUnbox` is the coercion behind a typed target initialized from a Mixed source — several lowering surfaces emit it for an `object` or `callable` target: the typed-assign coercer `coerce_typed_assign_value` (reached from a typed local and a typed property write), call-argument and closure coercion, static method-call receivers, typed foreach slot coercion, and the merge-temp coercion that hands a `??`-kept `?C` cell over to an object or callable temp (#1628). Each unbox's lowering ends in `emit_unbox_mixed_to_owned_refcounted_result`, so the payload it produces carries a reference of its OWN rather than borrowing the box's.
+`Op::MixedUnbox` extracts concrete storage from a checked Mixed source. Typed local/property assignment, call-argument and closure coercion, static method-call receivers, typed foreach slots, and merge-temp coercion emit it for their supported payloads. The merge-temp path also hands a `??`-kept `?C` cell to an object or callable temporary (#1628). Its lowering ends in `emit_unbox_mixed_to_owned_refcounted_result`, so a refcounted payload carries its own reference rather than borrowing the box's.
+
+Call parameters declared `iterable` receive a raw array, hash or Traversable pointer, not the surrounding Mixed cell. After runtime argument validation, their layout-neutral unbox acquires the payload before the source lease is released. Enum interface calls also keep static-unpack arrays and projected values rooted while checking types before a later arity shortage. A typed variadic collector promoted to Mixed storage must pass through an EIR unpack/rebox adapter; forwarding its raw words would confuse typed element storage with boxed entries and lose named keys or actual counts.
 
 That makes it an owning temporary, and `LoweringContext::value_is_owning_temporary` says so. The distinction is not cosmetic: while the unboxed value was read as a borrow, the store that consumed it acquired a second reference, and the one slot release in the function epilogue never balanced it. The unboxed object stayed alive for the rest of the process, and so did everything it owned — five heap blocks per call for a `ReflectionAttribute`, whose name string and argument array go with it.
 

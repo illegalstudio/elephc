@@ -139,6 +139,7 @@ fn lower_on_compiler_stack(
     );
     lower_literal_eval_aot_functions(&mut module, check_result, &constants, &fiber_return_sigs);
     lower_dynamic_constructor_thunks(&mut module, check_result, &constants, &fiber_return_sigs);
+    function::lower_optional_interface_adapters(&mut module);
     include_lowered_runtime_features(&mut module);
     super::reflection::lower_referenced_builtin_methods(
         &mut module,

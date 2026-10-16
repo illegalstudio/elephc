@@ -211,11 +211,11 @@ pub(crate) fn visibility_rank(visibility: &Visibility) -> u8 {
 /// of them as soon as the program contains an `eval()` or a backtrace call. Those slots are not
 /// declared parameters, so comparing them against a compiler-injected parent signature, which
 /// can never carry one, would report a difference the source never wrote.
-struct SourceVisibleShape {
-    param_count: usize,
-    param_names: Vec<String>,
-    param_types: Vec<PhpType>,
-    declared_params: Vec<bool>,
+pub(crate) struct SourceVisibleShape {
+    pub(crate) param_count: usize,
+    pub(crate) param_names: Vec<String>,
+    pub(crate) param_types: Vec<PhpType>,
+    pub(crate) declared_params: Vec<bool>,
     ref_params: Vec<bool>,
     has_defaults: Vec<bool>,
     variadic: Option<String>,
@@ -223,7 +223,7 @@ struct SourceVisibleShape {
 
 impl SourceVisibleShape {
     /// Projects `sig` onto the parameters its source declared.
-    fn of(sig: &FunctionSig) -> Self {
+    pub(crate) fn of(sig: &FunctionSig) -> Self {
         let generated: Vec<bool> = sig
             .params
             .iter()
@@ -293,6 +293,39 @@ impl SourceVisibleShape {
             })
             .count()
     }
+
+    /// Accepts calls admitted by `required`, permitting extra optional parameters and defaults.
+    fn widens_parameter_shape(&self, required: &Self) -> bool {
+        (self.param_count >= required.param_count || self.variadic.is_some())
+            && self.required_param_count() <= required.required_param_count()
+            && (0..self.param_count.max(required.param_count)).all(|index| {
+                self.parameter_at(index).zip(required.parameter_at(index))
+                    .is_none_or(|((_, actual_ref), (_, required_ref))| actual_ref == required_ref)
+            })
+            && self.has_defaults.iter().enumerate().skip(required.regular_param_count())
+                .all(|(index, default)| *default
+                    || (self.variadic.is_some() && index + 1 == self.param_count))
+            && (required.variadic.is_none() || self.variadic.is_some())
+    }
+
+    /// Counts scalar parameters before a source variadic's repeatable element contract.
+    pub(crate) fn regular_param_count(&self) -> usize {
+        self.param_count.saturating_sub(usize::from(self.variadic.is_some()))
+    }
+
+    /// Resolves one source argument position, extending variadics by their element type.
+    pub(crate) fn parameter_at(&self, position: usize) -> Option<(&PhpType, bool)> {
+        let regular = self.regular_param_count();
+        let index = if position < regular { position }
+            else if self.variadic.is_some() { regular } else { return None; };
+        let ty = if self.declared_params.get(index).copied().unwrap_or(false) {
+            self.param_types.get(index)?
+        } else { &PhpType::Mixed };
+        let ty = if index == regular && self.variadic.is_some() {
+            match ty { PhpType::Array(element) => element.as_ref(), _ => ty }
+        } else { ty };
+        Some((ty, self.ref_params.get(index).copied().unwrap_or(false)))
+    }
 }
 
 /// Validates that `child_sig` is compatible with `parent_sig` for override purposes.
@@ -303,6 +336,7 @@ impl SourceVisibleShape {
 /// injected contracts are synthesized after the `func_args` pass and can never carry its hidden
 /// collector or actual-count parameter, so comparing those slots against such a contract would
 /// report an ABI difference the source never declared.
+/// `allow_optional_widening` enables PHP-visible call-shape widening for final enum interfaces.
 pub(crate) fn validate_signature_compatibility(
     span: crate::span::Span,
     owner_name: &str,
@@ -312,13 +346,14 @@ pub(crate) fn validate_signature_compatibility(
     kind: &str,
     context: &str,
     compare_generated_abi: bool,
+    allow_optional_widening: bool,
 ) -> Result<(), CompileError> {
     // The hidden variadic that collects surplus positional arguments for
     // `func_num_args()`/`func_get_args()`/`func_get_arg()` is a real ABI parameter, so an
     // inherited signature that does not carry it cannot dispatch to a body that does.
     // Report that directly instead of the generic parameter-count mismatch, which names a
     // parameter the source never wrote.
-    if compare_generated_abi
+    if compare_generated_abi && !allow_optional_widening
         && (crate::func_args::sig_collects_surplus_args(child_sig)
             != crate::func_args::sig_collects_surplus_args(parent_sig)
             || crate::func_args::sig_has_hidden_argc_param(child_sig)
@@ -335,6 +370,14 @@ pub(crate) fn validate_signature_compatibility(
 
     let child = SourceVisibleShape::of(child_sig);
     let parent = SourceVisibleShape::of(parent_sig);
+
+    if allow_optional_widening {
+        return if child.widens_parameter_shape(&parent) { Ok(()) } else {
+            Err(CompileError::new(span, &format!(
+                "Incompatible parameter shape when {context} {kind}: {owner_name}::{method_name}",
+            )))
+        };
+    }
 
     if child.param_count != parent.param_count {
         return Err(CompileError::new(
@@ -419,6 +462,32 @@ pub(crate) fn declared_return_type_compatible(
     matches!(actual, PhpType::Never) || checker.type_accepts(expected, actual)
 }
 
+/// Checks source-call compatibility for an abstract trait contract without requiring equal frames.
+/// Extra optional parameters and optional replacements of required parameters widen the contract.
+pub(crate) fn validate_abstract_trait_signature(
+    checker: &Checker, span: crate::span::Span, owner: &str, method: &str,
+    actual: &FunctionSig, required: &FunctionSig,
+) -> Result<(), CompileError> {
+    let actual = SourceVisibleShape::of(actual);
+    let required = SourceVisibleShape::of(required);
+    if !actual.widens_parameter_shape(&required) {
+        return Err(CompileError::new(span, &format!(
+            "Incompatible parameter shape when implementing trait method: {owner}::{method}",
+        )));
+    }
+    for index in 0..actual.param_count.max(required.param_count) {
+        let Some(((actual_ty, _), (required_ty, _))) =
+            actual.parameter_at(index).zip(required.parameter_at(index)) else { continue; };
+        if !super::class_constants::strict_type_accepts(checker, actual_ty, required_ty, false) {
+            return Err(CompileError::new(span, &format!(
+                "Cannot narrow parameter ${} when implementing trait method: {owner}::{method}",
+                actual.param_names[index.min(actual.param_count - 1)],
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Returns true for PDO's internal SQLSTATE-aware widening of `Exception::getCode()`.
 pub(crate) fn is_pdo_exception_get_code_contract(
     class_name: &str,
@@ -453,6 +522,11 @@ pub(crate) fn late_static_return_compatible(
     };
     if matches!(actual_resolved, PhpType::Never) {
         return Ok(Some(true));
+    }
+    if checker.enums.contains_key(receiver_type) {
+        // Enums cannot be subclassed, so their lexical self type is also their late-static type.
+        let expected = checker.resolve_late_static_return_type_hint(expected, receiver_type, span)?;
+        return Ok(Some(declared_return_type_compatible(checker, &expected, actual_resolved)));
     }
     let Some(actual) = actual.filter(|return_type| return_type.contains_late_static()) else {
         return Ok(Some(false));
@@ -511,6 +585,7 @@ pub(crate) fn validate_override_signature(
         kind,
         "overriding",
         parent_declaration_is_source && method.span.line != 0,
+        false,
     )?;
     if parent_sig.declared_return && !child_sig.declared_return {
         return Err(CompileError::new(

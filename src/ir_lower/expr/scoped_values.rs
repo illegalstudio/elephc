@@ -11,15 +11,14 @@ use super::*;
 
 /// Lowers first-class callable creation.
 pub(super) fn lower_first_class_callable(ctx: &mut LoweringContext<'_, '_>, target: &CallableTarget, expr: &Expr) -> LoweredValue {
-    let operands = if let CallableTarget::Method { object, .. } = target {
-        vec![lower_expr(ctx, object).value]
-    } else {
-        Vec::new()
-    };
+    if let CallableTarget::Method { object, method } = target {
+        let object = lower_expr(ctx, object);
+        return lower_instance_callable_from_receiver(ctx, object, method, expr.span);
+    }
     let data = ctx.intern_string(&callable_target_name(target));
     ctx.emit_value(
         Op::FirstClassCallableNew,
-        operands,
+        Vec::new(),
         Some(Immediate::ProfiledData {
             data,
             strict_php: crate::strict_php::is_enabled(),
@@ -27,6 +26,18 @@ pub(super) fn lower_first_class_callable(ctx: &mut LoweringContext<'_, '_>, targ
         PhpType::Callable,
         Op::FirstClassCallableNew.default_effects(),
         Some(expr.span),
+    )
+}
+
+/// Captures an already evaluated method receiver without replaying its source expression.
+pub(super) fn lower_instance_callable_from_receiver(
+    ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, method: &str, span: crate::span::Span,
+) -> LoweredValue {
+    let data = ctx.intern_string(&format!("object::{method}"));
+    ctx.emit_value(
+        Op::FirstClassCallableNew, vec![receiver.value],
+        Some(Immediate::ProfiledData { data, strict_php: crate::strict_php::is_enabled() }),
+        PhpType::Callable, Op::FirstClassCallableNew.default_effects(), Some(span),
     )
 }
 

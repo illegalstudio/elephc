@@ -74,7 +74,7 @@ tokio-postgres-rustls = { version = "0.14", default-features = false, features =
 # The pg connector's rustls ClientConfig is built explicitly with the ring
 # provider (ClientConfig::builder_with_provider), so the pg path never consults a
 # process-global default provider. `std`/`tls12` mirror elephc-tls.
-rustls = { version = "0.23", default-features = false, features = [
+rustls = { version = "0.23.46", default-features = false, features = [
     "ring",
     "std",
     "tls12",

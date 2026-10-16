@@ -16,6 +16,7 @@ use crate::types::traits::FlattenedClass;
 use crate::types::ClassInfo;
 
 mod constants;
+mod enum_interfaces;
 mod interfaces;
 mod methods;
 mod properties;
@@ -26,6 +27,10 @@ use super::validation::build_constructor_param_map;
 use state::ClassBuildState;
 
 pub(super) use crate::types::{collect_attribute_args, collect_attribute_names};
+
+pub(crate) use enum_interfaces::{expand_enum_interfaces, validate_enum_interface_contracts};
+pub(super) use constants::resolve_lexical_class_value;
+pub(super) use methods::validate_method_shape;
 
 /// Recursively builds and registers `ClassInfo` for `class_name` and its inheritance chain.
 ///

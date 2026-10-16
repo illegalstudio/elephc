@@ -15,7 +15,9 @@ mod planner;
 mod static_spread;
 
 pub(crate) use matching::{
-    named_param_index, positional_param_type, regular_param_count, variadic_element_type,
+    named_param_index, positional_param_type, regular_param_count, required_param_count,
+    required_argument_binding_signature,
+    variadic_element_type,
 };
 pub(crate) use plan::{
     CallArgPlan, CallArgPlanError, PlannedRegularArg, PlannedSourceValue, SpreadBoundsCheck,
@@ -25,6 +27,6 @@ pub(crate) use planner::{
     validate_no_spread_after_named,
 };
 pub(crate) use static_spread::{
-    coalesce_planned_indexed_spreads,
+    coalesce_planned_indexed_spreads, coalesce_planned_indexed_spreads_with_prefix,
     expand_planned_positional_spreads, expand_static_assoc_spread_args, has_named_args,
 };

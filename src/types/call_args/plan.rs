@@ -117,6 +117,18 @@ pub(crate) enum CallArgPlanError {
 }
 
 impl CallArgPlan {
+    /// Detects too-short positional plans without replacing dynamic unpack bounds checks.
+    pub(crate) fn statically_missing_positionals(
+        &self, sig: &crate::types::FunctionSig,
+    ) -> Option<(usize, usize)> {
+        let args = self.passthrough_args.as_ref()?;
+        let provided = if args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_))) {
+            super::static_spread::expand_planned_positional_spreads(args)?.len()
+        } else { args.len() };
+        let required = super::matching::required_param_count(sig);
+        (provided < required).then_some((provided, required))
+    }
+
     /// Marks normalized regular slots supplied by a declaration default, not by caller storage.
     pub(crate) fn default_argument_mask(&self) -> Vec<bool> {
         self.regular_args.iter()
@@ -434,6 +446,39 @@ mod tests {
             &sig, &[named("b", 2), named("a", 1), named("c", 3)], Span::dummy(), false, true,
         ).expect("explicit equal literals should remain source arguments");
         assert_eq!(explicit.default_argument_mask(), vec![false, false, false]);
+    }
+
+    /// Static positional shortage detection leaves named plans and unknown unpack lengths alone.
+    #[test]
+    fn positional_shortage_distinguishes_static_and_dynamic_unpacks() {
+        let sig = sig_with_defaults(vec![None, None, Some(Expr::int_lit(3))]);
+        let check = |args: &[Expr]| super::super::planner::plan_call_args(
+            &sig, args, Span::dummy(), false, true,
+        ).unwrap().statically_missing_positionals(&sig);
+        assert_eq!(check(&[]), Some((0, 2)));
+        assert_eq!(check(&[Expr::int_lit(1)]), Some((1, 2)));
+        assert_eq!(check(&[Expr::int_lit(1), Expr::int_lit(2)]), None);
+        let empty = Expr::new(ExprKind::Spread(Box::new(Expr::new(
+            ExprKind::ArrayLiteral(Vec::new()), Span::dummy(),
+        ))), Span::dummy());
+        assert_eq!(check(&[empty]), Some((0, 2)));
+        let dynamic = Expr::new(ExprKind::Spread(Box::new(Expr::var("args"))), Span::dummy());
+        assert_eq!(check(&[dynamic]), None);
+    }
+
+    /// Leading defaults cannot lower positional arity below the last required visible slot.
+    #[test]
+    fn positional_shortage_includes_defaults_before_required() {
+        let mut sig = sig_with_defaults(vec![Some(Expr::int_lit(1)), None, Some(Expr::int_lit(3))]);
+        let plan = super::super::planner::plan_call_args(
+            &sig, &[Expr::int_lit(4)], Span::dummy(), false, true,
+        ).unwrap();
+        assert_eq!(plan.statically_missing_positionals(&sig), Some((1, 2)));
+        sig.params.push((crate::func_args::HIDDEN_ARGS_PARAM.to_string(),
+            PhpType::Array(Box::new(PhpType::Mixed))));
+        sig.defaults.push(None);
+        sig.variadic = Some(crate::func_args::HIDDEN_ARGS_PARAM.to_string());
+        assert_eq!(super::super::matching::required_param_count(&sig), 2);
     }
 
     /// Implements the `normalized_args_skip_default_guard_when_spread_check_guarantees_slot`

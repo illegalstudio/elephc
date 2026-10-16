@@ -41,7 +41,8 @@ use super::builtin_user_filter::inject_builtin_user_filter;
 use super::schema::{
     build_class_info_recursive, build_enum_info, build_interface_info_recursive,
     drop_unresolvable_attribute_arg_refs, validate_deferred_class_constants,
-    validate_deferred_declaration_defaults,
+    validate_deferred_declaration_defaults, validate_enum_trait_requirements,
+    expand_enum_interfaces, validate_enum_interface_contracts,
 };
 use super::yield_validation::validate_yield_contexts;
 use super::{CheckOptions, Checker};
@@ -354,6 +355,10 @@ pub(super) fn check_types_impl(
                 .get(name)
                 .map(|flattened| flattened.methods.as_slice())
                 .unwrap_or(methods.as_slice());
+            let enum_constants = flattened_enums
+                .get(name)
+                .map(|flattened| flattened.constants.as_slice())
+                .unwrap_or(constants.as_slice());
             let enum_used_traits = flattened_enums
                 .get(name)
                 .map(|flattened| flattened.used_traits.as_slice())
@@ -368,6 +373,7 @@ pub(super) fn check_types_impl(
                 cases,
                 implements,
                 enum_methods,
+                enum_constants,
                 constants,
                 enum_used_traits,
                 enum_trait_aliases,
@@ -377,6 +383,27 @@ pub(super) fn check_types_impl(
                 &mut checker,
                 &mut next_class_id,
             ) {
+                errors.extend(error.flatten());
+            }
+        }
+    }
+    // Publish all transitive interfaces before validating hints that mention another enum.
+    let mut enum_units: Vec<_> = flattened_enums.values()
+        .filter(|unit| checker.enums.contains_key(&unit.name)).collect();
+    enum_units.sort_by(|left, right| left.name.cmp(&right.name));
+    let mut expanded = HashSet::new();
+    for enum_unit in &enum_units {
+        match expand_enum_interfaces(&mut checker, enum_unit) {
+            Ok(()) => { expanded.insert(enum_unit.name.clone()); }
+            Err(error) => errors.extend(error.flatten()),
+        }
+    }
+    for enum_unit in enum_units {
+        if expanded.contains(&enum_unit.name) {
+            if let Err(error) = validate_enum_interface_contracts(&mut checker, enum_unit) {
+                errors.extend(error.flatten());
+            }
+            if let Err(error) = validate_enum_trait_requirements(&checker, program, enum_unit) {
                 errors.extend(error.flatten());
             }
         }

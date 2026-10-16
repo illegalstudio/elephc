@@ -16,7 +16,7 @@ use crate::names::Name;
 use crate::parser::ast::{ExprKind, MagicConstant};
 use crate::span::Span;
 
-pub(super) use members::{walk_class_method, walk_class_property};
+pub(super) use members::{walk_class_constant, walk_class_method, walk_class_property};
 pub(crate) use stmts::walk_program;
 
 use crate::parser::ast::TypeExpr;

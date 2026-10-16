@@ -103,6 +103,10 @@ fn emit_class_interface_return_wrappers(
             if !needs_return_wrapper && abi_plan == MethodAbiPlan::Direct {
                 continue;
             }
+            if abi_plan == MethodAbiPlan::OptionalDefaults {
+                // EIR owns default expressions, argument planning, and exceptional cleanup.
+                continue;
+            }
 
             let wrapper = interface_method_wrapper_symbol(
                 class_info.class_id,

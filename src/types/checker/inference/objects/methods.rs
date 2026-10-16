@@ -294,14 +294,74 @@ impl Checker {
                     &format!("Undefined method: {}::{}", interface_name, method),
                 )
             })?;
-        self.check_user_declared_call(
-            &sig,
-            args,
-            expr.span,
-            env,
-            &format!("Method {}::{}", interface_name, method),
-            interface_name,
-        )?;
+        // The interface governs shared calls; enum-specific extensions are allowed when
+        // any concrete signature accepts them. The selected runtime branch owns binding.
+        let mut implementations: Vec<_> = self.classes.iter()
+            .filter(|(_, info)| info.interfaces.iter().any(|name| name == interface_name))
+            .map(|(name, info)| (name.clone(), info.methods.get(&method_key).cloned()))
+            .collect();
+        implementations.sort_by(|left, right| left.0.cmp(&right.0));
+        if args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
+            && crate::types::call_args::expand_planned_positional_spreads(args).is_none()
+        {
+            // Runtime enum unpacks can retain named tail keys, even when the
+            // interface also has ordinary class implementations. Recheck enum
+            // bodies against boxed collectors without changing source element hints.
+            for (name, _) in &implementations {
+                if self.enums.contains_key(name) {
+                    self.promote_descriptor_variadic_container_for_method(name, &method_key, false);
+                }
+            }
+        }
+        if !implementations.is_empty()
+            && implementations.iter().all(|(name, _)| self.enums.contains_key(name))
+        {
+            let shared = self.check_user_declared_call(
+                &sig, args, expr.span, env,
+                &format!("Method {interface_name}::{method}"), interface_name,
+            );
+            if let Err(shared_error) = shared {
+                let mut accepted = false;
+                let mut missing = false;
+                let mut runtime_shortage = false;
+                for (name, implementation) in implementations {
+                    let Some(implementation) = implementation else {
+                        // Schema validation already recorded the missing contract. Continue
+                        // collecting diagnostics without turning that error into a panic.
+                        missing = true;
+                        continue;
+                    };
+                    // Final enum dispatch diagnoses omissions in the selected branch,
+                    // including named slots and defaults before a later required parameter.
+                    let binding = crate::types::call_args::required_argument_binding_signature(&implementation);
+                    runtime_shortage |= match crate::types::call_args::plan_call_args(
+                        &binding, args, expr.span, false, true,
+                    ) {
+                        Ok(plan) => plan.statically_missing_positionals(&implementation).is_some(),
+                        Err(crate::types::call_args::CallArgPlanError::MissingRequired { .. }) => true,
+                        Err(_) => false,
+                    };
+                    if self.check_user_declared_call(
+                        &implementation, args, expr.span, env,
+                        &format!("Method {name}::{method}"), &name,
+                    ).is_ok() {
+                        accepted = true;
+                        break;
+                    }
+                }
+                if !accepted && !missing {
+                    if !runtime_shortage { return Err(shared_error); }
+                    // Deferring binding must not skip validation of the caller's source
+                    // expressions when a missing slot made every signature check stop early.
+                    for arg in args { self.infer_type(arg, env)?; }
+                }
+            }
+        } else {
+            self.check_user_declared_call(
+                &sig, args, expr.span, env,
+                &format!("Method {}::{}", interface_name, method), interface_name,
+            )?;
+        }
         let late_static_return = self.instance_method_late_static_return(interface_name, &method_key);
         match late_static_return {
             Some(return_type) => self.resolve_late_static_return_type_hint(

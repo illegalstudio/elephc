@@ -4,6 +4,7 @@
 //!
 //! Called from:
 //! - `crate::types::checker::schema::classes::state::ClassBuildState::into_class_info()`
+//! - `crate::types::checker::schema::enums::insert_enum_metadata()`.
 //!
 //! Key details:
 //! - Class constant values are later re-inferred and emitted outside the declaring class scope.
@@ -28,7 +29,16 @@ pub(super) fn resolve_lexical_class_constant_value(
     value: &Expr,
     class: &FlattenedClass,
 ) -> Result<Expr, CompileError> {
-    rewrite_expr(value, &class.name, class.extends.as_deref())
+    resolve_lexical_class_value(value, &class.name, class.extends.as_deref())
+}
+
+/// Binds a class-like constant's lexical receivers before storing it outside declaration scope.
+pub(in crate::types::checker::schema) fn resolve_lexical_class_value(
+    value: &Expr,
+    class_name: &str,
+    parent_name: Option<&str>,
+) -> Result<Expr, CompileError> {
+    rewrite_expr(value, class_name, parent_name)
 }
 
 /// Recursively rewrites all expressions in a class-constant value, resolving lexical
