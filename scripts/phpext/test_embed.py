@@ -27,7 +27,8 @@ def check_apple_leaks(command, env, work):
         plistlib.dump({"com.apple.security.get-task-allow": True}, output)
     checked(["codesign", "--force", "--sign", "-", "--entitlements", str(entitlements), command[0]],
             allow_stderr=True)
-    env.update(MallocStackLogging="1", ELEPHC_EMBED_ITERATIONS="3", ELEPHC_EMBED_LEAK_READY="1")
+    env.update(MallocStackLogging="1", USE_ZEND_ALLOC="0", ELEPHC_EMBED_ITERATIONS="3",
+               ELEPHC_EMBED_LEAK_READY="1")
     with subprocess.Popen(command, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                           stderr=subprocess.PIPE, text=True, start_new_session=True) as process:
         try:

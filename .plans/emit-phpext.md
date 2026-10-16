@@ -8,8 +8,8 @@
 - [x] Implement the neutral value transport and scalar, string, array, and null conversion.
 - [x] Generate recoverable native invocation thunks and translate exceptions after native cleanup.
 - [x] Integrate PHP output and diagnostics without bypassing the host output system.
-- [ ] Add the example, differential tests, lifecycle/concurrency/leak checks, and six mandatory CI configurations.
-- [ ] Document the supported surface and verify existing executable, cdylib, staticlib, and iOS behavior.
+- [x] Add the example, differential tests, lifecycle/concurrency/leak checks, and six mandatory CI configurations.
+- [x] Document the supported surface and verify existing executable, cdylib, staticlib, and iOS behavior.
 
 ## Scope and status
 
@@ -135,10 +135,14 @@ All 14 real-PHP integration tests pass locally and on the four Linux matrix
 jobs. Local PHP 8.5.11 debug ZTS embed tests pass with eight concurrent threads,
 repeated requests, reentrant output callbacks and stack recovery. The Linux
 x86_64 ZTS embed lifecycle passes Valgrind without suppressing diagnostics.
-The six-way CI remains the completion gate. The first full run exposed a
+The six-way CI remains the completion gate. All implementation checklist items
+are delivered; acceptance awaits the complete green matrix. The first full run exposed a
 shared ARM64 frame-footer lifetime bug, an NTS test stack-limit configuration
 issue and the need to register PHP's bounded Valgrind string comparison for
-the embed library's soname. These fixes are under focused verification.
+the embed library's soname. Local NTS and ZTS Valgrind checks pass with these
+fixes. Apple leak inspection pauses the signed harness after full PHP shutdown
+and inspects its live process with Zend's allocator disabled, avoiding atExit
+injection and retaining diagnostics for transport, native and host allocations.
 
 ## 2. Architecture and code ownership
 
