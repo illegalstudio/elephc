@@ -75,6 +75,7 @@ pub fn combine(units: &[&str], target: Target) -> Result<String, String> {
     out.push_str(&format!(".p2align 4\n.globl {}\n{}:\n",
         target.extern_symbol("elephc_state_end"), target.extern_symbol("elephc_state_end")));
     if target.platform == Platform::MacOS { out.push_str(".subsections_via_symbols\n"); }
+    if target.platform == Platform::Linux { out.push_str(".section .note.GNU-stack,\"\",@progbits\n"); }
     Ok(out)
 }
 

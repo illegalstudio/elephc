@@ -4,17 +4,49 @@
 import argparse
 import os
 from pathlib import Path
+import plistlib
+import select
 import shlex
+import signal
 import subprocess
 import tempfile
 
 
-def checked(command, **kwargs):
+def checked(command, allow_stderr=False, **kwargs):
     """Surface complete diagnostics while keeping successful test logs compact."""
     result = subprocess.run(command, capture_output=True, text=True, **kwargs)
-    if result.returncode or result.stderr:
+    if result.returncode or (result.stderr and not allow_stderr):
         raise RuntimeError(f"Command failed ({result.returncode}): {shlex.join(map(str, command))}\n{result.stdout}\n{result.stderr}")
     return result.stdout
+
+
+def check_apple_leaks(command, env, work):
+    """Inspect the live harness after full PHP shutdown, without atExit injection or open pipe hangs."""
+    entitlements = work / "leaks.entitlements"
+    with entitlements.open("wb") as output:
+        plistlib.dump({"com.apple.security.get-task-allow": True}, output)
+    checked(["codesign", "--force", "--sign", "-", "--entitlements", str(entitlements), command[0]],
+            allow_stderr=True)
+    env.update(MallocStackLogging="1", ELEPHC_EMBED_ITERATIONS="3", ELEPHC_EMBED_LEAK_READY="1")
+    with subprocess.Popen(command, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE, text=True, start_new_session=True) as process:
+        try:
+            if not select.select([process.stdout], [], [], 120)[0]:
+                raise RuntimeError("PHP lifecycle did not reach the Apple leak inspection checkpoint")
+            ready = process.stdout.readline()
+            if ready != "request isolation ok\n":
+                raise RuntimeError(f"PHP lifecycle failed before leak inspection: {ready}")
+            result = subprocess.run(["leaks", str(process.pid)], capture_output=True, text=True, timeout=120)
+            if result.returncode or "0 leaks" not in result.stdout:
+                raise RuntimeError(f"Apple leak check failed ({result.returncode}):\n{result.stdout}\n{result.stderr}")
+            stdout, stderr = process.communicate("\n", timeout=30)
+            if process.returncode or stdout:
+                raise RuntimeError(f"PHP lifecycle failed after leak inspection:\n{stdout}\n{stderr}")
+            print(ready + result.stdout, end="")
+        finally:
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.communicate()
 
 
 def main():
@@ -43,7 +75,9 @@ def main():
                    PHP_INI_SCAN_DIR="")
         checked([compiler, "--emit", "phpext", "--heap-size=524288", source], env=env)
         ini = work / "php.ini"
-        ini.write_text(f'extension="{source.with_suffix(".so")}"\n')
+        # Keep stack exhaustion ahead of the intentionally small native heap on NTS main threads too.
+        ini.write_text(f'extension="{source.with_suffix(".so")}"\n'
+                       'zend.max_allowed_stack_size=262144\nzend.reserved_stack_size=65536\n')
         executable = work / "embed-test"
         cc = shlex.split(os.environ.get("CC", "cc"))
         checked(cc + includes + ["-std=c11", "-O1", "-g", "-pthread", str(root / "tests/phpext/embed.c"),
@@ -55,12 +89,7 @@ def main():
             command = ["valgrind", "--quiet", "--leak-check=full", "--show-leak-kinds=definite,indirect",
                        "--errors-for-leak-kinds=definite,indirect", "--error-exitcode=99"] + command
         if args.leaks:
-            env["MallocStackLogging"] = "1"
-            result = subprocess.run(["leaks", "--atExit", "--"] + command, env=env,
-                                    capture_output=True, text=True, timeout=240)
-            if result.returncode or "0 leaks" not in result.stdout or "request isolation ok" not in result.stdout:
-                raise RuntimeError(f"Apple leak check failed ({result.returncode}):\n{result.stdout}\n{result.stderr}")
-            print(result.stdout, end="")
+            check_apple_leaks(command, env, work)
             return
         output = checked(command, env=env, timeout=240)
         if output != "request isolation ok\n":

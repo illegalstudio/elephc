@@ -10,12 +10,17 @@
 //! - Also generates `elephc_zend_abi.h`, the C header hosted PHP extensions compile
 //!   against, from the elephc-zend crate's Rust source with that crate's own generator,
 //!   so `elephc` embeds it without linking the engine.
+//! - Embeds the neutral Rust value-layout facts for fail-closed producer SDK checks.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 #[path = "crates/elephc-zend/abi_header.rs"]
 mod abi_header;
+
+#[path = "crates/elephc-zend/src/abi/mod.rs"]
+#[allow(dead_code, unused_imports)]
+mod abi;
 
 /// Recursively hashes Rust source files in lexical path order and asks Cargo to rerun for each one.
 fn hash_rust_sources(root: &Path, state: &mut u64) {
@@ -71,4 +76,7 @@ fn main() {
         .unwrap_or_else(|message| panic!("elephc-zend ABI header: {message}"));
     let out = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
     fs::write(out.join("elephc_zend_abi.h"), header).expect("write elephc_zend_abi.h");
+    let layout = abi::values::value_layout_facts();
+    fs::write(out.join("elephc_zend_value_layout.rs"), format!("{layout:?}"))
+        .expect("write elephc_zend_value_layout.rs");
 }

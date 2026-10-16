@@ -15,6 +15,27 @@ families, and executable linking dead-strips unreachable helpers, so the final
 binary contains only the required subset. They remain part of that binary
 rather than an external shared dependency.
 
+## PHP extension producer runtime
+
+`--emit phpext` emits a distinct hosted runtime profile through
+`generate_phpext_runtime()`. Its output and warning helpers call the C adapter
+under `src/phpext/`, and native stack/allocation failures escape to an invocation
+boundary before a host PHP exception is raised. It bypasses the standalone
+runtime object cache so these helpers cannot be reused by executable output.
+
+`src/phpext/state.rs` places all writable native storage into one bounded region.
+The adapter initializes a template at MINIT, allocates independent request images
+at RINIT and exchanges complete images at stable native addresses under a module
+mutex. PHP output/error callbacks run with the image parked and the lock released,
+allowing reentry and concurrent host requests. RSHUTDOWN and MSHUTDOWN free the
+request and module storage. The initial producer capability policy rejects
+runtime families whose lifecycle has not been audited for this profile.
+
+The actual Zend ABI comes from the selected PHP SDK. The producer reuses neutral
+`elephc-zend` value-layout facts and native zval transport helpers; the replacement
+engine is never linked. See [PHP extensions](../beyond-php/phpext.md) for the
+supported surface, snapshot costs and verification matrix.
+
 ## Eval execution paths
 
 `eval()` is an optional hybrid boundary rather than part of the ordinary

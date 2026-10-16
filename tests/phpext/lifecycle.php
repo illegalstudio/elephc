@@ -32,3 +32,10 @@ function phpext_recurse(int $depth): int
 {
     return $depth > 0 ? phpext_recurse($depth - 1) + 1 : 0;
 }
+
+#[Export]
+function phpext_output(string $value): string
+{
+    echo $value;
+    return $value;
+}

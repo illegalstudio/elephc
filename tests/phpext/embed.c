@@ -5,17 +5,35 @@
 #include <stdatomic.h>
 #include <stdio.h>
 
+#if defined(__x86_64__) && defined(__linux__)
+/* PHP's supplied Valgrind replacement targets the CLI's NONE soname. Embed
+ * libphp.so needs the same bounded comparison registered for its own soname.
+ * Keep all Memcheck diagnostics enabled, including extension memory accesses.
+ * See php-src/Zend/zend_string.c, I_REPLACE_SONAME_FNNAME_ZU. */
+bool ZEND_FASTCALL _vgr00000ZU_libphpZdso_zend_string_equal_val(const zend_string *a, const zend_string *b)
+{
+    return memcmp(ZSTR_VAL(a), ZSTR_VAL(b), ZSTR_LEN(a)) == 0;
+}
+#endif
+
 static atomic_int failures;
+static atomic_uint request_ids;
 
 static const char request_code[] =
+    "ob_start(function ($bytes) use ($token) {"
+    "  if ($bytes === '') { return ''; }"
+    "  if ($bytes !== $token || phpext_mirror([$token]) !== [$token]) { throw new Exception('output context corrupted'); }"
+    "  return '';"
+    "}, 1);"
     "for ($i = 1, $limit = (int)(getenv('ELEPHC_EMBED_ITERATIONS') ?: 24); $i <= $limit; $i++) {"
     "  if (phpext_counter() !== $i) { throw new Exception('request static leaked'); }"
     "  $value = ['binary' => \"a\\0b\", 7 => [null, true, 1.5]];"
     "  if (phpext_mirror($value) !== $value) { throw new Exception('array corrupted'); }"
     "  if (phpext_label(\"x\\0y\") !== \"label:x\\0y\") { throw new Exception('string corrupted'); }"
+    "  if (phpext_output($token) !== $token) { throw new Exception('output result corrupted'); }"
     "  try { phpext_failure(); throw new Exception('missing native exception'); }"
     "  catch (RuntimeException $e) { if ($e->getCode() !== 42) { throw new Exception('wrong exception'); } }"
-    "}"
+    "} ob_end_clean();"
     "try { phpext_recurse(100000); throw new Exception('missing native stack guard'); }"
     "catch (Error $e) { if (!str_contains($e->getMessage(), 'runtime failed')) { throw $e; } }"
     "if (phpext_counter() !== $limit + 1) { throw new Exception('failed stack recovery'); }";
@@ -34,7 +52,10 @@ static void *run_requests(void *unused)
                 atomic_fetch_add(&failures, 1);
                 break;
             }
-            if (zend_eval_string(request_code, NULL, "phpext request isolation") == FAILURE || EG(exception)) {
+            char code[sizeof(request_code) + 80];
+            snprintf(code, sizeof(code), "$token = \"request:%u\\0bytes\"; %s",
+                atomic_fetch_add(&request_ids, 1), request_code);
+            if (zend_eval_string(code, NULL, "phpext request isolation") == FAILURE || EG(exception)) {
                 atomic_fetch_add(&failures, 1);
                 if (EG(exception)) { zend_exception_error(EG(exception), E_WARNING); }
             }
@@ -80,5 +101,8 @@ int main(int argc, char **argv)
         return 1;
     }
     puts("request isolation ok");
+    fflush(stdout);
+    /* Let Apple's leaks inspect the process after all module/thread/request teardown. */
+    if (getenv("ELEPHC_EMBED_LEAK_READY")) { (void)getchar(); }
     return 0;
 }

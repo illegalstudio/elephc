@@ -251,6 +251,7 @@ fn compiled_php_scalar_types_and_metadata() {
 #[Export] function php_nullable(?int $value): ?int { return $value; }
 #[Export] function php_false(false $value): false { return $value; }
 #[Export] function php_empty(array $value = []): array { return $value; }
+#[Export] function php_float_default(float $value = 1): float { return $value; }
 "#);
     let result = php(&sdk, &module).args(["-r", r#"
 declare(strict_types=1);
@@ -260,6 +261,7 @@ if (php_null(null) !== null || php_void() !== null || php_default() !== "default
 if (php_double(1.25) !== 2.5 || php_invert(true) !== false || php_invert(false) !== true) { exit(17); }
 if (php_nullable(null) !== null || php_nullable(PHP_INT_MAX - 1) !== PHP_INT_MAX - 1) { exit(18); }
 if (php_false(false) !== false || php_empty() !== []) { exit(19); }
+if (php_float_default() !== 1.0 || (new ReflectionFunction('php_float_default'))->getParameters()[0]->getDefaultValue() !== 1.0) { exit(20); }
 try { php_scalars('5', 1.0, true); exit(13); } catch (TypeError $e) {}
 $function = new ReflectionFunction('php_scalars');
 if ($function->getNumberOfRequiredParameters() !== 3 || $function->getParameters()[3]->getDefaultValue() !== null) { exit(14); }

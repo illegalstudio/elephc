@@ -116,20 +116,29 @@ that only informs the design. Extract only the former into engine-free helpers;
 host-specific allocation, executor state, and ABI layouts remain separate.
 Do not claim that stacking makes the entire crate reusable or host-compatible.
 
-### Implementation checkpoint: SDK and registration foundation
+### Implementation checkpoint: complete producer and matrix validation
 
-The initial producer slice adds `src/phpext/` with real SDK discovery, paired
-interpreter/header checks, atomic adapter compilation, an empty registration
-shell, and explicit rejection of unsupported/cross-SDK targets. It extracts a
-neutral value-layout contract from `elephc-zend` and reuses it for both the
-consumer ABI tests and probes compiled against real PHP headers. A separate
-workflow explicitly runs the real-host tests in all six NTS/ZTS configurations.
+PR [#1862](https://github.com/illegalstudio/elephc/pull/1862) now contains the CLI,
+SDK discovery, generated handlers/arginfo, native invocation thunks, deep-copy
+transport, exception translation, guarded host callbacks and request isolation.
+Its producer-owned base mirrors #1743 at
+`9f928d6353139abf8766ffcc63e945f2c9993029`; the author's branch is unchanged.
 
-Local real-host tests passed on Linux x86_64, PHP 8.5.11 NTS: layout agreement,
-module loading/MINFO, get_module-only exports, failed-build artifact preservation,
-and symlink destination rejection. CI and subsequent implementation checkpoints
-remain necessary. This slice does not yet expose a CLI `--emit phpext`, compile
-export handlers, initialize the native request runtime, or claim ZTS concurrency.
+The actual native thunk lives in `src/codegen_support/cdylib/phpext.rs`, sharing
+the library recovery machinery. `src/phpext/state.rs` collects the entire native
+writable region at stable addresses. `activation.c` exchanges request snapshots
+under a module mutex and parks the active snapshot while PHP callbacks run.
+The public example lives in `examples/php-extension/`. SDK selection uses
+`ELEPHC_PHPEXT_PHP_CONFIG` and `ELEPHC_PHPEXT_PHP_BINARY`.
+
+All 14 real-PHP integration tests pass locally and on the four Linux matrix
+jobs. Local PHP 8.5.11 debug ZTS embed tests pass with eight concurrent threads,
+repeated requests, reentrant output callbacks and stack recovery. The Linux
+x86_64 ZTS embed lifecycle passes Valgrind without suppressing diagnostics.
+The six-way CI remains the completion gate. The first full run exposed a
+shared ARM64 frame-footer lifetime bug, an NTS test stack-limit configuration
+issue and the need to register PHP's bounded Valgrind string comparison for
+the embed library's soname. These fixes are under focused verification.
 
 ## 2. Architecture and code ownership
 

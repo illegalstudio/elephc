@@ -28,7 +28,13 @@ pub fn render(name: &str, version: &str, exports: &[&ExportedFunction]) -> Resul
             handlers.push_str(&format!("ZEND_BEGIN_ARG_WITH_RETURN_TYPE_MASK_EX(arginfo_{symbol}, 0, {required}, {})\n", mask(&sig.return_type)?));
         }
         for (i, (param, ty)) in sig.params.iter().enumerate() {
-            let default = default_text(sig.defaults.get(i).and_then(Option::as_ref))?;
+            let expr = sig.defaults.get(i).and_then(Option::as_ref);
+            let mut default = default_text(expr)?;
+            if matches!(base_type(ty)?.0, PhpType::Float) {
+                if let Some(crate::parser::ast::Expr { kind: ExprKind::IntLiteral(value), .. }) = expr {
+                    default = Some(format!("{:?}", *value as f64));
+                }
+            }
             handlers.push_str(&format!("    ZEND_ARG_TYPE_MASK(0, {param}, {}, {})\n", mask(ty)?, default.as_ref().map(|s| c_string(s.as_bytes())).unwrap_or("NULL".into())));
         }
         handlers.push_str(&format!("ZEND_END_ARG_INFO()\nstatic ZEND_FUNCTION({symbol})\n{{\n    zval values[{}];\n", sig.params.len().max(1)));
@@ -50,7 +56,9 @@ pub fn render(name: &str, version: &str, exports: &[&ExportedFunction]) -> Resul
                         PhpType::Float => ("double", "DOUBLE", "Z_DVAL", "ZVAL_DOUBLE"),
                         _ => ("bool", "BOOL", "zend_is_true", "ZVAL_BOOL"),
                     };
-                    let getter = if getter == "zend_is_true" { format!("zend_is_true(&{value})") } else { format!("{getter}({value})") };
+                    let getter = if base == &PhpType::Float {
+                        format!("(Z_TYPE({value}) == IS_LONG ? (double)Z_LVAL({value}) : Z_DVAL({value}))")
+                    } else if getter == "zend_is_true" { format!("zend_is_true(&{value})") } else { format!("{getter}({value})") };
                     handlers.push_str(&format!("    {ctype} arg_{i} = Z_TYPE({value}) == IS_NULL ? 0 : {getter};\n"));
                     let extra = if nullable { format!(", null_{i}") } else { String::new() };
                     parse.push_str(&format!("        Z_PARAM_{macro_type}{suffix}(arg_{i}{extra})\n"));
@@ -135,7 +143,10 @@ fn c_string(bytes: &[u8]) -> String {
 fn default_text(expr: Option<&crate::parser::ast::Expr>) -> Result<Option<String>, String> {
     let Some(expr) = expr else { return Ok(None); };
     Ok(Some(match &expr.kind {
-        ExprKind::IntLiteral(v) => v.to_string(), ExprKind::FloatLiteral(v) => v.to_string(),
+        ExprKind::IntLiteral(v) => v.to_string(), ExprKind::FloatLiteral(v) => {
+            if v.is_nan() { "NAN".into() } else if *v == f64::INFINITY { "INF".into() }
+            else if *v == f64::NEG_INFINITY { "-INF".into() } else { format!("{v:?}") }
+        },
         ExprKind::BoolLiteral(v) => v.to_string(), ExprKind::Null => "null".into(),
         ExprKind::ArrayLiteral(values) if values.is_empty() => "[]".into(),
         ExprKind::StringLiteral(v) => format!("\"{}\"", v.as_bytes().iter().map(|b| format!("\\x{b:02x}")).collect::<String>()),
@@ -148,7 +159,13 @@ fn default_c(expr: Option<&crate::parser::ast::Expr>, value: &str) -> Result<Str
     Ok(match expr.map(|expr| &expr.kind) {
         None | Some(ExprKind::Null) => format!("ZVAL_NULL(&{value});"),
         Some(ExprKind::IntLiteral(v)) => format!("ZVAL_LONG(&{value}, (zend_long)UINT64_C({}));", *v as u64),
-        Some(ExprKind::FloatLiteral(v)) => format!("ZVAL_DOUBLE(&{value}, {v:?});"),
+        Some(ExprKind::FloatLiteral(v)) => {
+            let literal = if v.is_nan() { "__builtin_nan(\"\")".into() }
+                else if *v == f64::INFINITY { "__builtin_inf()".into() }
+                else if *v == f64::NEG_INFINITY { "-__builtin_inf()".into() }
+                else { format!("{v:?}") };
+            format!("ZVAL_DOUBLE(&{value}, {literal});")
+        },
         Some(ExprKind::BoolLiteral(v)) => format!("ZVAL_BOOL(&{value}, {});", u8::from(*v)),
         Some(ExprKind::ArrayLiteral(values)) if values.is_empty() => format!("ZVAL_EMPTY_ARRAY(&{value});"),
         Some(ExprKind::StringLiteral(text)) => {

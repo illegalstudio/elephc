@@ -76,8 +76,8 @@ pub fn emit_frame_restore(emitter: &mut Emitter, frame_size: usize) {
             // x29 == entry_sp - 16, and [x29] is the saved frame footer regardless
             // of any temporary-stack drift in the function body.
             emitter.instruction("mov x9, x29");                                 // preserve the footer address before restoring the caller frame pointer
-            emitter.instruction("add sp, x9, #16");                             // restore the entry stack pointer from the stable frame anchor
             emitter.instruction("ldp x29, x30, [x9]");                          // reload the caller frame pointer and return address
+            emitter.instruction("add sp, x9, #16");                             // release the frame only after reading its still-live footer
         }
         Arch::X86_64 => {
             emitter.instruction("leave");                                       // restore rsp from rbp and pop the caller frame pointer

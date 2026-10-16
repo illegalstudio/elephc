@@ -94,6 +94,7 @@ impl PhpSdk {
         {
             return Err(format!("PHP headers/compiler do not match the selected native SDK target {}", target.as_str()));
         }
+        validate_value_layout(&build.layout)?;
         let runtime = output_text(Command::new(&php_binary).args(["-n", "-r", INTERPRETER_PROBE]),
             "inspect matching PHP interpreter")?;
         let runtime: InterpreterBuild = serde_json::from_str(&runtime)
@@ -152,7 +153,8 @@ impl PhpSdk {
                 let exports = scratch.join("exports.map");
                 std::fs::write(&exports, "{ global: get_module; local: *; };\n")
                     .map_err(|error| format!("write PHP extension export map: {error}"))?;
-                args.extend([OsString::from("-shared"), OsString::from("-Wl,--exclude-libs,ALL")]);
+                args.extend(["-shared", "-Wl,--exclude-libs,ALL", "-Wl,-z,noexecstack",
+                    "-Wl,-z,relro", "-Wl,-z,now"].map(OsString::from));
                 args.extend([OsString::from("-Xlinker"), OsString::from("--version-script"),
                     OsString::from("-Xlinker"), exports.into_os_string()]);
             }
@@ -171,6 +173,17 @@ impl PhpSdk {
         // rename replaces a symlink introduced after the initial check, rather than following it.
         std::fs::rename(&staged, destination).map_err(|error| format!("publish PHP extension: {error}"))
     }
+}
+
+/// Rejects a host whose values cannot be consumed by the native transport helpers.
+fn validate_value_layout(actual: &BTreeMap<String, usize>) -> Result<(), String> {
+    let facts = include!(concat!(env!("OUT_DIR"), "/elephc_zend_value_layout.rs"));
+    let expected = facts.into_iter().map(|(key, value)| (key.to_string(), value))
+        .collect::<BTreeMap<_, _>>();
+    if actual != &expected {
+        return Err("PHP SDK value layouts do not match the native producer transport ABI".into());
+    }
+    Ok(())
 }
 
 /// Rejects unsupported and cross-SDK targets before executing any SDK tool.
@@ -287,6 +300,17 @@ mod tests {
             }
             assert!(validate_build(&headers, &php).is_err(), "mismatch {field}");
         }
+    }
+
+    /// Refuses a custom SDK layout before native transport helpers can access its values.
+    #[test]
+    fn rejects_changed_value_layout() {
+        let facts = include!(concat!(env!("OUT_DIR"), "/elephc_zend_value_layout.rs"));
+        let mut layout = facts.into_iter().map(|(key, value)| (key.to_string(), value))
+            .collect::<BTreeMap<_, _>>();
+        assert!(validate_value_layout(&layout).is_ok());
+        *layout.get_mut("sizeof(zval)").unwrap() += 8;
+        assert!(validate_value_layout(&layout).is_err());
     }
 
     /// Refuses iOS device and Simulator before querying a PHP toolchain.
