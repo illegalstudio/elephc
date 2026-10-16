@@ -59,6 +59,7 @@ pub(crate) fn emit_diagnostics(emitter: &mut Emitter, features: RuntimeFeatures)
     emitter.instruction("ret");                                                 // return to the expression wrapper after restoring suppression state
 
     emitter.label_global("__rt_diag_write");
+    if emitter.phpext_output { emit_phpext_diagnostic(emitter); return; }
     abi::emit_symbol_address(emitter, "x9", "_rt_diag_suppression");
     emitter.instruction("ldr x10, [x9]");                                       // load suppression depth before deciding whether to emit the warning
     emitter.instruction("cbnz x10, __rt_diag_warning_done");                    // suppress the warning while inside an active @ scope
@@ -102,6 +103,7 @@ fn emit_diagnostics_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to the expression wrapper after restoring suppression state
 
     emitter.label_global("__rt_diag_write");
+    if emitter.phpext_output { emit_phpext_diagnostic(emitter); return; }
     abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);    // load suppression depth before deciding whether to emit the warning
     emitter.instruction("test r10, r10");                                       // is runtime warning output currently suppressed?
     emitter.instruction("jnz __rt_diag_warning_done_linux_x86_64");             // suppress the warning while inside an active @ scope
@@ -112,4 +114,28 @@ fn emit_diagnostics_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("syscall");                                             // emit the runtime warning diagnostic to stderr
     emitter.label("__rt_diag_warning_done_linux_x86_64");
     emitter.instruction("ret");                                                 // return after either writing or suppressing the warning
+}
+
+/// Calls the host warning API with native state parked behind a C bailout guard.
+fn emit_phpext_diagnostic(emitter: &mut Emitter) {
+    let done = "L_phpext_diagnostic_done";
+    abi::emit_frame_prologue(emitter, 16);
+    let scratch = abi::secondary_scratch_reg(emitter);
+    abi::emit_load_symbol_to_reg(emitter, scratch, "_rt_diag_suppression", 0);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cbnz {scratch}, {done}"));            // preserve native suppression before entering the host warning API
+            emitter.instruction("mov x0, x1");                                  // adapt the raw warning pointer to the C callback ABI
+            emitter.instruction("mov x1, x2");                                  // adapt the raw warning length to the C callback ABI
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("test {scratch}, {scratch}"));         // inspect native diagnostic suppression without changing the message arguments
+            emitter.instruction(&format!("jnz {done}"));                        // keep suppressed warnings inside native code
+        }
+    }
+    emitter.bl_c("elephc_php_warning");                                         // let real PHP dispatch warnings while the native image is parked
+    crate::codegen_support::cdylib::emit_host_callback_check(emitter, done);
+    emitter.label(done);
+    abi::emit_frame_restore(emitter, 16);
+    abi::emit_return(emitter);
 }

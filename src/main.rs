@@ -56,6 +56,8 @@ mod php_version;
 mod mysqli_prelude;
 mod pdo_prelude;
 mod php_ext;
+#[allow(dead_code, unused_imports)]
+mod phpext;
 mod monitor;
 mod call_graph;
 mod php_profile;

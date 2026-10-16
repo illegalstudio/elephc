@@ -155,6 +155,7 @@ fn render_macos_command(
             args.extend([OsString::from("-e"), OsString::from("_main")]);
             args.push(OsString::from("-dead_strip"));
         }
+        Emit::Phpext => unreachable!("PHP extensions use their host SDK linker"),
         Emit::Staticlib => unreachable!("a static library is archived with ar, never linked"),
         Emit::Cdylib => {
             let install_name = paths
@@ -217,6 +218,7 @@ fn render_linux_command(
     let mut args = Vec::new();
     match emit {
         Emit::Executable => args.push(OsString::from("-Wl,--gc-sections")),
+        Emit::Phpext => unreachable!("PHP extensions use their host SDK linker"),
         Emit::Staticlib => unreachable!("a static library is archived with ar, never linked"),
         Emit::Cdylib => {
             args.push(OsString::from("-shared"));

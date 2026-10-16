@@ -2,18 +2,18 @@
 
 - [x] Inspect the current export ABI, runtime lifecycle, value bridge, and PR #1743 without changing that PR.
 - [x] Define the producer architecture, reuse boundary, ownership rules, and acceptance matrix.
-- [ ] Discover and validate the PHP host SDK and add `Emit::PhpExt` with target diagnostics.
-- [ ] Separate export discovery from output-specific signature validation and generate Zend registration metadata.
-- [ ] Introduce a request-scoped hosted runtime context with NTS, ZTS, and nested-call isolation.
-- [ ] Implement the neutral value transport and scalar, string, array, and null conversion.
-- [ ] Generate recoverable native invocation thunks and translate exceptions after native cleanup.
-- [ ] Integrate PHP output and diagnostics without bypassing the host output system.
+- [x] Discover and validate the PHP host SDK and add `Emit::Phpext` with target diagnostics.
+- [x] Separate export discovery from output-specific signature validation and generate Zend registration metadata.
+- [x] Introduce a request-scoped hosted runtime context with NTS, ZTS, and nested-call isolation.
+- [x] Implement the neutral value transport and scalar, string, array, and null conversion.
+- [x] Generate recoverable native invocation thunks and translate exceptions after native cleanup.
+- [x] Integrate PHP output and diagnostics without bypassing the host output system.
 - [ ] Add the example, differential tests, lifecycle/concurrency/leak checks, and six mandatory CI configurations.
 - [ ] Document the supported surface and verify existing executable, cdylib, staticlib, and iOS behavior.
 
 ## Scope and status
 
-This is a design deliverable, not an implementation. It describes a distinct
+This plan tracks the implementation of a distinct
 producer output, `elephc --emit phpext`, whose artifact PHP loads through
 `extension=...`. Top-level functions marked `#[Export]` become PHP functions.
 The existing C ABI for `cdylib` and `staticlib` remains compatible.
@@ -252,13 +252,28 @@ scratch, exception and cleanup chains, boundary depth/status/diagnostics, stack
 limits, compiled globals/statics, and mutable builtin caches/settings.
 Immutable code, literals, and metadata can remain shared.
 
-Implement one target-aware context-slot access mechanism, resolved from the
-module's current thread/request context. Audit both ABI-helper accesses and raw
-assembly symbol references, data pointers, runtime callbacks, and Rust bridge
-state. Moving only the C module globals or adding a mutex is insufficient.
-Use an inventory and validation gate that rejects unclassified mutable symbols
-in hosted runtime emission. The existing standalone profile need not adopt the
-new access path.
+The initial producer uses complete request snapshots and a module-local mutex.
+All native writable `.data`, `.bss`, and `.comm` storage is emitted into one
+explicitly bounded section. RINIT copies the immutable initial image into a
+request-owned snapshot. Before each native call, the adapter acquires the mutex
+and restores that snapshot at the section's stable addresses; on return it saves
+the entire image and restores the initial template before releasing the mutex.
+This preserves internal pointers, including pointers into the fixed native heap,
+without rewriting ABI-helper or raw assembly symbol accesses. The compiler
+rejects storage sections it has not classified. All native state is covered,
+not only the adapter pointer. Native calls are serialized in ZTS in this first
+version; requests remain independent.
+
+Native thunks call only C transport callbacks. Results and exception records
+are copied into malloc-owned storage before the native boundary returns. Output
+and warnings park the complete active image, release the mutex, and invoke the
+real host API inside a C bailout guard. Nested PHP-to-native calls restore the
+parked image and publish their changes before the outer native activation
+resumes. Host exceptions and bailouts become a callback status, followed by a
+contained native unwind; a bailout is re-raised only after all native frames
+have returned. On resumption the adapter restores the outer thread or Fiber
+stack floor. Core-only capability checks reject bridges and process-monitoring
+state until they have an explicit hosted lifecycle policy.
 
 Nested calls in the same request share persistent request state but receive
 independent activation frames, temporary owners, diagnostics, and recovery

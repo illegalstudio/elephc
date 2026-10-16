@@ -8,11 +8,15 @@
 //! - Host headers and host Zend symbols remain authoritative.
 //! - This module never links the replacement engine into a produced extension.
 
+pub mod build;
+mod producer;
 mod flags;
 mod probe;
 mod registration;
 mod scratch;
 mod sdk;
+pub(crate) mod state;
+pub(crate) mod signature;
 
 pub use registration::render_registration;
 pub use sdk::{HostBuild, PhpSdk};

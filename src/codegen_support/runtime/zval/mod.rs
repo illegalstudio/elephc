@@ -35,3 +35,5 @@ pub(crate) use zval_string_new::emit_zval_string_new;
 pub(crate) use zval_type::emit_zval_type;
 pub(crate) use zval_unpack::emit_zval_unpack;
 pub(crate) use zval_unpack_array::emit_zval_unpack_array;
+
+mod phpext_depth;

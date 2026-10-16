@@ -57,12 +57,13 @@ pub(super) fn output_paths(filename: &str, target: Target, emit: Emit) -> Output
             Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
         },
         Emit::Staticlib => format!("lib{}.a", stem),
+        Emit::Phpext => format!("{}.so", stem),
     };
     OutputPaths {
         asm: parent.join(format!("{}.s", stem)),
         obj: parent.join(format!("{}.o", stem)),
         bin: parent.join(bin_name),
         source_map: parent.join(format!("{}.map", stem)),
-        header: emit.is_library().then(|| parent.join(format!("lib{}.h", stem))),
+        header: (emit.is_library() && emit != Emit::Phpext).then(|| parent.join(format!("lib{}.h", stem))),
     }
 }

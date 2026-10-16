@@ -9,8 +9,10 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'build.rs'
-      - 'src/phpext/**'
-      - 'src/lib.rs'
+      - 'src/**'
+      - 'scripts/phpext/**'
+      - 'tests/phpext/**'
+      - 'examples/php-extension/**'
       - 'crates/elephc-zend/**'
       - 'tests/phpext_tests.rs'
 
@@ -76,6 +78,7 @@ jobs:
         run: |
           set -euo pipefail
           php -n -r 'if (PHP_VERSION_ID < 80500 || PHP_VERSION_ID >= 80600 || (int) PHP_ZTS !== (int) getenv("ELEPHC_PHPEXT_EXPECT_ZTS")) { exit(1); }'
+          echo "ELEPHC_PHPEXT_PHP_BINARY=$(command -v php)" >> "$GITHUB_ENV"
           php-config --vernum
           php -n -v
 
@@ -86,6 +89,54 @@ jobs:
         run: cargo test -p elephc-zend --test abi structures_have_the_layout_rust_gives_them
 
       # These are explicit real-host tests. A missing SDK must fail, not skip.
-      # This gate validates registration, not native runtime thread safety.
-      - name: Load generated registration in real PHP and verify host value layouts
+      - name: Verify real PHP SDK, compiled exports, ownership and output
         run: cargo test -p elephc --test phpext_tests -- --include-ignored
+
+      - name: Check existing library outputs
+        run: cargo test -p elephc --test cdylib_tests test_cdylib_builds_and_host_calls_exports
+
+      - name: Check static archive output
+        run: cargo test -p elephc --test cdylib_tests test_staticlib_links_directly_into_a_host_binary
+
+      - name: Check iOS library emitter contracts
+        run: cargo test -p elephc --test cdylib_tests test_ios_aarch64_emit_asm_pins_string_return_out_parameters
+
+      - name: Cache real PHP debug embed SDK
+        uses: actions/cache@v6
+        with:
+          path: target/phpext-test-host
+          key: phpext-embed-8.5.11-debug-${{ matrix.platform.target }}-${{ matrix.phpts }}-v1
+
+      - name: Build real PHP debug CLI and embed SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ '${{ matrix.phpts }}' = ts ]; then
+            python3 scripts/phpext/build_host.py --prefix target/phpext-test-host --debug --zts
+          else
+            python3 scripts/phpext/build_host.py --prefix target/phpext-test-host --debug
+          fi
+
+      - name: Verify repeated requests and concurrent ZTS requests in real PHP
+        run: python3 scripts/phpext/test_embed.py --php-config target/phpext-test-host/bin/php-config
+
+      - name: Install Valgrind for native and adapter memory checks
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y valgrind libc6-dbg
+
+      - name: Check native and adapter leaks with Valgrind
+        if: runner.os == 'Linux'
+        run: python3 scripts/phpext/test_embed.py --php-config target/phpext-test-host/bin/php-config --valgrind
+
+      - name: Check native and adapter leaks with Apple leaks
+        if: runner.os == 'macOS'
+        run: python3 scripts/phpext/test_embed.py --php-config target/phpext-test-host/bin/php-config --leaks
+
+      - name: Check standalone null declaration parsing
+        run: cargo test -p elephc --test parser_tests standalone_null
+
+      - name: Check standalone null declarations in executable output
+        run: cargo test -p elephc --test codegen_tests test_standalone_null_parameters_and_returns
+
+      - name: Check standalone null and void diagnostics
+        run: cargo test -p elephc --test error_tests test_standalone_null_return_requirements

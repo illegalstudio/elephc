@@ -73,9 +73,11 @@ impl PhpSdk {
         if includes.is_empty() {
             return Err("php-config --includes returned no host header paths".to_string());
         }
-        let php_binary = PathBuf::from(config("--php-binary")?);
+        let configured_binary = config("--php-binary")?;
+        let php_binary = std::env::var_os("ELEPHC_PHPEXT_PHP_BINARY").map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(configured_binary));
         if php_binary.as_os_str().is_empty() || php_binary == Path::new("NONE") {
-            return Err("php-config does not identify a matching PHP CLI interpreter".to_string());
+            return Err("php-config does not identify a PHP CLI interpreter; set ELEPHC_PHPEXT_PHP_BINARY to the matching executable".to_string());
         }
         let compiler = split_words(&std::env::var("CC").unwrap_or_else(|_| "cc".to_string()))?;
         if compiler.is_empty() {
@@ -135,6 +137,11 @@ impl PhpSdk {
 
     /// Builds a host module, exporting only get_module and publishing it without following symlinks.
     pub fn compile_extension(&self, source: &str, destination: &Path) -> Result<(), String> {
+        self.compile_extension_with_objects(source, destination, &[])
+    }
+
+    /// Links native producer objects without introducing a dependency on libphp.
+    pub(crate) fn compile_extension_with_objects(&self, source: &str, destination: &Path, objects: &[PathBuf]) -> Result<(), String> {
         reject_unsafe_destination(destination)?;
         let parent = destination.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
         let scratch = Scratch::create(parent)?;
@@ -152,6 +159,13 @@ impl PhpSdk {
             "macos-aarch64" => args.extend(["-bundle", "-undefined", "dynamic_lookup",
                 "-Wl,-exported_symbol,_get_module"].map(OsString::from)),
             _ => return Err("unsupported PHP extension target".to_string()),
+        }
+        args.extend(objects.iter().map(|path| path.as_os_str().to_os_string()));
+        args.extend([OsString::from("-pthread"), OsString::from("-lm")]);
+        if !objects.is_empty() {
+            args.push(OsString::from(if self.target.as_str() == "macos-aarch64" {
+                "-Wl,-dead_strip"
+            } else { "-Wl,--gc-sections" }));
         }
         compile_c(&self.compiler, &self.includes, source, &staged, &args)?;
         // rename replaces a symlink introduced after the initial check, rather than following it.

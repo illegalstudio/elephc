@@ -18,7 +18,8 @@ pub fn render_registration(name: &str, version: &str) -> Result<String, String> 
     if version.is_empty() || !version.bytes().all(|b| b.is_ascii_graphic() && b != b'"' && b != b'\\') {
         return Err("PHP module version must be a nonempty printable ASCII token without quotes or backslashes".to_string());
     }
-    Ok(include_str!("registration.c").replace("@MODULE@", name).replace("@VERSION@", version))
+    Ok(include_str!("registration.c").replace("@MODULE@", name).replace("@VERSION@", version)
+        .replace("@IDENT@", &format!("elephc_generated_{name}")))
 }
 
 #[cfg(test)]

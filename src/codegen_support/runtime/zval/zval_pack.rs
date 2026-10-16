@@ -49,6 +49,7 @@ fn emit_zval_pack_element_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: zval_pack_element ---");
     emitter.label_global("__rt_zval_pack_element");
+    super::phpext_depth::emit_guard(emitter);
 
     emitter.instruction("cmp x0, #4");                                          // only container-shaped tags can carry the null sentinel
     emitter.instruction("b.lt __rt_zval_pack_element_input_ready");             // scalar payloads preserve their original bits
@@ -218,6 +219,7 @@ fn emit_zval_pack_element_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: zval_pack_element ---");
     emitter.label_global("__rt_zval_pack_element");
+    super::phpext_depth::emit_guard(emitter);
 
     emitter.instruction("cmp rax, 4");                                          // only container-shaped tags can carry the null sentinel
     emitter.instruction("jl __rt_zval_pack_element_input_ready");               // scalar payloads preserve their original bits
