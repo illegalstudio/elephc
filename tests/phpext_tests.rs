@@ -252,6 +252,7 @@ fn compiled_php_scalar_types_and_metadata() {
 #[Export] function php_false(false $value): false { return $value; }
 #[Export] function php_empty(array $value = []): array { return $value; }
 #[Export] function php_float_default(float $value = 1): float { return $value; }
+#[Export] function php_integer(int $value): int { return $value; }
 "#);
     let result = php(&sdk, &module).args(["-r", r#"
 declare(strict_types=1);
@@ -273,6 +274,17 @@ echo 'ok';
         String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
     assert_eq!(result.stdout, b"ok");
     assert!(result.stderr.is_empty());
+    let weak = php(&sdk, &module).args(["-r", r#"
+if (php_double('1.25') !== 2.5 || php_invert(1) !== false || php_default(42) !== '42' || php_integer('42') !== 42) { exit(21); }
+foreach (['php_double', 'php_invert', 'php_default', 'php_integer'] as $function) {
+    try { $function(null); exit(22); } catch (TypeError $e) {}
+}
+try { php_scalars(null, 1.0, null); exit(23); } catch (TypeError $e) {}
+echo 'ok';
+"#]).output().unwrap();
+    assert!(weak.status.success(), "{:?}: {}", weak.status, String::from_utf8_lossy(&weak.stderr));
+    assert_eq!(weak.stdout, b"ok");
+    assert!(weak.stderr.is_empty());
 }
 
 /// Failed partial imports roll back native allocation state and leave the next call usable.

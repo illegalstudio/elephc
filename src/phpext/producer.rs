@@ -48,6 +48,13 @@ pub fn render(name: &str, version: &str, exports: &[&ExportedFunction]) -> Resul
             let (base, nullable) = base_type(ty)?;
             let base = &base;
             let suffix = if nullable { "_OR_NULL" } else { "" };
+            if !nullable && matches!(base, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str) {
+                let expected = match base {
+                    PhpType::Int => "int", PhpType::Float => "float", PhpType::Bool => "bool", _ => "string",
+                };
+                // Preserve source PHP null rejection before ZPP's legacy scalar coercion.
+                handlers.push_str(&format!("    if (ZEND_NUM_ARGS() > {i}) {{ zval *supplied = ZEND_CALL_ARG(execute_data, {}); ZVAL_DEREF(supplied); if (Z_TYPE_P(supplied) == IS_NULL) {{ zend_argument_type_error({}, \"must be of type {expected}, null given\"); return; }} }}\n", i + 1, i + 1));
+            }
             match base {
                 PhpType::Int | PhpType::Float | PhpType::Bool => {
                     if nullable { handlers.push_str(&format!("    bool null_{i} = Z_TYPE({value}) == IS_NULL;\n")); }
