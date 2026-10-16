@@ -1,5 +1,11 @@
 # Bidirectional PHP Extension / Library Bridge
 
+Producer design update: [Emit PHP extensions](emit-phpext.md) is the current
+producer plan. It supersedes this document's producer handler, allocator,
+failure-containment, and thread-safety assumptions. Consumer hosting remains
+separate, including the still-open PR #1743; the producer planning work does not
+modify that PR.
+
 **Goal:** Achieve full bidirectional interoperability between elephc-compiled code and real PHP C extensions / the Zend Engine.
 
 - **Consumer direction**: elephc programs (and libraries) can call functions provided by existing PHP extensions (mbstring, curl, hash, json, etc.).
