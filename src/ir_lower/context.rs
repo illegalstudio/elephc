@@ -509,7 +509,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             retype_sites,
             mixed_storage_store_sites,
             loop_storage_scope,
-            constants: constants.clone(),
+            constants: constants.iter().map(|(name, value)| {
+                (elephc_builtin_contract::constant_definition_key(name), value.clone())
+            }).collect(),
             top_level_env,
             current_class,
             loop_stack: Vec::new(),
@@ -794,8 +796,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Returns the prescanned value and PHP type for a global constant name.
     pub(crate) fn constant_value(&self, name: &str) -> Option<(ExprKind, PhpType)> {
         self.constants
-            .get(name)
-            .or_else(|| self.constants.get(name.trim_start_matches('\\')))
+            .get(&elephc_builtin_contract::constant_definition_key(name))
             .cloned()
     }
 
@@ -850,7 +851,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Records a constant discovered while lowering source-order `define()` calls.
     pub(crate) fn register_constant(&mut self, name: String, value: ExprKind, ty: PhpType) {
-        self.constants.entry(name).or_insert((value, ty));
+        self.constants.entry(elephc_builtin_contract::constant_definition_key(&name)).or_insert((value, ty));
     }
 
     /// Updates the current known PHP type for a local.

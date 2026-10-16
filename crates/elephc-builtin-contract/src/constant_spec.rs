@@ -1,5 +1,5 @@
 //! Purpose:
-//! Defines the backend-neutral contract for one PHP global constant elephc predefines.
+//! Defines PHP global-constant identity and backend-neutral predefined-constant contracts.
 //!
 //! Called from:
 //! - Shared constant catalog declarations (`crate::catalog_constants`,
@@ -95,4 +95,41 @@ pub struct ConstantContract {
     pub extension: bool,
     /// Whether this constant is compiler/runtime-internal, never PHP-visible.
     pub internal: bool,
+}
+
+/// Returns PHP's registration key: only namespace bytes are ASCII case-insensitive.
+///
+/// `define()` preserves every leading separator in its name; a lookup removes one
+/// separately. Keeping definition and lookup keys distinct mirrors zend_constants.c.
+pub fn constant_definition_key(name: &str) -> String {
+    match name.rfind('\\') {
+        Some(split) => format!("{}{}", name[..split].to_ascii_lowercase(), &name[split..]),
+        None => name.to_string(),
+    }
+}
+
+/// Returns PHP's fetch key after removing exactly one root separator.
+pub fn constant_lookup_key(name: &str) -> String {
+    constant_definition_key(name.strip_prefix('\\').unwrap_or(name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Definitions retain separators; fetches remove one; only namespaces ignore case.
+    #[test]
+    fn constant_keys_match_php_registration_and_lookup() {
+        for (name, defined, fetched) in [
+            ("FOO", "FOO", "FOO"),
+            (r"\FOO", r"\FOO", "FOO"),
+            (r"\\FOO", r"\\FOO", r"\FOO"),
+            (r"App\Sub\X", r"app\sub\X", r"app\sub\X"),
+            (r"\App\Sub\x", r"\app\sub\x", r"app\sub\x"),
+        ] {
+            assert_eq!(constant_definition_key(name), defined);
+            assert_eq!(constant_lookup_key(name), fetched);
+        }
+        assert_ne!(constant_definition_key(r"app\X"), constant_definition_key(r"APP\x"));
+    }
 }

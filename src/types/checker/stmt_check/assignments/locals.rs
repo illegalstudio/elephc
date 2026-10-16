@@ -1124,7 +1124,7 @@ pub(super) fn check_const_decl(
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
     let ty = checker.infer_type(value, env)?;
-    checker.constants.entry(name.to_string()).or_insert(ty);
+    checker.constants.entry(elephc_builtin_contract::constant_definition_key(name)).or_insert(ty);
     Ok(())
 }
 

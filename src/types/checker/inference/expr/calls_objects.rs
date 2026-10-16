@@ -124,7 +124,7 @@ impl Checker {
                     self.require_builtin_library("elephc_pcntl");
                 }
                 self.constants
-                    .get(name.as_str())
+                    .get(&elephc_builtin_contract::constant_definition_key(name.as_str()))
                     .cloned()
                     .or_else(|| self.eval_barrier_active.then_some(PhpType::Mixed))
                     .ok_or_else(|| {

@@ -41,10 +41,11 @@ impl ElephcEvalContext {
         name: &str,
         value: EvalNativeGlobalConstant,
     ) -> bool {
-        let key = normalize_constant_name(name);
-        if key.is_empty() || self.native_global_constants.contains_key(&key) {
+        let key = elephc_builtin_contract::constant_definition_key(name);
+        if key.is_empty() || self.has_constant_definition(name) {
             return false;
         }
+        self.constant_declared_names.insert(key.clone(), name.to_string());
         self.native_global_constants.insert(key, value);
         true
     }
@@ -67,7 +68,7 @@ impl ElephcEvalContext {
         let mut entries = self
             .native_global_constants
             .iter()
-            .map(|(name, value)| (name.clone(), value.clone()))
+            .map(|(name, value)| (self.constant_declared_names.get(name).unwrap_or(name).clone(), value.clone()))
             .collect::<Vec<_>>();
         entries.sort_by(|left, right| left.0.cmp(&right.0));
         entries
@@ -84,7 +85,7 @@ impl ElephcEvalContext {
         name: &str,
         value: EvalNativeUserConstant,
     ) -> bool {
-        let key = normalize_constant_name(name);
+        let key = elephc_builtin_contract::constant_definition_key(name);
         if key.is_empty()
             || self.native_user_constants.contains_key(&key)
             || self.native_global_constants.contains_key(&key)
@@ -92,6 +93,7 @@ impl ElephcEvalContext {
         {
             return false;
         }
+        self.constant_declared_names.insert(key.clone(), name.to_string());
         self.native_user_constants.insert(key, value);
         true
     }
@@ -112,15 +114,23 @@ impl ElephcEvalContext {
         let mut entries = self
             .native_user_constants
             .iter()
-            .map(|(name, value)| (name.clone(), value.clone()))
+            .map(|(name, value)| (self.constant_declared_names.get(name).unwrap_or(name).clone(), value.clone()))
             .collect::<Vec<_>>();
         entries.sort_by(|left, right| left.0.cmp(&right.0));
         entries
     }
 
+    /// Checks registration identity without stripping a separator as a fetch would.
+    pub(crate) fn has_constant_definition(&self, name: &str) -> bool {
+        let key = elephc_builtin_contract::constant_definition_key(name);
+        self.constants.contains_key(&key)
+            || self.native_global_constants.contains_key(&key)
+            || self.native_user_constants.contains_key(&key)
+    }
+
     /// Defines an eval dynamic constant value, failing if the name is invalid or already present.
     pub fn define_constant(&mut self, name: &str, value: RuntimeCellHandle) -> bool {
-        let key = normalize_constant_name(name);
+        let key = elephc_builtin_contract::constant_definition_key(name);
         if key.is_empty()
             || self.constants.contains_key(&key)
             || self.native_global_constants.contains_key(&key)
@@ -128,6 +138,7 @@ impl ElephcEvalContext {
         {
             return false;
         }
+        self.constant_declared_names.insert(key.clone(), name.to_string());
         self.constants.insert(key, value);
         true
     }
@@ -147,7 +158,7 @@ impl ElephcEvalContext {
         let mut entries = self
             .constants
             .iter()
-            .map(|(name, value)| (name.clone(), *value))
+            .map(|(name, value)| (self.constant_declared_names.get(name).unwrap_or(name).clone(), *value))
             .collect::<Vec<_>>();
         entries.sort_by(|left, right| left.0.cmp(&right.0));
         entries
@@ -155,9 +166,11 @@ impl ElephcEvalContext {
 
     /// Borrows one dynamic constant in stable name order for a native inventory snapshot.
     pub(crate) fn constant_inventory_entry(&self, index: usize) -> Option<(&str, RuntimeCellHandle)> {
-        let mut entries = self.constants.iter().collect::<Vec<_>>();
+        let mut entries = self.constants.iter().map(|(name, cell)| {
+            (self.constant_declared_names.get(name).unwrap_or(name).as_str(), *cell)
+        }).collect::<Vec<_>>();
         entries.sort_by(|left, right| left.0.cmp(right.0));
-        entries.get(index).map(|(name, cell)| (name.as_str(), **cell))
+        entries.get(index).copied()
     }
 
     /// Borrows one eval-only function name, excluding native registrations and closures.

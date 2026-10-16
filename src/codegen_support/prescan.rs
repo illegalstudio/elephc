@@ -8,7 +8,7 @@
 //! Key details:
 //! - The scan must not evaluate PHP side effects; it only recognizes declarations and literal `define()` calls.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use elephc_builtin_contract::{lookup_constant, ConstValue};
 
@@ -98,7 +98,8 @@ pub(crate) fn collect_constants(
             (ExprKind::IntLiteral(*value), PhpType::Int),
         );
     }
-    collect_constant_decls(program, &mut constants);
+    let mut identities = constants.keys().map(|name| elephc_builtin_contract::constant_definition_key(name)).collect();
+    collect_constant_decls(program, &mut constants, &mut identities);
     constants
 }
 
@@ -111,32 +112,42 @@ pub(crate) fn collect_constants(
 fn collect_constant_decls(
     stmts: &[Stmt],
     constants: &mut HashMap<String, (ExprKind, PhpType)>,
+    identities: &mut HashSet<String>,
 ) {
     for stmt in stmts {
         match &stmt.kind {
             StmtKind::ConstDecl { name, value } => {
-                constants
-                    .entry(name.clone())
-                    .or_insert((value.kind.clone(), constant_expr_type(&value.kind)));
+                insert_constant_once(constants, identities, name, &value.kind);
             }
             StmtKind::ExprStmt(expr) => {
                 if let ExprKind::FunctionCall { name, args } = &expr.kind {
                     if name.as_str() == "define" && args.len() == 2 {
                         if let ExprKind::StringLiteral(const_name) = &args[0].kind {
-                            constants.entry(const_name.clone()).or_insert((
-                                args[1].kind.clone(),
-                                constant_expr_type(&args[1].kind),
-                            ));
+                            insert_constant_once(constants, identities, const_name, &args[1].kind);
                         }
                     }
                 }
             }
             StmtKind::IncludeOnceGuard { body, .. } | StmtKind::Synthetic(body) => {
-                collect_constant_decls(body, constants);
+                collect_constant_decls(body, constants, identities);
             }
             _ => {}
         }
     }
+}
+
+/// Keeps the first registration identity while preserving its original inventory spelling.
+fn insert_constant_once(
+    constants: &mut HashMap<String, (ExprKind, PhpType)>,
+    identities: &mut HashSet<String>,
+    name: &str,
+    value: &ExprKind,
+) {
+    let key = elephc_builtin_contract::constant_definition_key(name);
+    if !identities.insert(key) {
+        return;
+    }
+    constants.insert(name.to_string(), (value.clone(), constant_expr_type(value)));
 }
 
 /// Infers the `PhpType` for a constant expression from its `ExprKind` variant.

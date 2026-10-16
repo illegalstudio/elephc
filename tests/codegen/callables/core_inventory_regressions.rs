@@ -143,7 +143,7 @@ echo ':', $after['user']['USER_ONE'], ':', count($after['user']);
     assert_eq!(out.stdout, "1:1:clean:2:8:stream:locked:1:2");
     assert!(
         out.stderr
-            .contains("Warning: define(): Constant already defined"),
+            .contains("Warning: Constant USER_ONE already defined, this will be an error in PHP 9"),
         "expected duplicate seeded-constant warning, got stderr={}",
         out.stderr
     );

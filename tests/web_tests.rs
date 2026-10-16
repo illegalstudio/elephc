@@ -2848,3 +2848,40 @@ echo count($c6), "|", implode(",", array_keys($_GET)), "\n";
     assert!(r1.ends_with(expected), "first response body: {:?}", r1);
     assert!(r2.ends_with(expected), "second response body: {:?}", r2);
 }
+
+/// Literal constant and define guards reset while the same pool process handles requests.
+#[test]
+fn web_constant_definitions_reset_between_pool_requests() {
+    let dir = make_test_dir("web_constant_guards");
+    let source = r#"<?php
+ini_set('display_errors', '1');
+error_reporting(E_ALL);
+const REQUEST_VALUE = 7;
+$created = define('REQUEST_EXTRA', 9);
+echo REQUEST_VALUE, ":", REQUEST_EXTRA, ":", $created ? "new" : "duplicate", ":", getmypid();
+"#;
+    let bin = compile_isolated_web(&dir, source, "app", "pool");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut server = spawn_server_with_args(
+        &bin,
+        &addr,
+        "1",
+        &["--handler-concurrency", "1", "--max-handler-requests", "20"],
+    );
+    let mut first_pid = None;
+    for request in 0..5 {
+        let response = http_get(&addr, "/");
+        let body = raw_response_body(&response).trim().to_string();
+        let (values, pid) = body.rsplit_once(':').expect("response includes handler PID");
+        assert_eq!(values, "7:9:new", "request {request}: {response}");
+        assert!(!response.contains("already defined"), "request {request}: {response}");
+        if let Some(first_pid) = &first_pid {
+            assert_eq!(pid, first_pid, "the test must reuse one handler process");
+        } else {
+            first_pid = Some(pid.to_string());
+        }
+    }
+    let _ = server.kill();
+    let _ = server.wait();
+}

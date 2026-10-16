@@ -7,7 +7,7 @@
 //! properties (their initializers re-run in the handler body and restore the
 //! defaults), releases and zeroes ordinary globals plus request superglobals
 //! ($_SERVER/$_GET/$_POST) that survive between requests, and resets the
-//! concat-buffer write offset and request-local collector controls.
+//! concat-buffer write offset, constant-definition guards and request-local collector controls.
 //!
 //! Called from:
 //! - `crate::codegen::block_emit::emit_module()`, after every function and the
@@ -128,6 +128,11 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     if module.required_runtime_features.mbstring || module.required_runtime_features.eval_bridge {
         abi::emit_call_label(emitter, "__rt_mbstring_release_catalog");
     }
+    // Cleanup callbacks can define constants too. Retire their markers only after all
+    // callbacks have finished, so the next handler registers its own constants afresh.
+    for symbol in data.request_local_words() {
+        abi::emit_store_zero_to_symbol(emitter, symbol, 0);
+    }
     emit_heap_arena_reset(emitter);
     abi::emit_call_label(emitter, "__rt_gc_request_start");
 
@@ -217,6 +222,29 @@ fn emit_heap_arena_reset(emitter: &mut Emitter) {
 mod handler_reset_tests {
     use super::*;
     use crate::codegen::platform::{AppleVariant, Platform, Target};
+
+    /// Request-local guards reset after cleanup callbacks and before arena reclamation.
+    #[test]
+    fn web_constant_guards_reset_after_cleanup_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            let mut module = Module::new(target);
+            module.required_runtime_features.eval_bridge = true;
+            let mut data = DataSection::new();
+            data.add_request_local_word("_test_constant_guard".to_string());
+            data.add_request_local_word("_test_constant_guard".to_string());
+            data.add_comm("_test_persistent_word".to_string(), 8);
+            assert_eq!(data.request_local_words().count(), 1);
+            emit_web_reset(&mut emitter, &module, &data);
+            let asm = emitter.output();
+            let cleanup = asm.find("__rt_mbstring_release_catalog").unwrap();
+            let guard = asm.find("_test_constant_guard").unwrap();
+            let heap = asm.find("_heap_off").unwrap();
+            assert!(cleanup < guard && guard < heap, "{name}: {asm}");
+            assert!(!asm.contains("_test_persistent_word"), "{name}");
+        }
+    }
 
     /// Full arena reclamation accounts for outstanding blocks only after retiring the old heap.
     #[test]

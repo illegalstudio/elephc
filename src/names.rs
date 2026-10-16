@@ -816,7 +816,14 @@ pub fn function_variant_active_symbol(name: &str) -> String {
 /// Format: `_eir_global_<mangled_fqn>`. Used by the IR backend for `LoadGlobal`
 /// and `StoreGlobal` storage that is distinct from user function labels.
 pub fn ir_global_symbol(name: &str) -> String {
-    format!("_eir_global_{}", mangle_fqn(name.trim_start_matches('\\')))
+    format!("_eir_global_{}", mangle_fqn(name.strip_prefix('\\').unwrap_or(name)))
+}
+
+/// Root-anchors a PHP constant registration key without discarding literal separators.
+///
+/// The ordinary global-symbol helper removes this compiler-added anchor exactly once.
+pub fn constant_storage_name(name: &str) -> String {
+    format!("\\{}", elephc_builtin_contract::constant_definition_key(name))
 }
 
 /// Returns the runtime guard symbol for a `define()` constant name.
@@ -825,7 +832,7 @@ pub fn ir_global_symbol(name: &str) -> String {
 /// sentinel names across compiler versions.
 pub fn define_seen_symbol(name: &str) -> String {
     let mut symbol = String::from("_define_seen");
-    for byte in name.bytes() {
+    for byte in elephc_builtin_contract::constant_definition_key(name).bytes() {
         match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' => symbol.push(byte as char),
             b'_' => symbol.push_str("_u"),
@@ -1002,5 +1009,24 @@ mod tests {
         assert_ne!(synthetic_place_local_name(1), synthetic_place_local_name(2));
         // A user variable that merely spells the stem is not a generated temporary.
         assert!(!is_generated_local_name(SYNTHETIC_PLACE_LOCAL_STEM));
+    }
+}
+
+#[cfg(test)]
+mod constant_identity_tests {
+    use super::*;
+
+    /// Constant flags/storage fold namespaces without folding globals or literal separators.
+    #[test]
+    fn constant_storage_and_guards_share_php_definition_identity() {
+        let storage = |name| ir_global_symbol(&constant_storage_name(name));
+        assert_eq!(storage(r"App\X"), storage(r"app\X"));
+        assert_eq!(define_seen_symbol(r"App\X"), define_seen_symbol(r"app\X"));
+        assert_ne!(storage(r"App\X"), storage(r"app\x"));
+        assert_ne!(define_seen_symbol(r"App\X"), define_seen_symbol(r"app\x"));
+        assert_ne!(storage("FOO"), storage(r"\FOO"));
+        assert_ne!(storage(r"\FOO"), storage(r"\\FOO"));
+        assert_ne!(define_seen_symbol("FOO"), define_seen_symbol(r"\FOO"));
+        assert_ne!(ir_global_symbol(r"App\X"), ir_global_symbol(r"app\X"));
     }
 }

@@ -12,7 +12,7 @@
 //!   everywhere silently under-aligns every common symbol on ELF, which the assembler accepts and
 //!   the linker then rejects with `relocation truncated to fit` for any 64-bit access.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use crate::codegen_support::platform::{Platform, Target};
 use crate::types::PhpType;
@@ -103,9 +103,10 @@ pub struct DataSection {
     dedup: HashMap<Vec<u8>, String>,
     float_dedup: HashMap<u64, String>,
     word_dedup: HashMap<Vec<DataWord>, String>,
-    comm_dedup: HashMap<String, String>,
+    comm_dedup: HashMap<String, usize>,
     static_locals: Vec<StaticLocalRecord>,
     static_local_dedup: HashMap<String, usize>,
+    request_local_words: BTreeSet<String>,
 }
 
 impl DataSection {
@@ -123,6 +124,7 @@ impl DataSection {
             comm_dedup: HashMap::new(),
             static_locals: Vec::new(),
             static_local_dedup: HashMap::new(),
+            request_local_words: BTreeSet::new(),
         }
     }
 
@@ -184,14 +186,16 @@ impl DataSection {
         self.entries.push((name, bytes.to_vec()));
     }
 
-    /// Looks up `label` in the common-symbol deduplication map; if found, returns the existing label.
-    /// Otherwise inserts `label` into `comm_entries` with the given `size` and returns `label` unchanged.
+    /// Reserves common storage for `label`, growing an existing declaration to the largest size.
+    /// Deduplication preserves the first-seen symbol order while later wider values remain in bounds.
     pub fn add_comm(&mut self, label: String, size: usize) -> String {
-        if let Some(existing) = self.comm_dedup.get(&label) {
-            return existing.clone();
+        if let Some(&index) = self.comm_dedup.get(&label) {
+            let entry = &mut self.comm_entries[index];
+            entry.1 = entry.1.max(size);
+            return label;
         }
 
-        self.comm_dedup.insert(label.clone(), label.clone());
+        self.comm_dedup.insert(label.clone(), self.comm_entries.len());
         self.comm_entries.push((label.clone(), size));
         label
     }
@@ -199,6 +203,19 @@ impl DataSection {
     /// Returns true when common storage has been declared for `label`.
     pub fn has_comm(&self, label: &str) -> bool {
         self.comm_dedup.contains_key(label)
+    }
+
+    /// Allocates a zero-initialized word whose state must not survive a web request.
+    /// These markers own no heap values; reset them after request cleanup callbacks.
+    pub fn add_request_local_word(&mut self, label: String) -> String {
+        let label = self.add_comm(label, 8);
+        self.request_local_words.insert(label.clone());
+        label
+    }
+
+    /// Returns deduplicated request-local markers in deterministic symbol order.
+    pub fn request_local_words(&self) -> impl Iterator<Item = &str> {
+        self.request_local_words.iter().map(String::as_str)
     }
 
     /// Adds words to the current runtime or metadata collection.
@@ -272,6 +289,24 @@ impl DataSection {
 mod tests {
     use super::DataSection;
     use crate::codegen_support::platform::{Arch, Platform, Target};
+
+    /// Repeated declarations reserve the widest storage without changing the symbol or its order.
+    #[test]
+    fn test_common_storage_reserves_largest_declaration_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            for (sizes, expected) in [([8, 16, 8], 16), ([16, 8, 16], 16), ([8, 32, 16], 32)] {
+                let mut data = DataSection::new();
+                for size in sizes {
+                    assert_eq!(data.add_comm("_shared".to_string(), size), "_shared");
+                }
+                let asm = data.emit(target);
+                assert_eq!(asm.matches(".comm _shared,").count(), 1, "{name}: {asm}");
+                assert!(asm.contains(&super::comm_directive("_shared", expected, target)),
+                    "{name}: {asm}");
+            }
+        }
+    }
 
     /// A Mach-O target, whose assembler reads `.comm`'s alignment operand as `log2(bytes)`.
     fn macos() -> Target {

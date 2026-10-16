@@ -58,6 +58,7 @@ mod builtins_strings_encoding;
 mod builtins_strings_openssl;
 mod builtins_strings_text;
 mod builtins_symbols;
+mod constant_identity;
 mod builtins_system_network;
 mod class_constants;
 mod classes;

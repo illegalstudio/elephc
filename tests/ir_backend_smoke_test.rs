@@ -6631,7 +6631,9 @@ fn ir_backend_handles_define_builtin() {
     );
     let stderr = String::from_utf8(duplicate.stderr).expect("stderr should be utf8");
     assert!(
-        stderr.contains("Warning: define()"),
+        stderr.contains(
+            "Warning: Constant DUPLICATE_WARN already defined, this will be an error in PHP 9"
+        ),
         "expected duplicate define warning, got stderr={stderr}"
     );
 }

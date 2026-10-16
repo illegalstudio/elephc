@@ -57,12 +57,10 @@ fn eval_define_name(
     if name.is_empty() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    if context.has_native_global_constant(&name)
-        || context.has_native_user_constant(&name)
-        || eval_predefined_constant_value(&name).is_some()
-        || context.has_constant(&name)
+    if context.has_constant_definition(&name)
+        || (!name.starts_with('\\') && eval_predefined_constant_value(&name).is_some())
     {
-        values.warning(DEFINE_ALREADY_DEFINED_WARNING)?;
+        values.warning(&define_already_defined_warning(&name))?;
         return Ok(false);
     }
     let value = values.retain(value)?;

@@ -10,16 +10,19 @@
 use super::*;
 
 /// Lowers a global constant declaration.
+///
+/// It lowers exactly like `define("NAME", value)`, so the two spellings share one
+/// already-defined guard: a second declaration of the same name, by either spelling, keeps the
+/// first value and prints PHP's `Constant NAME already defined` warning where it runs.
 pub(super) fn lower_const_decl(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, span: Span) {
-    let value = lower_expr(ctx, value);
-    let data = ctx.intern_global_name(name);
-    ctx.emit_void(
-        Op::StoreGlobal,
-        vec![value.value],
-        Some(Immediate::GlobalName(data)),
-        Op::StoreGlobal.default_effects(),
-        Some(span),
+    let call = Expr::new(
+        ExprKind::FunctionCall {
+            name: crate::names::Name::unqualified("define"),
+            args: vec![Expr::new(ExprKind::StringLiteral(name.to_string()), span), value.clone()],
+        },
+        span,
     );
+    lower_expr(ctx, &call);
 }
 
 /// Lowers simple positional list destructuring into indexed reads plus local writes.

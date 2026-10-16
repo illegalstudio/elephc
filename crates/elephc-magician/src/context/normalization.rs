@@ -114,5 +114,5 @@ pub(super) fn push_unique_constant_name(name: &str, names: &mut Vec<String>, see
 
 /// Normalizes PHP constant names for case-sensitive eval dynamic probes.
 pub(super) fn normalize_constant_name(name: &str) -> String {
-    name.trim_start_matches('\\').to_string()
+    elephc_builtin_contract::constant_lookup_key(name)
 }

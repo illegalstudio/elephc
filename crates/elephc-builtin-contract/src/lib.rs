@@ -49,7 +49,9 @@ pub use eval_profile::{
     eval_signature, eval_signature_profile, EvalSignatureOverrideReason, EvalSignatureProfile,
 };
 pub use class_spec::{ClassContract, ClassKind, ClassRoute};
-pub use constant_spec::{ConstType, ConstValue, ConstantContract, ConstantRoute};
+pub use constant_spec::{
+    constant_definition_key, constant_lookup_key, ConstType, ConstValue, ConstantContract, ConstantRoute,
+};
 pub use id::BuiltinId;
 pub use core_functions::CORE_FUNCTION_NAMES;
 pub use module::PhpModule;

@@ -109,7 +109,7 @@ fn static_defined_name_arg(arg: &Expr) -> Option<&str> {
 
 /// Returns true when a literal `defined()` name exists as a global or class-like constant.
 fn literal_constant_is_defined(ctx: &LoweringContext<'_, '_>, constant_name: &str) -> bool {
-    ctx.constant_value(constant_name).is_some()
+    ctx.constant_value(&elephc_builtin_contract::constant_lookup_key(constant_name)).is_some()
         || crate::types::class_like_constant_is_defined(
             ctx.classes,
             ctx.interfaces,
@@ -138,7 +138,7 @@ pub(super) fn lower_static_constant_call(
         return None;
     }
     let constant_name = static_constant_name_arg(&args[0])?;
-    let referenced = Name::unqualified(constant_name.trim_start_matches('\\'));
+    let referenced = Name::unqualified(elephc_builtin_contract::constant_lookup_key(constant_name));
     Some(lower_const_ref(ctx, &referenced, expr))
 }
 
@@ -181,7 +181,7 @@ pub(super) fn lower_const_ref(
             Some(expr.span),
         );
     }
-    let data = ctx.intern_global_name(name.as_str());
+    let data = ctx.intern_global_name(&crate::names::constant_storage_name(name.as_str()));
     ctx.emit_value(
         Op::LoadGlobal,
         Vec::new(),

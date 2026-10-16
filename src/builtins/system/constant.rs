@@ -71,7 +71,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             "constant() first argument must be a string literal in AOT mode",
         ));
     };
-    let name = name.trim_start_matches('\\').to_string();
+    let name = elephc_builtin_contract::constant_lookup_key(&name);
     if name.contains("::") {
         return Err(CompileError::new(
             cx.span,

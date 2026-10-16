@@ -153,7 +153,11 @@ pub(in crate::interpreter) fn eval_predefined_constant(
 pub(in crate::interpreter) fn eval_predefined_constant_value(
     name: &str,
 ) -> Option<EvalPredefinedConstant> {
-    let name = name.trim_start_matches('\\');
+    let key = elephc_builtin_contract::constant_lookup_key(name);
+    let name = key.as_str();
+    if name.starts_with('\\') {
+        return None;
+    }
     if let Some(value) = elephc_pcntl::host_pcntl_int_constant(name) {
         return Some(EvalPredefinedConstant::Int(value));
     }

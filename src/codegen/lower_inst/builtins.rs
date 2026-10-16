@@ -86,9 +86,6 @@ pub(crate) use scalar_metadata::*;
 pub(in crate::codegen::lower_inst) use shared::*;
 pub(crate) use type_predicates::*;
 
-const DEFINE_ALREADY_DEFINED_WARNING: &str =
-    "Warning: define(): Constant already defined\n";
-
 /// Lowers one compiler-resident PHP language construct by its canonical name.
 pub(super) fn lower_language_construct_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let name = ctx.function_name_data(expect_data(inst)?)?;
