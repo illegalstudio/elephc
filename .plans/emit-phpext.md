@@ -90,15 +90,23 @@ the generated PHP extension. The produced module still imports the real host API
 
 ### PR structure
 
-Create a new producer branch from a refreshed, recorded head of #1743 and open
-its draft PR against `feat/php-ext-hosting`. The review diff must contain only
+Create a new producer branch from a refreshed, recorded head of #1743. Its head
+branch, `feat/php-ext-hosting`, lives in `Guikingone/elephc`, not in the upstream
+repository. For one draft PR in `illegalstudio/elephc`, mirror the exact parent
+head into the producer-owned base branch `stack/pr-1743-php-ext-hosting` and open
+the producer PR against that mirror. Do not create another PR for the mirror.
+The review diff must contain only
 producer changes and any explicitly justified shared-helper extractions.
 Do not push to, rewrite, merge, or change the base PR's branch. Changes to its
 files made on the child branch belong exclusively to the producer PR.
 
 Keep implementation slices as reviewable commits, with focused validation at
-each slice. Refresh the child against the parent only on the child branch,
-rechecking the exact resulting head. Merge order is #1743 first, producer second.
+each slice. Check #1743's live state/head at each commit checkpoint, after major
+validation, and immediately before publication. Its author may rewrite the
+parent commit; compare actual source changes, not just commit counts. Refresh
+the child and its producer-owned base mirror while preserving our own commits,
+rechecking the exact resulting head. Never update the author's fork branch.
+Merge order is #1743 first, producer second.
 After the parent merges, retarget/rebase the producer onto main as appropriate
 for the parent's merge method, remove inherited commits from the review diff,
 and rerun validation on the new exact head.
@@ -107,6 +115,21 @@ The reuse audit must distinguish code that can actually be shared from code
 that only informs the design. Extract only the former into engine-free helpers;
 host-specific allocation, executor state, and ABI layouts remain separate.
 Do not claim that stacking makes the entire crate reusable or host-compatible.
+
+### Implementation checkpoint: SDK and registration foundation
+
+The initial producer slice adds `src/phpext/` with real SDK discovery, paired
+interpreter/header checks, atomic adapter compilation, an empty registration
+shell, and explicit rejection of unsupported/cross-SDK targets. It extracts a
+neutral value-layout contract from `elephc-zend` and reuses it for both the
+consumer ABI tests and probes compiled against real PHP headers. A separate
+workflow explicitly runs the real-host tests in all six NTS/ZTS configurations.
+
+Local real-host tests passed on Linux x86_64, PHP 8.5.11 NTS: layout agreement,
+module loading/MINFO, get_module-only exports, failed-build artifact preservation,
+and symlink destination rejection. CI and subsequent implementation checkpoints
+remain necessary. This slice does not yet expose a CLI `--emit phpext`, compile
+export handlers, initialize the native request runtime, or claim ZTS concurrency.
 
 ## 2. Architecture and code ownership
 

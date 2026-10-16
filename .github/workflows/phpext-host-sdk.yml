@@ -1,0 +1,91 @@
+name: PHP extension host SDK
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main, stack/pr-1743-php-ext-hosting]
+    paths:
+      - '.github/workflows/phpext-host-sdk.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'build.rs'
+      - 'src/phpext/**'
+      - 'src/lib.rs'
+      - 'crates/elephc-zend/**'
+      - 'tests/phpext_tests.rs'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phpext-host-sdk-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_BUILD_JOBS: '4'
+  RUST_MIN_STACK: '33554432'
+
+jobs:
+  host-sdk:
+    name: Host SDK (${{ matrix.platform.target }}, ${{ matrix.phpts }})
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - runner: ubuntu-24.04
+            target: linux-x86_64
+          - runner: ubuntu-24.04-arm
+            target: linux-aarch64
+          - runner: macos-15
+            target: macos-aarch64
+        phpts: [nts, ts]
+    env:
+      ELEPHC_PHPEXT_EXPECT_ZTS: ${{ matrix.phpts == 'ts' && '1' || '0' }}
+      ELEPHC_PHPEXT_EXPECT_TARGET: ${{ matrix.platform.target }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: '1.98'
+
+      - name: Install matching PHP 8.5 SDK and CLI
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.5'
+          coverage: none
+        env:
+          phpts: ${{ matrix.phpts }}
+          fail-fast: 'true'
+
+      - name: Cache Cargo state
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: phpext-sdk-${{ matrix.platform.target }}-${{ matrix.phpts }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Verify runner and selected interpreter
+        shell: bash
+        run: |
+          set -euo pipefail
+          php -n -r 'if (PHP_VERSION_ID < 80500 || PHP_VERSION_ID >= 80600 || (int) PHP_ZTS !== (int) getenv("ELEPHC_PHPEXT_EXPECT_ZTS")) { exit(1); }'
+          php-config --vernum
+          php -n -v
+
+      - name: Check SDK parsing and host build validation
+        run: 'cargo test -p elephc --lib phpext::'
+
+      - name: Check consumer ABI after sharing value-layout facts
+        run: cargo test -p elephc-zend --test abi structures_have_the_layout_rust_gives_them
+
+      # These are explicit real-host tests. A missing SDK must fail, not skip.
+      # This gate validates registration, not native runtime thread safety.
+      - name: Load generated registration in real PHP and verify host value layouts
+        run: cargo test -p elephc --test phpext_tests -- --include-ignored
