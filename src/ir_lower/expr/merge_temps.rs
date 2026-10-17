@@ -100,9 +100,9 @@ pub(super) fn short_ternary_merge_result_type(
     value: &Expr,
     default: &Expr,
 ) -> PhpType {
-    let value_ty = materialized_expr_type_for_merge(ctx, value).codegen_repr();
-    let default_ty = materialized_expr_type_for_merge(ctx, default).codegen_repr();
-    wider_type_for_merge(&value_ty, &default_ty)
+    let value_ty = materialized_expr_type_for_merge(ctx, value);
+    let default_ty = materialized_expr_type_for_merge(ctx, default);
+    nullable_aware_branch_merge_type(&value_ty, &default_ty)
 }
 
 /// Chooses a ternary branch merge type without erasing PHP null branches.

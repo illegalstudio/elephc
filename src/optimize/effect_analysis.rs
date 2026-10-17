@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Summaries remain conservative around dynamic eval, trait dispatch, visibility, and never-returning bodies.
+//! - Declared scalar return validation can throw even when the source body has no explicit throw.
 
 use super::*;
 
@@ -163,7 +164,8 @@ fn collect_program_function_bodies<'a>(
                     FunctionEffectBody {
                         body,
                         declared_never: is_never_return_type(return_type),
-                        parameter_guard_may_throw: params.iter().any(|(_, ty, _, _)| matches!(ty, Some(TypeExpr::False))),
+                        parameter_guard_may_throw: params.iter().any(|(_, ty, _, _)| matches!(ty, Some(TypeExpr::False)))
+                            || scalar_return_boundary_may_throw(return_type, body),
                     },
                 );
             }
@@ -198,7 +200,8 @@ fn collect_program_static_method_bodies<'a>(
                                 context: context.clone(),
                                 body: &method.body,
                                 declared_never: is_never_return_type(&method.return_type),
-                                parameter_guard_may_throw: method.params.iter().any(|(_, ty, _, _)| matches!(ty, Some(TypeExpr::False))),
+                                parameter_guard_may_throw: method.params.iter().any(|(_, ty, _, _)| matches!(ty, Some(TypeExpr::False)))
+                                    || scalar_return_boundary_may_throw(&method.return_type, &method.body),
                             },
                         );
                     }
@@ -235,7 +238,8 @@ fn collect_program_instance_method_bodies<'a>(
                                 context: context.clone(),
                                 body: &method.body,
                                 declared_never: is_never_return_type(&method.return_type),
-                                parameter_guard_may_throw: method.params.iter().any(|(_, ty, _, _)| matches!(ty, Some(TypeExpr::False))),
+                                parameter_guard_may_throw: method.params.iter().any(|(_, ty, _, _)| matches!(ty, Some(TypeExpr::False)))
+                                    || scalar_return_boundary_may_throw(&method.return_type, &method.body),
                             },
                         );
                     }
@@ -348,6 +352,17 @@ fn is_never_return_type(return_type: &Option<TypeExpr>) -> bool {
     matches!(return_type, Some(TypeExpr::Never))
 }
 
+/// Keeps implicit scalar return validation observable even when the body has no explicit throw.
+pub(super) fn scalar_return_boundary_may_throw(return_type: &Option<TypeExpr>, body: &[Stmt]) -> bool {
+    matches!(return_type, Some(TypeExpr::Int | TypeExpr::Str | TypeExpr::Float | TypeExpr::Bool))
+        && crate::opcache_prelude::detect::first_reference(
+            body,
+            crate::opcache_prelude::detect::Symbol::syntactic(
+                crate::opcache_prelude::detect::SymbolKind::LazyValueMerge,
+            ),
+        ).is_some()
+}
+
 /// Adjusts an effect when the callable has a `never` return type. A `never` function is
 /// considered to have side effects because it exits abruptly (e.g., via exit/die or an
 /// infinite loop) and the PHP-visible control flow never continues past it.
@@ -359,7 +374,7 @@ fn never_declared_effect(declared_never: bool, effect: Effect) -> Effect {
     }
 }
 
-/// Keeps call-boundary literal-type guards observable even when the callable body is pure.
+/// Keeps implicit parameter and return guards observable even when the callable body is pure.
 fn parameter_guard_effect(may_throw: bool, effect: Effect) -> Effect {
     if may_throw {
         effect.with_may_throw()

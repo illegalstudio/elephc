@@ -268,7 +268,8 @@ pub fn scan(program: &[Stmt], web: bool) -> Vec<Sensitivity> {
                 | SymbolKind::AsymmetricVisibility
                 | SymbolKind::TypedClassConst
                 | SymbolKind::ObjectCast
-                | SymbolKind::DestructorDeclaration => Symbol::syntactic(watched.symbol_kind),
+                | SymbolKind::DestructorDeclaration
+                | SymbolKind::LazyValueMerge => Symbol::syntactic(watched.symbol_kind),
             };
             detect::first_reference(program, symbol).map(|span| Sensitivity {
                 symbol: watched.symbol,

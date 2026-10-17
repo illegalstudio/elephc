@@ -149,6 +149,7 @@ pub(super) fn lower_conditional_non_local_null_coalesce_assignment(
     // target is allowed to be absent — so this must go through the suppressing read rather than
     // a plain one. `$a[$k] ??= 5` on an absent key warned `Undefined array key`, which reference
     // PHP does not, and `$o->p ??= 5` on an uninitialized typed property would fatal.
+    widen_coalesce_array_storage(ctx, target, default);
     let current = lower_null_coalesce_value(ctx, current);
     let is_null = ctx.emit_value(
         Op::IsNull,
@@ -209,6 +210,7 @@ pub(crate) fn lower_null_coalesce_update_stmt(
     default: &Expr,
     span: Span,
 ) {
+    widen_coalesce_array_storage(ctx, target, default);
     let current = lower_null_coalesce_value(ctx, target);
     let is_null = ctx.emit_value(
         Op::IsNull,
@@ -252,6 +254,34 @@ pub(crate) fn lower_null_coalesce_update_stmt(
             ctx.mark_local_initialized(name);
         }
     }
+}
+
+/// Keeps an inferred array's element storage capable of holding the fallback verbatim.
+fn widen_coalesce_array_storage(ctx: &mut LoweringContext<'_, '_>, target: &Expr, default: &Expr) {
+    let ExprKind::ArrayAccess { array, .. } = &target.kind else { return; };
+    let ExprKind::Variable(name) = &array.kind else { return; };
+    let array_ty = ctx.local_type(name);
+    let element = match &array_ty {
+        PhpType::Array(element) | PhpType::AssocArray { value: element, .. } => element,
+        _ => return,
+    };
+    let fallback = materialized_expr_type_for_merge(ctx, default);
+    if element.codegen_repr() == PhpType::Mixed
+        || element.codegen_repr() == fallback.codegen_repr()
+        || fallback == PhpType::Never
+    {
+        return;
+    }
+    // Hash entries are already boxed; indexed locals use the normal storage-conversion
+    // bookkeeping so both the kept path and the insertion path agree on their layout.
+    let widened = match array_ty {
+        PhpType::Array(_) => PhpType::Array(Box::new(PhpType::Mixed)),
+        PhpType::AssocArray { key, .. } => PhpType::AssocArray {
+            key, value: Box::new(PhpType::Mixed),
+        },
+        _ => unreachable!(),
+    };
+    ctx.set_local_type(name, widened);
 }
 
 /// Emits the write side of an assignment expression whose target is not a local variable.

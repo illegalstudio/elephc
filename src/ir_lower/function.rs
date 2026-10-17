@@ -1745,6 +1745,12 @@ fn lower_body_into_function(
     }
     ctx.by_ref_return = function_by_ref_return;
     ctx.return_type_is_declared = return_type_is_declared;
+    ctx.has_lazy_value_merge = crate::opcache_prelude::detect::first_reference(
+        body,
+        crate::opcache_prelude::detect::Symbol::syntactic(
+            crate::opcache_prelude::detect::SymbolKind::LazyValueMerge,
+        ),
+    ).is_some();
     if let Some((scope_param, read_names, write_names, flush_names)) = eval_scope_reads {
         ctx.enable_eval_scope_access(scope_param, read_names, write_names, flush_names);
     }

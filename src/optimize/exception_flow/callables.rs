@@ -84,15 +84,20 @@ pub(super) fn collect_object_reference_entry_checks(
 ) {
     for stmt in stmts {
         match &stmt.kind {
-            StmtKind::FunctionDecl { name, params, .. } => {
-                if params_have_object_reference(params) {
+            StmtKind::FunctionDecl { name, params, return_type, body, .. } => {
+                if params_have_object_reference(params)
+                    || super::super::effect_analysis::scalar_return_boundary_may_throw(return_type, body)
+                {
                     functions.insert(name.clone());
                 }
             }
             StmtKind::ClassDecl { name, methods, .. }
             | StmtKind::InterfaceDecl { name, methods, .. }
             | StmtKind::TraitDecl { name, methods, .. } => {
-                for method in methods.iter().filter(|method| params_have_object_reference(&method.params)) {
+                for method in methods.iter().filter(|method| {
+                    params_have_object_reference(&method.params)
+                        || super::super::effect_analysis::scalar_return_boundary_may_throw(&method.return_type, &method.body)
+                }) {
                     let key = method_effect_key(name, &method.name);
                     if method.is_static {
                         static_methods.insert(key, true);

@@ -628,7 +628,15 @@ fn expr_alias(expr: &Expr, state: &AliasState<'_>) -> ReturnArgAlias {
         ExprKind::Cast { expr: inner, target } => cast_alias(target, inner, state),
         ExprKind::NullCoalesce { value, default }
         | ExprKind::ShortTernary { value, default } => {
-            expr_alias(value, state).merge(&expr_alias(default, state))
+            let alias = expr_alias(value, state).merge(&expr_alias(default, state));
+            // Lazy merges stage their result in an owned temporary. A parameter's payload
+            // may still be shared, but that is not proof of a borrowed return: nullable
+            // scalar boxing/unboxing can also detach a fresh string. Keep possible aliasing
+            // conservative and let the PHP call's ownership marker decide cleanup.
+            match alias {
+                ReturnArgAlias::Parameters(_) => ReturnArgAlias::Unknown,
+                other => other,
+            }
         }
         ExprKind::Ternary {
             then_expr,

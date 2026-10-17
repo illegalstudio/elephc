@@ -7,6 +7,7 @@
 //! Key details:
 //! - PHP string truthiness is special: only `""` and `"0"` are false.
 //! - Mixed predicates unbox the runtime cell before comparing the concrete tag.
+//! - Nullable integer unions use their payload/tag representation for truthiness.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -53,8 +54,13 @@ pub(in crate::codegen::lower_inst) fn emit_value_truthiness(
         }
         PhpType::Object(_) => emit_object_truthiness(ctx, value)?,
         PhpType::Mixed | PhpType::Union(_) => {
-            ctx.load_value_to_result(value)?;
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
+            // A nullable integer's raw union type is held in a payload/tag pair, not a box.
+            if ctx.value_php_type(value)? == PhpType::TaggedScalar {
+                emit_tagged_scalar_truthiness(ctx, value)?;
+            } else {
+                ctx.load_value_to_result(value)?;
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
+            }
         }
         PhpType::Resource(_) => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);

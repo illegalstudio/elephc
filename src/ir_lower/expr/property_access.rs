@@ -644,7 +644,8 @@ pub(super) fn lower_initialized_property_value(
     property: &str,
     expr: &Expr,
 ) -> LoweredValue {
-    let temp_name = ctx.declare_hidden_temp(PhpType::Mixed);
+    let temp_name = ctx.declare_owned_hidden_temp(PhpType::Mixed);
+    let split_initialized = ctx.initialized_slots_snapshot();
     let uninitialized_block = ctx
         .builder
         .create_named_block("coalesce.property.uninitialized", Vec::new());
@@ -672,6 +673,7 @@ pub(super) fn lower_initialized_property_value(
     });
 
     ctx.builder.position_at_end(uninitialized_block);
+    ctx.restore_initialized_slots(split_initialized.clone());
     // This path never reads the property, so nothing downstream consumes the receiver — an
     // OWNING one has to be released here. The read path below hands it to
     // `lower_property_get_from_value`, which disposes of it the way an ordinary read does.
@@ -687,9 +689,12 @@ pub(super) fn lower_initialized_property_value(
     }
     let null_value = lower_boxed_null(ctx, expr);
     store_value_into_temp(ctx, &temp_name, PhpType::Mixed, null_value, expr.span);
+    let uninitialized_reachable = !ctx.builder.insertion_block_is_terminated();
+    let uninitialized_initialized = ctx.initialized_slots_snapshot();
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(read_block);
+    ctx.restore_initialized_slots(split_initialized.clone());
     let read_value = lower_property_get_from_value(ctx, object, property, Op::PropGet, expr);
     // Both arms store into one Mixed temporary, so a slot that is not already boxed has to be.
     let read_value = if matches!(
@@ -708,9 +713,18 @@ pub(super) fn lower_initialized_property_value(
         )
     };
     store_value_into_temp(ctx, &temp_name, PhpType::Mixed, read_value, expr.span);
+    let read_reachable = !ctx.builder.insertion_block_is_terminated();
+    let read_initialized = ctx.initialized_slots_snapshot();
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);
+    ctx.restore_initialized_slots(merge_initialized_slots_for_expr(
+        &split_initialized,
+        uninitialized_initialized,
+        uninitialized_reachable,
+        read_initialized,
+        read_reachable,
+    ));
     take_owned_temp(ctx, &temp_name, expr.span)
 }
 
@@ -767,7 +781,8 @@ pub(super) fn lower_initialized_static_property_value(
     property: &str,
     expr: &Expr,
 ) -> LoweredValue {
-    let temp_name = ctx.declare_hidden_temp(PhpType::Mixed);
+    let temp_name = ctx.declare_owned_hidden_temp(PhpType::Mixed);
+    let split_initialized = ctx.initialized_slots_snapshot();
     let uninitialized_block = ctx
         .builder
         .create_named_block("coalesce.static_property.uninitialized", Vec::new());
@@ -796,11 +811,15 @@ pub(super) fn lower_initialized_static_property_value(
     });
 
     ctx.builder.position_at_end(uninitialized_block);
+    ctx.restore_initialized_slots(split_initialized.clone());
     let null_value = lower_boxed_null(ctx, expr);
     store_value_into_temp(ctx, &temp_name, PhpType::Mixed, null_value, expr.span);
+    let uninitialized_reachable = !ctx.builder.insertion_block_is_terminated();
+    let uninitialized_initialized = ctx.initialized_slots_snapshot();
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(read_block);
+    ctx.restore_initialized_slots(split_initialized.clone());
     let read_value = lower_static_property_get(ctx, receiver, property, expr);
     // Both arms store into one Mixed temporary, so a slot that is not already boxed has to be.
     let read_value = if matches!(
@@ -819,9 +838,18 @@ pub(super) fn lower_initialized_static_property_value(
         )
     };
     store_value_into_temp(ctx, &temp_name, PhpType::Mixed, read_value, expr.span);
+    let read_reachable = !ctx.builder.insertion_block_is_terminated();
+    let read_initialized = ctx.initialized_slots_snapshot();
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);
+    ctx.restore_initialized_slots(merge_initialized_slots_for_expr(
+        &split_initialized,
+        uninitialized_initialized,
+        uninitialized_reachable,
+        read_initialized,
+        read_reachable,
+    ));
     take_owned_temp(ctx, &temp_name, expr.span)
 }
 

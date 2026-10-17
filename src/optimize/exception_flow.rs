@@ -294,14 +294,13 @@ impl ExceptionFlowAnalysis {
                     .collect()
             })
             .unwrap_or_default();
-        if type_metadata.is_none() {
-            callables::collect_object_reference_entry_checks(
-                program,
-                &mut function_object_ref_checks,
-                &mut static_method_object_ref_checks,
-                &mut instance_method_object_ref_checks,
-            );
-        }
+        // Body-level lazy return guards also matter when declaration metadata is available.
+        callables::collect_object_reference_entry_checks(
+            program,
+            &mut function_object_ref_checks,
+            &mut static_method_object_ref_checks,
+            &mut instance_method_object_ref_checks,
+        );
         let static_method_returns = type_metadata
             .map(|(_, classes, _)| {
                 classes
@@ -977,12 +976,25 @@ impl ExceptionFlowAnalysis {
         class_context: Option<&ExceptionClassContext>,
     ) -> ThrownTypes {
         match &callee.kind {
-            ExprKind::Closure { body, .. } => self.block_throws(body, bindings, class_context),
-            ExprKind::FirstClassCallable(CallableTarget::Function(name)) => self
-                .function_throws
-                .get(name.as_str())
-                .cloned()
-                .unwrap_or_else(ThrownTypes::unknown),
+            ExprKind::Closure { return_type, body, .. } => {
+                let thrown = self.block_throws(body, bindings, class_context);
+                if super::effect_analysis::scalar_return_boundary_may_throw(return_type, body) {
+                    thrown.combined(ThrownTypes::exact("TypeError"))
+                } else {
+                    thrown
+                }
+            },
+            ExprKind::FirstClassCallable(CallableTarget::Function(name)) => {
+                let thrown = self.function_throws.get(name.as_str()).cloned()
+                    .unwrap_or_else(ThrownTypes::unknown);
+                // A descriptor invocation crosses the same entry/return checks as a
+                // named call; the body-only summary does not include those TypeErrors.
+                if self.function_object_ref_checks.contains(name.as_str()) {
+                    thrown.combined(ThrownTypes::exact("TypeError"))
+                } else {
+                    thrown
+                }
+            },
             _ => ThrownTypes::unknown(),
         }
     }
