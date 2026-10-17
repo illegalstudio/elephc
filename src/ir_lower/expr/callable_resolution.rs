@@ -141,6 +141,14 @@ pub(super) fn lower_static_callable_call(
                 &function_name,
                 source_prefers_extension_builtin(&function_name),
             );
+            if let Some(sig) = sig.as_ref() {
+                let name = Name::from(function_name.as_str());
+                if let Some(call) = ref_place_args::lower_unshift_property_reference(
+                    ctx, &name, sig, callback_args, expr,
+                ) {
+                    return Some(call);
+                }
+            }
             if let Some(call) = lower_packed_builtin_call(
                 ctx, &function_name, sig.as_ref(), callback_args, expr,
             ) {

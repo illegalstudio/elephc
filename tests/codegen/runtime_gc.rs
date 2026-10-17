@@ -180,3 +180,9 @@ mod class_param_return;
 mod reflection_attribute_filter;
 #[path = "runtime_gc/tagged_scalar_boxing.rs"]
 mod tagged_scalar_boxing;
+
+#[path = "runtime_gc/property_receiver_arguments.rs"]
+mod property_receiver_arguments;
+
+#[path = "runtime_gc/unshift_reference_cow.rs"]
+mod unshift_reference_cow;

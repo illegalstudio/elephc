@@ -16,7 +16,9 @@ pub(super) fn lower_boxed_array_unshift(
     inst: &Instruction,
     array: ValueId,
 ) -> Result<()> {
-    ReceiverPlace::resolve(ctx, array)?.require_writable("array_unshift")?;
+    let receiver = ReceiverPlace::resolve(ctx, array)?;
+    receiver.require_writable("array_unshift")?;
+    receiver.reload_local_value(ctx, array)?;
     validate_receiver(ctx, array)?;
     emit_prefix(ctx, &inst.operands[1..])?;
     let result = abi::int_result_reg(ctx.emitter);

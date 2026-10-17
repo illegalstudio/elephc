@@ -17,7 +17,7 @@
 //!   caller kept a pointer into the buffer `__rt_array_grow` had already freed, and a receiver
 //!   with no writable slot at all is now refused instead of silently dropped.
 //! - Returns the new indexed-array length as PHP `int`.
-//! - Supports integer and boolean indexed payloads, matching the existing 8-byte helper.
+//! - Supports integer, boolean, and boxed Mixed payloads through the 8-byte slot helper.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -58,6 +58,12 @@ pub(super) fn lower_array_unshift(ctx: &mut FunctionContext<'_>, inst: &Instruct
         // a receiver with nowhere to publish the new pointer must be refused rather than left
         // pointing at freed storage.
         receiver.require_writable("array_unshift")?;
+        receiver.reload_local_value(ctx, array)?;
+        // The captured property cell keeps its own payload owner until store-back retires it.
+        // Give the consuming COW helper a separate owner so a cloned object's old array stays live.
+        if matches!(receiver, ReceiverPlace::RefCell(_)) {
+            receiver.prepare_consuming_storeback(ctx, array)?;
+        }
         ensure_unique_array_unshift_source(ctx, array)?;
         // Reverse source order: prepending v_last first and v_first last leaves the values in
         // PHP's `[v_first, …, v_last, old…]` layout. Growth is re-checked per element because
@@ -65,6 +71,10 @@ pub(super) fn lower_array_unshift(ctx: &mut FunctionContext<'_>, inst: &Instruct
         for index in (1..inst.operands.len()).rev() {
             let value = expect_operand(inst, index)?;
             ensure_array_unshift_capacity(ctx, array)?;
+            if elem_ty == PhpType::Mixed {
+                lower_mixed_array_unshift(ctx, array, value)?;
+                continue;
+            }
             match ctx.emitter.target.arch {
                 Arch::AArch64 => lower_array_unshift_aarch64(ctx, array, value)?,
                 Arch::X86_64 => lower_array_unshift_x86_64(ctx, array, value)?,
@@ -108,7 +118,7 @@ fn array_unshift_element_type(ty: PhpType) -> Result<PhpType> {
     match ty.codegen_repr() {
         PhpType::Array(elem) => {
             let elem = elem.codegen_repr();
-            if matches!(elem, PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never) {
+            if matches!(elem, PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never | PhpType::Mixed) {
                 return Ok(elem);
             }
             Err(CodegenIrError::unsupported(format!(
@@ -125,6 +135,9 @@ fn array_unshift_element_type(ty: PhpType) -> Result<PhpType> {
 
 /// Verifies the prepended value matches the runtime helper's scalar slot layout.
 fn require_array_unshift_value_type(elem_ty: &PhpType, value_ty: &PhpType) -> Result<()> {
+    if *elem_ty == PhpType::Mixed {
+        return Ok(());
+    }
     if matches!(value_ty, PhpType::Int | PhpType::Bool)
         && (elem_ty == value_ty || matches!(elem_ty, PhpType::Void | PhpType::Never))
     {
@@ -135,6 +148,32 @@ fn require_array_unshift_value_type(elem_ty: &PhpType, value_ty: &PhpType) -> Re
         value_ty,
         elem_ty
     )))
+}
+
+/// Transfers one independently owned boxed value into the packed Mixed payload.
+fn lower_mixed_array_unshift(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    value: ValueId,
+) -> Result<()> {
+    let value_ty = ctx.value_php_type(value)?.codegen_repr();
+    if value_ty == PhpType::Mixed {
+        ctx.load_value_to_result(value)?;
+        abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    } else {
+        super::super::super::arrays::box_value_for_mixed_container(ctx, value, &value_ty)?;
+    }
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result);
+    let array_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    ctx.load_value_to_reg(array, array_reg)?;
+    let value_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, value_reg, 0);
+    abi::emit_call_label(ctx.emitter, "__rt_array_unshift");
+    // The scalar-width prepend stores the pointer without retaining it. Its new slot owns
+    // the box above, so discarding the stack parking must not decrement that transferred owner.
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    Ok(())
 }
 
 /// Verifies the lowered `array_unshift()` result carries PHP's integer count metadata.
