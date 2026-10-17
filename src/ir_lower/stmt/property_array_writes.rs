@@ -18,6 +18,19 @@ pub(super) fn lower_property_array_push(
     span: Span,
 ) {
     let object = lower_expr(ctx, object);
+    lower_property_array_push_on(ctx, object, property, value, span);
+    release_owning_write_receiver(ctx, object, span);
+}
+
+/// Lowers `$object->prop[] = value` once the receiver is evaluated. Every path only borrows
+/// the receiver; [`lower_property_array_push`] retires an owning one afterwards.
+fn lower_property_array_push_on(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: &str,
+    value: &Expr,
+    span: Span,
+) {
     if object_property_type(ctx, object.value, property).is_some_and(|ty| ty.is_php_array()) {
         lower_php_array_property_write(ctx, object, property, None, value, span, false);
         return;
@@ -132,6 +145,35 @@ pub(crate) fn lower_property_array_assign_with_diagnosed_key(
     key_already_diagnosed: bool,
 ) {
     let object = lower_expr(ctx, object);
+    lower_property_array_assign_on(ctx, object, property, index, value, span, key_already_diagnosed);
+    release_owning_write_receiver(ctx, object, span);
+}
+
+/// Retires a property write's receiver when the write itself evaluated it into an owning
+/// temporary: `$h->next` read out of its slot for `$h->next->arr[0] = 9`, or a call result such
+/// as `mk()->arr[] = 9`. The write only borrows it, so leaving it was one leaked reference per
+/// statement (#1643). A receiver loaded from a variable is borrowed and left alone.
+pub(in crate::ir_lower) fn release_owning_write_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    span: Span,
+) {
+    if ctx.write_receiver_is_owning_temporary(object) && !ctx.builder.insertion_block_is_terminated() {
+        crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
+    }
+}
+
+/// Lowers `$object->prop[index] = value` once the receiver is evaluated. Every path only borrows
+/// the receiver; [`lower_property_array_assign_with_diagnosed_key`] retires an owning one.
+fn lower_property_array_assign_on(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: &str,
+    index: &Expr,
+    value: &Expr,
+    span: Span,
+    key_already_diagnosed: bool,
+) {
     if object_property_type(ctx, object.value, property).is_some_and(|ty| ty.is_php_array()) {
         lower_php_array_property_write(
             ctx,

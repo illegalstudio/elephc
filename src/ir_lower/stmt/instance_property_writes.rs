@@ -46,7 +46,7 @@ pub(super) fn lower_property_assign(
     // guard adds no evaluation and both branches see exactly the same two values.
     let magic_classes = magic_accessor_subclasses(ctx, object.value, property, "__set");
     if !magic_classes.is_empty() {
-        return lower_property_assign_guarding_magic_subclasses(
+        lower_property_assign_guarding_magic_subclasses(
             ctx,
             object,
             property,
@@ -55,8 +55,20 @@ pub(super) fn lower_property_assign(
             &magic_classes,
             span,
         );
+    } else {
+        lower_property_assign_value(ctx, object, property, value_expr, lowered_value, false, span);
     }
-    lower_property_assign_value(ctx, object, property, value_expr, lowered_value, false, span)
+    // Every write path above only BORROWS the receiver (the store, `__set`, a set hook). A
+    // receiver that is itself an owning temporary, such as `$h->next` read out of its slot for
+    // `$h->next->n = 9` or a call result, is retired here once the write returns normally;
+    // leaving it was one leaked reference per statement (#1643). A write that THROWS never gets
+    // here: the ordinary store and the set-hook call park the receiver for the unwinder (see
+    // `lower_property_assign_value`), the `__set` call roots its receiver itself, and a
+    // statically decided readonly write releases it above before raising. The judgement ignores
+    // a surrounding `??=`'s borrowed-operand mode, which is about the stored value only.
+    if ctx.write_receiver_is_owning_temporary(object) && !ctx.builder.insertion_block_is_terminated() {
+        crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
+    }
 }
 
 /// Emits the `instanceof` chain that hands a runtime subclass's `__set` its own call.
@@ -158,7 +170,13 @@ fn lower_property_assign_value(
     if set_hook_receiver_has_accessor(ctx, object.value, property)
         && !ctx.in_own_property_accessor(property)
     {
+        // A set hook is user code and can throw: an owning receiver is parked across the call so
+        // the unwind retires it, as the ordinary store below does (#1643).
+        let receiver_pins = ctx.with_write_receiver_ownership(|ctx| {
+            crate::ir_lower::expr::pin_in_flight_owners(ctx, &[object.value], span)
+        });
         lower_property_hook_set(ctx, object.value, property, value, span);
+        crate::ir_lower::expr::unpin_in_flight_owners(ctx, receiver_pins, span);
         return;
     }
     let data = ctx.intern_string(property);
@@ -180,6 +198,13 @@ fn lower_property_assign_value(
     } else {
         Vec::new()
     };
+    // The receiver, when this statement evaluated it into an owning temporary (`$h->next` read
+    // out of its slot, `mk()`), is parked the same way: a store that throws (a weak-mode
+    // `TypeError` from the runtime-class guard) unwinds past the release `lower_property_assign`
+    // emits after the write, so without a record the whole receiver was stranded (#1643).
+    let receiver_pins = ctx.with_write_receiver_ownership(|ctx| {
+        crate::ir_lower::expr::pin_in_flight_owners(ctx, &[object.value], span)
+    });
     if preserve_property_operand {
         let property_name = ctx.emit_value(
             Op::ConstStr,
@@ -206,6 +231,7 @@ fn lower_property_assign_value(
         );
     }
     crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, receiver_pins, span);
     // Undeclared dynamic properties store boxed Mixed values. Boxing retains a
     // concrete temporary payload just like a declared property store does.
     let property_ty = object_property_type(ctx, object.value, property).unwrap_or(PhpType::Mixed);

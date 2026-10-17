@@ -120,7 +120,16 @@ fn emit_dynamic_plan_write(
             ensure_property_value_supported(ctx, slot, value, &value_ty, inst)?;
             let base_reg = abi::symbol_scratch_reg(ctx.emitter);
             ctx.load_value_to_reg(object, base_reg)?;
-            emit_property_store(ctx, value, slot, base_reg)
+            emit_property_store(ctx, value, slot, base_reg)?;
+            if matches!(
+                slot.php_type.codegen_repr(),
+                PhpType::Str | PhpType::Int | PhpType::Float | PhpType::Bool
+            ) {
+                // A scalar or string slot copies the payload out of the runtime-shaped box, as
+                // `lower_mixed_named_prop_set` retires (#1643).
+                super::release_adopted_mixed_source(ctx, value, &slot.php_type)?;
+            }
+            Ok(())
         }
         PropertyRuntimeAction::DynamicHash { hash_offset, .. } => {
             // The NAME comes from the arm, not from the receiver's static type: php reports the
@@ -480,6 +489,16 @@ pub(super) fn lower_nullable_prop_set(
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     emit_nullable_receiver_object_payload(ctx, object, &null_label, base_reg)?;
     emit_property_store(ctx, value, &slot, base_reg)?;
+    if matches!(
+        slot.php_type.codegen_repr(),
+        PhpType::Str | PhpType::Int | PhpType::Float | PhpType::Bool
+    ) {
+        // A value written through a nullable receiver is boxed before the store (its slot is only
+        // known at run time in general), and scalar and string slots copy the accepted payload
+        // out of that cell, exactly as in `lower_mixed_named_prop_set`. An owned source box is
+        // retired here; leaving it was one leaked cell per `$link->n = 9` (#1643).
+        super::release_adopted_mixed_source(ctx, value, &slot.php_type)?;
+    }
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&null_label);
