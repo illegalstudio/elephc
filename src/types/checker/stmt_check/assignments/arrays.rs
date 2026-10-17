@@ -212,13 +212,13 @@ fn buffer_element_accepts_assignment(expected: &PhpType, actual: &PhpType) -> bo
 /// Validates a nested array assignment like `$arr[$i] = $value` where the target itself is an array access.
 ///
 /// Type-checks the array, index, and value expressions, then validates that the array type supports
-/// nested offset assignment. Allows `Mixed` and objects implementing `ArrayAccess`; rejects strings
-/// and plain arrays.
+/// nested offset assignment. Allows arrays and boxed write parents, including false conversion;
+/// objects retain their existing ArrayAccess validation.
 ///
 /// Errors:
 /// - Target is not an array access expression
 /// - Target is a string (string offset assignment not supported)
-/// - Target type does not support nested assignment (not `Mixed` or `ArrayAccess`)
+/// - Target type does not support nested assignment
 pub(super) fn check_nested_array_assign(
     checker: &mut Checker,
     target: &Expr,
@@ -230,11 +230,23 @@ pub(super) fn check_nested_array_assign(
         return Err(CompileError::new(span, "Invalid assignment target"));
     };
 
-    let arr_ty = checker.infer_type_with_assignment_effects(array, env)?;
+    super::static_properties::promote_static_nested_write_root(checker, target, span)?;
+    let arr_ty = checker.infer_nested_write_parent_with_effects(array, env)?;
     checker.infer_type_with_assignment_effects(index, env)?;
-    checker.infer_type_with_assignment_effects(value, env)?;
+    if !nested_write_parent_can_promote(&arr_ty, array)
+        || !check_promoted_nested_update_value(checker, target, value, span, env)?
+    {
+        checker.infer_type_with_assignment_effects(value, env)?;
+    }
     match arr_ty {
         PhpType::Mixed => Ok(()),
+        PhpType::Array(_) | PhpType::AssocArray { .. } => Ok(()),
+        PhpType::Bool | PhpType::False | PhpType::Void
+            if matches!(array.kind, ExprKind::ArrayAccess { .. }) => Ok(()),
+        PhpType::Union(members)
+            if matches!(array.kind, ExprKind::ArrayAccess { .. })
+                && members.iter().all(|member| matches!(member,
+                    PhpType::Bool | PhpType::False | PhpType::Void)) => Ok(()),
         PhpType::Str => Err(CompileError::new(
             span,
             "String offset assignment is not supported",
@@ -248,6 +260,54 @@ pub(super) fn check_nested_array_assign(
             span,
             "Nested array assignment requires a Mixed or ArrayAccess target",
         )),
+    }
+}
+
+/// Returns whether a nested write parent may legally autovivify from false or null.
+fn nested_write_parent_can_promote(parent: &PhpType, array: &Expr) -> bool {
+    if !matches!(array.kind, ExprKind::ArrayAccess { .. }) {
+        return false;
+    }
+    match parent {
+        PhpType::Bool | PhpType::False | PhpType::Void => true,
+        PhpType::Union(members) => members.iter().all(|member| matches!(member,
+            PhpType::Bool | PhpType::False | PhpType::Void)),
+        _ => false,
+    }
+}
+
+/// Checks only the user operand of a desugared update whose missing leaf reads as null.
+fn check_promoted_nested_update_value(
+    checker: &mut Checker,
+    target: &Expr,
+    value: &Expr,
+    span: Span,
+    env: &mut TypeEnv,
+) -> Result<bool, CompileError> {
+    if value.span != span {
+        return Ok(false);
+    }
+    match &value.kind {
+        ExprKind::BinaryOp { left, right, .. } if left.as_ref() == target => {
+            checker.infer_type_with_assignment_effects(right, env)?;
+            Ok(true)
+        }
+        ExprKind::NullCoalesce { value: read, default } if read.as_ref() == target => {
+            checker.infer_type_with_assignment_effects(default, env)?;
+            Ok(true)
+        }
+        ExprKind::Assignment { value, prelude, result_target: None, .. }
+            if prelude.len() == 1 =>
+        {
+            let crate::parser::ast::StmtKind::Assign { name, value: read } = &prelude[0].kind
+                else { return Ok(false); };
+            if read != target {
+                return Ok(false);
+            }
+            Ok(matches!(&value.kind,
+                ExprKind::PreIncrement(local) | ExprKind::PreDecrement(local) if local == name))
+        }
+        _ => Ok(false),
     }
 }
 

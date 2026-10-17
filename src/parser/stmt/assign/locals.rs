@@ -17,8 +17,8 @@ use crate::span::Span;
 use super::super::params::parse_type_expr;
 use super::super::{expect_semicolon, expect_token};
 
-/// Handle ++$var; or --$var; as standalone statements. Also handles ++A::$x and --A::$x
-/// (prefix increment/decrement on static properties) by desugaring to a compound assignment.
+/// Handles discarded prefix increments/decrements on locals, scoped properties and array places.
+/// Complex storage shares the postfix read-modify-write lowering and index snapshots.
 pub(in crate::parser::stmt) fn parse_incdec_stmt(
     tokens: &[SpannedToken],
     pos: &mut usize,
@@ -38,29 +38,7 @@ pub(in crate::parser::stmt) fn parse_incdec_stmt(
         let lhs_expr = crate::parser::expr::parse_expr(tokens, pos)
             .map_err(|_| CompileError::new(span, "Expected variable after '++'"))?;
         expect_semicolon(tokens, pos)?;
-        let op = if is_increment {
-            crate::parser::ast::BinOp::Add
-        } else {
-            crate::parser::ast::BinOp::Sub
-        };
-        let one = Expr::new(ExprKind::IntLiteral(1), span);
-        let value = crate::parser::stmt::assign::compound::assignment_value(
-            lhs_expr.clone(),
-            crate::parser::stmt::assign::compound::AssignmentOperator::Compound(op),
-            one,
-            span,
-        );
-        if let ExprKind::StaticPropertyAccess { receiver, property } = lhs_expr.kind {
-            return Ok(Stmt::new(
-                StmtKind::StaticPropertyAssign {
-                    receiver,
-                    property,
-                    value,
-                },
-                span,
-            ));
-        }
-        return Err(CompileError::new(span, "Invalid increment target"));
+        return super::postfix::lower_postfix_incdec_assignment(lhs_expr, is_increment, span);
     }
 
     // `++$this->n;`, `++$obj->n;`, and `++$a[0];` target storage the simple local path

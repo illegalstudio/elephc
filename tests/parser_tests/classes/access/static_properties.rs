@@ -9,6 +9,69 @@
 
 use super::*;
 
+/// Nested postfix results reuse the old-value capture inside their single update statement.
+#[test]
+fn test_parse_static_nested_postfix_reuses_update_capture() {
+    for expression in ["Counter::$items[0][1]++", "Counter::$items[key()][1]--"] {
+        let statements = parse_source(&format!("<?php echo {expression};"));
+        let StmtKind::Echo(Expr { kind: ExprKind::Assignment { value, prelude, .. }, .. })
+            = &statements[0].kind else { panic!("{expression}: expected captured assignment"); };
+        let StmtKind::NestedArrayAssign { value: update, .. } = &prelude.last().unwrap().kind
+            else { panic!("{expression}: expected one nested update"); };
+        let ExprKind::Assignment { prelude: captures, .. } = &update.kind
+            else { panic!("{expression}: expected PHP incdec capture"); };
+        let StmtKind::Assign { name, .. } = &captures[0].kind else { unreachable!() };
+        assert!(matches!(&value.kind, ExprKind::Variable(result) if result == name),
+            "{expression}: the postfix result must use the write-context old-value capture");
+        assert!(!prelude.iter().any(|stmt| matches!(&stmt.kind,
+            StmtKind::Assign { value: Expr { kind: ExprKind::ArrayAccess { .. }, .. }, .. })),
+            "{expression}: do not insert a separate plain-read traversal");
+    }
+}
+
+/// Direct static expression updates capture one read and reuse the PHP incdec local kernel.
+#[test]
+fn test_parse_static_property_array_incdec_expressions_read_once() {
+    for expression in ["++Counter::$items[key()]", "Counter::$items[key()]++",
+        "--Counter::$items[key()]", "Counter::$items[key()]--"]
+    {
+        let statements = parse_source(&format!("<?php echo {expression};"));
+        let StmtKind::Echo(Expr { kind: ExprKind::Assignment { prelude, result_target, .. }, .. })
+            = &statements[0].kind else { panic!("{expression}: expected captured assignment"); };
+        let rendered = format!("{prelude:?}");
+        assert_eq!(rendered.matches("ArrayAccess").count(), 1, "{expression}: {rendered}");
+        assert_eq!(rendered.matches("FunctionCall").count(), 1, "{expression}: {rendered}");
+        assert!(!rendered.contains("BinaryOp"), "{expression}: use PHP incdec, not numeric arithmetic");
+        assert!(result_target.is_some(), "{expression}: return a captured value, not another read");
+    }
+}
+
+/// Discarded prefix updates accept indexed static properties on every scoped receiver.
+#[test]
+fn test_parse_static_property_array_prefix_updates() {
+    for receiver in ["Counter", "self", "parent", "static"] {
+        for operator in ["++", "--"] {
+            let source = format!("<?php {operator}{receiver}::$items[0];");
+            let stmts = parse_source(&source);
+            assert_eq!(stmts.len(), 1, "{source}");
+            let kind = match &stmts[0].kind {
+                StmtKind::Synthetic(statements) => &statements.last().unwrap().kind,
+                kind => kind,
+            };
+            assert!(matches!(kind, StmtKind::StaticPropertyArrayAssign { .. }),
+                "{source}: {kind:?}");
+            let StmtKind::StaticPropertyArrayAssign { value, .. } = kind else { unreachable!() };
+            let ExprKind::Assignment { value, prelude, .. } = &value.kind else {
+                panic!("{source}: incdec must not become numeric compound arithmetic");
+            };
+            assert_eq!(prelude.len(), 1, "{source}: read the element once");
+            assert!(matches!(&value.kind, ExprKind::PreIncrement(_) if operator == "++")
+                || matches!(&value.kind, ExprKind::PreDecrement(_) if operator == "--"),
+                "{source}: share ordinary PHP incdec semantics");
+        }
+    }
+}
+
 /// Parses `Counter::$count` inside an Echo statement and verifies the AST
 /// produces a `StaticPropertyAccess` node with `StaticReceiver::Named("Counter")`
 /// and property name `"count"`.

@@ -27,9 +27,11 @@ pub(super) fn lower(
     match target {
         RuntimeCallTarget::ThrowableInitialize => lower_throwable_initialize(ctx, inst),
         RuntimeCallTarget::ExceptionChain => lower_exception_chain(ctx, inst),
-        RuntimeCallTarget::ArrayFetchForWrite => {
+        RuntimeCallTarget::ArrayFetchForWrite | RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed => {
             super::lower_array_fetch_for_write_runtime_call(ctx, inst)
         }
+        RuntimeCallTarget::WriteDiagnostic => lower_diagnostic(ctx, inst),
+        RuntimeCallTarget::MixedCellHasOtherOwner => lower_mixed_cell_has_other_owner(ctx, inst),
         RuntimeCallTarget::MixedCellPromoteToHash(sort) => {
             lower_mixed_cell_promote_to_hash(ctx, inst, sort, false)
         }
@@ -54,6 +56,42 @@ pub(super) fn lower(
             super::runtime_functions::lower(ctx, inst, target)
         }
     }
+}
+
+/// Checks the uniform cell header without adding an owner that would change the answer.
+fn lower_mixed_cell_has_other_owner(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ctx.load_value_to_result(expect_operand(inst, 0)?)?;
+    let done = ctx.next_label("mixed_cell_other_owner_done");
+    // -- distinguish attached cell ownership from the sole pending write pin --
+    match ctx.emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {done}"));                // an absent cell cannot have another owner
+            ctx.emitter.instruction("ldr w9, [x0, #-12]");                      // read the uniform heap reference count
+            ctx.emitter.instruction("cmp w9, #1");                              // the pending write owns one retained cell reference
+            ctx.emitter.instruction("cset x0, hi");                             // another owner keeps the selected parent attached
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // an absent cell cannot have another owner
+            ctx.emitter.instruction(&format!("jz {done}"));                     // retain the zero result for an absent cell
+            ctx.emitter.instruction("cmp DWORD PTR [rax - 12], 1");             // compare the uniform heap reference count with the pending pin
+            ctx.emitter.instruction("seta al");                                 // another owner keeps the selected parent attached
+            ctx.emitter.instruction("movzx eax, al");                           // materialize the complete PHP boolean result
+        }
+    }
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
+}
+
+/// Forwards a complete diagnostic through PHP's masks and catchable error-handler dispatch.
+fn lower_diagnostic(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    // -- materialize borrowed diagnostic bytes in the native handler ABI --
+    ctx.load_value_to_result(expect_operand(inst, 0)?)?;
+    if ctx.emitter.target.arch == crate::codegen::platform::Arch::X86_64 {
+        abi::emit_reg_move(ctx.emitter, "rdi", "rax");
+        abi::emit_reg_move(ctx.emitter, "rsi", "rdx");
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+    Ok(())
 }
 
 /// Promotes an independent cell copy and transfers one hash owner to a literal unpack operation.

@@ -9,7 +9,7 @@
 //! - Assignment checking must distinguish value writes, by-reference mutation, nullable access, and declared property contracts.
 
 use crate::errors::CompileError;
-use crate::parser::ast::{Expr, StaticReceiver};
+use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
 use crate::span::Span;
 use crate::types::{normalized_array_key_type, PhpType, TypeEnv};
 
@@ -23,6 +23,23 @@ struct StaticPropertyAssignmentTarget {
     property_has_declared_type: bool,
     prop_ty: PhpType,
     dynamic_eval_target: bool,
+}
+
+/// Gives an inferred static array a boxed PHP contract before nested write-context traversal.
+/// Concrete child reads otherwise detach boxes, and homogeneous children reject legal writes.
+pub(super) fn promote_static_nested_write_root(
+    checker: &mut Checker, target: &Expr, span: Span,
+) -> Result<(), CompileError> {
+    let mut root = target;
+    while let ExprKind::ArrayAccess { array, .. } = &root.kind { root = array; }
+    let ExprKind::StaticPropertyAccess { receiver, property } = &root.kind else { return Ok(()); };
+    let target = resolve_static_property_assignment_target(checker, receiver, property, span)?;
+    if !target.property_has_declared_type
+        && matches!(target.prop_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+    {
+        update_static_property_type(checker, property, &target.declaring_class, PhpType::php_array());
+    }
+    Ok(())
 }
 
 /// Type-checks a direct static property assignment `Class::$prop = value`.
@@ -144,7 +161,12 @@ pub(super) fn check_static_property_array_assign(
     let normalized_idx_ty = normalized_array_key_type(index, idx_ty);
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     let target = resolve_static_property_assignment_target(checker, receiver, property, span)?;
-    if target.dynamic_eval_target || target.prop_ty.is_php_array() {
+    let mixed_elements = match target.prop_ty.codegen_repr() {
+        PhpType::Array(element) => element.codegen_repr() == PhpType::Mixed,
+        PhpType::AssocArray { value, .. } => value.codegen_repr() == PhpType::Mixed,
+        _ => false,
+    };
+    if target.dynamic_eval_target || target.prop_ty.is_php_array() || mixed_elements {
         if !is_dynamic_eval_static_property_array_key_type(&normalized_idx_ty) {
             return Err(CompileError::new(span, "Array index must be integer"));
         }

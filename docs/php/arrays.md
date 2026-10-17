@@ -36,6 +36,35 @@ echo $items[0]; // 1
 echo $items[1]; // two
 ```
 
+## Nested write contexts
+
+Nested assignments and appends keep their parent cells attached to the original array and
+respect copy-on-write. Computed dimensions run once before the right-hand side; bare variable
+keys are read at store time. Missing or null parents are created during the write traversal.
+
+A `false` parent is converted to an empty array after the right-hand side, with PHP's
+false-to-array deprecation before the leaf write. This applies to locals and static arrays,
+including `$items[0][0][1] = 9` and `$items[0][0][] = 3`.
+Statically inferred false elements also support deeper write traversal. Integer, float and
+true parents instead raise `Error: Cannot use a scalar value as an array`.
+
+Nested `??=` probes without converting the parent, evaluates its default only for a missing
+or null leaf, and then uses the ordinary write traversal. Local and static compound updates
+settle computed dimensions and the RHS before fetching writable parents and converting false.
+A throwing conversion handler prevents the leaf read and operator, but does not undo the RHS.
+These update paths preserve by-value array copies.
+
+If the deprecation handler throws, plain writes preserve PHP's opcode completion: integer,
+boolean and string dimensions finish their store before propagation; appends finish their
+append. Null, float and resource dimensions stop without a leaf store, while array/object
+dimensions raise `TypeError` with the callback exception as `previous`. An intermediate
+write fetch completes an eligible dimension with null before propagating the exception.
+
+Local and static read-modify-write updates instead stop on a throwing conversion handler. If a returning handler
+detaches the promoted parent and only its pending write owner remains, the update starts from
+null without an extra undefined-key warning. Parents that still have another owner keep the
+ordinary leaf read and diagnostics.
+
 ## Associative arrays
 ```php
 <?php

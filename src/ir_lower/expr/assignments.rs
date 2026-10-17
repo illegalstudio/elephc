@@ -209,6 +209,14 @@ pub(crate) fn lower_null_coalesce_update_stmt(
     default: &Expr,
     span: Span,
 ) {
+    lower_null_coalesce_update_stmt_to(ctx, target, target, default, span);
+}
+
+/// Reuses dimensions captured during a coalescing probe for its lazy insertion.
+pub(crate) fn lower_null_coalesce_update_stmt_to(
+    ctx: &mut LoweringContext<'_, '_>, target: &Expr, write_target: &Expr,
+    default: &Expr, span: Span,
+) {
     let current = lower_null_coalesce_value(ctx, target);
     let is_null = ctx.emit_value(
         Op::IsNull,
@@ -231,7 +239,7 @@ pub(crate) fn lower_null_coalesce_update_stmt(
     });
 
     ctx.builder.position_at_end(insert_block);
-    lower_non_local_assignment_write(ctx, target, default, span);
+    lower_non_local_assignment_write(ctx, write_target, default, span);
     let insert_reachable = !ctx.builder.insertion_block_is_terminated();
     let insert_initialized = ctx.initialized_slots_snapshot();
     branch_to(ctx, merge);
@@ -350,6 +358,15 @@ fn compound_array_key_diagnosed_in_prelude(
         };
         if read_value != target {
             return false;
+        }
+        if old_name == value_name && prelude.iter().any(|next| {
+            matches!(&next.kind, StmtKind::Assign { value, .. }
+                if matches!(&value.kind,
+                    ExprKind::PreIncrement(name) | ExprKind::PostIncrement(name)
+                        | ExprKind::PreDecrement(name) | ExprKind::PostDecrement(name)
+                        if name == old_name))
+        }) {
+            return true;
         }
         prelude.iter().any(|next| {
             matches!(
