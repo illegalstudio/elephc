@@ -194,7 +194,14 @@ mod oracle_tests {
                         )
                         .expect("dump parsed");
                     }
-                    panic!("PHP {version}: built `{decl}` differs from its PHP");
+                    let at = left
+                        .chars()
+                        .zip(right.chars())
+                        .position(|(a, b)| a != b)
+                        .unwrap_or_else(|| left.chars().count().min(right.chars().count()));
+                    let built_excerpt: String = left.chars().skip(at).take(300).collect();
+                    let parsed_excerpt: String = right.chars().skip(at).take(300).collect();
+                    panic!("PHP {version}: built `{decl}` differs from its PHP at character {at}\nBuilt: {built_excerpt}\nParsed: {parsed_excerpt}");
                 }
             }
         }
@@ -239,7 +246,7 @@ mod oracle_tests {
             rest = &after[close..];
         }
         cleaned.push_str(rest);
-        cleaned
+        crate::synthetic_class::oracle::assignment_names(&cleaned)
     }
 }
 

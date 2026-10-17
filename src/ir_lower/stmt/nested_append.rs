@@ -213,6 +213,11 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
         // Anything else (a `Mixed` property, an object) is out of scope: fall open to today's
         // lowering, which is what the parser's desugar already produces.
         _ => {
+            // Property reads can return an independently owned boxed array. The probe is
+            // unused on this fallback, so retire it before replaying the actual statements.
+            if !matches!(group.base, BaseKind::StaticProperty { .. }) {
+                crate::ir_lower::ownership::release_if_owned(ctx, container, Some(span));
+            }
             super::lower_stmt(ctx, group.read);
             super::lower_stmt(ctx, group.push);
             super::lower_stmt(ctx, group.write_back);
@@ -228,7 +233,9 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
         isset_op.default_effects(),
         Some(span),
     );
-    if matches!(group.base, BaseKind::Local(_)) {
+    // Static loads borrow their class slot. Object-property probes can own an independent
+    // boxed result, but releasing a static probe would destroy the array still in that slot.
+    if !matches!(group.base, BaseKind::StaticProperty { .. }) {
         crate::ir_lower::ownership::release_if_owned(ctx, container, Some(span));
     }
     crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));

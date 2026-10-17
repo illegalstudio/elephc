@@ -463,6 +463,18 @@ Supported receivers are `ClassName::$prop`, `self::$prop`, `parent::$prop`, and 
 
 Static properties in elephc, like in PHP, are always mutable — even on a `readonly class`. PHP's `readonly` modifier only constrains instance properties; declaring `public readonly static` is a compile error in both PHP and elephc.
 
+Instance writes through static properties capture the RHS once before selecting the
+current static receiver; computed key expressions keep their PHP evaluation order.
+The temporary capture retires at the end of the assignment, not at function exit.
+Keeping the assignment result extends its ordinary PHP lifetime. A null receiver
+raises a catchable `Error` after RHS evaluation. If an intermediate receiver's
+destructor throws, selected child and RHS temporaries retire before the catch runs.
+The same rules apply through dynamic property hops such as
+`Registry::$object->$name->child->value`, including compound updates.
+Computed name expressions run once before the RHS; variable names are read when
+the delayed chain is traversed. An intermediate null hop reports a catchable
+`Attempt to modify property "name" on null` error.
+
 Static array properties support direct element writes:
 
 ```php

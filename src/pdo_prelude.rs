@@ -7774,7 +7774,7 @@ mod version_tests {
             rest = &after[close..];
         }
         cleaned.push_str(rest);
-        cleaned
+        crate::synthetic_class::oracle::assignment_names(&cleaned)
     }
 
     /// Compares the two Programs the compiler could inject, as PHP text, on request.

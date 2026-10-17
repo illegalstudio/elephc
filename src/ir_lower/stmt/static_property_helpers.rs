@@ -125,9 +125,7 @@ pub(super) fn object_property_type(
     property: &str,
 ) -> Option<PhpType> {
     let object_ty = ctx.builder.value_php_type(object);
-    let PhpType::Object(class_name) = object_ty else {
-        return None;
-    };
+    let (class_name, _) = crate::ir_lower::expr::singular_object_class(&object_ty)?;
     ctx.classes
         .get(class_name.trim_start_matches('\\'))?
         .visible_property(property)

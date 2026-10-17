@@ -56,8 +56,7 @@ sortPropertySlots(new MultisortPropertySlots());
 }
 
 /// Same-place concrete operands can each own a payload detached from final Mixed storage.
-#[test]
-fn multisort_same_widened_local_retires_the_second_detached_payload_on_every_target() {
+fn check_multisort_same_widened_local_retires_the_second_detached_payload(name: &str) {
     let source = r#"<?php
 function sortWidenedTwice(string $source): void {
     $values = [];
@@ -71,52 +70,65 @@ function sortWidenedTwice(string $source): void {
 }
 sortWidenedTwice('return null; // ' . $argc);
 "#;
-    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-        let module = super::lower_source_at_for_target(
-            source, std::path::Path::new("main.php"), std::path::Path::new("."),
-            crate::codegen::platform::Target::parse(name).unwrap(),
-        );
-        let function = module.functions.iter().find(|function| function.name == "sortWidenedTwice").unwrap();
-        let calls = function.instructions.iter().filter(|inst| matches!(inst.immediate,
-            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::ArrayMultisort)))
-            | Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction { target: RuntimeFnId::ArrayMultisort, .. }))
-        )).collect::<Vec<_>>();
-        assert_eq!(calls.len(), 2, "{name}: same-place and distinct-place calls");
-        let call = calls[0];
-        assert_ne!(call.operands[0], call.operands[1], "{name}: two independent local reads");
-        let mut slots = Vec::new();
-        for value in &call.operands {
-            let load = function.instructions.iter().find(|inst| inst.result == Some(*value)).unwrap();
-            assert_eq!(load.op, crate::ir::Op::LoadLocal, "{name}");
-            assert!(matches!(load.result_php_type, crate::types::PhpType::Array(_)), "{name}");
-            let Some(Immediate::LocalSlot(slot)) = load.immediate else { panic!("receiver slot"); };
-            assert_eq!(function.locals[slot.as_raw() as usize].php_type.codegen_repr(), crate::types::PhpType::Mixed);
-            slots.push(slot);
-            assert!(!function.instructions.iter().any(|inst| {
-                inst.op == crate::ir::Op::Release && inst.operands == [*value]
-            }), "{name}: mutation transfers the detached lease instead of post-call releasing it");
-        }
-        assert_eq!(slots[0], slots[1], "{name}: both reads name the same widened local");
-        let distinct = calls[1];
-        assert_ne!(distinct.operands[0], distinct.operands[1], "{name}: distinct local reads");
-        let distinct_slots = distinct.operands.iter().map(|value| {
-            let load = function.instructions.iter().find(|inst| inst.result == Some(*value)).unwrap();
-            assert_eq!(load.op, crate::ir::Op::LoadLocal, "{name}");
-            let Some(Immediate::LocalSlot(slot)) = load.immediate else { panic!("receiver slot"); };
-            assert_eq!(function.locals[slot.as_raw() as usize].php_type.codegen_repr(), crate::types::PhpType::Mixed);
-            assert!(!function.instructions.iter().any(|inst| {
-                inst.op == crate::ir::Op::Release && inst.operands == [*value]
-            }), "{name}: each distinct mutation transfers its detached lease");
-            slot
-        }).collect::<Vec<_>>();
-        assert_ne!(distinct_slots[0], distinct_slots[1], "{name}: distinct reads name separate widened locals");
-        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
-            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
-        let same_place = assembly.split("array_multisort_distinct_receivers").nth(1).unwrap();
-        let same_place = same_place.split("array_multisort_receivers_ready").next().unwrap();
-        assert!(same_place.contains("__rt_decref_any"), "{name}: retire the second detached payload before cache replacement");
+    let module = super::lower_source_at_for_target(
+        source, std::path::Path::new("main.php"), std::path::Path::new("."),
+        crate::codegen::platform::Target::parse(name).unwrap(),
+    );
+    let function = module.functions.iter().find(|function| function.name == "sortWidenedTwice").unwrap();
+    let calls = function.instructions.iter().filter(|inst| matches!(inst.immediate,
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::ArrayMultisort)))
+        | Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction { target: RuntimeFnId::ArrayMultisort, .. }))
+    )).collect::<Vec<_>>();
+    assert_eq!(calls.len(), 2, "{name}: same-place and distinct-place calls");
+    let call = calls[0];
+    assert_ne!(call.operands[0], call.operands[1], "{name}: two independent local reads");
+    let mut slots = Vec::new();
+    for value in &call.operands {
+        let load = function.instructions.iter().find(|inst| inst.result == Some(*value)).unwrap();
+        assert_eq!(load.op, crate::ir::Op::LoadLocal, "{name}");
+        assert!(matches!(load.result_php_type, crate::types::PhpType::Array(_)), "{name}");
+        let Some(Immediate::LocalSlot(slot)) = load.immediate else { panic!("receiver slot"); };
+        assert_eq!(function.locals[slot.as_raw() as usize].php_type.codegen_repr(), crate::types::PhpType::Mixed);
+        slots.push(slot);
+        assert!(!function.instructions.iter().any(|inst| {
+            inst.op == crate::ir::Op::Release && inst.operands == [*value]
+        }), "{name}: mutation transfers the detached lease instead of post-call releasing it");
     }
+    assert_eq!(slots[0], slots[1], "{name}: both reads name the same widened local");
+    let distinct = calls[1];
+    assert_ne!(distinct.operands[0], distinct.operands[1], "{name}: distinct local reads");
+    let distinct_slots = distinct.operands.iter().map(|value| {
+        let load = function.instructions.iter().find(|inst| inst.result == Some(*value)).unwrap();
+        assert_eq!(load.op, crate::ir::Op::LoadLocal, "{name}");
+        let Some(Immediate::LocalSlot(slot)) = load.immediate else { panic!("receiver slot"); };
+        assert_eq!(function.locals[slot.as_raw() as usize].php_type.codegen_repr(), crate::types::PhpType::Mixed);
+        assert!(!function.instructions.iter().any(|inst| {
+            inst.op == crate::ir::Op::Release && inst.operands == [*value]
+        }), "{name}: each distinct mutation transfers its detached lease");
+        slot
+    }).collect::<Vec<_>>();
+    assert_ne!(distinct_slots[0], distinct_slots[1], "{name}: distinct reads name separate widened locals");
+    let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+        .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    let same_place = assembly.split("array_multisort_distinct_receivers").nth(1).unwrap();
+    let same_place = same_place.split("array_multisort_receivers_ready").next().unwrap();
+    assert!(same_place.contains("__rt_decref_any"), "{name}: retire the second detached payload before cache replacement");
 }
+
+/// Gives each target its own CI timeout while preserving every ownership assertion.
+macro_rules! widened_multisort_target_test {
+    ($name:ident, $target:literal) => {
+        /// Checks same-place and distinct-place detached multisort ownership on one target.
+        #[test]
+        fn $name() { check_multisort_same_widened_local_retires_the_second_detached_payload($target); }
+    };
+}
+
+widened_multisort_target_test!(multisort_same_widened_local_retires_second_payload_macos, "macos-aarch64");
+widened_multisort_target_test!(multisort_same_widened_local_retires_second_payload_ios_device, "ios-arm64");
+widened_multisort_target_test!(multisort_same_widened_local_retires_second_payload_ios_simulator, "ios-sim-arm64");
+widened_multisort_target_test!(multisort_same_widened_local_retires_second_payload_linux_arm64, "linux-aarch64");
+widened_multisort_target_test!(multisort_same_widened_local_retires_second_payload_linux_x86_64, "linux-x86_64");
 
 /// Declared by-reference arrays reach the boxed multisort backend on every supported target.
 #[test]

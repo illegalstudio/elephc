@@ -9,6 +9,178 @@
 
 use super::*;
 
+/// Nullable interface receivers throw after the RHS without losing boxed dispatch.
+#[test]
+fn test_static_receiver_oct9_nullable_interface_write() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+interface Store { public function get(): int; }
+class C { public static ?Store $value = null; }
+try { C::$value->x = (print 'rhs'); echo 'bad'; }
+catch (Error $error) { echo ':', $error->getMessage(); }
+echo '|after';
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "rhs:Attempt to assign property \"x\" on null|after", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Nullable interface guards retire fresh RHS owners and preserve successful boxed dispatch.
+#[test]
+fn test_static_receiver_oct9_interface_rhs_ownership() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+interface Store { public function get(): int; }
+class Item implements Store { public string $x = ''; public function get(): int { return strlen($this->x); } }
+class C { public static ?Store $value = null; }
+for ($i = 0; $i < 8; $i++) {
+    try { C::$value->x = str_repeat('x', 24); echo 'bad'; }
+    catch (Error $error) { echo 'c'; }
+}
+C::$value = new Item();
+C::$value->x = str_repeat('x', 24);
+echo '|', C::$value->get();
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "cccccccc|24", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Element stores, compound stores and coalescing stores use the post-RHS static array.
+#[test]
+fn test_static_receiver_oct9_array_rhs_replacement() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class C { public static array $items = [1]; }
+function replace(): int { echo 'R'; C::$items = [7]; return 9; }
+C::$items[0] = replace(); echo json_encode(C::$items), '|';
+C::$items = [1]; C::$items[0] += replace(); echo json_encode(C::$items), '|';
+C::$items = [null]; C::$items[0] ??= replace(); echo json_encode(C::$items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "R[9]|R[16]|R[9]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A nested element assignment follows an RHS replacement of the static root.
+#[test]
+fn test_static_receiver_oct9_nested_array_rhs_replacement() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class C { public static array $items = [[1]]; }
+function replace(): int { echo 'R'; C::$items = [[7]]; return 9; }
+C::$items[0][0] = replace(); echo json_encode(C::$items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "R[[9]]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A compound write guards null after the RHS but before reading the property.
+#[test]
+fn test_static_receiver_oct9_compound_null_no_read_warning() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class O { public int $v = 1; }
+class C { public static ?O $o = null; }
+set_error_handler(function($level, $message) { echo 'warning|'; return true; });
+try { C::$o->v += (print 'rhs'); echo 'bad'; }
+catch (Error $error) { echo ':', $error->getMessage(); }
+restore_error_handler();
+echo '|after';
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "rhs:Attempt to assign property \"v\" on null|after", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Static properties can be object receivers for property writes, reads and method calls.
+#[test]
+fn test_static_property_object_receiver_reads_and_writes() {
+    let out = compile_and_run(r#"<?php
+class StoredObject { public int $v = 1; public function value(): int { return $this->v; } }
+class ObjectHolder { public static ?StoredObject $o = null; }
+ObjectHolder::$o = new StoredObject();
+ObjectHolder::$o->v = 9;
+echo ObjectHolder::$o->v, "|", ObjectHolder::$o->value();
+"#);
+    assert_eq!(out, "9|9");
+}
+
+/// Lexical and late-static receivers use the same complex property assignment path.
+#[test]
+fn test_static_property_object_receiver_lexical_assignments() {
+    let out = compile_and_run(r#"<?php
+class StoredObject { public int $v = 1; }
+class ObjectHolder { public static ?StoredObject $o = null; }
+class ChildHolder extends ObjectHolder {
+    public static function update(): void {
+        self::$o->v = 2;
+        static::$o->v += 3;
+        parent::$o->v += 4;
+        echo self::$o->v, "|", static::$o->v, "|", parent::$o->v;
+    }
+}
+ObjectHolder::$o = new StoredObject();
+ChildHolder::update();
+"#);
+    assert_eq!(out, "9|9|9");
+}
+
+/// A static receiver fetch is delayed until after an RHS that replaces its slot, as in PHP.
+#[test]
+fn test_static_property_object_receiver_survives_rhs_replacement() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ReviewReceiverObject { public int $v = 1; }
+class ReviewReceiverHolder { public static ?ReviewReceiverObject $o = null; }
+function replaceReviewReceiver(): int {
+    ReviewReceiverHolder::$o = new ReviewReceiverObject();
+    ReviewReceiverHolder::$o->v = 7;
+    return 9;
+}
+$original = new ReviewReceiverObject();
+ReviewReceiverHolder::$o = $original;
+ReviewReceiverHolder::$o->v = replaceReviewReceiver();
+echo $original->v, "|", ReviewReceiverHolder::$o->v;
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "1|9", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// An instance-array property reached through a static object supports indexed and compound writes.
+#[test]
+fn test_static_property_object_receiver_indexed_writes() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ReviewArrayObject { public array $items = [1, 2]; }
+class ReviewArrayHolder { public static ReviewArrayObject $o; }
+ReviewArrayHolder::$o = new ReviewArrayObject();
+ReviewArrayHolder::$o->items[0] = 9;
+ReviewArrayHolder::$o->items[1] += 3;
+ReviewArrayHolder::$o->items[] = 6;
+echo json_encode(ReviewArrayHolder::$o->items);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[9,5,6]", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Statement-position prefix operators can traverse named, lexical and late-static object receivers.
+#[test]
+fn test_static_property_object_receiver_prefix_statements() {
+    let out = compile_and_run(r#"<?php
+class ReviewPrefixObject { public int $v = 1; }
+class ReviewPrefixHolder { public static ?ReviewPrefixObject $o = null; }
+class ReviewPrefixChild extends ReviewPrefixHolder {
+    public static function update(): void {
+        ++self::$o->v;
+        ++static::$o->v;
+        --parent::$o->v;
+    }
+}
+ReviewPrefixHolder::$o = new ReviewPrefixObject();
+++ReviewPrefixHolder::$o->v;
+ReviewPrefixChild::update();
+echo ReviewPrefixHolder::$o->v;
+"#);
+    assert_eq!(out, "3");
+}
+
 /// Shutdown frees inherited static strings, containers, objects, and captured callbacks exactly once.
 #[test]
 fn test_class_static_properties_release_last_owners_at_shutdown() {

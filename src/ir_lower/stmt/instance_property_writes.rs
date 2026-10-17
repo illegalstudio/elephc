@@ -27,26 +27,35 @@ pub(super) fn lower_property_assign(
             None
         }
     });
-    let object = lower_expr(ctx, object);
     let value_expr = value;
-    let lowered_value = lower_expr(ctx, value_expr);
+    let (mut receiver, lowered_value) = if crate::ir_lower::expr::is_static_property_write_chain(object) {
+        let rhs = lower_expr(ctx, value_expr);
+        let receiver = crate::ir_lower::expr::lower_static_property_write_chain(ctx, object, rhs, span);
+        (receiver, rhs)
+    } else {
+        let object = lower_expr(ctx, object);
+        let receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
+        let rhs = lower_expr(ctx, value_expr);
+        (receiver, rhs)
+    };
+    let lowered_value = ctx.borrow_write_operand_if_needed(lowered_value, span);
     if let Some(message) = throw_access_message {
-        if ctx.value_is_owning_temporary(object) {
-            crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
-        }
+        receiver.finish(ctx, span);
         if ctx.value_is_owning_temporary(lowered_value) {
             crate::ir_lower::ownership::release_if_owned(ctx, lowered_value, Some(span));
         }
         lower_throw_access_error(ctx, &message, span);
         return;
     }
+    receiver.narrow_for_assignment(ctx, property, lowered_value, span);
+    let object = receiver.value;
     // A runtime SUBCLASS can declare `__set` where the receiver's STATIC class does not, and php
     // calls the accessor on such an instance. Only the runtime class can answer that, so the guard
     // asks it. Receiver and value are already lowered, once each and in source order, so the
     // guard adds no evaluation and both branches see exactly the same two values.
     let magic_classes = magic_accessor_subclasses(ctx, object.value, property, "__set");
     if !magic_classes.is_empty() {
-        return lower_property_assign_guarding_magic_subclasses(
+        lower_property_assign_guarding_magic_subclasses(
             ctx,
             object,
             property,
@@ -55,8 +64,10 @@ pub(super) fn lower_property_assign(
             &magic_classes,
             span,
         );
+    } else {
+        lower_property_assign_value(ctx, object, property, value_expr, lowered_value, false, span);
     }
-    lower_property_assign_value(ctx, object, property, value_expr, lowered_value, false, span)
+    receiver.finish(ctx, span);
 }
 
 /// Emits the `instanceof` chain that hands a runtime subclass's `__set` its own call.

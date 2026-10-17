@@ -644,7 +644,7 @@ pub(super) fn lower_initialized_property_value(
     property: &str,
     expr: &Expr,
 ) -> LoweredValue {
-    let temp_name = ctx.declare_hidden_temp(PhpType::Mixed);
+    let temp_name = ctx.declare_owned_hidden_temp(PhpType::Mixed);
     let uninitialized_block = ctx
         .builder
         .create_named_block("coalesce.property.uninitialized", Vec::new());
@@ -767,7 +767,7 @@ pub(super) fn lower_initialized_static_property_value(
     property: &str,
     expr: &Expr,
 ) -> LoweredValue {
-    let temp_name = ctx.declare_hidden_temp(PhpType::Mixed);
+    let temp_name = ctx.declare_owned_hidden_temp(PhpType::Mixed);
     let uninitialized_block = ctx
         .builder
         .create_named_block("coalesce.static_property.uninitialized", Vec::new());
@@ -827,7 +827,7 @@ pub(super) fn lower_initialized_static_property_value(
 
 /// Returns the class name and nullability if `php_type` is a single object type (optionally
 /// nullable). Heterogeneous unions and non-object types return `None`.
-pub(super) fn singular_object_class(php_type: &PhpType) -> Option<(&str, bool)> {
+pub(crate) fn singular_object_class(php_type: &PhpType) -> Option<(&str, bool)> {
     match php_type {
         PhpType::Object(name) => Some((name.as_str(), false)),
         PhpType::Union(members) => {
@@ -953,6 +953,18 @@ pub(super) fn lower_dynamic_property_fetch_from_value(
     let result_type = dynamic_property_get_result_type(ctx, object.value, property, expr);
     let property = lower_expr(ctx, property);
     let property = coerce_runtime_property_name(ctx, property, expr.span);
+    lower_dynamic_property_fetch_from_operands(ctx, object, property, result_type, mode, expr)
+}
+
+/// Fetches a property with an already evaluated name, sharing ordinary getter and ownership rules.
+pub(super) fn lower_dynamic_property_fetch_from_operands(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: LoweredValue,
+    result_type: PhpType,
+    mode: PropertyFetchMode,
+    expr: &Expr,
+) -> LoweredValue {
     let result = ctx.emit_value(
         Op::DynamicPropGet,
         vec![object.value, property.value],
@@ -1191,5 +1203,15 @@ pub(crate) fn static_property_result_type(
     else {
         return PhpType::Mixed;
     };
-    normalize_value_php_type(property_ty.codegen_repr())
+    // Preserve a nullable concrete class for fixed-slot property writes. Interface unions keep
+    // their boxed runtime dispatch: an instanceof guard can expose another interface's method,
+    // which the original declared interface does not own (Store::name, for example).
+    let result_type = if singular_object_class(property_ty).is_some_and(|(name, nullable)| {
+        nullable && ctx.classes.contains_key(name.trim_start_matches('\\'))
+    }) {
+        property_ty.clone()
+    } else {
+        property_ty.codegen_repr()
+    };
+    normalize_value_php_type(result_type)
 }

@@ -8,6 +8,7 @@
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
 
 use super::*;
+use crate::ir::RuntimeCallTarget;
 
 /// Lowers binary runtime fallbacks that Phase 04 can identify by operand type.
 pub(super) fn lower_binary_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
@@ -78,15 +79,20 @@ pub(super) fn lower_array_fetch_for_write_runtime_call(
     let receiver = expect_operand(inst, 0)?;
     let key = expect_operand(inst, 1)?;
     let receiver_ty = ctx.value_php_type(receiver)?.codegen_repr();
+    let normalization = if matches!(inst.immediate,
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed)))
+    {
+        hashes::HashKeyNormalization::PhpAlreadyDiagnosed
+    } else { hashes::HashKeyNormalization::Php };
     match receiver_ty {
         PhpType::Mixed | PhpType::Union(_) => {
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
-                    hashes::materialize_hash_key_aarch64(ctx, key)?;
+                    hashes::materialize_hash_key_aarch64_with(ctx, key, normalization)?;
                     ctx.load_value_to_reg(receiver, "x0")?;
                 }
                 Arch::X86_64 => {
-                    hashes::materialize_hash_key_x86_64(ctx, key)?;
+                    hashes::materialize_hash_key_x86_64_with(ctx, key, normalization)?;
                     ctx.load_value_to_reg(receiver, "rdi")?;
                 }
             }
@@ -102,14 +108,14 @@ pub(super) fn lower_array_fetch_for_write_runtime_call(
             };
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
-                    hashes::materialize_hash_key_aarch64(ctx, key)?;
+                    hashes::materialize_hash_key_aarch64_with(ctx, key, normalization)?;
                     abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
                     ctx.load_value_to_reg(receiver, "x0")?;
                     abi::emit_load_int_immediate(ctx.emitter, "x1", tag);
                     abi::emit_pop_reg_pair(ctx.emitter, "x2", "x3");
                 }
                 Arch::X86_64 => {
-                    hashes::materialize_hash_key_x86_64(ctx, key)?;
+                    hashes::materialize_hash_key_x86_64_with(ctx, key, normalization)?;
                     abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
                     ctx.load_value_to_reg(receiver, "rdi")?;
                     abi::emit_load_int_immediate(ctx.emitter, "rsi", tag);

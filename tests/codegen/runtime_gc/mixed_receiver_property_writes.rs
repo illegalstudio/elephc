@@ -14,6 +14,31 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// A throwing RHS retires the acquired nullable receiver through the same-frame unwind chain.
+#[test]
+fn test_static_property_object_receiver_throwing_rhs_releases_pin() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ReviewThrowObject { public int $v = 1; }
+class ReviewThrowHolder { public static ?ReviewThrowObject $o = null; }
+function replaceThenThrowReviewReceiver(): int {
+    ReviewThrowHolder::$o = new ReviewThrowObject();
+    throw new Exception("stop");
+}
+$total = 0;
+for ($i = 0; $i < 12; $i++) {
+    $original = new ReviewThrowObject();
+    ReviewThrowHolder::$o = $original;
+    try { ReviewThrowHolder::$o->v = replaceThenThrowReviewReceiver(); }
+    catch (Exception $error) { $total += $original->v; }
+    unset($original, $error);
+}
+echo $total;
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "12", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Asserts the program printed `expected` and left a clean heap under heap debug.
 fn assert_clean(out: crate::support::ProgramOutput, expected: &str) {
     assert_eq!(out.stdout, expected, "stderr: {}", out.stderr);
