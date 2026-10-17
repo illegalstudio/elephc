@@ -18,22 +18,27 @@ pub(super) fn lower_assoc_array_literal(ctx: &mut LoweringContext<'_, '_>, pairs
 pub(super) fn lower_assoc_array_literal_with_guard(
     ctx: &mut LoweringContext<'_, '_>, pairs: &[(Expr, Expr)], expr: &Expr, guarded: bool,
 ) -> LoweredValue {
+    let hash_ty = assoc_array_literal_type_for_ir(ctx, pairs, expr);
     let hash = ctx.emit_value(
         Op::HashNew,
         Vec::new(),
         Some(Immediate::Capacity(pairs.len() as u32)),
-        assoc_array_literal_type_for_ir(ctx, pairs, expr),
+        hash_ty.clone(),
         Op::HashNew.default_effects(),
         Some(expr.span),
     );
+    let owner = crate::ir_lower::function::contains_deferred_error(expr)
+        .then(|| publish_constructed_container(ctx, hash, expr.span));
     if guarded { guard_descriptor_container(ctx, hash, expr.span); }
     for (key, value) in pairs {
         let key = lower_expr(ctx, key);
         let value = lower_expr(ctx, value);
+        let hash = owner.map(|slot| load_published_container(ctx, slot, hash_ty.clone(), expr.span))
+            .unwrap_or(hash);
         ctx.emit_void(Op::HashSet, vec![hash.value, key.value, value.value], None, Op::HashSet.default_effects(), Some(expr.span));
         if guarded { ctx.refresh_argument_array_guard(hash, expr.span); }
     }
-    hash
+    owner.map(|slot| take_published_container(ctx, slot, hash_ty, expr.span)).unwrap_or(hash)
 }
 
 /// Returns the associative-array type for a literal that contains at least one associative
@@ -109,7 +114,7 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
         return storage;
     }
     match &value.kind {
-        ExprKind::Null => PhpType::Mixed,
+        ExprKind::Null | ExprKind::Throw(_) => PhpType::Mixed,
         ExprKind::Cast {
             target: CastType::Array,
             expr: inner,

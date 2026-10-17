@@ -50,6 +50,7 @@ pub(crate) fn emit_eval_value_runtime(emitter: &mut Emitter, features: RuntimeFe
     lifecycle::emit(emitter);
     output::emit(emitter);
     array_next_index::emit(emitter);
+    callable_adapter::emit(emitter);
     if features.mbstring || features.eval_bridge { string_literal::emit(emitter); }
 }
 
@@ -93,6 +94,7 @@ mod aarch64_arrays;
 mod array_iter_value;
 pub(crate) mod array_next_index;
 mod reference_values;
+mod callable_adapter;
 mod lifecycle;
 mod output;
 mod mbstring;

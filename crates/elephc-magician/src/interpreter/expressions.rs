@@ -60,6 +60,7 @@ fn eval_expr_with_result_ownership(
     own_result: bool,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match expr {
+        EvalExpr::DeferredDefaultError(message) => throwables::eval_throw_error(message, context, values),
         EvalExpr::Array(elements) => {
             if elements
                 .iter()

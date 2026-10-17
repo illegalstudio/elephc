@@ -43,7 +43,7 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
         allow_dynamic_properties,
         uninitialized_marker_offsets,
         owned_reference_property_offsets,
-        property_defaults,
+        property_initialization,
         constructor_impl,
         borrowed_reference_params,
     ) = {
@@ -57,7 +57,7 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
                 class_name
             )));
         }
-        let property_defaults = collect_property_defaults(class_info, inst)?;
+        let property_initialization = collect_property_initialization(class_info, inst);
         // A private constructor is not inherited, so a descendant of a class that declares one
         // carries no `__construct` entry of its own. PHP still instantiates it through that
         // ancestor, so resolve the owner; it is the class itself for every other constructor.
@@ -122,7 +122,7 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
             class_info.has_property_hash_storage(),
             marker_offsets,
             owned_ref_offsets,
-            property_defaults,
+            property_initialization,
             constructor_impl,
             borrowed_reference_params,
         )
@@ -155,7 +155,7 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
     } else {
         0
     };
-    emit_property_defaults(ctx, result, &property_defaults)?;
+    emit_property_initialization(ctx, result, &property_initialization)?;
     if let Some(constructor) = constructor_impl {
         emit_constructor_call(
             ctx,

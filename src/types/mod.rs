@@ -23,6 +23,8 @@ mod array_storage;
 mod array_cast;
 /// Call argument planning: named, positional, and spread semantics.
 pub(crate) mod call_args;
+/// Shared detection of lazy lexical errors in normalized default expression trees.
+pub(crate) mod deferred_defaults;
 /// Fiber/stack introspection for async and coroutine analysis.
 pub(crate) mod fibers;
 /// C FFI type mapping utilities.

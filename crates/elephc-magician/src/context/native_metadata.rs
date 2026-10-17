@@ -231,6 +231,21 @@ impl ElephcEvalContext {
             .cloned()
     }
 
+    /// Defines a deferred native property default without materializing its value.
+    pub fn define_native_property_default_error(
+        &mut self, class_name: &str, property_name: &str, message: String,
+    ) -> bool {
+        let key = native_property_key(class_name, property_name);
+        if key.0.is_empty() || key.1.is_empty() || message.is_empty() { return false; }
+        self.native_property_default_errors.insert(key, message).is_none()
+    }
+
+    /// Returns a native default's per-slot error at its eventual reflection boundary.
+    pub fn native_property_default_error(&self, class_name: &str, property_name: &str) -> Option<&str> {
+        self.native_property_default_errors.get(&native_property_key(class_name, property_name))
+            .map(String::as_str)
+    }
+
     /// Appends generated AOT property attribute metadata for eval reflection.
     pub fn define_native_property_attribute(
         &mut self,

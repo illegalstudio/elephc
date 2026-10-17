@@ -53,6 +53,11 @@ pub(super) fn emit_reflection_default_value_as_mixed(
             emit_boxed_string_literal_default_to_result(ctx, value)
         }
         ReflectionParameterDefaultValue::Null => emit_boxed_null_literal_to_result(ctx),
+        ReflectionParameterDefaultValue::DeferredError(_) => emit_boxed_null_literal_to_result(ctx),
+        ReflectionParameterDefaultValue::EirHelper(_) => {
+            // The complete tree belongs to the parameter's separately stored lazy factory.
+            emit_boxed_null_literal_to_result(ctx)
+        }
         ReflectionParameterDefaultValue::Object { args, .. } if args.is_empty() => {
             emit_boxed_null_literal_to_result(ctx)
         }
@@ -301,4 +306,3 @@ pub(super) fn emit_reflection_static_property_hash_insert(ctx: &mut FunctionCont
         }
     }
 }
-

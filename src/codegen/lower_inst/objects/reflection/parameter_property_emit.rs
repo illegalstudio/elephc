@@ -8,6 +8,9 @@
 //! - Preserves compile-time metadata, target-aware object layout, and ownership.
 
 use super::*;
+use crate::codegen::lower_inst::emit_runtime_callable_invoker_with_string_owner;
+use crate::codegen_support::callable_descriptor;
+use crate::names::function_symbol;
 
 /// Writes one ReflectionParameter object's private metadata properties.
 pub(super) fn emit_reflection_parameter_properties(
@@ -407,6 +410,52 @@ pub(super) fn emit_reflection_owner_default_value_property(
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, default_offset);
     abi::emit_store_zero_to_address(ctx.emitter, object_reg, default_offset + 8);
     abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
+    if matches!(class_name, "ReflectionProperty" | "ReflectionParameter") {
+        let message = match default_value {
+            Some(ReflectionParameterDefaultValue::DeferredError(message)) => message.as_str(),
+            _ => "",
+        };
+        emit_reflection_owner_string_property_by_name(ctx, class_name, "__default_error", message)?;
+    }
+    if class_name == "ReflectionParameter" {
+        emit_reflection_default_factory(ctx, default_value)?;
+    }
     Ok(())
 }
 
+/// Stores a persistent internal factory without evaluating the tree or minting a PHP Closure id.
+fn emit_reflection_default_factory(
+    ctx: &mut FunctionContext<'_>, default: Option<&ReflectionParameterDefaultValue>,
+) -> Result<()> {
+    let info = ctx.module.class_infos.get("ReflectionParameter")
+        .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+    let offset = reflection_property_offset(info, "__default_factory")?;
+    let result = abi::int_result_reg(ctx.emitter);
+    let object = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result);
+    if let Some(ReflectionParameterDefaultValue::EirHelper(name)) = default {
+        let helper = ctx.module.functions.iter().chain(ctx.module.closures.iter())
+            .find(|function| function.name == *name)
+            .ok_or_else(|| CodegenIrError::missing_entry("default factory", 0))?;
+        let signature = helper.signature.clone()
+            .ok_or_else(|| CodegenIrError::missing_entry("default factory signature", 0))?;
+        let invoker = emit_runtime_callable_invoker_with_string_owner(ctx, &signature, &[], false, true);
+        let entry = function_symbol(name);
+        let descriptor = callable_descriptor::static_descriptor_with_optional_invoker_meta(
+            ctx.data, &entry, Some(name), callable_descriptor::CALLABLE_DESC_KIND_FUNCTION,
+            Some(&signature), &[], &[],
+            callable_descriptor::CallableDescriptorInvocation::new(
+                callable_descriptor::CallableDescriptorShape::Function,
+            ), Some(&invoker),
+        );
+        abi::emit_symbol_address(ctx.emitter, result, &descriptor);
+        emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Callable);
+    } else {
+        emit_boxed_null_literal_to_result(ctx);
+    }
+    abi::emit_pop_reg(ctx.emitter, object);
+    abi::emit_store_to_address(ctx.emitter, result, object, offset);
+    abi::emit_store_zero_to_address(ctx.emitter, object, offset + 8);
+    abi::emit_reg_move(ctx.emitter, result, object);
+    Ok(())
+}

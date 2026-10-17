@@ -114,6 +114,8 @@ pub(super) fn builtin_reflection_parameter() -> FlattenedClass {
                 Some(mixed_type()),
                 null_lit(),
             ),
+            builtin_property("__default_error", Visibility::Private, Some(TypeExpr::Str), empty_string()),
+            builtin_property("__default_factory", Visibility::Private, Some(mixed_type()), null_lit()),
             builtin_property(
                 "__default_value_object_class",
                 Visibility::Private,
@@ -200,6 +202,8 @@ pub(super) fn builtin_reflection_parameter_get_default_value_method() -> ClassMe
         by_ref_return: false,
         body: vec![
             reflection_parameter_throw_if_default_missing(dummy_span),
+            reflection_throw_if_deferred_default_error(dummy_span),
+            reflection_parameter_lazy_factory_return(dummy_span),
             Stmt::new(
                 StmtKind::If {
                     condition: binary_expr(

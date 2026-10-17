@@ -210,6 +210,7 @@ fn class_info(_class_name: &str) -> ClassInfo {
         property_offsets: HashMap::new(),
         property_declaring_classes: HashMap::new(),
         defaults: Vec::new(),
+        deferred_property_default_error: None,
         property_visibilities: HashMap::new(),
         property_set_visibilities: HashMap::new(),
         declared_properties: Default::default(),

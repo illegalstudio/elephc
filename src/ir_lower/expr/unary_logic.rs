@@ -119,7 +119,7 @@ pub(super) fn lower_not(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &
     )
 }
 
-/// Lowers throw used as an expression and returns a placeholder null value.
+/// Lowers throw used as an expression and returns a boxed placeholder for unreachable consumers.
 pub(super) fn lower_throw_expr(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
     // Match statement-form `throw`: transfer owning temps, but retain loads that
@@ -138,7 +138,7 @@ pub(super) fn lower_throw_expr(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, 
         Op::ThrowException.default_effects(),
         Some(expr.span),
     );
-    lower_null(ctx, expr)
+    lower_boxed_null(ctx, expr)
 }
 
 /// Lowers an error-suppressed expression.

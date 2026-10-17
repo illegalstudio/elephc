@@ -738,21 +738,42 @@ pub(in crate::interpreter) fn eval_reflection_class_get_default_properties_resul
         return Ok(None);
     };
     let property_names = eval_reflection_default_property_names(&reflected_name, context, values)?;
-    let mut result = values.assoc_new(property_names.len())?;
+    let mut defaults = Vec::new();
     for name in property_names {
         let Some(member) =
             eval_reflection_default_property_metadata(&reflected_name, &name, context, values)?
         else {
             continue;
         };
-        let Some(default) = member.default_value.as_ref() else {
-            continue;
-        };
-        let key = values.string(&name)?;
-        let value = eval_reflection_member_default_value(&member, default, context, values)?;
-        result = values.array_set(result, key, value)?;
+        let declaring_class = member.declaring_class_name.as_deref().unwrap_or(&reflected_name);
+        if let Some(message) = context.native_property_default_error(declaring_class, &name)
+            .or_else(|| context.native_property_default_error(&reflected_name, &name))
+            .map(str::to_string)
+        {
+            // Check retained errors before skipping missing values or allocating the result.
+            return super::super::throwables::eval_throw_error(&message, context, values);
+        }
+        if member.default_value.is_some() { defaults.push((name, member)); }
     }
-    Ok(Some(result))
+    let mut result = values.assoc_new(defaults.len())?;
+    let outcome = (|| {
+        for (name, member) in defaults {
+            let default = member.default_value.as_ref().ok_or(EvalStatus::RuntimeFatal)?;
+            let value = eval_reflection_member_default_value(&member, default, context, values)?;
+            let key = match values.string(&name) {
+                Ok(key) => key,
+                Err(status) => { let _ = eval_release_value(context, values, value); return Err(status); }
+            };
+            let stored = values.array_set(result, key, value);
+            let released_value = eval_release_value(context, values, value);
+            let released_key = values.release(key);
+            result = stored?;
+            released_value.and(released_key)?;
+        }
+        Ok(Some(result))
+    })();
+    if outcome.is_err() { let _ = eval_release_value(context, values, result); }
+    outcome
 }
 
 /// Handles eval-backed `ReflectionClass::getStaticProperties()` calls.

@@ -31,6 +31,8 @@ use crate::types::{
 };
 
 mod builtin_wrappers;
+mod closure_defaults;
+pub(crate) use crate::types::deferred_defaults::contains_deferred_error;
 mod object_comparisons;
 pub(super) use object_comparisons::lower_object_comparison_dispatch;
 pub(crate) use builtin_wrappers::{lower_array_merge_callable, lower_boxed_usort_callable};
@@ -1263,12 +1265,13 @@ pub(crate) fn eval_native_default_helper_name(
     )
 }
 
-/// Lowers safe literal defaults into zero-argument Mixed-returning helpers for native eval calls.
+/// Lowers native deferred defaults and eval-safe deep literals into zero-argument EIR helpers.
 ///
 /// Compact eval metadata deliberately has a recursion bound. A finite source literal beyond that
 /// bound is still safe for the compiler to lower normally, so the binder calls one of these
-/// helpers when no compact value was registered. Defaults outside this side-effect-free literal
-/// subset remain unsupported instead of executing arbitrary PHP while Rust owns the eval stack.
+/// helpers when no compact value was registered. Deferred-error helpers run only on native
+/// callable and reflection paths. Eval receives those trees as owned data, never as callbacks
+/// that could unwind through interpreter-owned Rust frames.
 pub(crate) fn lower_eval_native_default_helpers(
     module: &mut Module,
     check_result: &CheckResult,
@@ -1285,9 +1288,6 @@ pub(crate) fn lower_eval_native_default_helpers(
             )
         })
     });
-    if !uses_eval {
-        return;
-    }
     let mut specs = Vec::new();
     let mut classes = module.class_infos.iter().collect::<Vec<_>>();
     classes.sort_by_key(|(_, info)| info.class_id);
@@ -1301,8 +1301,10 @@ pub(crate) fn lower_eval_native_default_helpers(
             for (method_name, signature) in methods {
                 for (param_index, default) in signature.defaults.iter().enumerate() {
                     let Some(default) = default else { continue };
-                    if eval_native_default_helper_literal(&default.kind)
-                        && crate::types::signatures::literal_default_exceeds_compact_depth(default)
+                    if contains_deferred_error(default)
+                        && !matches!(default.kind, ExprKind::Throw(_))
+                        || (uses_eval && eval_native_default_helper_literal(&default.kind)
+                            && crate::types::signatures::literal_default_exceeds_compact_depth(default))
                     {
                         specs.push((
                             class_name.clone(),
@@ -1333,6 +1335,13 @@ pub(crate) fn lower_eval_native_default_helpers(
             PhpType::Mixed,
         );
         function.flags.is_synthetic = true;
+        let default_scope = if is_static {
+            class_info.static_method_impl_classes.get(&method_name)
+        } else {
+            class_info.method_impl_classes.get(&method_name)
+        }.cloned().unwrap_or_else(|| class_name.clone());
+        function.lexical_class = Some(default_scope.clone());
+        function.callable_default = Some(default.clone());
         let signature = FunctionSig {
             params: Vec::new(),
             param_type_exprs: Vec::new(),
@@ -1385,7 +1394,7 @@ pub(crate) fn lower_eval_native_default_helpers(
             &check_result.mixed_storage_store_sites,
             function_name.clone(),
             constants,
-            Some(class_name),
+            Some(default_scope),
             PhpType::Mixed,
             true,
             &[],
@@ -1459,6 +1468,7 @@ pub(crate) fn lower_closure_function(
         captures,
         self_ref_callable_capture,
         loop_storage_scope,
+        None,
     )
 }
 
@@ -1520,6 +1530,7 @@ pub(crate) fn lower_closure_function_with_context(
         captures,
         self_ref_callable_capture,
         loop_storage_scope,
+        None,
     )
 }
 
@@ -1533,7 +1544,9 @@ fn lower_closure_function_with_signature(
     captures: &[(String, PhpType, bool)],
     self_ref_callable_capture: Option<&str>,
     loop_storage_scope: String,
+    callable_default: Option<Expr>,
 ) -> FunctionSig {
+    closure_defaults::lower_helpers(parent, name, &signature);
     // Generator closures lower their body as a Mixed-returning coroutine; see
     // `generator_body_return_type`.
     let closure_body_return_type = generator_body_return_type(body, &signature.return_type, signature.is_generator);
@@ -1543,8 +1556,10 @@ fn lower_closure_function_with_signature(
         closure_body_return_type.clone(),
     );
     function.lexical_class = parent.current_class.clone();
+    function.callable_default = callable_default;
     function.flags = FunctionFlags {
         is_closure: true,
+        is_synthetic: function.callable_default.is_some(),
         by_ref_return: signature.by_ref_return,
         ..FunctionFlags::default()
     };
@@ -2241,6 +2256,13 @@ fn closure_signature_from_ast(
 ) -> FunctionSig {
     let mut signature =
         signature_from_ast_with_variadic(params, return_type, variadic, variadic_by_ref);
+    let owner = ctx.current_class.as_deref();
+    let parent = owner.and_then(|owner| ctx.classes.get(owner))
+        .and_then(|class| class.parent.as_deref());
+    for default in &mut signature.defaults {
+        *default = crate::types::checker::normalize_lexical_callable_default(default, owner, parent)
+            .expect("closure defaults passed lexical validation before EIR lowering");
+    }
     signature.is_generator = crate::types::checker::yield_validation::body_contains_yield(body);
     if signature.is_generator {
         signature.return_type = PhpType::Object("Generator".to_string());

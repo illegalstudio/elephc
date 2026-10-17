@@ -30,6 +30,7 @@ use super::{
     emit_instance_method_descriptor_entry_wrapper, emit_ref_arg_writebacks,
     emit_runtime_builtin_wrapper_inline, emit_runtime_builtin_invoker_inline,
     emit_runtime_callable_invoker_inline,
+    emit_runtime_callable_invoker_in_class,
     emit_runtime_callable_invoker_with_string_owner,
     emit_runtime_descriptor_with_receiver_capture, emit_runtime_extern_wrapper_inline,
     emit_static_method_descriptor_entry_wrapper, expect_operand, function_signature_from_eir,
@@ -1300,7 +1301,9 @@ fn runtime_instance_method_descriptor_template(
     let owns_string_return = crate::codegen::runtime_callable_invoker::method_returns_owned_string(
         ctx.module, impl_class, method_key, false,
     );
-    let invoker_label = emit_runtime_callable_invoker_with_string_owner(ctx, sig, &captures, owns_string_return, true);
+    let invoker_label = emit_runtime_callable_invoker_in_class(
+        ctx, sig, &captures, owns_string_return, true, Some(impl_class),
+    );
     let php_name = format!("{}::{}", impl_class, method_name);
     let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
         ctx.data,
@@ -1761,7 +1764,9 @@ fn runtime_static_method_descriptor_cases(
         let owns_string_return = crate::codegen::runtime_callable_invoker::method_returns_owned_string(
             ctx.module, &impl_class, &method_key, true,
         );
-        let invoker_label = emit_runtime_callable_invoker_with_string_owner(ctx, &wrapper_sig, &[], owns_string_return, true);
+        let invoker_label = emit_runtime_callable_invoker_in_class(
+            ctx, &wrapper_sig, &[], owns_string_return, true, Some(&impl_class),
+        );
         let declared_name = format!("{}::{}", impl_class, method_name);
         let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
             ctx.data,

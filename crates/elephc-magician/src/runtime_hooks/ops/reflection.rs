@@ -11,6 +11,13 @@
 macro_rules! impl_reflection_ops {
     () => {
 
+    /// Boxes a native default factory independently of the lifetime of the registering eval call.
+    fn native_callable_from_raw(&mut self, descriptor: usize) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe {
+            __elephc_eval_value_callable_from_raw(descriptor)
+        })
+    }
+
     /// Materializes a populated synthetic `ReflectionAttribute` object for eval metadata.
     fn reflection_attribute_new(
         &mut self,

@@ -388,8 +388,7 @@ impl Scanner<'_> {
         match &stmt.kind {
             StmtKind::Echo(e) | StmtKind::Throw(e) | StmtKind::ExprStmt(e)
             | StmtKind::ConstDecl { value: e, .. } | StmtKind::Return(Some(e))
-            | StmtKind::Include { path: e, .. }
-            | StmtKind::StaticPropertyArrayPush { value: e, .. } => self.scan_expr(e),
+            | StmtKind::Include { path: e, .. } => self.scan_expr(e),
             StmtKind::Assign { name, value } => {
                 self.scan_expr(value);
                 self.remember_assignment(name, value);
@@ -437,7 +436,12 @@ impl Scanner<'_> {
                 }
                 self.scan_expr(value);
             }
-            StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
+            StmtKind::StaticPropertyArrayPush { receiver, value, .. } => {
+                self.scan_receiver(receiver);
+                self.scan_expr(value);
+            }
+            StmtKind::StaticPropertyArrayAssign { receiver, index, value, .. } => {
+                self.scan_receiver(receiver);
                 self.scan_expr(index);
                 self.scan_expr(value);
             }

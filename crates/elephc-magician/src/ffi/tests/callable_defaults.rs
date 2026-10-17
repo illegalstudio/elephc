@@ -10,6 +10,120 @@
 
 use super::*;
 
+/// Nested error trees are copied into all native signature kinds without running PHP.
+#[test]
+fn register_native_default_expression_preserves_owned_trees() {
+    let mut context = ElephcEvalContext::new();
+    let key = b"Known::value";
+    let class = b"Known";
+    let mut source = b"return ['key' => [new \\Payload(value: 'a\\\\b\\\'c$'), __elephc_deferred_default_error('missing parent')]];".to_vec();
+    unsafe {
+        assert_eq!(__elephc_eval_register_native_method(&mut context, key.as_ptr(), key.len() as u64, 1), 1);
+        assert_eq!(__elephc_eval_register_native_static_method(&mut context, key.as_ptr(), key.len() as u64, 1), 1);
+        assert_eq!(__elephc_eval_register_native_constructor(&mut context, class.as_ptr(), class.len() as u64, 1), 1);
+        for register in [
+            __elephc_eval_register_native_method_param_default_expression,
+            __elephc_eval_register_native_static_method_param_default_expression,
+        ] {
+            assert_eq!(register(&mut context, key.as_ptr(), key.len() as u64, 0,
+                source.as_ptr(), source.len() as u64), 1);
+        }
+        assert_eq!(__elephc_eval_register_native_constructor_param_default_expression(
+            &mut context, class.as_ptr(), class.len() as u64, 0,
+            source.as_ptr(), source.len() as u64), 1);
+    }
+    source.fill(0);
+    let instance = context.native_method_signature("Known", "value").unwrap();
+    let expected = instance.param_default(0).unwrap();
+    let NativeCallableDefault::Expression { expression, lexical_class, .. } = expected
+        else { panic!("retain owned expression data"); };
+    assert_eq!(lexical_class, "Known");
+    let rendered = format!("{expression:?}");
+    assert!(rendered.contains("DeferredDefaultError(\"missing parent\")"));
+    assert!(rendered.contains("Payload"));
+    assert!(!rendered.contains("__elephc_deferred_default_error"));
+    assert_eq!(context.native_static_method_signature("Known", "value").unwrap().param_default(0), Some(expected));
+    assert_eq!(context.native_constructor_signature("Known").unwrap().param_default(0), Some(expected));
+}
+
+/// Invalid expression registrations fail closed and leave the previous default untouched.
+#[test]
+fn register_native_default_expression_rejects_invalid_input() {
+    let mut context = ElephcEvalContext::new();
+    let key = b"Known::value";
+    let valid = b"return [__elephc_deferred_default_error('missing parent')];";
+    unsafe {
+        assert_eq!(__elephc_eval_register_native_method(&mut context, key.as_ptr(), key.len() as u64, 1), 1);
+        assert_eq!(__elephc_eval_register_native_method_param_default_expression(
+            &mut context, key.as_ptr(), key.len() as u64, 0, valid.as_ptr(), valid.len() as u64), 1);
+    }
+    let original = context.native_method_signature("Known", "value").unwrap().param_default(0).cloned();
+    for source in [b"return strlen('x');".as_slice(), b"return $value;", b"return 1; return 2;",
+        b"return __elephc_deferred_default_error(1);", b"return [&$value];", &[0xff]]
+    {
+        assert_eq!(unsafe { __elephc_eval_register_native_method_param_default_expression(
+            &mut context, key.as_ptr(), key.len() as u64, 0, source.as_ptr(), source.len() as u64) }, 0);
+    }
+    unsafe {
+        assert_eq!(__elephc_eval_register_native_method_param_default_expression(
+            &mut context, key.as_ptr(), key.len() as u64, 1, valid.as_ptr(), valid.len() as u64), 0);
+        assert_eq!(__elephc_eval_register_native_method_param_default_expression(
+            &mut context, key.as_ptr(), key.len() as u64, 0, std::ptr::null(), 1), 0);
+        assert_eq!(__elephc_eval_register_native_constructor_param_default_expression(
+            std::ptr::null_mut(), key.as_ptr(), key.len() as u64, 0, valid.as_ptr(), valid.len() as u64), 0);
+    }
+    assert_eq!(context.native_method_signature("Known", "value").unwrap().param_default(0), original.as_ref());
+}
+
+/// Native factory metadata remains separate from the safe expression and binds inherited scope.
+#[test]
+fn register_native_default_expression_retains_scope_and_reflection_factory() {
+    let mut context = ElephcEvalContext::new();
+    let key = b"Child::value";
+    let source = b"return __elephc_default_lexical_scope('Base', [__elephc_deferred_default_error('missing parent')]);";
+    unsafe {
+        assert_eq!(__elephc_eval_register_native_static_method(&mut context, key.as_ptr(), key.len() as u64, 1), 1);
+        assert_eq!(__elephc_eval_register_native_static_method_param_default_expression(
+            &mut context, key.as_ptr(), key.len() as u64, 0, source.as_ptr(), source.len() as u64), 1);
+        assert_eq!(__elephc_eval_register_native_param_default_factory(
+            &mut context, key.as_ptr(), key.len() as u64, 0, 1, 0x1000), 1);
+        for (index, kind, factory) in [(1, 1, 0x1000), (0, 3, 0x1000), (0, 1, 0)] {
+            assert_eq!(__elephc_eval_register_native_param_default_factory(
+                &mut context, key.as_ptr(), key.len() as u64, index, kind, factory), 0);
+        }
+    }
+    let signature = context.native_static_method_signature("Child", "value").unwrap();
+    let Some(NativeCallableDefault::Expression { expression, lexical_class, reflection_factory }) = signature.param_default(0)
+        else { panic!("retain expression metadata"); };
+    assert_eq!(lexical_class, "Base");
+    assert_eq!(*reflection_factory, Some(0x1000));
+    assert!(matches!(expression.as_ref(), crate::eval_ir::EvalExpr::Array(_)));
+}
+
+/// Deferred errors register as context-owned defaults and invalid indexes or buffers fail closed.
+#[test]
+fn register_native_deferred_default_errors_preserves_signatures() {
+    let mut context = ElephcEvalContext::new();
+    let key = b"Known::value";
+    let class = b"Known";
+    let message = b"Cannot access parent in this scope";
+    unsafe {
+        assert_eq!(__elephc_eval_register_native_method(&mut context, key.as_ptr(), key.len() as u64, 1), 1);
+        assert_eq!(__elephc_eval_register_native_static_method(&mut context, key.as_ptr(), key.len() as u64, 1), 1);
+        assert_eq!(__elephc_eval_register_native_constructor(&mut context, class.as_ptr(), class.len() as u64, 1), 1);
+        assert_eq!(__elephc_eval_register_native_method_param_default_error(&mut context, key.as_ptr(), key.len() as u64, 0, message.as_ptr(), message.len() as u64), 1);
+        assert_eq!(__elephc_eval_register_native_static_method_param_default_error(&mut context, key.as_ptr(), key.len() as u64, 0, message.as_ptr(), message.len() as u64), 1);
+        assert_eq!(__elephc_eval_register_native_constructor_param_default_error(&mut context, class.as_ptr(), class.len() as u64, 0, message.as_ptr(), message.len() as u64), 1);
+        assert_eq!(__elephc_eval_register_native_method_param_default_error(&mut context, key.as_ptr(), key.len() as u64, 1, message.as_ptr(), message.len() as u64), 0);
+        assert_eq!(__elephc_eval_register_native_method_param_default_error(&mut context, key.as_ptr(), key.len() as u64, 0, std::ptr::null(), 1), 0);
+        assert_eq!(__elephc_eval_register_native_constructor_param_default_error(std::ptr::null_mut(), class.as_ptr(), class.len() as u64, 0, message.as_ptr(), message.len() as u64), 0);
+    }
+    let expected = NativeCallableDefault::DeferredError(String::from_utf8(message.to_vec()).unwrap());
+    assert_eq!(context.native_method_signature("Known", "value").unwrap().param_default(0), Some(&expected));
+    assert_eq!(context.native_static_method_signature("Known", "value").unwrap().param_default(0), Some(&expected));
+    assert_eq!(context.native_constructor_signature("Known").unwrap().param_default(0), Some(&expected));
+}
+
 /// Verifies native AOT object defaults can carry nested object constructor args.
 #[test]
 fn register_native_object_default_decodes_nested_objects() {

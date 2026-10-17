@@ -98,6 +98,7 @@ pub(super) fn eval_reflection_parameters_from_names_and_type_flags(
             let is_callable_type =
                 eval_reflection_parameter_has_named_type(type_metadata.as_ref(), "callable");
             EvalReflectionParameterMetadata {
+                native_default_factory: None,
                 name: name.clone(),
                 declaring_class_name: declaring_class_name.map(str::to_string),
                 declaring_function: declaring_function.cloned(),

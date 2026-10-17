@@ -117,7 +117,9 @@ pub(super) fn register_eval_native_method(
             );
         }
     }
-    let default_context = EvalNativeDefaultContext::for_class(ctx.module, &registration.class_name);
+    let default_context = super::default_source::declaring_default_context(
+        ctx.module, &registration.class_name, &registration.method_name, registration.is_static,
+    );
     for (index, default) in registration.signature.defaults.iter().enumerate() {
         // A hidden count slot carries a synthesized `0` default that PHP never declared. Leaving
         // it unregistered is what keeps `required_param_count()` and Reflection honest.
@@ -139,6 +141,11 @@ pub(super) fn register_eval_native_method(
         ) {
             continue;
         }
+        let error_symbol = if registration.is_static {
+            "__elephc_eval_register_native_static_method_param_default_error"
+        } else { "__elephc_eval_register_native_method_param_default_error" };
+        if register_eval_native_param_default_error(ctx, context_offset,
+            (&method_key_label, method_key_len), index, default.as_ref(), &default_context, error_symbol) { continue; }
         if let Some(default) = default
             .as_ref()
             .and_then(|expr| eval_native_callable_default(expr, &default_context))
@@ -163,7 +170,9 @@ pub(super) fn register_eval_native_method(
             &registration.method_name,
             index,
         );
-        if ctx.module.functions.iter().any(|function| function.name == helper) {
+        if ctx.module.functions.iter().any(|function| function.name == helper)
+            && !default.as_ref().is_some_and(crate::types::deferred_defaults::contains_deferred_error)
+        {
             register_eval_native_method_compiled_default(
                 ctx,
                 context_offset,

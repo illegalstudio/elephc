@@ -873,7 +873,11 @@ pub(super) fn lower_args_with_signature_options_for_capture(
                 } else { prepare_captured_output_argument(ctx, arg, ty) });
             let value = lower_arg_with_signature_options(ctx, sig, index, arg, capture_values);
             if let Some((name, ty)) = previous { ctx.set_local_logical_type(&name, ty); }
-            if !capture_values && index + 1 < args.len() {
+            // Omitted defaults execute after every caller expression, including the last one.
+            let deferred_default = !trim_trailing_defaults
+                && sig.defaults.iter().take(regular_param_count).skip(fixed_arg_count)
+                    .flatten().any(crate::types::deferred_defaults::contains_deferred_error);
+            if !capture_values && (index + 1 < args.len() || deferred_default) {
                 root_prior_argument_preserving_reference_place(
                     ctx, sig, index, arg, value,
                 )

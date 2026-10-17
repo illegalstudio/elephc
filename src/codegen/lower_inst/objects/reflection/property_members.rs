@@ -292,7 +292,10 @@ pub(super) fn reflection_property_slot_default_value(
     default: Option<&Expr>,
 ) -> Option<ReflectionParameterDefaultValue> {
     match default {
-        Some(default) => reflection_literal_parameter_default_value(default),
+        Some(default) => reflection_deferred_default_value(default)
+            .or_else(|| crate::types::deferred_defaults::unconditional_error_message(default)
+                .map(|message| ReflectionParameterDefaultValue::DeferredError(message.to_string())))
+            .or_else(|| reflection_literal_parameter_default_value(default)),
         None if !is_declared => Some(ReflectionParameterDefaultValue::Null),
         None => None,
     }
@@ -387,8 +390,9 @@ pub(super) fn reflection_default_value_to_string(
         ReflectionParameterDefaultValue::Str(value) => Some(format!("'{value}'")),
         ReflectionParameterDefaultValue::Null => Some(String::from("NULL")),
         ReflectionParameterDefaultValue::Object { .. }
+        | ReflectionParameterDefaultValue::DeferredError(_)
+        | ReflectionParameterDefaultValue::EirHelper(_)
         | ReflectionParameterDefaultValue::Array(_)
         | ReflectionParameterDefaultValue::AssocArray(_) => None,
     }
 }
-

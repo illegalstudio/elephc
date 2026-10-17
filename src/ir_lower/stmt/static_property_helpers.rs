@@ -27,6 +27,9 @@ pub(super) fn load_static_property_as(
     php_type: PhpType,
     span: Span,
 ) -> LoweredValue {
+    if let Some(error) = crate::ir_lower::property_default_errors::for_receiver(ctx, receiver, span) {
+        return error;
+    }
     let name = format!("{}::{}", receiver_name(receiver), property);
     let data = ctx.intern_string(&name);
     ctx.emit_value(
@@ -47,6 +50,9 @@ pub(super) fn store_static_property(
     value: crate::ir::ValueId,
     span: Span,
 ) {
+    if crate::ir_lower::property_default_errors::for_receiver(ctx, receiver, span).is_some() {
+        return;
+    }
     let name = format!("{}::{}", receiver_name(receiver), property);
     let data = ctx.intern_string(&name);
     ctx.emit_void(

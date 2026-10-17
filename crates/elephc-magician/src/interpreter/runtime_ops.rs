@@ -30,6 +30,11 @@ thread_local! {
 
 /// Runtime value hooks required by the EvalIR interpreter.
 pub trait RuntimeValueOps {
+    /// Boxes a borrowed persistent native callable descriptor for Reflection default factories.
+    fn native_callable_from_raw(&mut self, _descriptor: usize) -> Result<RuntimeCellHandle, EvalStatus> {
+        Err(EvalStatus::UnsupportedConstruct)
+    }
+
     /// Invokes a reviewed static operator adapter using PHP-visible arguments.
     /// Native implementations bind hidden physical parameters before entering the method.
     fn operator_static_call(&mut self, class: &str, method: &str, args: Vec<RuntimeCellHandle>) -> Result<RuntimeCellHandle, EvalStatus> {

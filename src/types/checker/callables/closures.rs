@@ -67,6 +67,11 @@ impl Checker {
         let mut declared_params = Vec::new();
 
         for (idx, (name, type_ann, default, is_ref)) in params.iter().enumerate() {
+            let source_default = default;
+            let owner = self.current_class.as_deref();
+            let parent = owner.and_then(|owner| self.classes.get(owner))
+                .and_then(|class| class.parent.as_deref());
+            let default = super::super::schema::normalize_lexical_callable_default(default, owner, parent)?;
             let (env_ty, sig_ty) = match type_ann {
                 Some(type_ann) => {
                     let declared_ty = self.resolve_declared_param_type_hint(
@@ -74,12 +79,18 @@ impl Checker {
                         span,
                         &format!("Closure parameter ${}", name),
                     )?;
-                    self.validate_resolved_declared_default_type(
-                        &declared_ty,
-                        default.as_ref(),
-                        span,
-                        &format!("Closure parameter ${}", name),
-                    )?;
+                    // A synthesized lexical-scope Error has no value to compare with
+                    // the declared type. Actual value defaults keep normal validation.
+                    let deferred_scope_error = default.as_ref().is_some_and(|value| matches!(value.kind, ExprKind::Throw(_)))
+                        && !source_default.as_ref().is_some_and(|value| matches!(value.kind, ExprKind::Throw(_)));
+                    if !deferred_scope_error {
+                        self.validate_resolved_declared_default_type(
+                            &declared_ty,
+                            default.as_ref(),
+                            span,
+                            &format!("Closure parameter ${}", name),
+                        )?;
+                    }
                     (declared_ty.clone(), declared_ty)
                 }
                 None if *is_ref => (PhpType::Mixed, PhpType::Mixed),
@@ -92,7 +103,7 @@ impl Checker {
             closure_env.insert(name.clone(), env_ty);
             param_types.push((name.clone(), sig_ty));
             param_type_exprs.push(type_ann.clone());
-            defaults.push(default.clone());
+            defaults.push(default);
             ref_params.push(*is_ref);
             declared_params.push(type_ann.is_some());
         }

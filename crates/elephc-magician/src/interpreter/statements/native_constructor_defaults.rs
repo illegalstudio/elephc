@@ -166,6 +166,17 @@ pub(in crate::interpreter) fn materialize_native_callable_default(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match default {
+        NativeCallableDefault::DeferredError(message) =>
+            super::super::throwables::eval_throw_error(message, context, values),
+        NativeCallableDefault::Expression { expression, lexical_class, .. } => {
+            context.push_class_scope(lexical_class.clone());
+            let mut scope = ElephcEvalScope::new();
+            let result = super::super::expressions::eval_owned_expr(
+                expression, context, &mut scope, values,
+            );
+            context.pop_class_scope();
+            result
+        }
         NativeCallableDefault::Null => values.null(),
         NativeCallableDefault::Bool(value) => values.bool_value(*value),
         NativeCallableDefault::Int(value) => values.int(*value),

@@ -228,7 +228,7 @@ pub(super) fn lower_callback_filter_iterator_new(
         class_id,
         property_count,
         uninitialized_marker_offsets,
-        property_defaults,
+        property_initialization,
         callback_env_offset,
     ) = {
         let class_info =
@@ -251,7 +251,7 @@ pub(super) fn lower_callback_filter_iterator_new(
             class_info.class_id,
             class_info.properties.len(),
             uninitialized_property_marker_offsets(class_info),
-            collect_property_defaults(class_info, inst)?,
+            collect_property_initialization(class_info, inst),
             class_info.property_offsets.get("callbackEnv").copied(),
         )
     };
@@ -269,7 +269,7 @@ pub(super) fn lower_callback_filter_iterator_new(
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("object_new missing result value"))?;
     ctx.store_result_value(result)?;
-    emit_property_defaults(ctx, result, &property_defaults)?;
+    emit_property_initialization(ctx, result, &property_initialization)?;
     if let Some(offset) = callback_env_offset {
         emit_zero_pointer_property(ctx, result, offset)?;
     }

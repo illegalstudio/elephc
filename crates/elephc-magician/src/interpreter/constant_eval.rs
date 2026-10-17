@@ -130,7 +130,8 @@ fn eval_native_user_constant_element<V: RuntimeValueOps>(
                 eval_native_user_constant_element::<V>,
             )
         }
-        NativeCallableDefault::Object { .. } => Err(EvalStatus::RuntimeFatal),
+        NativeCallableDefault::Object { .. } | NativeCallableDefault::DeferredError(_)
+        | NativeCallableDefault::Expression { .. } => Err(EvalStatus::RuntimeFatal),
     }
 }
 

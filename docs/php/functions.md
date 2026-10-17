@@ -100,6 +100,13 @@ Variables inside a function are separate from the caller.
 
 ## Anonymous functions (closures)
 
+Closure and arrow parameter defaults bind `self::` and `parent::` to the
+enclosing lexical class, not the later caller. A missing parent, or a `self::` /
+`parent::` default outside class scope, raises a catchable `Error` only when the
+argument is omitted and its default is evaluated. Passing an explicit argument
+bypasses that default. Ordinary method and property defaults keep their separate
+declaration-time validation rules.
+
 ```php
 <?php
 $double = function(int $x): int {

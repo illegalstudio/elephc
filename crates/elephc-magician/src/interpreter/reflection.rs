@@ -27,6 +27,7 @@ mod member_construction;
 mod member_metadata;
 mod owner_materialization;
 mod parameter_construction;
+mod parameter_lazy_defaults;
 mod parameter_metadata;
 mod property_access;
 mod property_helpers;
@@ -54,6 +55,7 @@ pub(in crate::interpreter) use member_construction::*;
 use member_metadata::*;
 use owner_materialization::*;
 use parameter_construction::*;
+use parameter_lazy_defaults::*;
 use parameter_metadata::*;
 use property_access::*;
 use property_helpers::*;
@@ -159,6 +161,7 @@ struct EvalReflectionMemberMetadata {
 
 /// Eval metadata needed to materialize one `ReflectionParameter` object.
 struct EvalReflectionParameterMetadata {
+    native_default_factory: Option<usize>,
     name: String,
     declaring_class_name: Option<String>,
     declaring_function: Option<EvalReflectionDeclaringFunctionMetadata>,

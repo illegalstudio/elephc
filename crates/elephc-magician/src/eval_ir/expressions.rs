@@ -12,6 +12,8 @@ use super::*;
 /// Dynamic eval expressions evaluated by the interpreter against runtime cells.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub enum EvalExpr {
+    /// Native default metadata raises an Error lazily, without crossing a compiled callback.
+    DeferredDefaultError(String),
     Array(Vec<EvalArrayElement>),
     ArrayGet {
         array: Box<EvalExpr>,

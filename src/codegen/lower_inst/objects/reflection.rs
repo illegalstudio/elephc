@@ -256,6 +256,8 @@ enum ReflectionParameterDefaultValue {
     Float(f64),
     Str(String),
     Null,
+    DeferredError(String),
+    EirHelper(String),
     Object {
         class_name: String,
         args: Vec<ReflectionParameterDefaultValue>,

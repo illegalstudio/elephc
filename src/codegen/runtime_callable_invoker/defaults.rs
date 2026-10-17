@@ -12,6 +12,8 @@
 //!   invoker materializes can never disagree.
 //! - A default is kept only when it is materializable end to end. Anything else stays `None` and
 //!   the invoker keeps its existing fatal diagnostic; nothing is ever replaced by null.
+//! - Compiler-generated lazy default Errors bypass constant folding and remain catchable throws.
+//! - Nested lazy Errors use native EIR helpers to preserve prefix effects and unwind cleanup.
 //! - Every refcounted default is FRESHLY allocated per invocation and hands the caller exactly one
 //!   owner, which `InvokerArgumentOwners` adopts and releases on the normal and escape paths alike.
 //! - Object defaults are constructed through the same pair of runtime entry points eval already
@@ -30,6 +32,7 @@ use crate::codegen::platform::Arch;
 use crate::codegen::runtime_value_tag;
 use crate::codegen::{emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed};
 use crate::ir::Module;
+use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{FunctionSig, PhpType};
 
 use super::{abi, DataSection, Emitter, InvokerEmitContext, InvokerParamShape};
@@ -40,6 +43,8 @@ pub(in crate::codegen) type InvokerDefaults = Vec<Option<InvokerDefaultValue>>;
 /// One descriptor-invoker default after nested object calls have been physically normalized.
 #[derive(Clone, PartialEq)]
 pub(in crate::codegen) enum InvokerDefaultValue {
+    DeferredError(String),
+    EirHelper(String),
     Scalar { kind: i64, payload: i64 },
     String(String),
     Array(Vec<InvokerDefaultArrayElement>),
@@ -79,11 +84,31 @@ pub(in crate::codegen) fn resolve_invoker_defaults(
     sig.defaults
         .iter()
         .map(|default| {
-            let value = resolve_const_default(default.as_ref()?, &context)?;
+            let default = default.as_ref()?;
+            if let Some(message) = deferred_error_message(default) {
+                return Some(InvokerDefaultValue::DeferredError(message.to_string()));
+            }
+            if let Some(helper) = module.closures.iter().chain(module.functions.iter()).find(|function|
+                function.callable_default.as_ref().is_some_and(|value|
+                    value == default && value.span == default.span)
+                    && function.lexical_class.as_deref() == current_class) {
+                return Some(InvokerDefaultValue::EirHelper(helper.name.clone()));
+            }
+            let value = resolve_const_default(default, &context)?;
             let value = normalize_invoker_default(module, value)?;
             materializable(module, &value).then_some(value)
         })
         .collect()
+}
+
+/// Extracts the message from a compiler-generated lazy `throw new Error` default.
+fn deferred_error_message(default: &Expr) -> Option<&str> {
+    let ExprKind::Throw(exception) = &default.kind else { return None; };
+    let ExprKind::NewObject { class_name, args } = &exception.kind else { return None; };
+    let [Expr { kind: ExprKind::StringLiteral(message), .. }] = args.as_slice() else {
+        return None;
+    };
+    (class_name.as_str() == "Error").then_some(message.as_str())
 }
 
 /// Recursively converts shared source defaults into descriptor-invoker materialization values.
@@ -259,6 +284,7 @@ fn normalize_object_args_for_signature(
 /// fatal diagnostic instead of quietly becoming null or a half-built value.
 fn materializable(module: &Module, value: &InvokerDefaultValue) -> bool {
     match value {
+        InvokerDefaultValue::DeferredError(_) | InvokerDefaultValue::EirHelper(_) => true,
         InvokerDefaultValue::Scalar { .. } | InvokerDefaultValue::String(_) => true,
         InvokerDefaultValue::Array(elements) => elements
             .iter()
@@ -299,6 +325,14 @@ pub(super) fn emit_const_default_to_result(
     data: &mut DataSection,
 ) -> PhpType {
     match default {
+        InvokerDefaultValue::EirHelper(name) => {
+            abi::emit_call_label(emitter, &crate::names::function_symbol(name));
+            PhpType::Mixed
+        }
+        InvokerDefaultValue::DeferredError(message) => {
+            super::emit_invoker_throwable(emitter, data, "_spl_error_class_id", message);
+            PhpType::Never
+        }
         InvokerDefaultValue::Scalar {
             kind: CONST_DEFAULT_NULL,
             ..

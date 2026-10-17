@@ -17,6 +17,8 @@ use crate::value::RuntimeCell;
 
 #[cfg(not(test))]
 unsafe extern "C" {
+    /// Boxes a borrowed persistent native descriptor for a lazy Reflection default factory.
+    pub(super) fn __elephc_eval_value_callable_from_raw(descriptor: usize) -> *mut RuntimeCell;
     /// Wraps a PHP value in an independently owned runtime reference cell.
     pub(super) fn __elephc_eval_value_reference_new(value: *mut RuntimeCell) -> *mut RuntimeCell;
     /// Reports whether a boxed value is a runtime reference cell.

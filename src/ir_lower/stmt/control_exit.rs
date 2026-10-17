@@ -621,6 +621,20 @@ pub(crate) fn lower_throw_access_error_expr(
     message: &str,
     span: Span,
 ) -> LoweredValue {
+    lower_throw_access_error_expr_as(ctx, message, span, PhpType::Void)
+}
+
+/// Lowers a statically-decided access violation while preserving the surrounding result type.
+///
+/// The returned value is unreachable at runtime, but later expression lowering still inspects its
+/// PHP and EIR types. Keeping the expected type prevents a chained operation after the throwing
+/// expression from being rejected as an operation on `Void` before the exception can be caught.
+pub(crate) fn lower_throw_access_error_expr_as(
+    ctx: &mut LoweringContext<'_, '_>,
+    message: &str,
+    span: Span,
+    php_type: PhpType,
+) -> LoweredValue {
     let error_expr = Expr::new(
         ExprKind::NewObject {
             class_name: crate::names::Name::unqualified("Error"),
@@ -636,6 +650,12 @@ pub(crate) fn lower_throw_access_error_expr(
         Op::ThrowException.default_effects(),
         Some(span),
     );
+    let ir_type = crate::ir_lower::context::value_ir_type(&php_type);
+    let ownership = if matches!(Ownership::for_php_type(&php_type), Ownership::NonHeap) {
+        Ownership::NonHeap
+    } else {
+        Ownership::Borrowed
+    };
     LoweredValue {
         value: ctx
             .builder
@@ -643,14 +663,14 @@ pub(crate) fn lower_throw_access_error_expr(
                 Op::ConstNull,
                 Vec::new(),
                 None,
-                IrType::I64,
-                PhpType::Void,
-                Ownership::NonHeap,
+                ir_type,
+                php_type,
+                ownership,
                 Op::ConstNull.default_effects(),
                 Some(span),
             )
             .expect("const_null produces a value"),
-        ir_type: IrType::I64,
+        ir_type,
     }
 }
 

@@ -43,6 +43,10 @@ pub(super) fn lower_static_property_assign(
     span: Span,
 ) {
     let source = lower_expr(ctx, value);
+    if has_deferred_default_error(ctx, receiver) {
+        raise_deferred_default_error(ctx, receiver, &[source], span);
+        return;
+    }
     let source = static_property_type(ctx, receiver, property)
         .map(|slot_ty| coerce_typed_assign_value(ctx, source, &slot_ty, span))
         .unwrap_or(source);
@@ -159,6 +163,11 @@ pub(super) fn lower_static_property_array_push(
     value: &Expr,
     span: Span,
 ) {
+    if has_deferred_default_error(ctx, receiver) {
+        let value = lower_expr(ctx, value);
+        raise_deferred_default_error(ctx, receiver, &[value], span);
+        return;
+    }
     if let Some(array) = separate_php_array_static_property(ctx, receiver, property, span) {
         let value = lower_expr(ctx, value);
         ctx.emit_void(
@@ -223,6 +232,12 @@ pub(super) fn lower_static_property_array_assign(
     value: &Expr,
     span: Span,
 ) {
+    if has_deferred_default_error(ctx, receiver) {
+        let index = lower_expr(ctx, index);
+        let value = lower_expr(ctx, value);
+        raise_deferred_default_error(ctx, receiver, &[index, value], span);
+        return;
+    }
     let update = desugared_element_update(value, span, |read| {
         reads_static_property_array_element(read, receiver, property, index)
     });
@@ -239,6 +254,26 @@ pub(super) fn lower_static_property_array_assign(
         span,
         update.is_some(),
     );
+}
+
+/// Identifies a class-wide initialization failure before emitting an unreachable storage operation.
+fn has_deferred_default_error(ctx: &LoweringContext<'_, '_>, receiver: &StaticReceiver) -> bool {
+    static_receiver_class_name(ctx, receiver).and_then(|name| ctx.classes.get(&name))
+        .is_some_and(|class| class.deferred_property_default_error.is_some())
+}
+
+/// Preserves write operand effects and releases owned operands if initialization throws.
+fn raise_deferred_default_error(
+    ctx: &mut LoweringContext<'_, '_>, receiver: &StaticReceiver, values: &[LoweredValue], span: Span,
+) {
+    ctx.begin_argument_guard_scope();
+    for (index, value) in values.iter().copied().enumerate() {
+        if ctx.value_is_owning_temporary(value) && !ctx.value_is_owned_unboxed_local_load(value.value) {
+            ctx.guard_call_argument(value, index, span);
+        }
+    }
+    ctx.end_argument_guard_scope();
+    crate::ir_lower::property_default_errors::for_receiver(ctx, receiver, span);
 }
 
 /// Returns whether `read` is the element `Class::$property[index]` a statement writes.

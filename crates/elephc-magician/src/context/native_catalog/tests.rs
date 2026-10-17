@@ -112,6 +112,30 @@ fn native_catalog_metadata_writes_are_context_local() {
     assert_eq!(next.declared_class_names.len(), 1);
 }
 
+/// Cached activations preserve deferred default failures without sharing writable metadata.
+#[test]
+fn native_catalog_preserves_property_default_errors_across_activations() {
+    reset_cache();
+    let mut first = ElephcEvalContext::new();
+    seed(&mut first, 103);
+    let member = ("probe".to_owned(), "member".to_owned());
+    first.native_property_default_errors.insert(member.clone(), "missing constant".into());
+    assert!(first.publish_native_catalog());
+
+    let mut second = ElephcEvalContext::new();
+    second.use_native_catalog(103);
+    assert!(second.native_catalog_is_ready());
+    assert!(std::ptr::eq(&*first.native_property_default_errors, &*second.native_property_default_errors));
+    assert_eq!(second.native_property_default_errors.get(&member).map(String::as_str), Some("missing constant"));
+    second.native_property_default_errors.insert(member.clone(), "context-local replacement".into());
+    drop(first);
+    drop(second);
+
+    let mut third = ElephcEvalContext::new();
+    third.use_native_catalog(103);
+    assert_eq!(third.native_property_default_errors.get(&member).map(String::as_str), Some("missing constant"));
+}
+
 /// Cache eviction bounds retained catalogs without invalidating a live activation.
 #[test]
 fn native_catalog_eviction_keeps_live_contexts_valid() {

@@ -37,7 +37,7 @@ pub(in crate::codegen::lower_inst) fn lower_prop_set(ctx: &mut FunctionContext<'
         ensure_property_value_supported(ctx, &slot, value, &value_ty, inst)?;
         let base_reg = abi::symbol_scratch_reg(ctx.emitter);
         ctx.load_value_to_reg(object, base_reg)?;
-        initialize_owned_property_reference(ctx, &slot, base_reg);
+        initialize_owned_property_reference(ctx, &slot, base_reg, false);
         return emit_property_store(ctx, value, &slot, base_reg);
     }
     let property = property_name_immediate(ctx, inst)?.to_string();
@@ -1730,7 +1730,7 @@ pub(in crate::codegen::lower_inst) fn lower_prop_unset(ctx: &mut FunctionContext
         let base_reg = abi::symbol_scratch_reg(ctx.emitter);
         ctx.load_value_to_reg(object, base_reg)?;
         // Match direct allocation's object-owned reference cells before exposing the object.
-        if !initialize_owned_property_reference(ctx, &slot, base_reg) {
+        if !initialize_owned_property_reference(ctx, &slot, base_reg, slot.is_declared) {
             if !slot.is_declared && !slot_supports_untyped_unset_marker(&slot) {
                 return Err(CodegenIrError::invalid_module(
                     "uninitialized marker on an unsupported untyped property slot",

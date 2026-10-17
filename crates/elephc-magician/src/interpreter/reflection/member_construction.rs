@@ -752,7 +752,7 @@ pub(super) fn eval_reflection_native_callable_parameters(
         flags,
         required_parameter_count: signature.required_param_count(),
     };
-    eval_reflection_parameters_from_names_and_type_flags(
+    let mut parameters = eval_reflection_parameters_from_names_and_type_flags(
         Some(declaring_class_name.trim_start_matches('\\')),
         Some(&declaring_function),
         &names,
@@ -763,7 +763,13 @@ pub(super) fn eval_reflection_native_callable_parameters(
         &by_ref_flags,
         &variadic_flags,
         &[],
-    )
+    );
+    for (parameter, index) in parameters.iter_mut().zip(visible) {
+        if let Some(NativeCallableDefault::Expression { reflection_factory, .. }) = signature.param_default(index) {
+            parameter.native_default_factory = *reflection_factory;
+        }
+    }
+    parameters
 }
 
 /// Returns declared parameter type metadata for a registered native callable.
@@ -818,6 +824,8 @@ pub(super) fn eval_reflection_native_callable_parameter_defaults(
 /// Converts one registered native default into an eval constant expression.
 pub(super) fn eval_reflection_native_callable_default_expr(default: &NativeCallableDefault) -> EvalExpr {
     match default {
+        NativeCallableDefault::DeferredError(message) => EvalExpr::DeferredDefaultError(message.clone()),
+        NativeCallableDefault::Expression { expression, .. } => *expression.clone(),
         NativeCallableDefault::Null => EvalExpr::Const(EvalConst::Null),
         NativeCallableDefault::Bool(value) => EvalExpr::Const(EvalConst::Bool(*value)),
         NativeCallableDefault::Int(value) => EvalExpr::Const(EvalConst::Int(*value)),

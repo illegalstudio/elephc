@@ -43,6 +43,7 @@ struct NativeCatalog {
     native_abstract_properties: Rc<HashMap<String, Vec<(String, EvalInterfaceProperty)>>>,
     native_property_types: Rc<HashMap<(String, String), EvalParameterType>>,
     native_property_defaults: Rc<HashMap<(String, String), NativeCallableDefault>>,
+    native_property_default_errors: Rc<HashMap<(String, String), String>>,
     native_property_attributes: Rc<HashMap<(String, String), Vec<EvalAttribute>>>,
 }
 
@@ -76,6 +77,7 @@ impl ElephcEvalContext {
             self.native_abstract_properties = SharedNative::from_shared(catalog.native_abstract_properties);
             self.native_property_types = SharedNative::from_shared(catalog.native_property_types);
             self.native_property_defaults = SharedNative::from_shared(catalog.native_property_defaults);
+            self.native_property_default_errors = SharedNative::from_shared(catalog.native_property_default_errors);
             self.native_property_attributes = SharedNative::from_shared(catalog.native_property_attributes);
             self.native_catalog_ready = true;
         }
@@ -119,6 +121,7 @@ impl ElephcEvalContext {
             native_abstract_properties: self.native_abstract_properties.share(),
             native_property_types: self.native_property_types.share(),
             native_property_defaults: self.native_property_defaults.share(),
+            native_property_default_errors: self.native_property_default_errors.share(),
             native_property_attributes: self.native_property_attributes.share(),
         };
         NATIVE_CATALOGS.with(|cache| {

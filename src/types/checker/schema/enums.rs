@@ -544,6 +544,7 @@ pub(crate) fn insert_enum_metadata(
             property_offsets,
             property_declaring_classes,
             defaults,
+            deferred_property_default_error: None,
             property_visibilities,
             property_set_visibilities: HashMap::new(),
             declared_properties,

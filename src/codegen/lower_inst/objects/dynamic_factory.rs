@@ -191,7 +191,7 @@ pub(super) fn dynamic_new_candidate(
     } else {
         return Ok(None);
     };
-    let property_defaults = collect_property_defaults(class_info, inst)?;
+    let property_initialization = collect_property_initialization(class_info, inst);
     Ok(Some(DynamicNewCandidate {
         class_name: class_name.to_string(),
         class_id: class_info.class_id,
@@ -199,7 +199,7 @@ pub(super) fn dynamic_new_candidate(
         allow_dynamic_properties: class_info.has_property_hash_storage(),
         uninitialized_marker_offsets: uninitialized_property_marker_offsets(class_info),
         owned_reference_property_offsets: owned_reference_property_offsets(class_info),
-        property_defaults,
+        property_initialization,
         constructor_impl,
     }))
 }
@@ -223,7 +223,7 @@ pub(super) fn dynamic_new_without_constructor_candidate(
     if class_interfaces_require_missing_method_symbols(ctx, class_name, class_info) {
         return Ok(None);
     }
-    let property_defaults = collect_property_defaults(class_info, inst)?;
+    let property_initialization = collect_property_initialization(class_info, inst);
     Ok(Some(DynamicNewCandidate {
         class_name: class_name.to_string(),
         class_id: class_info.class_id,
@@ -231,7 +231,7 @@ pub(super) fn dynamic_new_without_constructor_candidate(
         allow_dynamic_properties: class_info.has_property_hash_storage(),
         uninitialized_marker_offsets: uninitialized_property_marker_offsets(class_info),
         owned_reference_property_offsets: owned_reference_property_offsets(class_info),
-        property_defaults,
+        property_initialization,
         constructor_impl: None,
     }))
 }
@@ -260,7 +260,7 @@ pub(super) fn spl_runtime_storage_dynamic_new_candidate(
         allow_dynamic_properties: class_info.has_property_hash_storage(),
         uninitialized_marker_offsets: Vec::new(),
         owned_reference_property_offsets: Vec::new(),
-        property_defaults: Vec::new(),
+        property_initialization: PropertyInitialization::Inline(Vec::new()),
         constructor_impl: None,
     })
 }
@@ -374,7 +374,7 @@ pub(super) fn emit_dynamic_new_candidate(
         &candidate.owned_reference_property_offsets,
     )?;
     ctx.store_result_value(result)?;
-    emit_property_defaults(ctx, result, &candidate.property_defaults)?;
+    emit_property_initialization(ctx, result, &candidate.property_initialization)?;
     if let Some(constructor) = &candidate.constructor_impl {
         emit_constructor_call(
             ctx,

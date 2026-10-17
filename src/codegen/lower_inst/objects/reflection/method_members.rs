@@ -356,7 +356,7 @@ pub(super) fn reflection_trait_method_member(
         Some(trait_name),
         Some(declaring_function),
         &[],
-        None,
+        Some(&info.source_defaults),
     )?;
     Ok(Some(ReflectionListedMember {
         name: info.declared_name.clone(),
@@ -396,4 +396,3 @@ pub(super) fn reflection_method_is_generator(
             && function.flags.is_generator
     })
 }
-

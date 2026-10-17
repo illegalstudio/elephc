@@ -448,6 +448,7 @@ pub(super) fn lower_new_scoped_object(ctx: &mut LoweringContext<'_, '_>, receive
     if matches!(receiver, StaticReceiver::Static) {
         let fallback_class = ctx.current_class.clone().unwrap_or_else(|| receiver_name(receiver));
         let class_name = lower_class_constant(ctx, receiver, expr);
+        crate::ir_lower::property_default_errors::for_dynamic_class(ctx, class_name, expr.span);
         for (arg_index, arg) in args.iter().enumerate() {
             let place = match &arg.kind {
                 ExprKind::NamedArg { value, .. } => value.as_ref(),

@@ -289,6 +289,8 @@ mod reference_detach;
 mod exceptions_enums_magic;
 #[path = "error_tests/classes_traits.rs"]
 mod classes_traits;
+#[path = "error_tests/property_default_scope.rs"]
+mod property_default_scope;
 #[path = "error_tests/generics_review.rs"]
 mod generics_review;
 #[path = "error_tests/extensions.rs"]

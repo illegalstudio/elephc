@@ -14,16 +14,24 @@ use super::*;
 
 use crate::types::PropertyNameResolution;
 
-/// Allocates an object-owned ref cell before a physical initializer writes its default.
+/// Reuses allocation-time cells, or creates one for a zeroed by-name allocation.
 pub(super) fn initialize_owned_property_reference(
     ctx: &mut FunctionContext<'_>,
     slot: &PropertySlot,
     base_reg: &str,
+    starts_uninitialized: bool,
 ) -> bool {
     let owns_cell = slot.is_reference && ctx.module.class_infos.get(&slot.class_name)
         .is_some_and(|class| class.owned_reference_properties.contains(&slot.property));
     if owns_cell {
-        emit_owned_reference_property_cell(ctx, base_reg, slot.offset, &slot.php_type, false);
+        // Fixed and known dynamic allocations already own this cell. Replacing it would
+        // leak that owner and discard its typed-uninitialized marker. Runtime by-name
+        // allocation instead reaches the same thunk with a zeroed physical slot.
+        let ready = ctx.next_label("property_reference_initialized");
+        abi::emit_load_from_address(ctx.emitter, abi::int_result_reg(ctx.emitter), base_reg, slot.offset);
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &ready);
+        emit_owned_reference_property_cell(ctx, base_reg, slot.offset, &slot.php_type, starts_uninitialized);
+        ctx.emitter.label(&ready);
     }
     owns_cell
 }

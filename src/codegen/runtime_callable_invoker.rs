@@ -2486,6 +2486,11 @@ fn push_default_value_arg(
     data: &mut DataSection,
 ) -> PhpType {
     let source_ty = emit_default_to_result(index, target_ty, emitter, ctx, data);
+    if source_ty.codegen_repr() == PhpType::Mixed {
+        // Native EIR helpers return one owned box. Reuse the same transfer path
+        // as owned hash cells when a typed slot borrows the unboxed payload.
+        return push_materialized_mixed_hash_value_arg(target_ty, true, emitter, ctx, data);
+    }
     let pushed_ty = if source_ty.is_refcounted()
         && target_ty.is_some_and(|ty| ty.codegen_repr() == PhpType::Mixed)
         && source_ty.codegen_repr() != PhpType::Mixed
@@ -3402,17 +3407,29 @@ fn widen_callback_arg_type(left: &PhpType, right: &PhpType) -> PhpType {
 
 /// Throws a catchable `ArgumentCountError` for a descriptor missing a required argument.
 fn emit_call_user_func_array_missing_arg_error(emitter: &mut Emitter, data: &mut DataSection) {
-    let (message_label, message_len) =
-        data.add_string(b"call_user_func_array(): missing required argument");
+    emit_invoker_throwable(
+        emitter, data, "_spl_argument_count_error_class_id",
+        "call_user_func_array(): missing required argument",
+    );
+}
+
+/// Throws a compact builtin throwable through the invoker's argument-owner escape boundary.
+fn emit_invoker_throwable(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    class_id_symbol: &str,
+    message: &str,
+) {
+    let (message_label, message_len) = data.add_string(message.as_bytes());
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("mov x0, #56");                                 // request the compact Throwable payload
-            emitter.instruction("bl __rt_heap_alloc");                          // allocate the ArgumentCountError object
+            emitter.instruction("bl __rt_heap_alloc");                          // allocate the catchable builtin throwable
             emitter.instruction("mov x9, #6");                                  // heap kind 6 identifies a throwable object
             emitter.instruction("str x9, [x0, #-8]");                           // stamp the allocation before acquiring its PHP handle
             emitter.instruction("bl __rt_object_handle_acquire");               // assign the object its runtime handle
-            abi::emit_load_symbol_to_reg(emitter, "x9", "_spl_argument_count_error_class_id", 0);
-            emitter.instruction("str x9, [x0]");                                // identify the catchable ArgumentCountError class
+            abi::emit_load_symbol_to_reg(emitter, "x9", class_id_symbol, 0);
+            emitter.instruction("str x9, [x0]");                                // identify the requested builtin throwable class
             abi::emit_symbol_address(emitter, "x9", &message_label);
             emitter.instruction("str x9, [x0, #8]");                            // store the immutable diagnostic bytes
             abi::emit_load_int_immediate(emitter, "x9", message_len as i64);
@@ -3427,7 +3444,7 @@ fn emit_call_user_func_array_missing_arg_error(emitter: &mut Emitter, data: &mut
         }
         Arch::X86_64 => {
             emitter.instruction("mov eax, 56");                                 // request the compact Throwable payload
-            emitter.instruction("call __rt_heap_alloc");                        // allocate the ArgumentCountError object
+            emitter.instruction("call __rt_heap_alloc");                        // allocate the catchable builtin throwable
             abi::emit_load_int_immediate(
                 emitter,
                 "r10",
@@ -3438,10 +3455,10 @@ fn emit_call_user_func_array_missing_arg_error(emitter: &mut Emitter, data: &mut
             abi::emit_load_symbol_to_reg(
                 emitter,
                 "r10",
-                "_spl_argument_count_error_class_id",
+                class_id_symbol,
                 0,
             );
-            emitter.instruction("mov QWORD PTR [rax], r10");                    // identify the catchable ArgumentCountError class
+            emitter.instruction("mov QWORD PTR [rax], r10");                    // identify the requested builtin throwable class
             abi::emit_symbol_address(emitter, "r10", &message_label);
             emitter.instruction("mov QWORD PTR [rax + 8], r10");                // store the immutable diagnostic bytes
             abi::emit_load_int_immediate(emitter, "r10", message_len as i64);

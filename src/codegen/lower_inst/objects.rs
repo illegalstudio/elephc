@@ -115,6 +115,21 @@ struct PropertyDefault {
     is_reference: bool,
 }
 
+/// Strategy used to initialize a newly allocated object's physical property slots.
+enum PropertyInitialization {
+    /// Copy backend-supported literal defaults directly into their slots.
+    Inline(Vec<PropertyDefault>),
+    /// Run the EIR initializer so constant expressions retain their runtime branch semantics.
+    Thunk { class_id: u64 },
+}
+
+impl PropertyInitialization {
+    /// Returns whether initialization requires calling the class's EIR thunk.
+    fn uses_thunk(&self) -> bool {
+        matches!(self, Self::Thunk { .. })
+    }
+}
+
 /// Concrete class that a dynamic factory can instantiate in this EIR module.
 struct DynamicNewCandidate {
     class_name: String,
@@ -123,7 +138,7 @@ struct DynamicNewCandidate {
     allow_dynamic_properties: bool,
     uninitialized_marker_offsets: Vec<usize>,
     owned_reference_property_offsets: Vec<(usize, PhpType, bool)>,
-    property_defaults: Vec<PropertyDefault>,
+    property_initialization: PropertyInitialization,
     constructor_impl: Option<ConstructorCallTarget>,
 }
 
