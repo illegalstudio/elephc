@@ -237,11 +237,12 @@ pub(super) fn lower_indexed_array_sort(
     store_if_result(ctx, inst)
 }
 
-/// Calls the mutating shuffle helper for indexed arrays whose payload slots are pointer-sized.
+/// Calls the mutating shuffle helper for indexed arrays whose payload slots are pointer-sized,
+/// or `__rt_shuffle_str` for an indexed string array's 16-byte slots (issue #675).
 pub(super) fn lower_indexed_array_shuffle(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "shuffle", 1)?;
     let array = expect_operand(inst, 0)?;
-    eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "shuffle")?;
+    let elem_ty = str_or_eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "shuffle")?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
     receiver.require_writable("shuffle")?;
     receiver.prepare_consuming_storeback(ctx, array)?;
@@ -255,7 +256,8 @@ pub(super) fn lower_indexed_array_shuffle(ctx: &mut FunctionContext<'_>, inst: &
             ctx.load_value_to_reg(array, "rdi")?;
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_shuffle");
+    let helper = if elem_ty == PhpType::Str { "__rt_shuffle_str" } else { "__rt_shuffle" };
+    abi::emit_call_label(ctx.emitter, helper);
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
