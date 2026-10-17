@@ -244,6 +244,14 @@ impl Checker {
                     continue;
                 }
                 if self.is_builtin_by_ref_argument_lvalue(arg) {
+                    if matches!(
+                        def.spec.semantics.lowering,
+                        crate::builtins::semantics::BuiltinLowering::Runtime(
+                            crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::ArrayUnshift)
+                        )
+                    ) {
+                        self.promote_builtin_array_property_reference(arg, env)?;
+                    }
                     continue;
                 }
                 let param_name = def
