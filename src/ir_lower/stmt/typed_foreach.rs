@@ -471,14 +471,16 @@ pub(super) fn lower_foreach(
     }
 }
 
-/// Reifies a property, static property, or nested element source as a local reference.
+/// Reifies a property, static property, nested element, or by-reference-returning call source as
+/// a local reference.
 ///
 /// Iterator relocation can only reload a local slot. A synthetic alias turns an addressable
 /// non-local source into such a slot without copying the container: instance properties use
 /// their promoted property cell, native static properties use their process-lifetime symbol
-/// address, and nested elements first promote their parent to hash storage and then retain the
-/// entry's tag-11 cell. Growth through any spelling writes into that same cell, so `IterNext`
-/// always reloads the live table.
+/// address, nested elements first promote their parent to hash storage and then retain the
+/// entry's tag-11 cell, and a by-reference-returning call adopts the callee's cell through
+/// [`crate::ir_lower::expr::lower_ref_assign_call`]. Growth through any spelling writes into
+/// that same cell, so `IterNext` always reloads the live table.
 fn prepare_addressable_by_ref_foreach_source(
     ctx: &mut LoweringContext<'_, '_>,
     source: &Expr,
@@ -528,6 +530,23 @@ fn prepare_addressable_by_ref_foreach_source(
                 &element,
                 source.span,
             );
+            Some(Expr::new(ExprKind::Variable(alias), source.span))
+        }
+        ExprKind::FunctionCall { .. }
+        | ExprKind::MethodCall { .. }
+        | ExprKind::StaticMethodCall { .. }
+        | ExprKind::ClosureCall { .. }
+        | ExprKind::ExprCall { .. }
+            if crate::ir_lower::expr::call_returns_by_reference(ctx, source) =>
+        {
+            // A by-reference-returning callee hands the loop its own reference cell. Binding it
+            // to a managed local makes that cell the iterator origin, so the loop mutates the
+            // array the caller's variable aliases instead of a detached copy
+            // (`foreach (ref_id($array) as &$v)`, and the same for a method, static method,
+            // closure or immediately-invoked closure), matching php's `bug67633.phpt`. A by-VALUE
+            // call stays on the ordinary path and iterates a copy, as PHP does.
+            let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
+            crate::ir_lower::expr::lower_ref_assign_call(ctx, &alias, source, source.span);
             Some(Expr::new(ExprKind::Variable(alias), source.span))
         }
         _ => None,

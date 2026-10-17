@@ -437,43 +437,61 @@ pub(super) fn interface_satisfies_interface(
 }
 
 /// Converts an untyped boxed Mixed payload into indexed-array storage with Mixed slots.
+///
+/// The unboxed payload is BORROWED: the Mixed cell keeps its own reference to the array.
+/// `__rt_array_to_mixed` consumes one owner through `__rt_array_ensure_unique`, so without a
+/// reference of its own the conversion steals the cell's, and the cell's later release then
+/// frees an array the caller still holds — `function id($x){ return $x; }` emptied `$array`
+/// and the by-reference loop over `id($array)` exhausted the heap (issue #1790 / php bug
+/// #67633). Acquiring first forces the split and leaves the cell's reference intact.
 pub(super) fn lower_mixed_to_mixed_indexed_array(ctx: &mut FunctionContext<'_>) -> Result<()> {
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let mixed_array_ty = PhpType::Array(Box::new(PhpType::Mixed));
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed indexed-array payload to the Mixed conversion helper
+            abi::emit_incref_if_refcounted(ctx.emitter, &mixed_array_ty);       // give the conversion its own owner before it consumes one
             ctx.emitter.instruction("ldr x1, [x0, #-8]");                       // load indexed-array metadata before Mixed-slot conversion
             ctx.emitter.instruction("lsr x1, x1, #8");                          // move the runtime value_type tag into the low bits
             ctx.emitter.instruction("and x1, x1, #0x7f");                       // isolate the indexed-array value_type tag
         }
         Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, rdi");                            // move the unboxed indexed-array payload into the incref argument register
+            abi::emit_incref_if_refcounted(ctx.emitter, &mixed_array_ty);       // give the conversion its own owner before it consumes one
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the retained indexed-array payload to the conversion helper
             ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");            // load indexed-array metadata before Mixed-slot conversion
             ctx.emitter.instruction("shr rsi, 8");                              // move the runtime value_type tag into the low bits
             ctx.emitter.instruction("and rsi, 0x7f");                           // isolate the indexed-array value_type tag
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
-    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)));
     Ok(())
 }
 
 /// Converts an untyped boxed Mixed payload into associative-array storage with Mixed values.
+///
+/// Same ownership rule as [`lower_mixed_to_mixed_indexed_array`]: `__rt_hash_to_mixed` consumes
+/// an owner through `__rt_hash_ensure_unique`, so the borrowed unboxed hash needs a reference of
+/// its own first or the conversion decrements the Mixed cell's reference and the cell's release
+/// double-frees the caller's array (issue #1790).
 pub(super) fn lower_mixed_to_mixed_assoc_array(ctx: &mut FunctionContext<'_>) -> Result<()> {
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let mixed_hash_ty = PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(PhpType::Mixed),
+    };
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed associative-array payload to the Mixed conversion helper
+            abi::emit_incref_if_refcounted(ctx.emitter, &mixed_hash_ty);        // give the conversion its own owner before it consumes one
         }
-        Arch::X86_64 => {}
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, rdi");                            // move the unboxed associative-array payload into the incref argument register
+            abi::emit_incref_if_refcounted(ctx.emitter, &mixed_hash_ty);        // give the conversion its own owner before it consumes one
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the retained associative-array payload to the conversion helper
+        }
     }
     abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
-    abi::emit_incref_if_refcounted(
-        ctx.emitter,
-        &PhpType::AssocArray {
-            key: Box::new(PhpType::Mixed),
-            value: Box::new(PhpType::Mixed),
-        },
-    );
     Ok(())
 }
 
