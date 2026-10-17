@@ -50,12 +50,30 @@ pub(in crate::interpreter) fn eval_builtin_ctype_named(
 }
 
 /// Returns the PHP boolean result for one named ASCII `ctype_*` byte-string check.
+///
+/// php-src takes `mixed`: a string is checked byte by byte, an int in -128..=255 is ONE character
+/// code (negative values wrap by 256, so `-1` is byte 255), any other int is checked as its decimal
+/// string, and every other type answers false. Coercing everything to a string made
+/// `ctype_digit(7)` true, where php checks the bell character and answers false.
 pub(in crate::interpreter) fn eval_ctype_named_result(
     name: &str,
     value: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let bytes = values.string_bytes(value)?;
+    const INT_TAG: u64 = 0;
+    const STRING_TAG: u64 = 1;
+    let bytes = match values.type_tag(value)? {
+        STRING_TAG => values.string_bytes(value)?,
+        INT_TAG => {
+            let number = values.raw_value_word(value)? as i64;
+            if (-128..=255).contains(&number) {
+                vec![(number & 0xff) as u8]
+            } else {
+                number.to_string().into_bytes()
+            }
+        }
+        _ => return values.bool_value(false),
+    };
     let mut matches = !bytes.is_empty();
     for byte in bytes {
         if !eval_ctype_byte_matches(name, byte)? {
