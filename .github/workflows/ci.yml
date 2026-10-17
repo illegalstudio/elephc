@@ -2188,6 +2188,15 @@ jobs:
       - name: Check undersized frame rejection in release mode
         run: cargo test -p elephc --release --lib test_emit_frame_
 
+  upstream-watch-tests:
+    name: php-src watcher tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Run watcher tests
+        run: bash .github/scripts/test_php-upstream-watch.sh
+
   benchmark-tooling:
     name: Benchmark tooling
     runs-on: ubuntu-latest
@@ -2234,6 +2243,7 @@ jobs:
       - security-audit
       - action-pins
       - frame-assertions-release
+      - upstream-watch-tests
       - benchmark-tooling
     if: always()
     steps:
@@ -2269,6 +2279,7 @@ jobs:
           test "${{ needs.security-audit.result }}" = "success"
           test "${{ needs.action-pins.result }}" = "success"
           test "${{ needs.frame-assertions-release.result }}" = "success"
+          test "${{ needs.upstream-watch-tests.result }}" = "success"
           test "${{ needs.benchmark-tooling.result }}" = "success"
 
   benchmark:
