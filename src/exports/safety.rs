@@ -55,6 +55,23 @@ pub fn validate_cdylib_call_graph(
     module: &Module,
     exports: &HashMap<String, ExportedFunction>,
 ) -> Result<(), CompileError> {
+    validate_call_graph(module, exports, false)
+}
+
+/// Applies core-only producer capability restrictions to every transitively reachable body.
+pub fn validate_phpext_call_graph(
+    module: &Module,
+    exports: &HashMap<String, ExportedFunction>,
+) -> Result<(), CompileError> {
+    validate_call_graph(module, exports, true)
+}
+
+/// Shares reachability proof while adding request-isolation constraints for PHP hosts.
+fn validate_call_graph(
+    module: &Module,
+    exports: &HashMap<String, ExportedFunction>,
+    phpext: bool,
+) -> Result<(), CompileError> {
     let functions = module
         .functions
         .iter()
@@ -85,6 +102,30 @@ pub fn validate_cdylib_call_graph(
             reject_fatal_terminators(module, function, export, &path)?;
             let callable_reachability = CallableReachabilityAnalysis::new(module, function);
             for instruction in &function.instructions {
+                if phpext {
+                    if matches!(instruction.op, Op::PromoteLocalRefCell | Op::AliasLocalRefCell
+                        | Op::LoadArrayElemRefCell | Op::LoadArrayElemRefCellExisting
+                        | Op::BindRefCellPtr | Op::AdoptRefCellPtr | Op::AcquireRefCell) {
+                        return Err(CompileError::new(instruction.span.unwrap_or(export.span),
+                            &format!("PHP export '{}' reaches reference construction through {}; native reference graphs are not supported by --emit phpext", export.name, path.join(" -> "))));
+                    }
+                    if instruction.op == Op::ObjectNew {
+                        if let Some(class) = immediate_class_name(module, instruction.immediate.as_ref()) {
+                            if !matches!(class, "Exception" | "RuntimeException" | "Error" | "TypeError"
+                                | "ValueError" | "ArithmeticError" | "DivisionByZeroError" | "ArgumentCountError"
+                                | "JsonException") {
+                                return Err(CompileError::new(instruction.span.unwrap_or(export.span),
+                                    &format!("PHP export '{}' constructs unsupported class '{class}'; --emit phpext currently supports builtin Throwables", export.name)));
+                            }
+                        }
+                    }
+                    if let Some(target) = runtime_function_id(instruction.immediate.as_ref()) {
+                        if !crate::phpext::signature::runtime_supported(target) {
+                            return reject_runtime_call(export, instruction, &path, target,
+                                "has no audited request-local PHP extension lifecycle");
+                        }
+                    }
+                }
                 if instruction.op == Op::LanguageConstructCall {
                     let Some(name) = immediate_function_name(module, instruction.immediate.as_ref())
                     else {

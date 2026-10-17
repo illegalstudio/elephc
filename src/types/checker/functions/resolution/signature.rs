@@ -217,7 +217,8 @@ impl Checker {
                     &format!("Function '{}'", name),
                 )?;
                 if !self.generator_return_type_accepts(&declared_ret) {
-                    self.require_compatible_return_type(
+                    self.require_compatible_return_hint(
+                        type_ann,
                         &declared_ret,
                         &generator_ty,
                         true,
@@ -239,7 +240,8 @@ impl Checker {
                     &format!("Function '{}' declared never must not return", name),
                 ));
             }
-            self.require_declared_return_coverage(
+            self.require_return_hint_coverage(
+                type_ann,
                 &declared_ret,
                 &decl.body,
                 decl.span,
@@ -247,7 +249,8 @@ impl Checker {
             )?;
             if !all_return_infos.is_empty() {
                 for return_info in &all_return_infos {
-                    self.require_compatible_return_type(
+                    self.require_compatible_return_hint(
+                        type_ann,
                         &declared_ret,
                         &return_info.ty,
                         return_info.has_value,

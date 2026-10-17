@@ -436,7 +436,8 @@ impl Checker {
                         self.current_method_is_static = false;
                         return;
                     }
-                    if let Err(error) = self.require_declared_return_coverage(
+                    if let Err(error) = self.require_return_hint_coverage(
+                        type_ann,
                         &declared,
                         &method.body,
                         method.span,
@@ -452,7 +453,8 @@ impl Checker {
                     let skip_compat_check = matches!(declared, PhpType::Never);
                     if !skip_compat_check {
                         for return_info in &return_infos {
-                            if let Err(error) = self.require_compatible_return_type(
+                            if let Err(error) = self.require_compatible_return_hint(
+                                type_ann,
                                 &declared,
                                 &return_info.ty,
                                 return_info.has_value,
@@ -545,7 +547,8 @@ impl Checker {
                 &format!("Method '{}::{}'", class.name, method.name),
             )?;
             if !self.generator_return_type_accepts(&declared) {
-                self.require_compatible_return_type(
+                self.require_compatible_return_hint(
+                    type_ann,
                     &declared,
                     &generator_ty,
                     true,

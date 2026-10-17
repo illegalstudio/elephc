@@ -102,3 +102,6 @@ mod attributes;
 mod yield_parsing;
 #[path = "parser_tests/generated_locals.rs"]
 mod generated_locals;
+
+#[path = "parser_tests/standalone_null.rs"]
+mod standalone_null;

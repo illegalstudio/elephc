@@ -5154,6 +5154,7 @@ fn named_type_expr_to_php_type(name: &str) -> PhpType {
         "callable" => PhpType::Callable,
         "closure" => PhpType::Callable,
         "mixed" => PhpType::Mixed,
+        "null" | "void" => PhpType::Void,
         "object" => PhpType::Object(String::new()),
         _ => PhpType::Object(name.to_string()),
     }

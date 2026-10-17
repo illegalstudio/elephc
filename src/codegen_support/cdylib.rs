@@ -23,6 +23,9 @@ use crate::exports::{is_string_return_signature, ExportedFunction, ELEPHC_ABI_VE
 mod boundary;
 mod owned_string;
 mod lifecycle;
+mod phpext;
+
+pub(crate) use phpext::emit_phpext_exports;
 
 pub(crate) const STATUS_OK: i32 = 0;
 pub(crate) const STATUS_INVALID_ARGUMENT: i32 = 1;
@@ -32,6 +35,20 @@ pub(crate) const STATUS_RUNTIME_FAILURE: i32 = 4;
 
 pub(crate) const BOUNDARY_ACTIVE: &str = "_elephc_boundary_active";
 pub(crate) const BOUNDARY_STATUS: &str = "_elephc_boundary_status";
+
+/// Converts a guarded host callback failure into a contained native cleanup unwind.
+pub(crate) fn emit_host_callback_check(emitter: &mut Emitter, done: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction(&format!("cbz x0, {done}")),       // resume normal native execution only after a successful host callback
+        Arch::X86_64 => {
+            emitter.instruction("test eax, eax");                               // inspect the guarded host callback status
+            emitter.instruction(&format!("jz {done}"));                         // resume normal native execution only after a successful host callback
+        }
+    }
+    abi::emit_store_imm_to_symbol(emitter, BOUNDARY_STATUS, 0, STATUS_RUNTIME_FAILURE as i64);
+    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+    abi::emit_jump(emitter, "__rt_throw_current");
+}
 const LAST_ERROR_BUFFER: &str = "_elephc_last_error_buffer";
 const LAST_ERROR_LENGTH: &str = "_elephc_last_error_length";
 const LAST_ERROR_PRESENT: &str = "_elephc_last_error_present";
@@ -291,6 +308,7 @@ mod tests {
             source_sig: source_sig.clone(),
             internal_sig: source_sig,
             span: Span::dummy(),
+            php_void_return: false,
         }
     }
 

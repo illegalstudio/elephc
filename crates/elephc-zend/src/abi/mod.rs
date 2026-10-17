@@ -16,6 +16,7 @@ pub mod engine;
 pub mod runtime;
 pub mod scalars;
 pub mod values;
+mod value_layout;
 
 pub use c_side::*;
 pub use engine::*;

@@ -52,7 +52,7 @@ fn include_args(dir: &Path) -> Vec<String> {
 /// `(C expression, Rust value)` pairs: sizes and offsets that must agree.
 fn layout_facts() -> Vec<(String, usize)> {
     use std::mem::{offset_of, size_of};
-    let mut facts: Vec<(String, usize)> = Vec::new();
+    let mut facts = elephc_zend::abi::values::value_layout_facts();
     macro_rules! size {
         ($($ty:ident),*) => { $( facts.push((format!("sizeof({})", stringify!($ty)), size_of::<$ty>())); )* };
     }
@@ -62,17 +62,13 @@ fn layout_facts() -> Vec<(String, usize)> {
         };
     }
     size!(
-        zval, zend_string, Bucket, HashTable, zend_object, zend_resource, zend_reference, zend_execute_data,
+        zend_object, zend_resource, zend_reference, zend_execute_data,
         zend_internal_arg_info, zend_function_entry, zend_internal_function, zend_function, zend_module_entry,
         zend_class_entry, zend_object_handlers, zend_property_info, zend_class_constant, zend_constant,
         zend_ini_entry_def, zend_ini_entry, zend_executor_globals, zend_compiler_globals, smart_str, smart_string,
         zend_fcall_info, zend_fcall_info_cache, php_core_globals, php_basic_globals, PHP_MD5_CTX, PHP_SHA1_CTX,
         PHP_SHA256_CTX, php_hash_ops, zend_attribute, zend_object_iterator
     );
-    offset!(zval: value, u1, u2);
-    offset!(zend_string: gc, h, len, val);
-    offset!(Bucket: val, h, key);
-    offset!(zend_array: gc, u, nTableMask, data, nNumUsed, nNumOfElements, nTableSize, nInternalPointer, nNextFreeElement, pDestructor);
     offset!(zend_object: gc, handle, ce, handlers, properties, properties_table);
     offset!(zend_execute_data: opline, call, return_value, func, This, prev_execute_data);
     offset!(zend_internal_function: r#type, fn_flags, function_name, scope, num_args, required_num_args, arg_info, handler, module);

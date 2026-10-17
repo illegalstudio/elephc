@@ -269,7 +269,7 @@ services. See [Profiling](../beyond-php/profiling.md) for both in full.
 | Flag | Values | Default | Description |
 |---|---|---|---|
 | `<source-file>` | path | — | Required. A tagged `.php` or tagless `.lfc` file to compile. Other suffixes retain tagged-PHP behavior. |
-| `--emit KIND` / `--emit=KIND` | `executable` (`exe`, `bin`), `cdylib` (`dylib`, `shared`), `staticlib` (`static`, `lib`) | `executable` | Output artifact kind. `cdylib` builds a C-ABI shared library; `staticlib` builds a C-ABI archive. `lib` is an alias of `staticlib`, not `cdylib`. |
+| `--emit KIND` / `--emit=KIND` | `executable` (`exe`, `bin`), `cdylib` (`dylib`, `shared`), `staticlib` (`static`, `lib`), `phpext` | `executable` | Output artifact kind. `cdylib` builds a C-ABI shared library; `staticlib` builds a C-ABI archive. `lib` is an alias of `staticlib`, not `cdylib`. `phpext` produces a real PHP 8.5 extension using the matching native development SDK. |
 | `--emit-asm` | — | off | Write generated assembly and stop before runtime-object preparation, native assembly, or linking; no target assembler is required. |
 | `--emit-ir` | — | off | Print the EIR textual form and stop. |
 | `--check` | — | off | Run checks and write nothing; exported code also receives EIR cdylib call-graph safety validation. |
@@ -283,7 +283,7 @@ services. See [Profiling](../beyond-php/profiling.md) for both in full.
 | `--web-isolation MODE` / `--web-isolation=MODE` | `worker`, `pool`, `request` | `worker` | Bake the web handler process model into the produced binary. Requires `--web`; plain `--web` is exactly `worker`. |
 
 `--emit-ir`, `--emit-asm`, and `--check` are mutually exclusive. `--web` cannot
-be combined with `--check`, either library emit kind (`cdylib` or `staticlib`),
+be combined with `--check`, a library emit kind (`cdylib`, `staticlib`, or `phpext`),
 `--emit-asm`, or `--emit-ir`. See
 [Output formats and diagnostics](output-and-diagnostics.md).
 
@@ -971,3 +971,25 @@ as `LINUX_AARCH64`. All three tool overrides are required for a non-host target.
 The variables in this table are read by the **compiler**. A separate family,
 `ELEPHC_INI_<directive>`, is read by the **compiled binary** at run time — see
 [Runtime overrides](#runtime-overrides-elephc_ini_).
+
+## PHP extension SDK selection
+
+`--emit phpext` requires a native PHP 8.5 development SDK on Linux x86_64,
+Linux aarch64 or macOS aarch64. iOS extension output is rejected. It produces
+`<source-stem>.so`, including a Mach-O bundle with that suffix on macOS.
+
+| Environment variable | Default | Meaning |
+| --- | --- | --- |
+| `ELEPHC_PHPEXT_PHP_CONFIG` | `php-config` on PATH | Selects the real host headers and interpreter. |
+| `ELEPHC_PHPEXT_PHP_BINARY` | `php-config --php-binary` | Explicit matching interpreter when the SDK reports `NONE`, or when selecting a particular installation. |
+| `ELEPHC_PHPEXT_MODULE_NAME` | source stem | Validated lowercase module identifier. |
+| `ELEPHC_PHPEXT_MODULE_VERSION` | compiler version | Validated module version token. |
+| `CC` | `cc` | C compiler command and flags, parsed without shell evaluation. |
+
+Headers and interpreter must agree on the complete PHP version, module API,
+build ID, ZTS mode, debug mode and integer width. A small generated extension
+must load successfully before the compiler uses that SDK. No extension is
+installed into PHP's configuration or extension directory.
+
+See [PHP extensions](../beyond-php/phpext.md) for supported signatures,
+ownership, request isolation and lifecycle testing.
