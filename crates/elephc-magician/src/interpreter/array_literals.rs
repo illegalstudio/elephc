@@ -171,7 +171,9 @@ pub(in crate::interpreter) fn eval_array_reference_key(
             }
         }
         EVAL_TAG_NULL => EvalArrayReferenceKey::String(Vec::new()),
-        EVAL_TAG_BOOL | EVAL_TAG_FLOAT => EvalArrayReferenceKey::Int(eval_int_value(key, values)?),
+        EVAL_TAG_BOOL | EVAL_TAG_FLOAT | EVAL_TAG_RESOURCE => {
+            EvalArrayReferenceKey::Int(eval_int_value(key, values)?)
+        }
         _ => return Ok(None),
     }))
 }

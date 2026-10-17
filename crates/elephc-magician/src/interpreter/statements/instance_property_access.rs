@@ -736,6 +736,22 @@ pub(in crate::interpreter) fn eval_reference_target_value(
             let array = eval_reference_target_value(array_target, context, values)?;
             values.array_get(array, *index)
         }
+        EvalReferenceTarget::PersistentArrayElement { array_target, key } => {
+            let index = materialize_array_reference_key(key, values)?;
+            let result = (|| {
+                let array = eval_reference_target_value(array_target, context, values)?;
+                values.array_get(array, index)
+            })();
+            let cleanup = values.release(index);
+            match (result, cleanup) {
+                (Ok(value), Ok(())) => Ok(value),
+                (Err(status), _) => Err(status),
+                (Ok(value), Err(status)) => {
+                    let _ = release_expr_result(value, context, values);
+                    Err(status)
+                },
+            }
+        }
         EvalReferenceTarget::ObjectProperty {
             object,
             property,

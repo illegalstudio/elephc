@@ -850,6 +850,16 @@ Lookup still probes physical buckets, but iteration walks the `head -> next -> .
 - `json_encode()` on associative arrays
 - Rehashing during growth and copy-on-write cloning
 
+### Eval reference keys
+
+Eval array-element aliases store normalized integer or byte-string keys as
+Rust-owned metadata. The temporary native cell used to evaluate an offset is
+released after the read; it does not escape into an array's alias map. Readers
+and write-back paths materialize a short-lived key cell for each operation and
+retire it afterwards. This keeps an established reference on the evaluated key
+when its source variable is rebound, and lets alias maps be cloned or retired
+without retaining native key allocations.
+
 ### Comparison with indexed arrays
 
 | | Indexed array | Associative array |

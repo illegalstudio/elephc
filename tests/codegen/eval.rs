@@ -11,6 +11,9 @@
 //! - Fixtures exercise the native/EvalIR boundary rather than the frozen legacy
 //!   AST backend, and many cases assert post-barrier native visibility.
 
+#[path = "eval/array_reference_keys.rs"]
+mod array_reference_keys;
+
 use crate::support::*;
 
 /// Asserts an eval failure stayed inside the C ABI/error-status contract.

@@ -440,7 +440,8 @@ fn eval_clone_property_reference_is_shared(target: &EvalReferenceTarget, scope: 
                 .as_ref()
                 .is_some_and(|scope| scope.contains_visible(array_name))
         },
-        EvalReferenceTarget::NestedArrayElement { array_target, .. } => {
+        EvalReferenceTarget::NestedArrayElement { array_target, .. }
+        | EvalReferenceTarget::PersistentArrayElement { array_target, .. } => {
             eval_clone_property_reference_is_shared(array_target, scope)
         }
         EvalReferenceTarget::Cell { cell } => scope.map_or(true, |scope| scope.visible_entries()

@@ -180,6 +180,11 @@ pub enum EvalReferenceTarget {
         array_target: Box<EvalReferenceTarget>,
         index: RuntimeCellHandle,
     },
+    /// An escaping element alias stores its normalized key without owning a native cell.
+    PersistentArrayElement {
+        array_target: Box<EvalReferenceTarget>,
+        key: EvalArrayReferenceKey,
+    },
     ObjectProperty {
         object: RuntimeCellHandle,
         property: String,
