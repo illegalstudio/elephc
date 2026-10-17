@@ -7,7 +7,7 @@
 //! Key details:
 //! - References, objects, resources and variadics have no producer boundary in this phase.
 
-use crate::{errors::CompileError, span::Span, types::{FunctionSig, PhpType}};
+use crate::{errors::CompileError, parser::ast::{Expr, ExprKind}, span::Span, types::{FunctionSig, PhpType}};
 
 /// Rejects signatures for which the adapter cannot make an independent value copy.
 pub(crate) fn validate(name: &str, sig: &FunctionSig, span: Span) -> Result<(), CompileError> {
@@ -22,10 +22,30 @@ pub(crate) fn validate(name: &str, sig: &FunctionSig, span: Span) -> Result<(), 
         if !supported(ty) { return Err(fail(&format!("unsupported parameter type {ty:?}"))); }
         parameter_type(ty).map_err(|detail| fail(&detail))?;
     }
+    for default in sig.defaults.iter().flatten() {
+        default_text(Some(default)).map_err(|detail| {
+            CompileError::new(default.span, &format!("PHP export '{name}': {detail}"))
+        })?;
+    }
     if !supported(&sig.return_type) && sig.return_type != PhpType::Never {
         return Err(fail(&format!("unsupported return type {:?}", sig.return_type)));
     }
     Ok(())
+}
+
+/// Shares the accepted default forms between source validation and Zend reflection metadata.
+pub(super) fn default_text(expr: Option<&Expr>) -> Result<Option<String>, String> {
+    let Some(expr) = expr else { return Ok(None); };
+    Ok(Some(match &expr.kind {
+        ExprKind::IntLiteral(v) => v.to_string(), ExprKind::FloatLiteral(v) => {
+            if v.is_nan() { "NAN".into() } else if *v == f64::INFINITY { "INF".into() }
+            else if *v == f64::NEG_INFINITY { "-INF".into() } else { format!("{v:?}") }
+        },
+        ExprKind::BoolLiteral(v) => v.to_string(), ExprKind::Null => "null".into(),
+        ExprKind::ArrayLiteral(values) if values.is_empty() => "[]".into(),
+        ExprKind::StringLiteral(v) => format!("\"{}\"", v.as_bytes().iter().map(|b| format!("\\x{b:02x}")).collect::<String>()),
+        _ => return Err("PHP extension defaults currently require scalar, null or empty array constants".into()),
+    }))
 }
 
 /// Shares nullable and array parameter shapes between source validation and Zend generation.

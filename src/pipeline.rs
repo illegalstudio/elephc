@@ -91,6 +91,15 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     } = config;
     let filename = filename.as_str();
     crate::progress::init(quiet);
+    // Reject incompatible options before check/EIR output can return without the backend.
+    if emit == Emit::Phpext && (web || !extra_link_libs.is_empty()
+        || !extra_link_paths.is_empty() || !extra_frameworks.is_empty()
+        || !with_crates.is_empty() || counters || gc_stats
+        || instrument != crate::codegen::Instrumentation::Off) {
+        crate::progress::clear();
+        eprintln!("PHP extension output currently requires the core runtime without bridges, hosted extensions, web or process monitoring");
+        process::exit(1);
+    }
     codegen::set_null_repr(null_repr);
     // Record the PHP language profile and SAPI mode BEFORE any prelude or lowering runs: it is
     // the single source of truth for the reported version surface (`PHP_VERSION` and friends,

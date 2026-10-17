@@ -185,8 +185,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         }
     }
 
-    if emit == Emit::Phpext && (web || hosted_php_ext.is_some() || !planned_link_libraries.is_empty()
-        || !extra_frameworks.is_empty() || !extra_link_paths.is_empty() || !with_crates.is_empty() || counters || instrument != crate::codegen::Instrumentation::Off || gc_stats) {
+    if emit == Emit::Phpext && (hosted_php_ext.is_some() || !planned_link_libraries.is_empty()) {
         eprintln!("PHP extension output currently requires the core runtime without bridges, hosted extensions, web or process monitoring");
         process::exit(1);
     }

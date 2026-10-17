@@ -9,7 +9,7 @@
 //! - The C adapter contains no replacement engine symbols or Rust stack frames.
 
 use crate::{exports::ExportedFunction, parser::ast::ExprKind, types::PhpType};
-use super::signature::parameter_type;
+use super::signature::{default_text, parameter_type};
 
 /// Renders a complete host adapter using one fixed handler for each exported function.
 pub fn render(name: &str, version: &str, exports: &[&ExportedFunction]) -> Result<String, String> {
@@ -130,21 +130,6 @@ fn mask(ty: &PhpType) -> Result<String, String> {
 fn c_string(bytes: &[u8]) -> String {
     let body = bytes.iter().map(|byte| format!("\\{:03o}", byte)).collect::<String>();
     format!("\"{body}\"")
-}
-
-/// Provides reflection defaults for the constant forms accepted by this boundary.
-fn default_text(expr: Option<&crate::parser::ast::Expr>) -> Result<Option<String>, String> {
-    let Some(expr) = expr else { return Ok(None); };
-    Ok(Some(match &expr.kind {
-        ExprKind::IntLiteral(v) => v.to_string(), ExprKind::FloatLiteral(v) => {
-            if v.is_nan() { "NAN".into() } else if *v == f64::INFINITY { "INF".into() }
-            else if *v == f64::NEG_INFINITY { "-INF".into() } else { format!("{v:?}") }
-        },
-        ExprKind::BoolLiteral(v) => v.to_string(), ExprKind::Null => "null".into(),
-        ExprKind::ArrayLiteral(values) if values.is_empty() => "[]".into(),
-        ExprKind::StringLiteral(v) => format!("\"{}\"", v.as_bytes().iter().map(|b| format!("\\x{b:02x}")).collect::<String>()),
-        _ => return Err("PHP extension defaults currently require scalar, null or empty array constants".into()),
-    }))
 }
 
 /// Initializes optional argument storage without allocating from the Zend heap.
