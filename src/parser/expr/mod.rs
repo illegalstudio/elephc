@@ -9,6 +9,8 @@
 //! - Assignment-value parsing intentionally permits assignment expressions where PHP syntax allows them.
 
 mod assignment_targets;
+mod append_writes;
+mod arrow_preludes;
 mod calls;
 mod prefix;
 mod prefix_complex;

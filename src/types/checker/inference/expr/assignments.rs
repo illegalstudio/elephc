@@ -46,7 +46,7 @@ impl Checker {
         env: &mut TypeEnv,
     ) -> Result<PhpType, CompileError> {
         for stmt in prelude {
-            self.check_assignment_like_stmt(stmt, env)?;
+            self.check_stmt(stmt, env)?;
         }
 
         if let ExprKind::Variable(name) = &target.kind {

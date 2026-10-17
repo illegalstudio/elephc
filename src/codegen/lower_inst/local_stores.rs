@@ -8,6 +8,7 @@
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
 
 use super::*;
+use crate::ir::RuntimeCallTarget;
 
 /// Lowers an addressable local store from one SSA operand.
 pub(super) fn lower_store_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
@@ -80,7 +81,7 @@ pub(in crate::codegen) enum RefCellStorePrevious {
 pub(super) fn lower_store_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
     let value = expect_operand(inst, 0)?;
-    let previous = if value_is_consuming_conversion_of_ref_cell(ctx, value, slot)? {
+    let previous = if value_is_consuming_mutation_of_ref_cell(ctx, value, slot)? {
         RefCellStorePrevious::Keep
     } else {
         retire_raw_occupant_before_ref_store(ctx, slot)?;
@@ -89,7 +90,7 @@ pub(super) fn lower_store_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruc
     store_value_through_ref_cell_slot(ctx, slot, value, &inst.result_php_type, previous)
 }
 
-/// Returns true when `value` is `ArrayToHash(LoadRefCell(slot))` for the slot being stored.
+/// Returns true when a container mutation already consumed the ref-cell owner being replaced.
 ///
 /// `ArrayToHash` CONSUMES the array it converts: the convert path releases the source after the
 /// copy and returns a fresh hash, the already-a-hash path returns the source pointer itself. Either
@@ -99,7 +100,9 @@ pub(super) fn lower_store_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruc
 /// (`function r(&...$items) { $items[0] = 1; $items["k"] = 2; }` called through a first-class
 /// callable), and the freed block's reuse by the persisted key string then walked that string as a
 /// hash on the next release.
-fn value_is_consuming_conversion_of_ref_cell(
+/// Concrete `ArrayFetchForWrite` calls have the same consuming contract when promoting or
+/// separating a nested parent. Boxed-receiver calls return a child, not a replacement container.
+fn value_is_consuming_mutation_of_ref_cell(
     ctx: &FunctionContext<'_>,
     value: ValueId,
     slot: LocalSlotId,
@@ -107,12 +110,21 @@ fn value_is_consuming_conversion_of_ref_cell(
     let Some(conversion) = instruction_for_value(ctx, value)? else {
         return Ok(false);
     };
-    if conversion.op != Op::ArrayToHash {
+    let consuming_fetch = conversion.op == Op::RuntimeCall
+        && conversion.immediate == Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite))
+        && matches!(conversion.result_php_type.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. });
+    if conversion.op != Op::ArrayToHash && !consuming_fetch {
         return Ok(false);
     }
     let Some(source) = conversion.operands.first().copied() else {
         return Ok(false);
     };
+    if consuming_fetch && !matches!(ctx.value_php_type(source)?.codegen_repr(),
+        PhpType::Array(_) | PhpType::AssocArray { .. })
+    {
+        return Ok(false);
+    }
     Ok(instruction_for_value(ctx, source)?.is_some_and(|load| {
         load.op == Op::LoadRefCell && load.immediate == Some(Immediate::LocalSlot(slot))
     }))

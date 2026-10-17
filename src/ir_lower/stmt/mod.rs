@@ -46,6 +46,8 @@ mod conditionals;
 mod loops;
 mod array_write_core;
 mod nested_array_writes;
+mod nested_write_guards;
+mod nested_scalar_writes;
 mod array_write_storage;
 mod typed_foreach;
 mod switches;
@@ -315,3 +317,6 @@ fn local_slot_is_convertible_here(ctx: &LoweringContext<'_, '_>, name: &str) -> 
             .get(name)
             .is_some_and(|slot| ctx.slot_is_initialized(*slot))
 }
+
+/// Exposes captured writable parent cells to compiler-generated append expressions.
+pub(crate) use nested_array_writes::lower_nested_assign_parent;

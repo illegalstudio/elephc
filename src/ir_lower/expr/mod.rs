@@ -71,6 +71,9 @@ mod indexed_array_literals;
 mod array_cast_source;
 mod assoc_array_literals;
 mod match_expr;
+/// Scoped stored-cell leases for compiler-generated compound append updates.
+mod append_updates;
+pub(crate) use append_updates::store_alias as store_append_update_cell;
 mod array_access;
 mod array_access_types;
 mod ternary_cast;
@@ -193,7 +196,8 @@ pub(crate) use indexed_array_literals::{
 };
 pub(crate) use array_access::{
     array_access_element_result_type, index_expr_key_type,
-    lower_array_access_from_lowered_receiver, lower_by_ref_foreach_element_source,
+    lower_array_access_from_lowered_receiver,
+    lower_by_ref_foreach_element_source,
 };
 pub(crate) use array_access_types::type_satisfies_array_access_for_ir;
 pub(crate) use assignments::lower_null_coalesce_update_stmt;

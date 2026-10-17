@@ -90,6 +90,8 @@ mod boxed_property_defaults;
 mod by_ref_place_args;
 #[path = "runtime_gc/by_ref_variadic_writeback.rs"]
 mod by_ref_variadic_writeback;
+#[path = "runtime_gc/variadic_key_writes.rs"]
+mod variadic_key_writes;
 #[path = "runtime_gc/omitted_by_ref_default_args.rs"]
 mod omitted_by_ref_default_args;
 

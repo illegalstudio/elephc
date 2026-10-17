@@ -296,3 +296,39 @@ fn test_null_coalesce_assignment_expression_stabilizes_computed_mutated_index() 
         other => panic!("expected Echo, got {:?}", other),
     }
 }
+
+/// A compound append evaluates its RHS, reserves a null slot, then computes/stores the value.
+/// Generated builtin helpers must retain distinct identities for checked-call metadata.
+#[test]
+fn test_compound_append_reserves_slot_before_operation_and_keeps_call_identities() {
+    let stmts = parse_source("<?php $items[] /= divisor();");
+    let StmtKind::ExprStmt(expr) = &stmts[0].kind else {
+        panic!("expected a compound append expression: {:?}", stmts[0]);
+    };
+    let ExprKind::Assignment { prelude, .. } = &expr.kind else {
+        panic!("expected a stabilized append expression: {:?}", expr);
+    };
+    let rhs = prelude.iter().position(|stmt| matches!(&stmt.kind,
+        StmtKind::Assign { value, .. }
+            if matches!(&value.kind, ExprKind::FunctionCall { name, .. } if name.as_str() == "divisor")
+    )).expect("RHS evaluated once in the prelude");
+    let reserve = prelude.iter().position(|stmt| matches!(&stmt.kind,
+        StmtKind::ArrayPush { value, .. } if matches!(value.kind, ExprKind::Null)
+    )).expect("new null slot reserved");
+    let write = prelude.iter().position(|stmt| matches!(&stmt.kind,
+        StmtKind::RefAssign { source, .. } if matches!(source.kind, ExprKind::ArrayAccess { .. })
+    )).expect("reserved slot captured for its update");
+    assert!(rhs < reserve && reserve < write);
+    let helpers = prelude.iter().filter_map(|stmt| {
+        let expr = match &stmt.kind {
+            StmtKind::Assign { value, .. } | StmtKind::ExprStmt(value) => value,
+            _ => return None,
+        };
+        matches!(&expr.kind, ExprKind::FunctionCall { name, .. } if name.is_fully_qualified())
+            .then_some(expr)
+    }).collect::<Vec<_>>();
+    assert!(!helpers.is_empty());
+    assert!(helpers.iter().all(|call| call.span.identifies_a_node() && !call.span.is_from_source()));
+    let identities = helpers.iter().map(|call| call.span).collect::<std::collections::HashSet<_>>();
+    assert_eq!(identities.len(), helpers.len());
+}

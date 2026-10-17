@@ -239,6 +239,22 @@ pub(super) fn check_ref_assign(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
+    if crate::names::append_update_alias_kind(target).is_some() {
+        if let ExprKind::ArrayAccess { array, .. } = &source.kind {
+            if let ExprKind::Variable(name) = &array.kind {
+                if let Some(ty) = env.get(name).cloned() {
+                    let widened = match ty {
+                        PhpType::Array(_) => PhpType::Array(Box::new(PhpType::Mixed)),
+                        PhpType::AssocArray { key, .. } => PhpType::AssocArray {
+                            key, value: Box::new(PhpType::Mixed),
+                        },
+                        other => other,
+                    };
+                    env.insert(name.clone(), widened);
+                }
+            }
+        }
+    }
     let mut target_has_boxed_ref_provenance = match &source.kind {
         ExprKind::Variable(source_name) => {
             checker.boxed_ref_aliased_locals.contains(source_name)
@@ -331,6 +347,11 @@ pub(super) fn check_ref_assign(
     if let Err(error) = result {
         poison_unbound_local(env, target);
         return Err(error);
+    }
+    if crate::names::append_update_alias_kind(target).is_some() {
+        // The parser's writable-cell lease is representation-neutral, not a value snapshot.
+        env.insert(target.to_string(), PhpType::Mixed);
+        target_has_boxed_ref_provenance = true;
     }
     if target_has_boxed_ref_provenance {
         checker.boxed_ref_aliased_locals.insert(target.to_string());

@@ -10,6 +10,20 @@
 use super::*;
 use elephc::parser::ast::ArrayEntry;
 
+/// Empty array literals used as indices are distinct from append dimensions in diagnostics.
+#[test]
+fn test_parse_empty_array_index_is_not_an_append_dimension() {
+    for source in [
+        "<?php $items[[]] += 2;",
+        "<?php echo ($items[[]] += 2);",
+        "<?php $items[] = 2;",
+        "<?php $items[0][] = 2;",
+        "<?php Box::$items[] = 2;",
+    ] {
+        assert_eq!(parse_source(source).len(), 1, "source: {source}");
+    }
+}
+
 /// Verifies that `<?php echo $name[1];` parses as an `ArrayAccess` expression with an integer
 /// index. String indexing in PHP uses the same `ArrayAccess` AST node as array indexing.
 #[test]

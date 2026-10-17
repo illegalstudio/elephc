@@ -28,8 +28,14 @@ pub(super) fn lower(
         RuntimeCallTarget::ThrowableInitialize => lower_throwable_initialize(ctx, inst),
         RuntimeCallTarget::ExceptionChain => lower_exception_chain(ctx, inst),
         RuntimeCallTarget::ArrayFetchForWrite => {
-            super::lower_array_fetch_for_write_runtime_call(ctx, inst)
+            super::lower_array_fetch_for_write_runtime_call(ctx, inst, false)
         }
+        RuntimeCallTarget::PendingAppendFetchForWrite => {
+            super::lower_array_fetch_for_write_runtime_call(ctx, inst, true)
+        }
+        RuntimeCallTarget::StringWriteOffset => super::string_write_offsets::lower_offset(ctx, inst),
+        RuntimeCallTarget::WriteDiagnostic => super::string_write_offsets::lower_diagnostic(ctx, inst),
+        RuntimeCallTarget::MixedArrayCellHasLiveOwner => super::runtime_array_liveness::lower(ctx, inst),
         RuntimeCallTarget::MixedCellPromoteToHash(sort) => {
             lower_mixed_cell_promote_to_hash(ctx, inst, sort, false)
         }
@@ -37,6 +43,7 @@ pub(super) fn lower(
             lower_mixed_cell_promote_to_hash(ctx, inst, sort, true)
         }
         RuntimeCallTarget::MixedCellClone => lower_mixed_cell_clone(ctx, inst),
+        RuntimeCallTarget::MixedCellResolveForWrite => lower_mixed_cell_resolve_for_write(ctx, inst),
         RuntimeCallTarget::ArrayUnpackToHash => lower_array_unpack_to_hash(ctx, inst),
         RuntimeCallTarget::ExceptionGuardOwned => super::exception_instructions::lower_guard_owned(ctx, inst),
         RuntimeCallTarget::ExceptionUnguardOwned => super::exception_instructions::lower_unguard_owned(ctx, inst),
@@ -102,6 +109,41 @@ fn lower_exception_chain(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     abi::emit_pop_reg(ctx.emitter, pending_reg);
     abi::emit_call_label(ctx.emitter, "__rt_exception_chain");
     Ok(())
+}
+
+/// Retains actual boxed caller storage without overwriting its reference marker.
+fn lower_mixed_cell_resolve_for_write(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let cell = expect_operand(inst, 0)?;
+    ctx.load_value_to_result(cell)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_deref");
+    let retain = ctx.next_label("nested_ref_retain");
+    match ctx.emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {retain}"));              // preserve missing-cell behavior
+            ctx.emitter.instruction("ldr x9, [x0]");                            // inspect the stored Mixed tag
+            ctx.emitter.instruction("cmp x9, #11");                             // caller-reference markers carry indirect storage
+            ctx.emitter.instruction(&format!("b.ne {retain}"));                 // retain ordinary cells directly
+            ctx.emitter.instruction("ldr x9, [x0, #16]");                       // load the caller storage representation
+            ctx.emitter.instruction("cmp x9, #7");                              // boxed reference arguments use Mixed slots
+            ctx.emitter.instruction(&format!("b.ne {retain}"));                 // leave concrete markers to their existing adapters
+            ctx.emitter.instruction("ldr x0, [x0, #8]");                        // load the caller slot address
+            ctx.emitter.instruction("ldr x0, [x0]");                            // borrow the caller's actual Mixed cell
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // preserve missing-cell behavior
+            ctx.emitter.instruction(&format!("jz {retain}"));                   // skip marker reads on a missing cell
+            ctx.emitter.instruction("cmp QWORD PTR [rax], 11");                 // caller-reference markers carry indirect storage
+            ctx.emitter.instruction(&format!("jne {retain}"));                  // retain ordinary cells directly
+            ctx.emitter.instruction("cmp QWORD PTR [rax + 16], 7");             // boxed reference arguments use Mixed slots
+            ctx.emitter.instruction(&format!("jne {retain}"));                  // leave concrete markers to their existing adapters
+            ctx.emitter.instruction("mov rax, QWORD PTR [rax + 8]");            // load the caller slot address
+            ctx.emitter.instruction("mov rax, QWORD PTR [rax]");                // borrow the caller's actual Mixed cell
+        }
+    }
+    ctx.emitter.label(&retain);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_deref");
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    store_if_result(ctx, inst)
 }
 
 /// Materializes normalized constructor parameters through the shared target-aware call ABI.

@@ -293,18 +293,24 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
             )
         }
         StmtKind::NestedArrayAssign { target, value } => {
+            // The root names writable storage, not an ordinary read. Substituting its
+            // known literal lets later folding replace the parent by a detached scalar.
+            let mut write_env = env.clone();
+            let mut root = &target;
+            while let ExprKind::ArrayAccess { array, .. } = &root.kind { root = array; }
+            if let ExprKind::Variable(name) = &root.kind { write_env.remove(name); }
             // The store-time rule, extended to a chain. `$a[$i][$i] = ($i = 1)` reads BOTH
             // indices after the right-hand side, so folding them against the pre-value
             // environment writes through the old ones. Deferring the whole target is only sound
             // when it carries no index EXPRESSION — otherwise this would move a call across the
             // right-hand side — so the shape is checked first and anything else keeps its order.
             let (target, value) = if nested_target_is_all_bare_variables(&target) {
-                let value = propagate_expr(value, &env);
-                let after = env_after_expr_side_effects(env.clone(), &[&value]);
+                let value = propagate_expr(value, &write_env);
+                let after = env_after_expr_side_effects(write_env, &[&value]);
                 (propagate_expr(target, &after), value)
             } else {
-                let target = propagate_expr(target, &env);
-                (target, propagate_expr(value, &env))
+                let target = propagate_expr(target, &write_env);
+                (target, propagate_expr(value, &write_env))
             };
             let mut next_env = env;
             let stmt = Stmt::new(StmtKind::NestedArrayAssign { target, value }, span);

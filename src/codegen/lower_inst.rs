@@ -62,6 +62,8 @@ mod predicates;
 mod property_values;
 mod receiver_place;
 mod runtime_calls;
+mod runtime_array_liveness;
+mod string_write_offsets;
 mod runtime_class_messages;
 mod literal_parameter_guards;
 pub(in crate::codegen) use literal_parameter_guards::emit_boxed_literal_parameter_guard;
@@ -459,7 +461,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::FunctionVariantDispatch => Ok(()),
         Op::FunctionVariantMark => lower_function_variant_mark(ctx, &inst),
         Op::RuntimeCall => lower_runtime_call(ctx, &inst),
-        Op::MixedArrayGetForWrite => lower_mixed_array_runtime_get(ctx, &inst, true),
+        Op::MixedArrayGetForWrite => lower_mixed_array_runtime_get(ctx, &inst, true, false),
         Op::GeneratorYield => lower_generator_yield(ctx, &inst),
         Op::GeneratorYieldFrom => lower_generator_yield_from(ctx, &inst),
         Op::ConcatReset => lower_concat_reset(ctx),

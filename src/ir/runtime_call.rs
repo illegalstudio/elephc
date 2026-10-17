@@ -76,6 +76,19 @@ pub enum RuntimeCallTarget {
     /// Fetches an intermediate array element in write context, installing an
     /// empty child container when the addressed parent slot is missing or null.
     ArrayFetchForWrite,
+    /// Fetches through a pending append parent, preserving a payload-only survivor selected
+    /// before a diagnostic callback instead of separating it through ordinary COW.
+    PendingAppendFetchForWrite,
+    /// Retains the concrete cell behind PHP wrappers and boxed caller-reference markers.
+    MixedCellResolveForWrite,
+    /// Checks whether exactly one of the selected array cell and its payload survives beyond
+    /// the pending compiler lease. Non-array cells stay active; older compiler ancestor leases
+    /// must already be retired.
+    MixedArrayCellHasLiveOwner,
+    /// Converts a PHP string-write offset, preserving catchable errors and conversion warnings.
+    StringWriteOffset,
+    /// Sends one complete PHP warning or deprecation line through the shared handler dispatcher.
+    WriteDiagnostic,
     /// Borrows a boxed PHP array and returns an independently owned hash for literal unpacking.
     /// Rejects non-array values without mutating the original cell or its payload.
     ArrayUnpackToHash,
@@ -134,9 +147,19 @@ impl RuntimeCallTarget {
                 parameters: &[IrType::Heap(IrHeapKind::Object), IrType::Heap(IrHeapKind::Object)],
                 result: IrType::Void,
             }),
-            RuntimeCallTarget::ArrayFetchForWrite => Some(RuntimeCallSignature::Polymorphic {
+            RuntimeCallTarget::ArrayFetchForWrite
+            | RuntimeCallTarget::PendingAppendFetchForWrite => Some(RuntimeCallSignature::Polymorphic {
                 min_operands: 2,
                 max_operands: Some(2),
+            }),
+            RuntimeCallTarget::StringWriteOffset => Some(RuntimeCallSignature::Polymorphic {
+                min_operands: 1, max_operands: Some(1),
+            }),
+            RuntimeCallTarget::WriteDiagnostic => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Str], result: IrType::Void,
+            }),
+            RuntimeCallTarget::MixedArrayCellHasLiveOwner => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Mixed)], result: IrType::I64,
             }),
             RuntimeCallTarget::MixedCellPromoteToHash(_)
             | RuntimeCallTarget::MixedCellPromoteAttachedToHash(_)
@@ -146,7 +169,7 @@ impl RuntimeCallTarget {
                     result: IrType::Heap(IrHeapKind::Hash),
                 })
             }
-            RuntimeCallTarget::MixedCellClone => Some(RuntimeCallSignature::Fixed {
+            RuntimeCallTarget::MixedCellClone | RuntimeCallTarget::MixedCellResolveForWrite => Some(RuntimeCallSignature::Fixed {
                 parameters: &[IrType::Heap(IrHeapKind::Mixed)],
                 result: IrType::Heap(IrHeapKind::Mixed),
             }),
@@ -202,6 +225,11 @@ impl RuntimeCallTarget {
             RuntimeCallTarget::ThrowableInitialize => "object.throwable_initialize",
             RuntimeCallTarget::ExceptionChain => "object.exception_chain",
             RuntimeCallTarget::ArrayFetchForWrite => "array.fetch_for_write",
+            RuntimeCallTarget::PendingAppendFetchForWrite => "array.pending_append_fetch_for_write",
+            RuntimeCallTarget::StringWriteOffset => "string.write_offset",
+            RuntimeCallTarget::MixedCellResolveForWrite => "array.mixed_cell_resolve_for_write",
+            RuntimeCallTarget::MixedArrayCellHasLiveOwner => "array.mixed_cell_has_live_owner",
+            RuntimeCallTarget::WriteDiagnostic => "diagnostic.write",
             RuntimeCallTarget::ArrayUnpackToHash => "array.unpack_to_hash",
             RuntimeCallTarget::MixedCellPromoteToHash(ArrayKeySort::Ascending) => {
                 "array.mixed_cell_promote_to_hash_ksort"

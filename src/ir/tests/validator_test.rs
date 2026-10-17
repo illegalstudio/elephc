@@ -14,6 +14,68 @@ use crate::ir::{
 };
 use crate::types::PhpType;
 
+/// Builds a fetch-for-write function whose runtime key and result contracts can be varied.
+fn array_fetch_for_write_function(key_ty: PhpType, result_ty: PhpType) -> Function {
+    use crate::ir::{Immediate, LocalKind};
+    let key_ty = key_ty.codegen_repr();
+    let mut function = Function::new("fetch_key".to_string(), IrType::Void, PhpType::Void);
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", Vec::new());
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let array_ty = PhpType::Array(Box::new(PhpType::Mixed));
+        let array_slot = builder.add_local(
+            Some("array".to_string()), IrType::from_php(&array_ty), array_ty.clone(),
+            LocalKind::PhpLocal,
+        );
+        let key_slot = builder.add_local(
+            Some("key".to_string()), IrType::from_php(&key_ty), key_ty.clone(),
+            LocalKind::PhpLocal,
+        );
+        let key_owner = Ownership::for_php_type(&key_ty);
+        let array = builder.emit(
+            Op::LoadLocal, Vec::new(), Some(Immediate::LocalSlot(array_slot)),
+            IrType::from_php(&array_ty), array_ty, Ownership::Borrowed,
+        ).unwrap();
+        let key = builder.emit(
+            Op::LoadLocal, Vec::new(), Some(Immediate::LocalSlot(key_slot)),
+            IrType::from_php(&key_ty), key_ty, key_owner,
+        ).unwrap();
+        builder.emit(
+            Op::ArrayGetForWrite, vec![array, key], None,
+            IrType::from_php(&result_ty), result_ty, Ownership::Owned,
+        );
+        builder.terminate(Terminator::Return { value: None });
+    }
+    function
+}
+
+/// Mixed writable parents accept only keys understood by the storage-aware runtime reader.
+#[test]
+fn array_fetch_for_write_validates_mixed_key_shapes() {
+    for key in [PhpType::Int, PhpType::Str, PhpType::Mixed,
+        PhpType::Union(vec![PhpType::Int, PhpType::Str])] {
+        assert_eq!(validate_function(&array_fetch_for_write_function(key, PhpType::Mixed)), Ok(()));
+    }
+    for key in [PhpType::Float, PhpType::Array(Box::new(PhpType::Int)),
+        PhpType::Object("stdClass".to_string())] {
+        assert!(matches!(validate_function(&array_fetch_for_write_function(key, PhpType::Mixed)),
+            Err(ValidationError::OperandTypeMismatch { .. })));
+    }
+}
+
+/// Typed COW fetches retain the original integer-only ABI rather than accepting tagged keys.
+#[test]
+fn array_fetch_for_write_keeps_typed_keys_integer_only() {
+    let result = PhpType::Array(Box::new(PhpType::Int));
+    assert_eq!(validate_function(&array_fetch_for_write_function(PhpType::Int, result.clone())), Ok(()));
+    for key in [PhpType::Str, PhpType::Mixed] {
+        assert!(matches!(validate_function(&array_fetch_for_write_function(key, result.clone())),
+            Err(ValidationError::OperandTypeMismatch { .. })));
+    }
+}
+
 /// An empty function has no valid entry block and fails validation.
 #[test]
 fn empty_function_fails_validation() {

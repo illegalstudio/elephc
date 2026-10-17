@@ -10,7 +10,7 @@
 //!   `crate::codegen_support::runtime::objects`.
 //!
 //! Key details:
-//! - `__rt_mixed_array_get_for_write(cell, key_lo, key_hi)` mirrors
+//! - `__rt_mixed_array_get_for_write(cell, key_lo, key_hi, pending_append)` mirrors
 //!   `__rt_mixed_array_get` but with PHP write-context semantics (issue #555):
 //!   a missing / null-gap / boxed-null element is autovivified as an empty
 //!   indexed array whose boxed cell is INSTALLED into the parent storage, and
@@ -37,6 +37,8 @@
 //!   keeping the autovivified container attached to the original local/slot.
 //! - Write fetches detach existing child zvals and install typed hash entries before
 //!   returning them, so nested mutations do not bypass COW or modify detached read boxes.
+//! - Pending append mode preserves a payload-only survivor selected before a diagnostic
+//!   callback. Ordinary nested writes retain the normal cell and payload COW boundaries.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -158,8 +160,8 @@ fn emit_mixed_cell_promote_to_hash_aarch64(emitter: &mut Emitter) {
 
 /// Emits `__rt_mixed_array_get_for_write` for ARM64 (AAPCS64 ABI).
 ///
-/// Inputs arrive in `x0` = mixed cell, `x1` = key_lo, `x2` = key_hi (integer
-/// keys use the `-1` sentinel, matching `emit_normalized_hash_key`). Returns
+/// Inputs arrive in `x0` = mixed cell, `x1` = key_lo, `x2` = key_hi, and `x3`
+/// selects pending-append ownership (integer keys use the `-1` sentinel). Returns
 /// an OWNED pointer to a boxed Mixed cell in `x0`.
 ///
 /// Write-context lookup: missing indexed elements (beyond length), null gap
@@ -182,14 +184,33 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     //   [sp, #24] = unique array pointer (indexed path)
     //   [sp, #32] = target index / fresh child cell
     //   [sp, #40] = original logical length
-    //   [sp, #48] = saved x29
-    //   [sp, #56] = saved x30
-    emitter.instruction("sub sp, sp, #64");                                     // reserve frame: 3 inputs + 3 scratch slots + saved fp/lr
-    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #48");                                    // establish the helper frame pointer
+    //   [sp, #48] = selected shared-payload mode
+    //   [sp, #64] = saved x29
+    //   [sp, #72] = saved x30
+    emitter.instruction("sub sp, sp, #80");                                     // reserve inputs, scratch, selected-payload mode, and saved fp/lr
+    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #64");                                    // establish the helper frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the receiver cell
     emitter.instruction("str x1, [sp, #8]");                                    // save key_lo
     emitter.instruction("str x2, [sp, #16]");                                   // save key_hi
+    emitter.instruction("str xzr, [sp, #48]");                                  // ordinary writes and stored-cell survivors keep normal COW
+    emitter.instruction("cbz x3, __rt_mixed_array_gfw_mode_ready");             // only pending appends inspect payload-only survival
+    emitter.instruction("cbz x0, __rt_mixed_array_gfw_mode_ready");             // absent cells have no payload identity to preserve
+    emitter.instruction("ldr x9, [x0]");                                        // load the candidate cell tag
+    emitter.instruction("cmp x9, #4");                                          // indexed arrays can have a separately boxed payload owner
+    emitter.instruction("b.eq __rt_mixed_array_gfw_mode_array");                // inspect their cell and payload counts
+    emitter.instruction("cmp x9, #5");                                          // hashes follow the same ownership rule
+    emitter.instruction("b.ne __rt_mixed_array_gfw_mode_ready");                // scalar and object receivers use ordinary semantics
+    emitter.label("__rt_mixed_array_gfw_mode_array");
+    emitter.instruction("ldr w9, [x0, #-12]");                                  // count owners of the selected Mixed cell
+    emitter.instruction("cmp w9, #1");                                          // the compiler lease is the one expected cell owner
+    emitter.instruction("b.hi __rt_mixed_array_gfw_mode_ready");                // a stored cell owner keeps ordinary write-through semantics
+    emitter.instruction("ldr x9, [x0, #8]");                                    // load the selected array or hash payload
+    emitter.instruction("ldr w9, [x9, #-12]");                                  // count independent payload owners
+    emitter.instruction("cmp w9, #2");                                          // one selected-cell lease and exactly one PHP payload owner
+    emitter.instruction("cset x9, eq");                                         // multiple independent copies must never share the detached write
+    emitter.instruction("str x9, [sp, #48]");                                   // preserve it through conversion, lookup, and insertion
+    emitter.label("__rt_mixed_array_gfw_mode_ready");
 
     emitter.instruction("cbz x0, __rt_mixed_array_gfw_detached_null");          // null receivers yield a detached Mixed(null); the set drops the write
     emitter.instruction("ldr x9, [x0]");                                        // load the boxed payload tag
@@ -205,8 +226,8 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload key_lo for the plain reader
     emitter.instruction("ldr x2, [sp, #16]");                                   // reload key_hi for the plain reader
     emitter.instruction("mov x3, xzr");                                         // write-context fallback reads suppress missing/null warnings
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address before the tail call
-    emitter.instruction("add sp, sp, #64");                                     // release the helper frame before the tail call
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address before the tail call
+    emitter.instruction("add sp, sp, #80");                                     // release the helper frame before the tail call
     emitter.instruction("b __rt_mixed_array_get");                              // delegate non-container receivers to the plain reader
 
     // Indexed array payload: integer keys mutate slots, string keys promote.
@@ -227,7 +248,13 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x12, [x10, #-8]");                                 // load the packed indexed-array metadata
     emitter.instruction("ubfx x1, x12, #8, #7");                                // pass the source value_type tag to the Mixed conversion helper
     emitter.instruction("mov x0, x10");                                         // pass the indexed array to the Mixed conversion helper
-    emitter.instruction("bl __rt_array_to_mixed");                              // COW-split shared arrays and box slots so cells are stored in place
+    emitter.instruction("ldr x14, [sp, #48]");                                  // select ordinary COW or the pre-callback payload identity
+    emitter.instruction("cbnz x14, __rt_mixed_array_gfw_indexed_shared");       // payload-only survivors must remain observable through their copy
+    emitter.instruction("bl __rt_array_to_mixed");                              // COW-split ordinary shared arrays and box stored slots
+    emitter.instruction("b __rt_mixed_array_gfw_indexed_ready");                // join after conversion
+    emitter.label("__rt_mixed_array_gfw_indexed_shared");
+    emitter.instruction("bl __rt_array_to_mixed_shared");                       // box slots in the already selected shared payload
+    emitter.label("__rt_mixed_array_gfw_indexed_ready");
     emitter.instruction("str x0, [sp, #24]");                                   // save the unique array pointer
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload the receiver cell after the helper call
     emitter.instruction("str x0, [x10, #8]");                                   // publish the unique array pointer back into the cell
@@ -319,8 +346,11 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
         "x9",
         "__rt_mixed_array_gfw_autovivify_receiver",
     );
-    emitter.instruction("mov x0, x10");                                         // pass the hash pointer to its COW boundary
-    emitter.instruction("bl __rt_hash_ensure_unique");                          // separate the outer hash before replacing a child cell
+    emitter.instruction("mov x0, x10");                                         // pass the hash pointer to its ownership boundary
+    emitter.instruction("ldr x9, [sp, #48]");                                   // was this payload selected before the callback retained it?
+    emitter.instruction("cbnz x9, __rt_mixed_array_gfw_assoc_ready");           // yes, mutate that survivor rather than splitting it
+    emitter.instruction("bl __rt_hash_ensure_unique");                          // separate ordinary shared hashes before replacing a child cell
+    emitter.label("__rt_mixed_array_gfw_assoc_ready");
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the owning receiver cell after COW
     emitter.instruction("str x0, [x9, #8]");                                    // republish the unique hash before looking up the child
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the normalized key low word
@@ -351,7 +381,13 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [sp, #32]");                                   // pass the fresh child cell (ownership consumed by the insert)
     emitter.instruction("mov x4, xzr");                                         // boxed Mixed hash values only use the low payload word
     emitter.instruction("mov x5, #7");                                          // runtime value tag 7 = boxed Mixed
-    emitter.instruction("bl __rt_hash_set");                                    // insert or overwrite the entry (overwrites release the old value)
+    emitter.instruction("ldr x9, [sp, #48]");                                   // preserve a callback-retained selected hash through insertion
+    emitter.instruction("cbnz x9, __rt_mixed_array_gfw_assoc_set_shared");      // bypass the hash_set COW boundary only for that survivor
+    emitter.instruction("bl __rt_hash_set");                                    // insert through ordinary associative-array COW
+    emitter.instruction("b __rt_mixed_array_gfw_assoc_set_done");               // join after insertion
+    emitter.label("__rt_mixed_array_gfw_assoc_set_shared");
+    emitter.instruction("bl __rt_hash_set_shared");                             // mutate the exact pre-callback selected payload
+    emitter.label("__rt_mixed_array_gfw_assoc_set_done");
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the receiver cell after hash mutation
     emitter.instruction("str x0, [x9, #8]");                                    // publish the possibly-reallocated hash back into the cell
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the installed child cell
@@ -364,8 +400,8 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #0");                                          // value_hi = 0
     emitter.instruction("bl __rt_mixed_from_value");                            // box a detached Mixed(null); the following set drops the write
     emitter.label("__rt_mixed_array_gfw_return");
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                     // release the helper frame
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #80");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the owned Mixed cell in x0
 }
 
@@ -398,6 +434,7 @@ fn emit_array_ensure_elem_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x0, sp, #16");                                     // pass the transient cell as the fetch-for-write receiver
     emitter.instruction("mov x1, x2");                                          // forward key_lo into the fetch-for-write key register
     emitter.instruction("mov x2, x3");                                          // forward key_hi into the fetch-for-write key register
+    emitter.instruction("mov x3, xzr");                                         // concrete local writes retain ordinary COW semantics
     emitter.instruction("bl __rt_mixed_array_get_for_write");                   // autovivify the element and publish container changes to the cell
     emitter.instruction("bl __rt_decref_mixed");                                // drop the returned child reference; the container slot keeps its own
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the possibly promoted/reallocated container pointer
@@ -497,7 +534,8 @@ fn emit_mixed_cell_promote_to_hash_x86_64(emitter: &mut Emitter) {
 
 /// Emits `__rt_mixed_array_get_for_write` for x86_64 (SysV ABI).
 ///
-/// Inputs arrive in `rdi` = mixed cell, `rsi` = key_lo, `rdx` = key_hi.
+/// Inputs arrive in `rdi` = mixed cell, `rsi` = key_lo, `rdx` = key_hi, and
+/// `rcx` selects pending-append ownership.
 /// Returns an OWNED pointer to a boxed Mixed cell in `rax`. Same dispatch and
 /// autovivification semantics as the ARM64 emitter.
 fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
@@ -512,12 +550,32 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
     //   [rbp - 32] = unique array pointer (indexed path)
     //   [rbp - 40] = target index / fresh child cell
     //   [rbp - 48] = original logical length
+    //   [rbp - 56] = selected shared-payload mode
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
-    emitter.instruction("sub rsp, 48");                                         // reserve slots for the 3 inputs and 3 scratch words
+    emitter.instruction("sub rsp, 64");                                         // reserve inputs, scratch, and selected-payload mode
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the receiver cell
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save key_lo
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save key_hi
+    emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // ordinary writes and stored-cell survivors keep normal COW
+    emitter.instruction("test rcx, rcx");                                       // is this a parent selected by a pending append?
+    emitter.instruction("jz __rt_mixed_array_gfw_mode_ready");                  // no, retain ordinary write semantics
+    emitter.instruction("test rdi, rdi");                                       // absent cells have no payload identity to preserve
+    emitter.instruction("jz __rt_mixed_array_gfw_mode_ready");                  // keep the detached-null path unchanged
+    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the candidate cell tag
+    emitter.instruction("cmp r10, 4");                                          // indexed arrays can have separately boxed payload owners
+    emitter.instruction("je __rt_mixed_array_gfw_mode_array");                  // inspect their cell and payload counts
+    emitter.instruction("cmp r10, 5");                                          // hashes follow the same ownership rule
+    emitter.instruction("jne __rt_mixed_array_gfw_mode_ready");                 // scalar and object receivers use ordinary semantics
+    emitter.label("__rt_mixed_array_gfw_mode_array");
+    emitter.instruction("cmp DWORD PTR [rdi - 12], 1");                         // the compiler lease is the one expected cell owner
+    emitter.instruction("ja __rt_mixed_array_gfw_mode_ready");                  // a stored cell owner keeps ordinary write-through semantics
+    emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the selected array or hash payload
+    emitter.instruction("cmp DWORD PTR [r10 - 12], 2");                         // one selected-cell lease and exactly one PHP payload owner
+    emitter.instruction("sete r10b");                                           // multiple independent copies must never share the detached write
+    emitter.instruction("movzx r10, r10b");                                     // materialize a complete mode word
+    emitter.instruction("mov QWORD PTR [rbp - 56], r10");                       // preserve it through conversion, lookup, and insertion
+    emitter.label("__rt_mixed_array_gfw_mode_ready");
 
     emitter.instruction("test rdi, rdi");                                       // null receivers yield a detached Mixed(null); the set drops the write
     emitter.instruction("je __rt_mixed_array_gfw_detached_null");               // branch to the detached-null fallback
@@ -556,7 +614,13 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("and r8, 0x7f");                                        // remove the persistent COW flag from the extracted tag
     emitter.instruction("mov rsi, r8");                                         // pass the source value_type tag to the Mixed conversion helper
     emitter.instruction("mov rdi, r10");                                        // pass the indexed array to the Mixed conversion helper
-    emitter.instruction("call __rt_array_to_mixed");                            // COW-split shared arrays and box slots so cells are stored in place
+    emitter.instruction("cmp QWORD PTR [rbp - 56], 0");                         // select ordinary COW or the pre-callback payload identity
+    emitter.instruction("jne __rt_mixed_array_gfw_indexed_shared");             // payload-only survivors must remain observable through their copy
+    emitter.instruction("call __rt_array_to_mixed");                            // COW-split ordinary shared arrays and box stored slots
+    emitter.instruction("jmp __rt_mixed_array_gfw_indexed_ready");              // join after conversion
+    emitter.label("__rt_mixed_array_gfw_indexed_shared");
+    emitter.instruction("call __rt_array_to_mixed_shared");                     // box slots in the already selected shared payload
+    emitter.label("__rt_mixed_array_gfw_indexed_ready");
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the unique array pointer
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the receiver cell after the helper call
     emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // publish the unique array pointer back into the cell
@@ -647,8 +711,12 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
         "r11",
         "__rt_mixed_array_gfw_autovivify_receiver",
     );
-    emitter.instruction("mov rdi, r10");                                        // pass the hash pointer to its COW boundary
-    emitter.instruction("call __rt_hash_ensure_unique");                        // separate the outer hash before replacing a child cell
+    emitter.instruction("mov rdi, r10");                                        // pass the hash pointer to its ownership boundary
+    emitter.instruction("mov rax, r10");                                        // preserve the selected hash as the no-COW result
+    emitter.instruction("cmp QWORD PTR [rbp - 56], 0");                         // was this payload selected before the callback retained it?
+    emitter.instruction("jne __rt_mixed_array_gfw_assoc_ready");                // yes, mutate that survivor rather than splitting it
+    emitter.instruction("call __rt_hash_ensure_unique");                        // separate ordinary shared hashes before replacing a child cell
+    emitter.label("__rt_mixed_array_gfw_assoc_ready");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the owning receiver cell after COW
     emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // republish the unique hash before looking up the child
     emitter.instruction("mov rdi, rax");                                        // pass the unique hash to key lookup
@@ -682,7 +750,13 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // pass the fresh child cell (ownership consumed by the insert)
     emitter.instruction("xor r8, r8");                                          // boxed Mixed hash values only use the low payload word
     emitter.instruction("mov r9, 7");                                           // runtime value tag 7 = boxed Mixed
-    emitter.instruction("call __rt_hash_set");                                  // insert or overwrite the entry (overwrites release the old value)
+    emitter.instruction("cmp QWORD PTR [rbp - 56], 0");                         // preserve a callback-retained selected hash through insertion
+    emitter.instruction("jne __rt_mixed_array_gfw_assoc_set_shared");           // bypass the hash_set COW boundary only for that survivor
+    emitter.instruction("call __rt_hash_set");                                  // insert through ordinary associative-array COW
+    emitter.instruction("jmp __rt_mixed_array_gfw_assoc_set_done");             // join after insertion
+    emitter.label("__rt_mixed_array_gfw_assoc_set_shared");
+    emitter.instruction("call __rt_hash_set_shared");                           // mutate the exact pre-callback selected payload
+    emitter.label("__rt_mixed_array_gfw_assoc_set_done");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the receiver cell after hash mutation
     emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // publish the possibly-reallocated hash back into the cell
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the installed child cell
@@ -725,6 +799,7 @@ fn emit_array_ensure_elem_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rdi, [rbp - 40]");                                 // pass the transient cell as the fetch-for-write receiver
     emitter.instruction("mov rsi, rdx");                                        // forward key_lo into the fetch-for-write key register
     emitter.instruction("mov rdx, rcx");                                        // forward key_hi into the fetch-for-write key register
+    emitter.instruction("xor ecx, ecx");                                        // concrete local writes retain ordinary COW semantics
     emitter.instruction("call __rt_mixed_array_get_for_write");                 // autovivify the element and publish container changes to the cell
     emitter.instruction("call __rt_decref_mixed");                              // drop the returned child reference; the container slot keeps its own
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the possibly promoted/reallocated container pointer
@@ -745,9 +820,18 @@ mod tests {
             let mut emitter = Emitter::new(Target::parse(name).unwrap());
             emit_mixed_array_fetch_for_write(&mut emitter);
             let asm = emitter.output();
+            let exact_owner_count = if name == "linux-x86_64" {
+                "cmp DWORD PTR [r10 - 12], 2"
+            } else {
+                "cmp w9, #2"
+            };
+            assert!(asm.contains(exact_owner_count),
+                "{name}: detached writes may bypass COW only for one surviving PHP payload owner");
             let indexed = asm.split("__rt_mixed_array_gfw_indexed:\n").nth(1).unwrap()
                 .split("__rt_mixed_array_gfw_replace_null:\n").next().unwrap();
             assert!(indexed.contains("__rt_array_to_mixed"), "{name}");
+            assert!(indexed.contains("__rt_array_to_mixed_shared"),
+                "{name}: pending selections need an in-place conversion entry");
             assert!(indexed.contains("__rt_mixed_clone"), "{name}");
             assert!(indexed.contains("__rt_decref_mixed"), "{name}");
             let hash = asm.split("__rt_mixed_array_gfw_assoc:\n").nth(1).unwrap()
@@ -755,6 +839,8 @@ mod tests {
             assert!(hash.find("__rt_hash_ensure_unique").unwrap() < hash.find("__rt_hash_get").unwrap(), "{name}");
             assert!(hash.contains("__rt_mixed_clone"), "{name}");
             assert!(hash.contains("__rt_mixed_array_gfw_assoc_install"), "{name}");
+            assert!(asm.contains("__rt_hash_set_shared"),
+                "{name}: pending selections need an insertion path without a second COW split");
             let typed = asm.split("__rt_mixed_array_gfw_assoc_box:\n").nth(1).unwrap()
                 .split("__rt_mixed_array_gfw_assoc_create:\n").next().unwrap();
             assert!(typed.contains("__rt_mixed_from_value"), "{name}");

@@ -12,6 +12,8 @@ mod fill_boxed_integers;
 mod size_bounds;
 mod assoc;
 mod append_history;
+mod append_writes;
+mod append_cancellation_review;
 mod closure_literal_returns;
 mod by_ref_params;
 mod by_ref_places;

@@ -73,6 +73,18 @@ pub(crate) fn static_array_key_forces_hash_storage(expr: &Expr) -> bool {
     }
 }
 
+/// Keeps an empty array packed only when its first explicit key is provably zero.
+/// Unknown keys can be sparse or negative, so hash storage must not create typed holes.
+pub(crate) fn empty_array_key_requires_hash_storage(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::IntLiteral(value) => *value != 0,
+        ExprKind::BoolLiteral(value) => *value,
+        ExprKind::FloatLiteral(value) => (*value as i64) != 0,
+        ExprKind::StringLiteral(value) => value != "0",
+        _ => true,
+    }
+}
+
 /// Merges two array key types from adjacent elements into a unified key type.
 ///
 /// If both sides have the same type, returns that type. Otherwise returns `PhpType::Mixed`

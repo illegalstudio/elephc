@@ -1,0 +1,403 @@
+//! Purpose:
+//! Regressions for compound append cancellation after diagnostic callbacks separate a container.
+//!
+//! Called from:
+//! - The array codegen integration suite.
+//!
+//! Key details:
+//! - Cancellation follows the selected nested container, not unrelated root mutations.
+//! - Retaining a by-value copy can preserve the old selected container for the update.
+
+use crate::support::*;
+
+/// Checks one callback/operator pair and verifies complete temporary cleanup.
+fn assert_append(callback: &str, operation: &str, expected: &str) {
+    let source = format!(r#"<?php
+$items = []; $copy = [];
+set_error_handler(function(int $level, string $message) use (&$items, &$copy): bool {{
+    echo 'W:'; {callback} return true;
+}});
+try {{ $result = ($items[]['k'] {operation}); echo json_encode($result), ':'; }}
+catch (DivisionByZeroError $e) {{ echo 'division:'; }}
+restore_error_handler(); echo json_encode($items), ':', json_encode($copy);
+unset($items, $copy, $result, $e);
+"#);
+    assert_output(&source, expected);
+}
+
+/// Runs a single fixture while checking its independent result and heap ownership.
+fn assert_output(source: &str, expected: &str) {
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, expected, "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Add assignment yields null once its warning callback separates the selected child.
+#[test]
+fn test_append_eighth_review_separated_add() {
+    assert_append("$items[0]['other'] = 2;", "+= 1", r#"W:null:[{"other":2}]:[]"#);
+}
+
+/// Separated addition is unchanged without EIR optimization.
+#[test]
+fn test_append_eighth_review_separated_add_no_ir_opt() {
+    without_ir_opt(test_append_eighth_review_separated_add);
+}
+
+/// Concat assignment yields null rather than evaluating the operator on the detached child.
+#[test]
+fn test_append_eighth_review_separated_concat() {
+    assert_append("$items[0]['other'] = 2;", ".= 'x'", r#"W:null:[{"other":2}]:[]"#);
+}
+
+/// Separated concatenation is unchanged without EIR optimization.
+#[test]
+fn test_append_eighth_review_separated_concat_no_ir_opt() {
+    without_ir_opt(test_append_eighth_review_separated_concat);
+}
+
+/// Cancellation prevents division by zero from running at all.
+#[test]
+fn test_append_eighth_review_separated_division() {
+    assert_append("$items[0]['other'] = 2;", "/= 0", r#"W:null:[{"other":2}]:[]"#);
+}
+
+/// Cancelled division is unchanged without EIR optimization.
+#[test]
+fn test_append_eighth_review_separated_division_no_ir_opt() {
+    without_ir_opt(test_append_eighth_review_separated_division);
+}
+
+/// Adding a sibling at the root does not detach the selected nested container.
+#[test]
+fn test_append_eighth_review_root_sibling_control() {
+    assert_append("$items[] = 'changed';", "+= 1", r#"W:1:[{"k":1},"changed"]:[]"#);
+}
+
+/// Unrelated root appends do not cancel unoptimized operations either.
+#[test]
+fn test_append_eighth_review_root_sibling_control_no_ir_opt() {
+    without_ir_opt(test_append_eighth_review_root_sibling_control);
+}
+
+/// A still-attached division retains its ordinary DivisionByZeroError.
+#[test]
+fn test_append_eighth_review_live_division_control() {
+    assert_append("$items[] = 'changed';", "/= 0", r#"W:division:[{"k":null},"changed"]:[]"#);
+}
+
+/// Live division errors do not depend on optimization.
+#[test]
+fn test_append_eighth_review_live_division_control_no_ir_opt() {
+    without_ir_opt(test_append_eighth_review_live_division_control);
+}
+
+/// A handler with no mutation leaves the ordinary compound update active.
+#[test]
+fn test_append_eighth_review_nonmutating_control() {
+    assert_append("", "+= 1", r#"W:1:[{"k":1}]:[]"#);
+}
+
+/// Nonmutating callbacks keep unoptimized updates active.
+#[test]
+fn test_append_eighth_review_nonmutating_control_no_ir_opt() {
+    without_ir_opt(test_append_eighth_review_nonmutating_control);
+}
+
+/// A retained old root copy keeps the selected container alive for the update.
+#[test]
+fn test_append_eighth_review_retained_old_copy() {
+    assert_append("$copy = $items; $items[0]['other'] = 2;", "+= 1", r#"W:1:[{"other":2}]:[{"k":1}]"#);
+}
+
+/// Root-copy ownership also preserves unoptimized updates.
+#[test]
+fn test_append_eighth_review_retained_old_copy_no_ir_opt() {
+    without_ir_opt(test_append_eighth_review_retained_old_copy);
+}
+
+/// A separately boxed child payload keeps the operator active after its original box detaches.
+#[test]
+fn test_append_eighth_review_retained_child_copy() {
+    assert_output(r#"<?php
+function run(array $items): void {
+    $copy = [];
+    set_error_handler(function(int $level, string $message) use (&$items, &$copy): bool {
+        echo 'W:'; $copy = $items[0]; $items[0]['other'] = 2; return true;
+    });
+    $result = ($items[]['k'] += 1);
+    restore_error_handler();
+    $copy[] = 3;
+    echo json_encode($result), ':', json_encode($items), ':', json_encode($copy);
+}
+run([]);
+"#, r#"W:1:[{"other":2}]:{"k":1,"0":3}"#);
+}
+
+/// Child payload ownership is preserved without EIR optimization.
+#[test]
+fn test_append_eighth_review_retained_child_copy_no_ir_opt() {
+    without_ir_opt(test_append_eighth_review_retained_child_copy);
+}
+
+/// A payload copy alone does not keep the still-attached pending child writable.
+#[test]
+fn test_append_ninth_review_retained_child_without_root_separation() {
+    assert_output(r#"<?php
+function run(array $items): void {
+    $copy = [];
+    set_error_handler(function(int $level, string $message) use (&$items, &$copy): bool {
+        echo 'W:'; $copy = $items[0]; return true;
+    });
+    $result = ($items[]['k'] += 1);
+    restore_error_handler();
+    $copy[] = 3;
+    echo json_encode($result), ':', json_encode($items), ':', json_encode($copy);
+}
+run([]);
+"#, r#"W:null:[[]]:[3]"#);
+}
+
+/// Payload-only retention keeps ordinary cancellation semantics without EIR optimization.
+#[test]
+fn test_append_ninth_review_retained_child_without_root_separation_no_ir_opt() {
+    without_ir_opt(test_append_ninth_review_retained_child_without_root_separation);
+}
+
+/// Numeric dimensions preserve the selected indexed payload when the root separates.
+#[test]
+fn test_append_ninth_review_retained_indexed_child_copy() {
+    assert_output(r#"<?php
+function run(array $items): void {
+    $copy = [];
+    set_error_handler(function(int $level, string $message) use (&$items, &$copy): bool {
+        echo 'W:'; $copy = $items[0]; $items[0]['other'] = 2; return true;
+    });
+    $result = ($items[][0] += 1);
+    restore_error_handler();
+    $copy[] = 3;
+    echo json_encode($result), ':', json_encode($items), ':', json_encode($copy);
+}
+run([]);
+"#, r#"W:1:[{"other":2}]:[1,3]"#);
+}
+
+/// Indexed payload retention is unchanged without EIR optimization.
+#[test]
+fn test_append_ninth_review_retained_indexed_child_copy_no_ir_opt() {
+    without_ir_opt(test_append_ninth_review_retained_indexed_child_copy);
+}
+
+/// Independent cell and payload survivors together mean COW invalidated the pending target.
+#[test]
+fn test_append_ninth_review_retained_root_and_child_copies() {
+    assert_output(r#"<?php
+$items = []; $root = []; $child = [];
+set_error_handler(function(int $level, string $message) use (&$items, &$root, &$child): bool {
+    echo 'W:'; $root = $items; $child = $items[0]; $items[0]['other'] = 2; return true;
+});
+$result = ($items[]['k'] += 1);
+restore_error_handler();
+echo json_encode($result), ':', json_encode($items), ':', json_encode($root), ':', json_encode($child);
+"#, r#"W:null:[{"other":2}]:[[]]:[]"#);
+}
+
+/// Combined cell and payload survival cancels identically without EIR optimization.
+#[test]
+fn test_append_ninth_review_retained_root_and_child_copies_no_ir_opt() {
+    without_ir_opt(test_append_ninth_review_retained_root_and_child_copies);
+}
+
+/// Multiple independent payload owners cancel rather than jointly receiving a detached write.
+fn assert_multiple_child_copies(dimension: &str) {
+    for copies in [2, 3] {
+        let source = format!(r#"<?php
+$items = []; $first = []; $second = []; $third = [];
+set_error_handler(function(int $level, string $message) use (&$items, &$first, &$second, &$third): bool {{
+    echo 'W:';
+    $first = $items[0];
+    $second = $items[0];
+    if ({copies} === 3) {{ $third = $items[0]; }}
+    $items[0] = ['other' => 2];
+    return true;
+}});
+$result = ($items[][{dimension}] += 1);
+restore_error_handler();
+echo json_encode($result), ':', json_encode($items), ':', json_encode($first), ':', json_encode($second), ':', json_encode($third);
+unset($items, $first, $second, $third, $result);
+"#);
+        assert_output(&source, r#"W:null:[{"other":2}]:[]:[]:[]"#);
+    }
+}
+
+/// Two and three copies must remain unchanged when a detached string-key append cancels.
+#[test]
+fn test_append_grok_review_multiple_child_copies() {
+    assert_multiple_child_copies("'k'");
+}
+
+/// String-key cancellation counts every owner even without EIR optimization.
+#[test]
+fn test_append_grok_review_multiple_child_copies_no_ir_opt() {
+    without_ir_opt(test_append_grok_review_multiple_child_copies);
+}
+
+/// Integer-key append cancellation observes the same exact owner-count requirement.
+#[test]
+fn test_append_grok_review_multiple_indexed_child_copies() {
+    assert_multiple_child_copies("0");
+}
+
+/// Integer-key cancellation counts every owner even without EIR optimization.
+#[test]
+fn test_append_grok_review_multiple_indexed_child_copies_no_ir_opt() {
+    without_ir_opt(test_append_grok_review_multiple_indexed_child_copies);
+}
+
+/// Shared root copies retain one child slot, not two independent child payload owners.
+#[test]
+fn test_append_grok_review_multiple_root_copies_control() {
+    assert_output(r#"<?php
+$items = []; $first = []; $second = [];
+set_error_handler(function(int $level, string $message) use (&$items, &$first, &$second): bool {
+    echo 'W:'; $first = $items; $second = $items;
+    $items[0] = ['other' => 2]; return true;
+});
+$result = ($items[][0] += 1);
+restore_error_handler();
+echo json_encode($result), ':', json_encode($items), ':', json_encode($first), ':', json_encode($second);
+unset($items, $first, $second, $result);
+"#, r#"W:1:[{"other":2}]:[[1]]:[[1]]"#);
+}
+
+/// Shared root storage still keeps the selected child writable without EIR optimization.
+#[test]
+fn test_append_grok_review_multiple_root_copies_control_no_ir_opt() {
+    without_ir_opt(test_append_grok_review_multiple_root_copies_control);
+}
+
+/// Prefix increment returns the written scalar when its pending append is cancelled.
+#[test]
+fn test_append_ninth_review_separated_prefix_increment() {
+    assert_output(r#"<?php
+$items = [];
+set_error_handler(function(int $level, string $message) use (&$items): bool {
+    echo 'W:'; $items[0]['other'] = 2; return true;
+});
+$result = ++$items[]['k'];
+restore_error_handler(); echo json_encode($result), ':', json_encode($items);
+"#, r#"W:1:[{"other":2}]"#);
+}
+
+/// Cancelled prefix increment preserves its result without EIR optimization.
+#[test]
+fn test_append_ninth_review_separated_prefix_increment_no_ir_opt() {
+    without_ir_opt(test_append_ninth_review_separated_prefix_increment);
+}
+
+/// Every missing intermediate append dimension emits its ordinary PHP warning.
+#[test]
+fn test_append_ninth_review_missing_intermediate_warnings() {
+    assert_output(r#"<?php
+$items = [];
+set_error_handler(function(int $level, string $message): bool {
+    echo 'W:', $message, '|'; return true;
+});
+$result = ($items[]['k']['other'][] += 1);
+restore_error_handler(); echo json_encode($result), ':', json_encode($items);
+"#, r#"W:Undefined array key "k"|W:Undefined array key "other"|1:[{"k":{"other":[1]}}]"#);
+}
+
+/// Intermediate append diagnostics are unchanged without EIR optimization.
+#[test]
+fn test_append_ninth_review_missing_intermediate_warnings_no_ir_opt() {
+    without_ir_opt(test_append_ninth_review_missing_intermediate_warnings);
+}
+
+/// Replacing the root loses the selected container even if the replacement is value-equal.
+#[test]
+fn test_append_eighth_review_equal_root_replacement() {
+    assert_append("$items = [[]];", "+= 1", "W:null:[[]]:[]");
+}
+
+/// Value-equal replacements cancel without EIR optimization.
+#[test]
+fn test_append_eighth_review_equal_root_replacement_no_ir_opt() {
+    without_ir_opt(test_append_eighth_review_equal_root_replacement);
+}
+
+/// A missing-key handler sees an empty attached parent and no prematurely inserted leaf.
+#[test]
+fn test_append_eighth_review_callback_parent_state() {
+    assert_append("echo json_encode($items), '|'; $items[0]['other'] = 2;", "+= 1",
+        r#"W:[[]]|null:[{"other":2}]:[]"#);
+}
+
+/// Callback parent publication retains the same order without optimization.
+#[test]
+fn test_append_eighth_review_callback_parent_state_no_ir_opt() {
+    without_ir_opt(test_append_eighth_review_callback_parent_state);
+}
+
+/// Object-property array roots cancel without replaying or redirecting the captured receiver.
+#[test]
+fn test_append_eighth_review_object_property_root() {
+    assert_output(r#"<?php
+class Box { public array $items = []; }
+$box = new Box();
+set_error_handler(function(int $level, string $message) use ($box): bool {
+    echo 'W:'; $box->items[0]['other'] = 2; return true;
+});
+$result = ($box->items[]['k'] += 1);
+restore_error_handler(); echo json_encode($result), ':', json_encode($box->items);
+unset($box, $result);
+"#, r#"W:null:[{"other":2}]"#);
+}
+
+/// Property-root cancellation also works without optimization.
+#[test]
+fn test_append_eighth_review_object_property_root_no_ir_opt() {
+    without_ir_opt(test_append_eighth_review_object_property_root);
+}
+
+/// Static-property array roots use the same pending cell liveness rule.
+#[test]
+fn test_append_eighth_review_static_property_root() {
+    assert_output(r#"<?php
+class Box { public static array $items = []; }
+set_error_handler(function(int $level, string $message): bool {
+    echo 'W:'; Box::$items[0]['other'] = 2; return true;
+});
+$result = (Box::$items[]['k'] += 1);
+restore_error_handler(); echo json_encode($result), ':', json_encode(Box::$items);
+Box::$items = []; unset($result);
+"#, r#"W:null:[{"other":2}]"#);
+}
+
+/// Static-root cancellation also works without optimization.
+#[test]
+fn test_append_eighth_review_static_property_root_no_ir_opt() {
+    without_ir_opt(test_append_eighth_review_static_property_root);
+}
+
+/// Cancelled concatenation skips object string conversion while retaining balanced RHS cleanup.
+#[test]
+fn test_append_eighth_review_owned_rhs_conversion() {
+    assert_output(r#"<?php
+class Text { public function __toString(): string { echo 'converted'; return 'x'; } }
+$items = [];
+set_error_handler(function(int $level, string $message) use (&$items): bool {
+    echo 'W:'; $items[0]['other'] = 2; return true;
+});
+$result = ($items[]['k'] .= new Text());
+restore_error_handler(); echo json_encode($result), ':', json_encode($items);
+unset($items, $result);
+"#, r#"W:null:[{"other":2}]"#);
+}
+
+/// Owned RHS cancellation remains balanced without optimization.
+#[test]
+fn test_append_eighth_review_owned_rhs_conversion_no_ir_opt() {
+    without_ir_opt(test_append_eighth_review_owned_rhs_conversion);
+}

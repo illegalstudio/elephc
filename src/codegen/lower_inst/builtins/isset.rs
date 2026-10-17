@@ -162,6 +162,10 @@ fn emit_isset_array_offset_missing_result(
 ) -> Result<()> {
     let array = expect_operand(inst, 0)?;
     let index = expect_operand(inst, 1)?;
+    if matches!(ctx.value_ir_type(index)?, crate::ir::IrType::Str
+        | crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed | crate::ir::IrHeapKind::Union)) {
+        return emit_isset_mixed_key_offset_missing_result(ctx, array, index);
+    }
     require_isset_integer_like_index(ctx, index, "array offset")?;
     let elem_ty = match ctx.value_php_type(array)? {
         PhpType::Array(elem_ty) => elem_ty.codegen_repr(),
@@ -187,6 +191,51 @@ fn emit_isset_array_offset_missing_result(
             &done,
         )?,
     }
+    Ok(())
+}
+
+/// Probes indexed or promoted storage under a runtime key and retires the detached probe cell.
+fn emit_isset_mixed_key_offset_missing_result(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    key: ValueId,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            super::super::hashes::materialize_hash_key_aarch64(ctx, key)?;
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            ctx.load_value_to_reg(array, "x0")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            abi::emit_load_int_immediate(ctx.emitter, "x3", 0);
+        }
+        Arch::X86_64 => {
+            super::super::hashes::materialize_hash_key_x86_64(ctx, key)?;
+            abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
+            ctx.load_value_to_reg(array, "rdi")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
+            abi::emit_load_int_immediate(ctx.emitter, "rcx", 0);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_get_mixed_key");
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #8");                              // a quiet absent or null key reads as canonical PHP null
+            ctx.emitter.instruction("cset x0, eq");                             // report the missing predicate before retiring the probe owner
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 8");                              // a quiet absent or null key reads as canonical PHP null
+            ctx.emitter.instruction("sete al");                                 // report the missing predicate before retiring the probe owner
+            ctx.emitter.instruction("movzx rax, al");                           // widen the missing predicate into the integer result register
+        }
+    }
+    abi::emit_push_reg(ctx.emitter, result);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result, 16);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    abi::emit_pop_reg(ctx.emitter, result);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
     Ok(())
 }
 

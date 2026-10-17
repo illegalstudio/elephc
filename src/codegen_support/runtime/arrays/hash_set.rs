@@ -17,6 +17,8 @@
 //! - `__rt_hash_set_value` is the bucket-replacing sibling for array-building helpers whose
 //!   destination was cloned from a user array. It detaches a reference entry first, matching
 //!   `zend_hash_update`, so building a new array never mutates the array it was copied from.
+//! - `__rt_hash_set_shared` is restricted to a pending append selected before a diagnostic
+//!   callback. It preserves the exact payload retained by a surviving child copy.
 
 use crate::codegen_support::callable_invoker_args::INVOKER_ARG_REF_CELL_TAG;
 use crate::codegen_support::emit::Emitter;
@@ -37,6 +39,11 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_set ---");
     emitter.label_global("__rt_hash_set");
+    emitter.instruction("mov x9, #0");                                          // ordinary writes retain the hash COW boundary
+    emitter.instruction("b __rt_hash_set_entry");                               // share insertion and update machinery
+    emitter.label_global("__rt_hash_set_shared");
+    emitter.instruction("mov x9, #1");                                          // pending append mutates its pre-callback selected payload
+    emitter.label_shared("__rt_hash_set_entry");
 
     // -- set up stack frame, save all inputs --
     // Stack layout:
@@ -47,6 +54,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     //   [sp, #32] = value_hi (x4)
     //   [sp, #40] = value_tag (x5)
     //   [sp, #48] = probe index (saved across calls)
+    //   [sp, #56] = selected shared-payload mode
     //   [sp, #64] = saved x29
     //   [sp, #72] = saved x30
     emitter.instruction("sub sp, sp, #80");                                     // allocate 80 bytes on the stack
@@ -57,7 +65,10 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("str x3, [sp, #24]");                                   // save value_lo
     emitter.instruction("str x4, [sp, #32]");                                   // save value_hi
     emitter.instruction("str x5, [sp, #40]");                                   // save value_tag
-    emitter.instruction("bl __rt_hash_ensure_unique");                          // split shared hash tables before insert/update mutates storage
+    emitter.instruction("str x9, [sp, #56]");                                   // preserve the pending-append selection mode
+    emitter.instruction("cbnz x9, __rt_hash_set_ready");                        // selected payloads must remain visible through surviving copies
+    emitter.instruction("bl __rt_hash_ensure_unique");                          // split ordinary shared hash tables before mutation
+    emitter.label("__rt_hash_set_ready");
     emitter.instruction("str x0, [sp, #0]");                                    // save the unique hash_table_ptr
 
     // -- check load factor: grow if count * 4 >= capacity * 3 (75%) --
@@ -378,6 +389,11 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_set ---");
     emitter.label_global("__rt_hash_set");
+    emitter.instruction("xor r10d, r10d");                                      // ordinary writes retain the hash COW boundary
+    emitter.instruction("jmp __rt_hash_set_x86_entry");                         // share insertion and update machinery
+    emitter.label_global("__rt_hash_set_shared");
+    emitter.instruction("mov r10d, 1");                                         // pending append mutates its pre-callback selected payload
+    emitter.label("__rt_hash_set_x86_entry");
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving hash-insert spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved table/key/value tuple
@@ -391,8 +407,13 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the low payload word across the probe and optional update paths
     emitter.instruction("mov QWORD PTR [rbp - 40], r8");                        // save the high payload word across the probe and optional update paths
     emitter.instruction("mov QWORD PTR [rbp - 48], r9");                        // save the runtime value tag across the probe and optional update paths
+    emitter.instruction("mov QWORD PTR [rbp - 64], r10");                       // preserve the pending-append selection mode
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the candidate hash-table pointer so the copy-on-write helper sees the current mutation target
-    emitter.instruction("call __rt_hash_ensure_unique");                        // split shared associative arrays before insert/update mutates shared storage
+    emitter.instruction("mov rax, rdi");                                        // selected mode returns the original table without a COW helper call
+    emitter.instruction("test r10, r10");                                       // was this table selected before a callback retained its payload?
+    emitter.instruction("jnz __rt_hash_set_x86_ready");                         // yes, preserve that exact payload identity
+    emitter.instruction("call __rt_hash_ensure_unique");                        // split ordinary shared associative arrays before mutation
+    emitter.label("__rt_hash_set_x86_ready");
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the unique hash-table pointer that subsequent probe logic must mutate
 
     // -- check load factor: grow if count * 4 >= capacity * 3 (75%) --

@@ -22,7 +22,7 @@ pub(super) fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
     }
     if inst.operands.len() == 3 {
         if inst.result_php_type.codegen_repr() != PhpType::Void {
-            return lower_mixed_array_runtime_get(ctx, inst, false);
+            return lower_mixed_array_runtime_get(ctx, inst, false, false);
         }
         return lower_mixed_array_runtime_set(ctx, inst);
     }

@@ -12,6 +12,7 @@
 //! - `HashGetForWrite` is a lookup that also WRITES: it separates the container the
 //!   matching entry holds and republishes it into that entry's value slot, whose
 //!   address comes from `__rt_hash_get`'s entry-address output (issue #580).
+//! - Value reads dereference boxed invoker markers retained by variadic array promotion.
 //! - `DescriptorArgSet` / `DescriptorArgKeyExists` share every one of those mechanics with
 //!   `HashSet` / `array_key_exists` and differ in exactly one place: the key is materialized
 //!   WITHOUT `__rt_hash_normalize_key`. A descriptor argument container keys parameter NAMES,
@@ -21,6 +22,7 @@ use crate::codegen::{
     abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
 };
 use crate::codegen::platform::Arch;
+use crate::codegen::callable_invoker_args::INVOKER_ARG_REF_CELL_TAG;
 use crate::ir::{Immediate, Instruction, ValueId};
 use crate::types::PhpType;
 
@@ -1654,7 +1656,7 @@ fn emit_hash_get_mixed_success_aarch64(ctx: &mut FunctionContext<'_>, for_write:
     if for_write {
         abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
     } else {
-        abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");                  // detach values while preserving shared PHP resource identity
+        emit_hash_mixed_value_read(ctx);
     }
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip on-demand boxing for already boxed entries
     ctx.emitter.label(&box_label);
@@ -1673,13 +1675,41 @@ fn emit_hash_get_mixed_success_x86_64(ctx: &mut FunctionContext<'_>, for_write: 
     if for_write {
         abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
     } else {
-        abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");                  // detach values while preserving shared PHP resource identity
+        emit_hash_mixed_value_read(ctx);
     }
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip on-demand boxing for already boxed entries
     ctx.emitter.label(&box_label);
     ctx.emitter.instruction("mov rax, rcx");                                    // pass the concrete entry tag to the Mixed boxing helper
     abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
     ctx.emitter.label(&done_label);
+}
+
+/// Dereferences an invoker marker, or clones an ordinary boxed hash value for a value read.
+fn emit_hash_mixed_value_read(ctx: &mut FunctionContext<'_>) {
+    let ordinary = ctx.next_label("hash_get_mixed_ordinary");
+    let done = ctx.next_label("hash_get_mixed_value_done");
+    let result = abi::int_result_reg(ctx.emitter);
+    // -- distinguish a boxed invoker reference from an ordinary value --
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &ordinary);
+    let tag = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_from_address(ctx.emitter, tag, result, 0);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {tag}, #{INVOKER_ARG_REF_CELL_TAG}")); // boxed invoker markers hold referenced caller storage rather than a scalar payload
+            ctx.emitter.instruction(&format!("b.ne {ordinary}"));               // ordinary cells keep their existing detached read behavior
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {tag}, {INVOKER_ARG_REF_CELL_TAG}")); // boxed invoker markers hold referenced caller storage rather than a scalar payload
+            ctx.emitter.instruction(&format!("jne {ordinary}"));                // ordinary cells keep their existing detached read behavior
+        }
+    }
+    // -- read caller storage through the invoker reference marker --
+    super::arrays::emit_box_loaded_invoker_ref_cell_value_as_mixed(ctx, result);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&ordinary);
+    // -- detach an ordinary boxed hash value for PHP value-read semantics --
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");
+    ctx.emitter.label(&done);
 }
 
 /// Returns an owned boxed hash entry for a nested write, promoting a typed entry in place first.
