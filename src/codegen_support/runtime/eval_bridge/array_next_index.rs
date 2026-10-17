@@ -44,7 +44,11 @@ fn emit_copy_history(emitter: &mut Emitter) {
     emitter.instruction(if arm { "cbnz x0, __rt_eval_copy_index_resolve" } else { "test rax, rax" }); // preserve the nonempty dense length
     if !arm { emitter.instruction("jnz __rt_eval_copy_index_resolve"); }        // an empty dense source has no integer insertion history
     emitter.label("__rt_eval_copy_index_empty");
-    abi::emit_load_int_immediate(emitter, if arm { "x0" } else { "rax" }, i64::MIN);
+    if crate::codegen_support::empty_array_next_index_starts_at_zero() {
+        emitter.instruction(if arm { "mov x0, #0" } else { "xor eax, eax" });   // before PHP 8.3 an empty indexed array's next index is 0
+    } else {
+        abi::emit_load_int_immediate(emitter, if arm { "x0" } else { "rax" }, i64::MIN); // from PHP 8.3 an empty array starts at the uninitialized sentinel
+    }
     emitter.label("__rt_eval_copy_index_resolve");
     emitter.instruction(if arm { "str x0, [sp, #8]" } else { "mov QWORD PTR [rsp + 8], rax" }); // retain exact metadata across destination dereferencing
     emitter.instruction(if arm { "ldr x0, [sp]" } else { "mov rax, QWORD PTR [rsp]" }); // resolve the newly reconstructed cell

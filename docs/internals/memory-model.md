@@ -794,11 +794,11 @@ Associative arrays use a separate heap-allocated structure: an open-addressing h
 | `pins` | 8 bytes | Internal lifetime roots included in the physical refcount but excluded from PHP copy-on-write ownership |
 | `next_index` | 8 bytes | Signed next automatic integer key; initially `PHP_INT_MIN`, advancing on integer insertion and saturating at `PHP_INT_MAX` |
 
-Deleting an entry preserves `next_index`. Growth keeps the counter in the stable header, and COW clones copy it even when the highest inserted key is gone. Typed EIR, boxed Mixed, and eval appends consume the same native index rule. A never-indexed hash appends at zero; subsequent negative keys follow PHP's signed successor rule. At saturation, the maximum key can be reused after `unset`, but an occupied maximum raises `Error`. The nonthrowing `__rt_hash_try_next_index` probe reports the same exhaustion condition for native query registration.
+Deleting an entry preserves `next_index`. Growth keeps the counter in the stable header, and COW clones copy it even when the highest inserted key is gone. Typed EIR, boxed Mixed, and eval appends consume the same native index rule. A never-indexed hash appends at zero. An inserted integer key advances the counter when it is greater than or equal to the current value, including a negative key written into a hash that still holds the uninitialized sentinel. The empty-array constant is the one profile-dependent start value: before PHP 8.3 `[]` and `array()` begin at 0, so a negative key does not move them, and from 8.3 they begin at the sentinel. A non-empty literal is a fresh hash and continues from a negative key on every profile. At saturation, the maximum key can be reused after `unset`, but an occupied maximum raises `Error`. The nonthrowing `__rt_hash_try_next_index` probe reports the same exhaustion condition for native query registration.
 
 Eval reconstructs an unset array as a hash, preserving integer gaps and copying exact index history after the retained entries. Its index callback returns a status without unwinding through Rust; Magician evaluates the RHS before choosing an index and schedules exhaustion through its own exception context. Zend `zval` packing and unpacking preserve the same counter in `nNextFreeElement`.
 
-The header carries the associative array's reference count and heap kind. Entry storage has raw heap kind `0`; the garbage collector reaches its PHP values through the owning header. Deep release frees keys and values, then the entry allocation, then the header. Both allocations participate in heap accounting.
+The header carries the associative array's reference count and heap kind. Entry storage has raw heap kind `0`; the garbage collector reaches its PHP values through the owning header. Deep release follows the insertion-order chain when freeing keys and values, then releases the entry allocation and the header. It snapshots the successor before a child cleanup callback runs, preserving PHP destructor order independently of physical buckets. Both allocations participate in heap accounting.
 
 `__rt_hash_pin` retains one physical root and increments `pins`. `__rt_hash_unpin` removes the pin before releasing that root, so final release uses ordinary deep cleanup and may invoke destructors. Each pin must have one matching unpin. A pin keeps the hash reachable during cycle collection without changing ordinary PHP copy-on-write decisions. New hashes and COW clones start with zero pins; growth preserves the original header's pin count.
 
@@ -849,6 +849,16 @@ Lookup still probes physical buckets, but iteration walks the `head -> next -> .
 - `array_search()` / `in_array()` when duplicate values exist
 - `json_encode()` on associative arrays
 - Rehashing during growth and copy-on-write cloning
+
+### Eval reference keys
+
+Eval array-element aliases store normalized integer or byte-string keys as
+Rust-owned metadata. The temporary native cell used to evaluate an offset is
+released after the read; it does not escape into an array's alias map. Readers
+and write-back paths materialize a short-lived key cell for each operation and
+retire it afterwards. This keeps an established reference on the evaluated key
+when its source variable is rebound, and lets alias maps be cloned or retired
+without retaining native key allocations.
 
 ### Comparison with indexed arrays
 

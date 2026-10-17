@@ -45,8 +45,8 @@ mod wrappers;
 
 pub(crate) use arrays::emit_array_value_type_stamp;
 pub(crate) use compilation_context::{
-    compile_is_web_sapi, compile_php_version, ini_overrides, linked_extensions,
-    opcache_api_restricted, opcache_manifest_len,
+    compile_is_web_sapi, compile_php_version, empty_array_next_index_starts_at_zero,
+    ini_overrides, linked_extensions, opcache_api_restricted, opcache_manifest_len,
 };
 pub use compilation_context::{
     autoload_rule_count, set_autoload_rule_count, set_compile_profile, set_ini_overrides,

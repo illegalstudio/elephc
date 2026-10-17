@@ -89,6 +89,32 @@ $arr[] = 9;                                    // appended at key 3
 echo isset($arr[1]) ? "y" : "n";               // n
 ```
 
+A negative integer key inside a non-empty literal, or written into an array that was created
+as a fresh hash, moves the next implicit key on every PHP version. `[-5 => "a", "b"]` stores
+`"b"` at `-4`, and so does `$a = [-5 => "a"]; $a[] = "b"`.
+
+The empty-array constant is the exception. Before PHP 8.3, `[]` and `array()` start with next
+index 0, so a negative key written into that array does not move it and the following append
+lands at 0. From PHP 8.3 the same constant starts unset, and the append continues from the
+negative key.
+
+```php
+<?php
+$a = [-5 => "a"];
+$a[] = "b";                 // key -4 on every profile
+$b = [-5 => "a", "b"];      // key -4 on every profile
+$c = [];
+$c[-5] = "a";
+$c[] = "b";                 // keys -5, 0 before 8.3; keys -5, -4 from 8.3
+```
+
+In dynamic `eval()`, a free `PHP_INT_MAX` key can be filled once. A later implicit
+insertion raises `Error` because no integer key remains. A multi-value
+`array_push()` keeps the values inserted before that error, including the last
+available key. Array literals evaluate an implicit element's value before checking
+whether its key is occupied, so its side effects run and any exception it throws
+takes precedence over the insertion error.
+
 `unset()` respects copy-on-write: removing a key from one array never mutates another array that
 was assigned from it. Unsetting a key that is not present is a no-op.
 

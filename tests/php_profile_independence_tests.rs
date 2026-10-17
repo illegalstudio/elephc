@@ -124,6 +124,17 @@ const CORPUS: &[Case] = &[
         name: "eval_fragment_without_the_version_surface",
         source: r#"<?php eval('echo 1 + 1;');"#,
     },
+    // A negative key and an append that never meet it: the negative key is read, and the
+    // append goes to an array of non-negative keys.
+    Case {
+        name: "negative_key_without_an_append",
+        source: r#"<?php $a = [-5 => "a"]; $b = [1]; echo $a[-5], count($b);"#,
+    },
+    // A non-empty literal continues from a negative key on every profile.
+    Case {
+        name: "literal_append_after_a_negative_key",
+        source: r#"<?php $a = [-5 => "a"]; $a[] = "b"; echo implode(",", array_keys($a));"#,
+    },
     // ---- expected profile-DEPENDENT ----
     // The eval boundary. The fragment runs in the linked interpreter rather than through
     // codegen, so before `__elephc_eval_set_php_version_id` existed this program printed
@@ -169,6 +180,11 @@ const CORPUS: &[Case] = &[
     Case {
         name: "ini_get_opcache_directive",
         source: r#"<?php var_dump(ini_get("opcache.jit"));"#,
+    },
+    // Before PHP 8.3 the empty-array constant's next index is 0. From 8.3 it starts unset.
+    Case {
+        name: "append_after_a_negative_key",
+        source: r#"<?php $a = []; $a[-5] = "a"; $a[] = "b"; echo implode(",", array_keys($a));"#,
     },
 ];
 
@@ -316,6 +332,7 @@ macro_rules! case_tests {
         /// `corpus_and_tests_agree` so neither list can quietly outgrow the other.
         const COVERED: &[&str] = &[$(stringify!($name),)*];
         $(
+            /// Compiles this corpus case at every maintained profile and checks its stdout.
             #[test]
             fn $name() {
                 check_case(stringify!($name));
@@ -335,6 +352,8 @@ case_tests!(
     nan_bool_diagnostic_only,
     ini_get_unrelated_directive,
     eval_fragment_without_the_version_surface,
+    negative_key_without_an_append,
+    literal_append_after_a_negative_key,
     eval_reads_the_version_surface,
     eval_calls_phpversion,
     version_id_printed,
@@ -345,6 +364,7 @@ case_tests!(
     version_gate_branches,
     opcache_configuration_shape,
     ini_get_opcache_directive,
+    append_after_a_negative_key,
 );
 
 /// The corpus and the generated tests name exactly the same cases.

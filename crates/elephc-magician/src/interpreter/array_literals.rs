@@ -7,6 +7,8 @@
 //! Key details:
 //! - Explicit keys are normalized through runtime string conversion to match PHP array-key rules.
 //! - Unkeyed elements continue from the next PHP integer key after explicit keys.
+//! - A literal is a fresh hash, so its first integer key seeds that cursor on every
+//!   profile, including a negative key. The empty-array constant is a separate runtime fact.
 //! - Construction owns operand leases until insertion finishes, including failure paths.
 
 use super::*;
@@ -64,11 +66,11 @@ pub(super) fn eval_assoc_array(
                 EvalArrayElement::KeyValue { key, value } => (Some(key), value, false),
                 EvalArrayElement::KeyReference { key, value } => (Some(key), value, true),
             };
-            let key = if let Some(key) = explicit_key {
+            let (key, saturated_implicit_key) = if let Some(key) = explicit_key {
                 let key = eval_owned_expr(key, context, scope, values)?;
                 operands.push(key);
                 next_key = eval_array_next_key_after_explicit_key(key, next_key, &mut operands, values)?;
-                key
+                (key, false)
             } else {
                 let key = match next_key {
                     Some(key) => key,
@@ -78,12 +80,11 @@ pub(super) fn eval_assoc_array(
                         key
                     }
                 };
-                let one = values.int(1)?;
-                operands.push(one);
-                let next = values.add(key, one)?;
+                let key_int = eval_int_value(key, values)?;
+                let next = values.int(key_int.saturating_add(1))?;
                 operands.push(next);
                 next_key = Some(next);
-                key
+                (key, key_int == i64::MAX)
             };
             let (value, target) = if by_ref {
                 eval_reference_array_element_value(value, context, scope, values)?
@@ -91,6 +92,19 @@ pub(super) fn eval_assoc_array(
                 (eval_owned_expr(value, context, scope, values)?, None)
             };
             operands.push(value);
+            // PHP evaluates the value before attempting the implicit insertion. Keep its
+            // owner in the construction leases so failure releases it with the partial array.
+            if saturated_implicit_key {
+                let exists = values.array_key_exists(key, array)?;
+                operands.push(exists);
+                if values.truthy(exists)? {
+                    return eval_throw_error(
+                        crate::interpreter::builtins::ARRAY_NEXT_ELEMENT_OCCUPIED,
+                        context,
+                        values,
+                    );
+                }
+            }
             array = values.array_set(array, key, value)?;
             if let Some(target) = target {
                 bind_array_element_reference(context, array, key, target, values)?;
@@ -171,12 +185,18 @@ pub(in crate::interpreter) fn eval_array_reference_key(
             }
         }
         EVAL_TAG_NULL => EvalArrayReferenceKey::String(Vec::new()),
-        EVAL_TAG_BOOL | EVAL_TAG_FLOAT => EvalArrayReferenceKey::Int(eval_int_value(key, values)?),
+        EVAL_TAG_BOOL | EVAL_TAG_FLOAT | EVAL_TAG_RESOURCE => {
+            EvalArrayReferenceKey::Int(eval_int_value(key, values)?)
+        }
         _ => return Ok(None),
     }))
 }
 
 /// Advances an array literal's automatic key after an integer-normalized explicit key.
+///
+/// The first integer key seeds the cursor, including a negative one, on every PHP
+/// version. Later keys raise it and never rewind it. `[-5 => "a", "b"]` stores
+/// `"b"` at `-4`. `PHP_INT_MAX` saturates the cursor instead of wrapping.
 fn eval_array_next_key_after_explicit_key(
     key: RuntimeCellHandle,
     current_next_key: Option<RuntimeCellHandle>,
@@ -201,9 +221,8 @@ fn eval_array_next_key_after_explicit_key(
             key
         }
     };
-    let one = values.int(1)?;
-    operands.push(one);
-    let candidate = values.add(key, one)?;
+    let key_int = eval_int_value(key, values)?;
+    let candidate = values.int(key_int.saturating_add(1))?;
     operands.push(candidate);
     let replace = if let Some(current_next_key) = current_next_key {
         let is_greater = values.compare(EvalBinOp::Gt, candidate, current_next_key)?;

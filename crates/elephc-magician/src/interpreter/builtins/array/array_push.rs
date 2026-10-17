@@ -44,27 +44,32 @@ pub(in crate::interpreter) fn eval_array_push_unshift_count_result(
 }
 
 /// Builds the replacement array for direct push/unshift write-back.
+///
+/// Associative `array_push` reports a saturated cursor separately so a free
+/// `PHP_INT_MAX` key is inserted and only the following value is rejected.
 pub(in crate::interpreter) fn eval_array_push_unshift_replacement(
     name: &str,
     array: RuntimeCellHandle,
     inserted: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    match (name, values.type_tag(array)?) {
+) -> Result<ArrayPushReplacement, EvalStatus> {
+    let replacement = match (name, values.type_tag(array)?) {
         ("array_push", EVAL_TAG_ARRAY) => {
-            eval_array_push_indexed_replacement(array, inserted, values)
+            eval_array_push_indexed_replacement(array, inserted, values)?
         }
         ("array_push", EVAL_TAG_ASSOC) => {
-            eval_array_push_assoc_replacement(array, inserted, values)
+            return eval_array_push_assoc_replacement(array, inserted, context, values);
         }
         ("array_unshift", EVAL_TAG_ARRAY) => {
-            eval_array_unshift_indexed_replacement(array, inserted, values)
+            eval_array_unshift_indexed_replacement(array, inserted, values)?
         }
         ("array_unshift", EVAL_TAG_ASSOC) => {
-            eval_array_unshift_assoc_replacement(array, inserted, values)
+            eval_array_unshift_assoc_replacement(array, inserted, values)?
         }
-        _ => Err(EvalStatus::RuntimeFatal),
-    }
+        _ => return Err(EvalStatus::RuntimeFatal),
+    };
+    Ok(ArrayPushReplacement { replacement: Some(replacement), overflow: false })
 }
 
 /// Rebuilds an indexed array after appending values.
@@ -90,29 +95,75 @@ pub(in crate::interpreter) fn eval_array_push_indexed_replacement(
     Ok(result)
 }
 
-/// Rebuilds an associative array after appending values at PHP's next integer keys.
+/// Message PHP raises when an append's next integer key is already occupied.
+pub(in crate::interpreter) const ARRAY_NEXT_ELEMENT_OCCUPIED: &str =
+    "Cannot add element to the array as the next element is already occupied";
+
+/// A rebuilt `array_push` / `array_unshift` array, plus whether a later value could not be inserted.
+///
+/// `replacement` is `None` when nothing was inserted, so the caller leaves the original array
+/// alone. A `Some` replacement is written back even when `overflow` is set: PHP inserts every
+/// value that fits, then throws, and `unset` does not rewind a saturated cursor.
+pub(in crate::interpreter) struct ArrayPushReplacement {
+    /// The rebuilt array when this call allocated one.
+    pub replacement: Option<RuntimeCellHandle>,
+    /// Set once the next integer key is occupied and a requested value was not inserted.
+    pub overflow: bool,
+}
+
+/// Rebuilds an associative array after appending values at the array's stored next index.
+///
+/// The cursor is the hash's next index, not the maximum live key. A literal
+/// `[-5 => "a"]` continues at -4. An array that is still the empty constant keeps
+/// next index 0 before PHP 8.3, so the same negative key is followed by 0 there
+/// and by -4 from 8.3. Unset does not rewind the cursor. `PHP_INT_MAX` stays the
+/// cursor after that key is inserted; the value is stored when the key is free,
+/// and only a further insertion is rejected.
 pub(in crate::interpreter) fn eval_array_push_assoc_replacement(
     array: RuntimeCellHandle,
     inserted: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
+) -> Result<ArrayPushReplacement, EvalStatus> {
     let len = values.array_len(array)?;
+    let Some(mut next_key) = values.array_next_index(array)? else {
+        return Ok(ArrayPushReplacement { replacement: None, overflow: true });
+    };
     let mut result = values.assoc_new(len.saturating_add(inserted.len()))?;
-    let mut next_key = 0_i64;
-    for position in 0..len {
-        let key = values.array_iter_key(array, position)?;
-        if values.type_tag(key)? == EVAL_TAG_INT {
-            next_key = next_key.max(eval_int_value(key, values)?.saturating_add(1));
+    let mut operands = Vec::new();
+    let built = (|| {
+        for position in 0..len {
+            let key = values.array_iter_key(array, position)?;
+            operands.push(key);
+            let value = values.array_get(array, key)?;
+            operands.push(value);
+            result = values.array_set(result, key, value)?;
         }
-        let value = values.array_get(array, key)?;
-        result = values.array_set(result, key, value)?;
+        let mut maximum_key_inserted = false;
+        for value in inserted.iter().copied() {
+            if maximum_key_inserted { return Ok(true); }
+            let key = values.int(next_key)?;
+            operands.push(key);
+            result = values.array_set(result, key, value)?;
+            maximum_key_inserted = next_key == i64::MAX;
+            next_key = next_key.saturating_add(1);
+        }
+        Ok(false)
+    })();
+    // Insertion retains the entries, so retire every temporary key and copied value lease.
+    // Keep input arguments borrowed and preserve the successfully inserted prefix on overflow.
+    let mut cleanup = Ok(());
+    for operand in operands {
+        let released = release_expr_result(operand, context, values);
+        if cleanup.is_ok() { cleanup = released; }
     }
-    for value in inserted.iter().copied() {
-        let key = values.int(next_key)?;
-        next_key = next_key.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
-        result = values.array_set(result, key, value)?;
+    match (built, cleanup) {
+        (Ok(overflow), Ok(())) => Ok(ArrayPushReplacement { replacement: Some(result), overflow }),
+        (Err(status), _) | (Ok(_), Err(status)) => {
+            let _ = eval_release_value(context, values, result);
+            Err(status)
+        }
     }
-    Ok(result)
 }
 
 /// Rebuilds an indexed array after prepending values and reindexing the original tail.
@@ -203,13 +254,19 @@ pub(in crate::interpreter) fn eval_array_push_unshift_declared_call(
         return Err(EvalStatus::RuntimeFatal);
     }
     let (array, target) = super::mutation::eval_array_mutation_lvalue_arg(&args[0], context, scope, values)?;
-    let mut inserted = Vec::with_capacity(args.len() - 1);
-    for arg in &args[1..] {
-        inserted.push(eval_expr(arg.value(), context, scope, values)?);
-    }
-
-    let replacement = eval_array_push_unshift_replacement(name, array, &inserted, values)?;
-    let result = eval_array_push_unshift_count_result(array, inserted.len(), values)?;
-    eval_write_direct_ref_target(&target, replacement, context, values, None)?;
-    Ok(result)
+    let inserted_args = args[1..].iter().map(EvalCallArg::value).collect::<Vec<_>>();
+    with_eval_operands(&inserted_args, context, scope, values, |inserted, context, _, values| {
+        let update = eval_array_push_unshift_replacement(name, array, inserted, context, values)?;
+        if update.overflow {
+            if let Some(replacement) = update.replacement {
+                eval_write_direct_ref_target(&target, replacement, context, values, None)?;
+            }
+            return eval_throw_error(ARRAY_NEXT_ELEMENT_OCCUPIED, context, values);
+        }
+        let result = eval_array_push_unshift_count_result(array, inserted.len(), values)?;
+        if let Some(replacement) = update.replacement {
+            eval_write_direct_ref_target(&target, replacement, context, values, None)?;
+        }
+        Ok(result)
+    })
 }

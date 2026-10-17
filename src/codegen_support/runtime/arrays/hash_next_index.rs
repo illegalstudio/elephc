@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - The signed counter survives deletion and saturates at PHP_INT_MAX.
+//! - Any inserted integer key at or above the counter advances it, including a negative
+//!   key written into a hash that still holds the uninitialized sentinel.
 //! - A nonthrowing probe lets query registration stop a field on append exhaustion.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};

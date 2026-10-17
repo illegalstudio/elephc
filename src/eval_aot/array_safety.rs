@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - PHP integer-key normalization remains compile-time safe.
+//! - The implicit-key cursor matches the parser: the first integer key of a literal
+//!   seeds it on every profile, so a negative key continues rather than restarting at 0.
 
 use super::*;
 
@@ -129,6 +131,9 @@ pub(super) fn advance_static_array_auto_key(next_auto_key: &mut i64, auto_key_in
 }
 
 /// Updates the static array auto-key cursor from an explicit integer-like key.
+///
+/// Matches the parser's `update_next_auto_key_from_explicit_key`: the first integer
+/// key of a literal seeds the cursor on every profile, and later keys only raise it.
 pub(super) fn update_static_array_auto_key_from_explicit_key(
     key: &Expr,
     next_auto_key: &mut i64,

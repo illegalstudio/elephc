@@ -70,6 +70,15 @@ pub(crate) fn compile_php_version() -> crate::web_prelude::PhpVersion {
     COMPILE_PROFILE.with(|profile| profile.get().0)
 }
 
+/// Returns whether the empty-array constant starts its next index at 0.
+///
+/// The rule lives on [`crate::php_version::PhpVersion::empty_array_next_index_starts_at_zero`].
+/// Before PHP 8.3 `[]` keeps next index 0, so a negative key does not move it. From
+/// 8.3 that constant starts unset. Fresh hashes and non-empty literals are unaffected.
+pub(crate) fn empty_array_next_index_starts_at_zero() -> bool {
+    compile_php_version().empty_array_next_index_starts_at_zero()
+}
+
 /// Returns whether this compilation is a `--web` build (default: `false`, i.e. CLI).
 pub(crate) fn compile_is_web_sapi() -> bool {
     COMPILE_PROFILE.with(|profile| profile.get().1)

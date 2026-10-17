@@ -144,6 +144,17 @@ impl PhpVersion {
         ""
     }
 
+    /// Returns whether the empty-array constant's next index starts at 0.
+    ///
+    /// Before PHP 8.3 `[]` and `array()` share a constant whose next index is 0, so a
+    /// negative key written into that array does not move it. From 8.3 the same constant
+    /// starts at the uninitialized sentinel, and a negative key advances it. A non-empty
+    /// literal and any freshly initialized hash continue from a negative key on every
+    /// profile.
+    pub const fn empty_array_next_index_starts_at_zero(self) -> bool {
+        self.version_id() < Self::Php83.version_id()
+    }
+
     /// Returns the matching Zend Engine language-profile version.
     pub const fn zend_version(self) -> &'static str {
         match self {
@@ -223,5 +234,13 @@ mod tests {
     fn error_reporting_mask_tracks_php_profile() {
         assert_eq!(PhpVersion::Php84.error_reporting_mask(), 32_767);
         assert_eq!(PhpVersion::Php85.error_reporting_mask(), 30_719);
+    }
+
+    /// Verifies only the pre-8.3 empty-array constant starts its next index at 0.
+    #[test]
+    fn empty_array_next_index_starts_at_zero_before_php_83() {
+        assert!(PhpVersion::Php82.empty_array_next_index_starts_at_zero());
+        assert!(!PhpVersion::Php83.empty_array_next_index_starts_at_zero());
+        assert!(!PhpVersion::Php85.empty_array_next_index_starts_at_zero());
     }
 }

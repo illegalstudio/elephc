@@ -76,6 +76,7 @@ pub(in crate::interpreter) use array_pointer::eval_array_pointer_move;
 pub(in crate::interpreter) use array_pop::eval_array_pop_shift_replacement;
 pub(in crate::interpreter) use array_push::{
     eval_array_push_unshift_count_result, eval_array_push_unshift_replacement,
+    ARRAY_NEXT_ELEMENT_OCCUPIED,
 };
 pub(in crate::interpreter) use array_splice::eval_array_splice_removed_and_replacement;
 pub(in crate::interpreter) use array_walk::eval_array_walk_ref_result;

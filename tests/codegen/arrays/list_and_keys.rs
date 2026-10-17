@@ -109,3 +109,100 @@ echo (array_key_last([]) === null) ? "-last-null" : "-last-val";
     );
     assert_eq!(out, "first-null-last-null");
 }
+
+/// The `$a[] = ...` shapes after a negative integer key in a non-empty literal.
+///
+/// An append inside `eval()` reaches the same runtime `record_insert` branch; it is left out
+/// because linking the interpreter under a non-default profile takes most of a minute, which
+/// the CI harness times out. These shapes are the same on every PHP version.
+const NEGATIVE_KEY_APPEND_SOURCE: &str = r#"<?php
+$a = [-5 => "a"];
+$a[] = "b";
+echo implode(",", array_keys($a)), "\n";
+$b = [-5 => "a", "b"];
+echo implode(",", array_keys($b)), "\n";
+$c = [0 => "z"]; unset($c[0]);
+$c[-3] = 1;
+$c[] = 2;
+echo implode(",", array_keys($c)), "\n";
+$d = [-5 => "a", 3 => "b"];
+$d[] = "c";
+echo implode(",", array_keys($d)), "\n";
+function f(array $m): array { $m[] = "x"; return $m; }
+echo implode(",", array_keys(f([-9 => 1]))), "\n";
+"#;
+
+/// A non-empty literal and a fresh hash continue from a negative key on every PHP version.
+///
+/// `[-5 => "a"]` then `$a[] = "b"` stores "b" at -4. The same successor is used for a bare
+/// literal element, a parameter append, and an append after a later explicit key. Measured
+/// on PHP 8.2.33, 8.3.33, 8.4.24, and 8.5.9.
+#[test]
+fn test_append_after_negative_key_continues_from_it_on_every_profile() {
+    let expected = "-5,-4\n-5,-4\n-3,1\n-5,3,4\n-9,-8\n";
+    assert_eq!(compile_and_run(NEGATIVE_KEY_APPEND_SOURCE), expected);
+    assert_eq!(
+        compile_and_run_with_php_version(
+            NEGATIVE_KEY_APPEND_SOURCE,
+            elephc::php_version::PhpVersion::Php83
+        ),
+        expected
+    );
+    assert_eq!(
+        compile_and_run_with_php_version(
+            NEGATIVE_KEY_APPEND_SOURCE,
+            elephc::php_version::PhpVersion::Php82
+        ),
+        expected
+    );
+}
+
+/// The empty-array constant is the profile-dependent next index.
+///
+/// Before PHP 8.3 `[]` and `array()` start at 0, so a negative key does not move the cursor
+/// and the following append or `array_push` lands at 0. From 8.3 the constant starts unset
+/// and the append continues from the negative key. `array_fill_keys` builds a fresh hash, so
+/// it continues on every profile. Measured on PHP 8.2.33 through 8.5.9.
+#[test]
+fn test_empty_array_negative_key_follows_php_version() {
+    let source = r#"<?php
+function push(array &$m, $value): void { array_push($m, $value); }
+$a = [];
+$a[-5] = "a";
+$a[] = "b";
+echo implode(",", array_keys($a)), "\n";
+$b = array();
+$b[-5] = "a";
+push($b, "b");
+echo implode(",", array_keys($b)), "\n";
+$c = [];
+$c["x"] = 1;
+$c[-5] = "a";
+$c[] = "b";
+echo implode(",", array_keys($c)), "\n";
+$u = [];
+unset($u[0]);
+$u[-5] = "a";
+$u[] = "b";
+echo implode(",", array_keys($u)), "\n";
+$f = array_fill_keys(["-5"], 1);
+$f[] = 2;
+echo implode(",", array_keys($f)), "\n";
+$i = [-5 => "a"];
+push($i, "b");
+echo implode(",", array_keys($i)), "\n";
+$j = [-5 => "a", 3 => "b", "c"];
+echo implode(",", array_keys($j)), "\n";
+"#;
+    let before = "-5,0\n-5,0\nx,-5,0\n-5,0\n-5,-4\n-5,-4\n-5,3,4\n";
+    let after = "-5,-4\n-5,-4\nx,-5,-4\n-5,-4\n-5,-4\n-5,-4\n-5,3,4\n";
+    assert_eq!(
+        compile_and_run_with_php_version(source, elephc::php_version::PhpVersion::Php82),
+        before
+    );
+    assert_eq!(
+        compile_and_run_with_php_version(source, elephc::php_version::PhpVersion::Php83),
+        after
+    );
+    assert_eq!(compile_and_run(source), after);
+}

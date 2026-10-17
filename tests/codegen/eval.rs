@@ -11,6 +11,11 @@
 //! - Fixtures exercise the native/EvalIR boundary rather than the frozen legacy
 //!   AST backend, and many cases assert post-barrier native visibility.
 
+#[path = "eval/array_reference_keys.rs"]
+mod array_reference_keys;
+#[path = "eval/max_array_keys.rs"]
+mod max_array_keys;
+
 use crate::support::*;
 
 /// Asserts an eval failure stayed inside the C ABI/error-status contract.
@@ -1335,6 +1340,142 @@ echo eval('return array(2 => "two", "tail")[3];');
         "tail:tail:tail:tail:tail:tail:empty:tail:tail:tail:tail"
     );
     let _ = fs::remove_dir_all(&dir);
+}
+
+/// Eval literals whose implicit keys depend on a leading negative integer key.
+///
+/// The three lines are: `[-5 => "a", "b"]`, the same shape followed by an explicit
+/// non-negative key and another bare element, and a literal whose cursor has already
+/// reached 0 before the last bare element.
+const EVAL_NEGATIVE_KEY_LITERAL_SOURCE: &str = r#"<?php
+eval('$b = [-5 => "a", "b"];');
+echo implode(",", array_keys($b)), "\n";
+eval('$later = [-5 => "a", "b", 3 => "c", "d"];');
+echo implode(",", array_keys($later)), "\n";
+eval('$zero = [-5 => "a", 0 => "z", "c"];');
+echo implode(",", array_keys($zero)), "\n";
+"#;
+
+/// Compiles an eval-literal fixture at `php_version` and returns stdout.
+///
+/// The static fragments must lower through EIR AOT. A safety-check miss would
+/// fall back to the interpreter and link Magician.
+fn compile_eval_negative_key_literals(php_version: elephc::php_version::PhpVersion) -> String {
+    let dir = make_cli_test_dir("elephc_eval_negative_key_literal");
+    let (user_asm, runtime_asm, required_libraries) =
+        compile_source_to_asm_with_defines_repr_and_php_version(
+            EVAL_NEGATIVE_KEY_LITERAL_SOURCE,
+            &dir,
+            &std::collections::HashSet::new(),
+            8_388_608,
+            false,
+            false,
+            default_null_repr(),
+            php_version,
+        );
+    assert!(
+        user_asm.contains("eval literal AOT compiled EIR function"),
+        "negative-key eval literals should use the internal EIR AOT function path:\n{user_asm}"
+    );
+    assert!(
+        user_asm.contains("__elephc_eval_scope_set"),
+        "negative-key eval literals should flush through eval scope set:\n{user_asm}"
+    );
+    assert!(
+        !user_asm.contains("__elephc_eval_execute")
+            && !runtime_asm.contains("__elephc_eval_execute"),
+        "negative-key eval literals should not call the interpreter bridge"
+    );
+    assert!(
+        !required_libraries
+            .iter()
+            .any(|lib| lib == "elephc_magician"),
+        "negative-key eval literals should not link elephc_magician: {required_libraries:?}"
+    );
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
+    let out = assemble_and_run(
+        &user_asm,
+        &runtime_obj,
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    let _ = fs::remove_dir_all(&dir);
+    out
+}
+
+/// An eval literal continues implicit keys from a negative key on every profile.
+///
+/// The default profile, PHP 8.3, and PHP 8.2 agree, including a later explicit key
+/// and an element after the cursor has already reached 0. Measured against PHP
+/// 8.2.33 through 8.5.9.
+#[test]
+fn test_eval_literal_after_negative_key_continues_from_it_on_every_profile() {
+    let expected = "-5,-4\n-5,-4,3,4\n-5,0,1\n";
+    assert_eq!(
+        compile_eval_negative_key_literals(elephc::php_version::PhpVersion::default()),
+        expected
+    );
+    assert_eq!(
+        compile_eval_negative_key_literals(elephc::php_version::PhpVersion::Php83),
+        expected
+    );
+    assert_eq!(
+        compile_eval_negative_key_literals(elephc::php_version::PhpVersion::Php82),
+        expected
+    );
+}
+
+/// Dynamic eval appends follow the array's origin, matching PHP 8.2 and 8.3+.
+///
+/// Assignments and `array_push` keep the fragment on the Magician bridge. A
+/// non-empty literal continues from a negative key on every profile. An array
+/// that is still `[]` appends at 0 before PHP 8.3 and at -4 from 8.3.
+#[test]
+fn test_eval_append_after_negative_key_follows_php_version() {
+    let source = r#"<?php
+echo eval('
+$a = [-5 => "a", "b"];
+$b = [-5 => "a"];
+$b[] = "b";
+$c = [];
+$c[-5] = "a";
+$c[] = "b";
+$d = [-5 => "a"];
+$d[-3] = "b";
+$d[] = "c";
+$e = [-5 => "a"];
+array_push($e, "b");
+$f = [];
+$f[-5] = "a";
+array_push($f, "b");
+$g = array_fill_keys(["-5"], 1);
+$g[] = 2;
+$h = [-5 => "a", 3 => "b", "c"];
+$p = array_pad([-5 => "a"], 2, "b");
+return implode(",", array_keys($a)) . "\n"
+    . implode(",", array_keys($b)) . "\n"
+    . implode(",", array_keys($c)) . "\n"
+    . implode(",", array_keys($d)) . "\n"
+    . implode(",", array_keys($e)) . "\n"
+    . implode(",", array_keys($f)) . "\n"
+    . implode(",", array_keys($g)) . "\n"
+    . implode(",", array_keys($h)) . "\n"
+    . implode(",", array_keys($p));
+');
+"#;
+    let before = "-5,-4\n-5,-4\n-5,0\n-5,-3,-2\n-5,-4\n-5,0\n-5,-4\n-5,3,4\n0,1";
+    let after = "-5,-4\n-5,-4\n-5,-4\n-5,-3,-2\n-5,-4\n-5,-4\n-5,-4\n-5,3,4\n0,1";
+    assert_eq!(
+        compile_and_run_with_php_version(source, elephc::php_version::PhpVersion::Php82),
+        before
+    );
+    assert_eq!(
+        compile_and_run_with_php_version(source, elephc::php_version::PhpVersion::Php83),
+        after
+    );
+    assert_eq!(compile_and_run(source), after);
 }
 
 /// Verifies fractional float array keys stay on the bridge because PHP emits a precision warning.
