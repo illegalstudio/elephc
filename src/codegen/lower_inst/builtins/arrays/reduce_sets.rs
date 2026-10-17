@@ -125,8 +125,20 @@ pub(crate) fn lower_array_merge(ctx: &mut FunctionContext<'_>, inst: &Instructio
     store_if_result(ctx, inst)
 }
 
-/// Lowers `array_diff()` for two compatible indexed arrays with pointer-sized payload slots.
+/// Lowers `array_diff()`, keeping each survivor under its original key (#1645).
+///
+/// PHP keeps the keys (`array_diff([1, 2, 3], [2])` is `[0 => 1, 2 => 3]`), so the checker types
+/// the result of an int/float/bool/string first operand as a hash and this lowers through
+/// `__rt_hash_value_diff_intersect`, converting an indexed operand to a hash keyed `0..n-1`.
+/// Element types the value comparison cannot cast (objects, arrays, callables) keep an indexed
+/// result and the legacy identity-comparing helpers; the declared result decides which path runs.
 pub(crate) fn lower_array_diff(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if super::boxed_set_ops::needs_rendering_scan(ctx, inst)? {
+        return super::boxed_set_ops::lower_array_diff_values(ctx, inst);
+    }
+    if matches!(inst.result_php_type.codegen_repr(), PhpType::AssocArray { .. }) {
+        return lower_value_set_op_to_hash(ctx, inst, "array_diff", 0);
+    }
     lower_indexed_array_set_op(
         ctx,
         inst,
@@ -136,11 +148,20 @@ pub(crate) fn lower_array_diff(ctx: &mut FunctionContext<'_>, inst: &Instruction
     )
 }
 
-/// Lowers `array_intersect()` for two compatible indexed arrays with pointer-sized payload slots.
+/// Lowers `array_intersect()`, keeping each survivor under its original key (#1645).
+///
+/// Same split as [`lower_array_diff`]: a hash result runs the key-preserving value comparison,
+/// an indexed result (element types that cannot be cast to string) the legacy helpers.
 pub(crate) fn lower_array_intersect(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
+    if super::boxed_set_ops::needs_rendering_scan(ctx, inst)? {
+        return super::boxed_set_ops::lower_array_intersect_values(ctx, inst);
+    }
+    if matches!(inst.result_php_type.codegen_repr(), PhpType::AssocArray { .. }) {
+        return lower_value_set_op_to_hash(ctx, inst, "array_intersect", 1);
+    }
     lower_indexed_array_set_op(
         ctx,
         inst,
@@ -150,20 +171,69 @@ pub(crate) fn lower_array_intersect(
     )
 }
 
-/// Lowers `array_diff_key()` for two associative arrays by filtering first-operand keys.
+/// Runs `__rt_hash_value_diff_intersect` in `mode` (0 = diff, 1 = intersect) over two operands,
+/// converting an indexed one whose values can be compared by string cast to an owned hash first.
+fn lower_value_set_op_to_hash(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    mode: i64,
+) -> Result<()> {
+    super::misc_dispatch::lower_two_hash_arg_builtin_converting(
+        ctx,
+        inst,
+        name,
+        "__rt_hash_value_diff_intersect",
+        Some(mode),
+        value_set_op_element_converts,
+    )
+}
+
+/// Accepts the indexed element types whose values `__rt_hash_value_diff_intersect` compares by
+/// string cast: scalars, strings, and the element type of an empty literal.
+pub(crate) fn value_set_op_element_converts(elem: &PhpType) -> bool {
+    matches!(
+        elem,
+        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str | PhpType::Void | PhpType::Never
+    )
+}
+
+/// Accepts every indexed element type for a KEY set operation: keys never compare the values,
+/// and `__rt_array_to_hash` persists strings and retains heap values when it converts.
+fn key_set_op_element_converts(_elem: &PhpType) -> bool {
+    true
+}
+
+/// Lowers `array_diff_key()`, converting an indexed operand to a hash keyed `0..n-1` so an indexed
+/// first argument keeps its surviving keys (#1645).
 pub(crate) fn lower_array_diff_key(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    lower_assoc_array_key_set_op(ctx, inst, "array_diff_key", "__rt_array_diff_key")
+    super::misc_dispatch::lower_two_hash_arg_builtin_converting(
+        ctx,
+        inst,
+        "array_diff_key",
+        "__rt_array_diff_key",
+        None,
+        key_set_op_element_converts,
+    )
 }
 
-/// Lowers `array_intersect_key()` for two associative arrays by keeping shared first-operand keys.
+/// Lowers `array_intersect_key()`, converting an indexed operand to a hash keyed `0..n-1` so an
+/// indexed first argument keeps its surviving keys (#1645).
 pub(crate) fn lower_array_intersect_key(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    lower_assoc_array_key_set_op(ctx, inst, "array_intersect_key", "__rt_array_intersect_key")
+    super::misc_dispatch::lower_two_hash_arg_builtin_converting(
+        ctx,
+        inst,
+        "array_intersect_key",
+        "__rt_array_intersect_key",
+        None,
+        key_set_op_element_converts,
+    )
 }
 
 /// Lowers `array_slice()` for indexed arrays with pointer-sized payload slots.
