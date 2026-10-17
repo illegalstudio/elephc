@@ -342,7 +342,7 @@ pub(super) fn assoc_array_literal_type_from_entries(
     for entry in entries {
         let next = match entry {
             ArrayEntry::Spread(inner) => {
-                match array_literal_spread_source_type_for_ir(ctx, inner).codegen_repr() {
+                match spread_source_storage_type_for_ir(ctx, inner).codegen_repr() {
                     PhpType::Array(elem) => elem.codegen_repr(),
                     PhpType::AssocArray { value, .. } => value.codegen_repr(),
                     _ => PhpType::Mixed,
@@ -565,7 +565,7 @@ pub(crate) fn array_literal_type_for_ir(
     }
     if items.iter().any(|item| {
         matches!(&item.kind, ExprKind::Spread(inner) if matches!(
-            array_literal_spread_source_type_for_ir(ctx, inner).codegen_repr(),
+            spread_source_storage_type_for_ir(ctx, inner).codegen_repr(),
             PhpType::AssocArray { .. } | PhpType::Mixed
         ))
     }) {
@@ -595,7 +595,7 @@ pub(super) fn array_literal_element_type_for_ir(
             // Keep array element ownership consistent with the lowered branch result.
             ir_array_storage_type(materialized_expr_type_for_merge(ctx, item))
         }
-        ExprKind::Spread(inner) => match array_literal_spread_source_type_for_ir(ctx, inner).codegen_repr() {
+        ExprKind::Spread(inner) => match spread_source_storage_type_for_ir(ctx, inner).codegen_repr() {
             // A spread of an empty/unknown array (`array<never>`, e.g. a `$x = []` local or a
             // bare-`array`-returning method) contributes no element constraint, so widen its
             // Void/Never element to Mixed rather than collapsing the outer literal to
@@ -672,10 +672,14 @@ pub(super) fn array_literal_element_type_for_ir(
 /// `func_get_args()` at that span and mistakes the spread container for an element. Resolve the
 /// builtin's own contract without a checker span here so static spread classification agrees
 /// with the runtime value lowered below.
-fn array_literal_spread_source_type_for_ir(
+/// Shared by literal and call-argument unpacking; ordinary elements retain their logical type.
+pub(super) fn spread_source_storage_type_for_ir(
     ctx: &LoweringContext<'_, '_>,
     source: &Expr,
 ) -> PhpType {
+    if let ExprKind::ErrorSuppress(inner) = &source.kind {
+        return spread_source_storage_type_for_ir(ctx, inner);
+    }
     if let ExprKind::FunctionCall { name, args } = &source.kind {
         let canonical = name.as_str();
         if let Some(sig) = ctx.functions.get(canonical) {
@@ -695,7 +699,17 @@ fn array_literal_spread_source_type_for_ir(
             return ir_array_storage_type(result);
         }
     }
-    array_literal_element_type_for_ir(ctx, source)
+    let source_ty = array_literal_element_type_for_ir(ctx, source);
+    if matches!(source.kind, ExprKind::ArrayAccess { .. }) {
+        // A typed container read can miss, but that logical null does not change its native
+        // storage into a hash. Unpacking still checks the actual value and rejects the miss.
+        // Keep ordinary literal elements nullable so a missing object read remains PHP null.
+        let non_null = strip_void_from_union(source_ty.clone());
+        if matches!(non_null.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. }) {
+            return non_null;
+        }
+    }
+    source_ty
 }
 
 /// Returns the EIR array storage type for a resolved element type, or `None` when the type

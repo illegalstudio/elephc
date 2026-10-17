@@ -224,7 +224,10 @@ pub(super) fn scoped_constant_value_type_for_ir(
     ir_array_storage_type(infer_expr_type_syntactic(value))
 }
 
-/// Returns the element/value type for an array-access expression used inside a literal.
+/// Returns the PHP value shape of an array access before merge or literal storage is selected.
+///
+/// A PHP array read can yield null on a missing key even when its elements are non-nullable.
+/// Keep that logical null here; the read itself retains its existing typed fast path.
 pub(in crate::ir_lower) fn array_access_expr_value_type_for_ir(
     ctx: &LoweringContext<'_, '_>,
     array: &Expr,
@@ -240,12 +243,9 @@ pub(in crate::ir_lower) fn array_access_expr_value_type_for_ir(
     }?
     .codegen_repr();
     match array_ty {
-        PhpType::Array(elem_ty) => {
-            Some(array_access_element_result_type(normalize_value_php_type(*elem_ty).codegen_repr()))
-        }
-        PhpType::AssocArray { value, .. } => {
-            Some(array_access_element_result_type(normalize_value_php_type(*value).codegen_repr()))
-        }
+        PhpType::Array(element) | PhpType::AssocArray { value: element, .. } => Some(
+            nullable_aware_branch_merge_type(&normalize_value_php_type(*element), &PhpType::Void),
+        ),
         PhpType::Str => Some(PhpType::Str),
         PhpType::Mixed | PhpType::Union(_) => Some(PhpType::Mixed),
         _ => None,

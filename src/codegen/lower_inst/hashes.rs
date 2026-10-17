@@ -127,6 +127,12 @@ pub(super) fn lower_hash_get(
     let value_ty = assoc_value_type(&ctx.value_php_type(hash)?, inst)?;
     require_hash_get_result(&value_ty, inst)?;
     let result_ty = inst.result_php_type.codegen_repr();
+    if result_ty == PhpType::Mixed && value_ty != PhpType::Mixed {
+        // The shared getter boxes typed hash hits and keeps a missing key as null.
+        return super::arrays::lower_array_get_runtime_mixed(
+            ctx, inst, hash, key, warn_on_missing, false,
+        );
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             lower_hash_get_aarch64(
@@ -1853,7 +1859,7 @@ fn require_hash_get_result(value_ty: &PhpType, inst: &Instruction) -> Result<()>
     if matches!(
         value_ty,
             PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float | PhpType::Str | PhpType::Mixed
-    ) && result_ty == *value_ty
+    ) && (result_ty == *value_ty || result_ty == PhpType::Mixed)
     {
         return Ok(());
     }

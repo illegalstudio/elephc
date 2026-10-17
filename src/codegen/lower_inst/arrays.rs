@@ -1253,7 +1253,7 @@ pub(super) fn lower_array_get_mixed_key(
 
 /// Reads an indexed-or-promoted array through its runtime storage metadata and returns a fresh
 /// boxed Mixed cell, preserving typed slots when control-flow has widened only the static type.
-fn lower_array_get_runtime_mixed(
+pub(super) fn lower_array_get_runtime_mixed(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     array: ValueId,
@@ -3286,7 +3286,7 @@ fn require_array_get_result(elem_ty: &PhpType, inst: &Instruction) -> Result<()>
         return Ok(());
     }
     if matches!(elem_ty, PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float | PhpType::Str)
-        && result_ty == *elem_ty
+        && (result_ty == *elem_ty || result_ty == PhpType::Mixed)
     {
         return Ok(());
     }

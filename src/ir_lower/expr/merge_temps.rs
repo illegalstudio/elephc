@@ -17,6 +17,12 @@ pub(super) fn store_expr_into_temp(
     expr: &Expr,
     span: crate::span::Span,
 ) {
+    if temp_type.codegen_repr() == PhpType::Mixed {
+        if let Some(value) = lower_array_value_for_merge(ctx, expr) {
+            store_value_into_temp(ctx, temp_name, temp_type, value, span);
+            return;
+        }
+    }
     let value = lower_expr(ctx, expr);
     store_value_into_temp(ctx, temp_name, temp_type, value, span);
 }

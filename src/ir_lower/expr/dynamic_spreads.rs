@@ -1,13 +1,14 @@
 //! Purpose:
-//! Materializes fixed-arity builtin calls whose unpacked PHP arrays have boxed storage.
+//! Materializes fixed-signature calls whose unpacked PHP arrays have boxed storage.
 //!
 //! Called from:
-//! - Builtin signature-based argument lowering, including statically selected CUF/FCC targets.
+//! - Signature-based argument lowering, including builtin coordinators and CUF/FCC targets.
 //!
 //! Key details:
 //! - Consumes the shared source plan, then binds runtime keys without discarding named arguments.
 //! - Preserve-values builtins retain optional null slots and defer coercion to their coordinator.
 //! - Iterator sources and argument values stay in rooted slots across later evaluation and throws.
+//! - Logical read nullability does not make a native unpack source use this boxed binder.
 
 use super::*;
 
@@ -41,7 +42,7 @@ pub(super) fn lower_boxed_spread_args(
         || !args.iter().any(|arg| match &arg.kind {
             ExprKind::Spread(source) => {
                 preserve_values
-                    || array_literal_element_type_for_ir(ctx, source).codegen_repr() == PhpType::Mixed
+                    || spread_source_storage_type_for_ir(ctx, source).codegen_repr() == PhpType::Mixed
                     || nested_spread_assoc_literal(source)
             }
             _ => false,

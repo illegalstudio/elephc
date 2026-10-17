@@ -234,6 +234,40 @@ answers — a concrete value is boxed into it on the way in, a `Mixed` value is 
 as-is — and it is what a literal mixing a builtin call with a plain element already
 merged to.
 
+### Missing array elements at lazy merges
+
+A typed array describes its populated elements; a read can still produce `null`.
+AST pruning retains a merge whose selected arm/default is an array read until EIR,
+rather than replacing the entire merge with its raw read. Materialized branch types therefore
+include the missing-value alternative before choosing storage for `match`, ternary, short-ternary and coalescing results. Object/container
+reads keep their concrete getter and nullable merge storage preserves their null
+payload. A merge-bound raw scalar or callable read uses the boxed getter so absence
+is distinguished before conversion, including a float miss that an ordinary
+warned typed read represents as zero. Already-tagged integer getters keep their
+existing null-aware path. Receiver/key evaluation and warnings still
+occur once. Explicit casts and string offsets keep their usual lowering.
+
+When a nullable object/callable merge returns through a concrete payload ABI,
+`MixedUnbox` takes an independent payload reference before the owning merge cell
+is released. This prevents a clean-looking return value from leaking its box.
+
+Unpacking uses a separate storage projection for a direct container read. Its
+implicit null alternative does not turn native indexed storage into a hash;
+the unpack operation still rejects an actual null value at runtime. Literal,
+positional-call and boxed-binder classification share that projection, including
+error-suppressed reads, so argument binding cannot replace the unpack diagnostic
+with an arity error. Ordinary
+literal elements retain the nullable logical type because inserting a missed
+read is valid and must store PHP null.
+
+A nullable receiver's null path still evaluates the offset once and honors the
+normal/silent warning flag. Undefined roots and native nullable containers can
+carry a raw null word, so the null arm retires the original owning source and
+creates a canonical boxed-null receiver for the dynamic getter ABI. That receiver
+is parked in the in-flight cleanup chain while offset evaluation or warning
+delivery can throw. The getter retires it normally; its proven-null payload has
+no user destructor, so detaching that non-owning cleanup record afterwards is safe.
+
 ### Parsed Type Expressions
 
 `TypeExpr` maps into `PhpType` during type checking before EIR lowering. EIR

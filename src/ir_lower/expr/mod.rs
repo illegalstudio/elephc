@@ -33,6 +33,8 @@ use crate::types::{
 use std::collections::HashSet;
 
 mod constants;
+mod array_merge_values;
+use array_merge_values::lower_array_value_for_merge;
 mod nullsafe_chain;
 mod ref_place_args;
 mod boxed_user_sort;

@@ -8,6 +8,7 @@
 //! - Preserves statement ordering, CFG shape, EIR effects, and ownership contracts.
 
 use super::*;
+use crate::ir::IrHeapKind;
 
 /// Coerces a value to the current function return storage type when needed.
 pub(super) fn coerce_to_return_type(
@@ -20,6 +21,33 @@ pub(super) fn coerce_to_return_type(
     }
     if value.ir_type == ctx.return_type {
         return value;
+    }
+    // Lazy merges preserve a typed array miss in a nullable box. Object/callable
+    // returns use their ordinary payload ABI; take an independent payload lease
+    // before releasing the owning merge box (including its null arm). Nominal class
+    // assignability is checked by the frontend; parent/interface returns share the
+    // same object payload ABI as the concrete child carried by the merge.
+    let return_ty = ctx.return_php_type.codegen_repr();
+    let source_ty = ctx.builder.value_php_type(value.value);
+    if matches!(return_ty, PhpType::Object(_) | PhpType::Callable)
+        && value.ir_type == IrType::Heap(IrHeapKind::Mixed)
+        && matches!(source_ty, PhpType::Union(members) if members.iter().all(|member|
+            matches!(member, PhpType::Void | PhpType::Never)
+                || matches!((&return_ty, member),
+                    (PhpType::Object(_), PhpType::Object(_)) | (PhpType::Callable, PhpType::Callable))))
+    {
+        let unboxed = ctx.emit_owned_value(
+            Op::MixedUnbox,
+            vec![value.value],
+            None,
+            return_ty.clone(),
+            Op::mixed_unbox_effects(&return_ty),
+            span,
+        );
+        if ctx.value_is_owning_temporary(value) {
+            crate::ir_lower::ownership::release_if_owned(ctx, value, span);
+        }
+        return unboxed;
     }
     match ctx.return_type {
         IrType::I64 => {

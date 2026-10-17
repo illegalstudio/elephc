@@ -9,6 +9,7 @@
 //! - Loop exits, empty bodies, and effectful conditions must be handled before removing structural statements.
 
 use super::super::*;
+use super::super::switch::array_read_needs_merge_context;
 use super::statements::prune_stmt;
 
 /// Recursively rewrites an expression tree, pruning constant subexpressions while
@@ -326,8 +327,10 @@ pub(crate) fn prune_unused_pure_subexpressions(kind: ExprKind) -> ExprKind {
             then_expr,
             else_expr,
         } => match scalar_value(&condition) {
-            Some(value) if value.truthy() && !expr_has_side_effects(&else_expr) => then_expr.kind,
-            Some(value) if !value.truthy() && !expr_has_side_effects(&then_expr) => else_expr.kind,
+            Some(value) if value.truthy() && !expr_has_side_effects(&else_expr)
+                && !array_read_needs_merge_context(&then_expr) => then_expr.kind,
+            Some(value) if !value.truthy() && !expr_has_side_effects(&then_expr)
+                && !array_read_needs_merge_context(&else_expr) => else_expr.kind,
             _ => ExprKind::Ternary {
                 condition,
                 then_expr,
@@ -338,10 +341,14 @@ pub(crate) fn prune_unused_pure_subexpressions(kind: ExprKind) -> ExprKind {
             Some(value_scalar) if value_scalar.truthy() && !expr_has_side_effects(&default) => {
                 value.kind
             }
-            Some(value_scalar) if !value_scalar.truthy() => default.kind,
+            Some(value_scalar) if !value_scalar.truthy()
+                && !array_read_needs_merge_context(&default) => default.kind,
             _ => ExprKind::ShortTernary { value, default },
         },
         ExprKind::NullCoalesce { value, default } => match scalar_value(&value) {
+            Some(ScalarValue::Null) if array_read_needs_merge_context(&default) => {
+                ExprKind::NullCoalesce { value, default }
+            }
             Some(ScalarValue::Null) => default.kind,
             Some(_) if !expr_has_side_effects(&default) => value.kind,
             _ => ExprKind::NullCoalesce { value, default },

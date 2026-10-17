@@ -197,8 +197,14 @@ pub(super) fn lower_short_ternary(
 ) -> LoweredValue {
     let condition_span = value.span;
     let result_type = short_ternary_merge_result_type(ctx, value, default);
-    let value = lower_expr(ctx, value);
-    let cond = ctx.truthy(value, Some(condition_span));
+    let value = lower_array_value_for_merge(ctx, value).unwrap_or_else(|| lower_expr(ctx, value));
+    // A retained constant-null branch uses the raw I64 null sentinel. It is PHP-falsy,
+    // while `truthy` deliberately forwards ordinary I64 conditions without converting them.
+    let cond = if ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Void {
+        emit_bool_literal(ctx, false, Some(condition_span))
+    } else {
+        ctx.truthy(value, Some(condition_span))
+    };
     let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let split_initialized = ctx.initialized_slots_snapshot();
     let value_block = ctx
