@@ -110,3 +110,22 @@ eval('echo "|e";');
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+
+/// A concrete Mixed-valued hash reorders descending, renumbers keys, keeps a copied alias intact,
+/// and releases every owner.
+#[test]
+fn test_core_concrete_mixed_hash_rsort_renumbers_and_balances() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+for ($i = 0; $i < 4; $i++) {
+    $items = ["x" => 1, "y" => str_repeat('s', 12), "z" => 3];
+    $copy = $items;
+    rsort($items);
+    echo $items[0], '|', strlen($items[1]), '|', $items[2], '|', count($copy), '|';
+    unset($items, $copy);
+}
+echo 'done';
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "ssssssssssss|1|1|3|".repeat(4) + "done", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

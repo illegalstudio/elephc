@@ -568,6 +568,13 @@ fn lower_hash_link_sort_with_flags(
     let array = expect_operand(inst, 0)?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
     if !hash_sort_source_is_published_mixed_cell(ctx, array)? {
+        // A miss-read receiver holds the in-band null-container sentinel; PHP raises a TypeError
+        // for it rather than relinking a null table.
+        boxed_mutation::require_non_null_hash_receiver(
+            ctx,
+            array,
+            helper.trim_start_matches("__rt_hash_"),
+        )?;
         receiver.require_writable("hash link sort")?;
         receiver.prepare_consuming_storeback(ctx, array)?;
         ensure_unique_hash_sort_source(ctx, array)?;

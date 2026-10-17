@@ -110,8 +110,11 @@ pub(super) fn lower_hash_reindexing_sort(
     };
     let value_ty = value.codegen_repr();
     let helper = match value_ty {
-        PhpType::Str => str_helper,
-        PhpType::Int => int_helper,
+        PhpType::Str => Some(str_helper),
+        PhpType::Int => Some(int_helper),
+        // A Mixed-valued hash has no typed comparator; `emit_mixed_slot_sort` orders the extracted
+        // list with `__rt_php_compare_slots` after a runtime scalar guard, exactly as a boxed sort.
+        PhpType::Mixed => None,
         ref other => {
             return Err(CodegenIrError::unsupported(format!(
                 "{} for hash values of PHP type {:?}",
@@ -120,6 +123,7 @@ pub(super) fn lower_hash_reindexing_sort(
         }
     };
 
+    super::boxed_mutation::require_non_null_hash_receiver(ctx, array, name)?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
     receiver.require_writable(name)?;
     // Same opening as the key-preserving hash sorts: drop the slot's ownership and split a shared
@@ -142,8 +146,18 @@ pub(super) fn lower_hash_reindexing_sort(
     // Sort the fresh list in place. The sorters answer nothing useful and clobber the argument
     // registers, so the list pointer is parked rather than read back afterwards.
     abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_reg_move(ctx.emitter, arg0, result_reg);
-    abi::emit_call_label(ctx.emitter, helper);
+    match helper {
+        Some(helper) => {
+            abi::emit_reg_move(ctx.emitter, arg0, result_reg);
+            abi::emit_call_label(ctx.emitter, helper);
+        }
+        None => {
+            // `emit_mixed_slot_sort` reads its array from the first argument register, so move it
+            // there first (a no-op on AArch64, where that is also the result register).
+            abi::emit_reg_move(ctx.emitter, arg0, result_reg);
+            emit_mixed_slot_sort(ctx, name)?;
+        }
+    }
 
     // Rebuild a hash keyed 0..n-1 out of the sorted list. `__rt_array_slice_to_hash` reads
     // (array, offset, length, length_present), and a zero flag means "to the end", so the length
@@ -162,7 +176,7 @@ pub(super) fn lower_hash_reindexing_sort(
     // Publish the rebuilt table as the receiver's value, then release the two intermediates in
     // the order they were stacked: the sorted list, then the table its values came from.
     ctx.store_result_value(array)?;
-    receiver.store_back_value(ctx, array)?;
+    receiver.store_back_after_consuming_split(ctx, array)?;
     // Both release helpers read their pointer from the RESULT register, not the first argument
     // register — `x0` on ARM64, `rax` on x86_64. Passing it in `arg0` happened to work on ARM64,
     // where the two are the same register, and released a garbage pointer on x86_64.

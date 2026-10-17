@@ -126,6 +126,7 @@ mod boxed_array_column;
 mod boxed_array_take;
 mod boxed_array_unshift;
 mod boxed_array_sort;
+mod boxed_array_reverse;
 mod boxed_array_splice;
 mod boxed_array_slice;
 mod boxed_array_key_sort;

@@ -29,6 +29,12 @@ pub(super) fn lower_array_shift(ctx: &mut FunctionContext<'_>, inst: &Instructio
     if ctx.value_php_type(array)?.codegen_repr() == PhpType::Mixed {
         return super::boxed_mutation::lower_boxed_array_take(ctx, inst, array, true);
     }
+    // A concrete associative source: `array_shift` renumbers the surviving integer keys, so it
+    // needs the hash-rebuilding path rather than the indexed slot compactor. The rebuilt table
+    // keeps the source's value representation while the removed value is boxed to `mixed`.
+    if let PhpType::AssocArray { .. } = ctx.value_php_type(array)?.codegen_repr() {
+        return super::boxed_mutation::lower_assoc_array_shift(ctx, inst, array);
+    }
     let elem_ty = array_shift_element_type(ctx.value_php_type(array)?)?;
     require_array_shift_result_type(&inst.result_php_type.codegen_repr())?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
@@ -73,7 +79,7 @@ fn array_shift_element_type(ty: PhpType) -> Result<PhpType> {
 }
 
 /// Verifies the lowered `array_shift()` result uses PHP's `mixed` shape.
-fn require_array_shift_result_type(result_ty: &PhpType) -> Result<()> {
+pub(super) fn require_array_shift_result_type(result_ty: &PhpType) -> Result<()> {
     if result_ty == &PhpType::Mixed {
         return Ok(());
     }

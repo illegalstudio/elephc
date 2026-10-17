@@ -2848,3 +2848,30 @@ echo count($c6), "|", implode(",", array_keys($_GET)), "\n";
     assert!(r1.ends_with(expected), "first response body: {:?}", r1);
     assert!(r2.ends_with(expected), "second response body: {:?}", r2);
 }
+
+/// The Mixed-valued hash builtins must keep an aliased superglobal alive.
+#[test]
+fn aliased_superglobal_survives_new_mixed_hash_builtins() {
+    let dir = make_test_dir("web_aliased_superglobal_mixed");
+    let src = r#"<?php
+$c1 = $_GET; array_shift($_GET);
+echo count($c1), "|", count($_GET), "|", implode(",", array_keys($_GET)), "\n";
+$c2 = $_GET; array_unshift($_GET, "n0");
+echo count($c2), "|", count($_GET), "|", implode(",", array_keys($_GET)), "\n";
+$c3 = $_GET; rsort($_GET);
+echo count($c3), "|", count($_GET), "|", implode(",", array_keys($_GET)), "\n";
+$c4 = $_GET; array_reverse($_GET);
+echo count($c4), "|", count($_GET), "\n";
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let r1 = http_get(&addr, "/?a=1&b=2&c=3");
+    let r2 = http_get(&addr, "/?a=1&b=2&c=3");
+    let _ = child.kill();
+    let _ = child.wait();
+    let expected = "3|2|b,c\n2|3|0,b,c\n3|3|0,1,2\n3|3\n";
+    assert!(r1.ends_with(expected), "first response body: {:?}", r1);
+    assert!(r2.ends_with(expected), "second response body: {:?}", r2);
+}
