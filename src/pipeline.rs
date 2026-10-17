@@ -666,8 +666,7 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
         }
     };
     timings.record_since("typecheck", phase_started);
-    // Source requirements survive declaration pruning, including those from unused functions.
-    if emit == Emit::Phpext && (hosted_php_ext.is_some() || !check_result.required_libraries.is_empty()) {
+    if emit == Emit::Phpext && hosted_php_ext.is_some() {
         crate::progress::clear();
         eprintln!("{PHPEXT_CORE_RUNTIME_ONLY}");
         process::exit(1);
@@ -702,6 +701,11 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
         }
     };
     timings.record_since("exports-scan", phase_started);
+    if emit == Emit::Phpext && exported_functions.is_empty() {
+        crate::progress::clear();
+        eprintln!("--emit phpext requires at least one #[Export] function");
+        process::exit(1);
+    }
     if matches!(emit, Emit::Executable)
         && !check_only
         && !emit_ir
@@ -790,6 +794,12 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
         },
     );
     timings.record_since("decl-reach", phase_started);
+    // Reachability removes bridge requirements belonging only to dead declarations.
+    if emit == Emit::Phpext && !check_result.required_libraries.is_empty() {
+        crate::progress::clear();
+        eprintln!("{PHPEXT_CORE_RUNTIME_ONLY}");
+        process::exit(1);
+    }
     codegen::prepare_declared_name_order(
         &ast,
         &check_result.classes,

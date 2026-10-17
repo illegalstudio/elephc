@@ -2,11 +2,12 @@
 //! Regressions for PHP extension validation across check, EIR and native output modes.
 //!
 //! Called from:
-//! - The `phpext_tests` integration test binary, without requiring a PHP SDK.
+//! - The `phpext_tests` binary for SDK-independent checks and opt-in real-PHP pruning.
 //!
 //! Key details:
 //! - An intentionally missing SDK proves source errors are reported before native build work.
 //! - Nullable scalars and PHP arrays retain the producer's supported parameter shapes.
+//! - Dead bridge declarations must disappear before validating final link requirements.
 
 use super::*;
 
@@ -135,13 +136,13 @@ fn phpext_validation_rejects_options_before_sdk() {
     }
 }
 
-/// Keeps unused source dependencies subject to the same producer restrictions in every mode.
+/// Rejects live source dependencies consistently after declaration reachability is reconciled.
 #[test]
 fn phpext_validation_rejects_detected_libraries_before_sdk() {
     let project = Project::new();
     let source = project.0.join("libraries.php");
-    for export in ["", "#[Export] function php_ok(): int { return 1; }"] {
-        fs::write(&source, format!("<?php function unused(string $value): string {{ return hash('sha256', $value); }} {export}")).unwrap();
+    for body in ["return hash('sha256', $value);", "return php_dependency($value);"] {
+        fs::write(&source, format!("<?php function php_dependency(string $value): string {{ return hash('sha256', $value); }} #[Export] function php_live(string $value): string {{ {body} }}")).unwrap();
         for mode in [Some("--check"), Some("--emit-ir"), None] {
             let mut command = Command::new(env!("CARGO_BIN_EXE_elephc"));
             command.args(["--emit", "phpext"]);
@@ -155,6 +156,60 @@ fn phpext_validation_rejects_detected_libraries_before_sdk() {
             assert!(!diagnostic.contains("query php-config"), "{mode:?}: {diagnostic}");
         }
     }
+}
+
+/// Preserves unused library declarations that native emission already removes before linking.
+#[test]
+fn phpext_validation_accepts_pruned_dependencies() {
+    let project = Project::new();
+    let source = project.0.join("pruned.php");
+    fs::write(&source, "<?php function unused(string $value): string { return hash('sha256', $value); } #[Export] function php_ok(): int { return 1; }").unwrap();
+    for mode in ["--check", "--emit-ir"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_elephc"))
+            .args(["--emit", "phpext", mode]).arg(&source)
+            .env("ELEPHC_PHPEXT_PHP_CONFIG", project.0.join("missing-sdk"))
+            .output().unwrap();
+        assert!(output.status.success(), "{mode}: {}", String::from_utf8_lossy(&output.stderr));
+    }
+    let output = Command::new(env!("CARGO_BIN_EXE_elephc"))
+        .args(["--emit", "phpext"]).arg(&source)
+        .env("ELEPHC_PHPEXT_PHP_CONFIG", project.0.join("missing-sdk"))
+        .output().unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("query php-config"), "{}", String::from_utf8_lossy(&output.stderr));
+}
+
+/// Enforces the native output's required export list before check/EIR can return success.
+#[test]
+fn phpext_validation_rejects_missing_exports_before_sdk() {
+    let project = Project::new();
+    let source = project.0.join("missing_exports.php");
+    fs::write(&source, "<?php function php_unexported(): int { return 1; }").unwrap();
+    for mode in [Some("--check"), Some("--emit-ir"), None] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_elephc"));
+        command.args(["--emit", "phpext"]);
+        if let Some(mode) = mode { command.arg(mode); }
+        let output = command.arg(&source)
+            .env("ELEPHC_PHPEXT_PHP_CONFIG", project.0.join("missing-sdk"))
+            .output().unwrap();
+        let diagnostic = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{mode:?} accepted missing exports");
+        assert!(diagnostic.contains("requires at least one #[Export] function"), "{mode:?}: {diagnostic}");
+        assert!(!diagnostic.contains("query php-config"), "{mode:?}: {diagnostic}");
+    }
+}
+
+/// Loads a core-only extension after pruning a declaration that would otherwise need crypto.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn compiled_php_prunes_unused_bridge_requirements() {
+    let project = Project::new();
+    let sdk = project.sdk();
+    let module = project.compile("pruned_bridge", "<?php function php_unused_bridge(string $value): string { return hash('sha256', $value); } #[Export] function php_pruned_ok(): int { return 42; }");
+    let output = php(&sdk, &module).args(["-r", "echo php_pruned_ok();"]).output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(output.stdout, b"42");
+    assert!(output.stderr.is_empty());
 }
 
 /// Rejects an installed but unused hosted extension before either check/EIR early return.
