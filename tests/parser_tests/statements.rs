@@ -135,10 +135,9 @@ fn test_this_property_postfix_increment_parses_as_compound_assignment() {
     );
 }
 
-/// Verifies prefix `++`/`--` on complex targets parses to the same statement as the
-/// equivalent compound assignment, since statement position discards the result.
+/// Property updates retain their lowering while array updates preserve PHP incdec semantics.
 #[test]
-fn test_prefix_increment_on_complex_targets_parses_as_compound_assignment() {
+fn test_prefix_increment_on_complex_targets_retains_array_incdec() {
     assert_eq!(
         parse_source("<?php ++$this->n;"),
         parse_source("<?php $this->n += 1;")
@@ -147,18 +146,48 @@ fn test_prefix_increment_on_complex_targets_parses_as_compound_assignment() {
         parse_source("<?php ++$obj->n;"),
         parse_source("<?php $obj->n += 1;")
     );
-    assert_eq!(
-        parse_source("<?php --$a[0];"),
-        parse_source("<?php $a[0] -= 1;")
-    );
+    let statements = parse_source("<?php --$a[0];");
+    let StmtKind::ArrayAssign { array, index, value } = &statements[0].kind else {
+        panic!("Expected array writeback, got {:?}", statements[0].kind);
+    };
+    assert_eq!(array, "a");
+    assert!(matches!(index.kind, ExprKind::IntLiteral(0)));
+    let ExprKind::Assignment { value, prelude, .. } = &value.kind else {
+        panic!("Expected captured decrement, got {:?}", value.kind);
+    };
+    let ExprKind::PreDecrement(old_name) = &value.kind else {
+        panic!("Expected PHP decrement, got {:?}", value.kind);
+    };
+    assert_eq!(prelude.len(), 1);
+    assert!(matches!(&prelude[0].kind, StmtKind::Assign { name, value }
+        if name == old_name && matches!(value.kind, ExprKind::ArrayAccess { .. })));
 }
 
-/// Verifies `$this->arr[0]++;` parses to the same statement as the compound assignment,
-/// so the array element under a `$this` property is reached as well.
+/// Property array elements capture their value and retain PHP increment semantics.
 #[test]
-fn test_this_property_element_increment_parses_as_compound_assignment() {
-    assert_eq!(
-        parse_source("<?php $this->arr[0]++;"),
-        parse_source("<?php $this->arr[0] += 1;")
-    );
+fn test_this_property_element_increment_retains_php_incdec() {
+    let statements = parse_source("<?php $this->arr[0]++;");
+    let StmtKind::PropertyArrayAssign { object, property, index, value } = &statements[0].kind else {
+        panic!("Expected property array writeback, got {:?}", statements[0].kind);
+    };
+    assert!(matches!(object.kind, ExprKind::This));
+    assert_eq!(property, "arr");
+    assert!(matches!(index.kind, ExprKind::IntLiteral(0)));
+    let ExprKind::Assignment { value, prelude, .. } = &value.kind else {
+        panic!("Expected captured increment, got {:?}", value.kind);
+    };
+    let ExprKind::PreIncrement(old_name) = &value.kind else {
+        panic!("Expected PHP increment, got {:?}", value.kind);
+    };
+    assert_eq!(prelude.len(), 1);
+    let StmtKind::Assign { name, value } = &prelude[0].kind else {
+        panic!("Expected captured property element, got {:?}", prelude[0].kind);
+    };
+    assert_eq!(name, old_name);
+    let ExprKind::ArrayAccess { array, index } = &value.kind else {
+        panic!("Expected property element read, got {:?}", value.kind);
+    };
+    assert!(matches!(index.kind, ExprKind::IntLiteral(0)));
+    assert!(matches!(&array.kind, ExprKind::PropertyAccess { object, property }
+        if matches!(object.kind, ExprKind::This) && property == "arr"));
 }
