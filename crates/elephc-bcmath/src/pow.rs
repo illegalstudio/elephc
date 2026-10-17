@@ -22,17 +22,27 @@ use crate::scale::resolve_scale;
 /// Raises one BCMath decimal to an integral exponent.
 pub fn bc_pow(base: &str, exponent: &str, scale: Option<i64>) -> Result<String, BcError> {
     let result_scale = resolve_scale(scale, "bcpow", 3)?;
-    let base = parse_bcmath_number_for(base, "bcpow", 1, "num")?;
+    let mut base = parse_bcmath_number_for(base, "bcpow", 1, "num")?;
+    // Insignificant fractional zeroes do not belong to the coefficient being exponentiated.
+    // The caller's requested result scale independently preserves any visible zeroes.
+    if base.is_zero() {
+        base.scale = 0;
+    } else {
+        while base.scale > 0 && base.digits.last() == Some(&0) {
+            base.digits.pop();
+            base.scale -= 1;
+        }
+    }
     let exponent = parse_integral_operand(exponent, "bcpow", 2, "exponent")?;
-    let exponent = signed_i32(&exponent).ok_or(BcError::PowRange)?;
+    let exponent = signed_i64(&exponent).ok_or(BcError::PowRange)?;
     if exponent < 0 && base.is_zero() {
         return Err(BcError::DivisionByZero { func: "bcpow" });
     }
 
     let magnitude = exponent.unsigned_abs();
     let powered_digits = pow_digits(&base.digits, magnitude);
-    let powered_scale_i64 = i64::from(base.scale) * i64::from(magnitude);
-    let powered_scale = i32::try_from(powered_scale_i64).map_err(|_| BcError::PowRange)?;
+    let powered_scale_wide = i128::from(base.scale) * i128::from(magnitude);
+    let powered_scale = i32::try_from(powered_scale_wide).map_err(|_| BcError::PowRange)?;
     let powered = BcNum::new(
         base.negative && magnitude % 2 == 1,
         powered_digits,
@@ -108,7 +118,7 @@ pub fn bc_sqrt(value: &str, scale: Option<i64>) -> Result<String, BcError> {
 }
 
 /// Parses an operand that may contain fractional zeroes but must have an integral value.
-fn parse_integral_operand(
+pub(crate) fn parse_integral_operand(
     input: &str,
     func: &'static str,
     arg_pos: u32,
@@ -139,24 +149,24 @@ fn parse_integral_operand(
     Ok(number)
 }
 
-/// Converts a parsed signed integral value to `i32` when it fits.
-fn signed_i32(number: &BcNum) -> Option<i32> {
-    let mut value = 0i64;
+/// Converts a parsed signed integral value to PHP's machine integer when it fits.
+fn signed_i64(number: &BcNum) -> Option<i64> {
+    let mut value = 0u64;
     for digit in &number.digits {
-        value = value.checked_mul(10)?.checked_add(i64::from(*digit))?;
-        if value > i64::from(i32::MAX) + i64::from(number.negative) {
+        value = value.checked_mul(10)?.checked_add(u64::from(*digit))?;
+        if value > i64::MAX as u64 + u64::from(number.negative) {
             return None;
         }
     }
     if number.negative {
-        i32::try_from(-value).ok()
+        if value == (1u64 << 63) { Some(i64::MIN) } else { Some(-(value as i64)) }
     } else {
-        i32::try_from(value).ok()
+        i64::try_from(value).ok()
     }
 }
 
 /// Raises an unsigned coefficient to a non-negative exponent by squaring.
-fn pow_digits(base: &[u8], mut exponent: u32) -> Vec<u8> {
+fn pow_digits(base: &[u8], mut exponent: u64) -> Vec<u8> {
     let mut result = vec![1];
     let mut factor = base.to_vec();
     while exponent != 0 {

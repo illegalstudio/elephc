@@ -11,6 +11,8 @@
 //! - Control-flow joins can reload locals from slots, so Phase 03 does not need
 //!   to synthesize block-parameter phis for every PHP variable yet.
 
+mod string_append;
+
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::ir::{
@@ -94,6 +96,10 @@ pub(crate) enum StaticCallableBinding {
         signature: FunctionSig,
         captures: Vec<ClosureCapture>,
         return_alias: ReturnArgAlias,
+        /// Requires scalar/nonthrowing call gates for newly preserved loop facts.
+        loop_guarded: bool,
+        /// Allows direct calls only at spans admitted by the numeric loop proof.
+        numeric_loop_guarded: bool,
     },
     StaticMethod {
         receiver: StaticReceiver,
@@ -197,10 +203,15 @@ pub(crate) struct LoweringSnapshot {
     argument_guard_scopes: Vec<Vec<(usize, ValueId)>>,
     eval_barrier_active: bool,
     eval_executed: bool,
+    consuming_string_append_enabled: bool,
     eval_scope_read_param: Option<String>,
     eval_scope_read_names: HashSet<String>,
     eval_scope_write_names: HashSet<String>,
     eval_scope_flush_names: BTreeSet<String>,
+    numeric_closure_sites: std::collections::HashSet<Span>,
+    numeric_tracked_locals: std::collections::HashSet<String>,
+    final_mixed_locals: std::collections::HashSet<String>,
+    numeric_proof_sealed: bool,
 }
 
 /// Lengths of append-only intern pools captured for speculative rollback.
@@ -406,10 +417,26 @@ pub(crate) struct LoweringContext<'m, 'f> {
     write_operand_is_borrowed: bool,
     eval_barrier_active: bool,
     eval_executed: bool,
+    consuming_string_append_enabled: bool,
     eval_scope_read_param: Option<String>,
     eval_scope_read_names: HashSet<String>,
     eval_scope_write_names: HashSet<String>,
     eval_scope_flush_names: BTreeSet<String>,
+    /// Call spans whose arguments were proved `int|float` for a known closure.
+    ///
+    /// The proof is per span. A later call of the same local with an unproved
+    /// argument does not inherit it.
+    pub(crate) numeric_closure_sites: HashSet<Span>,
+    /// Locals read or written by an admitted numeric proof.
+    pub(crate) numeric_tracked_locals: HashSet<String>,
+    /// Locals whose frame slot must be Mixed from the first store.
+    ///
+    /// Set only on the replay that follows a discovery pass. The sealed proof
+    /// still describes the `int|float` value; this set is only the storage.
+    pub(crate) final_mixed_locals: HashSet<String>,
+    /// When set, loop facts reuse `numeric_closure_sites` instead of seeding
+    /// another proof from the now-Mixed slots.
+    pub(crate) numeric_proof_sealed: bool,
     source_path: Option<String>,
 }
 
@@ -552,10 +579,15 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             write_operand_is_borrowed: false,
             eval_barrier_active: false,
             eval_executed: false,
+            consuming_string_append_enabled: true,
             eval_scope_read_param: None,
             eval_scope_read_names: HashSet::new(),
             eval_scope_write_names: HashSet::new(),
             eval_scope_flush_names: BTreeSet::new(),
+            numeric_closure_sites: HashSet::new(),
+            numeric_tracked_locals: HashSet::new(),
+            final_mixed_locals: HashSet::new(),
+            numeric_proof_sealed: false,
             source_path,
         }
     }
@@ -602,10 +634,15 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             argument_guard_scopes: self.argument_guard_scopes.clone(),
             eval_barrier_active: self.eval_barrier_active,
             eval_executed: self.eval_executed,
+            consuming_string_append_enabled: self.consuming_string_append_enabled,
             eval_scope_read_param: self.eval_scope_read_param.clone(),
             eval_scope_read_names: self.eval_scope_read_names.clone(),
             eval_scope_write_names: self.eval_scope_write_names.clone(),
             eval_scope_flush_names: self.eval_scope_flush_names.clone(),
+            numeric_closure_sites: self.numeric_closure_sites.clone(),
+            numeric_tracked_locals: self.numeric_tracked_locals.clone(),
+            final_mixed_locals: self.final_mixed_locals.clone(),
+            numeric_proof_sealed: self.numeric_proof_sealed,
         }
     }
 
@@ -672,10 +709,15 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.argument_guard_scopes = snapshot.argument_guard_scopes;
         self.eval_barrier_active = snapshot.eval_barrier_active;
         self.eval_executed = snapshot.eval_executed;
+        self.consuming_string_append_enabled = snapshot.consuming_string_append_enabled;
         self.eval_scope_read_param = snapshot.eval_scope_read_param;
         self.eval_scope_read_names = snapshot.eval_scope_read_names;
         self.eval_scope_write_names = snapshot.eval_scope_write_names;
         self.eval_scope_flush_names = snapshot.eval_scope_flush_names;
+        self.numeric_closure_sites = snapshot.numeric_closure_sites;
+        self.numeric_tracked_locals = snapshot.numeric_tracked_locals;
+        self.final_mixed_locals = snapshot.final_mixed_locals;
+        self.numeric_proof_sealed = snapshot.numeric_proof_sealed;
     }
 
     /// Returns the canonical PHP source path associated with this lowered body, if known.
@@ -932,6 +974,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// slot back to `I64` wherever no access can observe the float, which is what keeps an
     /// ordinary counter loop as fast as it was.
     fn boxed_incdec_storage_type(&self, name: &str, php_type: PhpType) -> PhpType {
+        if self.final_mixed_locals.contains(name) {
+            return PhpType::Mixed;
+        }
         if !matches!(php_type.codegen_repr(), PhpType::Str) {
             return php_type;
         }
@@ -1733,6 +1778,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // in every scope. Ordinary globals remain boxed Mixed cells.
         let php_type = if uses_global {
             self.global_alias_type(name)
+        } else if self.final_mixed_locals.contains(name) && !self.is_ref_bound_local(name) {
+            // The sealed proof already established int|float. Read the boxed slot
+            // as Mixed so codegen does not insert a truncating mixed-to-int cast.
+            PhpType::Mixed
         } else {
             self.local_type(name)
         };
@@ -3345,6 +3394,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::ICheckedPow
                     | Op::MixedCastString
                     | Op::StrConcat
+                    | Op::StrAppend
                     | Op::StrPersist
                     | Op::StrCharAt
                     | Op::StrInterpolate
@@ -4536,6 +4586,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Emits an `is_truthy` conversion when a value is not already I64.
     pub(crate) fn truthy(&mut self, input: LoweredValue, span: Option<Span>) -> LoweredValue {
+        if let Some(value) = super::expr::object_operators::lower_object_truthy(self, input, span) {
+            return value;
+        }
         if input.ir_type == IrType::I64 {
             return input;
         }

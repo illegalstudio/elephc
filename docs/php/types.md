@@ -39,7 +39,7 @@ Integer-form numeric literals keep the `int` type only while they fit in PHP's s
 
 ### Literal pseudo-types in unions
 
-PHP lets `null`, `false`, and `true` appear as type members. elephc accepts them in parameter, return, and property positions, matched case-insensitively like the other built-in type names.
+PHP lets `null`, `false`, and `true` appear as type members. elephc accepts them in parameter and return positions, and accepts `null` and `false` as property types, matched case-insensitively like the other built-in type names; a property type containing `true` is rejected (see [Literal property types](#literal-property-types)).
 
 ```php
 <?php
@@ -179,6 +179,8 @@ $f = (float)42;      // 42.0
 $s = (string)42;     // "42"
 $b = (bool)0;        // false
 $a = (array)42;      // [42]
+$l = (array)[1, 2];  // [1, 2] (the same array, unchanged)
+$n = (array)null;    // []
 $o = (array)$obj;    // property name => value hash, with PHP's visibility-mangled keys
 $m = (array)$mixed;  // dispatches on the runtime tag: arrays pass through, scalars wrap, objects project
 $p = (object)['k' => 1]; // stdClass with a `k` property
@@ -191,6 +193,12 @@ array's keys rendered as strings (so `(object)['x', 'y']` has the properties
 other non-object value to a `stdClass` carrying it in a single `scalar`
 property. An object source is returned **unchanged** — `(object)$obj === $obj`
 — rather than copied.
+
+`(array)` returns an array **unchanged**, turns `null` into an empty array,
+and wraps any scalar (`int`, `float`, `bool`, `string`) as a one-element list
+`[0 => value]`. The static type follows the source: `(array)"x"` is a list of
+strings, `(array)$list` keeps the list's own type, and a runtime-typed source
+(`mixed`, a union such as `int|string` or `?array`) is typed as PHP `array`.
 
 `(array)` on an object projects all of its properties into a string-keyed hash
 using PHP's exact key mangling — `x` for a public property, `"\0*\0y"` for a
@@ -453,7 +461,7 @@ Two gaps remain: array callables (`[$obj, "method"]`, `["Class", "method"]`) are
 - `json_encode()` of an instance of a declared class (not `stdClass`) encodes its declared public properties only: dynamic properties added to an `#[\AllowDynamicProperties]` class, or created by a deprecated runtime-named write, are not included. `var_dump()`, `print_r()` and `var_export()` do list them, after the declared properties and in insertion order, exactly like PHP.
 - `func_num_args()`, `func_get_args()` and `func_get_arg()` are compiled away rather than dispatched as builtin calls, so `function_exists()` reports `false` for the three names where PHP reports `true`. Their supported scopes are also narrower than PHP's: they are rejected in a function with an optional (defaulted) parameter, in a function that already declares its own variadic, and in a method that overrides a parent method or implements an interface method. Everywhere else — functions, methods, static methods, closures, arrow functions, generators — they match PHP, including reporting the current values of the declared parameters. See [Functions](./functions.md#argument-introspection).
 - Surplus *positional* arguments (PHP allows any user function to be called with more arguments than it declares, discarding the extras) are only accepted by functions that use one of the three argument-introspection constructs above. Every other user function keeps elephc's compile-time arity check, so `function f($a) {} f(1, 2);` is a compile error where PHP runs it.
-- `serialize()`/`unserialize()` cover scalars, arrays, and objects (including the `__serialize`/`__unserialize`/`__sleep`/`__wakeup` magic methods and `r:`/`R:` object back-references) byte-for-byte compatibly with PHP. Objects are registered before property hydration, so self-references resolve correctly; unknown class names materialize as `__PHP_Incomplete_Class` and preserve their original wire name. Remaining gaps: the deprecated `Serializable` interface (`C:` wire form) is unsupported, writing a property of an unserialized object held in a `Mixed` does not persist (a separate `Mixed` property-write limitation), and `unserialize()` does not emit PHP's `E_WARNING` / `E_NOTICE` on malformed input — it just returns `false`. A value that does not match a typed property's declaration is not rejected with PHP's `TypeError` (`Cannot assign string to property C::$n of type ?int`); a `?int` property then holds `null` rather than the mismatched value.
+- `serialize()`/`unserialize()` cover scalars, arrays, and objects (including the `__serialize`/`__unserialize`/`__sleep`/`__wakeup` magic methods and `r:`/`R:` object back-references) byte-for-byte compatibly with PHP. Objects are registered before property hydration, so self-references resolve correctly; unknown class names materialize as `__PHP_Incomplete_Class` and preserve their original wire name. Remaining gaps: the deprecated `Serializable` interface (`C:` wire form) is unsupported, writing a property of an unserialized object held in a `Mixed` does not persist (a separate `Mixed` property-write limitation), and `unserialize()` does not emit PHP's `E_WARNING` / `E_NOTICE` on malformed input — it just returns `false`. A hydrated value that does not match a typed property's declaration is rejected with PHP's catchable `TypeError` (`Cannot assign string to property C::$n of type ?int`), spelling the value as PHP does (including the literal `true`/`false` for a bool) and naming the declared type (`?int`, `?float`, `array`, a class name, …). One gap remains: an object of the wrong class still hydrates an object-typed property, because the slot check verifies only that the value is an object, not that its class is the declared class or a subclass; the class/interface members of an `iterable` or union type are likewise not checked, and two properties of one serialized object that share a reference are hydrated as independent per-slot clones, so a shared raw `int` is widened per property where PHP keeps the shared value.
 - An uninitialized typed property (declared without a default and never assigned) is omitted by `print_r()`, `var_export()`, `get_object_vars()` and `(array)`, like PHP, but `json_encode()` and `serialize()` still emit it (as `0`, `""` or `null` for its type) where PHP leaves it out, and `var_dump()` names a nullable or union type `uninitialized(mixed)` where PHP prints the declared type (`uninitialized(?string)`).
 - Reading a variable after a straight-line `unset()` of it is a compile error (`Undefined variable: $a`), in both modes, where PHP warns and evaluates the read as `null`. See [Local retyping](#local-retyping) above for the full unset/retype/mixed-storage mechanism and the `isset()`/`empty()`/`??` probes that stay legal on the unbound name.
 - `defined('Class::CONST')` follows PHP visibility for public, protected, and private members, including lexical `self::`/`parent::`, runtime-called-class `static::`, and constants imported into classes through traits; invalid relative scopes raise a catchable `Error`. The trait name itself is not a valid constant receiver. Eval-mode class-constant names remain unresolved, and dynamic and first-class-callable `defined()` names are still rejected at compile time.
@@ -530,3 +538,20 @@ The compiler also emits non-fatal warnings (unused variables, unreachable code).
 ### Runtime diagnostics
 
 Runtime warnings flow through a suppressible diagnostics channel. The `@` operator hides those warnings for its operand only, while fatal runtime errors and compile-time diagnostics remain visible. Current suppressible warnings include `fopen()` / `file_get_contents()` open failures and duplicate `define()` calls.
+
+## Literal property types
+
+Standalone `false` properties and `false` parameters accept the exact boolean
+`false`; values such as integer zero, null, and empty strings are rejected before
+boolean coercion. Known instance, static, and parent calls retain this check.
+Object refusals name the runtime class in their `TypeError`.
+Initialize literal `false` properties in a constructor: declaration defaults
+such as `public false $ready = false` are currently unsupported.
+
+Ordinary standalone `null` properties accept only null and retain typed-property
+initialization checks. The `null` declaration is distinct from a forbidden
+`void` property.
+
+Literal `true` property types are currently unsupported. Ordinary and promoted
+properties, including nullable and union forms containing `true`, produce an
+explicit compile diagnostic instead of silently widening to `bool`.

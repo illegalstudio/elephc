@@ -39,6 +39,27 @@ pub(super) fn lower_direct_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
         .iter()
         .map(|param| param.by_ref)
         .collect::<Vec<_>>();
+    // A `false`-declared parameter must refuse a boxed mixed argument before the ordinary
+    // bool coercion folds `0`/`""`/`[]` into `false`; php throws the argument `TypeError`
+    // naming what was given. The guards run in source order, before materialization.
+    for (index, (param, operand)) in callee.params.iter().zip(&inst.operands).enumerate() {
+        if param.php_type != PhpType::False {
+            continue;
+        }
+        let operand_ty = ctx.value_php_type(*operand)?;
+        if matches!(operand_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+            let base_name = function_name.split('<').next().unwrap_or(&function_name);
+            emit_false_param_mixed_guard(
+                ctx,
+                *operand,
+                &format!(
+                    "{base_name}(): Argument #{} (${}) must be of type false, ",
+                    index + 1,
+                    param.name
+                ),
+            )?;
+        }
+    }
     let borrowed_stack_mixed_args =
         plan_borrowed_stack_mixed_args(ctx, callee, &inst.operands, &param_types, &ref_params)?;
     let call_args = materialize_direct_call_args_with_refs_and_borrowed_options(
@@ -395,13 +416,135 @@ pub(super) fn materialize_plain_call_arg(
     Ok(push_ty)
 }
 
-/// Converts the loaded call operand to the ABI shape required by the callee parameter.
+/// Refuses a boxed mixed/union argument bound to a `false`-declared parameter.
+///
+/// The ordinary argument coercion for a bool-repr parameter is the truthiness cast, which
+/// would fold `0`, `""` and `[]` into `false`; php accepts ONLY the exact `false` bool for a
+/// `false` parameter and throws the argument `TypeError` naming the runtime type of what was
+/// given. The check runs BEFORE argument materialization, which re-loads every operand on its
+/// own, and throws for every case php throws — the accepted case falls through and the
+/// ordinary coercion stores `false` exactly as php stores it.
+pub(super) fn emit_false_param_mixed_guard(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    message_prefix: &str,
+) -> Result<()> {
+    emit_literal_param_mixed_guard(ctx, value, message_prefix, false)
+}
+
+/// Rejects non-literal boxed arguments before either false or null ABI conversion.
+fn emit_literal_param_mixed_guard(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    message_prefix: &str,
+    null_only: bool,
+) -> Result<()> {
+    load_value_to_first_int_arg(ctx, value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let tag_reg = abi::int_result_reg(ctx.emitter);
+    let accepted = ctx.next_label("literal_param_ok");
+    let null_tag = crate::codegen_support::sentinels::TAGGED_SCALAR_TAG_NULL;
+    if null_only {
+        super::enums::emit_mixed_tag_branch(ctx, tag_reg, null_tag, &accepted);
+    }
+    let bool_arm = ctx.next_label("false_param_bool");
+    let mut refuse_arms: Vec<(u8, String, String)> = Vec::new();
+    for (tag, name) in super::objects::RUNTIME_TAGS
+        .iter()
+        .filter(|(tag, _)| *tag != super::objects::BOOL_TAG && (!null_only || i64::from(*tag) != null_tag))
+    {
+        refuse_arms.push((
+            *tag,
+            format!("{message_prefix}{name} given"),
+            ctx.next_label(&format!("false_param_reject_{name}")),
+        ));
+    }
+    for (tag, _, label) in &refuse_arms {
+        super::enums::emit_mixed_tag_branch(ctx, tag_reg, i64::from(*tag), label);
+    }
+    super::enums::emit_mixed_tag_branch(ctx, tag_reg, i64::from(super::objects::BOOL_TAG), &bool_arm);
+    // A tag outside the table never reaches the unbox helper (tag 7 is a nested box it peels),
+    // so this fall-through is a defensive refusal rather than a live path.
+    super::exceptions::emit_type_error(ctx, &format!("{message_prefix}mixed given"));
+    for (tag, message, label) in refuse_arms {
+        ctx.emitter.label(&label);
+        if tag == super::objects::OBJECT_TAG {
+            let payload_reg = crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target);
+            let result_reg = abi::int_result_reg(ctx.emitter);
+            abi::emit_reg_move(ctx.emitter, result_reg, payload_reg);
+            super::runtime_class_messages::emit_runtime_class_name_to_string_result(
+                ctx, result_reg, "object",
+            );
+            super::runtime_class_messages::emit_concat_static_prefix(ctx, message_prefix);
+            super::runtime_class_messages::emit_concat_static_suffix(ctx, " given");
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            super::exceptions::emit_type_error_from_string_result(ctx);
+        } else {
+            super::exceptions::emit_type_error(ctx, &message);
+        }
+    }
+    ctx.emitter.label(&bool_arm);
+    let payload_reg = crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_reg_move(ctx.emitter, result_reg, payload_reg);
+    if null_only {
+        let false_arm = ctx.next_label("null_param_false");
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &false_arm);
+        super::exceptions::emit_type_error(ctx, &format!("{message_prefix}true given"));
+        ctx.emitter.label(&false_arm);
+        super::exceptions::emit_type_error(ctx, &format!("{message_prefix}false given"));
+    } else {
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &accepted);
+        super::exceptions::emit_type_error(ctx, &format!("{message_prefix}true given"));
+    }
+    ctx.emitter.label(&accepted);
+    Ok(())
+}
+
+/// Checks false and null declarations before ABI materialization erases their literal type.
+pub(super) fn emit_literal_declared_parameter_guards(
+    ctx: &mut FunctionContext<'_>,
+    operands: &[ValueId],
+    parameters: &[(String, PhpType)],
+    callable_name: &str,
+) -> Result<()> {
+    for (index, ((name, declared), value)) in parameters.iter().zip(operands).enumerate() {
+        if !matches!(declared, PhpType::False | PhpType::Void) {
+            continue;
+        }
+        let source = ctx.value_php_type(*value)?;
+        let literal = if declared == &PhpType::Void { "null" } else { "false" };
+        let prefix = format!(
+            "{callable_name}(): Argument #{} (${name}) must be of type {literal}, ",
+            index + 1,
+        );
+        if matches!(source.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+            emit_literal_param_mixed_guard(ctx, *value, &prefix, declared == &PhpType::Void)?;
+        } else if source == PhpType::Bool && declared == &PhpType::False {
+            ctx.load_value_to_result(*value)?;
+            let accepted = ctx.next_label("false_parameter_accepted");
+            abi::emit_branch_if_int_result_zero(ctx.emitter, &accepted);
+            super::exceptions::emit_type_error(ctx, &format!("{prefix}true given"));
+            ctx.emitter.label(&accepted);
+        }
+    }
+    Ok(())
+}
+
+/// Converts the loaded argument to its parameter's ABI representation and returns that type.
+/// Literal false/null parameter guards must run before this conversion.
 pub(super) fn materialize_direct_call_arg_for_param(
     ctx: &mut FunctionContext<'_>,
     source_ty: &PhpType,
     param_ty: &PhpType,
 ) -> Result<PhpType> {
     match param_ty.codegen_repr() {
+        PhpType::Void if matches!(source_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) => {
+            // The declared null guard ran before materialization; pass the null word, not its box.
+            let result = abi::int_result_reg(ctx.emitter);
+            abi::emit_load_int_immediate(ctx.emitter, result, 0);
+            Ok(PhpType::Void)
+        }
         PhpType::TaggedScalar => coerce_loaded_value_to_tagged_scalar(ctx, source_ty),
         PhpType::Int if matches!(source_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) => {
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");

@@ -38,6 +38,7 @@ mod ref_place_args;
 mod boxed_user_sort;
 mod scalar_literals;
 mod numeric_binary;
+pub(crate) mod object_operators;
 mod string_concat;
 mod comparisons;
 mod unary_logic;
@@ -67,6 +68,7 @@ mod named_spreads;
 mod variadic_args;
 mod call_return_types;
 mod indexed_array_literals;
+mod array_cast_source;
 mod assoc_array_literals;
 mod match_expr;
 mod array_access;
@@ -711,15 +713,7 @@ fn lower_initialized_property_empty(
 
     ctx.builder.position_at_end(read_block);
     let read_value = lower_property_get_from_value(ctx, object, property, Op::PropGet, arg);
-    let construct_name = ctx.intern_function_name(construct);
-    let empty_value = ctx.emit_value(
-        Op::LanguageConstructCall,
-        vec![read_value.value],
-        Some(Immediate::Data(construct_name)),
-        PhpType::Bool,
-        effects_lookup::language_construct_effects(construct),
-        Some(arg.span),
-    );
+    let empty_value = lazy_isset::lower_empty_of_probed_value(ctx, read_value, construct, arg);
     store_value_into_temp(ctx, &temp_name, PhpType::Bool, empty_value, arg.span);
     branch_to(ctx, merge);
 
@@ -771,15 +765,7 @@ fn lower_initialized_static_property_empty(
 
     ctx.builder.position_at_end(read_block);
     let read_value = lower_static_property_get(ctx, receiver, property, arg);
-    let construct_name = ctx.intern_function_name(construct);
-    let empty_value = ctx.emit_value(
-        Op::LanguageConstructCall,
-        vec![read_value.value],
-        Some(Immediate::Data(construct_name)),
-        PhpType::Bool,
-        effects_lookup::language_construct_effects(construct),
-        Some(arg.span),
-    );
+    let empty_value = lazy_isset::lower_empty_of_probed_value(ctx, read_value, construct, arg);
     store_value_into_temp(ctx, &temp_name, PhpType::Bool, empty_value, arg.span);
     branch_to(ctx, merge);
 

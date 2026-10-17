@@ -6,8 +6,91 @@
 //!
 //! Key details:
 //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
+//! - [`numeric_binary_result_type`] is the PHP type each arithmetic branch stamps. Array-literal
+//!   `(array)` sources call it so a float `%` is not labeled `float` while the value is an `int`.
 
 use super::*;
+
+/// Returns the PHP type `lower_numeric_binary` stamps for `op`.
+///
+/// The order is the lowering's order. `**` is mixed when both operands are ints that can
+/// overflow, or when either operand is not an int or float, and a float otherwise. `%` and the
+/// bitwise operators (`&`, `|`, `^`, `<<`, `>>`) coerce to int and are always `int`, including
+/// when an operand is a float. `/` is a float for int and float operands; it is not integer
+/// division. `+`, `-`, and `*` of floats are floats. Two ints stay `int` for the overflow-free
+/// identities and are boxed otherwise.
+///
+/// Array union is chosen before this helper, from the already-lowered values. Unary `~` is
+/// [`super::unary_logic::int_unary_result_type`]: an int is `int`, and any other operand is the
+/// mixed runtime call.
+pub(super) fn numeric_binary_result_type(
+    op: &BinOp,
+    lhs: IrType,
+    rhs: IrType,
+    fallback: &PhpType,
+    identity: bool,
+) -> PhpType {
+    if matches!(op, BinOp::Pow) {
+        if lhs == IrType::I64 && rhs == IrType::I64 && fallback == &PhpType::Mixed {
+            return PhpType::Mixed;
+        }
+        if should_use_mixed_numeric_binop(lhs, rhs) {
+            return PhpType::Mixed;
+        }
+        return PhpType::Float;
+    }
+    if matches!(op, BinOp::Mod) {
+        return PhpType::Int;
+    }
+    if matches!(
+        op,
+        BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::ShiftLeft | BinOp::ShiftRight
+    ) {
+        return PhpType::Int;
+    }
+    if mixed_numeric_op(op).is_some() && should_use_mixed_numeric_binop(lhs, rhs) {
+        return PhpType::Mixed;
+    }
+    if lhs == IrType::F64 || rhs == IrType::F64 {
+        return PhpType::Float;
+    }
+    if matches!(op, BinOp::Div) && (lhs != IrType::I64 || rhs != IrType::I64) {
+        return PhpType::Float;
+    }
+    if lhs == IrType::I64 && rhs == IrType::I64 {
+        if fallback == &PhpType::Mixed
+            && matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul)
+            && !identity
+        {
+            return PhpType::Mixed;
+        }
+        if matches!(op, BinOp::Div) {
+            return PhpType::Float;
+        }
+        return PhpType::Int;
+    }
+    if mixed_numeric_op(op).is_some() {
+        return PhpType::Mixed;
+    }
+    fallback.clone()
+}
+
+/// Returns whether an integer `+`, `-`, or `*` cannot overflow.
+///
+/// `x + 0`, `0 + x`, `x - 0`, `x * 0`, `0 * x`, `x * 1`, and `1 * x` stay plain `int`.
+/// `lower_numeric_binary` uses the same literals to skip the checked helper.
+pub(super) fn numeric_binary_identity(op: &BinOp, left: &Expr, right: &Expr) -> bool {
+    let left_zero = matches!(left.kind, ExprKind::IntLiteral(0));
+    let right_zero = matches!(right.kind, ExprKind::IntLiteral(0));
+    let left_one = matches!(left.kind, ExprKind::IntLiteral(1));
+    let right_one = matches!(right.kind, ExprKind::IntLiteral(1));
+    match op {
+        BinOp::Add => left_zero || right_zero,
+        BinOp::Sub => right_zero,
+        BinOp::Mul => left_zero || right_zero || left_one || right_one,
+        _ => false,
+    }
+}
 
 /// Lowers a binary operation.
 pub(super) fn lower_binary(
@@ -42,7 +125,24 @@ pub(super) fn lower_numeric_binary(
     expr: &Expr,
 ) -> LoweredValue {
     let lhs = lower_expr(ctx, left);
+    let (lhs, left_pins) = object_operators::capture_left_operand(ctx, lhs, left.span);
     let rhs = lower_expr(ctx, right);
+    unpin_in_flight_owners(ctx, left_pins, left.span);
+    if let Some(result) = object_operators::lower_object_binary_values(ctx, lhs, op, rhs, expr) {
+        return result;
+    }
+    if let Some(result) = object_operators::lower_dynamic_object_binary(ctx, lhs, op, rhs, expr, true,
+        |ctx| lower_numeric_binary_values(ctx, lhs, op, rhs, left, right, expr)) {
+        return result;
+    }
+    lower_numeric_binary_values(ctx, lhs, op, rhs, left, right, expr)
+}
+
+/// Lowers the scalar/array path after an internal object handler has been excluded.
+fn lower_numeric_binary_values(
+    ctx: &mut LoweringContext<'_, '_>, lhs: LoweredValue, op: &BinOp, rhs: LoweredValue,
+    left: &Expr, right: &Expr, expr: &Expr,
+) -> LoweredValue {
     if matches!(op, BinOp::Add) {
         if let Some((op, result_ty)) = array_union_plan(ctx, lhs.value, rhs.value) {
             // Union helpers borrow both inputs and return fresh storage. Retire expression
@@ -62,6 +162,13 @@ pub(super) fn lower_numeric_binary(
             return result;
         }
     }
+    let numeric_ty = numeric_binary_result_type(
+        op,
+        lhs.ir_type,
+        rhs.ir_type,
+        &fallback_expr_type(expr),
+        numeric_binary_identity(op, left, right),
+    );
     if matches!(op, BinOp::Pow) {
         // PHP's `**` is int-preserving (`2 ** 3` is `int(8)`), so an int/int power goes
         // through the checked helper that reproduces `zend_pow_function_base`: it keeps an
@@ -77,7 +184,7 @@ pub(super) fn lower_numeric_binary(
                 Op::ICheckedPow,
                 vec![lhs.value, rhs.value],
                 None,
-                PhpType::Mixed,
+                numeric_ty,
                 Op::ICheckedPow.default_effects(),
                 Some(expr.span),
             );
@@ -99,7 +206,7 @@ pub(super) fn lower_numeric_binary(
             Op::FPow,
             vec![lhs.value, rhs.value],
             None,
-            PhpType::Float,
+            numeric_ty,
             Op::FPow.default_effects(),
             Some(expr.span),
         );
@@ -111,7 +218,7 @@ pub(super) fn lower_numeric_binary(
             Op::ISMod,
             vec![lhs.value, rhs.value],
             None,
-            PhpType::Int,
+            numeric_ty,
             arithmetic_effects(Op::ISMod, right),
             Some(expr.span),
         );
@@ -134,7 +241,7 @@ pub(super) fn lower_numeric_binary(
             iop,
             vec![lhs.value, rhs.value],
             None,
-            PhpType::Int,
+            numeric_ty,
             arithmetic_effects(iop, right),
             Some(expr.span),
         );
@@ -159,7 +266,7 @@ pub(super) fn lower_numeric_binary(
             BinOp::Div => Op::FDiv,
             _ => Op::RuntimeCall,
         };
-        return ctx.emit_value(fop, vec![lhs.value, rhs.value], None, PhpType::Float, arithmetic_effects(fop, right), Some(expr.span));
+        return ctx.emit_value(fop, vec![lhs.value, rhs.value], None, numeric_ty, arithmetic_effects(fop, right), Some(expr.span));
     }
     if matches!(op, BinOp::Div) && (lhs.ir_type != IrType::I64 || rhs.ir_type != IrType::I64) {
         let lhs = coerce_to_float(ctx, lhs, left);
@@ -168,45 +275,29 @@ pub(super) fn lower_numeric_binary(
             Op::FDiv,
             vec![lhs.value, rhs.value],
             None,
-            PhpType::Float,
+            numeric_ty.clone(),
             arithmetic_effects(Op::FDiv, right),
             Some(expr.span),
         );
     }
     if lhs.ir_type == IrType::I64 && rhs.ir_type == IrType::I64 {
-        // Check if the type checker promoted this to Mixed (non-constant int arithmetic
-        // that can overflow to float). If so, emit a checked helper that returns a Mixed box.
-        let result_php_type = fallback_expr_type(expr);
-        if result_php_type == PhpType::Mixed && matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul) {
-            // Identity shortcuts: x+0, x-0, 0+x, 0-x cannot overflow → keep plain Int.
-            // x*1, 1*x cannot overflow → keep plain Int.
-            // x*0, 0*x always yields 0 → keep plain Int.
-            let lhs_is_zero = matches!(&left.kind, ExprKind::IntLiteral(0));
-            let rhs_is_zero = matches!(&right.kind, ExprKind::IntLiteral(0));
-            let lhs_is_one = matches!(&left.kind, ExprKind::IntLiteral(1));
-            let rhs_is_one = matches!(&right.kind, ExprKind::IntLiteral(1));
-            let is_identity = match op {
-                BinOp::Add => lhs_is_zero || rhs_is_zero,
-                BinOp::Sub => rhs_is_zero,
-                BinOp::Mul => lhs_is_zero || rhs_is_zero || lhs_is_one || rhs_is_one,
-                _ => false,
+        // Two ints whose sum, difference, or product can overflow are boxed. The identity
+        // cases stay plain ints. Both decisions come from `numeric_binary_result_type`.
+        if numeric_ty == PhpType::Mixed {
+            let checked_op = match op {
+                BinOp::Add => Op::ICheckedAdd,
+                BinOp::Sub => Op::ICheckedSub,
+                BinOp::Mul => Op::ICheckedMul,
+                _ => unreachable!("only overflow-capable integer arithmetic is boxed"),
             };
-            if !is_identity {
-                let checked_op = match op {
-                    BinOp::Add => Op::ICheckedAdd,
-                    BinOp::Sub => Op::ICheckedSub,
-                    BinOp::Mul => Op::ICheckedMul,
-                    _ => unreachable!(),
-                };
-                return ctx.emit_value(
-                    checked_op,
-                    vec![lhs.value, rhs.value],
-                    None,
-                    PhpType::Mixed,
-                    checked_op.default_effects(),
-                    Some(expr.span),
-                );
-            }
+            return ctx.emit_value(
+                checked_op,
+                vec![lhs.value, rhs.value],
+                None,
+                numeric_ty,
+                checked_op.default_effects(),
+                Some(expr.span),
+            );
         }
         let iop = match op {
             BinOp::Add => Op::IAdd,
@@ -222,12 +313,15 @@ pub(super) fn lower_numeric_binary(
             BinOp::ShiftRight => Op::IShrA,
             _ => Op::MixedNumericBinop,
         };
-        let php_type = if matches!(op, BinOp::Div) { PhpType::Float } else { PhpType::Int };
-        let result_type = if matches!(op, BinOp::Div) { IrType::F64 } else { IrType::I64 };
-        let ownership = Ownership::for_php_type(&php_type);
+        let result_type = if numeric_ty == PhpType::Float {
+            IrType::F64
+        } else {
+            IrType::I64
+        };
+        let ownership = Ownership::for_php_type(&numeric_ty);
         let value = ctx
             .builder
-            .emit_with_effects(iop, vec![lhs.value, rhs.value], None, result_type, php_type, ownership, arithmetic_effects(iop, right), Some(expr.span))
+            .emit_with_effects(iop, vec![lhs.value, rhs.value], None, result_type, numeric_ty, ownership, arithmetic_effects(iop, right), Some(expr.span))
             .expect("numeric binary produces a value");
         return LoweredValue { value, ir_type: result_type };
     }
@@ -243,7 +337,7 @@ pub(super) fn lower_numeric_binary(
         Op::RuntimeCall,
         vec![lhs.value, rhs.value],
         None,
-        fallback_expr_type(expr),
+        numeric_ty,
         effects_lookup::runtime_effects(),
         Some(expr.span),
     )

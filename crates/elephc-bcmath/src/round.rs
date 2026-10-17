@@ -29,11 +29,11 @@ pub fn bc_round(value: &str, precision: i64, mode: i64) -> Result<String, BcErro
     if !(1..=8).contains(&mode) {
         return Err(BcError::RoundMode);
     }
-    let precision = i32::try_from(precision).map_err(|_| BcError::PrecisionRange)?;
+    if precision > i64::from(i32::MAX) { return Err(BcError::PrecisionRange); }
     let number = parse_bcmath_number_for(value, "bcround", 1, "num")?;
-    let drop_count = i64::from(number.scale) - i64::from(precision);
+    let drop_count = i128::from(number.scale) - i128::from(precision);
     if drop_count <= 0 {
-        return format_bcmath_number(&number, precision.max(0));
+        return format_bcmath_number(&number, precision.max(0) as i32);
     }
 
     let drop_count = drop_count as usize;
@@ -57,10 +57,11 @@ pub fn bc_round(value: &str, precision: i64, mode: i64) -> Result<String, BcErro
 
     if precision >= 0 {
         format_bcmath_number(
-            &BcNum::new(number.negative, retained, precision),
-            precision,
+            &BcNum::new(number.negative, retained, precision as i32),
+            precision as i32,
         )
     } else {
+        if is_zero_digits(&retained) { return Ok("0".to_string()); }
         let digits = append_zeros(retained, precision.unsigned_abs() as usize);
         format_bcmath_number(&BcNum::new(number.negative, digits, 0), 0)
     }

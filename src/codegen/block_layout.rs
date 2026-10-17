@@ -6,7 +6,7 @@
 //! - `crate::codegen::block_emit::emit_blocks()`.
 //!
 //! Key details:
-//! - The first table block stays first: the prologue falls through into it.
+//! - The declared entry block stays first: the prologue falls through into it.
 //! - Blocks that can only end the activation abnormally (`unreachable`, `fatal`, `throw`)
 //!   are cold. They move after every other block, in their original relative order, so a
 //!   loop body's hot path is laid out contiguously and branches over no cold code.
@@ -22,8 +22,11 @@ use crate::ir_passes::{successors, terminator_uses};
 pub(super) fn emission_order(function: &Function) -> Vec<usize> {
     let mut hot = Vec::with_capacity(function.blocks.len());
     let mut cold = Vec::new();
+    let entry = function.entry.as_raw() as usize;
+    hot.push(entry);
     for (index, block) in function.blocks.iter().enumerate() {
-        if index > 0 && is_cold(block) {
+        if index == entry { continue; }
+        if is_cold(block) {
             cold.push(index);
         } else {
             hot.push(index);
@@ -158,6 +161,18 @@ mod tests {
     fn cold_blocks_are_laid_out_last() {
         let function = diamond(false);
         assert_eq!(emission_order(&function), vec![0, 2, 1]);
+    }
+
+    /// A synthesized entry appended by tail recursion must receive prologue fallthrough.
+    #[test]
+    fn declared_entry_is_emitted_first() {
+        let mut function = diamond(false);
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("appended_entry", Vec::new());
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        builder.terminate(Terminator::Br { target: crate::ir::BlockId::from_raw(0), args: Vec::new() });
+        assert_eq!(emission_order(&function), vec![3, 0, 2, 1]);
     }
 
     /// Verifies a single-use icmp feeding the branch is fusible, and a reused one is not.

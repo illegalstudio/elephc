@@ -8,6 +8,7 @@
 //! - Preserves statement ordering, CFG shape, EIR effects, and ownership contracts.
 
 use super::*;
+use crate::ir_lower::loop_closures::{begin_loop_closure_facts, retain_loop_body_facts};
 
 /// Lowers a `while` loop.
 pub(super) fn lower_while(
@@ -17,6 +18,7 @@ pub(super) fn lower_while(
     loop_span: Span,
 ) {
     apply_loop_storage_contracts(ctx, loop_span, Some(condition.span));
+    let closure_facts = begin_loop_closure_facts(ctx, Some(condition), None, body, true);
     let header = ctx.builder.create_named_block("while.cond", Vec::new());
     let body_block = ctx.builder.create_named_block("while.body", Vec::new());
     let exit = ctx.builder.create_named_block("while.exit", Vec::new());
@@ -33,7 +35,7 @@ pub(super) fn lower_while(
         else_args: Vec::new(),
     });
 
-    ctx.clear_static_callable_locals();
+    retain_loop_body_facts(ctx, &closure_facts);
     ctx.builder.position_at_end(body_block);
     ctx.loop_stack.push(LoopFrame {
         break_block: exit,
@@ -60,6 +62,7 @@ pub(super) fn lower_do_while(
     loop_span: Span,
 ) {
     apply_loop_storage_contracts(ctx, loop_span, Some(condition.span));
+    let _ = begin_loop_closure_facts(ctx, Some(condition), None, body, false);
     let body_block = ctx.builder.create_named_block("do.body", Vec::new());
     let cond_block = ctx.builder.create_named_block("do.cond", Vec::new());
     let exit = ctx.builder.create_named_block("do.exit", Vec::new());
@@ -136,6 +139,7 @@ fn lower_for_once(
     update: Option<&Stmt>,
     body: &[Stmt],
 ) {
+    let closure_facts = begin_loop_closure_facts(ctx, condition, update, body, true);
     let header = ctx.builder.create_named_block("for.cond", Vec::new());
     let body_block = ctx.builder.create_named_block("for.body", Vec::new());
     let update_block = ctx.builder.create_named_block("for.update", Vec::new());
@@ -157,7 +161,7 @@ fn lower_for_once(
         else_args: Vec::new(),
     });
 
-    ctx.clear_static_callable_locals();
+    retain_loop_body_facts(ctx, &closure_facts);
     ctx.builder.position_at_end(body_block);
     ctx.loop_stack.push(LoopFrame {
         break_block: exit,

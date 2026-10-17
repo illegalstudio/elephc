@@ -8,6 +8,7 @@
 //! Key details:
 //! - Heap helpers own allocator metadata, debug accounting, and free-list invariants used by all refcounted runtime values.
 //! - Enabled mbstring hooks retire native string identity leases before storage can be reused.
+//! - Mixed wrappers cannot own string identity leases; their string children retire separately.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -77,9 +78,14 @@ pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) 
         super::eval_array_references::emit_eval_array_reference_retirement(emitter);
     }
     if mbstring {
+        // -- string identity belongs to the child buffer, never its Mixed wrapper --
+        emitter.instruction("ldrb w9, [x0, #-8]");                              // inspect the validated allocation kind after eval observers retire
+        emitter.instruction("cmp w9, #5");                                      // a Mixed wrapper cannot be a native string identity owner
+        emitter.instruction("b.eq __rt_heap_free_mbstring_done");               // let the separately owned string child retire its own identity
         emitter.instruction("stp x0, x30, [sp, #-16]!");                        // preserve the freed pointer and caller return address across the metadata callback
         emitter.instruction("bl __rt_mbstring_ini_forget");                     // retire the string identity before allocator reuse
         emitter.instruction("ldp x0, x30, [sp], #16");                          // restore the frameless allocator's input and original return address
+        emitter.label("__rt_heap_free_mbstring_done");
     }
 
     // -- debug mode: validate the free list before mutating it --
@@ -389,9 +395,13 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool, mbstrin
         super::eval_array_references::emit_eval_array_reference_retirement(emitter);
     }
     if mbstring {
+        // -- string identity belongs to the child buffer, never its Mixed wrapper --
+        emitter.instruction("cmp BYTE PTR [rax - 8], 5");                       // inspect the validated allocation kind after eval observers retire
+        emitter.instruction("je __rt_heap_free_mbstring_done");                 // let the separately owned string child retire its own identity
         emitter.instruction("sub rsp, 8");                                      // align the identity-retirement call from the frameless entry
         emitter.instruction("call __rt_mbstring_ini_forget");                   // retire the string identity before allocator reuse
         emitter.instruction("add rsp, 8");                                      // restore the allocator's entry stack
+        emitter.label("__rt_heap_free_mbstring_done");
     }
 
     emitter.instruction("lea r9, [rax - 16]");                                  // recover the internal block header address from the user payload pointer
@@ -630,6 +640,41 @@ mod tests {
             assert!(output.contains(
                 "stp x0, x30, [sp, #-16]!\n    bl __rt_mbstring_ini_forget\n    ldp x0, x30, [sp], #16"
             ), "{name}");
+        }
+    }
+
+    /// Mixed wrappers skip only the string registry callback, after mandatory eval retirement.
+    #[test]
+    fn heap_free_skips_mixed_string_identity_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            for pic in [false, true] {
+                for eval_bridge in [false, true] {
+                    let mut emitter = Emitter::new(target);
+                    emitter.pic_data_refs = pic;
+                    emit_heap_free(&mut emitter, eval_bridge, true);
+                    let output = emitter.output();
+                    let guard = output.find(if target.arch == Arch::AArch64 {
+                        "b.eq __rt_heap_free_mbstring_done"
+                    } else { "je __rt_heap_free_mbstring_done" }).unwrap();
+                    let call = output.find("__rt_mbstring_ini_forget").unwrap();
+                    let done = output.find("__rt_heap_free_mbstring_done:").unwrap();
+                    let clear = output.find(if target.arch == Arch::AArch64 {
+                        "str xzr, [x9, #8]"
+                    } else { "mov QWORD PTR [r9 + 8], 0" }).unwrap();
+                    assert!(guard < call && call < done && done < clear, "{name}, PIC {pic}");
+                    if eval_bridge {
+                        let retired = output.find("__rt_heap_free_eval_references_done:").unwrap();
+                        assert!(retired < guard, "{name}, PIC {pic}");
+                    }
+                }
+                let mut emitter = Emitter::new(target);
+                emitter.pic_data_refs = pic;
+                emit_heap_free(&mut emitter, true, false);
+                let output = emitter.output();
+                assert!(!output.contains("__rt_heap_free_mbstring_done"), "{name}, PIC {pic}");
+                assert!(!output.contains("__rt_mbstring_ini_forget"), "{name}, PIC {pic}");
+            }
         }
     }
 }

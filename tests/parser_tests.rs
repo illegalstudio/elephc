@@ -82,6 +82,8 @@ mod functions;
 mod lfc;
 #[path = "parser_tests/classes.rs"]
 mod classes;
+#[path = "parser_tests/generics_review.rs"]
+mod generics_review;
 #[path = "parser_tests/namespaces.rs"]
 mod namespaces;
 #[path = "parser_tests/exceptions.rs"]

@@ -69,8 +69,10 @@ impl Checker {
         context: &str,
     ) -> Result<PhpType, CompileError> {
         let ty = self.resolve_type_expr(type_expr, span)?;
+        let null_only = matches!(type_expr, TypeExpr::Named(name)
+            if name.as_str().eq_ignore_ascii_case("null"));
         match ty {
-            PhpType::Void => Err(CompileError::new(
+            PhpType::Void if !null_only => Err(CompileError::new(
                 span,
                 &format!("{} cannot use type void", context),
             )),
@@ -171,7 +173,8 @@ impl Checker {
         } else {
             self.resolve_type_expr(type_expr, span)?
         };
-        if matches!(ty, PhpType::Void) {
+        let null_only = matches!(type_expr, TypeExpr::Named(name) if name.as_str().eq_ignore_ascii_case("null"));
+        if matches!(ty, PhpType::Void) && !null_only {
             return Err(CompileError::new(
                 span,
                 &format!("{} cannot use type void", context),

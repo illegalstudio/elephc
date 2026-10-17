@@ -38,6 +38,7 @@ mod decoder_aarch64;
 mod decoder_x86_64;
 mod diagnostics;
 mod magic_call;
+mod parser_owners;
 mod reference_registry;
 mod refused_classes;
 mod storage_aarch64;

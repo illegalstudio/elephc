@@ -29,11 +29,16 @@ pub extern "C" fn __elephc_eval_abi_version() -> u32 {
 /// Allocates a process-level eval context handle for generated code.
 #[no_mangle]
 pub extern "C" fn __elephc_eval_context_new() -> *mut ElephcEvalContext {
+    Box::into_raw(allocate_eval_context())
+}
+
+/// Allocates an owned context so initialization can finish before publishing its ABI handle.
+pub(super) fn allocate_eval_context() -> Box<ElephcEvalContext> {
     #[cfg(not(test))]
     install_dynamic_object_destructor_hook();
     #[cfg(not(test))]
     install_ob_handler_hook();
-    Box::into_raw(Box::new(ElephcEvalContext::new()))
+    Box::new(ElephcEvalContext::new())
 }
 
 /// Retains one heap eval context for a process-wide callback owner.

@@ -20,6 +20,27 @@ pub(super) fn coerce(
     source_ty: &PhpType,
     target_ty: Option<&PhpType>,
 ) -> (PhpType, bool) {
+    if let (Some((index, name)), Some(target)) = (ctx.literal_parameter.clone(), target_ty) {
+        if matches!(target, PhpType::False | PhpType::Void) {
+            let boxed_source = !matches!(source_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_));
+            if boxed_source {
+                super::emit_box_current_value_as_mixed(emitter, source_ty);
+                ctx.argument_owners.record_coercion_source(emitter);
+                abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
+            }
+            let labels = ctx.next_label("literal_parameter");
+            crate::codegen::lower_inst::emit_boxed_literal_parameter_guard(
+                emitter, data, super::INVOKER_DESCRIPTOR_OFFSET,
+                (index, &name), target == &PhpType::Void, &labels,
+            );
+            if boxed_source {
+                ctx.argument_owners.clear_coercion_source(emitter);
+                super::release_preserved_mixed_after_arg_coercion(emitter, &PhpType::Int);
+            }
+            abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
+            return (target.codegen_repr(), false);
+        }
+    }
     if source_ty.codegen_repr() == PhpType::Mixed
         && target_ty.is_some_and(|ty| ty.codegen_repr() == PhpType::Str)
     {

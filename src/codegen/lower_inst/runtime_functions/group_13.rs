@@ -19,6 +19,21 @@ pub(super) fn lower(
 ) -> Option<Result<()>> {
     use crate::codegen::lower_inst::builtins::bcmath;
     match target {
+        RuntimeFnId::BcNumberAdd => Some(bcmath::lower_bcnumber_add(ctx, inst)),
+        RuntimeFnId::BcNumberCeil => Some(bcmath::lower_bcnumber_ceil(ctx, inst)),
+        RuntimeFnId::BcNumberComp => Some(bcmath::lower_bcnumber_comp(ctx, inst)),
+        RuntimeFnId::BcNumberCreate => Some(bcmath::lower_bcnumber_create(ctx, inst)),
+        RuntimeFnId::BcNumberDiv => Some(bcmath::lower_bcnumber_div(ctx, inst)),
+        RuntimeFnId::BcNumberDivmod => Some(bcmath::lower_bcnumber_divmod(ctx, inst)),
+        RuntimeFnId::BcNumberFloor => Some(bcmath::lower_bcnumber_floor(ctx, inst)),
+        RuntimeFnId::BcNumberMod => Some(bcmath::lower_bcnumber_mod(ctx, inst)),
+        RuntimeFnId::BcNumberMul => Some(bcmath::lower_bcnumber_mul(ctx, inst)),
+        RuntimeFnId::BcNumberPow => Some(bcmath::lower_bcnumber_pow(ctx, inst)),
+        RuntimeFnId::BcNumberPowmod => Some(bcmath::lower_bcnumber_powmod(ctx, inst)),
+        RuntimeFnId::BcNumberRound => Some(bcmath::lower_bcnumber_round(ctx, inst)),
+        RuntimeFnId::BcNumberSqrt => Some(bcmath::lower_bcnumber_sqrt(ctx, inst)),
+        RuntimeFnId::BcNumberSub => Some(bcmath::lower_bcnumber_sub(ctx, inst)),
+
         RuntimeFnId::BcAdd => Some(bcmath::lower_bcadd(ctx, inst)),
         RuntimeFnId::BcCeil => Some(bcmath::lower_bcceil(ctx, inst)),
         RuntimeFnId::BcComp => Some(bcmath::lower_bccomp(ctx, inst)),

@@ -446,7 +446,7 @@ pub(super) fn lower_date_args(
     vec![format.value, lower_expr(ctx, &args[1]).value]
 }
 
-/// Lowers simple positional `json_decode` operands while stabilizing string sources early.
+/// Stabilizes positional JSON sources in owned roots before evaluating later arguments.
 pub(super) fn lower_json_decode_args(
     ctx: &mut LoweringContext<'_, '_>,
     sig: Option<&FunctionSig>,
@@ -459,11 +459,25 @@ pub(super) fn lower_json_decode_args(
         return lower_args_with_signature(ctx, sig, args);
     }
     let source = lower_expr(ctx, &args[0]);
-    let source = persist_call_arg_if_string(ctx, source, args[0].span);
+    let source = root_evaluated_call_argument(ctx, source, args[0].span);
+    let source = if source.ir_type == IrType::Str {
+        ctx.emit_owned_value(
+            Op::StrPersist,
+            vec![source.value],
+            None,
+            PhpType::Str,
+            Op::StrPersist.default_effects(),
+            Some(args[0].span),
+        )
+    } else {
+        source
+    };
+    let source = root_evaluated_call_argument(ctx, source, args[0].span);
     let mut operands = Vec::with_capacity(args.len());
     operands.push(source.value);
     for arg in &args[1..] {
-        operands.push(lower_expr(ctx, arg).value);
+        let value = lower_expr(ctx, arg);
+        operands.push(root_evaluated_call_argument(ctx, value, arg.span).value);
     }
     operands
 }

@@ -9,6 +9,8 @@
 //! - The validator is conservative: uncertain or malformed IR fails early so
 //!   later passes can assume table IDs, branch args, and value types are sound.
 
+mod string_append;
+
 use std::collections::{HashMap, HashSet};
 
 use crate::ir::block::{BlockId, SwitchCase, Terminator};
@@ -58,6 +60,7 @@ pub enum ValidationError {
         expected: &'static str,
     },
     UnexpectedImmediate(InstId),
+    InvalidStringAppendTransfer(InstId),
     UnknownRuntimeCallSignature(InstId),
     EffectMismatch {
         inst: InstId,
@@ -119,6 +122,7 @@ pub fn validate_function(function: &Function) -> Result<(), ValidationError> {
     let dominators = compute_dominators(function);
     validate_instructions(function, &dominators)?;
     validate_terminators(function, &dominators)?;
+    string_append::validate_transfers(function)?;
     Ok(())
 }
 
@@ -508,7 +512,7 @@ fn validate_instruction_immediate(
         PropUnset => require_immediate(inst_id, inst, "property name or initializer physical slot", |imm| {
             matches!(imm, Imm::Data(_) | Imm::PropertyRef { .. })
         }),
-        LoadLocal | StoreLocal | UnsetLocal | ZeroLocalSlot | LoadRefCell | StoreRefCell
+        StrAppend | LoadLocal | StoreLocal | UnsetLocal | ZeroLocalSlot | LoadRefCell | StoreRefCell
         | ReleaseLocalRefCell | AcquireRefCell
         | ReleaseLocalSlot | PushCallOperandOwner | PopCallOperandOwner
         | LoadStaticLocal | StoreStaticLocal | InitStaticLocal | StaticLocalUninitialized
@@ -715,7 +719,7 @@ fn validate_opcode_rules(
         StrToI | StrToF | StrToNumber | StrLen | StrPersist => {
             check_unary(function, inst_id, inst, IrType::Str, "Str")
         }
-        StrConcat | StrEq | StrCmp | StrLooseEq => {
+        StrAppend | StrConcat | StrEq | StrCmp | StrLooseEq => {
             check_binary(function, inst_id, inst, IrType::Str, "Str")
         }
         StrCharAt => {

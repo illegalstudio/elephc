@@ -41,6 +41,9 @@ use mysql::consts::{CapabilityFlags, ColumnFlags, ColumnType};
 use mysql::prelude::Queryable;
 use mysql::{Column, Conn, LocalInfileHandler, OptsBuilder, QueryResult, Statement, Value};
 
+#[cfg(feature = "mysql-tls")]
+mod tls;
+
 /// One materialized column value, already decoded to a PHP-friendly scalar.
 pub enum Cell {
     Null,
@@ -1620,7 +1623,8 @@ fn interpolate_emulated_sql(
 
 /// Applies the prelude's packed `Pdo\Mysql::ATTR_SSL_*` config to `opts`, enabling
 /// rustls TLS for the connection. The default build enables mysql 28's ring-backed
-/// `mysql-tls` feature. An empty config leaves `opts` untouched (plaintext).
+/// `mysql-tls` feature. Without SSL config or cipher restrictions, leaves `opts`
+/// untouched (plaintext).
 #[cfg(feature = "mysql-tls")]
 fn apply_ssl_opts(
     opts: OptsBuilder,
@@ -1630,8 +1634,7 @@ fn apply_ssl_opts(
     if ssl_config.is_empty() && cipher.is_none() {
         return Ok(opts);
     }
-    install_crypto_provider();
-    Ok(opts.ssl_opts(parse_ssl_config(ssl_config, cipher)))
+    Ok(opts.ssl_opts(tls::parse_ssl_config(ssl_config, cipher)?))
 }
 
 /// Owns a temporary PEM bundle assembled from MySQL's CA file/directory options.
@@ -1760,8 +1763,7 @@ fn append_pem_certificates(output: &mut Vec<u8>, source: &[u8]) {
 
 /// A custom build without `mysql-tls` has no MySQL TLS backend linked. Rather than
 /// silently downgrade a program that asked for TLS to a plaintext connection, a
-/// non-empty SSL config fails loudly; an empty config (no TLS requested) connects
-/// normally.
+/// SSL config or a cipher restriction fails loudly; without either, connects normally.
 #[cfg(not(feature = "mysql-tls"))]
 fn apply_ssl_opts(
     opts: OptsBuilder,
@@ -1775,79 +1777,6 @@ fn apply_ssl_opts(
          `mysql-tls` feature, which was not compiled in (rebuild elephc-pdo with \
          --features mysql-tls)"
         .to_string())
-}
-
-/// Installs the ring `CryptoProvider` as the process default exactly once. The
-/// `mysql` crate builds its rustls `ClientConfig` with the provider-less
-/// `ClientConfig::builder()`, which panics when more than one provider is present
-/// unless a process default is installed. mysql 28's `rustls-tls-ring` feature
-/// uses the same provider as pg / elephc-tls; installing it explicitly keeps the
-/// choice deterministic when the final binary links other rustls users.
-#[cfg(feature = "mysql-tls")]
-fn install_crypto_provider() {
-    use std::sync::Once;
-    static INSTALL: Once = Once::new();
-    INSTALL.call_once(|| {
-        // Ignored on the (harmless) race where another path already installed one.
-        let _ = rustls::crypto::ring::default_provider().install_default();
-    });
-}
-
-/// Parses the prelude's packed SSL config (`ca=…;cert=…;key=…;verify=0|1`) into
-/// mysql `SslOpts`. `ca` is `MYSQL_ATTR_SSL_CA` (a server CA bundle to trust on
-/// top of the bundled webpki roots); `cert`+`key` are `MYSQL_ATTR_SSL_CERT`/
-/// `SSL_KEY` (client-certificate mutual TLS, honored only when both are present);
-/// `verify=0` is `MYSQL_ATTR_SSL_VERIFY_SERVER_CERT` set false, which disables
-/// certificate and hostname validation via the crate's danger flags. Unsupported
-/// security keys never reach this parser: `parse_driver_options` rejects them first.
-#[cfg(feature = "mysql-tls")]
-fn parse_ssl_config(ssl_config: &str, cipher: Option<&str>) -> mysql::SslOpts {
-    use mysql::{ClientIdentity, SslOpts};
-    use std::path::PathBuf;
-
-    let mut ca: Option<String> = None;
-    let mut cert: Option<String> = None;
-    let mut key: Option<String> = None;
-    let mut verify = true;
-    for pair in ssl_config.split(';') {
-        let Some((k, v)) = pair.trim().split_once('=') else {
-            continue;
-        };
-        let v = v.trim().to_string();
-        match k.trim() {
-            "ca" => ca = Some(v),
-            "cert" => cert = Some(v),
-            "key" => key = Some(v),
-            "verify" => verify = v != "0",
-            _ => {}
-        }
-    }
-
-    let mut ssl = SslOpts::default();
-    if let Some(ca) = ca {
-        ssl = ssl.with_root_cert_path(Some(PathBuf::from(ca)));
-    }
-    if let (Some(cert), Some(key)) = (cert, key) {
-        ssl = ssl.with_client_identity(Some(ClientIdentity::new(
-            PathBuf::from(cert),
-            PathBuf::from(key),
-        )));
-    }
-    if !verify {
-        ssl = ssl
-            .with_danger_skip_domain_validation(true)
-            .with_danger_accept_invalid_certs(true);
-    }
-    if let Some(cipher) = cipher {
-        let suites = cipher
-            .split([':', ','])
-            .map(str::trim)
-            .filter(|suite| !suite.is_empty())
-            .map(str::to_string)
-            .collect();
-        ssl = ssl.with_cipher_suites(Some(suites));
-    }
-    ssl
 }
 
 impl MyConn {
@@ -1886,7 +1815,7 @@ impl MyConn {
         let (ssl_config, _ca_bundle) =
             normalize_ssl_ca_sources(ssl_config, driver_options.ssl_ca_path.as_deref())?;
         if let Some(public_key) = driver_options.server_public_key.clone() {
-            opts = opts.server_public_key_path(Some(public_key));
+            opts = opts.server_key_path(Some(public_key));
         }
         opts = apply_ssl_opts(opts, &ssl_config, driver_options.ssl_cipher.as_deref())?;
         if driver_options.compress {
@@ -2356,7 +2285,7 @@ impl MyConn {
     /// standalone binary, so reporting the linked client crate is the truthful
     /// equivalent of `mysql_get_client_info()`.
     pub fn client_version(&self) -> String {
-        "mysql 28.0.0".to_string()
+        "mysql 28.0.4".to_string()
     }
 
     /// Returns the connection transport description in the same shape as
@@ -3964,9 +3893,14 @@ mod tests {
     #[test]
     fn apply_ssl_opts_requires_feature_when_configured() {
         // `OptsBuilder` has no `Debug`, so match rather than `unwrap_err`.
-        match apply_ssl_opts(OptsBuilder::new(), "ca=/etc/ca.pem", None) {
-            Ok(_) => panic!("expected an error when the mysql-tls feature is disabled"),
-            Err(err) => assert!(err.contains("mysql-tls"), "unexpected error: {err}"),
+        for (config, cipher) in [
+            ("ca=/etc/ca.pem", None),
+            ("", Some("ECDHE-RSA-AES128-GCM-SHA256")),
+        ] {
+            match apply_ssl_opts(OptsBuilder::new(), config, cipher) {
+                Ok(_) => panic!("expected an error when the mysql-tls feature is disabled"),
+                Err(err) => assert!(err.contains("mysql-tls"), "unexpected error: {err}"),
+            }
         }
     }
 

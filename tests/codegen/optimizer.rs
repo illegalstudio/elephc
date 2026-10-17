@@ -13,6 +13,8 @@ use crate::support::*;
 
 #[path = "optimizer/switch_fallthrough.rs"]
 mod switch_fallthrough;
+#[path = "optimizer/bcmath_number.rs"]
+mod bcmath_number;
 
 #[path = "optimizer/boxed_array_snapshots.rs"]
 mod boxed_array_snapshots;
@@ -63,6 +65,8 @@ mod peephole;
 mod property_receiver_ownership;
 #[path = "optimizer/read_result_cleanup.rs"]
 mod read_result_cleanup;
+#[path = "optimizer/fresh_mixed_transfer.rs"]
+mod fresh_mixed_transfer;
 #[path = "optimizer/release_local_slot.rs"]
 mod release_local_slot;
 #[path = "optimizer/inline.rs"]
@@ -80,3 +84,6 @@ mod warning_globals;
 mod loop_optimization;
 mod rematerialization;
 mod machine_peepholes;
+
+#[path = "optimizer/tail_call.rs"]
+mod tail_call;

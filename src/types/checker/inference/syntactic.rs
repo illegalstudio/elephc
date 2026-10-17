@@ -303,6 +303,13 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             target: CastType::Bool,
             ..
         } => PhpType::Bool,
+        // Same classification as the checker. Without this arm the `_ => Int` fallback below
+        // types `(array) "x"` as `int`, and an array literal that contains the cast stores the
+        // array's truthiness instead of the array.
+        ExprKind::Cast {
+            target: CastType::Array,
+            expr,
+        } => crate::types::array_cast_result_type(&infer_expr_type_syntactic(expr)),
         ExprKind::FunctionCall { name, args } => match name.as_str() {
             "eval" => PhpType::Mixed,
             "substr" | "strtolower" | "strtoupper" | "trim" | "ltrim" | "rtrim" | "str_repeat"
@@ -814,6 +821,59 @@ mod tests {
             PhpType::AssocArray {
                 key: Box::new(PhpType::Mixed),
                 value: Box::new(PhpType::Mixed),
+            }
+        );
+    }
+
+    /// Builds an `(array)` cast so syntactic inference can be checked without a typed environment.
+    fn array_cast(inner: Expr) -> Expr {
+        Expr::new(
+            ExprKind::Cast {
+                target: CastType::Array,
+                expr: Box::new(inner),
+            },
+            Span::dummy(),
+        )
+    }
+
+    /// An `(array)` cast follows `ArrayCast`: scalars wrap, `null` is an empty array, and an
+    /// array is returned unchanged. A literal that contains the cast must not fall through to `int`.
+    #[test]
+    fn test_syntactic_array_cast_matches_array_cast_classification() {
+        assert_eq!(
+            infer_expr_type_syntactic(&array_cast(Expr::string_lit("x"))),
+            PhpType::Array(Box::new(PhpType::Str))
+        );
+        assert_eq!(
+            infer_expr_type_syntactic(&array_cast(Expr::new(ExprKind::Null, Span::dummy()))),
+            PhpType::Array(Box::new(PhpType::Never))
+        );
+        assert_eq!(
+            infer_expr_type_syntactic(&array_cast(Expr::int_lit(1))),
+            PhpType::Array(Box::new(PhpType::Int))
+        );
+        assert_eq!(
+            infer_expr_type_syntactic(&array_cast(Expr::new(
+                ExprKind::ArrayLiteral(vec![Expr::string_lit("x")]),
+                Span::dummy(),
+            ))),
+            PhpType::Array(Box::new(PhpType::Str))
+        );
+        assert_eq!(
+            infer_expr_type_syntactic(&Expr::new(
+                ExprKind::ArrayLiteral(vec![array_cast(Expr::string_lit("x"))]),
+                Span::dummy(),
+            )),
+            PhpType::Array(Box::new(PhpType::Array(Box::new(PhpType::Str))))
+        );
+        assert_eq!(
+            infer_expr_type_syntactic(&assoc_literal(vec![(
+                Expr::string_lit("k"),
+                array_cast(Expr::int_lit(1)),
+            )])),
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Array(Box::new(PhpType::Int))),
             }
         );
     }

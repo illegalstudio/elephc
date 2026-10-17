@@ -27,6 +27,7 @@ mod dead_inst;
 mod dead_store;
 mod dominance;
 mod driver;
+mod fresh_mixed_transfer;
 mod identity_arith;
 mod inline;
 mod induction;
@@ -44,6 +45,7 @@ mod peephole;
 mod regalloc;
 pub(crate) mod rematerialize;
 mod rewrite;
+mod tail_call;
 
 #[cfg(test)]
 mod tests;

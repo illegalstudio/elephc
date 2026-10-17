@@ -32,6 +32,9 @@ impl Checker {
             ExprKind::Variable(name) => self.variable_type_or_eval_dynamic(name, expr.span, env),
             ExprKind::Negate(inner) => {
                 let ty = self.infer_type(inner, env)?;
+                if crate::types::object_operators::binary_plan(&crate::parser::ast::BinOp::Sub, &PhpType::Int, &ty).is_some() {
+                    return Ok(ty);
+                }
                 match ty {
                     PhpType::Int => {
                         if matches!(&inner.kind, ExprKind::IntLiteral(_)) {
@@ -64,6 +67,7 @@ impl Checker {
                 Ok(PhpType::Int)
             }
             ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => match env.get(name) {
+                Some(ty) if crate::types::object_operators::operator_class(ty).is_some() => Ok(ty.clone()),
                 Some(PhpType::Int) => Ok(PhpType::Mixed),
                 Some(PhpType::Mixed) => Ok(PhpType::Mixed),
                 // PHP's string increment can change the value's type (`"9"++` is
@@ -93,6 +97,7 @@ impl Checker {
                 )),
             },
             ExprKind::PostIncrement(name) | ExprKind::PostDecrement(name) => match env.get(name) {
+                Some(ty) if crate::types::object_operators::operator_class(ty).is_some() => Ok(ty.clone()),
                 Some(PhpType::Int)
                 | Some(PhpType::Bool)
                 | Some(PhpType::False)
@@ -303,18 +308,9 @@ impl Checker {
                     CastType::Float => PhpType::Float,
                     CastType::String => PhpType::Str,
                     CastType::Bool => PhpType::Bool,
-                    CastType::Array
-                        if matches!(source_ty.codegen_repr(), PhpType::Object(_)) =>
-                    PhpType::AssocArray {
-                        key: Box::new(PhpType::Str),
-                        value: Box::new(PhpType::Mixed),
-                    },
-                    CastType::Array
-                        if matches!(
-                            source_ty.codegen_repr(),
-                            PhpType::Mixed | PhpType::Union(_)
-                        ) => PhpType::Mixed,
-                    CastType::Array => PhpType::Array(Box::new(PhpType::Mixed)),
+                    // Shared with EIR lowering so the static type always names the storage
+                    // the lowered conversion produces.
+                    CastType::Array => crate::types::array_cast_result_type(&source_ty),
                     // `(object)` is the identity on an object, so the static class survives the
                     // cast; a runtime-typed source may already hold an unrelated class, which
                     // only `mixed` can describe. Every other source becomes a fresh stdClass.

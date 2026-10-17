@@ -109,6 +109,10 @@ fn all_functions(module: &Module) -> impl Iterator<Item = &Function> {
 /// Computes the caller-visible union of instruction and terminator effects for one body.
 fn summarize_function(function: &Function, context: &RefinementContext<'_>) -> Effects {
     let mut effects = Effects::PURE;
+    // A literal false signature has a throwing call-boundary guard even if its body is empty.
+    if function.params.iter().any(|parameter| parameter.php_type == PhpType::False) {
+        effects |= Effects::READS_HEAP | Effects::ALLOC_HEAP | Effects::MAY_THROW | Effects::MAY_DEOPT;
+    }
     for instruction in &function.instructions {
         // The reset restores this frame's inherited scratch offset, which PHP cannot observe.
         // Keep its instruction effect so intra-function passes retain and order the reset.

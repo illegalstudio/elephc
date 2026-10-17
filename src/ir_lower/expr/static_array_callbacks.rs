@@ -210,6 +210,7 @@ pub(super) fn lower_static_callable_value_call(
             signature,
             captures,
             return_alias: _,
+            ..
         } => {
             let arguments = operands;
             let mut call_operands = arguments.clone();

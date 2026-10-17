@@ -662,6 +662,7 @@ $f4->start("A", "B", "C", "D");
 /// Verifies that a runaway recursion inside a fiber triggers the guard page at
 /// the bottom of the fiber stack and aborts with SIGSEGV/SIGBUS rather than
 /// silently corrupting the heap. The program must not reach "should-not-reach".
+/// The non-tail addition keeps this a stack-growth probe with tail-call elimination enabled.
 #[test]
 fn test_fiber_stack_overflow_faults_via_guard_page() {
     // The fiber stack now has a 16 KB PROT_NONE guard page at its bottom. A
@@ -672,7 +673,7 @@ fn test_fiber_stack_overflow_faults_via_guard_page() {
 function recurse(int $n): int {
     $buf = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
     if ($n > 1000000) return $n;
-    return recurse($n + 1);
+    return 1 + recurse($n + 1);
 }
 $f = new Fiber(function(): void {
     recurse(0);

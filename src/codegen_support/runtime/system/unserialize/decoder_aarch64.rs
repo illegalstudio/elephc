@@ -82,12 +82,14 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.label_global("__rt_unser_at");
     // [sp+0]=base [8]=pos [16]=end [24]=container [32]=count [40]=index [48]=key_lo [56]=key_hi
     // [sp+64]=scratch [72]=hook/name length [80]=policy/data hash [88]=registry index [96]=object box
-    emitter.instruction("sub sp, sp, #128");                                    // recursive parser frame
-    emitter.instruction("stp x29, x30, [sp, #112]");                            // save frame pointer and return address
-    emitter.instruction("add x29, sp, #112");                                   // establish the new frame pointer
+    // [104]=unfinished array [112]=unfinished hook data; cleanup records at 128/176/224, FP at 272.
+    emitter.instruction("sub sp, sp, #288");                                    // recursive parser frame
+    emitter.instruction("stp x29, x30, [sp, #272]");                            // save frame pointer and return address
+    emitter.instruction("add x29, sp, #272");                                   // establish the new frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the base pointer
     emitter.instruction("str x1, [sp, #8]");                                    // save the current position
     emitter.instruction("str x2, [sp, #16]");                                   // save the end position
+    super::parser_owners::emit_enter(emitter);
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_unser_depth");
     emitter.instruction("ldr x10, [x9]");                                       // load current recursive unserialize depth
     emitter.instruction("add x10, x10, #1");                                    // account for this parser frame
@@ -296,6 +298,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov x1, #7");                                          // hash value_type = boxed Mixed
     emitter.instruction("bl __rt_hash_new");                                    // allocate the destination hash
     emitter.instruction("str x0, [sp, #24]");                                   // save the hash pointer
+    emitter.instruction("str x0, [sp, #104]");                                  // keep the unfinished array reachable by exception cleanup
     emitter.instruction("str xzr, [sp, #40]");                                  // initialize the entry index
     emitter.label("__rt_unser_at_array_loop");
     emitter.instruction("ldr x4, [sp, #40]");                                   // reload the entry index
@@ -326,6 +329,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov x5, #7");                                          // value tag = boxed Mixed (transfer the box)
     emitter.instruction("bl __rt_hash_set");                                    // insert the entry -> x0 = (possibly new) hash
     emitter.instruction("str x0, [sp, #24]");                                   // save the updated hash pointer
+    emitter.instruction("str x0, [sp, #104]");                                  // keep the unfinished array reachable by exception cleanup
     emitter.instruction("ldr x4, [sp, #40]");                                   // reload the entry index
     emitter.instruction("add x4, x4, #1");                                      // advance the entry index
     emitter.instruction("str x4, [sp, #40]");                                   // persist the entry index
@@ -355,6 +359,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("b __rt_unser_at_ret");                                 // return the box and new position
     emitter.label("__rt_unser_at_array_fail");
     emitter.instruction("ldr x0, [sp, #24]");                                   // partially built hash pointer
+    emitter.instruction("str xzr, [sp, #104]");                                 // detach the owner before explicit cleanup can throw
     emitter.instruction("bl __rt_hash_free_deep");                              // release keys and transferred boxed values locally
     emitter.instruction("mov x0, #0");                                          // report parse failure
     emitter.instruction("ldr x1, [sp, #8]");                                    // preserve current cursor for the caller
@@ -468,6 +473,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov x1, #7");                                          // hash value_type = boxed Mixed
     emitter.instruction("bl __rt_hash_new");                                    // allocate the $data hash
     emitter.instruction("str x0, [sp, #80]");                                   // save the $data hash pointer
+    emitter.instruction("str x0, [sp, #112]");                                  // keep unfinished hydration data reachable by exception cleanup
     emitter.instruction("str xzr, [sp, #40]");                                  // entry index = 0
     emitter.label("__rt_unser_obj_data_loop");
     emitter.instruction("ldr x4, [sp, #40]");                                   // reload the entry index
@@ -495,6 +501,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov x5, #7");                                          // value tag = boxed Mixed (transfer the box)
     emitter.instruction("bl __rt_hash_set");                                    // insert the entry -> x0 = (possibly new) hash
     emitter.instruction("str x0, [sp, #80]");                                   // save the updated $data hash pointer
+    emitter.instruction("str x0, [sp, #112]");                                  // keep unfinished hydration data reachable by exception cleanup
     emitter.instruction("ldr x4, [sp, #40]");                                   // reload the entry index
     emitter.instruction("add x4, x4, #1");                                      // advance the entry index
     emitter.instruction("str x4, [sp, #40]");                                   // persist the entry index
@@ -573,6 +580,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
 
     emitter.label("__rt_unser_obj_data_fail");
     emitter.instruction("ldr x0, [sp, #80]");                                   // partially built __unserialize data hash
+    emitter.instruction("str xzr, [sp, #112]");                                 // detach the owner before explicit cleanup can throw
     emitter.instruction("bl __rt_hash_free_deep");                              // release keys and transferred child boxes
     emitter.instruction("b __rt_unser_obj_fail");                               // release the partially hydrated object too
     emitter.label("__rt_unser_obj_fail");
@@ -584,6 +592,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [x10, x9, lsl #3]");                          // remove the failed object from future reference lookup
     emitter.label("__rt_unser_obj_fail_noreg");
     emitter.instruction("ldr x0, [sp, #96]");                                   // partially hydrated object's owning Mixed box
+    emitter.instruction("str xzr, [sp, #96]");                                  // detach the owner before explicit cleanup can throw
     emitter.instruction("bl __rt_decref_mixed");                                // release the box and its object ownership
     emitter.instruction("mov x0, #0");                                          // report parse failure
     emitter.instruction("ldr x1, [sp, #8]");                                    // preserve the child decoder's current cursor
@@ -595,12 +604,13 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #8]");                                    // newpos = unchanged position
 
     emitter.label("__rt_unser_at_ret");
+    super::parser_owners::emit_leave(emitter);
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_unser_depth");
     emitter.instruction("ldr x10, [x9]");                                       // load parser depth before returning to the caller
     emitter.instruction("sub x10, x10, #1");                                    // release this completed recursive parser frame
     emitter.instruction("str x10, [x9]");                                       // keep sibling parses independent
-    emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #128");                                    // deallocate the parser frame
+    emitter.instruction("ldp x29, x30, [sp, #272]");                            // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #288");                                    // deallocate the parser frame
     emitter.instruction("ret");                                                 // return x0=box, x1=newpos
 
     emitter.label_shared("__rt_unser_depth_fatal");

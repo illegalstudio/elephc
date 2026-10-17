@@ -47,12 +47,13 @@ pub unsafe extern "C" fn __elephc_eval_register_native_global_constant(
     value_word: u64,
     value_len: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_global_constant_inner(
             ctx, name_ptr, name_len, kind, value_word, value_len,
         )
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers one AOT scalar user-declared constant for eval lookup and introspection.
@@ -73,10 +74,11 @@ pub unsafe extern "C" fn __elephc_eval_register_native_user_constant(
     value_word: u64,
     value_len: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_user_constant_inner(ctx, name_ptr, name_len, kind, value_word, value_len)
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers one AOT array-valued user-declared constant for eval lookup and introspection.
@@ -98,10 +100,11 @@ pub unsafe extern "C" fn __elephc_eval_register_native_user_constant_array(
     spec_ptr: *const u8,
     spec_len: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_user_constant_array_inner(ctx, name_ptr, name_len, spec_ptr, spec_len)
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Validates and stores one scalar global constant after the ABI panic boundary.

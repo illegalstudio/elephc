@@ -201,26 +201,12 @@ pub(super) fn lower_lazy_empty(
             let value = lower_array_access_with_missing_warning(
                 ctx, &staged, index, &args[0], false,
             );
-            let result = emit_builtin_call_value(
-                ctx,
-                name,
-                vec![value.value],
-                PhpType::Bool,
-                expr.span,
-                None,
-            );
+            let result = lower_empty_of_probed_value(ctx, value, name, expr);
             release_evaluated_once(ctx, Some(temp_name), args[0].span);
             return Some(result);
         }
         let value = lower_array_access_with_missing_warning(ctx, array, index, &args[0], false);
-        return Some(emit_builtin_call_value(
-            ctx,
-            name,
-            vec![value.value],
-            PhpType::Bool,
-            expr.span,
-            None,
-        ));
+        return Some(lower_empty_of_probed_value(ctx, value, name, expr));
     }
     // A typed static property that is still uninitialized is EMPTY in PHP, and reading it the
     // ordinary way to find that out is fatal — the same reason `isset()` and `??` need the
@@ -266,6 +252,21 @@ pub(super) fn lower_lazy_empty(
         if let Some(probed) = nullsafe_chain::lower_with_missing_warning(ctx, &args[0], false) {
             return Some(lower_empty_of_probed_value(ctx, probed, name, expr));
         }
+    }
+    let ordinary_value = match &args[0].kind {
+        ExprKind::Variable(name) => ctx.has_local_slot(name),
+        ExprKind::PropertyAccess { .. } | ExprKind::DynamicPropertyAccess { .. }
+        | ExprKind::StaticPropertyAccess { .. } | ExprKind::NullsafePropertyAccess { .. }
+        | ExprKind::NullsafeDynamicPropertyAccess { .. } => false,
+        _ => true,
+    };
+    let ty = materialized_expr_type_for_merge(ctx, &args[0]);
+    let may_have_handler = crate::types::object_operators::operator_class(&ty).is_some()
+        || (matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_) | PhpType::Object(_))
+            && ctx.classes.keys().any(|name| elephc_builtin_contract::lookup_class(name).is_some_and(|class| class.operators.is_some())));
+    if ordinary_value && may_have_handler {
+        let value = lower_expr(ctx, &args[0]);
+        return Some(lower_empty_of_probed_value(ctx, value, name, expr));
     }
     let (exists_call, get_call) = lazy_empty_magic_property_calls(ctx, &args[0])?;
     Some(lower_empty_through_exists_then_get(
@@ -467,13 +468,12 @@ fn lower_empty_through_exists_then_get(
         else_args: Vec::new(),
     });
 
-    // Set: empty is the emptiness of the `__get` value (reuses the eager builtin).
+    // Set: apply the fetched value's own boolean contract.
     ctx.builder.position_at_end(present_block);
     // The read value is a fresh call result nothing else owns, so the builtin path, which
     // releases owned operands once the test has consumed them, is the one to take.
     let get_value = lower_expr(ctx, get_call);
-    let empty_value =
-        emit_builtin_call_value(ctx, name, vec![get_value.value], PhpType::Bool, expr.span, None);
+    let empty_value = lower_empty_of_probed_value(ctx, get_value, name, expr);
     store_value_into_temp(ctx, &temp_name, PhpType::Bool, empty_value, expr.span);
     branch_to(ctx, merge);
 
@@ -488,21 +488,21 @@ fn lower_empty_through_exists_then_get(
 }
 
 /// Applies php's `empty()` emptiness test to an already probed property value.
-fn lower_empty_of_probed_value(
+pub(super) fn lower_empty_of_probed_value(
     ctx: &mut LoweringContext<'_, '_>,
     probed: LoweredValue,
     name: &str,
     expr: &Expr,
 ) -> LoweredValue {
-    let empty_name = ctx.intern_function_name(name);
-    ctx.emit_value(
-        Op::LanguageConstructCall,
-        vec![probed.value],
-        Some(Immediate::Data(empty_name)),
-        PhpType::Bool,
-        effects_lookup::language_construct_effects(name),
-        Some(expr.span),
-    )
+    if let Some(truthy) = object_operators::lower_object_truthy(ctx, probed, Some(expr.span)) {
+        let zero = lower_int_literal(ctx, 0, expr);
+        let result = ctx.emit_value(Op::ICmp, vec![truthy.value, zero.value],
+            Some(Immediate::CmpPredicate(CmpPredicate::Eq)), PhpType::Bool,
+            Op::ICmp.default_effects(), Some(expr.span));
+        release_binary_operand_temporary(ctx, probed, expr.span);
+        return result;
+    }
+    emit_builtin_call_value(ctx, name, vec![probed.value], PhpType::Bool, expr.span, None)
 }
 
 /// For an `empty()` operand that is an overloaded (magic) property access,

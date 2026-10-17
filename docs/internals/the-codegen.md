@@ -16,6 +16,17 @@ user assembly for the selected target.
 
 ## Pipeline Position
 
+Internal value classes can declare operator adapters in their shared
+`ClassContract::operators` metadata. Type inference resolves their result types,
+and EIR lowering emits ordinary typed calls after evaluating and capturing
+operands in source order. Boxed operands branch on the actual runtime class
+before scalar fallback. Magician consumes the same metadata. Decimal work stays
+in `elephc-bcmath`; the existing target-aware BCMath ABI shapes marshal class
+operations on every supported target. Identity comparisons bypass this dispatch.
+AST effect and exception summaries retain potentially dispatched arithmetic,
+including unused results and calls through mixed parameters. Literal scalar
+arithmetic keeps its ordinary folding rules.
+
 ```text
 PHP source
   -> Lexer

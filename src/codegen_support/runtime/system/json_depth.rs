@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Encode and decode/validate paths intentionally use different caller-side limits to match PHP depth semantics.
+//! - Depth comparison does not scan the JSON source. Callers note a candidate pointer first; `__rt_json_throw_error` materializes coordinates.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -17,6 +18,10 @@ use crate::codegen_support::abi;
 /// `__rt_json_throw_error(JSON_ERROR_DEPTH)`; when the throw flag is clear
 /// the helper returns and the encoder keeps producing partial output (the
 /// error slot stays populated for `json_last_error()` to surface).
+///
+/// This helper does not compute line or column. A decode caller that needs a
+/// depth-error location stores the opening token with
+/// `__rt_json_note_error_candidate` before the call.
 ///
 /// The depth counter is incremented unconditionally so the matching exit
 /// helper can decrement once per container regardless of whether the

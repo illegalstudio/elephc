@@ -33,6 +33,8 @@ pub(crate) struct SharedCodegenState {
     /// Descriptor argument adapters need the shared boxed-callable normalizer.
     pub(super) callable_argument_normalizer: bool,
     generated_runtime_features: GeneratedRuntimeFeatures,
+    /// Declared parameter contracts cached independently of emitted method bodies.
+    pub(super) literal_methods: super::literal_method_index::LiteralMethodIndex,
     runtime_string_descriptor_cases:
         Vec<(Option<PhpType>, Option<Vec<String>>, bool, Vec<RuntimeCallableCase>)>,
     runtime_static_method_descriptor_cases:

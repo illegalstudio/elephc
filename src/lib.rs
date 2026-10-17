@@ -41,8 +41,11 @@ pub mod generics;
 /// The program-wide set of names some body declares `global`, shared by the checker and lowering.
 pub(crate) mod global_decls;
 mod progress;
-/// Image (GD/Exif/Imagick/Gmagick/Cairo) standard-library prelude injection.
+/// Immutable BCMath Number standard-library prelude injection.
+pub mod bcmath_prelude;
+/// Incremental hashing standard-library prelude injection.
 pub mod hash_prelude;
+/// Image (GD/Exif/Imagick/Gmagick/Cairo) standard-library prelude injection.
 pub mod image_prelude;
 /// Intrinsic call handling.
 pub mod intrinsics;

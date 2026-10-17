@@ -20,6 +20,8 @@
 //!   the depth-0 entry point every caller uses.
 //! - Same-tag int/resource/callable payloads compare word-for-word rather than
 //!   through `double`, so large integers do not lose precision.
+//! - Internal object adapters run before the ordinary PHP comparison table, including
+//!   bool/null conversion; unordered adapter results never mean equality.
 
 use super::MAX_LOOSE_EQ_DEPTH;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
@@ -70,6 +72,23 @@ fn emit_mixed_loose_eq_aarch64(emitter: &mut Emitter) {
 
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the left runtime tag for dispatch
     emitter.instruction("mov x10, x0");                                         // keep the right runtime tag in a scratch register
+
+    // -- internal object comparison overrides the ordinary object conversion rules --
+    emitter.instruction("cmp x9, #6");                                          // can the left operand select an internal class adapter?
+    emitter.instruction("b.eq __rt_mle_internal_object");                       // ask the program-specific typed dispatcher
+    emitter.instruction("cmp x10, #6");                                         // can the right operand select an internal class adapter?
+    emitter.instruction("b.ne __rt_mle_standard");                              // scalar pairs keep the allocation-free comparison table
+    emitter.label("__rt_mle_internal_object");
+    emitter.instruction("ldp x0, x1, [sp, #0]");                                // borrow both original boxed operands
+    abi::emit_call_label(emitter, &crate::names::function_symbol("__elephc_internal_object_compare"));
+    emitter.instruction("cmp x0, #3");                                          // three means neither class provided an adapter
+    emitter.instruction("b.eq __rt_mle_standard");                              // ordinary objects retain their existing PHP rules
+    emitter.instruction("cmp x0, #0");                                          // only an ordered equal result represents loose equality
+    emitter.instruction("cset x0, eq");                                         // unordered and unequal adapter results are false
+    emitter.instruction("b __rt_mle_done");                                     // return the internal class comparison
+    emitter.label("__rt_mle_standard");
+    emitter.instruction("ldr x9, [sp, #24]");                                   // restore the left tag after a possible adapter call
+    emitter.instruction("ldr x10, [sp, #48]");                                  // restore the right tag after a possible adapter call
 
     // -- PHP rule 1: a bool operand converts BOTH sides to bool --
     emitter.instruction("cmp x9, #3");                                          // is the left operand a bool?
@@ -324,6 +343,25 @@ fn emit_mixed_loose_eq_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the left runtime tag for dispatch
     emitter.instruction("mov r11, rax");                                        // keep the right runtime tag in a scratch register
+
+    // -- internal object comparison overrides the ordinary object conversion rules --
+    emitter.instruction("cmp r10, 6");                                          // can the left operand select an internal class adapter?
+    emitter.instruction("je __rt_mle_internal_object");                         // ask the program-specific typed dispatcher
+    emitter.instruction("cmp r11, 6");                                          // can the right operand select an internal class adapter?
+    emitter.instruction("jne __rt_mle_standard");                               // scalar pairs keep the allocation-free comparison table
+    emitter.label("__rt_mle_internal_object");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // borrow the original left boxed operand
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // borrow the original right boxed operand
+    abi::emit_call_label(emitter, &crate::names::function_symbol("__elephc_internal_object_compare"));
+    emitter.instruction("cmp rax, 3");                                          // three means neither class provided an adapter
+    emitter.instruction("je __rt_mle_standard");                                // ordinary objects retain their existing PHP rules
+    emitter.instruction("test rax, rax");                                       // only an ordered equal result represents loose equality
+    emitter.instruction("sete al");                                             // unordered and unequal adapter results are false
+    emitter.instruction("movzx rax, al");                                       // widen the equality result to a PHP boolean
+    emitter.instruction("jmp __rt_mle_done");                                   // return the internal class comparison
+    emitter.label("__rt_mle_standard");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // restore the left tag after a possible adapter call
+    emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // restore the right tag after a possible adapter call
 
     // -- PHP rule 1: a bool operand converts BOTH sides to bool --
     emitter.instruction("cmp r10, 3");                                          // is the left operand a bool?

@@ -10,7 +10,7 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::runtime::data::{
     UNSER_ALLOWED_CLASSES_ENTRY_PREFIX, UNSER_ALLOWED_CLASSES_POLICY_PREFIX,
-    UNSER_OPTIONS_TYPE_PREFIX,
+    UNSER_OPTIONS_TYPE_PREFIX, UNSER_TYPE_GIVEN_SUFFIX,
 };
 
 /// Emits the x86_64 version of the unserialize allowed-class policy helpers.
@@ -253,6 +253,10 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.label("__rt_unser_options_type_dispatch_x");
     emitter.instruction("lea rsi, [rip + _unser_options_type_prefix]");         // options diagnostic prefix
     emitter.instruction(&format!("mov rdx, {}", UNSER_OPTIONS_TYPE_PREFIX.len())); // prefix byte length
+    emitter.instruction("lea r8, [rip + _unser_type_given_suffix]");            // shared ` given` suffix pointer
+    emitter.instruction(&format!("mov r9, {}", UNSER_TYPE_GIVEN_SUFFIX.len())); // shared ` given` suffix byte length
+    emitter.instruction("xor r10d, r10d");                                      // argument diagnostics spell bool as `bool`
+    emitter.instruction("xor r11d, r11d");                                      // argument diagnostics own no rejected value box
     emitter.instruction("jmp __rt_unser_throw_type_error");                     // helper closes context and throws exactly once
 
     emitter.label("__rt_unser_allowed_classes_entry_null_error_x");
@@ -266,6 +270,10 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("leave");                                               // remove options decoder frame before common cleanup
     emitter.instruction("lea rsi, [rip + _unser_allowed_classes_entry_prefix]"); // list-entry diagnostic prefix
     emitter.instruction(&format!("mov rdx, {}", UNSER_ALLOWED_CLASSES_ENTRY_PREFIX.len())); // prefix byte length
+    emitter.instruction("lea r8, [rip + _unser_type_given_suffix]");            // shared ` given` suffix pointer
+    emitter.instruction(&format!("mov r9, {}", UNSER_TYPE_GIVEN_SUFFIX.len())); // shared ` given` suffix byte length
+    emitter.instruction("xor r10d, r10d");                                      // argument diagnostics spell bool as `bool`
+    emitter.instruction("xor r11d, r11d");                                      // argument diagnostics own no rejected value box
     emitter.instruction("jmp __rt_unser_throw_type_error");                     // helper closes context and throws exactly once
 
     emitter.label("__rt_unser_allowed_classes_entry_object_error_x");
@@ -278,5 +286,9 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("leave");                                               // remove options decoder frame before common cleanup
     emitter.instruction("lea rsi, [rip + _unser_allowed_classes_policy_prefix]"); // policy diagnostic prefix
     emitter.instruction(&format!("mov rdx, {}", UNSER_ALLOWED_CLASSES_POLICY_PREFIX.len())); // prefix byte length
+    emitter.instruction("lea r8, [rip + _unser_type_given_suffix]");            // shared ` given` suffix pointer
+    emitter.instruction(&format!("mov r9, {}", UNSER_TYPE_GIVEN_SUFFIX.len())); // shared ` given` suffix byte length
+    emitter.instruction("xor r10d, r10d");                                      // argument diagnostics spell bool as `bool`
+    emitter.instruction("xor r11d, r11d");                                      // argument diagnostics own no rejected value box
     emitter.instruction("jmp __rt_unser_throw_type_error");                     // helper closes context and throws exactly once
 }

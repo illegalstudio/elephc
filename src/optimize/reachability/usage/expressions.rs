@@ -1096,6 +1096,17 @@ impl Scanner<'_> {
     /// Records a class key and applies conservative Reflection hazards.
     pub(super) fn record_class(&mut self, name: &str) -> String {
         let key = self.class_key(name);
+        if let Some(operators) = elephc_builtin_contract::lookup_class(&key).and_then(|class| class.operators) {
+            for (_, method) in operators.arithmetic {
+                self.usage.methods.insert((key.clone(), php_symbol_key(method), true));
+            }
+            if let Some(method) = operators.compare {
+                self.usage.methods.insert((key.clone(), php_symbol_key(method), true));
+            }
+            if let Some(method) = operators.boolean {
+                self.usage.methods.insert((key.clone(), php_symbol_key(method), false));
+            }
+        }
         if key
             .rsplit('\\')
             .next()

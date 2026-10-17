@@ -262,7 +262,7 @@ macro_rules! impl_lifecycle_scalar_ops {
     }
 
     /// Casts a boxed Mixed cell to a boxed boolean Mixed cell through the generated runtime wrapper.
-    fn cast_bool(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+    fn cast_bool_raw(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_cast_bool(value.as_ptr()) })
     }
 

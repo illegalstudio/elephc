@@ -14,11 +14,16 @@ use crate::codegen_support::platform::Arch;
 mod aarch64;
 mod arrays;
 mod objects;
+mod ownership;
 mod whitespace;
 mod x86_64;
 
+#[cfg(test)]
+mod ownership_tests;
+
 /// __rt_json_decode_mixed: checked structural JSON decoder that returns a boxed
-/// Mixed cell pointer, or 0 after recording a JSON error.
+/// Mixed cell pointer, or 0 after recording a JSON error. The outer boundary
+/// defers JSON exceptions until recursive frames have released partial values.
 ///
 /// Trims the source slice, uses the existing string-returning
 /// `__rt_json_decode` helper for string unescaping, and classifies the result
@@ -41,6 +46,7 @@ mod x86_64;
 ///   x86_64: rax = json ptr, rdx = json len
 /// Output: x0/rax = boxed Mixed pointer or 0 on error
 pub(crate) fn emit_json_decode_mixed(emitter: &mut Emitter) {
+    ownership::emit(emitter);
     if emitter.target.arch == Arch::X86_64 {
         whitespace::emit(emitter);
         x86_64::emit(emitter);

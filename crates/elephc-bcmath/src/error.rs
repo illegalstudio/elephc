@@ -31,6 +31,13 @@ pub const BCMATH_ERR_ROUND_MODE: i32 = 8;
 /// A typed BCMath failure with enough context to reproduce PHP's message.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum BcError {
+    /// A class operation with PHP's method-specific diagnostic and stable ABI status.
+    Number {
+        /// Existing decimal-domain status, shared with procedural ABI consumers.
+        status: i32,
+        /// Fully contextualized PHP diagnostic.
+        message: String,
+    },
     /// A numeric string failed BCMath's decimal grammar.
     Malformed {
         /// PHP function name.
@@ -77,6 +84,7 @@ impl BcError {
     /// Returns the stable integer status used by the C ABI.
     pub fn status_code(&self) -> i32 {
         match self {
+            Self::Number { status, .. } => *status,
             Self::Malformed { .. } => BCMATH_ERR_MALFORMED,
             Self::ScaleRange { .. } => BCMATH_ERR_SCALE_RANGE,
             Self::DivisionByZero { .. } => BCMATH_ERR_DIV_ZERO,
@@ -91,6 +99,7 @@ impl BcError {
     /// Formats php-src-compatible exception text for the failure.
     pub fn php_message(&self) -> String {
         match self {
+            Self::Number { message, .. } => message.clone(),
             Self::Malformed {
                 func,
                 arg_pos,
@@ -122,7 +131,7 @@ impl BcError {
                     .to_string()
             }
             Self::PrecisionRange => {
-                "bcround(): Argument #2 ($precision) is out of range".to_string()
+                "bcround(): Argument #2 ($precision) must be between -9223372036854775808 and 2147483647".to_string()
             }
             Self::RoundMode => {
                 "bcround(): Argument #3 ($mode) must be a valid rounding mode (RoundingMode::*)"

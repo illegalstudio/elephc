@@ -342,15 +342,6 @@ pub(super) fn lower_mixed_named_prop_set(
                 let base_reg = abi::symbol_scratch_reg(ctx.emitter);
                 abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 0);
                 emit_property_store(ctx, value, slot, base_reg)?;
-                if matches!(
-                    slot.php_type.codegen_repr(),
-                    PhpType::Str | PhpType::Int | PhpType::Float | PhpType::Bool
-                ) {
-                    // Runtime-shaped assignments are boxed before dispatch. Scalar and string
-                    // slots copy the accepted payload out of that cell, so retire an owned
-                    // source box after the store.
-                    super::release_adopted_mixed_source(ctx, value, &slot.php_type)?;
-                }
                 abi::emit_release_temporary_stack(ctx.emitter, 16);
                 abi::emit_jump(ctx.emitter, &done_label);
             }
@@ -832,14 +823,6 @@ fn emit_refined_untyped_tag_guarded_store(
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, base_offset);
     emit_property_store(ctx, value, slot, base_reg)?;
-    if matches!(
-        slot.php_type.codegen_repr(),
-        PhpType::Str | PhpType::Int | PhpType::Float | PhpType::Bool
-    ) {
-        // A scalar/string slot copies the accepted payload out of the box, so retire an owned
-        // source box after the store, exactly as the plain Slot arm does.
-        super::release_adopted_mixed_source(ctx, value, &slot.php_type)?;
-    }
     abi::emit_release_temporary_stack(ctx.emitter, stack_cleanup);
     abi::emit_jump(ctx.emitter, done_label);
     Ok(())

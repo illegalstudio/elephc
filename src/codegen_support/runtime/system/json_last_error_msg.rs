@@ -7,6 +7,8 @@
 //!
 //! Key details:
 //! - Message table indexing must stay in sync with the JSON_ERROR_* constants.
+//! - The location suffix is built from the numeric `_json_error_line` and
+//!   `_json_error_column` slots. The formatter does not read the decode source.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;

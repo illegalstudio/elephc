@@ -22,20 +22,23 @@ pub(super) unsafe fn register_native_class_parent_inner(
     class_name_len: u64,
     parent_name_ptr: *const u8,
     parent_name_len: u64,
-) -> i32 {
+) -> Result<i32, ()> {
     let Some(context) = ctx.as_mut() else {
-        return 0;
+        return Err(());
     };
     if context.abi_version() != ABI_VERSION {
-        return 0;
+        return Err(());
     }
     let Ok(class_name) = abi_name_to_string(class_name_ptr, class_name_len) else {
-        return 0;
+        return Err(());
     };
     let Ok(parent_name) = abi_name_to_string(parent_name_ptr, parent_name_len) else {
-        return 0;
+        return Err(());
     };
-    i32::from(context.define_native_class_parent(&class_name, &parent_name))
+    if class_name.trim_start_matches('\\').is_empty() || parent_name.trim_start_matches('\\').is_empty() {
+        return Err(());
+    }
+    Ok(i32::from(context.define_native_class_parent(&class_name, &parent_name)))
 }
 
 /// Runs native property-type registration after installing a panic boundary.
@@ -49,27 +52,28 @@ pub(super) unsafe fn register_native_property_type_inner(
     property_key_len: u64,
     type_spec_ptr: *const u8,
     type_spec_len: u64,
-) -> i32 {
+) -> Result<i32, ()> {
     let Some(context) = ctx.as_mut() else {
-        return 0;
+        return Err(());
     };
     if context.abi_version() != ABI_VERSION {
-        return 0;
+        return Err(());
     }
     let Ok(property_key) = abi_name_to_string(property_key_ptr, property_key_len) else {
-        return 0;
+        return Err(());
     };
     let Some((class_name, property_name)) = split_property_key(&property_key) else {
-        return 0;
+        return Err(());
     };
     let Some(property_type) = native_callable_type_from_abi(
         type_spec_ptr,
         type_spec_len,
         NativeCallableTypePosition::Parameter,
     ) else {
-        return 0;
+        return Err(());
     };
-    i32::from(context.define_native_property_type(class_name, property_name, property_type))
+    if class_name.trim_start_matches('\\').is_empty() { return Err(()); }
+    Ok(i32::from(context.define_native_property_type(class_name, property_name, property_type)))
 }
 
 /// Runs native property scalar-default registration after installing a panic boundary.
@@ -83,9 +87,9 @@ pub(super) unsafe fn register_native_property_default_scalar_inner(
     property_key_len: u64,
     default_kind: u64,
     default_payload: u64,
-) -> i32 {
+) -> Result<i32, ()> {
     let Some(default) = native_callable_scalar_default(default_kind, default_payload) else {
-        return 0;
+        return Err(());
     };
     register_native_property_default_inner(ctx, property_key_ptr, property_key_len, default)
 }
@@ -101,9 +105,9 @@ pub(super) unsafe fn register_native_property_default_string_inner(
     property_key_len: u64,
     default_ptr: *const u8,
     default_len: u64,
-) -> i32 {
+) -> Result<i32, ()> {
     let Ok(default) = abi_name_to_string(default_ptr, default_len) else {
-        return 0;
+        return Err(());
     };
     register_native_property_default_inner(
         ctx,
@@ -124,9 +128,9 @@ pub(super) unsafe fn register_native_property_default_array_inner(
     property_key_len: u64,
     spec_ptr: *const u8,
     spec_len: u64,
-) -> i32 {
+) -> Result<i32, ()> {
     let Some(default) = native_callable_array_default(spec_ptr, spec_len) else {
-        return 0;
+        return Err(());
     };
     register_native_property_default_inner(ctx, property_key_ptr, property_key_len, default)
 }
@@ -141,20 +145,21 @@ pub(super) unsafe fn register_native_property_default_inner(
     property_key_ptr: *const u8,
     property_key_len: u64,
     default: NativeCallableDefault,
-) -> i32 {
+) -> Result<i32, ()> {
     let Some(context) = ctx.as_mut() else {
-        return 0;
+        return Err(());
     };
     if context.abi_version() != ABI_VERSION {
-        return 0;
+        return Err(());
     }
     let Ok(property_key) = abi_name_to_string(property_key_ptr, property_key_len) else {
-        return 0;
+        return Err(());
     };
     let Some((class_name, property_name)) = split_property_key(&property_key) else {
-        return 0;
+        return Err(());
     };
-    i32::from(context.define_native_property_default(class_name, property_name, default))
+    if class_name.trim_start_matches('\\').is_empty() { return Err(()); }
+    Ok(i32::from(context.define_native_property_default(class_name, property_name, default)))
 }
 
 /// Runs native member-attribute registration after installing a panic boundary.

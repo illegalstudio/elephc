@@ -81,6 +81,7 @@ fn deeply_nested_source_reports_compiler_depth_limit() {
 
 /// Verifies generated PHP recursion terminates through a runtime guard with a
 /// useful fatal message instead of reaching the operating-system stack guard.
+/// Work after the recursive call preserves native frames when tail-call elimination is enabled.
 #[test]
 fn generated_program_reports_runtime_recursion_limit() {
     let _guard = LIMIT_TEST_LOCK.lock().unwrap();
@@ -91,7 +92,7 @@ fn generated_program_reports_runtime_recursion_limit() {
         r#"<?php
 function descend(int $depth): int {
     if ($depth >= 1000000) { return $depth; }
-    return descend($depth + 1);
+    return 1 + descend($depth + 1);
 }
 echo descend(0);
 "#,

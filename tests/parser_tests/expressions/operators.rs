@@ -9,6 +9,19 @@
 
 use super::*;
 
+/// Unary plus binds below exponentiation and above multiplication, including object operands.
+#[test]
+fn test_unary_plus_precedence() {
+    let stmts = parse_source("<?php echo +$n ** 2 * 3;");
+    let expected = Stmt::echo(Expr::binop(
+        Expr::binop(Expr::int_lit(0), BinOp::Add,
+            Expr::binop(Expr::var("n"), BinOp::Pow, Expr::int_lit(2))),
+        BinOp::Mul, Expr::int_lit(3),
+    ));
+    assert_eq!(stmts, vec![expected]);
+    assert!(parse_fails("<?php echo +;"));
+}
+
 /// Verifies that `<?php echo 2 + 3 * 4;` parses as `2 + (3 * 4)` — multiplication has higher
 /// precedence than addition, matching PHP's arithmetic precedence.
 #[test]

@@ -922,14 +922,19 @@ fn emit_reload_live_iter_source(
 /// this validation to by-reference iterators with an origin keeps by-value iteration unchanged.
 fn emit_validate_hash_cursor_anchor(ctx: &mut FunctionContext<'_>, offset: usize) {
     let done = ctx.next_label("iter_anchor_validate_done");
+    let tail = ctx.next_label("iter_anchor_validate_tail");
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::load_at_offset(ctx.emitter, result_reg, offset - ITER_CURSOR_OFFSET_DELTA);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            ctx.emitter.instruction("cmn x0, #2");                              // is this the post-last cursor?
+            ctx.emitter.instruction(&format!("b.eq {tail}"));                   // the tail resumes from its live successor
             ctx.emitter.instruction("cmp x0, #0");                              // only an active positive cursor has a successor identity
             ctx.emitter.instruction(&format!("b.le {done}"));                   // fresh and terminal cursors need no validation
         }
         Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, -2");                             // is this the post-last cursor?
+            ctx.emitter.instruction(&format!("je {tail}"));                     // the tail resumes from its live successor
             ctx.emitter.instruction("cmp rax, 0");                              // only an active positive cursor has a successor identity
             ctx.emitter.instruction(&format!("jle {done}"));                    // fresh and terminal cursors need no validation
         }
@@ -957,6 +962,37 @@ fn emit_validate_hash_cursor_anchor(ctx: &mut FunctionContext<'_>, offset: usize
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_hash_iter_resync");
+    abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_CURSOR_OFFSET_DELTA);
+    abi::emit_jump(ctx.emitter, &done);
+    // -- the walk yielded the tail; resume from the tail key's live successor if one was appended --
+    ctx.emitter.label(&tail);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::load_at_offset(ctx.emitter, "x2", offset - ITER_NEXT_KEY_HI_OFFSET_DELTA);
+            ctx.emitter.instruction("cmn x2, #2");                              // the -2 marker means no tail key was captured
+            ctx.emitter.instruction(&format!("b.eq {done}"));                   // nothing to resume from after an exhausted walk
+            abi::load_at_offset(ctx.emitter, "x0", offset - ITER_SOURCE_OFFSET_DELTA);
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp x0, #3");                              // heap kind 3 is associative storage
+            ctx.emitter.instruction(&format!("b.ne {done}"));                   // a parked source has no hash cursor
+            abi::load_at_offset(ctx.emitter, "x0", offset - ITER_SOURCE_OFFSET_DELTA);
+            abi::load_at_offset(ctx.emitter, "x1", offset - ITER_NEXT_KEY_LO_OFFSET_DELTA);
+            abi::load_at_offset(ctx.emitter, "x2", offset - ITER_NEXT_KEY_HI_OFFSET_DELTA);
+        }
+        Arch::X86_64 => {
+            abi::load_at_offset(ctx.emitter, "rdx", offset - ITER_NEXT_KEY_HI_OFFSET_DELTA);
+            ctx.emitter.instruction("cmp rdx, -2");                             // the -2 marker means no tail key was captured
+            ctx.emitter.instruction(&format!("je {done}"));                     // nothing to resume from after an exhausted walk
+            abi::load_at_offset(ctx.emitter, "rax", offset - ITER_SOURCE_OFFSET_DELTA);
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp rax, 3");                              // heap kind 3 is associative storage
+            ctx.emitter.instruction(&format!("jne {done}"));                    // a parked source has no hash cursor
+            abi::load_at_offset(ctx.emitter, "rdi", offset - ITER_SOURCE_OFFSET_DELTA);
+            abi::load_at_offset(ctx.emitter, "rsi", offset - ITER_NEXT_KEY_LO_OFFSET_DELTA);
+            abi::load_at_offset(ctx.emitter, "rdx", offset - ITER_NEXT_KEY_HI_OFFSET_DELTA);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_hash_iter_resync_successor");
     abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_CURSOR_OFFSET_DELTA);
     ctx.emitter.label(&done);
 }
@@ -2187,17 +2223,23 @@ fn lower_hash_iter_next_x86_64(
 /// Records owned keys for the next two entries the cursor can yield.
 ///
 /// Emitted only for a by-reference walk that named an origin, so an ordinary `foreach` pays
-/// nothing for it. A post-last or done cursor leaves both anchors absent. String keys are retained
-/// after both pairs have been copied out of the table, so helper calls cannot invalidate the entry
-/// address used to discover the fallback.
+/// nothing for it. A positive cursor anchors on the entry it will yield next (and its successor);
+/// the post-last cursor anchors on the TAIL key it just yielded, so an element appended after the
+/// walk reached the tail can still be resumed from (`__rt_hash_iter_resync_successor`); a done
+/// cursor leaves both anchors absent. String keys are retained after both pairs have been copied
+/// out of the table, so helper calls cannot invalidate the entry address used to discover the
+/// fallback.
 fn emit_capture_successor_keys(ctx: &mut FunctionContext<'_>, offset: usize) {
     let absent = ctx.next_label("iter_successor_absent");
+    let tail = ctx.next_label("iter_successor_tail");
     let retain = ctx.next_label("iter_successor_retain");
     let done = ctx.next_label("iter_successor_done");
     emit_clear_successor_keys(ctx, offset);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::load_at_offset_scratch(ctx.emitter, "x10", offset - ITER_CURSOR_OFFSET_DELTA, "x12");
+            ctx.emitter.instruction("cmn x10, #2");                             // is this the post-last cursor?
+            ctx.emitter.instruction(&format!("b.eq {tail}"));                   // the tail key anchors a later append
             ctx.emitter.instruction("cmp x10, #0");                             // do the end sentinels leave any successor to anchor on?
             ctx.emitter.instruction(&format!("b.le {}", absent));               // the post-last and done cursors have none
             abi::load_at_offset_scratch(ctx.emitter, "x9", offset - ITER_SOURCE_OFFSET_DELTA, "x12");
@@ -2223,6 +2265,8 @@ fn emit_capture_successor_keys(ctx: &mut FunctionContext<'_>, offset: usize) {
         }
         Arch::X86_64 => {
             abi::load_at_offset(ctx.emitter, "r10", offset - ITER_CURSOR_OFFSET_DELTA);
+            ctx.emitter.instruction("cmp r10, -2");                             // is this the post-last cursor?
+            ctx.emitter.instruction(&format!("je {tail}"));                     // the tail key anchors a later append
             ctx.emitter.instruction("cmp r10, 0");                              // do the end sentinels leave any successor to anchor on?
             ctx.emitter.instruction(&format!("jle {}", absent));                // the post-last and done cursors have none
             abi::load_at_offset(ctx.emitter, "r11", offset - ITER_SOURCE_OFFSET_DELTA);
@@ -2245,6 +2289,25 @@ fn emit_capture_successor_keys(ctx: &mut FunctionContext<'_>, offset: usize) {
             ctx.emitter.instruction("mov rcx, QWORD PTR [r9 + 16]");            // fallback key length or integer sentinel
             abi::store_at_offset(ctx.emitter, "r11", offset - ITER_FALLBACK_KEY_LO_OFFSET_DELTA);
             abi::store_at_offset(ctx.emitter, "rcx", offset - ITER_FALLBACK_KEY_HI_OFFSET_DELTA);
+        }
+    }
+    abi::emit_jump(ctx.emitter, &retain);
+    // The walk just yielded the tail; remember its key so a later append can resume from its
+    // insertion-order successor. A tail key is a real key, so it never collides with the absent
+    // sentinel and the validator can tell the two apart by the post-last cursor.
+    ctx.emitter.label(&tail);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::load_at_offset(ctx.emitter, "x11", offset - ITER_KEY_LO_OFFSET_DELTA);
+            abi::load_at_offset(ctx.emitter, "x12", offset - ITER_KEY_HI_OFFSET_DELTA);
+            abi::store_at_offset(ctx.emitter, "x11", offset - ITER_NEXT_KEY_LO_OFFSET_DELTA);
+            abi::store_at_offset(ctx.emitter, "x12", offset - ITER_NEXT_KEY_HI_OFFSET_DELTA);
+        }
+        Arch::X86_64 => {
+            abi::load_at_offset(ctx.emitter, "r11", offset - ITER_KEY_LO_OFFSET_DELTA);
+            abi::load_at_offset(ctx.emitter, "rcx", offset - ITER_KEY_HI_OFFSET_DELTA);
+            abi::store_at_offset(ctx.emitter, "r11", offset - ITER_NEXT_KEY_LO_OFFSET_DELTA);
+            abi::store_at_offset(ctx.emitter, "rcx", offset - ITER_NEXT_KEY_HI_OFFSET_DELTA);
         }
     }
     ctx.emitter.label(&retain);

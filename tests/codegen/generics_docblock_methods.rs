@@ -468,3 +468,45 @@ fn test_comment_scan_follows_the_php_lexer() {
         );
     }
 }
+
+/// A one-line block parses its OPENING tag only — the tags after it are that tag's description
+/// (phpDocumentor semantics, review finding: a tag MENTIONED in a description must not bind).
+/// The violating argument is still refused, by a different route: with `@param` unread, `T`
+/// stays undetermined and the call errors. The multi-line form binds every tag and reports the
+/// bound violation.
+#[test]
+fn test_one_line_block_reads_its_opening_tag() {
+    let bound = "/** @template T of int @param T $v @return T */\n";
+    let cases = [
+        format!("<?php\n{bound}function id($v) {{ return $v; }}\necho id(\"seven\");\n"),
+        format!(
+            "<?php\nclass R {{\n{bound}public static function id($v) {{ return $v; }}\n}}\n\
+             echo R::id(\"seven\");\n"
+        ),
+        format!(
+            "<?php\ntrait Tr {{\n{bound}public function id($v) {{ return $v; }}\n}}\n\
+             class K {{ use Tr; }}\necho (new K)->id(\"seven\");\n"
+        ),
+        format!(
+            "<?php\nenum Id {{\n    case A;\n{bound}public function id($v) {{ return $v; }}\n}}\n\
+             echo Id::A->id(\"seven\");\n"
+        ),
+    ];
+    for source in &cases {
+        let error = compile_cli_file_with_flags_expect_failure(source, &[]);
+        assert!(
+            error.contains("does not determine type parameter <T>"),
+            "{source}: {error}"
+        );
+    }
+    let multiline = "<?php\n/** @template T of int\n * @param T $v\n * @return T\n */\n\
+                     function id($v) { return $v; }\necho id(\"seven\");\n";
+    let error = compile_cli_file_with_flags_expect_failure(multiline, &[]);
+    assert!(
+        error.contains("does not satisfy its bound int"),
+        "{multiline}: {error}"
+    );
+    let ok = "<?php\n/** @template T of int\n * @param T $v\n * @return T\n */\n\
+              function id($v) { return $v; }\necho id(7);\n";
+    assert_eq!(compile_cli_file_and_run_with_flags(ok, &[]), "7");
+}

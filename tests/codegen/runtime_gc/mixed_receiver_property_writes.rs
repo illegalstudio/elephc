@@ -143,3 +143,18 @@ echo $t->n, ":", $t->s, "\n";
     );
     assert_clean(out, "39:value39\n");
 }
+
+/// Bool and float slots narrowed from a boxed value through a `mixed` receiver stay balanced.
+#[test]
+fn test_mixed_receiver_bool_float_property_write_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class T { public bool $z = false; public float $f = 0.0; }
+function w(mixed $o): void { for ($i = 0; $i < 40; $i++) { $o->z = !$o->z; $o->f += 1.5; } }
+$t = new T();
+w($t);
+echo $t->z ? "T" : "F", ":", $t->f, "\n";
+"#,
+    );
+    assert_clean(out, "F:60\n");
+}

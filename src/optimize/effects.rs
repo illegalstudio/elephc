@@ -49,6 +49,23 @@ fn binary_op_may_throw(op: &BinOp, right: &Expr) -> bool {
     }
 }
 
+/// Excludes literal scalar operands while retaining operations that can dispatch object handlers.
+pub(super) fn internal_arithmetic_candidate(left: &Expr, op: &BinOp, right: &Expr) -> bool {
+    matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow)
+        && (!literal_scalar_operand(left) || !literal_scalar_operand(right))
+}
+
+/// Literal scalars cannot contain an internal object value hidden behind a variable or call.
+pub(super) fn literal_scalar_operand(expr: &Expr) -> bool {
+    matches!(expr.kind, ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)
+        | ExprKind::StringLiteral(_) | ExprKind::BoolLiteral(_) | ExprKind::Null)
+}
+
+/// Reads the closed-world capability flag installed for callable summaries and DCE.
+fn internal_object_operators_available() -> bool {
+    with_active_instance_dispatch_metadata(|metadata| metadata.is_some_and(|metadata| metadata.has_internal_object_operators))
+}
+
 /// Returns true if any statement in `stmts` may throw, including implicit destruction.
 pub(super) fn block_may_throw(stmts: &[Stmt]) -> bool {
     block_effect(stmts).may_throw
@@ -253,8 +270,13 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         | ExprKind::Null
         | ExprKind::ConstRef(_)
         | ExprKind::This => Effect::PURE,
-        ExprKind::Negate(inner)
-        | ExprKind::Not(inner)
+        ExprKind::Negate(inner) => {
+            let effect = expr_effect(inner);
+            if internal_object_operators_available() && !literal_scalar_operand(inner) {
+                effect.with_may_throw()
+            } else { effect }
+        }
+        ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Cast { expr: inner, .. }
@@ -274,7 +296,8 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
             .with_may_throw(),
         ExprKind::BinaryOp { left, op, right } => {
             let operands = expr_effect(left).combine(expr_effect(right));
-            if binary_op_may_throw(op, right) {
+            if binary_op_may_throw(op, right)
+                || (internal_object_operators_available() && internal_arithmetic_candidate(left, op, right)) {
                 operands.with_may_throw()
             } else {
                 operands

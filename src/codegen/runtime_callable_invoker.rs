@@ -148,6 +148,8 @@ struct InvokerEmitContext {
     php_return_status: bool,
     /// Resolved parameter defaults for this body, indexed like `FunctionSig::params`.
     defaults: InvokerDefaults,
+    /// The declared literal parameter currently being decoded, before ABI coercion.
+    literal_parameter: Option<(usize, String)>,
 }
 
 impl InvokerEmitContext {
@@ -169,12 +171,21 @@ impl InvokerEmitContext {
             defaults,
             mbstring_operation: None,
             mbstring_variable_ref_warnings: false,
+            literal_parameter: None,
         }
     }
 
     /// Returns the resolved default for one parameter index, if it was materializable.
     fn resolved_default(&self, index: usize) -> Option<InvokerDefaultValue> {
         self.defaults.get(index).cloned().flatten()
+    }
+
+    /// Selects a declared false/null contract without narrowing inferred parameter defaults.
+    fn select_literal_parameter(&mut self, sig: &FunctionSig, index: usize) {
+        self.literal_parameter = sig.params.get(index)
+            .filter(|(_, ty)| sig.declared_params.get(index).copied().unwrap_or(false)
+                && matches!(ty, PhpType::False | PhpType::Void))
+            .map(|(name, _)| (index, name.clone()));
     }
 
     /// Allocates a deterministic local label for generated branches.
@@ -637,6 +648,7 @@ fn emit_loaded_indexed_array_callback_call(
     let mut arg_types = Vec::new();
     // -- marshal each visible regular from the indexed container --
     for index in 0..shape.visible_regular {
+        ctx.select_literal_parameter(sig, index);
         let has_default = sig.defaults.get(index).and_then(Option::as_ref).is_some();
         let target_ty = callback_arg_target_ty(sig, index, has_default, &elem_ty);
         let is_ref = sig.ref_params.get(index).copied().unwrap_or(false);
@@ -679,6 +691,8 @@ fn emit_loaded_indexed_array_callback_call(
         ctx.argument_owners.record_pushed(index, &pushed_ty, emitter);
         arg_types.push(pushed_ty);
     }
+
+    ctx.literal_parameter = None;
 
     if shape.hidden_argc {
         // The invoker synthesizes argc from the container length; it never consumes a user slot.
@@ -837,6 +851,7 @@ fn emit_loaded_assoc_array_callback_call(
 
     // -- marshal each visible regular via hash lookup --
     for index in 0..shape.visible_regular {
+        ctx.select_literal_parameter(sig, index);
         let has_default = sig.defaults.get(index).and_then(Option::as_ref).is_some();
         let target_ty = callback_arg_target_ty(sig, index, has_default, &elem_ty);
         let param_name = sig.params.get(index).map(|(name, _)| name.as_str());
@@ -892,6 +907,7 @@ fn emit_loaded_assoc_array_callback_call(
         arg_types.push(pushed_ty);
     }
 
+    ctx.literal_parameter = None;
     if shape.hidden_argc {
         public_args::push_arg_count_from_reg(emitter, count_reg);
         arg_types.push(PhpType::Int);
@@ -2668,6 +2684,9 @@ fn coerce_result_to_type(
                     Arch::X86_64 => emitter.instruction("mov rax, rdi"),        // move the unboxed container pointer into the integer result
                 }
             }
+            PhpType::Void => {
+                abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
+            }
             PhpType::Mixed | PhpType::Union(_) => {}
             _ => {}
         }
@@ -2707,6 +2726,7 @@ fn can_coerce_result_to_type(source_ty: &PhpType, target_ty: &PhpType) -> bool {
                 | PhpType::Array(_)
                 | PhpType::AssocArray { .. }
                 | PhpType::Object(_)
+                | PhpType::Void
                 | PhpType::Mixed
                 | PhpType::Union(_)
         );
@@ -2778,6 +2798,13 @@ fn emit_empty_string_result(emitter: &mut Emitter) {
 
 /// Releases a preserved Mixed value after coercion.
 fn release_preserved_mixed_after_arg_coercion(emitter: &mut Emitter, pushed_ty: &PhpType) {
+    if matches!(pushed_ty.codegen_repr(), PhpType::Void | PhpType::Never) {
+        // Null has no pushed result slot; the preserved source is already at the stack top.
+        abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));
+        abi::emit_decref_if_refcounted(emitter, &PhpType::Mixed);
+        abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
+        return;
+    }
     abi::emit_push_result_value(emitter, pushed_ty);
     abi::emit_load_temporary_stack_slot(emitter, abi::int_result_reg(emitter), 16);
     abi::emit_decref_if_refcounted(emitter, &PhpType::Mixed);

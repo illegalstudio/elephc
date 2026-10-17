@@ -31,6 +31,11 @@ pub(super) fn lower_interface_method_call(
     let mut ref_params = Vec::with_capacity(callee_sig.ref_params.len() + 1);
     ref_params.push(false);
     ref_params.extend(callee_sig.ref_params.iter().copied());
+    let receiver_reg = abi::nested_call_reg(ctx.emitter);
+    ctx.load_value_to_reg(expect_operand(inst, 0)?, receiver_reg)?;
+    if super::super::literal_method_index::has_literal_parameters(&callee_sig.params) {
+        emit_interface_literal_parameter_guards(ctx, inst, method_name, receiver_reg)?;
+    }
     let call_args = materialize_direct_call_args_with_refs_and_options(
         ctx,
         &inst.operands,
@@ -81,6 +86,9 @@ pub(super) fn resolve_interface_call_signature(
 }
 
 /// Lowers a method call after an earlier EIR guard has proven a nullable receiver non-null.
+///
+/// The null check stays ahead of argument checks. An overridable method then uses the
+/// runtime class's declared parameters, so a wider override is not rejected by the base.
 pub(super) fn lower_nullable_receiver_method_call(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -113,6 +121,17 @@ pub(super) fn lower_nullable_receiver_method_call(
     let done_label = ctx.next_label("method_receiver_done");
     let receiver_reg = abi::nested_call_reg(ctx.emitter);
     objects::emit_nullable_receiver_object_payload(ctx, object, &null_label, receiver_reg)?;
+    if target.dynamic_slot.is_some() {
+        emit_hierarchy_literal_parameter_guards(
+            ctx, inst, class_name, method_name, receiver_reg,
+        )?;
+    } else {
+        abi::emit_push_reg(ctx.emitter, receiver_reg);
+        super::method_resolution::emit_method_literal_parameter_guards(
+            ctx, &target, &inst.operands[1..],
+        )?;
+        abi::emit_pop_reg(ctx.emitter, receiver_reg);
+    }
     let call_args = materialize_method_call_args_with_receiver_reg_and_refs(
         ctx,
         receiver_reg,
@@ -198,6 +217,9 @@ pub(super) fn lower_nullable_receiver_interface_method_call(
     let done_label = ctx.next_label("method_receiver_done");
     let receiver_reg = abi::nested_call_reg(ctx.emitter);
     objects::emit_nullable_receiver_object_payload(ctx, object, &null_label, receiver_reg)?;
+    if super::super::literal_method_index::has_literal_parameters(&callee_sig.params) {
+        emit_interface_literal_parameter_guards(ctx, inst, method_name, receiver_reg)?;
+    }
     let call_args = materialize_method_call_args_with_receiver_reg_and_refs(
         ctx,
         receiver_reg,
@@ -430,4 +452,93 @@ pub(super) fn lower_callback_filter_accept_intrinsic(
         &inst.operands[1..],
         "callback_filter_accept",
     )
+}
+
+/// Checks the concrete implementation before interface argument coercion.
+/// Wider contravariant implementations retain their own accepted parameter types.
+fn emit_interface_literal_parameter_guards(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    method_name: &str,
+    receiver_reg: &str,
+) -> Result<()> {
+    emit_dispatched_literal_parameter_guards(ctx, inst, method_name, receiver_reg, None)
+}
+
+/// Checks literal parameters on the runtime class when a base method can be overridden.
+///
+/// `false` and `null` on the static signature are not the implementation's contract:
+/// a subclass may widen them. Only classes in `ancestor`'s tree are considered, and a
+/// class whose implementation no longer declares the literal is not rejected.
+pub(super) fn emit_hierarchy_literal_parameter_guards(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    ancestor: &str,
+    method_name: &str,
+    receiver_reg: &str,
+) -> Result<()> {
+    let key = php_symbol_key(method_name);
+    if !ctx.module.class_infos.get(ancestor.trim_start_matches('\\'))
+        .and_then(|class| class.methods.get(&key))
+        .is_some_and(|signature| super::super::literal_method_index::has_literal_parameters(&signature.params))
+    {
+        return Ok(());
+    }
+    emit_dispatched_literal_parameter_guards(
+        ctx, inst, method_name, receiver_reg, Some(ancestor),
+    )
+}
+
+/// Dispatches literal parameter checks by runtime class id.
+///
+/// `ancestor` limits the search to one class and its subclasses. Interface calls pass
+/// `None` so every implementation of the method is eligible.
+fn emit_dispatched_literal_parameter_guards(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    method_name: &str,
+    receiver_reg: &str,
+    ancestor: Option<&str>,
+) -> Result<()> {
+    let indexed = ctx.shared.literal_methods.candidates(
+        ctx.module, &php_symbol_key(method_name), false, inst.operands.len() - 1,
+    );
+    let candidates = indexed.iter().filter(|candidate| ancestor.is_none_or(|ancestor|
+        super::method_dispatch::class_is_same_or_subclass(ctx, &candidate.class_name, ancestor)
+    )).collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return Ok(());
+    }
+    let done = ctx.next_label("interface_literal_done");
+    let labels = candidates.iter().map(|_| ctx.next_label("interface_literal_class"))
+        .collect::<Vec<_>>();
+    // -- select the declared parameter contract from the receiver's runtime class --
+    abi::emit_push_reg(ctx.emitter, receiver_reg);
+    let class_id_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let compare_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_from_address(ctx.emitter, class_id_reg, receiver_reg, 0);
+    for (candidate, label) in candidates.iter().zip(&labels) {
+        abi::emit_load_int_immediate(ctx.emitter, compare_reg, candidate.class_id as i64);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cmp {}, {}", class_id_reg, compare_reg)); // compare the runtime receiver with this literal contract
+                ctx.emitter.instruction(&format!("b.eq {}", label));            // validate only the selected runtime implementation
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("cmp {}, {}", class_id_reg, compare_reg)); // compare the runtime receiver with this literal contract
+                ctx.emitter.instruction(&format!("je {}", label));              // validate only the selected runtime implementation
+            }
+        }
+    }
+    abi::emit_jump(ctx.emitter, &done);
+    for (candidate, label) in candidates.iter().zip(&labels) {
+        ctx.emitter.label(label);
+        super::direct_calls::emit_literal_declared_parameter_guards(
+            ctx, &inst.operands[1..], &candidate.params, &candidate.callable_name,
+        )?;
+        abi::emit_jump(ctx.emitter, &done);
+    }
+    ctx.emitter.label(&done);
+    abi::emit_pop_reg(ctx.emitter, receiver_reg);
+    Ok(())
 }

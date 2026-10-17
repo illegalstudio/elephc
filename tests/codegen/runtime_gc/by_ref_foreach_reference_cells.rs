@@ -80,6 +80,41 @@ echo implode(",", $a), "\n";
     assert_clean(out, "3,2,3\n");
 }
 
+/// An element appended after the tail is visited and the walk stays balanced.
+#[test]
+fn by_ref_foreach_append_after_the_tail_is_balanced() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [1];
+foreach ($a as &$v) {
+    echo "$v\n";
+    $a[1] = 2;
+}
+unset($v);
+echo implode(",", $a), "\n";
+"#,
+    );
+    assert_clean(out, "1\n2\n1,2\n");
+}
+
+/// Repeated growth appends resume from the tail key and release every retained anchor.
+#[test]
+fn by_ref_foreach_growth_appends_stay_balanced() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [1];
+foreach ($a as &$v) {
+    if (count($a) < 12) {
+        $a[] = $v + 1;
+    }
+}
+unset($v);
+echo count($a), "\n";
+"#,
+    );
+    assert_clean(out, "12\n");
+}
+
 /// An indexed literal may be destroyed at loop exit while its final alias remains usable.
 #[test]
 fn indexed_literal_final_alias_outlives_the_foreach_source() {

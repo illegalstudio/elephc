@@ -22,6 +22,7 @@ mod array_implode;
 mod array_membership;
 mod call_coercion_owners;
 mod callable_flow_safety;
+mod loop_closures;
 mod callable_property_owners;
 mod class_introspection_owners;
 mod closure_bind_owners;
@@ -32,6 +33,7 @@ mod descriptor_unpack_keys;
 mod destructor_catch_preservation;
 mod dynamic_spreads;
 mod effects;
+mod string_append;
 mod eval_ownership;
 mod eval_default_helpers;
 mod exhaustive;
@@ -150,6 +152,7 @@ fn try_lower_source_at_for_target(
     );
     let ast = crate::image_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::version_prelude::inject_if_used(

@@ -158,7 +158,7 @@ mod tests {
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         // +11 over main: the `__elephc_opcache_rt_*` runtime script-cache helpers this
         // branch adds (see `support.rs` for the roll-call).
-        assert_eq!(contracts().len(), 1146 + curl_surface);
+        assert_eq!(contracts().len(), 1160 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

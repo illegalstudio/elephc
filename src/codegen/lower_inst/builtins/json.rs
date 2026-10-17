@@ -44,6 +44,7 @@ pub(crate) fn lower_json_decode(
     load_json_source_string(ctx, json, "json_decode source")?;
     store_json_error_source_ptr(ctx);
     abi::emit_call_label(ctx.emitter, "__rt_json_decode_mixed");
+    clear_json_diagnostic_source_refs(ctx);
     box_null_on_json_decode_failure(ctx);
     store_if_result(ctx, inst)
 }
@@ -62,6 +63,7 @@ pub(crate) fn lower_json_encode(
     lower_json_encode_flags(ctx, inst)?;
     load_json_encode_value(ctx, value, &value_ty)?;
     emit_json_encode_loaded_value(ctx, &value_ty);
+    clear_json_diagnostic_source_refs(ctx);
     box_json_encode_result(ctx);
     store_if_result(ctx, inst)
 }
@@ -103,7 +105,9 @@ pub(crate) fn lower_json_validate(
     lower_json_validate_flags(ctx, inst)?;
     lower_json_validate_depth(ctx, inst)?;
     load_json_source_string(ctx, json, "json_validate source")?;
+    store_json_error_source_ptr(ctx);
     abi::emit_call_label(ctx.emitter, "__rt_json_validate");
+    clear_json_diagnostic_source_refs(ctx);
     store_if_result(ctx, inst)
 }
 
@@ -112,7 +116,7 @@ fn reset_json_decode_state(ctx: &mut FunctionContext<'_>) {
     abi::emit_store_zero_to_symbol(ctx.emitter, "_json_last_error", 0);
     abi::emit_store_zero_to_symbol(ctx.emitter, "_json_active_depth", 0);
     abi::emit_store_zero_to_symbol(ctx.emitter, "_json_error_location_active", 0);
-    abi::emit_store_zero_to_symbol(ctx.emitter, "_json_error_source_ptr", 0);
+    clear_json_diagnostic_source_refs(ctx);
 }
 
 /// Clears observable JSON error and parser state after all EIR operands have evaluated.
@@ -120,7 +124,7 @@ fn reset_json_validation_state(ctx: &mut FunctionContext<'_>) {
     abi::emit_store_zero_to_symbol(ctx.emitter, "_json_last_error", 0);
     abi::emit_store_zero_to_symbol(ctx.emitter, "_json_active_depth", 0);
     abi::emit_store_zero_to_symbol(ctx.emitter, "_json_error_location_active", 0);
-    abi::emit_store_zero_to_symbol(ctx.emitter, "_json_error_source_ptr", 0);
+    clear_json_diagnostic_source_refs(ctx);
 }
 
 /// Clears JSON encoder state after all EIR operands have already evaluated.
@@ -129,7 +133,7 @@ fn reset_json_encode_state(ctx: &mut FunctionContext<'_>) {
     abi::emit_store_zero_to_symbol(ctx.emitter, "_json_active_depth", 0);
     abi::emit_store_zero_to_symbol(ctx.emitter, "_json_indent_depth", 0);
     abi::emit_store_zero_to_symbol(ctx.emitter, "_json_error_location_active", 0);
-    abi::emit_store_zero_to_symbol(ctx.emitter, "_json_error_source_ptr", 0);
+    clear_json_diagnostic_source_refs(ctx);
 }
 
 /// Classifies the optional `json_decode()` associative argument.
@@ -596,10 +600,28 @@ fn emit_static_string_result(ctx: &mut FunctionContext<'_>, bytes: &[u8]) {
     abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
 }
 
-/// Stores the current string pointer for location-aware `json_decode()` errors.
+/// Publishes the original decode or validate source and clears its coordinates.
+///
+/// The length bounds the deferred line/column scan. The candidate slot starts
+/// empty so a later container or syntax error can publish an absolute position
+/// without inheriting a previous call's pointer.
 fn store_json_error_source_ptr(ctx: &mut FunctionContext<'_>) {
-    let ptr_reg = abi::string_result_regs(ctx.emitter).0;
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_store_reg_to_symbol(ctx.emitter, ptr_reg, "_json_error_source_ptr", 0);
+    abi::emit_store_reg_to_symbol(ctx.emitter, len_reg, "_json_error_source_len", 0);
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_json_error_candidate_ptr", 0);
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_json_error_line", 0);
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_json_error_column", 0);
+}
+
+/// Drops diagnostic-source pointers after a public JSON operation returns.
+///
+/// Numeric line/column state is left intact for `json_last_error_msg()`.
+/// Recursive `__rt_json_decode_mixed` returns do not call this helper.
+fn clear_json_diagnostic_source_refs(ctx: &mut FunctionContext<'_>) {
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_json_error_source_ptr", 0);
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_json_error_source_len", 0);
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_json_error_candidate_ptr", 0);
 }
 
 /// Extracts `JSON_OBJECT_AS_ARRAY` from the loaded flags and stores decode assoc mode.

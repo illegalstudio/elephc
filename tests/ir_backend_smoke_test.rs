@@ -1443,7 +1443,7 @@ echo json_validate(123) ? "I" : "B";
 "#;
     assert_eq!(
         compile_and_run_ir_backend("json_validation_builtins", source),
-        "JDFok:T:4:Syntax error:0:C:M:I"
+        "JDFok:T:4:Syntax error near location 1:1:0:C:M:I"
     );
 }
 
@@ -1480,7 +1480,7 @@ echo gettype(json_decode("{}", null, 512, JSON_OBJECT_AS_ARRAY));
 "#;
     assert_eq!(
         compile_and_run_ir_backend("json_decode_builtins", source),
-        "JADFarray|array:Ada:2|object:Ada|42|4:Syntax error near location 1:9|array"
+        "JADFarray|array:Ada:2|object:Ada|42|4:Syntax error near location 1:1|array"
     );
 }
 

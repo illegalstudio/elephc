@@ -80,6 +80,24 @@ pub struct Function {
 }
 
 impl Function {
+    /// Counts instruction and terminator value uses without counting definitions.
+    pub(crate) fn value_use_counts(&self) -> std::collections::HashMap<ValueId, usize> {
+        let mut counts = std::collections::HashMap::new();
+        for inst in &self.instructions {
+            for &operand in &inst.operands {
+                *counts.entry(operand).or_insert(0) += 1;
+            }
+        }
+        for block in &self.blocks {
+            if let Some(terminator) = &block.terminator {
+                for operand in terminator.used_values() {
+                    *counts.entry(operand).or_insert(0) += 1;
+                }
+            }
+        }
+        counts
+    }
+
     /// Creates an empty function with no blocks or locals.
     pub fn new(name: String, return_type: IrType, return_php_type: PhpType) -> Self {
         Self {

@@ -62,7 +62,7 @@ libloading = { version = "0.8", optional = true }
 # DB client, no `-lz`) while keeping the binary wire protocol and prepared
 # statements this driver needs. mysql 28 exposes a ring-backed rustls feature, so
 # TLS no longer needs aws-lc-rs or a C/asm crypto toolchain.
-mysql = { version = "28", default-features = false, features = ["minimal-rust"] }
+mysql = { version = "28.0.4", default-features = false, features = ["minimal-rust"] }
 # --- TLS (gated by the `tls` / `mysql-tls` features below) ---
 # PostgreSQL TLS uses rustls with the RING crypto provider ONLY (no aws-lc-rs),
 # mirroring crates/elephc-tls so the musl/Docker images and standalone binaries

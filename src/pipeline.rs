@@ -69,6 +69,7 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
         check_only,
         emit_timings,
         emit_source_map,
+        report_generics,
         emit_debug_info,
         keep_symbols,
         regalloc_linear,
@@ -207,6 +208,7 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
         (with_crates.contains("image"), "image"),
         (with_crates.contains("curl"), "curl"),
         (with_crates.contains("xml"), "xml"),
+        (with_crates.contains("bcmath"), "bcmath"),
     ]
     .into_iter()
     .filter_map(|(forced, group)| forced.then_some(group.to_string()))
@@ -404,6 +406,7 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     crate::progress::phase("hash-prelude");
     let phase_started = Instant::now();
     let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::bcmath_prelude::inject_if_used(ast, with_crates.contains("bcmath"), &mut prelude_inventory);
     timings.record_since("hash-prelude", phase_started);
 
     // Inject the `ext/curl` prelude (the `CurlHandle` class and the `curl_*` wrappers over
@@ -627,6 +630,12 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     for warning in &check_result.warnings {
         errors::report_warning(warning);
     }
+    // The instantiation report is printed here, before declaration pruning and codegen: every
+    // template is already gone and every remaining `<...>` name is a concrete instantiation, so
+    // this is the complete monomorphization set. It is diagnostic only and changes nothing.
+    if report_generics {
+        eprintln!("{}", crate::generics::instantiation_report(&ast));
+    }
     if !target.supports_current_backend() {
         crate::progress::clear();
         eprintln!(
@@ -805,6 +814,14 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
         ir_passes::optimize_module(&mut ir_module);
     }
     timings.record_since("ir-opt", phase_started);
+    // The shape merge has now folded everything the EIR comparison could prove identical, so what
+    // remains is the measured case for widening it: candidates whose lowered bodies agree.
+    if report_generics {
+        eprintln!(
+            "{}",
+            codegen::generic_body_sharing_oracle(&ir_module, regalloc_linear)
+        );
+    }
 
     backend::emit_and_link(backend::BackendInputs {
         repl_build: repl_output.is_some(),

@@ -159,7 +159,7 @@ impl Checker {
                     "callable" => Ok(PhpType::Callable),
                     "closure" => Ok(PhpType::Callable),
                     "object" => Ok(PhpType::Object(String::new())),
-                    "void" => Ok(PhpType::Void),
+                    "void" | "null" => Ok(PhpType::Void),
                     // User PHP declarations accept packed and hash arrays without fixing their
                     // storage from a default or the first caller. Compiler-synthesized methods
                     // have explicit internal array ABIs and keep their existing storage type.

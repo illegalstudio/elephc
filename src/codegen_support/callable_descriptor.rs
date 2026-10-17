@@ -37,6 +37,8 @@ pub(crate) const CALLABLE_DESC_KIND_INSTANCE_METHOD: u64 =
     CallableDescriptorShape::InstanceMethod as u64;
 
 pub(crate) const CALLABLE_DESC_ENTRY_OFFSET: usize = 8;
+pub(crate) const CALLABLE_DESC_NAME_OFFSET: usize = 16;
+pub(crate) const CALLABLE_DESC_NAME_LENGTH_OFFSET: usize = 24;
 #[allow(dead_code)]
 pub(crate) const CALLABLE_DESC_SIGNATURE_OFFSET: usize = 32;
 #[allow(dead_code)]

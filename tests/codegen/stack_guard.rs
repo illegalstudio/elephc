@@ -11,6 +11,8 @@
 //! - Inline PHP fixtures are compiled to native binaries; the failure cases assert on the
 //!   stderr text and on the mere fact that the process did not succeed, because a raw
 //!   signal death would also be non-zero — the message is what proves the guard fired.
+//! - Overflow fixtures do observable work after recursion so tail-call elimination cannot
+//!   turn their deliberately unbounded calls into infinite loops.
 //! - The "still succeeds" cases are the false-positive gate: they must stay comfortably
 //!   under the real limits (roughly 50k frames on a default 8 MiB OS stack and roughly 1k
 //!   frames on a 256 KiB fiber stack) so the reserve can never make them flaky.
@@ -28,7 +30,7 @@ const OVERFLOW_MESSAGE: &str = "Maximum call stack size reached. Infinite recurs
 fn test_direct_infinite_recursion_reports_controlled_fatal() {
     let err = compile_and_run_expect_failure(
         r#"<?php
-function deep(int $n): int { $x = deep($n + 1); return $x; }
+function deep(int $n): int { return 1 + deep($n + 1); }
 echo deep(0);
 "#,
     );
@@ -41,8 +43,8 @@ echo deep(0);
 fn test_mutual_infinite_recursion_reports_controlled_fatal() {
     let err = compile_and_run_expect_failure(
         r#"<?php
-function ping(int $n): int { return pong($n + 1); }
-function pong(int $n): int { return ping($n + 1); }
+function ping(int $n): int { return 1 + pong($n + 1); }
+function pong(int $n): int { return 1 + ping($n + 1); }
 echo ping(0);
 "#,
     );
@@ -100,7 +102,7 @@ echo chain(5000);
 fn test_infinite_recursion_inside_generator_reports_controlled_fatal() {
     let err = compile_and_run_expect_failure(
         r#"<?php
-function deep(int $n): int { $x = deep($n + 1); return $x; }
+function deep(int $n): int { return 1 + deep($n + 1); }
 function gen(): Generator { yield deep(0); }
 foreach (gen() as $v) { echo $v; }
 "#,
@@ -114,7 +116,7 @@ foreach (gen() as $v) { echo $v; }
 fn test_infinite_recursion_inside_fiber_reports_controlled_fatal() {
     let err = compile_and_run_expect_failure(
         r#"<?php
-function deep(int $n): int { $x = deep($n + 1); return $x; }
+function deep(int $n): int { return 1 + deep($n + 1); }
 $f = new Fiber(function (): void { Fiber::suspend(deep(0)); });
 $f->start();
 echo "unreachable";

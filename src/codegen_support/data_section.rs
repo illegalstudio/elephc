@@ -99,6 +99,7 @@ pub struct DataSection {
     float_entries: Vec<(String, u64)>,
     word_entries: Vec<(String, Vec<DataWord>)>,
     comm_entries: Vec<(String, usize)>,
+    private_identities: Vec<String>,
     counter: usize,
     dedup: HashMap<Vec<u8>, String>,
     float_dedup: HashMap<u64, String>,
@@ -116,6 +117,7 @@ impl DataSection {
             float_entries: Vec::new(),
             word_entries: Vec::new(),
             comm_entries: Vec::new(),
+            private_identities: Vec::new(),
             counter: 0,
             dedup: HashMap::new(),
             float_dedup: HashMap::new(),
@@ -184,6 +186,15 @@ impl DataSection {
         self.entries.push((name, bytes.to_vec()));
     }
 
+    /// Reserves aligned, zero-initialized module-private storage for a runtime identity.
+    /// No global symbol is emitted, so separately loaded images cannot share the token.
+    pub fn add_private_identity(&mut self, label: &str) -> String {
+        if !self.private_identities.iter().any(|existing| existing == label) {
+            self.private_identities.push(label.to_owned());
+        }
+        label.to_owned()
+    }
+
     /// Looks up `label` in the common-symbol deduplication map; if found, returns the existing label.
     /// Otherwise inserts `label` into `comm_entries` with the given `size` and returns `label` unchanged.
     pub fn add_comm(&mut self, label: String, size: usize) -> String {
@@ -224,11 +235,15 @@ impl DataSection {
             && self.float_entries.is_empty()
             && self.word_entries.is_empty()
             && self.comm_entries.is_empty()
+            && self.private_identities.is_empty()
         {
             return String::new();
         }
 
         let mut out = String::from(".data\n");
+        for label in &self.private_identities {
+            out.push_str(&format!(".p2align 3\n{}:\n    .quad 0\n", label));
+        }
         let comm_align = comm_alignment_operand(target);
         for (label, size) in &self.comm_entries {
             out.push_str(&format!(".comm {}, {}, {}\n", label, size, comm_align));

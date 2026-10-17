@@ -10,6 +10,9 @@
 use super::*;
 
 /// Lowers a direct static-method call on a named class receiver.
+///
+/// A late-bound `static::` call that can still be overridden checks literal parameters
+/// against the runtime called class. Early-bound and final calls keep the resolved signature.
 pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let target = method_name_data(ctx, inst)?.to_string();
     let (receiver_label, method_name) = parse_static_method_target(&target)?;
@@ -97,6 +100,25 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
     } else {
         None
     };
+    let overridable_late_static = late_bound_static
+        && dynamic_static_slot.is_some()
+        && !receiver_info.final_static_methods.contains(&method_key);
+    if overridable_late_static {
+        emit_late_static_literal_parameter_guards(
+            ctx,
+            receiver.as_str(),
+            &method_key,
+            &called_class_id,
+            &inst.operands,
+        )?;
+    } else {
+        super::direct_calls::emit_literal_declared_parameter_guards(
+            ctx,
+            &inst.operands,
+            &callee_sig.params,
+            &format!("{impl_class}::{method_key}"),
+        )?;
+    }
     let eval_done_label = if late_bound_static && ctx.module.required_runtime_features.eval_bridge {
         let no_override_label = ctx.next_label("eval_late_static_no_override");
         let done_label = ctx.next_label("eval_late_static_done");
@@ -169,6 +191,7 @@ pub(super) fn lower_lexical_instance_static_method_call(
     let mut target =
         resolve_method_call_target(ctx, receiver, method_name, inst.operands.len() + 1)?;
     target.dynamic_slot = None;
+    super::method_resolution::emit_method_literal_parameter_guards(ctx, &target, &inst.operands)?;
     let receiver_ty = PhpType::Object(receiver.to_string());
     let mut param_types = Vec::with_capacity(target.params.len() + 1);
     param_types.push(receiver_ty.clone());
@@ -324,6 +347,77 @@ pub(super) fn resolve_static_method_receiver(ctx: &FunctionContext<'_>, receiver
         "static" => current_method_class(ctx).map(str::to_string),
         _ => Ok(receiver.to_string()),
     }
+}
+
+/// Checks literal parameters against the called class of an overridable `static::` call.
+///
+/// The method that lexically contains `static::` may declare `false` or `null` while the
+/// runtime called class widens that parameter. Classes outside the lexical class's tree
+/// are ignored. Final and early-bound calls do not use this path.
+fn emit_late_static_literal_parameter_guards(
+    ctx: &mut FunctionContext<'_>,
+    ancestor: &str,
+    method_key: &str,
+    called_class_id: &CalledClassIdArg,
+    operands: &[ValueId],
+) -> Result<()> {
+    if !ctx.module.class_infos.get(ancestor.trim_start_matches('\\'))
+        .and_then(|class| class.static_methods.get(method_key))
+        .is_some_and(|signature| super::super::literal_method_index::has_literal_parameters(&signature.params))
+    {
+        return Ok(());
+    }
+    let indexed = ctx.shared.literal_methods.candidates(
+        ctx.module, method_key, true, operands.len(),
+    );
+    let candidates = indexed.iter().filter(|candidate|
+        super::method_dispatch::class_is_same_or_subclass(ctx, &candidate.class_name, ancestor)
+    ).collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return Ok(());
+    }
+
+    let class_id_reg = abi::nested_call_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, class_id_reg);
+    super::direct_calls::materialize_called_class_id(ctx, called_class_id)?;
+    abi::emit_reg_move(ctx.emitter, class_id_reg, abi::int_result_reg(ctx.emitter));
+    let done = ctx.next_label("late_static_literal_done");
+    let labels = candidates
+        .iter()
+        .map(|_| ctx.next_label("late_static_literal_class"))
+        .collect::<Vec<_>>();
+    // -- select the declared parameter contract from the late-bound called class --
+    let compare_reg = abi::secondary_scratch_reg(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            for (candidate, label) in candidates.iter().zip(&labels) {
+                abi::emit_load_int_immediate(ctx.emitter, compare_reg, candidate.class_id as i64);
+                ctx.emitter.instruction(&format!("cmp {}, {}", class_id_reg, compare_reg)); // compare the late-bound called-class id with this implementation
+                ctx.emitter.instruction(&format!("b.eq {}", label));            // check this class when the called class matches
+            }
+        }
+        Arch::X86_64 => {
+            for (candidate, label) in candidates.iter().zip(&labels) {
+                abi::emit_load_int_immediate(ctx.emitter, compare_reg, candidate.class_id as i64);
+                ctx.emitter.instruction(&format!("cmp {}, {}", class_id_reg, compare_reg)); // compare the late-bound called-class id with this implementation
+                ctx.emitter.instruction(&format!("je {}", label));              // check this class when the called class matches
+            }
+        }
+    }
+    abi::emit_jump(ctx.emitter, &done);
+    for (candidate, label) in candidates.iter().zip(&labels) {
+        ctx.emitter.label(label);
+        super::direct_calls::emit_literal_declared_parameter_guards(
+            ctx,
+            operands,
+            &candidate.params,
+            &candidate.callable_name,
+        )?;
+        abi::emit_jump(ctx.emitter, &done);
+    }
+    ctx.emitter.label(&done);
+    abi::emit_pop_reg(ctx.emitter, class_id_reg);
+    Ok(())
 }
 
 /// Returns true for the late-bound static receiver spelling.

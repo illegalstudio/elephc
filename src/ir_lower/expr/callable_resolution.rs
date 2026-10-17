@@ -48,6 +48,9 @@ pub(super) fn lower_static_callable_call(
     if !static_callable_call_lowers_directly(ctx, &target) {
         return None;
     }
+    if !crate::ir_lower::loop_closures::direct_call_is_eligible(ctx, &target, callback_args, expr.span) {
+        return None;
+    }
     match target {
         StaticCallableBinding::UserFunction(function_name) => {
             let sig = ctx.functions.get(&function_name).cloned();
@@ -174,6 +177,7 @@ pub(super) fn lower_static_callable_call(
             signature,
             captures,
             return_alias,
+            ..
         } => {
             // A capture without a stable cell already refused this binding above, so the direct
             // call below can be lowered without abandoning any emitted instruction.
@@ -519,6 +523,7 @@ pub(super) fn build_bound_closure_binding(
         signature,
         captures,
         return_alias,
+        ..
     }) = ctx.take_pending_static_callable_result()
     else {
         return None;
@@ -591,6 +596,8 @@ pub(super) fn build_bound_closure_binding(
         signature,
         captures: bound_captures,
         return_alias,
+        loop_guarded: false,
+        numeric_loop_guarded: false,
     };
     Some((bound, bound_descriptor))
 }

@@ -524,13 +524,28 @@ pub(super) fn lower_inc_dec(
     crate::ir_lower::entry_locals::prepare_process_local_for_write(ctx, name);
     let old = ctx.load_local(name, Some(expr.span));
     let existing_type = ctx.local_type(name);
+    if crate::types::object_operators::operator_class(&existing_type).is_some() {
+        let return_old = if post {
+            crate::ir_lower::ownership::acquire_if_refcounted(ctx, old, Some(expr.span))
+        } else { old };
+        let one = lower_int_literal(ctx, 1, expr);
+        let op = if increment { BinOp::Add } else { BinOp::Sub };
+        if let Some(new) = object_operators::lower_object_binary_values(ctx, old, &op, one, expr) {
+            ctx.store_local(name, new, existing_type, Some(expr.span));
+            return if post { return_old } else { ctx.load_local(name, Some(expr.span)) };
+        }
+    }
     if matches!(existing_type.codegen_repr(), PhpType::Mixed | PhpType::Str) {
         let return_old = if post {
             crate::ir_lower::ownership::acquire_if_refcounted(ctx, old, Some(expr.span))
         } else {
             old
         };
-        let new = lower_str_inc_dec(ctx, old, increment, expr);
+        let one = lower_int_literal(ctx, 1, expr);
+        let op = if increment { BinOp::Add } else { BinOp::Sub };
+        let new = object_operators::lower_dynamic_object_binary(ctx, old, &op, one, expr, true,
+            |ctx| lower_str_inc_dec(ctx, old, increment, expr))
+            .unwrap_or_else(|| lower_str_inc_dec(ctx, old, increment, expr));
         ctx.store_local(name, new, PhpType::Mixed, Some(expr.span));
         return if post {
             return_old

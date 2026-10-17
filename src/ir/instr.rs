@@ -837,6 +837,8 @@ pub enum Op {
     MixedCastFloat,
     MixedCastString,
     StrConcat,
+    /// Consumes a local string owner and returns its replacement for an adjacent store.
+    StrAppend,
     StrLen,
     StrPersist,
     /// Reads a string offset; an optional Bool immediate controls missing-offset warnings.
@@ -1242,6 +1244,8 @@ impl Op {
             IToStr | FToStr | ResourceToStr | StrConcat | StrInterpolate
             | MixedCastString | VarDump | PrintR => E::ALLOC_CONCAT,
             StrCharAt => E::ALLOC_CONCAT | E::MAY_WARN,
+            StrAppend => E::READS_LOCAL | E::WRITES_LOCAL | E::READS_HEAP
+                | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_FATAL,
             ConcatReset => E::WRITES_GLOBAL,
             Cast => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_FATAL
@@ -1613,6 +1617,7 @@ impl Op {
             MixedCastFloat => "mixed_cast_float",
             MixedCastString => "mixed_cast_string",
             StrConcat => "str_concat",
+            StrAppend => "str_append",
             StrLen => "str_len",
             StrPersist => "str_persist",
             StrCharAt => "str_char_at",

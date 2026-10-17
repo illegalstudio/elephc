@@ -712,11 +712,13 @@ fn builtin_result_is_proven_independent(name: &str) -> bool {
 
 /// Computes the argument provenance of a cast's result.
 ///
-/// Only a cast EIR lowering ELIDES can hand an argument's storage back, and `lower_cast` elides
-/// exactly one shape: `(string)` over a value whose IR type is already `Str`. Everything else
-/// emits `Op::Cast`, whose backend helpers write into storage independent of the source -- a
-/// `mixed` holding a string is copied into a fresh allocation, and an `(array)` cast allocates
-/// even when its operand is already an array.
+/// Only a cast EIR lowering ELIDES can hand an argument's storage back UNRETAINED, and
+/// `lower_cast` elides exactly one such shape: `(string)` over a value whose IR type is already
+/// `Str`. Everything else either emits `Op::Cast`, whose backend helpers write into storage
+/// independent of the source -- a `mixed` holding a string is copied into a fresh allocation --
+/// or, for an `(array)` cast of a value that is already an array, returns the refcounted operand
+/// itself, which the ordinary return path hands back with a reference of its own (refcounted
+/// storage is retained on return, unlike a bare `Str` slot).
 ///
 /// The only operand with a bare `Str` slot is a parameter DECLARED `string`. A local is boxed
 /// Mixed even when everything written to it was a string -- `$x = $c ? $a : $b` over two

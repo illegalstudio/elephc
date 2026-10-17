@@ -56,6 +56,10 @@ echo json_encode(json_decode("{\"a\": 1, \"b\": 2}")) . "\n"; // → {"a":1,"b":
 $payload = "{\"users\": [{\"name\": \"Alice\", \"age\": 30}, {\"name\": \"Bob\", \"age\": 25}], \"count\": 2}";
 echo json_encode(json_decode($payload)) . "\n";
 
+// Nested integer batches also exercise allocator reuse between array growth steps.
+$batch = json_decode("[[1,2,3,4,5],[6,7,8,9,10]]", true);
+echo "batch: " . count($batch) . " rows, last=" . $batch[1][4] . "\n";
+
 // Default mode returns stdClass; properties are accessible directly.
 $user = json_decode("{\"name\": \"Alice\", \"age\": 30}");
 echo $user->name . " is " . $user->age . "\n";

@@ -495,3 +495,120 @@ fn pop_powmod_strings(ctx: &mut FunctionContext<'_>) {
         }
     }
 }
+
+/// Lowers `bcadd()` through the shared binary BCMath helper.
+pub(crate) fn lower_bcnumber_add(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_binary_scaled(ctx, inst, "__elephc_bcnumber_add", "__rt_bcnumber_add")
+}
+
+/// Lowers `bcceil()` through the shared unary integer-boundary helper.
+pub(crate) fn lower_bcnumber_ceil(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_unary_string(ctx, inst, "__elephc_bcnumber_ceil", "__rt_bcnumber_ceil")
+}
+
+/// Lowers `bccomp()` through the shared comparison helper.
+pub(crate) fn lower_bcnumber_comp(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_binary_scaled(ctx, inst, "__elephc_bcnumber_comp", "__rt_bcnumber_comp")
+}
+
+/// Lowers `bcceil()` through the shared unary integer-boundary helper.
+pub(crate) fn lower_bcnumber_create(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_unary_string(ctx, inst, "__elephc_bcnumber_create", "__rt_bcnumber_create")
+}
+
+/// Lowers `bcdiv()` through the shared binary BCMath helper.
+pub(crate) fn lower_bcnumber_div(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_binary_scaled(ctx, inst, "__elephc_bcnumber_div", "__rt_bcnumber_div")
+}
+
+/// Lowers `bcdivmod()` through the shared two-string-result helper.
+pub(crate) fn lower_bcnumber_divmod(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_binary_scaled(ctx, inst, "__elephc_bcnumber_divmod", "__rt_bcnumber_divmod")
+}
+
+/// Lowers `bcfloor()` through the shared unary integer-boundary helper.
+pub(crate) fn lower_bcnumber_floor(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_unary_string(ctx, inst, "__elephc_bcnumber_floor", "__rt_bcnumber_floor")
+}
+
+/// Lowers `bcmod()` through the shared binary BCMath helper.
+pub(crate) fn lower_bcnumber_mod(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_binary_scaled(ctx, inst, "__elephc_bcnumber_mod", "__rt_bcnumber_mod")
+}
+
+/// Lowers `bcmul()` through the shared binary BCMath helper.
+pub(crate) fn lower_bcnumber_mul(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_binary_scaled(ctx, inst, "__elephc_bcnumber_mul", "__rt_bcnumber_mul")
+}
+
+/// Lowers `bcpow()` through the shared binary-shaped BCMath helper.
+pub(crate) fn lower_bcnumber_pow(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_binary_scaled(ctx, inst, "__elephc_bcnumber_pow", "__rt_bcnumber_pow")
+}
+
+/// Lowers `bcpowmod()` while preserving all three source strings and nullable scale.
+pub(crate) fn lower_bcnumber_powmod(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count_between(inst, "__elephc_bcnumber_powmod", 3, 4)?;
+    publish(ctx);
+    load_string_arg_to_regs(ctx, inst, 0, "__elephc_bcnumber_powmod", string_ptr(ctx), string_len(ctx))?;
+    push_string_result(ctx);
+    load_string_arg_to_regs(ctx, inst, 1, "__elephc_bcnumber_powmod", string_ptr(ctx), string_len(ctx))?;
+    push_string_result(ctx);
+    load_string_arg_to_regs(ctx, inst, 2, "__elephc_bcnumber_powmod", string_ptr(ctx), string_len(ctx))?;
+    push_string_result(ctx);
+    load_optional_scale(
+        ctx,
+        inst.operands.get(3).copied(),
+        7,
+        8,
+        10,
+        11,
+        "bcpowmod scale",
+    )?;
+    pop_powmod_strings(ctx);
+    abi::emit_call_label(ctx.emitter, "__rt_bcnumber_powmod");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `bcround()` with default precision zero and default mode one.
+pub(crate) fn lower_bcnumber_round(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count_between(inst, "__elephc_bcnumber_round", 1, 3)?;
+    publish(ctx);
+    load_string_arg_to_regs(ctx, inst, 0, "__elephc_bcnumber_round", string_ptr(ctx), string_len(ctx))?;
+    push_string_result(ctx);
+    load_optional_int(ctx, inst.operands.get(1).copied(), 0, "bcround precision")?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    load_optional_int(ctx, inst.operands.get(2).copied(), 1, "bcround mode")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            // -- Place mode and saved precision after the AArch64 string pair --
+            ctx.emitter.instruction("mov x4, x0");                              // pass the rounding mode in the helper's fourth value register
+            abi::emit_pop_reg(ctx.emitter, "x3");
+        }
+        Arch::X86_64 => {
+            // -- Place mode and saved precision in the x86_64 integer arguments --
+            ctx.emitter.instruction("mov rsi, rax");                            // pass the rounding mode in the helper's secondary integer register
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+        }
+    }
+    pop_primary_string(ctx);
+    abi::emit_call_label(ctx.emitter, "__rt_bcnumber_round");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `bcsqrt()` through the shared unary scaled helper.
+pub(crate) fn lower_bcnumber_sqrt(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count_between(inst, "__elephc_bcnumber_sqrt", 1, 2)?;
+    publish(ctx);
+    load_string_arg_to_regs(ctx, inst, 0, "__elephc_bcnumber_sqrt", string_ptr(ctx), string_len(ctx))?;
+    push_string_result(ctx);
+    load_optional_scale(ctx, inst.operands.get(1).copied(), 5, 6, 3, 4, "bcsqrt scale")?;
+    pop_primary_string(ctx);
+    abi::emit_call_label(ctx.emitter, "__rt_bcnumber_sqrt");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `bcsub()` through the shared binary BCMath helper.
+pub(crate) fn lower_bcnumber_sub(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_binary_scaled(ctx, inst, "__elephc_bcnumber_sub", "__rt_bcnumber_sub")
+}

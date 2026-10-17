@@ -299,8 +299,12 @@ impl Span {
     }
 
     /// Returns the union of two spans: the earlier start and the later end.
-    /// A dummy operand (line 0) is ignored so merging with a synthetic child
-    /// never drags a real span to 0:0.
+    ///
+    /// The merged span carries the EARLIER start's source identity and DROPS the other
+    /// operand's, so a merge across an included file keys as the file that supplied the earlier
+    /// start. A `dummy()` operand (line 0) is ignored so merging with a node built without a
+    /// source location never drags a real span to 0:0; a `synthetic()` span is NOT ignored,
+    /// because its line starts at `SYNTHETIC_LINE_BASE`.
     pub fn merge(self, other: Span) -> Span {
         if other.line == 0 {
             return self;
@@ -462,6 +466,29 @@ mod tests {
         let b = Span::with_end(2, 10, 3, 4);
         let merged = a.merge(b);
         assert_eq!(merged, Span::with_end(2, 5, 3, 4));
+    }
+
+    /// A merged span keys as the EARLIER start's source and drops the other operand's: merging
+    /// spans from two included sources must not read back as root, and with distinct starts the
+    /// surviving identity is independent of the operand order; a root operand on the start side
+    /// still yields root (issue #1293). Two starts at identical coordinates tie-break to the
+    /// receiver, which no parser path can produce across files.
+    #[test]
+    fn merge_keeps_the_earlier_starts_source_identity() {
+        let first = Span::new_in_source(2, 4, 5);
+        let later = Span::new_in_source(9, 7, 9);
+        let merged = first.merge(later);
+        assert_eq!(merged.source_id(), 5, "the earlier start's identity survives the merge");
+        assert_eq!((merged.line, merged.col), (2, 4));
+        assert_eq!((merged.end_line, merged.end_column()), (9, 7));
+        assert_eq!(later.merge(first), merged, "operand order does not change the earlier start");
+
+        assert_eq!(Span::new(2, 4).merge(later).source_id(), 0, "a root start stays root");
+        assert_eq!(
+            first.merge(Span::new(9, 7)).source_id(),
+            5,
+            "an included start keeps its identity against a root end"
+        );
     }
 
     /// Verifies merging with a dummy span keeps the real span unchanged in

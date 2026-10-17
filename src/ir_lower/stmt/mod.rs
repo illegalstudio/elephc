@@ -41,6 +41,7 @@ use crate::types::{PhpType, ThrowAccessKind};
 
 mod statement_basics;
 mod local_assignments;
+mod string_append;
 mod conditionals;
 mod loops;
 mod array_write_core;

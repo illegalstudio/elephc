@@ -13,7 +13,7 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 /// Invokes the hydration hook after transferring its typed data argument to parser-context ownership.
 pub(super) fn emit_unserialize_magic_call(emitter: &mut Emitter) {
     let (object, data, method, temporary) = match emitter.target.arch {
-        Arch::AArch64 => (88, 32, 40, 56),
+        Arch::AArch64 => (248, 192, 200, 216),
         Arch::X86_64 => (32, 80, 72, 64),
     };
     let result = abi::int_result_reg(emitter);
@@ -47,6 +47,7 @@ pub(super) fn emit_unserialize_magic_call(emitter: &mut Emitter) {
     emitter.label("__rt_unser_magic_data_ready");
     abi::load_at_offset(emitter, result, data);
     abi::emit_call_label(emitter, "__rt_unserialize_defer_data");
+    super::parser_owners::emit_transfer_data(emitter);
     abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), object);
     abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), data);
     abi::emit_store_zero_to_local_slot(emitter, data);
@@ -71,7 +72,7 @@ mod tests {
             let rooted = asm.find("__rt_unserialize_defer_data").unwrap();
             let invoked = asm.find(if name == "linux-x86_64" { "call r10" } else { "blr x10" }).unwrap();
             assert!(boxed < rooted && rooted < invoked, "{name}: {asm}");
-            let clear = if name == "linux-x86_64" { "mov QWORD PTR [rbp - 80], 0" } else { "stur xzr, [x29, #-32]" };
+            let clear = if name == "linux-x86_64" { "mov QWORD PTR [rbp - 80], 0" } else { "stur xzr, [x29, #-192]" };
             assert!(asm[rooted..invoked].contains(clear), "{name}: {asm}");
             assert!(!asm.contains("__rt_decref_any"), "{name}: keep back-reference targets alive");
         }

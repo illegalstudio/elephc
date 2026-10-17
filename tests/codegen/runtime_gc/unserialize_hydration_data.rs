@@ -144,3 +144,152 @@ echo unserialize('i:42;');
 "#;
     assert_eq!(compile_and_run(source), "hook|cleanup|42");
 }
+
+/// A caught nested property error preserves outer identity and allowed-class policy.
+#[test]
+fn test_unserialize_exception_cleanup_nested_context() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class C { public int $n = 0; }
+class D {}
+class W { public function __wakeup(): void {
+    try { unserialize('O:1:"C":1:{s:1:"n";s:1:"x";}'); }
+    catch (TypeError $e) { echo "caught|"; }
+} }
+$options = ["allowed_classes" => ["W"]];
+$value = unserialize('a:3:{i:0;O:1:"W":0:{}i:1;r:2;i:2;O:1:"D":0:{}}', $options);
+echo ($value[0] === $value[1] ? "same" : "different"), "|", get_class($value[2]), "\n";
+unset($value, $options);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "caught|same|__PHP_Incomplete_Class\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A typed-property throw releases every unfinished ancestor array and earlier child.
+#[test]
+fn test_unserialize_exception_cleanup_partial_parent() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class C { public int $n = 0; }
+for ($i=0;$i<12;$i++) {
+    try { unserialize('a:2:{i:0;s:4:"kept";i:1;O:1:"C":1:{s:1:"n";s:1:"x";}}'); }
+    catch (TypeError $e) { echo "caught|"; }
+}
+echo unserialize('i:42;'), "\n";
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "caught|caught|caught|caught|caught|caught|caught|caught|caught|caught|caught|caught|42\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A typed-property throw releases an unfinished hydration data hash before the hook runs.
+#[test]
+fn test_unserialize_exception_cleanup_partial_data() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class C { public int $n = 0; }
+class H { public function __unserialize(array $data): void { echo "unexpected|"; } }
+for ($i=0; $i<12; $i++) {
+ try { unserialize('O:1:"H":2:{s:4:"kept";s:4:"text";s:3:"bad";O:1:"C":1:{s:1:"n";s:1:"x";}}'); }
+ catch (TypeError $e) { echo "caught|"; }
+}
+echo unserialize('i:42;'), "\n";
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "caught|caught|caught|caught|caught|caught|caught|caught|caught|caught|caught|caught|42\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A nested property failure releases its containing unfinished object and stored strings.
+#[test]
+fn test_unserialize_exception_cleanup_partial_object() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class C { public int $n = 0; }
+class P { public mixed $text; public mixed $child; }
+for ($i=0; $i<12; $i++) {
+ try { unserialize('O:1:"P":2:{s:4:"text";s:4:"kept";s:5:"child";O:1:"C":1:{s:1:"n";s:1:"x";}}'); }
+ catch (TypeError $e) { echo "caught|"; }
+}
+echo unserialize('i:42;'), "\n";
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "caught|caught|caught|caught|caught|caught|caught|caught|caught|caught|caught|caught|42\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// User hook throws retire unfinished arrays and objects through the same cleanup chain.
+#[test]
+fn test_unserialize_exception_cleanup_hook_throw_partial() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class W { public function __wakeup(): void { throw new RuntimeException("wake"); } }
+class H { public function __unserialize(array $data): void { throw new RuntimeException("hook"); } }
+for ($i=0; $i<3; $i++) {
+ try { unserialize('a:2:{i:0;s:4:"kept";i:1;O:1:"W":0:{}}'); }
+ catch (RuntimeException $e) { echo $e->getMessage(), "|"; }
+ try { unserialize('a:2:{i:0;s:4:"kept";i:1;O:1:"H":1:{s:4:"text";s:4:"data";}}'); }
+ catch (RuntimeException $e) { echo $e->getMessage(), "|"; }
+}
+echo unserialize('i:42;'), "\n";
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "wake|hook|wake|hook|wake|hook|42\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Option-validation errors still close their pre-boundary context exactly once.
+#[test]
+fn test_unserialize_exception_cleanup_nested_option_error() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class C { public int $n = 0; }
+class D {}
+class W { public function __wakeup(): void {
+    $bad = ["allowed_classes" => 123];
+    try { unserialize('i:1;', $bad); }
+    catch (TypeError $e) { echo "option|"; }
+    unset($bad);
+    $bad = ["allowed_classes" => [123]];
+    try { unserialize('i:1;', $bad); }
+    catch (TypeError $e) { echo "element|"; }
+    unset($bad);
+} }
+$options = ["allowed_classes" => ["W"]];
+$value = unserialize('a:3:{i:0;O:1:"W":0:{}i:1;r:2;i:2;O:1:"D":0:{}}', $options);
+echo ($value[0] === $value[1] ? "same" : "different"), "|", get_class($value[2]), "\n";
+unset($value, $options);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "option|element|same|__PHP_Incomplete_Class\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Unwinding nested partial arrays releases earlier objects exactly once before the catch.
+#[test]
+fn test_unserialize_exception_cleanup_deep_parent() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class C { public int $n = 0; }
+class D { public function __destruct() { echo "drop|"; } }
+for ($i = 0; $i < 3; $i++) {
+ try { unserialize('a:2:{i:0;O:1:"D":0:{}i:1;a:2:{i:0;s:4:"kept";i:1;O:1:"C":1:{s:1:"n";s:1:"x";}}}'); }
+ catch (TypeError $e) { echo "caught|"; }
+}
+echo unserialize('i:42;'), "\n";
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "drop|caught|drop|caught|drop|caught|42\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Throwing child destructors chain exceptions while all ancestor containers are retired.
+#[test]
+fn test_unserialize_exception_cleanup_cleanup_throw() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class C { public int $n = 0; }
+class D { public function __destruct() { throw new RuntimeException("cleanup"); } }
+for ($i = 0; $i < 3; $i++) {
+ try { unserialize('a:2:{i:0;O:1:"D":0:{}i:1;O:1:"C":1:{s:1:"n";s:1:"x";}}'); }
+ catch (Throwable $e) { echo get_class($e), ":", $e->getMessage(), "|"; }
+}
+echo unserialize('i:42;'), "\n";
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "RuntimeException:cleanup|RuntimeException:cleanup|RuntimeException:cleanup|42\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

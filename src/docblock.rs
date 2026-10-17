@@ -262,33 +262,80 @@ fn collect(source: &str) -> HashMap<(u32, u32), DocBlock> {
     bindings::collect(source)
 }
 
-/// Parses the annotations of one doc comment's lines.
+/// Parses the annotations of one doc comment, one opening tag per line.
+///
+/// A tall comment puts one tag on each line, so every `@template`, `@param`, and `@return` is
+/// read. A short comment that packs several tags onto one line
+/// (`/** @template T @param T $x @return T */`) reads only the tag that opens that line; later
+/// `@tag`s on the same line are that tag's description and are not parsed.
 fn parse_block(lines: &[&str]) -> DocBlock {
     let mut block = DocBlock::default();
     for line in lines {
-        let trimmed = strip_comment_markers(line);
-        let trimmed = trimmed.as_str();
-        if let Some((rest, variance)) = strip_template_tag(trimmed) {
-            if let Some(param) = parse_template(rest, variance) {
-                if !block.type_params.iter().any(|p| p.name == param.name) {
-                    block.type_params.push(param);
+        let stripped = strip_comment_markers(line);
+        for segment in tag_segments(&stripped) {
+            if let Some((rest, variance)) = strip_template_tag(segment) {
+                if let Some(param) = parse_template(rest, variance) {
+                    if !block.type_params.iter().any(|p| p.name == param.name) {
+                        block.type_params.push(param);
+                    }
                 }
+            } else if let Some(rest) = segment.strip_prefix("@param ") {
+                if let Some((name, ty)) = parse_param(rest) {
+                    // First read wins: a tag MENTIONED in a later description (`see @param U $w`)
+                    // must not retype the parameter the earlier annotation bound.
+                    block.params.entry(name).or_insert(ty);
+                }
+            } else if let Some(rest) = segment.strip_prefix("@return ") {
+                // First read wins: a later `@return` inside a description (`see @return mixed`)
+                // must not widen or replace the return type the earlier annotation bound.
+                if block.return_type.is_none() {
+                    block.return_type = parse_type(rest.trim());
+                }
+            } else if let Some(rest) = segment.strip_prefix("@var ") {
+                if block.var_type.is_none() {
+                    block.var_type = parse_var(rest);
+                }
+            } else if let Some(rest) = segment.strip_prefix("@extends ") {
+                block.extends.extend(parse_inherited(rest));
+            } else if let Some(rest) = segment.strip_prefix("@implements ") {
+                block.implements.extend(parse_inherited(rest));
             }
-        } else if let Some(rest) = trimmed.strip_prefix("@param ") {
-            if let Some((name, ty)) = parse_param(rest) {
-                block.params.insert(name, ty);
-            }
-        } else if let Some(rest) = trimmed.strip_prefix("@return ") {
-            block.return_type = parse_type(rest.trim());
-        } else if let Some(rest) = trimmed.strip_prefix("@var ") {
-            block.var_type = parse_var(rest);
-        } else if let Some(rest) = trimmed.strip_prefix("@extends ") {
-            block.extends.extend(parse_inherited(rest));
-        } else if let Some(rest) = trimmed.strip_prefix("@implements ") {
-            block.implements.extend(parse_inherited(rest));
         }
     }
     block
+}
+
+/// Returns the tag that opens one doc-comment line, as a single segment.
+///
+/// The whole trimmed line is that one segment. A later `@tag` on the same line stays inside the
+/// opening tag's description and does not start another segment. A line that does not open with
+/// a tag returns nothing. An unread opener such as `@deprecated` still counts: it opens the line,
+/// so the rest of the line is not scanned for a tag this pass reads.
+fn tag_segments(line: &str) -> Vec<&str> {
+    const TAGS: [&str; 8] = [
+        "@template-covariant ",
+        "@template-contravariant ",
+        "@template ",
+        "@param ",
+        "@return ",
+        "@var ",
+        "@extends ",
+        "@implements ",
+    ];
+    // One segment per line: the tag that OPENS the line. A `@tag` that follows an annotation's
+    // description is description — `@param T $v see @return mixed` must not retype the return,
+    // and phpDocumentor itself treats the rest of the line as the opening tag's content. The
+    // opening tag may be one this pass does not read (`@deprecated`): it still opens the line.
+    let leading_tag = line.starts_with('@')
+        && line[1..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
+    let recognized_at_zero = TAGS.iter().any(|tag| line.starts_with(tag));
+    if !leading_tag && !recognized_at_zero {
+        return Vec::new();
+    }
+    vec![line.trim_end()]
 }
 
 /// Strips one doc-comment line down to the annotation it carries.
@@ -329,7 +376,11 @@ fn parse_template(rest: &str, variance: Variance) -> Option<TypeParam> {
     let mut bound = None;
     if let Some(after) = rest.strip_prefix("of ") {
         let after = after.trim();
-        let bound_end = after.find('=').unwrap_or(after.len());
+        // The bound ends at a default `=` or at the NEXT TAG on the same line (one segment per
+        // line carries the line's description after its tags).
+        let bound_end = after
+            .find(['=', '@'])
+            .unwrap_or(after.len());
         bound = parse_type(after[..bound_end].trim());
         rest = after[bound_end..].trim();
     }
@@ -454,6 +505,78 @@ mod tests {
             block.return_type,
             Some(TypeExpr::Named(Name::unqualified("T")))
         );
+    }
+
+    /// A tag MENTIONED in a description must not REPLACE an annotation already read: a
+    /// `@param T $v see @return mixed` line kept `@return T` (first read wins) and the compile
+    /// still refused a returned string.
+    #[test]
+    fn a_described_tag_does_not_replace_the_annotation_before_it() {
+        let block = block_of(
+            "<?php\n/**\n * @template T of int\n * @param T $v see @return mixed\n * @return T\n */\nfunction f($v): int { return 1; }\n",
+        );
+        assert_eq!(block.type_params.len(), 1);
+        assert_eq!(block.params.get("v"), Some(&TypeExpr::Named(Name::unqualified("T"))));
+        assert_eq!(block.return_type, Some(TypeExpr::Named(Name::unqualified("T"))));
+    }
+
+    /// A tag MENTIONED inside an annotation's own description stays prose: the description may
+    /// carry sentence punctuation, and the split only crosses tag territory without it.
+    #[test]
+    fn a_tag_mentioned_in_a_description_stays_prose() {
+        let block = block_of(
+            "<?php\n/**\n * Sums a number.\n * @param int $v the value; the shape mirrors @template T in the docs.\n */\nfunction f2(int $v): int { return $v + 1; }\n",
+        );
+        assert_eq!(block.type_params.len(), 0, "a mentioned tag must not bind");
+        assert!(block.params.contains_key("v"), "the real annotation still reads");
+    }
+
+    /// A one-line block reads its OPENING tag only: a later `@tag` on the same line is the
+    /// opening tag's description (phpDocumentor semantics), so the `@return` here is not read.
+    #[test]
+    fn one_line_form_reads_its_opening_tag() {
+        let block = block_of(
+            "<?php\n/** @param string ...$args @return int */\nfunction f(...$args): int { return 1; }\n",
+        );
+        assert!(block.params.contains_key("args"), "the opening @param still reads");
+        assert_eq!(block.return_type, None, "a same-line @tag is description, not a segment");
+    }
+
+    /// Prose that MENTIONS a tag is not an annotation: only a line that begins with one may
+    /// contribute tags. A description like "Demonstrates @template T syntax." used to split into
+    /// an `@template` segment and inject a stray `T` into the block.
+    #[test]
+    fn prose_mentioning_a_tag_is_not_an_annotation() {
+        let block = block_of(
+            "<?php\n/**\n * Demonstrates @template T syntax.\n * @param int $v\n */\nfunction f($v) {}\n",
+        );
+        assert_eq!(block.type_params.len(), 0, "prose must not become a template");
+    }
+
+    /// A line opening with an UNREAD annotation (`@deprecated`) contributes nothing: the
+    /// compact one-line form parses its opening tag only, and an unread opening tag reads
+    /// nothing at all. Write the tags on separate lines.
+    #[test]
+    fn an_unread_leading_annotation_contributes_nothing() {
+        let blocks = collect(
+            "<?php\n/** @deprecated @template T of int @param T $v @return T */\nfunction f($v) {}\n",
+        );
+        assert!(blocks.is_empty(), "an unread opening tag reads nothing");
+    }
+
+    /// A one-line block reads its OPENING tag only — here `@template T of int` (with its
+    /// bound); the `@param`/`@return` after it are the opening tag's description. Declare the
+    /// tags on separate lines to bind them all.
+    #[test]
+    fn one_line_form_reads_only_its_opening_tag() {
+        let block = block_of(
+            "<?php\n/** @template T of int @param T $v @return T */\nfunction f($v) { return $v; }\n",
+        );
+        assert_eq!(block.type_params.len(), 1);
+        assert_eq!(block.type_params[0].name, "T");
+        assert_eq!(block.type_params[0].bound, Some(TypeExpr::Int));
+        assert!(block.params.is_empty(), "same-line tags are description");
+        assert_eq!(block.return_type, None);
     }
 
     /// `of` is PHPStan's bound spelling; it reaches the same `TypeParam` as native `T : Foo`.

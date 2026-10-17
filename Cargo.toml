@@ -168,12 +168,6 @@ pdo-cubrid = ["elephc-pdo/cubrid"]
 # export the curl rows into the generated builtin documentation.
 curl = ["elephc-magician/curl", "elephc-builtin-contract/curl"]
 
-# PDO needs two mysql client controls that upstream 28.0.0 does not expose:
-# caller-supplied authentication RSA keys and rustls cipher-suite selection.
-# Keep the small audited patch in-tree until those options land upstream.
-[patch.crates-io]
-mysql = { path = "vendor/mysql-28.0.0" }
-
 # Local test-speed tuning. The dev profile (which `test` inherits) keeps full
 # `debug = 2` info by default, which inflates both rustc codegen and the link of
 # the six test binaries. `line-tables-only` keeps file:line in panic backtraces

@@ -43,7 +43,7 @@ use crate::codegen_support::emit::Emitter;
 
 /// Runtime tags `__rt_mixed_unbox` can report, with the PHP type name each carries into a
 /// `TypeError` message. Tag 7 never reaches here: the unbox helper peels nested boxes.
-const RUNTIME_TAGS: [(u8, &str); 10] = [
+pub(in crate::codegen) const RUNTIME_TAGS: [(u8, &str); 10] = [
     (0, "int"),
     (1, "string"),
     (2, "float"),
@@ -61,9 +61,9 @@ const STRING_TAG: u8 = 1;
 /// The runtime tag carrying a PHP float payload.
 const FLOAT_TAG: u8 = 2;
 /// The runtime tag carrying a PHP object payload.
-const OBJECT_TAG: u8 = 6;
+pub(in crate::codegen) const OBJECT_TAG: u8 = 6;
 /// The runtime tag carrying a PHP bool payload.
-const BOOL_TAG: u8 = 3;
+pub(in crate::codegen) const BOOL_TAG: u8 = 3;
 
 /// Stack layout of the string-to-int diagnostic frame.
 const STRING_TO_INT_PTR_OFFSET: usize = 0;
@@ -158,6 +158,69 @@ pub(super) fn property_type_accepts_runtime_shaped_value(
     Ok(plan_tag_actions(ctx, slot)?.is_some())
 }
 
+/// Emits the `false`-slot mixed-source guard: unbox the boxed value, refuse every tag that is
+/// not bool (php names the refused SOURCE type in the `TypeError` — `int`, `string`, `array`,
+/// …), and refuse a `true` payload by value. On success the FALSE payload (0) sits in the
+/// integer-result register, exactly where the ordinary scalar store expects it.
+///
+/// A `false`-declared slot must never take the bool truthiness cast (`__rt_mixed_cast_bool`):
+/// php accepts ONLY the exact `false` bool here, so `0`, `""` and `[]` are `TypeError`s, not
+/// coercions.
+pub(super) fn emit_false_slot_mixed_guard(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    slot: &PropertySlot,
+) -> Result<()> {
+    // The refusal spells the DECLARED type `false` literally. The nullable `?false`
+    // shape is NOT covered: its slot stores a box through the mixed machinery, whose default
+    // and read paths predate this guard and do not round-trip a stored `false` today.
+    let refuse = |ctx: &mut FunctionContext<'_>, given: &str| {
+        super::super::exceptions::emit_type_error(
+            ctx,
+            &format!(
+                "Cannot assign {} to property {}::${} of type false",
+                given, slot.class_name, slot.property
+            ),
+        );
+    };
+    load_value_to_first_int_arg(ctx, value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let tag_reg = abi::int_result_reg(ctx.emitter);
+    let bool_arm = ctx.next_label("false_slot_bool");
+    let ok_label = ctx.next_label("false_slot_ok");
+    let mut refuse_arms: Vec<(u8, String, String)> = Vec::new();
+    for (tag, name) in RUNTIME_TAGS.iter().filter(|(tag, _)| *tag != BOOL_TAG) {
+        refuse_arms.push((
+            *tag,
+            (*name).to_string(),
+            ctx.next_label(&format!("false_slot_reject_{name}")),
+        ));
+    }
+    for (tag, _, label) in &refuse_arms {
+        super::super::enums::emit_mixed_tag_branch(ctx, tag_reg, i64::from(*tag), label);
+    }
+    super::super::enums::emit_mixed_tag_branch(ctx, tag_reg, i64::from(BOOL_TAG), &bool_arm);
+    // A tag outside the table never reaches the unbox helper (tag 7 is a nested box it peels),
+    // so this fall-through is a defensive refusal rather than a live path.
+    refuse(ctx, "mixed");
+    for (tag, name, label) in refuse_arms {
+        ctx.emitter.label(&label);
+        if tag == OBJECT_TAG {
+            emit_object_property_type_error(ctx, slot);
+        } else {
+            refuse(ctx, &name);
+        }
+    }
+    ctx.emitter.label(&bool_arm);
+    let payload_reg = crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_reg_move(ctx.emitter, result_reg, payload_reg);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &ok_label);
+    refuse(ctx, "true");
+    ctx.emitter.label(&ok_label);
+    Ok(())
+}
+
 /// Emits the weak-mode type guard for a boxed value assigned to a declared property.
 ///
 /// Returns the label the caller must emit AFTER its own value materialization, when the
@@ -167,8 +230,7 @@ pub(super) fn emit_mixed_property_type_guard(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     slot: &PropertySlot,
-) -> Result<Option<String>> {
-    let Some(actions) = plan_tag_actions(ctx, slot)? else {
+) -> Result<Option<String>> {    let Some(actions) = plan_tag_actions(ctx, slot)? else {
         return Ok(None);
     };
     if actions.iter().all(|action| matches!(action, TagAction::Accept)) {
@@ -755,7 +817,8 @@ fn php_type_name(php_type: &PhpType) -> String {
         PhpType::Int => "int".to_string(),
         PhpType::Float => "float".to_string(),
         PhpType::Str => "string".to_string(),
-        PhpType::Bool | PhpType::False => "bool".to_string(),
+        PhpType::Bool => "bool".to_string(),
+        PhpType::False => "false".to_string(),
         PhpType::Void | PhpType::Never => "null".to_string(),
         PhpType::Mixed => "mixed".to_string(),
         PhpType::Array(_) | PhpType::AssocArray { .. } => "array".to_string(),

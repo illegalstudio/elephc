@@ -56,3 +56,10 @@ mod decode_bigint;
 mod case_insensitive;
 #[path = "json/evaluation_order.rs"]
 mod evaluation_order;
+#[path = "json/error_location.rs"]
+mod error_location;
+#[path = "json/diagnostic_regressions.rs"]
+mod diagnostic_regressions;
+
+#[path = "json/coordinate_regressions.rs"]
+mod coordinate_regressions;

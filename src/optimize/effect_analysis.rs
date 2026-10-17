@@ -71,7 +71,7 @@ pub(super) fn compute_program_callable_effects(
                             for (name, function) in &function_bodies {
                                 let effect = never_declared_effect(
                                     function.declared_never,
-                                    block_effect(&function.body),
+                                    parameter_guard_effect(function.parameter_guard_may_throw, block_effect(&function.body)),
                                 );
                                 if function_effects.get(name).copied() != Some(effect) {
                                     function_updates.push((name.clone(), effect));
@@ -83,7 +83,8 @@ pub(super) fn compute_program_callable_effects(
                                     Some(method.context.clone()),
                                     || block_effect(&method.body),
                                 );
-                                let effect = never_declared_effect(method.declared_never, effect);
+                                let effect = never_declared_effect(method.declared_never,
+                                    parameter_guard_effect(method.parameter_guard_may_throw, effect));
                                 if static_method_effects.get(name).copied() != Some(effect) {
                                     static_method_updates.push((name.clone(), effect));
                                 }
@@ -94,7 +95,8 @@ pub(super) fn compute_program_callable_effects(
                                     Some(method.context.clone()),
                                     || block_effect(&method.body),
                                 );
-                                let effect = never_declared_effect(method.declared_never, effect);
+                                let effect = never_declared_effect(method.declared_never,
+                                    parameter_guard_effect(method.parameter_guard_may_throw, effect));
                                 if instance_method_effects.get(name).copied() != Some(effect) {
                                     instance_method_updates.push((name.clone(), effect));
                                 }
@@ -152,6 +154,7 @@ fn collect_program_function_bodies<'a>(
             StmtKind::FunctionDecl {
                 name,
                 body,
+                params,
                 return_type,
                 ..
             } => {
@@ -160,6 +163,7 @@ fn collect_program_function_bodies<'a>(
                     FunctionEffectBody {
                         body,
                         declared_never: is_never_return_type(return_type),
+                        parameter_guard_may_throw: params.iter().any(|(_, ty, _, _)| matches!(ty, Some(TypeExpr::False))),
                     },
                 );
             }
@@ -194,6 +198,7 @@ fn collect_program_static_method_bodies<'a>(
                                 context: context.clone(),
                                 body: &method.body,
                                 declared_never: is_never_return_type(&method.return_type),
+                                parameter_guard_may_throw: method.params.iter().any(|(_, ty, _, _)| matches!(ty, Some(TypeExpr::False))),
                             },
                         );
                     }
@@ -230,6 +235,7 @@ fn collect_program_instance_method_bodies<'a>(
                                 context: context.clone(),
                                 body: &method.body,
                                 declared_never: is_never_return_type(&method.return_type),
+                                parameter_guard_may_throw: method.params.iter().any(|(_, ty, _, _)| matches!(ty, Some(TypeExpr::False))),
                             },
                         );
                     }
@@ -270,6 +276,8 @@ fn collect_instance_dispatch_metadata_into(
                 methods,
                 ..
             } => {
+                metadata.has_internal_object_operators |= elephc_builtin_contract::lookup_class(name)
+                    .is_some_and(|class| class.operators.is_some());
                 let private_methods = methods
                     .iter()
                     .filter(|method| {
@@ -348,6 +356,15 @@ fn is_never_return_type(return_type: &Option<TypeExpr>) -> bool {
 fn never_declared_effect(declared_never: bool, effect: Effect) -> Effect {
     if declared_never {
         effect.with_side_effects()
+    } else {
+        effect
+    }
+}
+
+/// Keeps call-boundary literal-type guards observable even when the callable body is pure.
+fn parameter_guard_effect(may_throw: bool, effect: Effect) -> Effect {
+    if may_throw {
+        effect.with_may_throw()
     } else {
         effect
     }

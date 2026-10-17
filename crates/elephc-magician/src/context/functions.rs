@@ -212,6 +212,7 @@ impl ElephcEvalContext {
         identity: u64,
         target: EvalClosureObjectTarget,
     ) {
+        self.may_have_foreign_pcntl_callables |= target.contains_foreign_context();
         self.closure_objects.insert(identity, target);
     }
 

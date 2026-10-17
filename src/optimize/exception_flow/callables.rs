@@ -112,10 +112,10 @@ pub(super) fn collect_object_reference_entry_checks(
 /// Finds hints whose by-reference entry check may reject a previously retyped cell.
 fn params_have_object_reference(params: &[(String, Option<TypeExpr>, Option<crate::parser::ast::Expr>, bool)]) -> bool {
     params.iter().any(|(_, hint, _, by_ref)| {
-        *by_ref && matches!(hint, Some(TypeExpr::Named(name)) if !matches!(
+        matches!(hint, Some(TypeExpr::False)) || (*by_ref && matches!(hint, Some(TypeExpr::Named(name)) if !matches!(
             name.as_str().to_ascii_lowercase().as_str(),
             "mixed" | "callable" | "closure" | "array" | "string" | "void"
-        ))
+        )))
     })
 }
 

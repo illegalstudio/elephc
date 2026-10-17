@@ -12,7 +12,7 @@
 //!   each round runs the cross-function small-function inliner (`super::inline`)
 //!   and then the per-function passes (each driven to its own fixed point), and
 //!   the round repeats until neither the inliner nor any function pass reports a
-//!   change. This lets the two layers feed each other — inlining exposes constants
+//!   change. This lets the two layers feed each other: inlining exposes constants
 //!   and dead code for the function passes, and the function passes shrink callees
 //!   (or expose calls) so the next round can inline more. The first round
 //!   reproduces the previous "inline once, then optimize" behavior; later rounds
@@ -21,6 +21,9 @@
 //!   panic are gated on `debug_assertions`, so they are active in `cargo build`/
 //!   `cargo test` and compile out of `--release`. In release, hitting either
 //!   iteration cap simply stops and proceeds with the current IR.
+//! - Tail recursion lowering follows that fixed point and reruns scalar passes on its loops.
+//!   Ownership finalizers run only after these phases. Their rewrites must
+//!   not expose new integer sinks to the earlier representation-changing passes.
 
 use crate::ir::{DataPool, Function, Module};
 
@@ -32,6 +35,7 @@ use super::const_fold::ConstFold;
 use super::cse::Cse;
 use super::dead_inst::DeadInst;
 use super::dead_store::DeadStore;
+use super::fresh_mixed_transfer::FreshMixedTransfer;
 use super::identity_arith::IdentityArith;
 use super::immutable_local_loads::ImmutableLocalLoads;
 use super::integer_range::IntegerRange;
@@ -68,6 +72,11 @@ pub trait IrPass {
         true
     }
 
+    /// Selects ownership finalization after all representation-changing passes.
+    fn run_after_fixed_point(&self) -> bool {
+        false
+    }
+
     /// Runs the pass over one function, returning true if it changed the IR.
     /// `data` is the module's shared literal pool, used by passes that materialize
     /// new constants (e.g. peephole string-literal concat folding interns the
@@ -102,7 +111,9 @@ pub trait IrPass {
 /// SSA forwarding edges and merges straight-line loop update blocks.
 /// The redundant or relocated instructions these leave behind are
 /// cleaned up by dead instruction elimination, and any folded branch condition is
-/// collapsed by branch simplification — all converging through the fixed-point loop.
+/// collapsed by branch simplification, all converging through the fixed-point loop.
+/// Fresh numeric ownership transfer then runs separately, without restarting
+/// checked-integer sink discovery after removing assignment clone barriers.
 fn default_passes() -> Vec<Box<dyn IrPass>> {
     vec![
         Box::new(IdentityArith),
@@ -120,6 +131,7 @@ fn default_passes() -> Vec<Box<dyn IrPass>> {
         Box::new(DeadStore),
         Box::new(BranchSimplify),
         Box::new(ConcatResetElim),
+        Box::new(FreshMixedTransfer),
     ]
 }
 
@@ -139,7 +151,7 @@ fn default_passes() -> Vec<Box<dyn IrPass>> {
 /// two a program is getting. It has been broken: dead-store elimination treated
 /// a block that throws out of the middle of a `try` as reaching only the block
 /// its `br` named, so stores the catch could still observe were neutralized and
-/// the handler read a slot nothing had written — a different answer every run,
+/// the handler read a slot nothing had written, a different answer every run,
 /// and only with the passes on. The rule that a `may_throw` instruction and a
 /// `throw` terminator both reach the handler lives in `dead_store`; any future
 /// pass whose analysis walks `cfg::successors` inherits the same blind spot,
@@ -150,8 +162,23 @@ fn default_passes() -> Vec<Box<dyn IrPass>> {
 /// converges (inlining is bounded over the acyclic candidate graph; the function
 /// passes only simplify), with `MAX_MODULE_ITERATIONS` as a backstop.
 pub fn optimize_module(module: &mut Module) {
-    let passes = default_passes();
+    let (finalizers, passes): (Vec<_>, Vec<_>) = default_passes().into_iter()
+        .partition(|pass| pass.run_after_fixed_point());
+    optimize_module_to_fixed_point(module, &passes);
+    // Tail recursion changes the CFG and parameter mutability after the ordinary
+    // fixed point, so rerun scalar passes before finalizing ownership.
+    if super::tail_call::eliminate_tail_recursion(module) {
+        #[cfg(debug_assertions)]
+        if let Err(error) = crate::ir::validate_module(module) {
+            panic!("tail recursion produced invalid module: {:?}", error);
+        }
+        run_module_function_passes(module, &passes);
+    }
+    run_module_function_passes(module, &finalizers);
+}
 
+/// Interleaves inlining with the ordinary function passes until both converge.
+fn optimize_module_to_fixed_point(module: &mut Module, passes: &[Box<dyn IrPass>]) {
     for round in 0..MAX_MODULE_ITERATIONS {
         let mut changed = false;
 
@@ -167,38 +194,45 @@ pub fn optimize_module(module: &mut Module) {
         }
 
         // Per-function fixed-point passes over every function-like body.
-        if !passes.is_empty() {
-            let Module {
-                functions,
-                class_methods,
-                closures,
-                fiber_wrappers,
-                callback_wrappers,
-                extern_callback_trampolines,
-                runtime_callable_invokers,
-                data,
-                ..
-            } = module;
-            let all_functions = functions
-                .iter_mut()
-                .chain(class_methods.iter_mut())
-                .chain(closures.iter_mut())
-                .chain(fiber_wrappers.iter_mut())
-                .chain(callback_wrappers.iter_mut())
-                .chain(extern_callback_trampolines.iter_mut())
-                .chain(runtime_callable_invokers.iter_mut());
-            for function in all_functions {
-                changed |= run_function_passes(function, &passes, data);
-            }
-        }
+        changed |= run_module_function_passes(module, passes);
 
         if !changed {
-            return; // module-level fixed point reached
+            break; // module-level fixed point reached
         }
     }
     // Module-level non-convergence: keep the current (valid, more-optimized) IR.
     // Each per-function run still converged; only the inline/simplify interleave
     // hit the round cap, which is a generous backstop for deep inline chains.
+}
+
+/// Applies one phase to every function table while sharing the module literal pool.
+fn run_module_function_passes(module: &mut Module, passes: &[Box<dyn IrPass>]) -> bool {
+    if passes.is_empty() {
+        return false;
+    }
+    let Module {
+        functions,
+        class_methods,
+        closures,
+        fiber_wrappers,
+        callback_wrappers,
+        extern_callback_trampolines,
+        runtime_callable_invokers,
+        data,
+        ..
+    } = module;
+    let all_functions = functions.iter_mut()
+        .chain(class_methods.iter_mut())
+        .chain(closures.iter_mut())
+        .chain(fiber_wrappers.iter_mut())
+        .chain(callback_wrappers.iter_mut())
+        .chain(extern_callback_trampolines.iter_mut())
+        .chain(runtime_callable_invokers.iter_mut());
+    let mut changed = false;
+    for function in all_functions {
+        changed |= run_function_passes(function, passes, data);
+    }
+    changed
 }
 
 /// Runs the given passes over one function to a fixed point, returning whether the

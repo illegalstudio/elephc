@@ -627,7 +627,7 @@ fn build_name_to_index(module: &Module) -> HashMap<String, usize> {
 }
 
 /// Remap a single terminator's block targets and value operands according to maps.
-fn remap_terminator(
+pub(super) fn remap_terminator(
     mut term: Terminator,
     block_map: &HashMap<BlockId, BlockId>,
     value_map: &HashMap<ValueId, ValueId>,
@@ -741,7 +741,7 @@ fn remap_terminator(
 }
 
 /// Remap LocalSlot references inside an immediate (for cloned callee instrs).
-fn remap_immediate_local(imm: &mut Immediate, local_map: &HashMap<LocalSlotId, LocalSlotId>) {
+pub(super) fn remap_immediate_local(imm: &mut Immediate, local_map: &HashMap<LocalSlotId, LocalSlotId>) {
     match imm {
         Immediate::LocalSlot(ls) => {
             if let Some(&nl) = local_map.get(ls) {

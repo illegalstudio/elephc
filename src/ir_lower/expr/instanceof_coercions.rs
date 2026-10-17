@@ -108,7 +108,14 @@ pub(crate) fn coerce_to_int_at_span(
     match value.ir_type {
         IrType::I64 => value,
         IrType::F64 => ctx.emit_value(Op::FToI, vec![value.value], None, PhpType::Int, Op::FToI.default_effects(), span),
-        IrType::Str => ctx.emit_value(Op::StrToI, vec![value.value], None, PhpType::Int, Op::StrToI.default_effects(), span),
+        IrType::Str => {
+            let result = ctx.emit_value(Op::StrToI, vec![value.value], None, PhpType::Int, Op::StrToI.default_effects(), span);
+            // The integer cannot alias a string copied to capture an operand.
+            if ctx.value_needs_release_after_use(value) {
+                crate::ir_lower::ownership::release_if_owned(ctx, value, span);
+            }
+            result
+        }
         _ => {
             let result = ctx.emit_value(
                 Op::Cast,

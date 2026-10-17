@@ -1653,7 +1653,7 @@ class PDO {
         // bridge only consults $_mySslConfig for a mysql: DSN, so they stay inert
         // for the other drivers. ATTR_SSL_CAPATH (1010) is adapted to a temporary
         // multi-PEM CA bundle; ATTR_SSL_CIPHER (1011) is forwarded to the driver-option
-        // parser and fails explicitly because rustls exposes no PDO cipher-string mapping.
+        // parser, which maps supported OpenSSL/IANA names to rustls cipher suites.
         // $_mySslVerify stays -1 ("unset") until an
         // explicit ATTR_SSL_VERIFY_SERVER_CERT is seen.
         $_mySslCa = "";

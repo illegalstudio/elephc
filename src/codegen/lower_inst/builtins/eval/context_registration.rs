@@ -20,20 +20,37 @@ pub(super) fn ensure_eval_context(ctx: &mut FunctionContext<'_>) -> Result<()> {
     abi::load_at_offset(ctx.emitter, result_reg, offset);
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, &ready);
     register_eval_regex_provider(ctx);
+    // -- attach this module's immutable catalog to a fresh activation context --
+    let catalog = ctx.data.add_private_identity("L__elephc_eval_native_catalog");
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        &catalog,
+    );
     let symbol = ctx
         .emitter
         .target
-        .extern_symbol("__elephc_eval_context_new");
+        .extern_symbol("__elephc_eval_context_new_with_native_catalog");
     abi::emit_call_label(ctx.emitter, &symbol);
     abi::store_at_offset(ctx.emitter, result_reg, offset);
+    let registered = ctx.next_label("eval_native_catalog_registered");
+    load_eval_context_local_to_arg(ctx, offset, 0);
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_context_native_catalog_ready");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &registered);
+    // -- register and publish metadata only on this thread's catalog miss --
     register_eval_declared_symbols(ctx, offset);
     register_eval_native_global_constants(ctx, offset)?;
     register_eval_native_user_constants(ctx, offset);
     register_eval_native_functions(ctx, offset)?;
     register_eval_native_method_signatures(ctx, offset);
+    load_eval_context_local_to_arg(ctx, offset, 0);
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_context_publish_native_catalog");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    ctx.emitter.label(&registered);
     // The runtime's `__rt_closure_bind` is shared by eval-free programs, so it reaches the
-    // generated adapter wrapper through a slot the first eval context fills. Stored last: the
-    // registration helpers above still expect the fresh context handle in the result register.
+    // generated adapter wrapper through a slot each new context fills. Install it on both
+    // cache hits and misses, since a host can enter a different loaded module between calls.
     let scratch = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_symbol_address(
         ctx.emitter,
@@ -645,3 +662,7 @@ pub(super) fn register_eval_declared_symbol_name(
     let symbol = ctx.emitter.target.extern_symbol(symbol_name);
     abi::emit_call_label(ctx.emitter, &symbol);
 }
+
+#[cfg(test)]
+#[path = "native_catalog_tests.rs"]
+mod native_catalog_tests;

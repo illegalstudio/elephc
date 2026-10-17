@@ -13,6 +13,8 @@
 //!   inference remains checker-owned.
 //! - EIR lowering consumes the checker-recorded contract instead of repeating expression
 //!   inference, keeping non-literal RHSs and cascading promotions aligned across both layers.
+//! - An `(array)` cast inside a literal uses the same `ArrayCast` classification as the checker,
+//!   so a loop-carried array of those casts does not collapse to `array<int>`.
 
 use std::collections::HashSet;
 
@@ -303,6 +305,10 @@ fn infer_storage_value_type(
 }
 
 /// Infers one indexed/associative literal element's concrete runtime storage representation.
+///
+/// An `(array)` cast is classified with `ArrayCast` from the source's type in this
+/// environment. The syntactic fallback answers `int` for a cast it does not recognise,
+/// which would record the surrounding literal as an array of ints.
 fn infer_array_literal_element_storage(
     item: &Expr,
     env: &TypeEnv,
@@ -340,6 +346,13 @@ fn infer_array_literal_element_storage(
             PhpType::AssocArray { value, .. } => *value,
             _ => PhpType::Mixed,
         },
+        ExprKind::Cast {
+            target: CastType::Array,
+            expr: inner,
+        } => crate::types::array_cast_result_type(&array_cast_source_type_for_storage(
+            inner, env, infer_value,
+        ))
+        .codegen_repr(),
         ExprKind::FunctionCall { .. }
         | ExprKind::MethodCall { .. }
         | ExprKind::StaticMethodCall { .. }
@@ -348,6 +361,34 @@ fn infer_array_literal_element_storage(
             .unwrap_or_else(|| crate::types::checker::infer_expr_type_syntactic(item))
             .codegen_repr(),
         _ => crate::types::checker::infer_expr_type_syntactic(item).codegen_repr(),
+    }
+}
+
+/// Returns the PHP type an `(array)` cast inside a literal classifies.
+///
+/// Variables prefer the fixed-point environment, which is the storage the next iteration
+/// will load. The literal `null` is `Void` so the cast is an empty array; the element
+/// storage of a null literal is `Mixed` and would take the runtime-dispatch arm instead.
+/// Every cast, including nested `(object)` and `(array)`, uses the same result type as
+/// EIR lowering. A source the checker cannot type is `Mixed` rather than the syntactic
+/// `int` guess.
+fn array_cast_source_type_for_storage(
+    expr: &Expr,
+    env: &TypeEnv,
+    infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
+) -> PhpType {
+    match &expr.kind {
+        ExprKind::Null => PhpType::Void,
+        ExprKind::Variable(name) => env
+            .get(name)
+            .cloned()
+            .or_else(|| infer_value(expr, env))
+            .unwrap_or(PhpType::Mixed),
+        ExprKind::Cast { target, expr: inner } => crate::types::php_cast_result_type(
+            target,
+            &array_cast_source_type_for_storage(inner, env, infer_value),
+        ),
+        _ => infer_value(expr, env).unwrap_or(PhpType::Mixed),
     }
 }
 
@@ -1223,8 +1264,137 @@ fn call_arg_value(argument: &Expr) -> &Expr {
 
 #[cfg(test)]
 mod tests {
-    use super::{join_loop_flow_type, representation_contract};
-    use crate::types::PhpType;
+    use super::{infer_storage_value_type, join_loop_flow_type, representation_contract};
+    use crate::parser::ast::{CastType, Expr, ExprKind};
+    use crate::span::Span;
+    use crate::types::{PhpType, TypeEnv};
+
+    /// Builds an `(array)` cast expression for storage-inference fixtures.
+    fn array_cast(inner: Expr) -> Expr {
+        Expr::new(
+            ExprKind::Cast {
+                target: CastType::Array,
+                expr: Box::new(inner),
+            },
+            Span::dummy(),
+        )
+    }
+
+    /// Infers storage with the syntactic type standing in for the checker on literal sources.
+    fn storage_type(expr: &Expr, env: &TypeEnv) -> PhpType {
+        let mut infer = |expr: &Expr, _env: &TypeEnv| {
+            Some(crate::types::checker::infer_expr_type_syntactic(expr))
+        };
+        infer_storage_value_type(expr, env, &mut infer).expect("literal storage")
+    }
+
+    /// An `(array)` cast used as a literal element keeps the cast's array, for both indexed
+    /// and associative literals. The syntactic fallback used to answer `int` here.
+    #[test]
+    fn array_cast_literal_elements_keep_the_cast_result() {
+        let string_cast = array_cast(Expr::string_lit("x"));
+        let null_cast = array_cast(Expr::new(ExprKind::Null, Span::dummy()));
+        let int_cast = array_cast(Expr::int_lit(1));
+        assert_eq!(
+            storage_type(
+                &Expr::new(ExprKind::ArrayLiteral(vec![string_cast]), Span::dummy()),
+                &TypeEnv::new(),
+            ),
+            PhpType::Array(Box::new(PhpType::Array(Box::new(PhpType::Str))))
+        );
+        assert_eq!(
+            storage_type(
+                &Expr::new(ExprKind::ArrayLiteral(vec![null_cast]), Span::dummy()),
+                &TypeEnv::new(),
+            ),
+            PhpType::Array(Box::new(PhpType::Array(Box::new(PhpType::Never))))
+        );
+        let nested = Expr::new(
+            ExprKind::ArrayLiteral(vec![
+                array_cast(Expr::string_lit("x")),
+                array_cast(Expr::new(ExprKind::Null, Span::dummy())),
+            ]),
+            Span::dummy(),
+        );
+        assert_eq!(
+            storage_type(&nested, &TypeEnv::new()),
+            PhpType::Array(Box::new(PhpType::Mixed))
+        );
+        assert_eq!(
+            storage_type(
+                &Expr::new(
+                    ExprKind::ArrayLiteralAssoc(vec![(Expr::string_lit("k"), int_cast)]),
+                    Span::dummy(),
+                ),
+                &TypeEnv::new(),
+            ),
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Array(Box::new(PhpType::Int))),
+            }
+        );
+
+        let mut env = TypeEnv::new();
+        env.insert("arr".to_string(), PhpType::Array(Box::new(PhpType::Int)));
+        env.insert("obj".to_string(), PhpType::Object("Box".to_string()));
+        env.insert("mix".to_string(), PhpType::Mixed);
+        assert_eq!(
+            storage_type(
+                &Expr::new(
+                    ExprKind::ArrayLiteral(vec![array_cast(Expr::var("arr"))]),
+                    Span::dummy(),
+                ),
+                &env,
+            ),
+            PhpType::Array(Box::new(PhpType::Array(Box::new(PhpType::Int))))
+        );
+        assert_eq!(
+            storage_type(
+                &Expr::new(
+                    ExprKind::ArrayLiteralAssoc(vec![(
+                        Expr::string_lit("k"),
+                        array_cast(Expr::var("obj")),
+                    )]),
+                    Span::dummy(),
+                ),
+                &env,
+            ),
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::AssocArray {
+                    key: Box::new(PhpType::Str),
+                    value: Box::new(PhpType::Mixed),
+                }),
+            }
+        );
+        assert_eq!(
+            storage_type(
+                &Expr::new(
+                    ExprKind::ArrayLiteral(vec![array_cast(Expr::var("mix"))]),
+                    Span::dummy(),
+                ),
+                &env,
+            ),
+            PhpType::Array(Box::new(PhpType::Mixed))
+        );
+        let object_cast = array_cast(Expr::new(
+            ExprKind::Cast {
+                target: CastType::Object,
+                expr: Box::new(Expr::var("obj")),
+            },
+            Span::dummy(),
+        ));
+        assert_eq!(
+            storage_type(
+                &Expr::new(ExprKind::ArrayLiteral(vec![object_cast]), Span::dummy()),
+                &env,
+            ),
+            PhpType::Array(Box::new(PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Mixed),
+            }))
+        );
+    }
 
     /// Joining concrete storage with a declared array preserves the logical array proof.
     #[test]

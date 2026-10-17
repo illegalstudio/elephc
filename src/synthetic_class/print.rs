@@ -131,11 +131,15 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
             properties,
             methods,
             is_final,
+            is_readonly_class,
             ..
         } => {
             let mut head = String::from(indent.as_str());
             if *is_final {
                 head.push_str("final ");
+            }
+            if *is_readonly_class {
+                head.push_str("readonly ");
             }
             head.push_str(&format!("class {name}"));
             if let Some(parent) = extends {
@@ -232,6 +236,18 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
                     return_hint(&method.return_type),
                     block(&method.body, depth + 1)
                 ));
+            }
+            out.push_str(&format!("{indent}}}"));
+            out
+        }
+        StmtKind::EnumDecl { name, generics, backing_type, cases, implements, trait_uses, methods, constants } => {
+            assert!(generics.is_none() && backing_type.is_none(), "only plain unit enums are modelled");
+            assert!(implements.is_empty() && trait_uses.is_empty() && methods.is_empty() && constants.is_empty(),
+                "enum members other than cases are not modelled");
+            let mut out = format!("{indent}enum {name} {{\n");
+            for case in cases {
+                assert!(case.value.is_none() && case.attributes.is_empty(), "only plain unit cases are modelled");
+                out.push_str(&format!("{}case {};\n", pad(depth + 1), case.name));
             }
             out.push_str(&format!("{indent}}}"));
             out
@@ -654,6 +670,7 @@ fn type_expr(ty: &TypeExpr) -> String {
             .join("|"),
         TypeExpr::Ptr(None) => "ptr".to_string(),
         TypeExpr::Named(name) => name_source(name),
+        TypeExpr::Array(inner) => format!("array<{}>", type_expr(inner)),
         // Rendered structurally so the round trip holds: `printing_round_trips` re-parses
         // everything this prints, and `Box<int>` parses back to the same type.
         TypeExpr::GenericClass { name, args } => format!(
@@ -1112,6 +1129,12 @@ mod tests {
             );
         }
         round_trip("web wrapper", &vec![crate::web_prelude::web_wrap_stmt()]);
+    }
+
+    /// The immutable decimal class and its unit enum survive a source rendering round trip.
+    #[test]
+    fn printing_round_trips_bcmath_number() {
+        round_trip("bcmath", &crate::bcmath_prelude::bcmath_declarations());
     }
 
     /// Round-trips nested matches, grouped labels, missing defaults and the empty form.

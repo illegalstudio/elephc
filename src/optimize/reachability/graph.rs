@@ -394,6 +394,8 @@ impl GraphState {
             let Some(node) = self.index.classes.get(&class) else {
                 continue;
             };
+            let operators = elephc_builtin_contract::lookup_class(&class)
+                .and_then(|contract| contract.operators);
             let has_runtime_owned_parent = node
                 .parent
                 .as_ref()
@@ -403,6 +405,12 @@ impl GraphState {
                 let reference = (method.clone(), *is_static);
                 if self.reach.hazards.dynamic_method
                     || has_runtime_owned_parent
+                    || operators.is_some_and(|operators| {
+                        if *is_static {
+                            operators.arithmetic.iter().any(|(_, adapter)| *adapter == method)
+                                || operators.compare == Some(method.as_str())
+                        } else { operators.boolean == Some(method.as_str()) }
+                    })
                     || matches!(method.as_str(), "__call" | "__callstatic")
                     || self.behavioral.referenced_methods.contains(&reference)
                 {

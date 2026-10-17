@@ -618,6 +618,8 @@ struct PropertyReadMetadata {
 #[derive(Clone, Debug, Default)]
 struct InstanceDispatchMetadata {
     classes: HashMap<String, InstanceClassMetadata>,
+    /// Internal value classes can allocate or throw when arithmetic receives object operands.
+    has_internal_object_operators: bool,
     /// True when AST-level `eval()` can add subclasses beyond the declared hierarchy.
     has_dynamic_class_barrier: bool,
 }
@@ -627,6 +629,7 @@ struct InstanceDispatchMetadata {
 struct FunctionEffectBody<'a> {
     body: &'a [Stmt],
     declared_never: bool,
+    parameter_guard_may_throw: bool,
 }
 
 /// Holds the body, class context, and never-return metadata for a static method during effect analysis.
@@ -635,6 +638,7 @@ struct StaticMethodBody<'a> {
     context: ClassEffectContext,
     body: &'a [Stmt],
     declared_never: bool,
+    parameter_guard_may_throw: bool,
 }
 
 /// Holds callable summaries and dispatch metadata shared by optimizer passes.

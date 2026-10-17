@@ -272,6 +272,24 @@
     },
     {
       "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "bcmath",
+      "name": "BcMath\\Number",
+      "php_manual": null,
+      "since": "8.4"
+    },
+    {
+      "aot": {
         "kind": "checker-injected",
         "supported": true
       },
@@ -2918,6 +2936,24 @@
       "name": "RegexIterator",
       "php_manual": null,
       "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "enum",
+      "module": "standard",
+      "name": "RoundingMode",
+      "php_manual": null,
+      "since": "8.4"
     },
     {
       "aot": {

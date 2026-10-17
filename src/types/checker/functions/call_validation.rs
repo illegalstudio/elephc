@@ -593,6 +593,8 @@ impl Checker {
         owner_class: &str,
     ) -> Result<PhpType, CompileError> {
         let coercive = self.class_is_user_declared(owner_class);
+        let internal_sig = self.internal_operand_binding_signature(owner_class, sig);
+        let sig = internal_sig.as_ref().unwrap_or(sig);
         self.check_known_callable_call_with_options(
             sig,
             args,
@@ -617,6 +619,8 @@ impl Checker {
         owner_class: &str,
     ) -> Result<PhpType, CompileError> {
         let coercive = self.class_is_user_declared(owner_class);
+        let internal_sig = self.internal_operand_binding_signature(owner_class, sig);
+        let sig = internal_sig.as_ref().unwrap_or(sig);
         self.check_known_callable_call_with_options(
             sig,
             args,
@@ -627,6 +631,23 @@ impl Checker {
             coercive,
             true,
         )
+    }
+
+    /// Accepts weak float inputs whose internal Number parameter adapter performs the binding.
+    /// The declaration and its boxed union ABI remain authoritative outside this call check.
+    fn internal_operand_binding_signature(&self, owner: &str, sig: &FunctionSig) -> Option<FunctionSig> {
+        if self.strict_types || !owner.trim_start_matches('\\').eq_ignore_ascii_case("BcMath\\Number") {
+            return None;
+        }
+        let mut accepted = sig.clone();
+        for (_, ty) in &mut accepted.params {
+            if let PhpType::Union(members) = ty {
+                if members.contains(&PhpType::Str) && members.contains(&PhpType::Int) {
+                    members.push(PhpType::Float);
+                }
+            }
+        }
+        Some(accepted)
     }
 
     /// Returns true when `class_name` is a class-like symbol declared in user source.

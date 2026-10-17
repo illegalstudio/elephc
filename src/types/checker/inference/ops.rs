@@ -36,6 +36,16 @@ impl Checker {
     ) -> Result<PhpType, CompileError> {
         let lt = self.infer_type(left, env)?;
         let rt = self.infer_type(right, env)?;
+        if let Some(plan) = crate::types::object_operators::binary_plan(op, &lt, &rt) {
+            return Ok(plan.result_type(op));
+        }
+        if matches!(op, BinOp::Div | BinOp::Mod)
+            && (matches!(lt.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+                || matches!(rt.codegen_repr(), PhpType::Mixed | PhpType::Union(_)))
+            && self.classes.keys().any(|name| elephc_builtin_contract::lookup_class(name).is_some_and(|class| class.operators.is_some()))
+        {
+            return Ok(PhpType::Mixed);
+        }
         match op {
             BinOp::Pow => {
                 let lt_ok = is_arithmetic_operand_type(self, &lt);

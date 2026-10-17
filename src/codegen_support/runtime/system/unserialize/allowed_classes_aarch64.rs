@@ -10,7 +10,7 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::runtime::data::{
     UNSER_ALLOWED_CLASSES_ENTRY_PREFIX, UNSER_ALLOWED_CLASSES_POLICY_PREFIX,
-    UNSER_OPTIONS_TYPE_PREFIX,
+    UNSER_OPTIONS_TYPE_PREFIX, UNSER_TYPE_GIVEN_SUFFIX,
 };
 
 /// Emits the per-call `allowed_classes` option parser and class-membership gate.
@@ -277,6 +277,10 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.label("__rt_unser_options_type_dispatch");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x2", "_unser_options_type_prefix");
     emitter.instruction(&format!("mov x3, #{}", UNSER_OPTIONS_TYPE_PREFIX.len())); // diagnostic prefix byte length
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x4", "_unser_type_given_suffix");
+    emitter.instruction(&format!("mov x5, #{}", UNSER_TYPE_GIVEN_SUFFIX.len())); // shared ` given` suffix byte length
+    emitter.instruction("mov x6, #0");                                          // argument diagnostics spell bool as `bool`
+    emitter.instruction("mov x7, #0");                                          // argument diagnostics own no rejected value box
     emitter.instruction("b __rt_unser_throw_type_error");                       // helper closes context and throws exactly once
 
     emitter.label_shared("__rt_unser_allowed_classes_entry_null_error");
@@ -292,6 +296,10 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x3");                                          // rejected entry runtime tag
     crate::codegen_support::abi::emit_symbol_address(emitter, "x2", "_unser_allowed_classes_entry_prefix");
     emitter.instruction(&format!("mov x3, #{}", UNSER_ALLOWED_CLASSES_ENTRY_PREFIX.len())); // diagnostic prefix byte length
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x4", "_unser_type_given_suffix");
+    emitter.instruction(&format!("mov x5, #{}", UNSER_TYPE_GIVEN_SUFFIX.len())); // shared ` given` suffix byte length
+    emitter.instruction("mov x6, #0");                                          // argument diagnostics spell bool as `bool`
+    emitter.instruction("mov x7, #0");                                          // argument diagnostics own no rejected value box
     emitter.instruction("b __rt_unser_throw_type_error");                       // helper closes context and throws exactly once
 
     emitter.label_shared("__rt_unser_allowed_classes_entry_object_error");
@@ -306,5 +314,9 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x3");                                          // rejected policy runtime tag
     crate::codegen_support::abi::emit_symbol_address(emitter, "x2", "_unser_allowed_classes_policy_prefix");
     emitter.instruction(&format!("mov x3, #{}", UNSER_ALLOWED_CLASSES_POLICY_PREFIX.len())); // diagnostic prefix byte length
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x4", "_unser_type_given_suffix");
+    emitter.instruction(&format!("mov x5, #{}", UNSER_TYPE_GIVEN_SUFFIX.len())); // shared ` given` suffix byte length
+    emitter.instruction("mov x6, #0");                                          // argument diagnostics spell bool as `bool`
+    emitter.instruction("mov x7, #0");                                          // argument diagnostics own no rejected value box
     emitter.instruction("b __rt_unser_throw_type_error");                       // helper closes context and throws exactly once
 }

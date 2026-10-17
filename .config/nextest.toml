@@ -1,6 +1,16 @@
 [profile.default]
 slow-timeout = { period = "60s", terminate-after = 1 }
 
+# These BCMath probes compile dynamic-eval hosts and exceeded 60s under local load.
+# Keep their assertions and use the same bounded budget as REPL eval hosts.
+[[profile.default.overrides]]
+filter = 'binary(codegen_tests) and test(bcmath) and test(eval)'
+slow-timeout = { period = "60s", terminate-after = 4 }
+
+[[profile.ci.overrides]]
+filter = 'binary(codegen_tests) and test(bcmath) and test(eval)'
+slow-timeout = { period = "60s", terminate-after = 4 }
+
 # REPL integration probes compile real dynamic-eval hosts, including multiple cache variants.
 [[profile.default.overrides]]
 filter = 'binary(codegen_tests) and test(~codegen::repl)'
@@ -153,6 +163,16 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 filter = 'binary(extension_loaded_tests) and test(=get_loaded_extensions_dynamic_flag_tracks_linked_bridges)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
+# This auto-detection fixture compiles the full PDO surface in an isolated cold cache.
+# Both macOS CI attempts reached 60s; keep its assertions and use the existing PDO budget.
+[[profile.default.overrides]]
+filter = 'binary(extension_loaded_tests) and test(=pdo_usage_still_reports_pdo_without_mysqli)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'binary(extension_loaded_tests) and test(=pdo_usage_still_reports_pdo_without_mysqli)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
 # This single compilation injects both PDO and mysqli preludes and links their shared
 # archive in an isolated cold cache. Both macOS attempts reached the 60s cap, so give
 # this exact combined-surface probe the existing PDO budget without changing its checks.
@@ -234,6 +254,29 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 
 [[profile.ci.overrides]]
 filter = 'binary(codegen_tests) and (test(/^codegen::strings::mbstring_/) or test(/^codegen::runtime_gc::mbstring::/))'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+# macOS already gives every codegen test three 60s periods (the override above, platform-
+# scoped) because the shared macOS runners routinely stretch link-heavy tests past one period
+# while staying green. On Linux the same tolerance covers the remaining edge-of-budget families
+# on loaded runners: the Magician-linked eval tests (~30s of CPU idle) and the multi-target
+# lib tests, which emit one program per supported target (measured 83-96s in the CI-exact
+# container) — both spellings, `_on_all_targets` and `_on_every_target`. A separate quadratic
+# string-dedup pass made every eval-using program take ~120s to compile, which is what pushed
+# hundreds of tests past the cap at once; that pass is fixed in the compiler itself, and this
+# tolerance is the residual guard for genuinely slow tests. A real hang still terminates at
+# 180s, and the compiled-program watchdog keeps its own 60s guard.
+[[profile.ci.overrides]]
+platform = 'cfg(target_os = "linux")'
+filter = 'binary(codegen_tests)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.default.overrides]]
+filter = 'test(/_on_(all_targets|every_target)$/)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'test(/_on_(all_targets|every_target)$/)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
 # These eval fixtures live outside the Core eval GC naming family. Boxed method
@@ -549,3 +592,13 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 [[profile.ci.overrides]]
 filter = 'binary(codegen_tests) and test(=codegen::runtime_gc::instanceof_operand_owners::test_instanceof_throwing_target_retires_owned_and_detached_value_operands)'
 slow-timeout = { period = "60s", terminate-after = 3 }
+
+# This native-default ownership probe lowers/emits a deep program for all five targets.
+# Both macOS attempts hit 60s without a panic; use the existing all-target budget.
+[[profile.default.overrides]]
+filter = 'binary(elephc) and test(=ir_lower::tests::eval_default_helpers::deep_native_defaults_get_compiled_helpers_on_every_target)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'binary(elephc) and test(=ir_lower::tests::eval_default_helpers::deep_native_defaults_get_compiled_helpers_on_every_target)'
+slow-timeout = { period = "180s", terminate-after = 1 }

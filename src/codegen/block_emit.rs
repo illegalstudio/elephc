@@ -75,6 +75,19 @@ pub(super) fn emit_module(
     web_isolation: WebIsolation,
 ) -> Result<SharedCodegenState> {
     let mut shared = SharedCodegenState::default();
+    // Folding compares isolated emissions built with diagnostics off, so it must only run when
+    // the FINAL emission is diagnostics-off too (captured before `instrument` moves into the
+    // shared state below).
+    let diagnostics_off = !counters
+        && instrument == crate::codegen::Instrumentation::Off
+        && !probe
+        && !heap_debug
+        && !gc_stats
+        // The isolated comparison builds a plain `Emitter::new(target)`; cdylib and staticlib
+        // emissions render PIC operands through a different emitter configuration, so a fold
+        // decided on the plain text would gate an emission it did not measure. Folding is a
+        // size optimization for executables; library builds keep every body.
+        && emit == Emit::Executable;
     shared.counters = counters;
     shared.instrument = instrument;
     if probe {
@@ -117,14 +130,37 @@ pub(super) fn emit_module(
             data.add_comm(crate::names::ir_global_symbol(name), sg_size);
         }
     }
+    // A folded candidate keeps its EIR function — so a caller still resolves its parameter types
+    // and picks its own coercion from the original instantiation — but emits a jump to the
+    // survivor's body. The map is computed from the shape-normalized assembly oracle, so only
+    // bodies that lower to the same machine code are folded.
+    //
+    // Diagnostics modes are excluded: counters and instrumentation embed PER-NAME state into the
+    // final emission that the isolated comparison (which runs with diagnostics off) cannot see,
+    // so a folded victim would attribute its calls to the survivor or lose them entirely. Heap
+    // debug, probes and gc stats are gated the same conservative way — folding is a size
+    // optimization, and those modes exist to observe per-body behavior.
+    let body_aliases = if diagnostics_off {
+        generic_body_aliases(module, regalloc_linear)
+    } else {
+        Default::default()
+    };
     for function in module
         .functions
         .iter()
         .filter(|function| !is_main(function))
     {
+        if let Some(survivor) = body_aliases.get(&function.name) {
+            emit_folded_body(function, survivor, emitter)?;
+            continue;
+        }
         emit_user_function(module, function, emitter, data, &mut shared, regalloc_linear)?;
     }
     for method in &module.class_methods {
+        if let Some(survivor) = body_aliases.get(&method.name) {
+            emit_folded_body(method, survivor, emitter)?;
+            continue;
+        }
         emit_class_method(module, method, emitter, data, &mut shared, regalloc_linear)?;
     }
     for closure in &module.closures {
@@ -1374,4 +1410,459 @@ fn emit_fn_marker(emitter: &mut Emitter, name: &str, symbol: &str, synthetic: bo
 /// `emit_fn_marker()`.
 fn emit_endfn_marker(emitter: &mut Emitter, name: &str) {
     emitter.comment(&format!("@endfn name={}", name));
+}
+
+/// Reports which type-argument candidates lower to identical bodies.
+///
+/// The merge refuses a candidate when its EIR could observe a class name the shape erased, but the
+/// EIR cannot see every backend decision: the runtime value tag is baked from the exact `PhpType`
+/// at codegen, so two bodies may compare unequal while emitting the same code (a pass-through
+/// `id<int>` / `id<bool>` pair), or compare equal while emitting different code (a body boxing its
+/// scalar). This oracle lowers each surviving candidate into an isolated emitter and compares the
+/// SHAPE-NORMALIZED ASSEMBLY, which is the actual soundness oracle: it includes the frame layout,
+/// the epilogue cleanup, every baked tag and every future scalar-consulting lowering.
+///
+/// The result is the measured case for widening the merge — nothing here changes the emitted
+/// program; it is reported under `--report-generics` only.
+/// One dispatch slot's fold: the surviving candidate and the bodies folded into it.
+pub(crate) struct BodyShareGroup {
+    /// The slot's readable name, for the report.
+    pub slot: String,
+    /// How many candidates the slot carries in total (folded and kept).
+    pub slot_candidates: usize,
+    /// The candidate kept as the shared implementation.
+    pub survivor: String,
+    /// The candidates folded into the survivor, by EIR function name.
+    pub victims: Vec<String>,
+}
+
+/// Groups the module's type-argument candidates whose lowered bodies are byte-identical.
+///
+/// Within a slot the candidates are lowered in isolation and bucketed by their normalized text;
+/// each bucket keeps its first candidate as the survivor and folds the rest into it. A candidate
+/// whose body did not lower is left alone.
+pub(crate) fn foldable_body_groups(module: &Module, regalloc_linear: bool) -> Vec<BodyShareGroup> {
+    // (slot, candidate bodies, is_method)
+    let mut rows: Vec<(String, Vec<&Function>, bool)> = Vec::new();
+    let mut row_of: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let emitted_body = |function: &Function| {
+        // A STATIC LOCAL's storage symbol is derived from the function's own name, and a global
+        // alias names a global by symbol: both are state whose identity the shape erasure would
+        // fold into one storage cell for two independent instantiations.
+        let stateful = function.locals.iter().any(|slot| {
+            matches!(
+                slot.kind,
+                crate::ir::LocalKind::StaticLocal | crate::ir::LocalKind::GlobalAlias
+            )
+        });
+        !stateful
+            && !function.flags.is_main
+            && !function.flags.is_generator
+            && !function.flags.is_synthetic
+            && !function.flags.is_closure
+            && !function.flags.is_fiber_wrapper
+            && !function.flags.is_callback_wrapper
+            && !function.flags.is_runtime_callable_invoker
+    };
+    for function in &module.functions {
+        if !function.name.contains('<') || !emitted_body(function) {
+            continue;
+        }
+        let slot = function.name.split('<').next().unwrap_or(&function.name).to_string();
+        match row_of.get(&slot).copied() {
+            Some(index) => rows[index].1.push(function),
+            None => {
+                row_of.insert(slot.clone(), rows.len());
+                rows.push((slot, vec![function], false));
+            }
+        }
+    }
+    for function in &module.class_methods {
+        if !function.name.contains('<') || !emitted_body(function) {
+            continue;
+        }
+        let Some((class, method)) = function.name.rsplit_once("::") else {
+            continue;
+        };
+        let class = class.split('<').next().unwrap_or(class).to_string();
+        // The METHOD side carries type arguments too: a generic method on a non-generic class
+        // instantiates as `Plain::get<int>` / `Plain::get<string>`, and those siblings are
+        // exactly the pair monomorphization duplicates — strip both sides into one slot.
+        let method = method.split('<').next().unwrap_or(method).to_string();
+        let kind = if function.flags.is_static { "static" } else { "instance" };
+        let slot = format!("{class}::{method} [{kind}]");
+        match row_of.get(&slot).copied() {
+            Some(index) => rows[index].1.push(function),
+            None => {
+                row_of.insert(slot.clone(), rows.len());
+                rows.push((slot, vec![function], true));
+            }
+        }
+    }
+    rows.iter()
+        .filter(|(_, candidates, _)| candidates.len() >= 2)
+        .filter_map(|(slot, candidates, is_method)| {
+            // Bucket by the normalized text in one pass; a linear scan against every bucket
+            // would compare full bodies O(k²) per slot, which grows with the instantiation
+            // count the feature monomorphizes.
+            let mut buckets: std::collections::HashMap<String, Vec<&Function>> =
+                std::collections::HashMap::new();
+            let mut order: Vec<(String, &Function)> = Vec::new();
+            for function in candidates {
+                let Some(text) =
+                    normalized_candidate_body(module, function, *is_method, regalloc_linear)
+                else {
+                    continue;
+                };
+                match buckets.get_mut(&text) {
+                    Some(members) => members.push(function),
+                    None => {
+                        buckets.insert(text.clone(), vec![function]);
+                        order.push((text, function));
+                    }
+                }
+            }
+            let mut groups = Vec::new();
+            for (text, _) in order {
+                let members = &buckets[&text];
+                if members.len() >= 2 {
+                    groups.push(BodyShareGroup {
+                        slot: slot.clone(),
+                        slot_candidates: candidates.len(),
+                        survivor: members[0].name.clone(),
+                        victims: members[1..].iter().map(|body| body.name.clone()).collect(),
+                    });
+                }
+            }
+            (!groups.is_empty()).then_some(groups)
+        })
+        .flatten()
+        .collect()
+}
+
+/// The measured fold opportunity, reported under `--report-generics`.
+pub fn generic_body_sharing_oracle(module: &Module, regalloc_linear: bool) -> String {
+    let groups = foldable_body_groups(module, regalloc_linear);
+    if groups.is_empty() {
+        return "shape-oracle: no further foldable bodies".to_string();
+    }
+    // (slot, candidates, folded bodies) — a slot's distinct bodies are its candidates minus its
+    // folded ones.
+    let mut slots: Vec<(String, usize, usize)> = Vec::new();
+    for group in &groups {
+        match slots.iter_mut().find(|(slot, _, _)| *slot == group.slot) {
+            Some((_, _, folded)) => *folded += group.victims.len(),
+            None => slots.push((group.slot.clone(), group.slot_candidates, group.victims.len())),
+        }
+    }
+    let mut measured: Vec<(String, usize, usize)> = slots
+        .into_iter()
+        .map(|(slot, candidates, folded)| (slot, candidates, candidates - folded))
+        .collect();
+    measured.sort_by(|a, b| (b.1 - b.2).cmp(&(a.1 - a.2)).then(a.0.cmp(&b.0)));
+    let total_candidates: usize = measured.iter().map(|(_, candidates, _)| candidates).sum();
+    let total_distinct: usize = measured.iter().map(|(_, _, distinct)| distinct).sum();
+    let removable = total_candidates - total_distinct;
+    let mut lines = vec![format!(
+        "shape-oracle: {} slots lower to identical bodies: {} instantiations → {} distinct bodies ({} removable)",
+        measured.len(),
+        total_candidates,
+        total_distinct,
+        removable
+    )];
+    for (slot, candidates, distinct) in measured {
+        let body_word = if distinct == 1 { "body" } else { "bodies" };
+        lines.push(format!(
+            "  {slot}: {candidates} instantiations → {distinct} {body_word}"
+        ));
+    }
+    lines.join("\n")
+}
+
+/// The folded-candidate map: a victim's EIR function name to its survivor's.
+///
+/// The victim KEEPS its EIR function, so a caller still resolves its parameter types and picks its
+/// own coercion from the original instantiation; only the machine code is shared.
+pub(crate) fn generic_body_aliases(
+    module: &Module,
+    regalloc_linear: bool,
+) -> std::collections::HashMap<String, String> {
+    foldable_body_groups(module, regalloc_linear)
+        .into_iter()
+        .flat_map(|group| {
+            group
+                .victims
+                .into_iter()
+                .map(move |victim| (victim, group.survivor.clone()))
+        })
+        .collect()
+}
+
+/// Emits a folded candidate's entry as a jump to the survivor's body.
+///
+/// The candidate KEEPS its EIR function, so a caller still resolves its parameter types and picks
+/// its own coercion from the original instantiation; only the machine code is shared. No cleanup
+/// symbol is emitted: a cleanup activation is published by the body's own prologue
+/// (`frame::emit_exception_activation_push`), and a folded body has no prologue — the survivor's
+/// body publishes the activation for the frame that actually runs.
+pub(super) fn emit_folded_body(
+    function: &Function,
+    survivor: &str,
+    emitter: &mut Emitter,
+) -> Result<()> {
+    let is_static = function.flags.is_static;
+    let entry = entry_symbol_for_name(&function.name, is_static);
+    let survivor_entry = entry_symbol_for_name(survivor, is_static);
+    // The source map discovers functions through `@fn`/`@endfn` regions; a folded body is a real
+    // function whose range happens to be one jump, so it still needs its record.
+    emit_fn_marker(emitter, &function.name, &entry, false);
+    // `label_global` gives the thunk the same section and `%function` type the full bodies get
+    // on Linux; a bare `.globl` would leave the jump in the PREVIOUS symbol's section and skip
+    // the type annotation, which misdirects `--gc-sections` and debug extents.
+    emitter.label_global(&entry);
+    abi::emit_jump(emitter, &survivor_entry);
+    emit_endfn_marker(emitter, &function.name);
+    Ok(())
+}
+
+/// Returns the entry symbol of an EIR function name, method or free function.
+fn entry_symbol_for_name(name: &str, is_static: bool) -> String {
+    match name.rsplit_once("::") {
+        Some((class, method)) => {
+            let key = php_symbol_key(method);
+            if is_static {
+                static_method_symbol(class, &key)
+            } else {
+                method_symbol(class, &key)
+            }
+        }
+        None => function_symbol(name),
+    }
+}
+
+/// Lowers one candidate body into an isolated emitter and returns its shape-normalized text.
+///
+/// A fresh emitter, literal pool and shared state make the text depend only on the body and the
+/// module's read-only context, so two structurally identical candidates lower to the same text
+/// instead of inheriting whatever label counters and caches the whole-module emission had reached.
+/// `None` means the body did not lower, which the oracle reports as a candidate it cannot compare.
+fn normalized_candidate_body(
+    module: &Module,
+    function: &Function,
+    is_method: bool,
+    regalloc_linear: bool,
+) -> Option<String> {
+    let mut emitter = Emitter::new(module.target);
+    let mut data = DataSection::new();
+    let mut shared = SharedCodegenState::default();
+    let lowered = if is_method {
+        emit_class_method(
+            module,
+            function,
+            &mut emitter,
+            &mut data,
+            &mut shared,
+            regalloc_linear,
+        )
+    } else {
+        emit_user_function(
+            module,
+            function,
+            &mut emitter,
+            &mut data,
+            &mut shared,
+            regalloc_linear,
+        )
+    };
+    lowered.ok()?;
+    // The DATA the body references is part of its meaning: two isolated pools assign the same
+    // label to literals of different contents (a seven-byte "integer" and a seven-byte "boolean"
+    // both intern as the pool's first entry), so comparing the text alone would fold bodies whose
+    // literals disagree. The pool's own emission is the missing half of the comparison.
+    let mut text = emitter.output();
+    let data_output = data.emit(module.target);
+    if !data_output.is_empty() {
+        text.push_str(&data_output);
+    }
+    Some(normalize_body_text(&text, function))
+}
+
+/// Erases every symbol that names the candidate and canonicalizes internal labels, so two
+/// structurally identical bodies compare byte-equal.
+///
+/// The candidate's own mangled name reaches the text as its entry, epilogue and exceptional
+/// cleanup symbols, and reaches internal labels as part of their prefix. The erasure is
+/// operand-aware: a symbol is replaced only where it ENDS at a word boundary, so a sibling
+/// callee whose mangled name merely has the candidate's entry as a prefix (method `foobar`
+/// alongside method `foo`) keeps its own name — a blanket substring replace would fold the two
+/// distinct callees into one and send the folded body to the wrong call target. Each suffix
+/// symbol is erased under its own exact spelling for the same reason. The raw name is what the
+/// source-map `@fn` marker quotes.
+///
+/// The erasure deliberately SKIPS `.ascii` payload lines: a body may embed its own instantiated
+/// name as data, and that data is a real difference between two instantiations — erasing it
+/// would fold bodies whose runtime output differs.
+fn normalize_body_text(text: &str, function: &Function) -> String {
+    let self_symbol = crate::names::mangle_fqn(&function.name);
+    let entry_symbol = entry_symbol_for_name(&function.name, function.flags.is_static);
+    // Order matters: the longer suffix symbols must be erased before the entry symbol, or the
+    // entry erasure would consume their prefix and leave a mangled remainder behind.
+    let own_symbols = [
+        format!("{entry_symbol}__cdylib_exception_cleanup"),
+        format!("{entry_symbol}_epilogue"),
+        entry_symbol.clone(),
+        self_symbol,
+        function.name.clone(),
+    ];
+    // A method's symbols are NOT derived from the mangled full name: `method_symbol(class, key)`
+    // mangles the class and the method separately, so the entry symbol has to be erased on its
+    // own. Replacing it also erases its epilogue and exceptional-cleanup symbols, which are built
+    // as suffixes of it.
+    let erased: String = text
+        .split_inclusive('\n')
+        .map(|line| {
+            if line.trim_start().starts_with(".ascii") {
+                return line.to_string();
+            }
+            let mut erased_line = line.to_string();
+            for symbol in &own_symbols {
+                erased_line = erase_word_bounded(&erased_line, symbol);
+            }
+            erased_line
+        })
+        .collect();
+    let mut mapping: Vec<(String, String)> = Vec::new();
+    for line in erased.split_inclusive('\n') {
+        let trimmed = line.trim_end();
+        let Some(token) = trimmed.strip_suffix(':') else {
+            continue;
+        };
+        if !is_internal_label(token) {
+            continue;
+        }
+        label_map_push(&mut mapping, token);
+    }
+    let mut out = String::with_capacity(erased.len());
+    for line in erased.split_inclusive('\n') {
+        let trimmed = line.trim_end();
+        // A `.ascii` payload is data, not control flow: its bytes may spell a label by
+        // coincidence, and rewriting them would erase a real difference between two bodies.
+        // Label DEFINITIONS never sit on payload lines, so the mapping above is complete.
+        if line.trim_start().starts_with(".ascii") {
+            out.push_str(line);
+            continue;
+        }
+        if let Some(token) = trimmed.strip_suffix(':') {
+            if is_internal_label(token) {
+                out.push_str(&format!("{}:\n", label_of(&mapping, token)));
+                continue;
+            }
+        }
+        let mut rewritten = line.to_string();
+        for (raw, canonical) in &mapping {
+            rewritten = replace_symbol_token(&rewritten, raw, canonical);
+        }
+        out.push_str(&rewritten);
+    }
+    out
+}
+
+/// Whether a label token is one of the body's internal labels, which carry no cross-candidate
+/// meaning. The Linux assembler spells them `.L_eir_…` where Apple spells them `L_eir_…`.
+fn is_internal_label(token: &str) -> bool {
+    token.starts_with("L_") || token.starts_with(".L")
+}
+
+/// Replaces every occurrence of `symbol` that ends AND starts at symbol boundaries.
+///
+/// Both edges matter: the character AFTER the match decides whether the match is the whole of a
+/// longer symbol (method `foobar` alongside method `foo`), and the character BEFORE decides
+/// whether the match is the TAIL of one (callee `xf` alongside candidate `f` — the callee's
+/// mangled symbol contains the candidate's as a suffix). Missing either edge rewrites a
+/// DIFFERENT name's operand and fuses two distinct callees into one.
+fn erase_word_bounded(line: &str, symbol: &str) -> String {
+    if symbol.is_empty() {
+        return line.to_string();
+    }
+    let bytes = line.as_bytes();
+    let is_symbol_byte = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let mut out = String::with_capacity(line.len());
+    let mut cursor = 0;
+    while let Some(offset) = line[cursor..].find(symbol) {
+        let start = cursor + offset;
+        let end = start + symbol.len();
+        let before = start == 0 || !is_symbol_byte(bytes[start - 1]);
+        let after = end >= bytes.len() || !is_symbol_byte(bytes[end]);
+        out.push_str(&line[cursor..start]);
+        if before && after {
+            out.push_str("<SELF>");
+        } else {
+            out.push_str(symbol);
+        }
+        cursor = end;
+    }
+    out.push_str(&line[cursor..]);
+    out
+}
+
+/// Maps an internal label token to its canonical name by order of first definition.
+fn label_map_push(mapping: &mut Vec<(String, String)>, token: &str) -> String {
+    if let Some((_, canonical)) = mapping.iter().find(|(raw, _)| raw == token) {
+        return canonical.clone();
+    }
+    let canonical = format!("L{}", mapping.len());
+    mapping.push((token.to_string(), canonical.clone()));
+    canonical
+}
+
+/// Returns the canonical name of an already-mapped label token.
+fn label_of(mapping: &[(String, String)], token: &str) -> String {
+    mapping
+        .iter()
+        .find(|(raw, _)| raw == token)
+        .map(|(_, canonical)| canonical.clone())
+        .unwrap_or_else(|| token.to_string())
+}
+
+/// Replaces whole-token occurrences of `raw` with `canonical`, leaving longer symbols alone.
+fn replace_symbol_token(line: &str, raw: &str, canonical: &str) -> String {
+    let is_symbol_byte =
+        |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+    let mut out = String::with_capacity(line.len());
+    let mut cursor = 0;
+    while let Some(offset) = line[cursor..].find(raw) {
+        let start = cursor + offset;
+        let end = start + raw.len();
+        let before_ok = start == 0 || !is_symbol_byte(line.as_bytes()[start - 1]);
+        let after_ok = end >= line.len() || !is_symbol_byte(line.as_bytes()[end]);
+        if before_ok && after_ok {
+            out.push_str(&line[cursor..start]);
+            out.push_str(canonical);
+        } else {
+            out.push_str(&line[cursor..end]);
+        }
+        cursor = end;
+    }
+    out.push_str(&line[cursor..]);
+    out
+}
+
+/// Regression tests for assembly-body equivalence and literal payload preservation.
+#[cfg(test)]
+mod normalization_tests {
+    use super::*;
+
+    /// Label canonicalization must leave indented string data byte-for-byte intact.
+    #[test]
+    fn indented_ascii_preserves_internal_label_spelling() {
+        let function = Function::new(
+            "payload_fixture".to_string(), crate::ir::IrType::Void, PhpType::Void,
+        );
+        let first = "L_payload_17:\n    b L_payload_17\n    .ascii \"L_payload_17\"\n";
+        let second = "L_payload_18:\n    b L_payload_18\n    .ascii \"L_payload_18\"\n";
+        let normalized = normalize_body_text(first, &function);
+        assert!(normalized.contains("    .ascii \"L_payload_17\""));
+        assert!(!normalized.contains("b L_payload_17"));
+        assert_ne!(normalized, normalize_body_text(second, &function));
+    }
 }

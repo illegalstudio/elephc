@@ -23,6 +23,7 @@ pub(crate) mod ob_handlers;
 pub mod execute;
 #[cfg(not(test))]
 pub mod function_calls;
+pub mod native_catalog;
 pub mod native_functions;
 pub mod native_constants;
 pub mod native_methods;
@@ -45,6 +46,7 @@ pub use declared_symbols::*;
 pub use execute::*;
 #[cfg(not(test))]
 pub use function_calls::*;
+pub use native_catalog::*;
 pub use native_functions::*;
 pub use native_constants::*;
 pub use native_methods::*;

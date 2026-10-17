@@ -7,12 +7,19 @@
 //!
 //! Key details:
 //! - The exported validator must share JSON state slots with decode and encode entry points.
+//! - Public decode and validate calls publish their original source slice.
+//!   Errors materialize coordinates once from `__rt_json_throw_error`; empty
+//!   input has no location. String failures point at the token opener.
+//! - Token coordinates follow PHP 8.6, extending PHP 8.2-8.5 base messages.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
 mod aarch64;
+mod diagnostics;
 mod x86_64;
+#[cfg(test)]
+mod tests;
 
 /// __rt_json_validate(json_ptr, json_len) -> bool
 ///
@@ -42,8 +49,8 @@ mod x86_64;
 pub(crate) fn emit_json_validate(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         x86_64::emit(emitter);
-        return;
+    } else {
+        aarch64::emit(emitter);
     }
-
-    aarch64::emit(emitter);
+    diagnostics::emit_decode_syntax_error(emitter);
 }

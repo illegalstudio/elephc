@@ -23,10 +23,11 @@ pub unsafe extern "C" fn __elephc_eval_register_native_method(
     method_key_len: u64,
     param_count: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let outcome = std::panic::catch_unwind(|| unsafe {
         register_native_method_inner(ctx, method_key_ptr, method_key_len, false, param_count)
     })
-    .unwrap_or(0)
+    .ok().and_then(Result::ok);
+    unsafe { crate::ffi::native_catalog::record_registration_outcome(ctx, outcome) }
 }
 
 /// Registers a generated native PHP static-method signature in an eval context.
@@ -41,10 +42,11 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method(
     method_key_len: u64,
     param_count: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let outcome = std::panic::catch_unwind(|| unsafe {
         register_native_method_inner(ctx, method_key_ptr, method_key_len, true, param_count)
     })
-    .unwrap_or(0)
+    .ok().and_then(Result::ok);
+    unsafe { crate::ffi::native_catalog::record_registration_outcome(ctx, outcome) }
 }
 
 /// Registers one generated native PHP interface property contract in an eval context.
@@ -65,7 +67,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_interface_property(
     type_spec_len: u64,
     flags: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_interface_property_inner(
             ctx,
             property_key_ptr,
@@ -75,7 +77,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_interface_property(
             flags,
         )
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers one generated native PHP abstract class property contract in an eval context.
@@ -96,7 +99,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_abstract_property(
     type_spec_len: u64,
     flags: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_abstract_property_inner(
             ctx,
             property_key_ptr,
@@ -106,7 +109,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_abstract_property(
             flags,
         )
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers one generated native PHP instance method's explicit PHP signature shape.
@@ -128,7 +132,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_method_shape(
     required_param_count: u64,
     shape_flags: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_method_shape_inner(
             ctx,
             method_key_ptr,
@@ -139,7 +143,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_method_shape(
             shape_flags,
         )
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers one generated native PHP static method's explicit PHP signature shape.
@@ -156,7 +161,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method_shape(
     required_param_count: u64,
     shape_flags: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_method_shape_inner(
             ctx,
             method_key_ptr,
@@ -167,7 +172,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method_shape(
             shape_flags,
         )
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers one generated native PHP method parameter name in an eval context.
@@ -184,7 +190,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_method_param(
     param_name_ptr: *const u8,
     param_name_len: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_method_param_inner(
             ctx,
             method_key_ptr,
@@ -195,7 +201,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_method_param(
             param_name_len,
         )
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers one generated native PHP static-method parameter name in an eval context.
@@ -212,7 +219,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method_param(
     param_name_ptr: *const u8,
     param_name_len: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_method_param_inner(
             ctx,
             method_key_ptr,
@@ -223,7 +230,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method_param(
             param_name_len,
         )
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers generated native PHP method parameter flags in an eval context.
@@ -240,7 +248,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_method_param_flags(
     is_by_ref: i32,
     is_variadic: i32,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_method_param_flags_inner(
             ctx,
             method_key_ptr,
@@ -251,7 +259,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_method_param_flags(
             is_variadic,
         )
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers generated native PHP static-method parameter flags in an eval context.
@@ -268,7 +277,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method_param_flags
     is_by_ref: i32,
     is_variadic: i32,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_method_param_flags_inner(
             ctx,
             method_key_ptr,
@@ -279,7 +288,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method_param_flags
             is_variadic,
         )
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers whether generated eval may dispatch a native PHP method.
@@ -294,7 +304,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_method_bridge_support(
     method_key_len: u64,
     supported: i32,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_method_bridge_support_inner(
             ctx,
             method_key_ptr,
@@ -303,7 +313,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_method_bridge_support(
             supported,
         )
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers whether generated eval may dispatch a native PHP static method.
@@ -318,7 +329,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method_bridge_supp
     method_key_len: u64,
     supported: i32,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_method_bridge_support_inner(
             ctx,
             method_key_ptr,
@@ -327,7 +338,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method_bridge_supp
             supported,
         )
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers one generated native PHP method parameter declared type in an eval context.
@@ -344,7 +356,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_method_param_type(
     type_spec_ptr: *const u8,
     type_spec_len: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_method_param_type_inner(
             ctx,
             method_key_ptr,
@@ -355,7 +367,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_method_param_type(
             type_spec_len,
         )
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers one generated native PHP static-method parameter declared type.
@@ -372,7 +385,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method_param_type(
     type_spec_ptr: *const u8,
     type_spec_len: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_method_param_type_inner(
             ctx,
             method_key_ptr,
@@ -383,7 +396,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method_param_type(
             type_spec_len,
         )
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers one generated native PHP method declared return type in an eval context.
@@ -399,7 +413,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_method_return_type(
     type_spec_ptr: *const u8,
     type_spec_len: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_method_return_type_inner(
             ctx,
             method_key_ptr,
@@ -409,7 +423,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_method_return_type(
             type_spec_len,
         )
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers one generated native PHP static-method declared return type.
@@ -425,7 +440,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method_return_type
     type_spec_ptr: *const u8,
     type_spec_len: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_method_return_type_inner(
             ctx,
             method_key_ptr,
@@ -435,7 +450,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method_return_type
             type_spec_len,
         )
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers one generated native PHP method scalar parameter default in an eval context.
@@ -452,7 +468,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_method_param_default_scal
     default_kind: u64,
     default_payload: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_method_param_default_scalar_inner(
             ctx,
             method_key_ptr,
@@ -463,7 +479,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_method_param_default_scal
             default_payload,
         )
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers one generated native PHP static-method scalar parameter default in an eval context.
@@ -480,7 +497,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method_param_defau
     default_kind: u64,
     default_payload: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_method_param_default_scalar_inner(
             ctx,
             method_key_ptr,
@@ -491,7 +508,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method_param_defau
             default_payload,
         )
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers one generated native PHP method string parameter default in an eval context.
@@ -508,7 +526,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_method_param_default_stri
     default_ptr: *const u8,
     default_len: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_method_param_default_string_inner(
             ctx,
             method_key_ptr,
@@ -519,7 +537,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_method_param_default_stri
             default_len,
         )
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers one generated native PHP static-method string parameter default in an eval context.
@@ -536,7 +555,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method_param_defau
     default_ptr: *const u8,
     default_len: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_method_param_default_string_inner(
             ctx,
             method_key_ptr,
@@ -547,7 +566,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method_param_defau
             default_len,
         )
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers one generated native PHP method object parameter default in an eval context.
@@ -564,7 +584,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_method_param_default_obje
     spec_ptr: *const u8,
     spec_len: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_method_param_default_object_inner(
             ctx,
             method_key_ptr,
@@ -575,7 +595,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_method_param_default_obje
             spec_len,
         )
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers one generated native PHP static-method object parameter default in an eval context.
@@ -592,7 +613,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method_param_defau
     spec_ptr: *const u8,
     spec_len: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_method_param_default_object_inner(
             ctx,
             method_key_ptr,
@@ -603,7 +624,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method_param_defau
             spec_len,
         )
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers one generated native PHP method array parameter default in an eval context.
@@ -620,7 +642,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_method_param_default_arra
     spec_ptr: *const u8,
     spec_len: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_method_param_default_array_inner(
             ctx,
             method_key_ptr,
@@ -631,7 +653,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_method_param_default_arra
             spec_len,
         )
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers one generated native PHP static-method array parameter default in an eval context.
@@ -648,7 +671,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method_param_defau
     spec_ptr: *const u8,
     spec_len: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_method_param_default_array_inner(
             ctx,
             method_key_ptr,
@@ -659,7 +682,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method_param_defau
             spec_len,
         )
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers a generated native PHP constructor signature in an eval context.
@@ -674,10 +698,11 @@ pub unsafe extern "C" fn __elephc_eval_register_native_constructor(
     class_name_len: u64,
     param_count: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let outcome = std::panic::catch_unwind(|| unsafe {
         register_native_constructor_inner(ctx, class_name_ptr, class_name_len, param_count)
     })
-    .unwrap_or(0)
+    .ok().and_then(Result::ok);
+    unsafe { crate::ffi::native_catalog::record_registration_outcome(ctx, outcome) }
 }
 
 /// Registers one generated native PHP constructor's explicit PHP signature shape.
@@ -697,7 +722,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_constructor_shape(
     required_param_count: u64,
     shape_flags: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_constructor_shape_inner(
             ctx,
             class_name_ptr,
@@ -707,7 +732,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_constructor_shape(
             shape_flags,
         )
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers one generated native PHP constructor parameter name in an eval context.
@@ -724,7 +750,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_constructor_param(
     param_name_ptr: *const u8,
     param_name_len: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_constructor_param_inner(
             ctx,
             class_name_ptr,
@@ -734,7 +760,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_constructor_param(
             param_name_len,
         )
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers generated native PHP constructor parameter flags in an eval context.
@@ -751,7 +778,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_constructor_param_flags(
     is_by_ref: i32,
     is_variadic: i32,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_constructor_param_flags_inner(
             ctx,
             class_name_ptr,
@@ -761,7 +788,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_constructor_param_flags(
             is_variadic,
         )
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers whether generated eval may dispatch a native PHP constructor.
@@ -776,7 +804,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_constructor_bridge_suppor
     class_name_len: u64,
     supported: i32,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_constructor_bridge_support_inner(
             ctx,
             class_name_ptr,
@@ -784,7 +812,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_constructor_bridge_suppor
             supported,
         )
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers one generated native PHP constructor parameter declared type.
@@ -801,7 +830,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_constructor_param_type(
     type_spec_ptr: *const u8,
     type_spec_len: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_constructor_param_type_inner(
             ctx,
             class_name_ptr,
@@ -811,7 +840,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_constructor_param_type(
             type_spec_len,
         )
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers one generated native PHP constructor scalar parameter default in an eval context.
@@ -828,7 +858,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_constructor_param_default
     default_kind: u64,
     default_payload: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_constructor_param_default_scalar_inner(
             ctx,
             class_name_ptr,
@@ -838,7 +868,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_constructor_param_default
             default_payload,
         )
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers one generated native PHP constructor string parameter default in an eval context.
@@ -855,7 +886,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_constructor_param_default
     default_ptr: *const u8,
     default_len: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_constructor_param_default_string_inner(
             ctx,
             class_name_ptr,
@@ -865,7 +896,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_constructor_param_default
             default_len,
         )
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers one generated native PHP constructor object parameter default in an eval context.
@@ -882,7 +914,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_constructor_param_default
     spec_ptr: *const u8,
     spec_len: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_constructor_param_default_object_inner(
             ctx,
             class_name_ptr,
@@ -892,7 +924,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_constructor_param_default
             spec_len,
         )
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers one generated native PHP constructor array parameter default in an eval context.
@@ -909,7 +942,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_constructor_param_default
     spec_ptr: *const u8,
     spec_len: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_constructor_param_default_array_inner(
             ctx,
             class_name_ptr,
@@ -919,7 +952,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_constructor_param_default
             spec_len,
         )
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers generated native PHP parent-class metadata in an eval context.
@@ -935,7 +969,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_class_parent(
     parent_name_ptr: *const u8,
     parent_name_len: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let outcome = std::panic::catch_unwind(|| unsafe {
         register_native_class_parent_inner(
             ctx,
             class_name_ptr,
@@ -944,7 +978,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_class_parent(
             parent_name_len,
         )
     })
-    .unwrap_or(0)
+    .ok().and_then(Result::ok);
+    unsafe { crate::ffi::native_catalog::record_registration_outcome(ctx, outcome) }
 }
 
 /// Registers one generated native PHP property type in an eval context.
@@ -961,7 +996,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_property_type(
     type_spec_ptr: *const u8,
     type_spec_len: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let outcome = std::panic::catch_unwind(|| unsafe {
         register_native_property_type_inner(
             ctx,
             property_key_ptr,
@@ -970,7 +1005,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_property_type(
             type_spec_len,
         )
     })
-    .unwrap_or(0)
+    .ok().and_then(Result::ok);
+    unsafe { crate::ffi::native_catalog::record_registration_outcome(ctx, outcome) }
 }
 
 /// Registers one generated native PHP property scalar default in an eval context.
@@ -986,7 +1022,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_property_default_scalar(
     default_kind: u64,
     default_payload: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let outcome = std::panic::catch_unwind(|| unsafe {
         register_native_property_default_scalar_inner(
             ctx,
             property_key_ptr,
@@ -995,7 +1031,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_property_default_scalar(
             default_payload,
         )
     })
-    .unwrap_or(0)
+    .ok().and_then(Result::ok);
+    unsafe { crate::ffi::native_catalog::record_registration_outcome(ctx, outcome) }
 }
 
 /// Registers one generated native PHP property string default in an eval context.
@@ -1011,7 +1048,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_property_default_string(
     default_ptr: *const u8,
     default_len: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let outcome = std::panic::catch_unwind(|| unsafe {
         register_native_property_default_string_inner(
             ctx,
             property_key_ptr,
@@ -1020,7 +1057,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_property_default_string(
             default_len,
         )
     })
-    .unwrap_or(0)
+    .ok().and_then(Result::ok);
+    unsafe { crate::ffi::native_catalog::record_registration_outcome(ctx, outcome) }
 }
 
 /// Registers one generated native PHP property array default in an eval context.
@@ -1036,7 +1074,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_property_default_array(
     spec_ptr: *const u8,
     spec_len: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let outcome = std::panic::catch_unwind(|| unsafe {
         register_native_property_default_array_inner(
             ctx,
             property_key_ptr,
@@ -1045,7 +1083,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_property_default_array(
             spec_len,
         )
     })
-    .unwrap_or(0)
+    .ok().and_then(Result::ok);
+    unsafe { crate::ffi::native_catalog::record_registration_outcome(ctx, outcome) }
 }
 
 /// Registers one generated native PHP class/member attribute in an eval context.
@@ -1059,8 +1098,9 @@ pub unsafe extern "C" fn __elephc_eval_register_native_member_attribute(
     record_ptr: *const u8,
     record_len: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_native_member_attribute_inner(ctx, record_ptr, record_len)
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }

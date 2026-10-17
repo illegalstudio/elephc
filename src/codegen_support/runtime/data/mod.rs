@@ -279,6 +279,9 @@ pub(crate) const SPRINTF_OBJECT_TO_FLOAT_WARNING_SUFFIX: &str =
     " could not be converted to float\n";
 /// Suffix shared by PHP's runtime unserialize TypeError diagnostics.
 pub(crate) const UNSER_TYPE_GIVEN_SUFFIX: &str = " given";
+/// Prefix of PHP's typed-property hydration TypeError
+/// (`Cannot assign <value> to property C::$p of type <T>`), shared by every rejected slot.
+pub(crate) const UNSER_PROPERTY_ASSIGN_PREFIX: &str = "Cannot assign ";
 /// Fatal error message when a `printf`-family conversion requests a field width outside
 /// PHP's accepted range. PHP raises `ValueError: Width must be between 0 and 2147483647`;
 /// elephc has no catchable-error path inside `__rt_sprintf`, so it reports the same text

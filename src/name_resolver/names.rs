@@ -129,7 +129,7 @@ pub(super) fn resolve_type_expr(
         },
         TypeExpr::Named(name) => {
             let raw = name.as_str();
-            if matches!(raw, "array" | "mixed" | "callable" | "void")
+            if matches!(raw, "array" | "mixed" | "callable" | "void" | "null")
                 || raw.eq_ignore_ascii_case("object")
             {
                 TypeExpr::Named(name.clone())

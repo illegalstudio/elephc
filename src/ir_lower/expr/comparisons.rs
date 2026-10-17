@@ -17,8 +17,25 @@ pub(super) fn lower_compare(
     right: &Expr,
     expr: &Expr,
 ) -> LoweredValue {
-    let mut lhs = lower_expr(ctx, left);
-    let mut rhs = lower_expr(ctx, right);
+    let lhs = lower_expr(ctx, left);
+    let (lhs, left_pins) = object_operators::capture_left_operand(ctx, lhs, left.span);
+    let rhs = lower_expr(ctx, right);
+    unpin_in_flight_owners(ctx, left_pins, left.span);
+    if let Some(result) = object_operators::lower_object_binary_values(ctx, lhs, op, rhs, expr) {
+        return result;
+    }
+    if let Some(result) = object_operators::lower_dynamic_object_binary(ctx, lhs, op, rhs, expr, true,
+        |ctx| lower_compare_values(ctx, lhs, op, rhs, left, right, expr)) {
+        return result;
+    }
+    lower_compare_values(ctx, lhs, op, rhs, left, right, expr)
+}
+
+/// Lowers ordinary PHP comparisons after an internal value-class handler is excluded.
+fn lower_compare_values(
+    ctx: &mut LoweringContext<'_, '_>, mut lhs: LoweredValue, op: &BinOp,
+    mut rhs: LoweredValue, left: &Expr, right: &Expr, expr: &Expr,
+) -> LoweredValue {
     // DateTime-family value comparison: PHP orders `DateTime`/`DateTimeImmutable` by their absolute
     // instant (timestamp seconds + microsecond), independent of the stored timezone. Replace each
     // object operand with a monotonic integer instant key so `==`, `!=`, `<`, `<=`, `>`, `>=`, and

@@ -174,6 +174,8 @@ Linking:
 
 Diagnostics:
   --timings               Show a per-phase timing table on stderr
+  --report-generics       Summarize monomorphized generic instantiations per
+                          template on stderr
   --quiet, -q             Disable progress lines and colorized output
   --source-map            Emit a .map source map alongside the assembly
   --debug-info            Embed DWARF line info for debuggers
@@ -214,6 +216,8 @@ pub(crate) struct CliConfig {
     pub(crate) check_only: bool,
     pub(crate) emit_timings: bool,
     pub(crate) emit_source_map: bool,
+    /// Print a per-template summary of monomorphized generic instantiations on stderr.
+    pub(crate) report_generics: bool,
     pub(crate) emit_debug_info: bool,
     /// Keep the symbol table in the linked executable; it is stripped by default.
     pub(crate) keep_symbols: bool,
@@ -336,6 +340,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut check_only = false;
     let mut emit_timings = false;
     let mut emit_source_map = false;
+    let mut report_generics = false;
     let mut emit_debug_info = false;
     let mut keep_symbols = false;
     let mut filename_arg = None;
@@ -441,6 +446,8 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
             emit_timings = true;
         } else if arg == "--source-map" {
             emit_source_map = true;
+        } else if arg == "--report-generics" {
+            report_generics = true;
         } else if arg == "--debug-info" {
             emit_debug_info = true;
         } else if arg == "--keep-symbols" {
@@ -625,6 +632,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
         check_only,
         emit_timings,
         emit_source_map,
+        report_generics,
         emit_debug_info,
         keep_symbols,
         regalloc_linear,

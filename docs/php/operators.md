@@ -17,6 +17,15 @@ sidebar:
 | `**` | `$a ** $b` | Exponentiation (right-associative). Int-preserving like PHP: two `int` operands with a non-negative exponent give an `int` while the result fits (`2 ** 3` is `int(8)`), and promote to `double` at the multiplication that overflows (`2 ** 63`). A negative exponent or a `float` operand always gives a `float`. |
 | `-$x` | `-$x` | Unary negation |
 
+### Internal decimal objects
+
+[`BcMath\Number`](bcmath.md#immutable-number-objects) provides exact decimal
+arithmetic and value comparisons through typed internal class handlers. The
+operator forms use the corresponding method's automatic scale. Compound
+assignments and `++`/`--` replace immutable objects, and strict equality retains
+object identity. Ordinary userland classes cannot define arithmetic operator
+magic methods.
+
 ### Numeric strings in arithmetic
 
 The arithmetic operators (`+ - * / % **`) accept numeric and leading-numeric strings and coerce

@@ -62,6 +62,28 @@ struct RuntimeStringFunctionTarget {
     name: String,
     param_types: Vec<PhpType>,
     return_ty: PhpType,
+    /// Per-parameter argument-`TypeError` message prefix for a `false`-declared parameter
+    /// (`f(): Argument #1 ($v) must be of type false, `), `None` elsewhere — the invocation
+    /// guard needs the identity php names.
+    false_param_prefixes: Vec<Option<String>>,
+}
+
+/// Spells a compile-time argument type the way php names it in an argument `TypeError`.
+fn php_argument_type_name(ty: &PhpType) -> String {
+    match ty {
+        PhpType::Int => "int".to_string(),
+        PhpType::Float => "float".to_string(),
+        PhpType::Str => "string".to_string(),
+        PhpType::Bool => "bool".to_string(),
+        PhpType::Array(_) => "array".to_string(),
+        PhpType::AssocArray { .. } => "array".to_string(),
+        PhpType::Iterable => "iterable".to_string(),
+        PhpType::Callable => "callable".to_string(),
+        PhpType::Object(name) => name.clone(),
+        PhpType::Void | PhpType::Never => "null".to_string(),
+        PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar => "mixed".to_string(),
+        other => format!("{other:?}"),
+    }
 }
 
 /// Resolved public instance-method candidate for a runtime callable array.
@@ -1279,7 +1301,7 @@ fn runtime_instance_method_descriptor_template(
         ctx.module, impl_class, method_key, false,
     );
     let invoker_label = emit_runtime_callable_invoker_with_string_owner(ctx, sig, &captures, owns_string_return, true);
-    let php_name = format!("{}::{}", class_name, method_name);
+    let php_name = format!("{}::{}", impl_class, method_name);
     let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
         ctx.data,
         &entry_label,
@@ -1740,10 +1762,11 @@ fn runtime_static_method_descriptor_cases(
             ctx.module, &impl_class, &method_key, true,
         );
         let invoker_label = emit_runtime_callable_invoker_with_string_owner(ctx, &wrapper_sig, &[], owns_string_return, true);
+        let declared_name = format!("{}::{}", impl_class, method_name);
         let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
             ctx.data,
             &entry_label,
-            Some(&php_name),
+            Some(&declared_name),
             callable_descriptor::CALLABLE_DESC_KIND_STATIC_METHOD,
             Some(&wrapper_sig),
             &[],
@@ -2316,13 +2339,18 @@ fn emit_stack_string_compare_branch(
     }
 }
 
-/// Calls one matched runtime instance-method target through the normal EIR ABI.
+/// Checks literal parameters and calls the selected runtime array instance method.
+/// Guard operands before ABI conversion can erase their original Mixed tags.
 fn emit_runtime_array_instance_method_call(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     args: &[ValueId],
     target: &RuntimeArrayInstanceMethodTarget,
 ) -> Result<()> {
+    super::direct_calls::emit_literal_declared_parameter_guards(
+        ctx, args, &target.sig.params,
+        &format!("{}::{}", target.impl_class, target.method_key),
+    )?;
     let receiver_ty = PhpType::Object(target.class_name.clone());
     let mut param_types = Vec::with_capacity(target.sig.params.len() + 1);
     param_types.push(receiver_ty.clone());
@@ -3209,6 +3237,7 @@ fn runtime_string_function_targets(
             ) {
                 return None;
             }
+            let base_name = function.name.split('<').next().unwrap_or(&function.name);
             Some(RuntimeStringFunctionTarget {
                 name: function.name.clone(),
                 param_types: function
@@ -3217,6 +3246,20 @@ fn runtime_string_function_targets(
                     .map(|param| param.php_type.codegen_repr())
                     .collect(),
                 return_ty,
+                false_param_prefixes: function
+                    .params
+                    .iter()
+                    .enumerate()
+                    .map(|(index, param)| {
+                        (param.php_type == PhpType::False).then(|| {
+                            format!(
+                                "{base_name}(): Argument #{} (${}) must be of type false, ",
+                                index + 1,
+                                param.name
+                            )
+                        })
+                    })
+                    .collect(),
             })
         })
         .collect::<Vec<_>>();
@@ -3293,6 +3336,32 @@ fn emit_runtime_string_function_call(
     args: &[ValueId],
     target: &RuntimeStringFunctionTarget,
 ) -> Result<()> {
+    // A `false`-declared parameter accepts ONLY the exact `false` bool: the runtime-callable
+    // surface cannot be checked statically (the callable's identity is dynamic), so every
+    // argument bound to one is guarded here. A bool source is checked by payload, a boxed
+    // mixed by tag dispatch, and every other compile-time type is refused outright with php's
+    // argument `TypeError` naming it.
+    for (prefix, operand) in target.false_param_prefixes.iter().zip(args) {
+        let Some(prefix) = prefix else { continue };
+        let operand_ty = ctx.value_php_type(*operand)?;
+        match operand_ty.codegen_repr() {
+            PhpType::False => {}
+            PhpType::Bool => {
+                ctx.load_value_to_result(*operand)?;
+                let ok_label = ctx.next_label("false_invoker_ok");
+                abi::emit_branch_if_int_result_zero(ctx.emitter, &ok_label);
+                super::exceptions::emit_type_error(ctx, &format!("{prefix}true given"));
+                ctx.emitter.label(&ok_label);
+            }
+            PhpType::Mixed | PhpType::Union(_) => {
+                super::emit_false_param_mixed_guard(ctx, *operand, prefix)?
+            }
+            other => super::exceptions::emit_type_error(
+                ctx,
+                &format!("{prefix}{} given", php_argument_type_name(&other)),
+            ),
+        }
+    }
     let overflow_bytes = materialize_direct_call_args(ctx, args, &target.param_types)?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);

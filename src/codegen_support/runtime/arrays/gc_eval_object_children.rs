@@ -14,6 +14,19 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Emits optional eval object-edge traversal and final-release C-ABI helpers.
 pub fn emit_gc_eval_object_children(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: gc_eval_object_children_count_all ---");
+    emitter.label_global("__rt_gc_eval_object_children_count_all");
+    // -- the sibling counts every borrowed edge without changing the old count/mark ABI --
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("mov x2, #2");                                  // select all-edge counting while preserving the object
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov edx, 2");                                  // select all-edge counting while preserving the object
+        }
+    }
+    abi::emit_jump(emitter, "__rt_gc_eval_object_children");
     match emitter.target.arch {
         Arch::AArch64 => emit_aarch64(emitter),
         Arch::X86_64 => emit_x86_64(emitter),
@@ -39,7 +52,10 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("blr x10");                                             // borrow one retained child without allocating or changing ownership
     emitter.instruction("cbz x0, __rt_gc_eval_object_children_done");           // zero terminates this object's child sequence
     emitter.instruction("ldr x9, [sp, #8]");                                    // select the requested collector phase
+    emitter.instruction("cmp x9, #2");                                          // the new sibling explicitly selects incoming-edge counting
+    emitter.instruction("b.eq __rt_gc_eval_object_children_record_all");        // mode two records each retained child once
     emitter.instruction("cbnz x9, __rt_gc_eval_object_children_mark");          // recursively mark children only during reachability traversal
+    emitter.label("__rt_gc_eval_object_children_record_all");
     emitter.instruction("bl __rt_gc_note_child_ref");                           // count the real incoming edge to this child cell
     emitter.instruction("b __rt_gc_eval_object_children_next");                 // continue enumeration after recording the edge
     emitter.label("__rt_gc_eval_object_children_mark");
@@ -78,12 +94,17 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call r10");                                            // borrow one retained child without changing ownership
     emitter.instruction("test rax, rax");                                       // check for the end of this object's child sequence
     emitter.instruction("jz __rt_gc_eval_object_children_done");                // zero terminates enumeration
+    emitter.instruction("cmp QWORD PTR [rbp - 24], 2");                         // distinguish all-edge priming from the old count/mark modes
+    emitter.instruction("je __rt_gc_eval_object_children_count_all_x");         // record every retained child during cache priming
     emitter.instruction("cmp QWORD PTR [rbp - 24], 0");                         // select the requested collector phase
     emitter.instruction("jne __rt_gc_eval_object_children_mark");               // recursively mark children during reachability traversal
     emitter.instruction("cmp rax, QWORD PTR [rbp - 16]");                       // compare this child with the candidate being recounted
     emitter.instruction("jne __rt_gc_eval_object_children_next");               // other children do not contribute to this candidate
     emitter.instruction("add QWORD PTR [rbp - 40], 1");                         // count one actual owning edge to the candidate
     emitter.instruction("jmp __rt_gc_eval_object_children_next");               // continue enumeration after recording the edge
+    emitter.label("__rt_gc_eval_object_children_count_all_x");
+    emitter.instruction("call __rt_gc_note_child_ref");                         // cache the borrowed child's incoming edge without retaining it
+    emitter.instruction("jmp __rt_gc_eval_object_children_next");               // continue after the register-preserving edge update
     emitter.label("__rt_gc_eval_object_children_mark");
     emitter.instruction("call __rt_gc_mark_reachable");                         // pass the child in the runtime's rax convention
     emitter.label("__rt_gc_eval_object_children_next");

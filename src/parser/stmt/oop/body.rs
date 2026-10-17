@@ -476,13 +476,41 @@ fn parse_optional_property_type(
     if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Variable(_))) {
         return Ok(None);
     }
+    // PHP 8.2's standalone `false` / `true` / `null` are KEYWORD tokens, not identifiers.
+    // Property parsing preserves null's declaration and rejects unimplemented true-only slots.
+    // Excluding these tokens here made `public false $v;` parse
+    // as an untyped property whose NAME is a keyword — an immediate statement-level error.
     if !matches!(
         tokens.get(*pos).map(|(t, _)| t),
-        Some(Token::Identifier(_)) | Some(Token::Question) | Some(Token::Backslash)
+        Some(Token::Identifier(_))
+            | Some(Token::Question)
+            | Some(Token::Backslash)
+            | Some(Token::False)
+            | Some(Token::True)
+            | Some(Token::Null)
     ) {
         return Ok(None);
     }
-    Ok(Some(parse_type_expr(tokens, pos, span)?))
+    Ok(Some(parse_property_type_expr(tokens, pos, span)?))
+}
+
+/// Keeps null-only property declarations distinct from void and refuses true-only storage.
+pub(super) fn parse_property_type_expr(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+) -> Result<TypeExpr, CompileError> {
+    let start = *pos;
+    let parsed = parse_type_expr(tokens, pos, span)?;
+    if tokens[start..*pos].iter().any(|(token, _)| matches!(token, Token::True)) {
+        return Err(CompileError::new(span, "Literal true property types are not supported"));
+    }
+    if matches!(tokens.get(start).map(|(token, _)| token), Some(Token::Null))
+        && matches!(parsed, TypeExpr::Void)
+    {
+        return Ok(TypeExpr::Named(crate::names::Name::unqualified("null")));
+    }
+    Ok(parsed)
 }
 
 /// Parses the optional PHP 8.3 type between `const` and a class-constant name.

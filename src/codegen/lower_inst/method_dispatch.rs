@@ -10,6 +10,9 @@
 use super::*;
 
 /// Lowers a direct instance-method call on a statically known object receiver.
+///
+/// Overridable methods check literal `false` and `null` parameters on the runtime
+/// implementation. A final or otherwise non-virtual method keeps the resolved signature.
 pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let object = expect_operand(inst, 0)?;
     let method_name = method_name_data(ctx, inst)?.to_string();
@@ -65,6 +68,23 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
         return lower_interface_method_call(ctx, inst, &class_name, &method_name);
     }
     let target = resolve_method_call_target(ctx, &class_name, &method_name, inst.operands.len())?;
+    if target.dynamic_slot.is_some() {
+        // An override may widen `false` or `null`. The vtable selects that body, so the
+        // guard has to read the runtime class rather than the static base signature.
+        let receiver_reg = abi::nested_call_reg(ctx.emitter);
+        ctx.load_value_to_reg(object, receiver_reg)?;
+        super::method_intrinsics::emit_hierarchy_literal_parameter_guards(
+            ctx,
+            inst,
+            &class_name,
+            &method_name,
+            receiver_reg,
+        )?;
+    } else {
+        super::method_resolution::emit_method_literal_parameter_guards(
+            ctx, &target, &inst.operands[1..],
+        )?;
+    }
     let mut param_types = Vec::with_capacity(target.params.len() + 1);
     param_types.push(PhpType::Object(class_name));
     param_types.extend(target.params.iter().map(|param| param.codegen_repr()));
@@ -192,6 +212,11 @@ pub(super) fn lower_mixed_method_candidate_call(
     if is_throwable_standard_method_call(ctx, &candidate.class_name, method_name) {
         return lower_throwable_standard_method_from_reg(ctx, inst, receiver_reg, method_name);
     }
+    abi::emit_push_reg(ctx.emitter, receiver_reg);
+    super::method_resolution::emit_method_literal_parameter_guards(
+        ctx, &candidate.target, &inst.operands[1..],
+    )?;
+    abi::emit_pop_reg(ctx.emitter, receiver_reg);
     let receiver_ty = PhpType::Object(candidate.class_name.clone());
     let mut param_types = Vec::with_capacity(candidate.target.params.len() + 1);
     param_types.push(receiver_ty.clone());
@@ -225,30 +250,77 @@ pub(super) fn lower_mixed_method_candidate_call(
     emit_ref_arg_writebacks(ctx, &call_args)
 }
 
+/// Returns true when `class_name` is `ancestor` or reaches it through `parent`.
+pub(super) fn class_is_same_or_subclass(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    ancestor: &str,
+) -> bool {
+    let ancestor = ancestor.trim_start_matches('\\');
+    let mut current = class_name.trim_start_matches('\\');
+    let mut visited = std::collections::HashSet::new();
+    while visited.insert(current) {
+        if current == ancestor {
+            return true;
+        }
+        match ctx
+            .module
+            .class_infos
+            .get(current)
+            .and_then(|info| info.parent.as_deref())
+        {
+            Some(parent) => current = parent.trim_start_matches('\\'),
+            None => return false,
+        }
+    }
+    false
+}
+
 /// Collects concrete class-method candidates for a boxed `Mixed` receiver.
 pub(super) fn mixed_method_candidates(
     ctx: &FunctionContext<'_>,
     method_name: &str,
     operand_count: usize,
 ) -> Result<Vec<MixedMethodCandidate>> {
+    method_candidates(ctx, method_name, operand_count, None)
+}
+
+/// Collects class-method candidates, optionally limited to one inheritance tree.
+fn method_candidates(
+    ctx: &FunctionContext<'_>,
+    method_name: &str,
+    operand_count: usize,
+    ancestor: Option<&str>,
+) -> Result<Vec<MixedMethodCandidate>> {
     let method_key = php_symbol_key(method_name);
+    let class_names = ctx.module.class_infos.keys().cloned().collect::<Vec<_>>();
     let mut candidates = Vec::new();
-    for (class_name, class_info) in &ctx.module.class_infos {
-        let Some(signature) = class_info.methods.get(&method_key) else {
-            continue;
+    for class_name in class_names {
+        if let Some(ancestor) = ancestor {
+            if !class_is_same_or_subclass(ctx, &class_name, ancestor) {
+                continue;
+            }
+        }
+        let (class_id, params_len, source_count) = {
+            let Some(class_info) = ctx.module.class_infos.get(&class_name) else {
+                continue;
+            };
+            let Some(signature) = class_info.methods.get(&method_key) else {
+                continue;
+            };
+            let source_count =
+                crate::codegen_support::source_method_adapters::source_visible_signature(signature)
+                    .ok()
+                    .map(|source| source.params.len() + 1);
+            (class_info.class_id, signature.params.len(), source_count)
         };
-        let source_count = crate::codegen_support::source_method_adapters::source_visible_signature(
-            signature,
-        )
-        .ok()
-        .map(|source| source.params.len() + 1);
-        if signature.params.len() + 1 != operand_count && source_count != Some(operand_count) {
+        if params_len + 1 != operand_count && source_count != Some(operand_count) {
             continue;
         }
-        let target = resolve_method_call_target(ctx, class_name, method_name, operand_count)?;
+        let target = resolve_method_call_target(ctx, &class_name, method_name, operand_count)?;
         candidates.push(MixedMethodCandidate {
-            class_id: class_info.class_id,
-            class_name: class_name.clone(),
+            class_id,
+            class_name,
             target,
         });
     }

@@ -54,7 +54,7 @@ pub(in crate::codegen::lower_inst) fn emit_runtime_class_name_to_string_result(
 
 /// The target-specific half of the lookup, written against the emitter alone so both
 /// architectures can be asserted without building a whole function context.
-fn emit_class_name_lookup(
+pub(super) fn emit_class_name_lookup(
     emitter: &mut Emitter,
     object_reg: &str,
     fallback: &(String, usize),
@@ -172,7 +172,7 @@ pub(in crate::codegen::lower_inst) fn emit_static_diagnostic(
 }
 
 /// The register pair `__rt_concat` reads its right operand from.
-fn concat_right_operand_regs(emitter: &Emitter) -> (&'static str, &'static str) {
+pub(super) fn concat_right_operand_regs(emitter: &Emitter) -> (&'static str, &'static str) {
     match emitter.target.arch {
         Arch::AArch64 => ("x3", "x4"),
         Arch::X86_64 => ("rdi", "rsi"),

@@ -97,3 +97,50 @@ pub enum Terminator {
     },
     Unreachable,
 }
+
+impl Terminator {
+    /// Returns all value uses, including branch arguments and suspension operands.
+    pub(crate) fn used_values(&self) -> Vec<ValueId> {
+        match self {
+            Terminator::Br { args, .. } => args.clone(),
+            Terminator::CondBr {
+                cond,
+                then_args,
+                else_args,
+                ..
+            } => {
+                let mut uses = vec![*cond];
+                uses.extend(then_args.iter().copied());
+                uses.extend(else_args.iter().copied());
+                uses
+            }
+            Terminator::Switch {
+                scrutinee,
+                cases,
+                default_args,
+                ..
+            } => {
+                let mut uses = vec![*scrutinee];
+                for case in cases {
+                    uses.extend(case.args.iter().copied());
+                }
+                uses.extend(default_args.iter().copied());
+                uses
+            }
+            Terminator::Return { value } => value.iter().copied().collect(),
+            Terminator::Throw { value } => vec![*value],
+            Terminator::GeneratorSuspend {
+                key,
+                value,
+                resume_args,
+                ..
+            } => {
+                let mut uses: Vec<ValueId> = key.iter().copied().collect();
+                uses.extend(value.iter().copied());
+                uses.extend(resume_args.iter().copied());
+                uses
+            }
+            Terminator::Fatal { .. } | Terminator::Unreachable => Vec::new(),
+        }
+    }
+}

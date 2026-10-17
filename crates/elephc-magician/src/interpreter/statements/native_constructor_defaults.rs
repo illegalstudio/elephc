@@ -64,7 +64,8 @@ pub(super) fn eval_native_constructor_with_evaluated_args_and_ref_mode(
     }
     let bridge_scope =
         eval_native_constructor_bridge_scope(class_name, context, values)?;
-    let signature = context.native_constructor_signature(class_name);
+    let signature = number_scalar_binding_signature(class_name,
+        context.native_constructor_signature(class_name));
     let bound_args = bind_native_callable_bound_args_with_mode(
         signature,
         evaluated_args,

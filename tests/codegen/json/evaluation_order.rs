@@ -99,3 +99,17 @@ echo json_decode(123);
     );
     assert_eq!(out, "valid:123");
 }
+
+/// Verifies later json_decode arguments observe the previous error, not the source being decoded.
+#[test]
+fn test_json_decode_depth_argument_runs_before_error_location() {
+    let out = compile_and_run(
+        r#"<?php
+function src() { echo "S"; return "[{"; }
+function depth_arg() { echo json_last_error(); return 512; }
+json_decode(src(), true, depth_arg());
+echo json_last_error_msg();
+"#,
+    );
+    assert_eq!(out, "S0Syntax error near location 1:3");
+}

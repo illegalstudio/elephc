@@ -2,7 +2,7 @@
 title: "_imagick_parse_color() - internals"
 description: "Compiler internals for _imagick_parse_color(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1179
+  order: 1193
 ---
 
 ## `_imagick_parse_color()` - internals

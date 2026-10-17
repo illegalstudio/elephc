@@ -53,8 +53,11 @@ the materialization required for the statically known reads and writes.
 Interpreter fallback parses dynamic source into EvalIR. Exact source strings
 up to 64 KiB share a process-wide FIFO cache of 256 immutable parse results;
 larger fragments bypass the cache. The cache avoids repeated tokenization and
-parsing, but execution remains interpreted and scope/context state is never
-cached. Force-linking with `--with-eval` also increases binary size even if no
+parsing, but execution remains interpreted. Repeated native function activations
+also share an immutable catalog of the module's native callable signatures,
+class metadata and constants. Each thread retains up to eight module catalogs;
+activation scopes, dynamic declarations, references, handlers and materialized
+default values remain separate. Force-linking with `--with-eval` also increases binary size even if no
 call ultimately requires fallback.
 
 ## Quick start

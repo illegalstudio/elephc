@@ -32,10 +32,11 @@ pub unsafe extern "C" fn __elephc_eval_register_declared_class_name(
     name_ptr: *const u8,
     name_len: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_declared_symbol_inner(ctx, name_ptr, name_len, DeclaredSymbolKind::Class)
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers one generated interface name for eval `get_declared_interfaces()`.
@@ -49,10 +50,11 @@ pub unsafe extern "C" fn __elephc_eval_register_declared_interface_name(
     name_ptr: *const u8,
     name_len: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_declared_symbol_inner(ctx, name_ptr, name_len, DeclaredSymbolKind::Interface)
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Registers one generated trait name for eval `get_declared_traits()`.
@@ -66,10 +68,11 @@ pub unsafe extern "C" fn __elephc_eval_register_declared_trait_name(
     name_ptr: *const u8,
     name_len: u64,
 ) -> i32 {
-    std::panic::catch_unwind(|| unsafe {
+    let status = std::panic::catch_unwind(|| unsafe {
         register_declared_symbol_inner(ctx, name_ptr, name_len, DeclaredSymbolKind::Trait)
     })
-    .unwrap_or(0)
+    .unwrap_or(0);
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, status) }
 }
 
 /// Runs declared-name registration after installing a panic boundary.

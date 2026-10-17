@@ -137,6 +137,9 @@ fn check_eval_escape(
     scope: &mut ElephcEvalScope,
     values: &mut ElephcRuntimeOps,
 ) -> Result<interpreter::EvalOutcome, EvalStatus> {
+    if !context.needs_pcntl_escape_scan() {
+        return Ok(outcome);
+    }
     let owned = match &outcome {
         interpreter::EvalOutcome::Value(result) | interpreter::EvalOutcome::Throwable(result) => *result,
     };

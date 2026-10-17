@@ -49,6 +49,9 @@ pub(super) fn ensure_property_value_supported(
     if can_store_assoc_array_with_same_value_type(value_ty, &slot.php_type) {
         return Ok(());
     }
+    if can_store_bool_repr_into_bool_repr_property(value_ty, &slot.php_type) {
+        return Ok(());
+    }
     // A runtime-shaped value carries no compile-time type to compare against the declared
     // slot, so the weak-mode guard decides it at run time. Rejecting it here instead is what
     // made the runtime-class dispatch drop a whole class and silently lose the write.
@@ -277,6 +280,20 @@ pub(super) fn can_store_value_as_tagged_scalar_property(value_ty: &PhpType, slot
 /// Returns true when a nullable inline scalar can be narrowed into int property storage.
 pub(super) fn can_coerce_tagged_scalar_to_int_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
     value_ty.codegen_repr() == PhpType::TaggedScalar && slot_ty.codegen_repr() == PhpType::Int
+}
+
+/// Returns true when the value's runtime representation already matches the slot's.
+///
+/// `False` and `Never` are checker-only markers: `codegen_repr` lowers them to `Bool`/`Void`, the
+/// boxing tag is baked from that same representation, and nothing downstream distinguishes the
+/// marker on a stored payload — so a bool-repr value stores into a bool-repr slot without
+/// conversion (this is the same invariant the scalar shape collapse relies on). Representation
+/// equality is NOT value compatibility: a slot declared `false` only accepts a false payload, and
+/// because `value_php_type()` erases the marker to `Bool`, the STORE emits the payload check
+/// (`property_stores::emit_false_slot_payload_guard`) — a `true` payload throws php's catchable
+/// `TypeError` there instead of being stored.
+pub(super) fn can_store_bool_repr_into_bool_repr_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
+    value_ty.codegen_repr() == PhpType::Bool && slot_ty.codegen_repr() == PhpType::Bool
 }
 
 /// Returns true when a class default initializer writes into an untyped property later refined to null.

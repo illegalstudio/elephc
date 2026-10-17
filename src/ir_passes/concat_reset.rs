@@ -777,6 +777,7 @@ impl<'a> ConcatInertAnalysis<'a> {
             | Op::Move
             | Op::Borrow
             | Op::StrPersist
+            | Op::StrAppend
             | Op::TryPushHandler
             | Op::TryPopHandler
             | Op::FinallyEnter

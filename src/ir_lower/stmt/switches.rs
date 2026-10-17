@@ -16,13 +16,37 @@ pub(super) fn lower_switch(
     cases: &[(Vec<Expr>, Vec<Stmt>)],
     default: Option<&[Stmt]>,
 ) {
-    let subject = lower_expr(ctx, subject);
+    let span = subject.span;
+    let mut subject = lower_expr(ctx, subject);
+    let preserve_subject = matches!(subject.ir_type, IrType::Heap(crate::ir::IrHeapKind::Object | crate::ir::IrHeapKind::Mixed))
+        && ctx.classes.keys().any(|name| elephc_builtin_contract::lookup_class(name)
+            .is_some_and(|class| class.operators.is_some()));
+    if preserve_subject {
+        if matches!(subject.ir_type, IrType::Heap(crate::ir::IrHeapKind::Mixed)) {
+            subject = crate::ir_lower::ownership::copy_assignment_value(ctx, subject, Some(span));
+        } else {
+            let captured = crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, subject, Some(span));
+            if ctx.value_is_owning_temporary(subject) {
+                crate::ir_lower::ownership::release_if_owned(ctx, subject, Some(span));
+            }
+            subject = captured;
+        }
+    }
+    let (subject, owner) = if preserve_subject {
+        crate::ir_lower::expr::root_owned_call_operand(ctx, subject, span)
+    } else { (subject, None) };
     let exit = ctx.builder.create_named_block("switch.exit", Vec::new());
     let default_block = ctx.builder.create_named_block("switch.default", Vec::new());
     let blocks = cases
         .iter()
         .map(|_| ctx.builder.create_named_block("switch.case", Vec::new()))
         .collect::<Vec<_>>();
+    let dispatch_blocks = if owner.is_some() {
+        blocks.iter().map(|_| ctx.builder.create_named_block("switch.matched", Vec::new())).collect()
+    } else { blocks.clone() };
+    let dispatch_default = if owner.is_some() {
+        ctx.builder.create_named_block("switch.unmatched", Vec::new())
+    } else { default_block };
 
     // The compact integer jump table is valid only for an integer scrutinee with
     // integer case labels. Any other subject (string, float, mixed) takes the
@@ -30,9 +54,18 @@ pub(super) fn lower_switch(
     // picks PHP loose-equality vs the integer fast path per subject/case pair.
     if subject.ir_type == IrType::I64 && can_lower_static_switch(cases) {
         let subject = coerce_to_int(ctx, subject, None);
-        lower_static_switch_dispatch(ctx, subject, cases, &blocks, default_block);
+        lower_static_switch_dispatch(ctx, subject, cases, &dispatch_blocks, dispatch_default);
     } else {
-        lower_dynamic_switch_dispatch(ctx, subject, cases, &blocks, default_block);
+        lower_dynamic_switch_dispatch(ctx, subject, cases, &dispatch_blocks, dispatch_default);
+    }
+    if let Some(owner) = owner {
+        for (dispatch, target) in dispatch_blocks.iter().zip(&blocks)
+            .chain(std::iter::once((&dispatch_default, &default_block)))
+        {
+            ctx.builder.position_at_end(*dispatch);
+            crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span);
+            branch_to(ctx, *target);
+        }
     }
 
     lower_switch_bodies(ctx, cases, default, &blocks, default_block, exit);
@@ -92,10 +125,11 @@ pub(super) fn lower_dynamic_switch_dispatch(
 ) {
     let subject_is_str = subject.ir_type == IrType::Str;
     let subject_is_mixed = matches!(subject.ir_type, IrType::Heap(crate::ir::IrHeapKind::Mixed));
-    // Non-string, non-Mixed subjects are coerced to an integer once and reused by the ICmp path.
+    let subject_is_object = matches!(subject.ir_type, IrType::Heap(crate::ir::IrHeapKind::Object));
+    // Integer-like subjects are coerced once and reused by the ICmp path.
     // Mixed subjects must use loose equality for every case because the runtime tag may be
     // float, string, bool, etc. — coercing to int would truncate a float (issue #397).
-    let int_subject = if subject_is_str || subject_is_mixed {
+    let int_subject = if subject_is_str || subject_is_mixed || subject_is_object {
         None
     } else {
         Some(coerce_to_int(ctx, subject, None))
@@ -110,19 +144,26 @@ pub(super) fn lower_dynamic_switch_dispatch(
             // Mixed subjects must always use loose equality (tag-aware comparison).
             let use_loose_eq = subject_is_str
                 || subject_is_mixed
+                || subject_is_object
+                || matches!(case_value.ir_type, IrType::Heap(crate::ir::IrHeapKind::Object | crate::ir::IrHeapKind::Mixed))
                 || case_value.ir_type == IrType::Str
                 || float_loose_eq_pair(subject.ir_type, case_value.ir_type);
             let matched = if use_loose_eq {
                 // Loose equality handles string/string, string/scalar, float/numeric,
                 // and mixed cases exactly as PHP's `==` would inside an if/elseif chain.
-                ctx.emit_value(
+                let expression = Expr::new(ExprKind::Null, case_expr.span);
+                let compare = |ctx: &mut LoweringContext<'_, '_>| ctx.emit_value(
                     Op::LooseEq,
                     vec![subject.value, case_value.value],
                     None,
                     PhpType::Bool,
                     Op::LooseEq.default_effects(),
                     Some(case_expr.span),
-                )
+                );
+                crate::ir_lower::expr::object_operators::lower_dynamic_object_binary(
+                    ctx, subject, &crate::parser::ast::BinOp::Eq, case_value,
+                    &expression, false, compare,
+                ).unwrap_or_else(|| compare(ctx))
             } else {
                 let case_value = coerce_to_int(ctx, case_value, Some(case_expr.span));
                 ctx.emit_value(
@@ -139,6 +180,9 @@ pub(super) fn lower_dynamic_switch_dispatch(
                     Some(case_expr.span),
                 )
             };
+            if use_loose_eq && ctx.value_needs_release_after_use(case_value) {
+                crate::ir_lower::ownership::release_if_owned(ctx, case_value, Some(case_expr.span));
+            }
             let miss_block = ctx.builder.create_named_block("switch.next", Vec::new());
             ctx.builder.terminate(Terminator::CondBr {
                 cond: matched.value,

@@ -183,6 +183,30 @@ pub(super) fn emit_direct_resolved_method_call(
     Ok(())
 }
 
+/// Validates an instance method's declared parameters before argument coercion.
+pub(super) fn emit_method_literal_parameter_guards(
+    ctx: &mut FunctionContext<'_>,
+    target: &MethodCallTarget,
+    operands: &[ValueId],
+) -> Result<()> {
+    let signature = ctx.module.class_infos.get(&target.impl_class)
+        .and_then(|class| class.methods.get(&target.method_key))
+        .ok_or_else(|| CodegenIrError::unsupported(format!(
+            "missing declared method signature {}::{}", target.impl_class, target.method_key,
+        )))?;
+    let parameters = if target.source_abi
+        && crate::codegen_support::source_method_adapters::uses_physical_func_args_abi(signature)
+    {
+        crate::codegen_support::source_method_adapters::source_visible_signature(signature)
+            .map_err(CodegenIrError::unsupported)?.params
+    } else {
+        signature.params.clone()
+    };
+    super::direct_calls::emit_literal_declared_parameter_guards(
+        ctx, operands, &parameters, &format!("{}::{}", target.impl_class, target.method_key),
+    )
+}
+
 /// Returns true when the current EIR module includes the target class method body.
 pub(super) fn class_method_already_emitted(
     ctx: &FunctionContext<'_>,

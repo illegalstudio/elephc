@@ -37,6 +37,9 @@ mod query_invoke;
 #[path = "mbstring_capture_hash/ini_materialize.rs"]
 mod ini_materialize;
 
+#[path = "mbstring_capture_hash/ini_retirement.rs"]
+mod ini_retirement;
+
 /// Appends a C fixture without changing the atom boundaries of the preceding PHP assembly.
 fn append_c_provider_asm(assembly: &mut String, provider: &str) {
     for line in provider.lines() {

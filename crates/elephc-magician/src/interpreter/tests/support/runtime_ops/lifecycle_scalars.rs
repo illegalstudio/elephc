@@ -162,7 +162,7 @@ macro_rules! impl_fake_lifecycle_scalar_ops {
         self.runtime_cast_string(value)
     }
     /// Casts a fake runtime cell to a fake boolean cell.
-    fn cast_bool(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+    fn cast_bool_raw(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_cast_bool(value)
     }
 

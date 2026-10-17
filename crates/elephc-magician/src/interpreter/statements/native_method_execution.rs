@@ -254,7 +254,8 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let signature_owner = bridge_scope.unwrap_or(class_name);
-    let signature = context.native_method_signature(signature_owner, method_name);
+    let signature = number_scalar_binding_signature(signature_owner,
+        context.native_method_signature(signature_owner, method_name));
     let return_type = signature.as_ref().and_then(|signature| signature.return_type().cloned());
     let bound_args =
         bind_native_callable_bound_args_with_mode(signature, evaluated_args, by_ref_mode, context, values)?;

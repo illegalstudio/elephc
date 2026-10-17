@@ -23,11 +23,13 @@ pub mod classes;
 mod constructors;
 pub(crate) use constructors::parameter_name;
 pub mod methods;
+mod report;
 mod shared;
 mod site_scope;
 mod splice;
 pub mod variance;
 
+pub use report::report as instantiation_report;
 pub use splice::{
     instantiation_roots, splice_instantiations, strip_templates, substitute_in_body,
 };
@@ -582,10 +584,34 @@ fn unify_type_exprs(
 /// side table mapping instantiations to their arguments.
 ///
 /// Returns `None` for an ordinary class name, which has no `<` and therefore nothing to decode.
+/// The decode lexes and parses a synthesized source, and the SAME name is decoded repeatedly while
+/// one program is checked — generic inference, variance checks, and written-call resolution all
+/// decode the receiver's spelling — so the result is memoized per thread. The decode is a pure
+/// function of the name, and `None` is cached too: a name this module did not write loses nothing
+/// by answering nothing every time.
 pub fn instantiated_type(name: &str) -> Option<TypeExpr> {
     if !name.contains('<') {
         return None;
     }
+    if let Some(cached) = DECODED_INSTANTIATIONS.with(|cache| cache.borrow().get(name).cloned()) {
+        return cached;
+    }
+    let decoded = decode_instantiated_type(name);
+    DECODED_INSTANTIATIONS.with(|cache| {
+        cache.borrow_mut().insert(name.to_string(), decoded.clone());
+    });
+    decoded
+}
+
+thread_local! {
+    /// Per-thread memo for [`instantiated_type`], keyed by the instantiated name.
+    static DECODED_INSTANTIATIONS: std::cell::RefCell<
+        std::collections::HashMap<String, Option<TypeExpr>>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Decodes one instantiated name from scratch, without consulting the memo.
+fn decode_instantiated_type(name: &str) -> Option<TypeExpr> {
     let source = format!("<?php {};", name);
     let tokens = crate::lexer::tokenize(&source).ok()?;
     let mut pos = 1usize;
@@ -957,5 +983,70 @@ mod tests {
         );
         // A name that is not a type parameter survives untouched.
         assert_eq!(t("Foo").substitute_type_params(&bindings), t("Foo"));
+    }
+
+    /// Decodes one name without the memo, so a test can compare a cached answer to a fresh one.
+    fn decode_ignoring_memo(name: &str) -> Option<TypeExpr> {
+        if !name.contains('<') {
+            return None;
+        }
+        decode_instantiated_type(name)
+    }
+
+    /// Number of names the per-thread memo holds, so a test can prove a hit did not re-decode.
+    fn memo_len() -> usize {
+        super::DECODED_INSTANTIATIONS.with(|cache| cache.borrow().len())
+    }
+
+    /// The memo answers exactly what a fresh decode would, for every shape a name can take.
+    ///
+    /// A cache that returned the wrong entry, or a stale one, would bind a type parameter to the
+    /// wrong argument while every other test still passed. Comparing the cached path against the
+    /// uncached one over scalar, nested, function-style and malformed names is what pins it.
+    #[test]
+    fn instantiated_type_memo_matches_a_fresh_decode() {
+        let names = [
+            "Box<int>",
+            "Box<string>",
+            "Box<Box<int>>",
+            "array<string, int>",
+            "identity<string>",
+            "not_a_type_without_angles",
+            "Box<int",
+            "Box<>",
+        ];
+        for name in names {
+            let first = instantiated_type(name);
+            let second = instantiated_type(name);
+            let fresh = decode_ignoring_memo(name);
+            assert_eq!(first, fresh, "first decode diverged for {name:?}");
+            assert_eq!(second, fresh, "cached decode diverged for {name:?}");
+        }
+    }
+
+    /// A repeated decode is served from the memo, and a new name is added to it.
+    ///
+    /// The assertion is on the memo's length: a second decode of the same name must not grow it,
+    /// and a new name must. Without that, the "optimization" could silently stop working while the
+    /// correctness test above still passed.
+    #[test]
+    fn instantiated_type_memoizes_repeated_decodes() {
+        let first_name = "MemoProbe<int>";
+        let second_name = "MemoProbe<string>";
+        // A unique pair keeps the deltas independent of whatever else this test thread decoded.
+        let before = memo_len();
+        let _ = instantiated_type(first_name);
+        let after_first = memo_len();
+        assert_eq!(after_first, before + 1, "a new name must be memoized");
+        let _ = instantiated_type(first_name);
+        assert_eq!(memo_len(), after_first, "a repeated decode must not re-insert");
+        let _ = instantiated_type(second_name);
+        assert_eq!(memo_len(), after_first + 1, "a distinct name is a distinct entry");
+        // The first name still decodes to its own type after a second entry was added: the memo is
+        // keyed by name, not by insertion order.
+        assert_eq!(
+            instantiated_type(first_name),
+            decode_ignoring_memo(first_name)
+        );
     }
 }

@@ -21,6 +21,16 @@ pub(super) fn load_property_store_value_to_result(
 ) -> Result<()> {
     let slot_ty = &slot.php_type;
     let value_ty = ctx.value_php_type(value)?;
+    // A `false`-declared slot accepts ONLY the exact false bool: route a boxed mixed/union
+    // source through the false-slot guard instead of the bool truthiness cast, which would
+    // coerce `0`, `""` and `[]` into `false` where php throws. The nullable `?false` shape is
+    // a recorded limitation: its slot stores a box through the mixed machinery, and its
+    // default/read paths do not round-trip a stored `false` today.
+    if slot_ty == &PhpType::False
+        && matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+    {
+        return emit_false_slot_mixed_guard(ctx, value, slot);
+    }
     let coerced_done_label = if matches!(value_ty.codegen_repr(), PhpType::Mixed) {
         emit_mixed_property_type_guard(ctx, value, slot)?
     } else {
@@ -117,10 +127,26 @@ fn load_accepted_property_store_value_to_result(
     if matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
         load_value_to_first_int_arg(ctx, value)?;
         match slot_ty.codegen_repr() {
-            PhpType::Str => emit_mixed_string_for_persistent_store(ctx),
-            PhpType::Int => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int"),
-            PhpType::Bool => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool"),
-            PhpType::Float => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float"),
+            PhpType::Str => {
+                emit_mixed_string_for_persistent_store(ctx);
+                // The slot retains the string payload, not the cell that carried it. Keep this
+                // cleanup shared by nullable and mixed receiver dispatch, like scalar narrowing.
+                release_adopted_mixed_source(ctx, value, &PhpType::Str)?;
+            }
+            // A scalar slot stores the payload word the cast extracted, so the box's own
+            // reference has no owner left; retire it once the cast has copied the value out.
+            PhpType::Int => {
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+                release_adopted_mixed_source(ctx, value, &PhpType::Int)?;
+            }
+            PhpType::Bool => {
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
+                release_adopted_mixed_source(ctx, value, &PhpType::Bool)?;
+            }
+            PhpType::Float => {
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float");
+                release_adopted_mixed_source(ctx, value, &PhpType::Float)?;
+            }
             // An object slot stores the unboxed object POINTER, retained on its own, so the
             // adopted cell keeps no owner here either. Without this release a declared object
             // property leaked one boxed cell and its payload owner per runtime-shaped write.
@@ -231,6 +257,9 @@ pub(super) fn emit_packed_field_store(
             abi::emit_push_reg(ctx.emitter, base_reg);
             ctx.load_value_to_reg(value, int_reg)?;
             abi::emit_pop_reg(ctx.emitter, base_reg);
+            if slot.php_type == PhpType::False {
+                emit_false_slot_payload_guard(ctx, slot);
+            }
             abi::emit_store_to_address(ctx.emitter, int_reg, base_reg, slot.offset);
         }
         _ => {

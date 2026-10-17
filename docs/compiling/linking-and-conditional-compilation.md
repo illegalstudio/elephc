@@ -127,7 +127,7 @@ dynamic `eval()`), `web` (the `--web` server), and `curl` (the libcurl-backed
 
 By default a bridge is linked **only when the program uses it** — using a hash
 function pulls in `crypto`, opening an `https://` stream pulls in `tls`,
-calling a `bc*` function pulls in `bcmath`, calling an `iconv*` function pulls in
+calling a `bc*` function or using `BcMath\Number` pulls in `bcmath`, calling an `iconv*` function pulls in
 `iconv`, calling `mb_strlen()` pulls in `mbstring`, referencing `PDO` pulls in
 `pdo`, and creating an `XMLWriter` or calling an `xml_*` function pulls in `xml`.
 An `eval()` call pulls in Magician

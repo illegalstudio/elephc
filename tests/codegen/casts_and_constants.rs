@@ -13,6 +13,8 @@ use crate::support::*;
 mod casts;
 #[path = "casts_and_constants/object_cast.rs"]
 mod object_cast;
+#[path = "casts_and_constants/array_cast.rs"]
+mod array_cast;
 #[path = "casts_and_constants/introspection.rs"]
 mod introspection;
 #[path = "casts_and_constants/predicates.rs"]

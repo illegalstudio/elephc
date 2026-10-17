@@ -21,6 +21,30 @@
 
 use super::*;
 
+/// Leaves Number scalar operands intact for its native internal string-or-integer adapter.
+/// Only this invocation's signature copy changes; reflection keeps the declared union.
+pub(super) fn number_scalar_binding_signature(
+    class_name: &str,
+    signature: Option<NativeCallableSignature>,
+) -> Option<NativeCallableSignature> {
+    let mut signature = signature?;
+    if !class_name.trim_start_matches('\\').eq_ignore_ascii_case("BcMath\\Number") {
+        return Some(signature);
+    }
+    for index in 0..signature.param_count() {
+        let Some(ty) = signature.param_type(index) else { continue; };
+        if ty.is_intersection() { continue; }
+        let mut variants = ty.variants().to_vec();
+        if variants.contains(&EvalParameterTypeVariant::String)
+            && variants.contains(&EvalParameterTypeVariant::Int)
+        {
+            variants.extend([EvalParameterTypeVariant::Float, EvalParameterTypeVariant::Bool]);
+            signature.set_param_type(index, EvalParameterType::new(variants, true));
+        }
+    }
+    Some(signature)
+}
+
 /// Binds native AOT callable args using the selected by-reference degradation mode.
 pub(super) fn bind_native_callable_bound_args_with_mode(
     signature: Option<NativeCallableSignature>,

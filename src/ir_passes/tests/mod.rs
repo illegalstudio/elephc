@@ -19,6 +19,7 @@ mod dead_inst_test;
 mod dead_store_test;
 mod dominance_test;
 mod driver_test;
+mod fresh_mixed_transfer_test;
 mod identity_arith_test;
 mod inline_test;
 mod integer_range_test;
@@ -34,3 +35,5 @@ mod peephole_test;
 mod regalloc_edges_test;
 mod regalloc_test;
 mod rematerialize_test;
+
+mod tail_call_test;

@@ -206,10 +206,11 @@ pub(super) fn emit_instance_method_first_class_callable(
         ctx.module, &impl_class, &method_key, false,
     );
     let invoker_label = emit_runtime_callable_invoker_with_string_owner(ctx, &sig, &captures, owns_string_return, true);
+    let declared_name = format!("{}::{}", impl_class, method_name);
     let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
         ctx.data,
         &entry_label,
-        Some(target),
+        Some(&declared_name),
         callable_descriptor::CALLABLE_DESC_KIND_FIRST_CLASS,
         Some(&sig),
         &captures,

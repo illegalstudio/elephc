@@ -54,12 +54,17 @@ including fixed and variadic parameters.
 
 After the AST is lowered to EIR and validated, a fixed-point pass driver runs the
 registered transformation passes over each function until none reports a change.
-The whole pipeline runs to a **module-level fixed point**: each round runs the
-cross-function [small-function inliner](#small-function-inlining) and then drives the
-per-function passes to convergence on every function, repeating until neither the
-inliner nor any function pass changes anything. Interleaving lets the two layers feed
-each other — inlined bodies expose new constants and dead code, and the simplified
-functions expose new (smaller) inline candidates. The passes are **on by default**.
+The representation-changing pipeline runs to a **module-level fixed point**: each
+round runs the cross-function [small-function inliner](#small-function-inlining)
+and then drives the per-function passes to convergence on every function,
+repeating until neither the inliner nor any of those passes changes anything.
+Interleaving lets the two layers feed each other — inlined bodies expose new
+constants and dead code, and the simplified functions expose new (smaller) inline
+candidates. Passes that set `run_after_fixed_point` are partitioned out of that
+loop. [Fresh Mixed assignment transfer](#fresh-mixed-assignment-transfer) runs
+after `optimize_module_to_fixed_point` returns, so removing an assignment clone
+cannot restart the inliner or the checked-integer sink. The passes are **on by
+default**.
 
 ```bash
 # Default: EIR optimization passes enabled
@@ -396,6 +401,71 @@ that can run a destructor (objects, or arrays/mixed that may hold them) and by-r
 parameters (which alias caller storage) are therefore excluded, because a value-copy
 splice cannot reproduce their cleanup timing or aliasing. As with all EIR passes,
 inlining is gated by `--ir-opt` and changes only performance, never observable behavior.
+
+### Tail recursion
+
+With `--ir-opt` enabled, direct tail calls in recursive free functions can reuse
+one native stack frame. Self recursion branches back to a body entry with new
+parameter values. Mutually recursive functions share cloned EIR bodies within
+each original ABI entry, and their tail transitions become ordinary branches.
+
+```php
+function gcd(int $a, int $b): int {
+    if ($b === 0) { return $a; }
+    return gcd($b, $a % $b);
+}
+```
+
+Arguments keep their source evaluation order. Rebinding uses simultaneous block
+argument moves, so swapping parameters is safe. Named and default arguments use
+the normal call planner before the tail pass. `void` calls immediately followed
+by a return can also qualify. Arithmetic or output after a recursive call keeps
+an ordinary call and its stack frame.
+
+Eligibility is conservative: parameters, return types and local storage must be
+`int`, `bool` or `float` (`void` is also allowed for returns). Temporary boxed
+numeric arguments qualify only when their roots have a balanced cleanup on every
+normal return path; their ordinary ABI integer conversion runs before those roots retire.
+Owning strings, arrays, objects and arbitrary `mixed` frame storage, reference
+or variadic parameters, methods, closures, generators, static/global aliases,
+exception handlers and unresolved dispatch retain ordinary calls. Eval or
+backtrace argument snapshots anywhere in the module disable this optimization.
+Mutual components are limited to 16 functions and 4096 total EIR instructions
+per entry to bound code duplication; self recursion has no cloning limit.
+
+The pass runs after the normal module fixed point and before ownership
+finalization. The scalar passes run again on the new loops. It uses the same EIR
+branch lowering on every supported target and is disabled by `--no-ir-opt`.
+See `examples/tail-recursion/main.php` for Euclid and a deep mutual countdown.
+
+### Fresh Mixed assignment transfer
+
+`FreshMixedTransfer` (`src/ir_passes/fresh_mixed_transfer.rs`) is registered with
+the other passes, and `run_after_fixed_point` keeps it out of
+`optimize_module_to_fixed_point`. After the inliner and the
+representation-changing passes have stopped, `optimize_module` runs this
+finalizer phase once, through the ordinary per-function sweep. A change inside
+the phase repeats the finalizer until a sweep reports no change. That
+repetition stays inside the finalizer. The inliner and
+[checked-integer sinking](#checked-integer-sinking) have already finished.
+
+The finalizer removes a `MixedClone` of a fresh owned `ICheckedAdd`,
+`ICheckedSub`, or `ICheckedMul` result when that result is used only by the
+clone and by the next non-`nop` instruction in the same block, which must be
+the `Release` of the source. Uses of the clone result are redirected to the
+source, and the clone and that release become `nop`. The checked operation
+stays in place, including overflow-to-float promotion. Borrowed, acquired,
+shared, and otherwise observed sources, and a release in another block, keep
+the copy.
+
+The clone is a `Mixed` use, so the sink does not treat the producer as an
+integer-only observation while the copy is still there. Removing the clone
+inside the fixed point would leave the remaining integer cast or store looking
+like a sink, and a later sweep would rewrite the producer to `IChecked*ToInt`.
+The transfer runs only after that sink has finished, which keeps the overflow
+on the boxed `IChecked*` operation. `--ir-opt=off` skips `optimize_module`, so
+the original copy remains. The proof and the adjacency rules are in
+[The EIR Design](../internals/the-ir.md#fresh-mixed-assignment-transfer).
 
 Later releases extend this driver with further EIR passes.
 

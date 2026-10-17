@@ -128,6 +128,14 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
         )
     };
     reject_unmanaged_promoted_reference_args(ctx, inst, &borrowed_reference_params)?;
+    if let Some(constructor) = &constructor_impl {
+        super::super::direct_calls::emit_literal_declared_parameter_guards(
+            ctx,
+            &inst.operands,
+            &constructor.sig.params,
+            &format!("{}::__construct", constructor.impl_class),
+        )?;
+    }
     emit_object_allocation(
         ctx,
         class_id,
@@ -140,6 +148,13 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("object_new missing result value"))?;
     ctx.store_result_value(result)?;
+    let construction_guard_bytes = if constructor_impl.is_some() {
+        ctx.load_value_to_result(result)?;
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        super::super::callable_guards::begin_unconstructed_object(ctx.emitter)
+    } else {
+        0
+    };
     emit_property_defaults(ctx, result, &property_defaults)?;
     if let Some(constructor) = constructor_impl {
         emit_constructor_call(
@@ -153,6 +168,8 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
             &constructor.ref_params,
             None,
         )?;
+        super::super::callable_guards::end_unconstructed_object(ctx.emitter, construction_guard_bytes);
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
     }
     Ok(())
 }

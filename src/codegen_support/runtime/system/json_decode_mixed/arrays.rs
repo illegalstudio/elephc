@@ -169,16 +169,19 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #16]");                                   // elem_end
     emitter.instruction("add x1, x11, x10");                                    // sub_ptr = slice_ptr + elem_start
     emitter.instruction("sub x2, x9, x10");                                     // sub_len = elem_end - elem_start
-    emitter.instruction("bl __rt_json_decode_mixed");                           // x0 = Mixed* for the element
+    emitter.instruction("bl __rt_json_decode_mixed_value");                     // x0 = Mixed* for the element
     emitter.instruction("cbz x0, __rt_json_decode_array_real_propagate");       // recursion already recorded the JSON error
 
-    // Push the Mixed pointer into the destination array.
+    // -- transfer a fresh Mixed child into the destination array --
+    emitter.instruction("str x0, [sp, #32]");                                   // save the fresh child owner after scanning its boundary
     emitter.instruction("ldr x1, [sp, #24]");                                   // array ptr
     emitter.instruction("mov x9, x1");                                          // copy for arg-order swap
     emitter.instruction("mov x1, x0");                                          // child = Mixed*
     emitter.instruction("mov x0, x9");                                          // x0 = array ptr
     emitter.instruction("bl __rt_array_push_refcounted");                       // returns x0 = updated array
     emitter.instruction("str x0, [sp, #24]");                                   // store updated JSON decoder state
+    emitter.instruction("ldr x0, [sp, #32]");                                   // recover the parser's fresh child owner
+    emitter.instruction("bl __rt_decref_mixed");                                // retire the reference retained by the destination array
 
     // Look at the separator.
     emitter.instruction("ldr x1, [sp, #0]");                                    // slice_ptr
@@ -208,11 +211,11 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_json_decode_array_real_fail");               // trailing bytes after the array are invalid
     emitter.instruction("ldr x11, [sp, #40]");                                  // was the close reached right after a comma?
     emitter.instruction("cbnz x11, __rt_json_decode_array_real_fail");          // trailing commas are invalid JSON
-    // Box the populated array as Mixed(tag=4).
+    // -- box the populated array and retire its construction owner --
     emitter.instruction("ldr x1, [sp, #24]");                                   // array ptr
     emitter.instruction("mov x0, #4");                                          // tag = indexed array
     emitter.instruction("mov x2, #0");                                          // load or prepare JSON decoder state
-    emitter.instruction("bl __rt_mixed_from_value");                            // call the mixed from value helper
+    emitter.instruction("bl __rt_json_box_owned_container");                    // call the mixed from value helper
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // load or prepare JSON decoder state
     emitter.instruction("add sp, sp, #64");                                     // update the JSON decoder cursor or counter
     emitter.instruction("ret");                                                 // return from the JSON decoder helper
@@ -221,10 +224,12 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // load the array slice pointer for location reporting
     emitter.instruction("ldr x9, [sp, #16]");                                   // load the parser cursor at the failing array byte
     emitter.instruction("add x0, x0, x9");                                      // convert the array-local cursor to an absolute source pointer
-    emitter.instruction("bl __rt_json_set_error_location");                     // store one-based line/column metadata for the JSON error
-    emitter.instruction("mov x0, #4");                                          // JSON_ERROR_SYNTAX
-    emitter.instruction("bl __rt_json_throw_error");                            // record syntax error and throw when requested
+    emitter.instruction("bl __rt_json_note_error_candidate");                   // record the candidate byte without scanning the source
+    emitter.instruction("bl __rt_json_decode_syntax_error");                    // record syntax error and throw when requested
     emitter.label("__rt_json_decode_array_real_propagate");
+    // -- retire the partially built array after a local or recursive failure --
+    emitter.instruction("ldr x0, [sp, #24]");                                   // recover the partial array owner
+    emitter.instruction("bl __rt_decref_array");                                // release the array and every child already adopted
     emitter.instruction("mov x0, #0");                                          // signal decode failure to the caller
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // load or prepare JSON decoder state
     emitter.instruction("add sp, sp, #64");                                     // update the JSON decoder cursor or counter
@@ -374,15 +379,18 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rax, r10");                                        // sub_ptr = slice_ptr + elem_start
     emitter.instruction("mov rdx, rcx");                                        // sub_len = elem_end - elem_start
     emitter.instruction("sub rdx, r10");                                        // update the JSON decoder cursor or counter
-    emitter.instruction("call __rt_json_decode_mixed");                         // rax = Mixed* for the element
+    emitter.instruction("call __rt_json_decode_mixed_value");                   // rax = Mixed* for the element
     emitter.instruction("test rax, rax");                                       // check the current JSON decoder condition
     emitter.instruction("je __rt_json_decode_array_real_propagate_x");          // recursion already recorded the JSON error
 
-    // Push the Mixed pointer into the destination array.
+    // -- transfer a fresh Mixed child into the destination array --
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the fresh child owner across append
     emitter.instruction("mov rsi, rax");                                        // child = Mixed*
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // array ptr
     emitter.instruction("call __rt_array_push_refcounted");                     // rax = updated array
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // load or prepare JSON decoder state
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // recover the parser's fresh child owner
+    emitter.instruction("call __rt_decref_mixed");                              // retire the reference retained by the destination array
 
     // Look at the separator.
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // load or prepare JSON decoder state
@@ -411,11 +419,11 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_json_decode_array_real_fail_x");              // trailing bytes after the array are invalid
     emitter.instruction("cmp QWORD PTR [rbp - 48], 0");                         // was the close reached right after a comma?
     emitter.instruction("jne __rt_json_decode_array_real_fail_x");              // trailing commas are invalid JSON
-    // Box the populated array as Mixed(tag=4).
+    // -- box the populated array and retire its construction owner --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // array ptr
     emitter.instruction("mov rax, 4");                                          // tag = indexed array
     emitter.instruction("xor rsi, rsi");                                        // update the JSON decoder cursor or counter
-    emitter.instruction("call __rt_mixed_from_value");                          // call the mixed from value helper
+    emitter.instruction("call __rt_json_box_owned_container");                  // call the mixed from value helper
     emitter.instruction("mov rsp, rbp");                                        // load or prepare JSON decoder state
     emitter.instruction("pop rbp");                                             // preserve or restore JSON decoder scratch state
     emitter.instruction("ret");                                                 // return from the JSON decoder helper
@@ -423,10 +431,12 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_json_decode_array_real_fail_x");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // load the array slice pointer for location reporting
     emitter.instruction("add rax, QWORD PTR [rbp - 24]");                       // convert the array-local cursor to an absolute source pointer
-    emitter.instruction("call __rt_json_set_error_location");                   // store one-based line/column metadata for the JSON error
-    emitter.instruction("mov rax, 4");                                          // JSON_ERROR_SYNTAX
-    emitter.instruction("call __rt_json_throw_error");                          // record syntax error and throw when requested
+    emitter.instruction("call __rt_json_note_error_candidate");                 // record the candidate byte without scanning the source
+    emitter.instruction("call __rt_json_decode_syntax_error");                  // record syntax error and throw when requested
     emitter.label("__rt_json_decode_array_real_propagate_x");
+    // -- retire the partially built array after a local or recursive failure --
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // recover the partial array owner
+    emitter.instruction("call __rt_decref_array");                              // release the array and every child already adopted
     emitter.instruction("xor rax, rax");                                        // signal decode failure to the caller
     emitter.instruction("mov rsp, rbp");                                        // load or prepare JSON decoder state
     emitter.instruction("pop rbp");                                             // preserve or restore JSON decoder scratch state

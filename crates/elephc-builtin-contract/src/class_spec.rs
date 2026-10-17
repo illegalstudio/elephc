@@ -57,6 +57,8 @@ pub enum ClassRoute {
 /// Canonical backend-neutral contract for one PHP builtin class-like.
 #[derive(Clone, Copy, Debug)]
 pub struct ClassContract {
+    /// Reviewed internal object handlers; absent for ordinary PHP/userland classes.
+    pub operators: Option<&'static crate::ClassOperators>,
     /// Stable identity derived from the canonical lowercase name (namespace included).
     pub id: BuiltinId,
     /// PHP spelling as `get_class()` reports it, e.g. `ArrayIterator` or `Pdo\Mysql`.

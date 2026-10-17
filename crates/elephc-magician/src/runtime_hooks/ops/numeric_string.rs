@@ -55,7 +55,7 @@ macro_rules! impl_numeric_string_ops {
     }
 
     /// Adds two boxed Mixed cells using elephc runtime numeric semantics.
-    fn add(
+    fn add_raw(
         &mut self,
         left: RuntimeCellHandle,
         right: RuntimeCellHandle,
@@ -64,7 +64,7 @@ macro_rules! impl_numeric_string_ops {
     }
 
     /// Subtracts two boxed Mixed cells using elephc runtime numeric semantics.
-    fn sub(
+    fn sub_raw(
         &mut self,
         left: RuntimeCellHandle,
         right: RuntimeCellHandle,
@@ -73,7 +73,7 @@ macro_rules! impl_numeric_string_ops {
     }
 
     /// Multiplies two boxed Mixed cells using elephc runtime numeric semantics.
-    fn mul(
+    fn mul_raw(
         &mut self,
         left: RuntimeCellHandle,
         right: RuntimeCellHandle,
@@ -82,7 +82,7 @@ macro_rules! impl_numeric_string_ops {
     }
 
     /// Divides two boxed Mixed cells using elephc runtime numeric semantics.
-    fn div(
+    fn div_raw(
         &mut self,
         left: RuntimeCellHandle,
         right: RuntimeCellHandle,
@@ -91,7 +91,7 @@ macro_rules! impl_numeric_string_ops {
     }
 
     /// Computes modulo for two boxed Mixed cells using elephc runtime integer semantics.
-    fn modulo(
+    fn modulo_raw(
         &mut self,
         left: RuntimeCellHandle,
         right: RuntimeCellHandle,
@@ -100,7 +100,7 @@ macro_rules! impl_numeric_string_ops {
     }
 
     /// Raises two boxed Mixed cells using elephc runtime numeric exponentiation semantics.
-    fn pow(
+    fn pow_raw(
         &mut self,
         left: RuntimeCellHandle,
         right: RuntimeCellHandle,
@@ -149,7 +149,7 @@ macro_rules! impl_numeric_string_ops {
     }
 
     /// Compares two boxed Mixed cells through the generated runtime wrapper.
-    fn compare(
+    fn compare_raw(
         &mut self,
         op: EvalBinOp,
         left: RuntimeCellHandle,
@@ -161,7 +161,7 @@ macro_rules! impl_numeric_string_ops {
     }
 
     /// Computes a PHP numeric spaceship result through the generated runtime wrapper.
-    fn spaceship(
+    fn spaceship_raw(
         &mut self,
         left: RuntimeCellHandle,
         right: RuntimeCellHandle,
@@ -202,7 +202,7 @@ macro_rules! impl_numeric_string_ops {
     }
 
     /// Converts one boxed Mixed cell to PHP truthiness through the generated runtime wrapper.
-    fn truthy(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus> {
+    fn truthy_raw(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus> {
         Ok(unsafe { __elephc_eval_value_truthy(value.as_ptr()) != 0 })
     }
 

@@ -352,19 +352,33 @@ pub enum RuntimeFnId {
     Atan2,
     BaseConvert,
     BcAdd,
+    BcNumberAdd,
     BcCeil,
+    BcNumberCeil,
+    BcNumberCreate,
     BcComp,
+    BcNumberComp,
     BcDiv,
+    BcNumberDiv,
     BcDivmod,
+    BcNumberDivmod,
     BcFloor,
+    BcNumberFloor,
     BcMod,
+    BcNumberMod,
     BcMul,
+    BcNumberMul,
     BcPow,
+    BcNumberPow,
     BcPowmod,
+    BcNumberPowmod,
     BcRound,
+    BcNumberRound,
     BcScale,
     BcSqrt,
+    BcNumberSqrt,
     BcSub,
+    BcNumberSub,
     Ceil,
     Clamp,
     Cos,
@@ -911,7 +925,7 @@ impl RuntimeFnId {
                 PhpType::False,
             ]),
             RuntimeFnId::ClassAttributeNames
-            | RuntimeFnId::BcDivmod
+            | RuntimeFnId::BcDivmod | RuntimeFnId::BcNumberDivmod
             | RuntimeFnId::Explode
             | RuntimeFnId::Glob
             | RuntimeFnId::Scandir
@@ -1187,22 +1201,22 @@ impl RuntimeFnId {
                     | crate::ir::Effects::WRITES_PROCESS.bits()
                     | crate::ir::Effects::MAY_THROW.bits(),
             ),
-            RuntimeFnId::BcComp => crate::ir::Effects::from_bits_retain(
+            RuntimeFnId::BcComp | RuntimeFnId::BcNumberComp => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_PROCESS.bits()
                     | crate::ir::Effects::MAY_THROW.bits(),
             ),
-            RuntimeFnId::BcAdd
-            | RuntimeFnId::BcCeil
-            | RuntimeFnId::BcDiv
-            | RuntimeFnId::BcDivmod
-            | RuntimeFnId::BcFloor
-            | RuntimeFnId::BcMod
-            | RuntimeFnId::BcMul
-            | RuntimeFnId::BcPow
-            | RuntimeFnId::BcPowmod
-            | RuntimeFnId::BcRound
-            | RuntimeFnId::BcSqrt
-            | RuntimeFnId::BcSub => crate::ir::Effects::from_bits_retain(
+            RuntimeFnId::BcAdd | RuntimeFnId::BcNumberAdd
+            | RuntimeFnId::BcCeil | RuntimeFnId::BcNumberCeil | RuntimeFnId::BcNumberCreate
+            | RuntimeFnId::BcDiv | RuntimeFnId::BcNumberDiv
+            | RuntimeFnId::BcDivmod | RuntimeFnId::BcNumberDivmod
+            | RuntimeFnId::BcFloor | RuntimeFnId::BcNumberFloor
+            | RuntimeFnId::BcMod | RuntimeFnId::BcNumberMod
+            | RuntimeFnId::BcMul | RuntimeFnId::BcNumberMul
+            | RuntimeFnId::BcPow | RuntimeFnId::BcNumberPow
+            | RuntimeFnId::BcPowmod | RuntimeFnId::BcNumberPowmod
+            | RuntimeFnId::BcRound | RuntimeFnId::BcNumberRound
+            | RuntimeFnId::BcSqrt | RuntimeFnId::BcNumberSqrt
+            | RuntimeFnId::BcSub | RuntimeFnId::BcNumberSub => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_PROCESS.bits()
                     | crate::ir::Effects::ALLOC_HEAP.bits()
                     | crate::ir::Effects::MAY_THROW.bits(),
@@ -1655,20 +1669,20 @@ impl RuntimeFnId {
                 wait: WaitPolicy::GenericTiming,
                 trace_context: TraceContextPolicy::Automatic,
             },
-            RuntimeFnId::BcAdd
-            | RuntimeFnId::BcCeil
-            | RuntimeFnId::BcComp
-            | RuntimeFnId::BcDiv
-            | RuntimeFnId::BcDivmod
-            | RuntimeFnId::BcFloor
-            | RuntimeFnId::BcMod
-            | RuntimeFnId::BcMul
-            | RuntimeFnId::BcPow
-            | RuntimeFnId::BcPowmod
-            | RuntimeFnId::BcRound
+            RuntimeFnId::BcAdd | RuntimeFnId::BcNumberAdd
+            | RuntimeFnId::BcCeil | RuntimeFnId::BcNumberCeil | RuntimeFnId::BcNumberCreate
+            | RuntimeFnId::BcComp | RuntimeFnId::BcNumberComp
+            | RuntimeFnId::BcDiv | RuntimeFnId::BcNumberDiv
+            | RuntimeFnId::BcDivmod | RuntimeFnId::BcNumberDivmod
+            | RuntimeFnId::BcFloor | RuntimeFnId::BcNumberFloor
+            | RuntimeFnId::BcMod | RuntimeFnId::BcNumberMod
+            | RuntimeFnId::BcMul | RuntimeFnId::BcNumberMul
+            | RuntimeFnId::BcPow | RuntimeFnId::BcNumberPow
+            | RuntimeFnId::BcPowmod | RuntimeFnId::BcNumberPowmod
+            | RuntimeFnId::BcRound | RuntimeFnId::BcNumberRound
             | RuntimeFnId::BcScale
-            | RuntimeFnId::BcSqrt
-            | RuntimeFnId::BcSub
+            | RuntimeFnId::BcSqrt | RuntimeFnId::BcNumberSqrt
+            | RuntimeFnId::BcSub | RuntimeFnId::BcNumberSub
             | RuntimeFnId::ElephcPharBzip2Archive
             | RuntimeFnId::ElephcPharDecompressArchive
             | RuntimeFnId::ElephcPharGetFileMetadata
@@ -1826,20 +1840,20 @@ impl RuntimeFnId {
             ];
         }
         match self {
-            RuntimeFnId::BcAdd
-            | RuntimeFnId::BcCeil
-            | RuntimeFnId::BcComp
-            | RuntimeFnId::BcDiv
-            | RuntimeFnId::BcDivmod
-            | RuntimeFnId::BcFloor
-            | RuntimeFnId::BcMod
-            | RuntimeFnId::BcMul
-            | RuntimeFnId::BcPow
-            | RuntimeFnId::BcPowmod
-            | RuntimeFnId::BcRound
+            RuntimeFnId::BcAdd | RuntimeFnId::BcNumberAdd
+            | RuntimeFnId::BcCeil | RuntimeFnId::BcNumberCeil | RuntimeFnId::BcNumberCreate
+            | RuntimeFnId::BcComp | RuntimeFnId::BcNumberComp
+            | RuntimeFnId::BcDiv | RuntimeFnId::BcNumberDiv
+            | RuntimeFnId::BcDivmod | RuntimeFnId::BcNumberDivmod
+            | RuntimeFnId::BcFloor | RuntimeFnId::BcNumberFloor
+            | RuntimeFnId::BcMod | RuntimeFnId::BcNumberMod
+            | RuntimeFnId::BcMul | RuntimeFnId::BcNumberMul
+            | RuntimeFnId::BcPow | RuntimeFnId::BcNumberPow
+            | RuntimeFnId::BcPowmod | RuntimeFnId::BcNumberPowmod
+            | RuntimeFnId::BcRound | RuntimeFnId::BcNumberRound
             | RuntimeFnId::BcScale
-            | RuntimeFnId::BcSqrt
-            | RuntimeFnId::BcSub => &[BuiltinRequirement::Bridge("elephc_bcmath")],
+            | RuntimeFnId::BcSqrt | RuntimeFnId::BcNumberSqrt
+            | RuntimeFnId::BcSub | RuntimeFnId::BcNumberSub => &[BuiltinRequirement::Bridge("elephc_bcmath")],
             RuntimeFnId::ElephcPharBzip2Archive => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharDecompressArchive => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharGetFileMetadata => &[BuiltinRequirement::Bridge("elephc_phar")],
@@ -2251,6 +2265,11 @@ impl RuntimeFnId {
         self,
     ) -> crate::builtins::semantics::BuiltinResultOwnership {
         use crate::builtins::semantics::BuiltinResultOwnership;
+        // Decoding always constructs an independent Mixed graph. String payloads are
+        // persisted from decoder scratch; no result borrows the source argument pin.
+        if matches!(self, RuntimeFnId::JsonDecode) {
+            return BuiltinResultOwnership::Fresh;
+        }
         if self.uses_mbstring_runtime() {
             return if matches!(self, Self::MbStrlen | Self::MbStrwidth | Self::MbSubstrCount | Self::MbCheckEncoding
                 | Self::MbEregMatch | Self::MbEreg | Self::MbEregi | Self::MbParseStr | Self::MbSendMail | Self::MbEregSearchInit | Self::MbEregSearch | Self::MbEregSearchGetpos | Self::MbEregSearchSetpos) {
@@ -2270,7 +2289,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayUnshift
                 | RuntimeFnId::ArrayAny
                 | RuntimeFnId::ArrayAll
-                | RuntimeFnId::BcComp
+                | RuntimeFnId::BcComp | RuntimeFnId::BcNumberComp
                 | RuntimeFnId::BcScale
                 // `iconv_set_encoding()` answers with a bare boolean.
                 | RuntimeFnId::IconvSetEncoding
@@ -2380,18 +2399,18 @@ impl RuntimeFnId {
         if matches!(
             self,
             RuntimeFnId::Abs
-                | RuntimeFnId::BcAdd
-                | RuntimeFnId::BcCeil
-                | RuntimeFnId::BcDiv
-                | RuntimeFnId::BcDivmod
-                | RuntimeFnId::BcFloor
-                | RuntimeFnId::BcMod
-                | RuntimeFnId::BcMul
-                | RuntimeFnId::BcPow
-                | RuntimeFnId::BcPowmod
-                | RuntimeFnId::BcRound
-                | RuntimeFnId::BcSqrt
-                | RuntimeFnId::BcSub
+                | RuntimeFnId::BcAdd | RuntimeFnId::BcNumberAdd
+                | RuntimeFnId::BcCeil | RuntimeFnId::BcNumberCeil | RuntimeFnId::BcNumberCreate
+                | RuntimeFnId::BcDiv | RuntimeFnId::BcNumberDiv
+                | RuntimeFnId::BcDivmod | RuntimeFnId::BcNumberDivmod
+                | RuntimeFnId::BcFloor | RuntimeFnId::BcNumberFloor
+                | RuntimeFnId::BcMod | RuntimeFnId::BcNumberMod
+                | RuntimeFnId::BcMul | RuntimeFnId::BcNumberMul
+                | RuntimeFnId::BcPow | RuntimeFnId::BcNumberPow
+                | RuntimeFnId::BcPowmod | RuntimeFnId::BcNumberPowmod
+                | RuntimeFnId::BcRound | RuntimeFnId::BcNumberRound
+                | RuntimeFnId::BcSqrt | RuntimeFnId::BcNumberSqrt
+                | RuntimeFnId::BcSub | RuntimeFnId::BcNumberSub
                 | RuntimeFnId::ArrayChunk
                 | RuntimeFnId::ArrayColumn
                 | RuntimeFnId::ArrayCombine
@@ -2909,19 +2928,33 @@ impl RuntimeFnId {
             RuntimeFnId::Atan => "atan",
             RuntimeFnId::Atan2 => "atan2",
             RuntimeFnId::BcAdd => "bcadd",
+            RuntimeFnId::BcNumberAdd => "__elephc_bcnumber_add",
             RuntimeFnId::BcCeil => "bcceil",
+            RuntimeFnId::BcNumberCeil => "__elephc_bcnumber_ceil",
+            RuntimeFnId::BcNumberCreate => "__elephc_bcnumber_create",
             RuntimeFnId::BcComp => "bccomp",
+            RuntimeFnId::BcNumberComp => "__elephc_bcnumber_comp",
             RuntimeFnId::BcDiv => "bcdiv",
+            RuntimeFnId::BcNumberDiv => "__elephc_bcnumber_div",
             RuntimeFnId::BcDivmod => "bcdivmod",
+            RuntimeFnId::BcNumberDivmod => "__elephc_bcnumber_divmod",
             RuntimeFnId::BcFloor => "bcfloor",
+            RuntimeFnId::BcNumberFloor => "__elephc_bcnumber_floor",
             RuntimeFnId::BcMod => "bcmod",
+            RuntimeFnId::BcNumberMod => "__elephc_bcnumber_mod",
             RuntimeFnId::BcMul => "bcmul",
+            RuntimeFnId::BcNumberMul => "__elephc_bcnumber_mul",
             RuntimeFnId::BcPow => "bcpow",
+            RuntimeFnId::BcNumberPow => "__elephc_bcnumber_pow",
             RuntimeFnId::BcPowmod => "bcpowmod",
+            RuntimeFnId::BcNumberPowmod => "__elephc_bcnumber_powmod",
             RuntimeFnId::BcRound => "bcround",
+            RuntimeFnId::BcNumberRound => "__elephc_bcnumber_round",
             RuntimeFnId::BcScale => "bcscale",
             RuntimeFnId::BcSqrt => "bcsqrt",
+            RuntimeFnId::BcNumberSqrt => "__elephc_bcnumber_sqrt",
             RuntimeFnId::BcSub => "bcsub",
+            RuntimeFnId::BcNumberSub => "__elephc_bcnumber_sub",
             RuntimeFnId::Ceil => "ceil",
             RuntimeFnId::Clamp => "clamp",
             RuntimeFnId::Cos => "cos",

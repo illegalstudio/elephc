@@ -10,6 +10,12 @@
 //! - The `assoc_chunk` submodule checks heap balance when `array_chunk()` copies an associative receiver.
 //! - The `mixed_receiver_property_writes` submodule checks the ownership of a property write whose receiver is statically `mixed`.
 
+#[path = "runtime_gc/json_decode_owners.rs"]
+mod json_decode_owners;
+#[path = "runtime_gc/string_append.rs"]
+mod string_append;
+#[path = "runtime_gc/bcmath_number.rs"]
+mod bcmath_number;
 #[path = "runtime_gc/basics.rs"]
 mod basics;
 #[path = "runtime_gc/large_unary_string_results.rs"]
@@ -22,6 +28,8 @@ mod ini_lookup_arguments;
 mod mixed_string_cast_return;
 #[path = "runtime_gc/object_cast.rs"]
 mod object_cast;
+#[path = "runtime_gc/array_cast.rs"]
+mod array_cast;
 #[path = "runtime_gc/nullable_string_return.rs"]
 mod nullable_string_return;
 #[path = "runtime_gc/iconv.rs"]
@@ -36,6 +44,8 @@ mod destructor_resurrection;
 mod argument_guards;
 #[path = "runtime_gc/deep_cleanup.rs"]
 mod deep_cleanup;
+#[path = "runtime_gc/scalar_mixed_cleanup.rs"]
+mod scalar_mixed_cleanup;
 #[path = "runtime_gc/eval_constructor.rs"]
 mod eval_constructor;
 #[path = "runtime_gc/eval_native_calls.rs"]
@@ -68,6 +78,10 @@ mod literal_builtin_elements;
 mod mixed_receiver_property_writes;
 #[path = "runtime_gc/assoc_literal_spreads.rs"]
 mod assoc_literal_spreads;
+mod nested_nullable_property_compound;
+#[path = "runtime_gc/nullable_property_writes.rs"]
+mod nullable_property_writes;
+mod property_source_destructor_owners;
 #[path = "runtime_gc/object_supertype_rebind.rs"]
 mod object_supertype_rebind;
 #[path = "runtime_gc/boxed_property_defaults.rs"]
@@ -155,6 +169,7 @@ mod serialize_magic_results;
 mod growth;
 #[path = "runtime_gc/heap.rs"]
 mod heap;
+mod split_remainders;
 #[path = "runtime_gc/implode_boxed_operand.rs"]
 mod implode_boxed_operand;
 #[path = "runtime_gc/heap_codegen.rs"]
@@ -169,3 +184,5 @@ mod class_param_return;
 mod reflection_attribute_filter;
 #[path = "runtime_gc/tagged_scalar_boxing.rs"]
 mod tagged_scalar_boxing;
+#[path = "runtime_gc/gc_incoming_cache.rs"]
+mod gc_incoming_cache;

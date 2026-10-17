@@ -57,6 +57,7 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x1, #7");                                          // value_type = 7 (boxed mixed)
     emitter.instruction("bl __rt_hash_new");                                    // call the hash new helper
     emitter.instruction("str x0, [sp, #24]");                                   // park hash ptr
+    emitter.instruction("str xzr, [sp, #40]");                                  // no decoded key is owned before the first entry
 
     emitter.instruction("mov x9, #1");                                          // cursor = 1 (skip leading `{`)
     emitter.instruction("str x9, [sp, #16]");                                   // store updated JSON decoder state
@@ -118,7 +119,7 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #32]");                                  // key_start
     emitter.instruction("add x1, x11, x10");                                    // sub_ptr
     emitter.instruction("sub x2, x9, x10");                                     // sub_len
-    emitter.instruction("bl __rt_json_decode_mixed");                           // call the json decode mixed helper
+    emitter.instruction("bl __rt_json_decode_mixed_value");                     // call the json decode mixed helper
     emitter.instruction("cbz x0, __rt_json_decode_object_real_propagate");      // recursion already recorded the JSON error
     emitter.instruction("str x0, [sp, #40]");                                   // park key Mixed*
 
@@ -201,7 +202,7 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #48]");                                  // value_start
     emitter.instruction("add x1, x11, x10");                                    // update the JSON decoder cursor or counter
     emitter.instruction("sub x2, x9, x10");                                     // update the JSON decoder cursor or counter
-    emitter.instruction("bl __rt_json_decode_mixed");                           // call the json decode mixed helper
+    emitter.instruction("bl __rt_json_decode_mixed_value");                     // call the json decode mixed helper
     emitter.instruction("cbz x0, __rt_json_decode_object_real_propagate");      // recursion already recorded the JSON error
 
     // Insert (key, value) into the hash.
@@ -222,6 +223,10 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x5, #7");                                          // value_tag = boxed mixed
     emitter.instruction("bl __rt_hash_set");                                    // call the hash set helper
     emitter.instruction("str x0, [sp, #24]");                                   // updated hash ptr
+    // -- the hash adopts the value and persists its key, so retire the key box --
+    emitter.instruction("ldr x0, [sp, #40]");                                   // recover the temporary decoded key owner
+    emitter.instruction("bl __rt_decref_mixed");                                // release the key box after hash key persistence
+    emitter.instruction("str xzr, [sp, #40]");                                  // prevent failure cleanup from releasing an inserted key twice
 
     // Look at the separator.
     emitter.instruction("ldr x1, [sp, #0]");                                    // load or prepare JSON decoder state
@@ -259,7 +264,7 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
 
     emitter.instruction("mov x0, #5");                                          // tag = associative array
     emitter.instruction("mov x2, #0");                                          // mixed_from_value high word unused for assoc payload
-    emitter.instruction("bl __rt_mixed_from_value");                            // box the hash as Mixed(assoc)
+    emitter.instruction("bl __rt_json_box_owned_container");                    // box the hash as Mixed(assoc)
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #80");                                     // release the local frame before returning
     emitter.instruction("ret");                                                 // return Mixed* (assoc array) in x0
@@ -270,7 +275,7 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x0");                                          // shift the stdClass pointer into the mixed_from_value low-word slot
     emitter.instruction("mov x0, #6");                                          // tag = object
     emitter.instruction("mov x2, #0");                                          // mixed_from_value high word unused for object payload
-    emitter.instruction("bl __rt_mixed_from_value");                            // box the stdClass as Mixed(object)
+    emitter.instruction("bl __rt_json_box_owned_container");                    // box the stdClass as Mixed(object)
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #80");                                     // release the local frame before returning
     emitter.instruction("ret");                                                 // return Mixed* (stdClass) in x0
@@ -279,10 +284,14 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // load the object slice pointer for location reporting
     emitter.instruction("ldr x9, [sp, #16]");                                   // load the parser cursor at the failing object byte
     emitter.instruction("add x0, x0, x9");                                      // convert the object-local cursor to an absolute source pointer
-    emitter.instruction("bl __rt_json_set_error_location");                     // store one-based line/column metadata for the JSON error
-    emitter.instruction("mov x0, #4");                                          // JSON_ERROR_SYNTAX
-    emitter.instruction("bl __rt_json_throw_error");                            // record or throw the syntax error
+    emitter.instruction("bl __rt_json_note_error_candidate");                   // record the candidate byte without scanning the source
+    emitter.instruction("bl __rt_json_decode_syntax_error");                    // record or throw the syntax error
     emitter.label("__rt_json_decode_object_real_propagate");
+    // -- release a pending key and every value already adopted by the hash --
+    emitter.instruction("ldr x0, [sp, #40]");                                   // recover a decoded key not yet retired after insertion
+    emitter.instruction("bl __rt_decref_any");                                  // release the pending key when one exists
+    emitter.instruction("ldr x0, [sp, #24]");                                   // recover the partially built hash owner
+    emitter.instruction("bl __rt_decref_hash");                                 // release the partial hash and all adopted values
     emitter.instruction("mov x0, #0");                                          // load or prepare JSON decoder state
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // load or prepare JSON decoder state
     emitter.instruction("add sp, sp, #80");                                     // update the JSON decoder cursor or counter
@@ -326,6 +335,7 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, 7");                                          // value_type = boxed mixed
     emitter.instruction("call __rt_hash_new");                                  // call the hash new helper
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // load or prepare JSON decoder state
+    emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // no decoded key is owned before the first entry
 
     emitter.instruction("mov QWORD PTR [rbp - 24], 1");                         // cursor past `{`
     emitter.instruction("mov QWORD PTR [rbp - 64], 0");                         // no trailing comma seen yet
@@ -385,7 +395,7 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rax, r10");                                        // update the JSON decoder cursor or counter
     emitter.instruction("mov rdx, rcx");                                        // load or prepare JSON decoder state
     emitter.instruction("sub rdx, r10");                                        // update the JSON decoder cursor or counter
-    emitter.instruction("call __rt_json_decode_mixed");                         // call the json decode mixed helper
+    emitter.instruction("call __rt_json_decode_mixed_value");                   // call the json decode mixed helper
     emitter.instruction("test rax, rax");                                       // check the current JSON decoder condition
     emitter.instruction("je __rt_json_decode_object_real_propagate_x");         // recursion already recorded the JSON error
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // park key Mixed*
@@ -475,7 +485,7 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rax, r10");                                        // update the JSON decoder cursor or counter
     emitter.instruction("mov rdx, rcx");                                        // load or prepare JSON decoder state
     emitter.instruction("sub rdx, r10");                                        // update the JSON decoder cursor or counter
-    emitter.instruction("call __rt_json_decode_mixed");                         // call the json decode mixed helper
+    emitter.instruction("call __rt_json_decode_mixed_value");                   // call the json decode mixed helper
     emitter.instruction("test rax, rax");                                       // check the current JSON decoder condition
     emitter.instruction("je __rt_json_decode_object_real_propagate_x");         // recursion already recorded the JSON error
 
@@ -497,6 +507,10 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, 7");                                           // value_tag = boxed mixed
     emitter.instruction("call __rt_hash_set");                                  // call the hash set helper
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // load or prepare JSON decoder state
+    // -- the hash adopts the value and persists its key, so retire the key box --
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // recover the temporary decoded key owner
+    emitter.instruction("call __rt_decref_mixed");                              // release the key box after hash key persistence
+    emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // prevent failure cleanup from releasing an inserted key twice
 
     // Look at the separator.
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // load or prepare JSON decoder state
@@ -534,7 +548,7 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("mov rax, 5");                                          // tag = associative array
     emitter.instruction("xor rsi, rsi");                                        // mixed_from_value high word unused for assoc payload
-    emitter.instruction("call __rt_mixed_from_value");                          // box the hash as Mixed(assoc)
+    emitter.instruction("call __rt_json_box_owned_container");                  // box the hash as Mixed(assoc)
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return Mixed* (assoc array) in rax
@@ -545,7 +559,7 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, rax");                                        // shift the stdClass pointer into the mixed_from_value low-word slot
     emitter.instruction("mov rax, 6");                                          // tag = object
     emitter.instruction("xor rsi, rsi");                                        // mixed_from_value high word unused for object payload
-    emitter.instruction("call __rt_mixed_from_value");                          // box the stdClass as Mixed(object)
+    emitter.instruction("call __rt_json_box_owned_container");                  // box the stdClass as Mixed(object)
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return Mixed* (stdClass) in rax
@@ -555,10 +569,14 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_json_decode_object_real_fail_x");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // load the object slice pointer for location reporting
     emitter.instruction("add rax, QWORD PTR [rbp - 24]");                       // convert the object-local cursor to an absolute source pointer
-    emitter.instruction("call __rt_json_set_error_location");                   // store one-based line/column metadata for the JSON error
-    emitter.instruction("mov rax, 4");                                          // JSON_ERROR_SYNTAX
-    emitter.instruction("call __rt_json_throw_error");                          // record or throw the syntax error
+    emitter.instruction("call __rt_json_note_error_candidate");                 // record the candidate byte without scanning the source
+    emitter.instruction("call __rt_json_decode_syntax_error");                  // record or throw the syntax error
     emitter.label("__rt_json_decode_object_real_propagate_x");
+    // -- release a pending key and every value already adopted by the hash --
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // recover a decoded key not yet retired after insertion
+    emitter.instruction("call __rt_decref_any");                                // release the pending key when one exists
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // recover the partially built hash owner
+    emitter.instruction("call __rt_decref_hash");                               // release the partial hash and all adopted values
     emitter.instruction("xor rax, rax");                                        // update the JSON decoder cursor or counter
     emitter.instruction("mov rsp, rbp");                                        // load or prepare JSON decoder state
     emitter.instruction("pop rbp");                                             // preserve or restore JSON decoder scratch state

@@ -11,9 +11,13 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
+#[cfg(test)]
+mod split_remainder_tests;
+
 
 /// Emits the `__rt_heap_alloc` runtime helper: a free-list allocator with size-segregated
 /// small-bin caching and a bump-pointer fallback.
+/// Split remainders use the same payload classes as freed blocks, without free accounting.
 ///
 /// Allocation path (ARM64): small bins (≤64 bytes) → ordered free list → bump pointer.
 /// Allocation path (x86_64): identical logic via `emit_heap_alloc_linux_x86_64`.
@@ -199,8 +203,30 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("str wzr, [x13, #4]");                                  // free remainder keeps refcount cleared while on the free list
     emitter.instruction("str xzr, [x13, #8]");                                  // free remainder has no heap kind while on the free list
     emitter.instruction("ldr x14, [x10, #16]");                                 // x14 = current->next before splitting
+    emitter.instruction("cmp x12, #64");                                        // small split payloads belong in the existing size-segregated bins
+    emitter.instruction("b.hi __rt_heap_alloc_split_large");                    // retain ordered-list placement for larger remainders
+    emitter.instruction("str x14, [x9]");                                       // unlink the allocated block before publishing its remainder in one bin
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_heap_small_bins");
+    emitter.instruction("mov x16, #0");                                         // default to the eight-byte payload class
+    emitter.instruction("cmp x12, #8");                                         // classify the actual aligned remainder payload
+    emitter.instruction("b.ls __rt_heap_alloc_split_bin_ready");                // use the first size class that contains this remainder
+    emitter.instruction("mov x16, #8");                                         // advance to the next existing bin head offset
+    emitter.instruction("cmp x12, #16");                                        // classify the actual aligned remainder payload
+    emitter.instruction("b.ls __rt_heap_alloc_split_bin_ready");                // use the first size class that contains this remainder
+    emitter.instruction("mov x16, #16");                                        // advance to the next existing bin head offset
+    emitter.instruction("cmp x12, #32");                                        // classify the actual aligned remainder payload
+    emitter.instruction("b.ls __rt_heap_alloc_split_bin_ready");                // use the first size class that contains this remainder
+    emitter.instruction("mov x16, #24");                                        // advance to the next existing bin head offset
+    emitter.label("__rt_heap_alloc_split_bin_ready");
+    emitter.instruction("add x15, x15, x16");                                   // address the selected size-class head
+    emitter.instruction("ldr x14, [x15]");                                      // preserve the old small-bin chain
+    emitter.instruction("str x14, [x13, #16]");                                 // link the remainder only into its size class
+    emitter.instruction("str x13, [x15]");                                      // publish the free remainder without altering live or free counters
+    emitter.instruction("b __rt_heap_alloc_split_linked");                      // finish the original allocation through common accounting
+    emitter.label("__rt_heap_alloc_split_large");
     emitter.instruction("str x14, [x13, #16]");                                 // remainder->next = current->next
     emitter.instruction("str x13, [x9]");                                       // prev->next = remainder header
+    emitter.label("__rt_heap_alloc_split_linked");
     emitter.instruction("str w0, [x10]");                                       // shrink allocated block header size to the requested payload
     emitter.instruction("mov w13, #1");                                         // initial refcount = 1
     emitter.instruction("str w13, [x10, #4]");                                  // reset refcount in reused header
@@ -471,8 +497,30 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov DWORD PTR [r8 + 4], 0");                           // free-list blocks keep refcount zero while they remain unowned
     emitter.instruction("mov QWORD PTR [r8 + 8], 0");                           // free-list blocks clear the heap kind until a typed allocation reuses them
     emitter.instruction("mov rdx, QWORD PTR [r10 + 16]");                       // preserve the original successor before rewriting the free-list links
+    emitter.instruction("cmp rcx, 64");                                         // small split payloads belong in the existing size-segregated bins
+    emitter.instruction("ja __rt_heap_alloc_split_large");                      // retain ordered-list placement for larger remainders
+    emitter.instruction("mov QWORD PTR [r9], rdx");                             // unlink the allocated block before publishing its remainder in one bin
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_heap_small_bins");
+    emitter.instruction("xor edx, edx");                                        // default to the eight-byte payload class
+    emitter.instruction("cmp rcx, 8");                                          // classify the actual aligned remainder payload
+    emitter.instruction("jbe __rt_heap_alloc_split_bin_ready");                 // use the first size class that contains this remainder
+    emitter.instruction("mov edx, 8");                                          // advance to the next existing bin head offset
+    emitter.instruction("cmp rcx, 16");                                         // classify the actual aligned remainder payload
+    emitter.instruction("jbe __rt_heap_alloc_split_bin_ready");                 // use the first size class that contains this remainder
+    emitter.instruction("mov edx, 16");                                         // advance to the next existing bin head offset
+    emitter.instruction("cmp rcx, 32");                                         // classify the actual aligned remainder payload
+    emitter.instruction("jbe __rt_heap_alloc_split_bin_ready");                 // use the first size class that contains this remainder
+    emitter.instruction("mov edx, 24");                                         // advance to the next existing bin head offset
+    emitter.label("__rt_heap_alloc_split_bin_ready");
+    emitter.instruction("add r11, rdx");                                        // address the selected size-class head
+    emitter.instruction("mov rdx, QWORD PTR [r11]");                            // preserve the old small-bin chain
+    emitter.instruction("mov QWORD PTR [r8 + 16], rdx");                        // link the remainder only into its size class
+    emitter.instruction("mov QWORD PTR [r11], r8");                             // publish the free remainder without altering live or free counters
+    emitter.instruction("jmp __rt_heap_alloc_split_linked");                    // finish the original allocation through common accounting
+    emitter.label("__rt_heap_alloc_split_large");
     emitter.instruction("mov QWORD PTR [r8 + 16], rdx");                        // splice the split remainder to the original successor
     emitter.instruction("mov QWORD PTR [r9], r8");                              // replace the matched free block with the split remainder in the free list
+    emitter.label("__rt_heap_alloc_split_linked");
     emitter.instruction("mov DWORD PTR [r10], eax");                            // shrink the reused block header down to the requested payload size
     emitter.instruction("mov DWORD PTR [r10 + 4], 1");                          // restore a live refcount of one in the reused heap header
     emitter.instruction(&format!("mov r8, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(0))); // materialize the x86_64 heap marker for the reused block header

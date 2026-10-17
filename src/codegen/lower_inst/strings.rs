@@ -12,7 +12,7 @@
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
-use crate::ir::{Immediate, Instruction};
+use crate::ir::{Immediate, Instruction, Op};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
@@ -219,7 +219,7 @@ pub(super) fn lower_load_called_class_id(ctx: &mut FunctionContext<'_>, inst: &I
     store_if_result(ctx, inst)
 }
 
-/// Lowers a string concatenation by loading both string pairs into `__rt_concat`'s ABI.
+/// Lowers ordinary concat or a consuming append through their shared string-pair ABI.
 pub(super) fn lower_str_concat(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
@@ -235,7 +235,8 @@ pub(super) fn lower_str_concat(ctx: &mut FunctionContext<'_>, inst: &Instruction
             ctx.load_string_value_to_regs(rhs, "rdi", "rsi")?;
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_concat");
+    let helper = if inst.op == Op::StrAppend { "__rt_str_append" } else { "__rt_concat" };
+    abi::emit_call_label(ctx.emitter, helper);
     store_if_result(ctx, inst)
 }
 
