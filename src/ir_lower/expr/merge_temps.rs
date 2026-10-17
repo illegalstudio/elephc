@@ -128,7 +128,15 @@ pub(super) fn php_type_allows_null(php_type: &PhpType) -> bool {
 }
 
 /// Estimates the value type an expression will materialize during branch lowering.
+///
+/// A postfix chain holding a `?->` anywhere (`$o?->items()`, `$o?->child()->items()`,
+/// `$o?->list[0]`) lowers into one boxed `Mixed` temp whether or not the receiver is null, so it
+/// answers that storage before any arm reads a declaration: a declared `array<int>` there would
+/// size the merge temp for a raw array and store the box into it.
 pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> PhpType {
+    if let Some(storage) = nullsafe_chain::result_storage_type(expr) {
+        return storage;
+    }
     match &expr.kind {
         ExprKind::Variable(name) => normalize_value_php_type(ctx.local_type(name).codegen_repr()),
         ExprKind::ErrorSuppress(inner) => materialized_expr_type_for_merge(ctx, inner),
@@ -154,30 +162,50 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         ExprKind::ShortTernary { value, default } => {
             short_ternary_merge_result_type(ctx, value, default)
         }
-        ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
-            .unwrap_or_else(|| fallback_expr_type(expr)),
+        // Every arm below reads a type the syntax cannot know. The syntactic fallback answers
+        // `Int` for all of them, which sized the merge temp as an integer and cast an array arm
+        // to its element count, a string arm to `0` and an object arm to `0` (#1501). So each
+        // one reads the metadata its own lowering reads, and when there is none it answers
+        // `Mixed`: a `Mixed` temp boxes whatever the arm materializes, where any narrower guess
+        // stores a value of one shape into a slot declared as another. The `?->` forms never
+        // reach here: the chain check above answers them.
+        ExprKind::ArrayAccess { array, .. } => {
+            array_access_expr_value_type_for_ir(ctx, array).unwrap_or(PhpType::Mixed)
+        }
         ExprKind::PropertyAccess { object, property } => {
-            property_access_expr_type_for_ir(ctx, object, property)
-                .unwrap_or_else(|| fallback_expr_type(expr))
+            property_access_expr_type_for_ir(ctx, object, property).unwrap_or(PhpType::Mixed)
+        }
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            static_property_result_type(ctx, receiver, property, expr)
         }
         // Calls are typed from the return metadata their own lowering uses. The syntactic
         // fallback answers `int` for every call outside its builtin allowlist, and a merge temp
         // typed from that guess coerced a string, array or object branch into an integer slot or,
         // beside a `null` branch, into a tagged `?int` scalar the backend cannot store an array
         // in (issue #1364). A call whose result cannot be named here merges as boxed `mixed`,
-        // which holds whatever the call returns.
-        ExprKind::FunctionCall { name, .. } => function_call_type_for_merge(ctx, name.as_str(), expr),
+        // which holds whatever the call returns. A `?->` call never reaches these arms: the
+        // chain check above already answered the boxed `Mixed` the chain stores, and a
+        // declaration-based nullsafe arm would size that temp for the method's return instead.
+        ExprKind::FunctionCall { name, .. } => {
+            function_call_type_for_merge(ctx, name.as_str(), expr)
+        }
         ExprKind::MethodCall { object, method, .. } => {
             method_call_expr_type_for_ir(ctx, object, method).unwrap_or(PhpType::Mixed)
-        }
-        ExprKind::NullsafeMethodCall { object, method, .. } => {
-            nullsafe_method_call_expr_type_for_ir(ctx, object, method).unwrap_or(PhpType::Mixed)
         }
         ExprKind::StaticMethodCall { receiver, method, .. } => {
             static_method_call_expr_type_for_ir(ctx, receiver, method).unwrap_or(PhpType::Mixed)
         }
         ExprKind::ClosureCall { var, .. } => closure_call_type_for_merge(ctx, var),
-        ExprKind::ExprCall { .. } => PhpType::Mixed,
+        // An expression call, a pipe, a dynamic member access, a dynamic `new`, `clone`, an
+        // assignment used as a value, and an `include` result have no declaration the merge
+        // can read ahead of lowering them (#1501).
+        ExprKind::ExprCall { .. }
+        | ExprKind::Pipe { .. }
+        | ExprKind::DynamicPropertyAccess { .. }
+        | ExprKind::NewDynamic { .. }
+        | ExprKind::Clone(_)
+        | ExprKind::Assignment { .. }
+        | ExprKind::IncludeValue { .. } => PhpType::Mixed,
         _ => fallback_expr_type(expr),
     }
 }
