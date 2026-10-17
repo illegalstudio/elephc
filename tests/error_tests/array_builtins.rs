@@ -565,13 +565,11 @@ fn test_error_array_intersect_key_wrong_args() {
     );
 }
 
-/// Verifies that error array rand wrong args.
+/// Verifies `array_rand()` reports its 1-to-2 argument range (`$num` is optional).
 #[test]
 fn test_error_array_rand_wrong_args() {
-    expect_error(
-        "<?php array_rand();",
-        "array_rand() takes exactly 1 argument",
-    );
+    expect_error("<?php array_rand();", "array_rand() takes 1 or 2 arguments");
+    expect_error("<?php array_rand([1], 1, 2);", "array_rand() takes 1 or 2 arguments");
 }
 
 /// Verifies that error asort wrong args.

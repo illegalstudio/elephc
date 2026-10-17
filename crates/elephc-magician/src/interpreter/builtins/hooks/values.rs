@@ -198,6 +198,10 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Pi,
     /// Dispatches `mt_rand(...)`.
     MtRand,
+    MtSrand,
+    Srand,
+    MtGetrandmax,
+    Getrandmax,
     /// Dispatches `quotemeta(...)`.
     QuoteMeta,
     /// Dispatches `quoted_printable_encode(...)`.
@@ -522,6 +526,14 @@ impl EvalValuesHook {
             Self::Max => eval_max_result(evaluated_args, values),
             Self::Min => eval_min_result(evaluated_args, values),
             Self::MtRand => eval_mt_rand_values_result(evaluated_args, values),
+            Self::MtSrand => eval_mt_srand_values_result(evaluated_args, values),
+            Self::Srand => eval_srand_values_result(evaluated_args, values),
+            Self::MtGetrandmax | Self::Getrandmax => {
+                if !evaluated_args.is_empty() {
+                    return Err(EvalStatus::RuntimeFatal);
+                }
+                eval_mt_getrandmax_values_result(values)
+            }
             Self::NetworkEnv => {
                 eval_network_env_values_result(name, evaluated_args, context, values)
             }

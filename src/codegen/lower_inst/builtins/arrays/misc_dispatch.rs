@@ -22,16 +22,97 @@ pub(crate) fn lower_array_keys(ctx: &mut FunctionContext<'_>, inst: &Instruction
     keys::lower_array_keys(ctx, inst)
 }
 
-/// Lowers `array_rand()` for indexed arrays.
+/// Lowers `array_rand()`: one key from a list through the indexed `__rt_array_rand`, everything
+/// else through `__rt_array_rand_boxed`, which answers php's key or list of keys as a box.
 pub(crate) fn lower_array_rand(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::super::ensure_arg_count(inst, "array_rand", 1)?;
+    ensure_arg_count_between(inst, "array_rand", 1, 2)?;
+    if inst.result_php_type.codegen_repr() != PhpType::Int {
+        return lower_boxed_array_rand(ctx, inst);
+    }
     let array = expect_operand(inst, 0)?;
     require_indexed_array_builtin(ctx.value_php_type(array)?, "array_rand")?;
     ctx.load_value_to_result(array)?;
+    // php refuses an empty array before drawing; the indexed helper would answer index 0.
+    let not_empty = ctx.next_label("array_rand_not_empty");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [x0]");                            // the list's live count
+            ctx.emitter.instruction(&format!("cbnz x9, {not_empty}"));          // a non-empty list can be sampled
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp QWORD PTR [rax], 0");                  // the list's live count
+            ctx.emitter.instruction(&format!("jne {not_empty}"));               // a non-empty list can be sampled
+        }
+    }
+    crate::codegen::lower_inst::exceptions::emit_value_error(
+        ctx,
+        "array_rand(): Argument #1 ($array) must not be empty",
+    );
+    ctx.emitter.label(&not_empty);
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the indexed-array pointer as the random-key helper argument
     }
     abi::emit_call_label(ctx.emitter, "__rt_array_rand");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers the boxed `array_rand()` path and raises php's ValueError / TypeError for its error codes.
+fn lower_boxed_array_rand(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+    super::boxed_membership::store_borrowed_cell(ctx, array, 0)?;
+    let num_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    match inst.operands.get(1).copied() {
+        Some(num) => {
+            resolve_int_operand_to_result(ctx, num, "array_rand num")?;
+            abi::emit_reg_move(ctx.emitter, num_arg, abi::int_result_reg(ctx.emitter));
+        }
+        None => abi::emit_load_int_immediate(ctx.emitter, num_arg, 1),
+    }
+    abi::emit_temporary_stack_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 0);
+    abi::emit_call_label(ctx.emitter, "__rt_array_rand_boxed");
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    let valid = ctx.next_label("array_rand_valid");
+    let empty = ctx.next_label("array_rand_empty");
+    let bad_num = ctx.next_label("array_rand_bad_num");
+    let (code, empty_code, bad_code) = (
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => "x1",
+            Arch::X86_64 => "rdx",
+        },
+        crate::codegen_support::runtime::ARRAY_RAND_EMPTY,
+        crate::codegen_support::runtime::ARRAY_RAND_BAD_NUM,
+    );
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &valid);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {code}, #{empty_code}"));     // an empty array?
+            ctx.emitter.instruction(&format!("b.eq {empty}"));                  // php's empty-array ValueError
+            ctx.emitter.instruction(&format!("cmp {code}, #{bad_code}"));       // a $num outside [1, count]?
+            ctx.emitter.instruction(&format!("b.eq {bad_num}"));                // php's range ValueError
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {code}, {empty_code}"));      // an empty array?
+            ctx.emitter.instruction(&format!("je {empty}"));                    // php's empty-array ValueError
+            ctx.emitter.instruction(&format!("cmp {code}, {bad_code}"));        // a $num outside [1, count]?
+            ctx.emitter.instruction(&format!("je {bad_num}"));                  // php's range ValueError
+        }
+    }
+    crate::codegen::lower_inst::exceptions::emit_type_error(
+        ctx,
+        "array_rand(): Argument #1 ($array) must be of type array",
+    );
+    ctx.emitter.label(&empty);
+    crate::codegen::lower_inst::exceptions::emit_value_error(
+        ctx,
+        "array_rand(): Argument #1 ($array) must not be empty",
+    );
+    ctx.emitter.label(&bad_num);
+    crate::codegen::lower_inst::exceptions::emit_value_error(
+        ctx,
+        "array_rand(): Argument #2 ($num) must be between 1 and the number of elements in argument #1 ($array)",
+    );
+    ctx.emitter.label(&valid);
     store_if_result(ctx, inst)
 }
 

@@ -2,7 +2,7 @@
 title: "__elephc_opcache_rt_discard() - internals"
 description: "Compiler internals for __elephc_opcache_rt_discard(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1131
+  order: 1135
 ---
 
 ## `__elephc_opcache_rt_discard()` - internals

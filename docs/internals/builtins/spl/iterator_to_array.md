@@ -2,7 +2,7 @@
 title: "iterator_to_array() - internals"
 description: "Compiler internals for iterator_to_array(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 768
+  order: 772
 ---
 
 ## `iterator_to_array()` - internals

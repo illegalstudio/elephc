@@ -2,7 +2,7 @@
 title: "pcntl_strerror() - internals"
 description: "Compiler internals for pcntl_strerror(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 666
+  order: 670
 ---
 
 ## `pcntl_strerror()` - internals

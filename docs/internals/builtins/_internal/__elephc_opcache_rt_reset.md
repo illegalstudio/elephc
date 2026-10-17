@@ -2,7 +2,7 @@
 title: "__elephc_opcache_rt_reset() - internals"
 description: "Compiler internals for __elephc_opcache_rt_reset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1134
+  order: 1138
 ---
 
 ## `__elephc_opcache_rt_reset()` - internals

@@ -53,12 +53,21 @@ pub(in crate::interpreter) fn eval_rand_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let (min, max) = match (min, max) {
-        (None, None) => (0, i64::from(i32::MAX)),
+        (None, None) => {
+            if let Some(seeded) = eval_mt_rand_raw() {
+                return values.int(seeded);
+            }
+            (0, i64::from(i32::MAX))
+        }
         (Some(min), Some(max)) => (eval_int_value(min, values)?, eval_int_value(max, values)?),
         _ => return Err(EvalStatus::RuntimeFatal),
     };
     let low = min.min(max);
     let high = min.max(max);
+    // Once `mt_srand()` ran in eval, draw php's sequence from the seeded Mersenne Twister.
+    if let Some(seeded) = eval_mt_rand_range(low, high) {
+        return values.int(seeded);
+    }
     let width = (i128::from(high) - i128::from(low) + 1) as u128;
     let offset = (eval_random_u128() % width) as i128;
     let sampled = i128::from(low) + offset;

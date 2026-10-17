@@ -89,6 +89,10 @@ pub(crate) use emitters::emit_runtime;
 pub(crate) use arrays::{emit_nan_bool_coercion_probe, nan_bool_coercion_warning_enabled};
 /// The `__rt_hash_map` callback result-kind selector, chosen by the `array_map()` lowering.
 pub(crate) use arrays::HashMapResultKind;
+/// The `__rt_array_rand_boxed` error codes the `array_rand()` lowering turns into ValueErrors.
+pub(crate) use arrays::{ARRAY_RAND_BAD_NUM, ARRAY_RAND_EMPTY};
+/// php's Mersenne Twister mode words, chosen by the `mt_srand()` / `srand()` lowering.
+pub(crate) use arrays::{MT_MODE_MT19937, MT_MODE_PHP};
 /// The call-stack overflow guard's shared symbol name. Codegen's prologue check and the
 /// runtime emitter must name the same `.comm` word or the guard silently never fires.
 pub(crate) use system::STACK_LIMIT_SYMBOL;
