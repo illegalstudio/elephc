@@ -35,8 +35,35 @@ pub(in crate::ir_lower) fn load_array_local_for_write(
 
 /// Lowers `$array[] = value`.
 pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, value: &Expr, span: Span) {
-    let array_value = load_array_local_for_write(ctx, array, span);
-    let value = lower_expr(ctx, value);
+    // A value that may write the receiver is lowered first, so the append lands in the array
+    // the variable holds afterwards (PHP's order); see `element_write_order`.
+    let mut pinned_slot = None;
+    let (array_value, value) =
+        if super::element_write_order::element_write_operands_may_write_receiver(ctx, array, &[value]) {
+            // Pinned: fetching a `Mixed` receiver stores a detached clone and releases the cell a
+            // value may still borrow from.
+            let lowered = lower_expr(ctx, value);
+            let (pinned, slot) = crate::ir_lower::expr::root_call_operand(ctx, lowered, span);
+            pinned_slot = slot;
+            (load_array_local_for_write(ctx, array, span), pinned)
+        } else {
+            let array_value = load_array_local_for_write(ctx, array, span);
+            (array_value, lower_expr(ctx, value))
+        };
+    lower_array_push_into(ctx, array, array_value, value, span);
+    if let Some(slot) = pinned_slot {
+        crate::ir_lower::expr::retire_owned_call_operand(ctx, slot, span);
+    }
+}
+
+/// Appends an already lowered value to an already fetched local receiver.
+fn lower_array_push_into(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &str,
+    array_value: LoweredValue,
+    value: LoweredValue,
+    span: Span,
+) {
     let op = if array_value.ir_type == IrType::Heap(crate::ir::IrHeapKind::Array) {
         Op::ArrayPush
     } else if array_value.ir_type == IrType::Heap(crate::ir::IrHeapKind::Hash) {
@@ -106,14 +133,14 @@ pub(super) fn prepare_indexed_array_local_set(
     prepare_indexed_array_local_write(ctx, array_value, value, span)
 }
 
-/// Coerces miss-capable scalar reads before writing them into a concrete indexed-array slot.
+/// Coerces a scalar store and returns a discarded owner to release after publication.
 pub(super) fn coerce_indexed_array_set_value(
     ctx: &mut LoweringContext<'_, '_>,
     array_ty: &PhpType,
     value: LoweredValue,
     span: Option<Span>,
-) -> LoweredValue {
-    match array_ty.codegen_repr() {
+) -> (LoweredValue, Option<LoweredValue>) {
+    let converted = match array_ty.codegen_repr() {
         PhpType::Array(elem_ty)
             if elem_ty.codegen_repr() == PhpType::Int
                 && matches!(
@@ -124,7 +151,10 @@ pub(super) fn coerce_indexed_array_set_value(
             coerce_to_int(ctx, value, span)
         }
         _ => value,
-    }
+    };
+    let discarded = (converted.value != value.value && ctx.value_is_owning_temporary(value))
+        .then_some(value);
+    (converted, discarded)
 }
 
 /// Returns true when a refcounted indexed-array assignment should use Mixed slots.

@@ -67,7 +67,10 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     *pos = assign_pos + 1;
     let rhs = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
-    if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {
+    if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr)
+        && !(matches!(op, AssignmentOperator::Compound(_))
+            && matches!(lhs_expr.kind, ExprKind::ArrayAccess { .. }))
+    {
         return lower_effectful_postfix_assignment(lhs_expr, op, rhs, span).map(Some);
     }
     // A compound write reads its element at store time too, so a right-hand side that
@@ -81,8 +84,16 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     // AND before the presence check, so `$a[$slot] ??= ($slot = 0)` would test the slot the
     // right-hand side just selected instead of the one written in the source.
     let mut hoisted = EffectfulTargetLowerer::new(span);
+    let lhs_expr = if matches!(op, AssignmentOperator::Compound(_))
+        && matches!(lhs_expr.kind, ExprKind::ArrayAccess { .. })
+    {
+        let target = hoisted.stabilize_array_target(lhs_expr);
+        hoisted.snapshot_computed_update_dimension(target)
+    } else {
+        lhs_expr
+    };
     let rhs = if matches!(op, AssignmentOperator::Compound(_))
-        && compound_rhs_can_disturb_index(&lhs_expr, &rhs)
+        && compound_rhs_settles_before_element_read(&lhs_expr, &rhs)
     {
         hoisted.stabilize_unconditionally(rhs)
     } else {
@@ -161,27 +172,24 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     Ok(Some(hoisted.finish_if_used(stmt, span)))
 }
 
-/// True when `target` writes an element at a plain-VARIABLE index and `rhs` can reassign
-/// that variable before the write lands.
+/// True when a compound element write must settle its right-hand side into a temporary before
+/// the element is read.
 ///
-/// A replay-safe right-hand side has no effects at all, so it can disturb nothing — which is
-/// what keeps `$counts[$k]++` and `$sums[$k] += $n` on the existing path, emitting no temporary.
-/// Every other right-hand side is settled first.
+/// PHP evaluates a compound assignment's right-hand side BEFORE reading the element, so a
+/// right-hand side that can replace the receiver must run first: `$a = [1]; $a[0] +=
+/// ($a = [10])[0]` leaves `[20]`, because the read sees the array the right-hand side installed.
+/// A plain-VARIABLE index additionally needs the right-hand side settled so the index is read at
+/// store time (`$c[$k] += ($k = 1)` reads and writes index 1). A replay-safe right-hand side has
+/// no effects at all, so it can disturb nothing — which is what keeps `$counts[$k]++` and
+/// `$sums[$k] += $n` on the existing path, emitting no temporary.
 ///
 /// The gate used to also require the right-hand side to MENTION the index by name, which was
 /// unsound: `$c[$k] += (function() use (&$k) { $k = 1; return 1; })();` answered `10,11` where
 /// PHP answers `10,21`, because the mention sits in a closure the call expression does not scan.
 /// Widening it costs a temporary on shapes like `$sums[$k] += f()` and costs no correctness:
-/// PHP evaluates a compound assignment's right-hand side BEFORE reading the element, so settling
-/// it early is what the language does anyway.
-fn compound_rhs_can_disturb_index(target: &Expr, rhs: &Expr) -> bool {
-    let ExprKind::ArrayAccess { index, .. } = &target.kind else {
-        return false;
-    };
-    if !matches!(index.kind, ExprKind::Variable(_)) {
-        return false;
-    }
-    !can_replay_assignment_target(rhs)
+/// settling the right-hand side early is what the language does anyway.
+fn compound_rhs_settles_before_element_read(target: &Expr, rhs: &Expr) -> bool {
+    matches!(target.kind, ExprKind::ArrayAccess { .. }) && !can_replay_assignment_target(rhs)
 }
 
 /// Lowers an append through a nested array target (`$a[0][] = $value`) into a
@@ -395,14 +403,23 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
     *pos = assign_pos + 1;
     let rhs = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
-    if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {
+    if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr)
+        && !(matches!(op, AssignmentOperator::Compound(_))
+            && matches!(lhs_expr.kind, ExprKind::ArrayAccess { .. }))
+    {
         return lower_effectful_static_assignment(lhs_expr, op, rhs, span).map(Some);
     }
     // A compound update settles a disturbing right-hand side, then captures a mutable index,
     // exactly as `try_parse_postfix_assignment` does for local and property targets.
     let mut hoisted = EffectfulTargetLowerer::new(span);
     let (lhs_expr, rhs) = if matches!(op, AssignmentOperator::Compound(_)) {
-        let rhs = if compound_rhs_can_disturb_index(&lhs_expr, &rhs) {
+        let lhs_expr = if matches!(lhs_expr.kind, ExprKind::ArrayAccess { .. }) {
+            hoisted.stabilize_array_target(lhs_expr)
+        } else {
+            lhs_expr
+        };
+        let lhs_expr = hoisted.snapshot_computed_update_dimension(lhs_expr);
+        let rhs = if compound_rhs_settles_before_element_read(&lhs_expr, &rhs) {
             hoisted.stabilize_unconditionally(rhs)
         } else {
             rhs
@@ -873,6 +890,17 @@ impl EffectfulTargetLowerer {
             self.span,
         ));
         Expr::new(ExprKind::Variable(name), self.span)
+    }
+
+    /// Freezes a computed dimension before the RHS while leaving a PHP variable operand late.
+    fn snapshot_computed_update_dimension(&mut self, target: Expr) -> Expr {
+        if matches!(&target.kind, ExprKind::ArrayAccess { index, .. }
+            if !matches!(index.kind, ExprKind::Variable(_)))
+        {
+            self.snapshot_update_dimension(target)
+        } else {
+            target
+        }
     }
 
     /// Captures a mutable index once for both halves of an update.

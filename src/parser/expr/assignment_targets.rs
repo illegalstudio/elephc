@@ -202,6 +202,17 @@ impl AssignmentExpressionLowerer {
         self.stabilize_assignment_target(target, rhs)
     }
 
+    /// Freezes an expression result before the RHS without freezing a bare variable operand.
+    pub(super) fn snapshot_computed_update_dimension(&mut self, target: Expr) -> Expr {
+        if matches!(&target.kind, ExprKind::ArrayAccess { index, .. }
+            if !matches!(index.kind, ExprKind::Variable(_)))
+        {
+            self.snapshot_update_dimension(target)
+        } else {
+            target
+        }
+    }
+
     /// Captures a mutable index for both halves of an update.
     ///
     /// Covers one dimension of a local, property, or static-property array, so the write lands

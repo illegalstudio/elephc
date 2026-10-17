@@ -150,23 +150,6 @@ fn propagate_write_key_and_value(index: Expr, value: Expr, env: &ConstantEnv) ->
     (propagate_expr(index, &after), value)
 }
 
-/// Returns true when every part of a nested write target is a bare variable.
-///
-/// `$a[$i][$j]` qualifies; `$a[f()][$i]` does not. The distinction is what makes deferring the
-/// WHOLE target past the right-hand side safe: with no index expression there is no side effect
-/// whose order could change, so the only thing that moves is the READ of each variable — which is
-/// exactly PHP's store-time rule, applied to a chain instead of one index.
-fn nested_target_is_all_bare_variables(target: &Expr) -> bool {
-    match &target.kind {
-        ExprKind::Variable(_) => true,
-        ExprKind::ArrayAccess { array, index } => {
-            matches!(index.kind, ExprKind::Variable(_))
-                && nested_target_is_all_bare_variables(array)
-        }
-        _ => false,
-    }
-}
-
 /// Iterates through a block of statements, propagating constants and stopping early
 /// when a terminal effect (return, throw, exit) is encountered.
 pub(crate) fn propagate_block(body: Vec<Stmt>, mut env: ConstantEnv) -> (Vec<Stmt>, ConstantEnv) {
@@ -293,19 +276,11 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
             )
         }
         StmtKind::NestedArrayAssign { target, value } => {
-            // The store-time rule, extended to a chain. `$a[$i][$i] = ($i = 1)` reads BOTH
-            // indices after the right-hand side, so folding them against the pre-value
-            // environment writes through the old ones. Deferring the whole target is only sound
-            // when it carries no index EXPRESSION — otherwise this would move a call across the
-            // right-hand side — so the shape is checked first and anything else keeps its order.
-            let (target, value) = if nested_target_is_all_bare_variables(&target) {
-                let value = propagate_expr(value, &env);
-                let after = env_after_expr_side_effects(env.clone(), &[&value]);
-                (propagate_expr(target, &after), value)
-            } else {
-                let target = propagate_expr(target, &env);
-                (target, propagate_expr(value, &env))
-            };
+            // EIR captures expression results before the value and reads bare-variable keys
+            // afterwards. Keep that operand distinction intact instead of freezing an old CV
+            // fact in the target. Key side effects still invalidate facts used by the value.
+            let before_value = env_after_expr_side_effects(env.clone(), &[&target]);
+            let value = propagate_expr(value, &before_value);
             let mut next_env = env;
             let stmt = Stmt::new(StmtKind::NestedArrayAssign { target, value }, span);
             stmt_invalidation(&stmt).apply(&mut next_env);

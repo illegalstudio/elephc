@@ -426,6 +426,11 @@ fn parse_expr_bp_inner(
 
                 let mut lowerer = AssignmentExpressionLowerer::new(span);
                 let target = lowerer.stabilize_non_local_target(lhs, &rhs);
+                let target = if matches!(op, AssignmentOperator::Compound(_)) {
+                    lowerer.snapshot_computed_update_dimension(target)
+                } else {
+                    target
+                };
                 let conditional_value_temp =
                     null_coalesce_assign.then(|| lowerer.reserve_value_temp());
                 let rhs = if null_coalesce_assign {
