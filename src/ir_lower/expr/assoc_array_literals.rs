@@ -100,8 +100,31 @@ pub(super) fn assoc_array_literal_type_for_ir(
     }
 }
 
+/// Maps an associative-literal value type to the representation a hash entry can hold.
+///
+/// A hash cannot store an inline `{payload, tag}` tagged scalar — value type 11 already means a
+/// PHP reference set — so such a value is boxed as Mixed, which the insertion path
+/// (`materialize_hash_mixed_value_*`) already does. Keeping the EIR value type Mixed is what
+/// keeps every consumer (reads, `isset`, iteration) consistent with the storage.
+fn assoc_hash_storage_type(ty: PhpType) -> PhpType {
+    if ty.codegen_repr() == PhpType::TaggedScalar {
+        PhpType::Mixed
+    } else {
+        ty
+    }
+}
+
 /// Returns the best EIR storage value type for one associative-array literal value.
 pub(super) fn assoc_array_literal_value_type_for_ir(
+    ctx: &LoweringContext<'_, '_>,
+    value: &Expr,
+) -> PhpType {
+    assoc_hash_storage_type(assoc_array_literal_value_type_for_ir_inner(ctx, value))
+}
+
+/// Returns the declared value type for one associative-array literal value, before the hash's
+/// storage mapping.
+fn assoc_array_literal_value_type_for_ir_inner(
     ctx: &LoweringContext<'_, '_>,
     value: &Expr,
 ) -> PhpType {
@@ -318,5 +341,5 @@ pub(super) fn nullsafe_method_call_expr_type_for_ir(
 
 /// Merges associative-array value types for EIR storage metadata.
 pub(crate) fn merge_ir_assoc_value_type(left: PhpType, right: PhpType) -> PhpType {
-    ir_array_storage_type(PhpType::widen_array_branch_element(left, right))
+    assoc_hash_storage_type(ir_array_storage_type(PhpType::widen_array_branch_element(left, right)))
 }
