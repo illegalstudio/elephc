@@ -204,6 +204,12 @@ foreach ($names as $name) {
 }
 echo "\n";
 
+// array_column with an index key re-keys the extracted column
+$scores = array_column($users, "score", "name");
+echo "Linus scored " . $scores["Linus"] . "\n";
+$byName = array_column($users, null, "name");
+echo "Grace's row has " . count($byName["Grace"]) . " fields\n";
+
 // Key sorting updates a row inside a declared array property without changing its aliases.
 class ScoreReport {
     public array $rows = ["scores" => ["Linus" => 12, "Ada" => 10]];

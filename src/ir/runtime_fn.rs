@@ -1214,18 +1214,18 @@ impl RuntimeFnId {
                     | crate::ir::Effects::MAY_THROW.bits()
                     | crate::ir::Effects::MAY_FATAL.bits(),
             ),
-            // String conversions, flip warnings and cleanup destructors may execute
-            // arbitrary PHP. Discarded calls must retain these observable effects.
-            // I/O inside those callbacks is monitored at its own runtime boundary;
-            // the join itself does not perform a network or blocking operation.
-            RuntimeFnId::Implode | RuntimeFnId::ArrayFlip => crate::ir::Effects::from_bits_retain(
+            // String conversions, flip warnings, float-key deprecations (array_column)
+            // and cleanup destructors may execute arbitrary PHP, and array_column raises
+            // TypeErrors for illegal keys. Discarded calls must retain these observable
+            // effects. I/O inside those callbacks is monitored at its own runtime boundary;
+            // the builtins themselves perform no network or blocking operation.
+            RuntimeFnId::Implode | RuntimeFnId::ArrayFlip | RuntimeFnId::ArrayColumn => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::all().bits()
                     & !crate::ir::Effects::BLOCKING_IO.bits()
                     & !crate::ir::Effects::NETWORK_IO.bits(),
             ),
             RuntimeFnId::Abs |
             RuntimeFnId::Acos |
-            RuntimeFnId::ArrayColumn |
             RuntimeFnId::ArrayCombine |
             RuntimeFnId::ArrayDiff |
             RuntimeFnId::ArrayDiffAssoc |

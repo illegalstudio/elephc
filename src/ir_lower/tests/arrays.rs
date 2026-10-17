@@ -173,6 +173,36 @@ echo readDeclaredColumn(["row" => ["id" => 23]], "id")[0];
     }
 }
 
+/// Index keys, integer columns and object rows lower to the general column walker on every
+/// target, and illegal-key error codes become TypeErrors at the call site.
+#[test]
+fn array_column_general_shapes_use_the_column_walker_on_every_target() {
+    let source = r#"<?php
+class Row { public $id = 1; }
+function keyed(mixed $key): array {
+    $rows = [["id" => 3, "n" => "a"]];
+    return array_column($rows, "n", $key);
+}
+echo count(keyed("id"));
+echo count(array_column([[1, 2]], 1));
+echo count(array_column([new Row()], null, "id"));
+echo count(array_column([["n" => "x"]], "n"));
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+        assert!(asm.contains("__rt_array_column_any"), "{target}");
+        assert!(asm.contains("__rt_array_column_str"), "{target}: the typed fast path stays");
+        assert!(asm.contains("Cannot access offset of type"), "{target}");
+        assert!(asm.contains("must be of type string|int|null"), "{target}");
+        assert!(asm.contains("__rt_hash_normalize_key"), "{target}: fast-path keys are normalized");
+    }
+}
+
 /// Declared array splice results remain boxed arrays at the caller and return boundaries.
 #[test]
 fn declared_array_splice_results_keep_the_boxed_contract_on_every_target() {
