@@ -108,6 +108,6 @@ pub fn canonical_entry_path(main_file: &str) -> Option<String> {
 /// the PHP form expressed by deleting a placeholder line.
 pub(super) fn restrict_api_warning(restricted: bool) -> Option<Stmt> {
     restricted.then(|| {
-        build::restrict_api_warning_stmt(&format!("Warning: {RESTRICT_API_WARNING_TEXT}"))
+        build::opcache_warning_stmt(&format!("Warning: {RESTRICT_API_WARNING_TEXT}"))
     })
 }

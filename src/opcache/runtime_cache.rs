@@ -59,8 +59,7 @@ pub struct RuntimeCacheConfig {
 }
 
 /// Resolves the runtime cache configuration for a compile target and SAPI.
-pub fn runtime_cache_config(
-    version_id: u32,
+pub fn runtime_cache_config(    version_id: u32,
     is_web_sapi: bool,
     overrides: &[(String, String)],
 ) -> RuntimeCacheConfig {
@@ -137,6 +136,29 @@ pub fn runtime_cache_config(
         // `-1` and a file dated an hour ahead: reference refuses it, elephc cached it.
         file_update_protection: signed("opcache.file_update_protection"),
         blacklist_filename: text("opcache.blacklist_filename"),
+    }
+}
+
+/// The accelerator channel's configuration for a compile target, with the signed
+/// `opcache.log_verbosity_level` clamped to `i32` — a value below `i32::MIN` SILENCES the channel.
+///
+/// ONE spelling of the clamp, so the compiler (`main`, `pipeline`) cannot drift; Magician's
+/// `ffi/context` applies the same rule to its raw C-ABI argument. An earlier
+/// `unwrap_or(i32::MAX)` opened the channel on underflow instead of silencing it.
+// `allow(dead_code)`: live in the `elephc` BINARY (`main`/`pipeline`), dead in the lib target,
+// whose module set does not include those callers.
+#[allow(dead_code)]
+pub(crate) fn accel_log_config(
+    version_id: u32,
+    is_web_sapi: bool,
+    overrides: &[(String, String)],
+) -> crate::opcache::accel_log::AccelLogConfig {
+    let gate = runtime_cache_config(version_id, is_web_sapi, overrides);
+    crate::opcache::accel_log::AccelLogConfig {
+        verbosity: gate
+            .log_verbosity_level
+            .clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+        error_log: gate.error_log,
     }
 }
 

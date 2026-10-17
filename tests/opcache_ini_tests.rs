@@ -1266,3 +1266,361 @@ echo 'freq_cfg=', var_export(opcache_get_configuration()['directives']['opcache.
     assert!(out.contains("freq_get='3K'"), "{out}");
     assert!(out.contains("freq_cfg=3072"), "{out}");
 }
+
+/// `bug79665.phpt`: the `zend_accel_error`-gated startup refusals at raised verbosity.
+///
+/// `opcache.memory_consumption`, `opcache.max_accelerated_files` and
+/// `opcache.max_wasted_percentage` refuse an out-of-range value through
+/// `zend_accel_error(ACCEL_LOG_WARNING, …)`, which reference PHP suppresses at the default
+/// `opcache.log_verbosity_level` of 1 and prints from 2 on. The line is the timestamped
+/// accelerator shape `<asctime> (<pid>): Warning <body>`, in directive REGISTRATION order.
+#[test]
+fn accel_startup_refusals_print_at_verbosity_two() {
+    let dir = make_test_dir("opcache_ini_accel");
+    let stderr = compile_capturing_stderr(
+        &dir,
+        "<?php echo \"ok\\n\";",
+        "accelwarn",
+        &[
+            ("opcache.memory_consumption", "7"),
+            ("opcache.max_accelerated_files", "10"),
+            ("opcache.max_wasted_percentage", "60"),
+            ("opcache.log_verbosity_level", "2"),
+        ],
+    );
+
+    let lines: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.contains("): Warning opcache."))
+        .collect();
+    assert_eq!(
+        lines.len(),
+        3,
+        "the three refusals must be logged at verbosity 2:\n{stderr}"
+    );
+    assert!(
+        lines[0].ends_with(
+            "): Warning opcache.memory_consumption is set below the required 8MB."
+        ),
+        "memory_consumption is logged first (registration order): {:?}",
+        lines[0]
+    );
+    assert!(
+        lines[1].ends_with(
+            "): Warning opcache.max_accelerated_files is set below the required minimum (200)."
+        ),
+        "{:?}",
+        lines[1]
+    );
+    assert!(
+        lines[2].ends_with(
+            "): Warning opcache.max_wasted_percentage must be set between 1 and 50."
+        ),
+        "{:?}",
+        lines[2]
+    );
+    assert!(
+        stderr.contains("opcache.memory_consumption is set below the required 8MB.\n\n"),
+        "php-src's embedded newline plus the channel's own yield a blank line after each \
+         warning:\n{stderr}"
+    );
+}
+
+/// The same out-of-range overrides at the DEFAULT verbosity 1 log nothing on the channel.
+#[test]
+fn accel_startup_refusals_are_silent_at_default_verbosity() {
+    let dir = make_test_dir("opcache_ini_accel_quiet");
+    let stderr = compile_capturing_stderr(
+        &dir,
+        "<?php echo \"ok\\n\";",
+        "accelquiet",
+        &[
+            ("opcache.memory_consumption", "7"),
+            ("opcache.max_accelerated_files", "10"),
+            ("opcache.max_wasted_percentage", "60"),
+        ],
+    );
+
+    assert!(
+        !stderr.contains("): Warning opcache."),
+        "at the default verbosity the accelerator channel is silent:\n{stderr}"
+    );
+}
+
+/// `opcache_enable_noop_001.phpt`: `ini_set('opcache.enable', …)` on an ENABLED cache.
+///
+/// Setting `1` is a silent no-op that returns the previous value; setting `0` disables the
+/// cache for the rest of the request and also returns the previous value; setting `1` again is
+/// REFUSED with php-src's `E_WARNING` and returns `false`. `ini_get()` and
+/// `opcache_get_configuration()` then report the disabled value. VERIFIED on reference PHP
+/// 8.5.10: `a='1'`, `b='1'`, `c=false`, `get='0'`, `cfg=false`.
+#[test]
+fn ini_set_opcache_enable_is_a_noop_then_disables_then_refuses() {
+    let dir = make_test_dir("opcache_enable_noop");
+    let probe = r#"<?php
+echo 'a=', var_export(ini_set('opcache.enable', 1), true), "\n";
+echo 'b=', var_export(ini_set('opcache.enable', 0), true), "\n";
+echo 'c=', var_export(ini_set('opcache.enable', 1), true), "\n";
+echo 'get=', var_export(ini_get('opcache.enable'), true), "\n";
+echo 'cfg=', var_export(opcache_get_configuration()['directives']['opcache.enable'], true), "\n";
+"#;
+    let (binary, _) = compile_with_ini(
+        &dir,
+        probe,
+        "enablenoop",
+        &[("opcache.enable", "1"), ("opcache.enable_cli", "1")],
+    );
+
+    let (out, err) = run_binary(&binary);
+    assert_eq!(out, "a='1'\nb='1'\nc=false\nget='0'\ncfg=false\n");
+    assert!(
+        err.contains(
+            "Warning: Zend OPcache can't be temporarily enabled \
+             (it may be only disabled until the end of request)"
+        ),
+        "the third call must warn:\n{err}"
+    );
+}
+
+/// `opcache_enable_noop_002.phpt`: enabling a cache that was DISABLED at compile time is refused.
+#[test]
+fn ini_set_opcache_enable_refuses_when_the_cache_started_disabled() {
+    let dir = make_test_dir("opcache_enable_disabled");
+    let probe = r#"<?php
+echo 'a=', var_export(ini_set('opcache.enable', 1), true), "\n";
+"#;
+    let (binary, _) = compile_with_ini(
+        &dir,
+        probe,
+        "enabledisabled",
+        &[("opcache.enable", "0"), ("opcache.enable_cli", "1")],
+    );
+
+    let (out, err) = run_binary(&binary);
+    assert_eq!(out, "a=false\n");
+    assert!(err.contains("can't be temporarily enabled"), "{err}");
+}
+
+/// Verifies the raw argument is stored VERBATIM on BOTH success paths, as php-src's
+/// `zend_alter_ini_entry_ex` does: a no-op and a disable leave `ini_get()` echoing what was
+/// passed, not a normalized `"0"`/`"1"`. VERIFIED on reference PHP 8.5.10.
+#[test]
+fn ini_set_opcache_enable_stores_the_raw_argument() {
+    let dir = make_test_dir("opcache_enable_raw");
+    let probe = r#"<?php
+var_dump(ini_set('opcache.enable', 'yes'));
+echo 'after_noop=', var_export(ini_get('opcache.enable'), true), "\n";
+var_dump(ini_set('opcache.enable', 'Off'));
+echo 'after_off=', var_export(ini_get('opcache.enable'), true), "\n";
+"#;
+    let (binary, _) = compile_with_ini(
+        &dir,
+        probe,
+        "enableraw",
+        &[("opcache.enable", "1"), ("opcache.enable_cli", "1")],
+    );
+
+    let (out, _) = run_binary(&binary);
+    assert_eq!(
+        out,
+        "string(1) \"1\"\nafter_noop='yes'\nstring(3) \"yes\"\nafter_off='Off'\n"
+    );
+}
+
+/// `zzz_basic_logging.phpt` (compile-time half): with the cache enabled and
+/// `opcache.log_verbosity_level >= 3`, the compiler logs `Message Cached script '<path>'` for
+/// each manifest script through the accelerator channel; at the default verbosity it logs
+/// nothing. This is the AOT analogue of php-src storing the entry script at startup.
+#[test]
+fn cached_script_is_logged_at_verbosity_three() {
+    let dir = make_test_dir("opcache_cached_log");
+    let loud = compile_capturing_stderr(
+        &dir,
+        "<?php echo \"ok\\n\";",
+        "cachedloud",
+        &[
+            ("opcache.enable_cli", "1"),
+            ("opcache.log_verbosity_level", "3"),
+        ],
+    );
+    assert!(
+        loud.contains("): Message Cached script '"),
+        "the compile-time channel must log the cached manifest script:\n{loud}"
+    );
+
+    let quiet = compile_capturing_stderr(
+        &dir,
+        "<?php echo \"ok\\n\";",
+        "cachedquiet",
+        &[("opcache.enable_cli", "1")],
+    );
+    assert!(
+        !quiet.contains("Cached script"),
+        "at the default verbosity the channel is silent:\n{quiet}"
+    );
+}
+
+/// `zzz_basic_logging.phpt` (run-time half): with the cache enabled and
+/// `opcache.log_verbosity_level >= 4`, a native `opcache_reset()` logs
+/// `Debug Restart Scheduled! Reason: user`; at verbosity 3 it does not.
+#[test]
+fn reset_logs_the_scheduled_restart_at_verbosity_four() {
+    let dir = make_test_dir("opcache_reset_log");
+    let program = "<?php\nvar_dump(opcache_reset());\n";
+
+    let (loud, _) = compile_with_ini(
+        &dir,
+        program,
+        "resetloud",
+        &[
+            ("opcache.enable_cli", "1"),
+            ("opcache.log_verbosity_level", "4"),
+        ],
+    );
+    let (out, err) = run_binary(&loud);
+    assert_eq!(out, "bool(true)\n");
+    assert!(
+        err.contains("): Debug Restart Scheduled! Reason: user"),
+        "the reset must log through the accelerator channel:\n{err}"
+    );
+
+    let (quiet, _) = compile_with_ini(
+        &dir,
+        program,
+        "resetquiet",
+        &[
+            ("opcache.enable_cli", "1"),
+            ("opcache.log_verbosity_level", "3"),
+        ],
+    );
+    let (out, err) = run_binary(&quiet);
+    assert_eq!(out, "bool(true)\n");
+    assert!(
+        !err.contains("Restart Scheduled"),
+        "verbosity 3 is below Debug, so no line:\n{err}"
+    );
+}
+
+/// R3: after a runtime `ini_set('opcache.enable', 0)`, the API functions php-src gates on the
+/// live flag answer `false`, and `opcache_get_status()` reports `opcache_enabled => false` with
+/// the `scripts` key ABSENT. `opcache_compile_file()` is deliberately not gated (reference ignores
+/// the disable there). The post-disable half is VERIFIED byte-for-byte on reference PHP 8.5.10;
+/// `opcache.file_update_protection=0` neutralizes reference's young-file window so the
+/// pre-disable `bool(true)` matches too (it cannot change elephc's compile-time manifest answer).
+#[test]
+fn api_functions_follow_a_runtime_disable() {
+    let dir = make_test_dir("opcache_runtime_disable");
+    let probe = r#"<?php
+var_dump(opcache_is_script_cached(__FILE__));
+var_dump(opcache_invalidate(__FILE__));
+var_dump(opcache_reset());
+ini_set('opcache.enable', 0);
+var_dump(opcache_is_script_cached(__FILE__));
+var_dump(opcache_invalidate(__FILE__));
+var_dump(opcache_reset());
+$s = opcache_get_status();
+echo 'enabled=', var_export($s['opcache_enabled'], true), "\n";
+echo 'has_scripts=', (isset($s['scripts']) ? '1' : '0'), "\n";
+"#;
+    let (binary, _) = compile_with_ini(
+        &dir,
+        probe,
+        "runtimedisable",
+        &[
+            ("opcache.enable", "1"),
+            ("opcache.enable_cli", "1"),
+            ("opcache.file_update_protection", "0"),
+        ],
+    );
+
+    let (out, _) = run_binary(&binary);
+    assert_eq!(
+        out,
+        "bool(true)\nbool(true)\nbool(true)\nbool(false)\nbool(false)\nbool(false)\n\
+         enabled=false\nhas_scripts=0\n"
+    );
+}
+
+/// R1: the two diagnostic families are interleaved in ONE registration-order pass, not emitted as
+/// two blocks. `opcache.memory_consumption` (registered before `opcache.jit_hot_func`) logs its
+/// timestamped accelerator line BEFORE the later directive's `Warning:`. VERIFIED on reference PHP
+/// 8.5.10 (the `-d` order is irrelevant).
+#[test]
+fn startup_diagnostics_interleave_the_two_families_end_to_end() {
+    let dir = make_test_dir("opcache_interleave");
+    let stderr = compile_capturing_stderr(
+        &dir,
+        "<?php echo \"ok\\n\";",
+        "interleave",
+        &[
+            ("opcache.jit_hot_func", "999"),
+            ("opcache.memory_consumption", "7"),
+            ("opcache.log_verbosity_level", "2"),
+        ],
+    );
+
+    let accel = stderr
+        .find("): Warning opcache.memory_consumption")
+        .expect("the accelerator line must be present");
+    let warning = stderr
+        .find("Warning: Invalid \"opcache.jit_hot_func\"")
+        .expect("the JIT range Warning: must be present");
+    assert!(
+        accel < warning,
+        "the accelerator line must precede the later directive's Warning:\n{stderr}"
+    );
+}
+
+/// R2: when `opcache.error_log` names a file, the run-time reset line is APPENDED there rather
+/// than written to stderr.
+#[test]
+fn reset_log_routes_to_the_configured_error_log() {
+    let dir = make_test_dir("opcache_reset_logfile");
+    let log_path = dir.join("accel.log").to_string_lossy().into_owned();
+    let (binary, _) = compile_with_ini(
+        &dir,
+        "<?php\nopcache_reset();\n",
+        "resetlogfile",
+        &[
+            ("opcache.enable_cli", "1"),
+            ("opcache.log_verbosity_level", "4"),
+            ("opcache.error_log", log_path.as_str()),
+        ],
+    );
+
+    let (_, err) = run_binary(&binary);
+    assert!(
+        !err.contains("Restart Scheduled"),
+        "the line must not go to stderr when error_log is set:\n{err}"
+    );
+    let written = std::fs::read_to_string(&log_path).expect("opcache.error_log must exist");
+    assert!(
+        written.contains("): Debug Restart Scheduled! Reason: user"),
+        "{written:?}"
+    );
+}
+
+/// Compiles `source` and returns the compiler's RAW stderr, for the diagnostics the
+/// `elephc_diagnostics` allow-list deliberately drops (the accelerator lines start with a
+/// timestamp, not with a `Warning: ` prefix).
+fn compile_capturing_stderr(
+    dir: &Path,
+    source: &str,
+    stem: &str,
+    ini: &[(&str, &str)],
+) -> String {
+    let php = dir.join(format!("{}.php", stem));
+    fs::write(&php, source).unwrap();
+    let mut cmd = Command::new(elephc_bin());
+    managed_pcre2::configure_host_managed_pcre2(&mut cmd, dir);
+    cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.current_dir(dir);
+    for (key, value) in ini {
+        cmd.arg("--ini").arg(format!("{key}={value}"));
+    }
+    cmd.arg(&php);
+    let output = cmd.output().expect("failed to spawn elephc");
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(output.status.success(), "elephc compile failed:\n{stderr}");
+    stderr
+}

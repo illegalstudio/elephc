@@ -67,11 +67,12 @@ pub(crate) fn php_assoc(entries: Vec<(Expr, Expr)>) -> Expr {
     e_array_assoc(entries)
 }
 
-/// The VERBATIM `E_WARNING` php-src's OPcache API guard emits when `opcache.restrict_api`
-/// denies a call, written straight to `STDERR` as `Warning: <text>`. See the parent module's
-/// `RESTRICT_API_WARNING_TEXT` for the byte-for-byte reference evidence and why this does not
-/// go through `trigger_error`.
-pub(crate) fn restrict_api_warning_stmt(text: &str) -> Stmt {
+/// A VERBATIM `E_WARNING` written straight to `STDERR` as `Warning: <text>`, for the OPcache
+/// guards php-src emits through `zend_error(E_WARNING, …)` rather than through the accelerator
+/// channel: the `opcache.restrict_api` refusal and the `ini_set('opcache.enable', …)` one. The
+/// parent module's `RESTRICT_API_WARNING_TEXT` records why this does not go through
+/// `trigger_error`.
+pub(crate) fn opcache_warning_stmt(text: &str) -> Stmt {
     s_expr(e_call(
         "fwrite",
         vec![
@@ -79,6 +80,86 @@ pub(crate) fn restrict_api_warning_stmt(text: &str) -> Stmt {
             e_binop(e_str(text), BinOp::Concat, e_str("\n")),
         ],
     ))
+}
+
+/// The accelerator diagnostic write, INLINE, for the run-time lines a pure-native binary emits:
+/// currently `opcache_reset()`'s `Debug Restart Scheduled! Reason: user`.
+///
+/// This is the PHP half of `crate::opcache::accel_log` — the same `<asctime> (<pid>): <label>
+/// <message>` shape, routed to `opcache.error_log` or stderr. It is INLINE rather than a shared
+/// helper because both the level and the `opcache.log_verbosity_level` gate are compile-time
+/// constants, so the caller has already decided whether to emit the block at all and there is
+/// nothing to gate at run time. `__elephc_opcache_asctime` is the same formatter the `scripts`
+/// map's `last_used` field uses.
+pub(crate) fn accel_log_stmts(label: &str, message: &str, error_log: &str) -> Vec<Stmt> {
+    // `asctime(time()) . " (" . getmypid() . "): <label><message>\n"`.
+    let line = e_binop(
+        e_binop(
+            e_binop(
+                e_call("__elephc_opcache_asctime", vec![e_call("time", vec![])]),
+                BinOp::Concat,
+                e_str(" ("),
+            ),
+            BinOp::Concat,
+            e_call("getmypid", vec![]),
+        ),
+        BinOp::Concat,
+        e_str(&format!("): {label}{message}\n")),
+    );
+    vec![
+        s_assign("__elephc_opcache_accel_line", line),
+        s_if(
+            or_chain(vec![
+                e_binop(e_str(error_log), BinOp::StrictEq, e_str("")),
+                e_binop(e_str(error_log), BinOp::StrictEq, e_str("stderr")),
+            ]),
+            vec![s_expr(e_call(
+                "fwrite",
+                vec![e_const("STDERR"), e_var("__elephc_opcache_accel_line")],
+            ))],
+            vec![],
+            Some(vec![
+                // php-src's `zend_accel_error` falls back to stderr when the log file cannot be
+                // opened, and `file_put_contents` returns `false` there — so reproduce the
+                // fallback, matching the Rust half (`emit_with_config`).
+                s_if(
+                    e_binop(
+                        e_call(
+                            "file_put_contents",
+                            vec![
+                                e_str(error_log),
+                                e_var("__elephc_opcache_accel_line"),
+                                e_const("FILE_APPEND"),
+                            ],
+                        ),
+                        BinOp::StrictEq,
+                        e_bool(false),
+                    ),
+                    vec![s_expr(e_call(
+                        "fwrite",
+                        vec![e_const("STDERR"), e_var("__elephc_opcache_accel_line")],
+                    ))],
+                    vec![],
+                    None,
+                ),
+            ]),
+        ),
+    ]
+}
+
+/// The "return `false`" guard the API functions php-src disables mid-request share: the
+/// compile-time gate, OR — only when `ini_set` is present — a runtime `opcache.enable` that has
+/// been turned off. `None` renders the compile-time gate alone, byte-identically to before.
+///
+/// php-src's `opcache_is_script_cached`, `opcache_invalidate` and `opcache_reset` all test
+/// `ZCG(enabled)` / `ZCG(accelerator_enabled)`, which `OnEnable`'s falsy branch zeroes; a binary
+/// whose `ini_set('opcache.enable', 0)` did so must answer `false` for the rest of the request.
+fn disabled_condition(enabled: bool, runtime_gate: Option<&Expr>) -> Expr {
+    let mut clauses = vec![e_binop(e_bool(enabled), BinOp::StrictEq, e_bool(false))];
+    if let Some(gate) = runtime_gate {
+        clauses.push(e_not(gate.clone()));
+    }
+    or_chain(clauses)
 }
 
 /// The `$path` prologue the path-taking OPcache functions share: an empty argument resolves
@@ -227,38 +308,58 @@ pub(crate) fn restricted_get_configuration_decl(configuration: Expr, warning: St
 }
 
 /// `opcache_reset()`: the compile-time enabled gate, then the one-shot restart latch.
-pub(crate) fn reset_decl(enabled: bool) -> Stmt {
+///
+/// `restart_log` is the `opcache.error_log` destination when the effective
+/// `opcache.log_verbosity_level >= 4`, so the scheduling branch also emits php-src's
+/// `Debug Restart Scheduled! Reason: user`; `None` renders byte-identically to before.
+/// `runtime_gate` is the live `opcache.enable` (see [`disabled_condition`]), which makes a reset
+/// after `ini_set('opcache.enable', 0)` answer `false`; `None` renders the compile-time gate alone.
+pub(crate) fn reset_decl(
+    enabled: bool,
+    restart_log: Option<&str>,
+    runtime_gate: Option<Expr>,
+) -> Stmt {
+    let mut body = vec![
+        s_if(
+            disabled_condition(enabled, runtime_gate.as_ref()),
+            vec![s_return(e_bool(false))],
+            vec![],
+            None,
+        ),
+        s_if(
+            e_call("__elephc_opcache_restart_pending", vec![e_bool(false)]),
+            vec![s_return(e_bool(false))],
+            vec![],
+            None,
+        ),
+        s_assign(
+            "scheduled",
+            e_call("__elephc_opcache_restart_pending", vec![e_bool(true)]),
+        ),
+        // Schedule on the RUNTIME SCRIPT CACHE as well, not just the reported latch
+        // above. Without this a natively compiled `opcache_reset()` moved what the
+        // status array says while the dynamic tier kept serving its entries — and the
+        // flush php-src performs at the next request never happened at all.
+        //
+        // The result is deliberately discarded: the once-then-false answer is the
+        // native latch's to give, and it has already been taken. In a binary with no
+        // eval bridge this whole call folds away at lowering time, leaving that latch
+        // as the entire effect, which is correct when there is no cache to restart.
+        s_expr(e_call("__elephc_opcache_rt_reset", vec![])),
+    ];
+    // php-src logs the scheduled restart from `zend_accel_schedule_restart`, which is exactly
+    // this branch. Emitted only when the effective verbosity reaches DEBUG (4).
+    if let Some(error_log) = restart_log {
+        body.extend(accel_log_stmts(
+            "Debug ",
+            "Restart Scheduled! Reason: user",
+            error_log,
+        ));
+    }
+    body.push(s_return(e_var("scheduled")));
     function("opcache_reset")
         .returns(TypeExpr::Bool)
-        .body(vec![
-            s_if(
-                e_binop(e_bool(enabled), BinOp::StrictEq, e_bool(false)),
-                vec![s_return(e_bool(false))],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_call("__elephc_opcache_restart_pending", vec![e_bool(false)]),
-                vec![s_return(e_bool(false))],
-                vec![],
-                None,
-            ),
-            s_assign(
-                "scheduled",
-                e_call("__elephc_opcache_restart_pending", vec![e_bool(true)]),
-            ),
-            // Schedule on the RUNTIME SCRIPT CACHE as well, not just the reported latch
-            // above. Without this a natively compiled `opcache_reset()` moved what the
-            // status array says while the dynamic tier kept serving its entries — and the
-            // flush php-src performs at the next request never happened at all.
-            //
-            // The result is deliberately discarded: the once-then-false answer is the
-            // native latch's to give, and it has already been taken. In a binary with no
-            // eval bridge this whole call folds away at lowering time, leaving that latch
-            // as the entire effect, which is correct when there is no cache to restart.
-            s_expr(e_call("__elephc_opcache_rt_reset", vec![])),
-            s_return(e_var("scheduled")),
-        ])
+        .body(body)
         .build()
 }
 
@@ -277,6 +378,11 @@ pub(crate) fn restricted_reset_decl(warning: Stmt) -> Stmt {
 pub(crate) struct StatusFacts {
     /// The compile-time cache-enabled gate. A restricted API forces it `false`.
     pub enabled: bool,
+    /// The live `opcache.enable` gate (present only when `ini_set` can disable the cache), used
+    /// for the `opcache_enabled` entry and the `scripts` key — both of which php-src ties to the
+    /// live flag rather than the compile-time one. `None` renders `true` / the `$include_scripts`
+    /// test alone, byte-identically to before.
+    pub runtime_gate: Option<Expr>,
     /// The `opcache.restrict_api` diagnostic, present only when the API is denied.
     pub warning: Option<Stmt>,
     /// `memory_usage.used_memory` — the baseline plus Σ per-script memory.
@@ -329,8 +435,16 @@ pub(crate) fn get_status_decl(facts: StatusFacts) -> Stmt {
     }
     gate_body.push(s_return(e_bool(false)));
 
+    // The live gate, read once. `opcache_enabled` and the `scripts` key both follow it: php-src
+    // reports `opcache_enabled = ZCG(accelerator_enabled)` and omits `scripts` when the flag is
+    // clear, which `OnEnable`'s falsy branch does mid-request.
+    let runtime_gate = facts.runtime_gate.clone();
+
     let mut status_entries = vec![
-        (e_str("opcache_enabled"), e_bool(true)),
+        (
+            e_str("opcache_enabled"),
+            runtime_gate.clone().unwrap_or_else(|| e_bool(true)),
+        ),
         // The budget latch belongs to the runtime script cache; a binary without one reports
         // `0` here and the comparison renders the same `false` this key always carried.
         (
@@ -461,8 +575,15 @@ pub(crate) fn get_status_decl(facts: StatusFacts) -> Stmt {
             preload,
         ));
     }
+    // `scripts` is attached only when the caller asked for it AND the live gate is set: php-src's
+    // `accelerator_get_scripts` short-circuits on the disabled flag, so the key is ABSENT rather
+    // than empty. `None` renders the `$include_scripts` test alone, byte-identically to before.
+    let scripts_condition = match runtime_gate {
+        Some(gate) => e_binop(e_var("include_scripts"), BinOp::And, gate),
+        None => e_var("include_scripts"),
+    };
     body.push(s_if(
-        e_var("include_scripts"),
+        scripts_condition,
         vec![s_array_assign(
             "status",
             e_str("scripts"),
@@ -689,9 +810,13 @@ fn runtime_cache_scripts_loop(revalidate_freq: Option<i64>) -> Vec<Stmt> {
 
 /// `opcache_is_script_cached($filename)`: `realpath`-normalized membership in the baked
 /// manifest, with a force-invalidated entry reporting `false`.
-pub(crate) fn is_script_cached_decl(enabled: bool, manifest_paths: Expr) -> Stmt {
+pub(crate) fn is_script_cached_decl(
+    enabled: bool,
+    runtime_gate: Option<Expr>,
+    manifest_paths: Expr,
+) -> Stmt {
     let mut body = vec![s_if(
-        e_binop(e_bool(enabled), BinOp::StrictEq, e_bool(false)),
+        disabled_condition(enabled, runtime_gate.as_ref()),
         vec![s_return(e_bool(false))],
         vec![],
         None,
@@ -760,7 +885,12 @@ pub(crate) fn restricted_is_script_cached_decl(warning: Stmt) -> Stmt {
 /// `strict` selects the `--strict-opcache` variant, whose only difference is what a FORCED call
 /// on a manifest member does: record the discard, or throw because code frozen into the binary
 /// cannot be reloaded from disk.
-pub(crate) fn invalidate_decl(enabled: bool, manifest_paths: Expr, strict: bool) -> Stmt {
+pub(crate) fn invalidate_decl(
+    enabled: bool,
+    runtime_gate: Option<Expr>,
+    manifest_paths: Expr,
+    strict: bool,
+) -> Stmt {
     let forced_action = if strict {
         s_throw(e_new(
             "RuntimeException",
@@ -783,7 +913,7 @@ pub(crate) fn invalidate_decl(enabled: bool, manifest_paths: Expr, strict: bool)
 
     let mut body = vec![
         s_if(
-            e_binop(e_bool(enabled), BinOp::StrictEq, e_bool(false)),
+            disabled_condition(enabled, runtime_gate.as_ref()),
             vec![s_return(e_bool(false))],
             vec![],
             None,
@@ -1312,9 +1442,17 @@ pub(crate) const INI_SETTABLE_DIRECTIVES: [(&str, i64, bool); 3] = [
     ("opcache.file_update_protection", 2, false),
 ];
 
+/// The wire id the bespoke `opcache.enable` `ini_set()` arm addresses.
+///
+/// It is NOT a row in [`INI_SETTABLE_DIRECTIVES`] because its semantics are not the uniform
+/// store those rows share. The number is the append-only wire contract
+/// `elephc_magician::script_cache::DIRECTIVE_ENABLE`; keep the two in step.
+pub(crate) const OPCACHE_DIRECTIVE_ENABLE: i64 = 4;
+
 /// The `ini_set(string $option, $value): string|false` wrapper.
 ///
-/// Succeeds for [`INI_SETTABLE_DIRECTIVES`] and fails for every other key. A successful
+/// Succeeds for [`INI_SETTABLE_DIRECTIVES`] and, with `OnEnable`'s bespoke no-op / disable /
+/// refuse semantics, for `opcache.enable`; it fails for every other key. A successful
 /// call does two things, and needs both to stay honest: it records the new raw string in
 /// the override store every reporting surface consults, and it installs the value on the
 /// live runtime script cache through `__elephc_opcache_rt_swap`. Moving only the report
@@ -1335,7 +1473,7 @@ pub(crate) const INI_SETTABLE_DIRECTIVES: [(&str, i64, bool); 3] = [
 /// right while the echoed string stops being a lie.
 ///
 /// The shared Core/mbstring settings are routed first, as on main (`shared_ini_prelude`); they
-/// share no name with the `opcache.*` arms, and every compiled-in `opcache.*` key still fails.
+/// share no name with the `opcache.*` arms, and every other compiled-in `opcache.*` key still fails.
 pub(crate) fn cli_ini_set_decl() -> Stmt {
     let mut body = vec![crate::shared_ini_prelude::directive(
         elephc_builtin_contract::mbstring_abi::ini::INI_SET,
@@ -1359,8 +1497,8 @@ pub(crate) fn cli_ini_set_decl() -> Stmt {
         .build()
 }
 
-/// The `ini_set()` statements that handle [`INI_SETTABLE_DIRECTIVES`], shared by the CLI
-/// wrapper and the `--web` one.
+/// The `ini_set()` statements that handle [`INI_SETTABLE_DIRECTIVES`] plus the bespoke
+/// `opcache.enable` arm, shared by the CLI wrapper and the `--web` one.
 ///
 /// ONE SOURCE OF TRUTH ON PURPOSE. The two wrappers are separate declarations — under
 /// `--web` the session-aware body owns the `ini_set` name — and letting each spell this
@@ -1423,6 +1561,73 @@ pub(crate) fn opcache_ini_set_arms() -> Vec<Stmt> {
             None,
         ));
     }
+    // `opcache.enable` is php-src's `OnEnable`, whose RUNTIME behaviour is unlike every other
+    // directive's and so gets its own arm rather than a row in [`INI_SETTABLE_DIRECTIVES`]:
+    //
+    // - a truthy value with the cache ALREADY enabled is a no-op that returns the previous
+    //   value, with no warning;
+    // - a truthy value with the cache DISABLED is REFUSED with an `E_WARNING` and returns
+    //   `false` — an OPcache cache may only be temporarily *disabled*, never re-enabled;
+    // - a falsy value disables the cache for the rest of the request.
+    //
+    // `__elephc_opcache_ini_string('opcache.enable')` is the EFFECTIVE value — an earlier
+    // `ini_set()`'s override, else the compiled one — so it doubles as the previous value this
+    // returns and as the "is it currently enabled?" test, with no baked constant threaded in.
+    //
+    // THE ARGUMENT IS STORED VERBATIM on BOTH success paths, as on every other directive:
+    // `zend_alter_ini_entry_ex` assigns the raw `new_value` to the entry whenever the handler
+    // returns SUCCESS without replacing it, and `OnEnable` never replaces it. VERIFIED on
+    // reference PHP 8.5.10: `ini_set('opcache.enable', 'Off')` then `ini_get()` answers `'Off'`,
+    // and a no-op `ini_set('opcache.enable', 'yes')` answers `'yes'`. The enabled test
+    // normalizes through `__elephc_ini_bool_val`, so `'Off'` / `'garbage'` still read disabled
+    // and `'yes'` / `'2'` still read enabled.
+    body.push(s_if(
+        e_binop(e_var("option"), BinOp::StrictEq, e_str("opcache.enable")),
+        vec![
+            s_assign(
+                "oc_previous",
+                e_call("__elephc_opcache_ini_string", vec![e_var("option")]),
+            ),
+            s_if(
+                e_call("__elephc_ini_bool_val", vec![e_var("oc_raw")]),
+                vec![
+                    s_if(
+                        e_call(
+                            "__elephc_ini_bool_val",
+                            vec![e_cast(CastType::String, e_var("oc_previous"))],
+                        ),
+                        vec![
+                            s_expr(e_call(
+                                "__elephc_opcache_ini_override",
+                                vec![e_var("option"), e_var("oc_raw"), e_int(1)],
+                            )),
+                            s_return(e_var("oc_previous")),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    opcache_warning_stmt(
+                        "Warning: Zend OPcache can't be temporarily enabled \
+                         (it may be only disabled until the end of request)",
+                    ),
+                    s_return(e_bool(false)),
+                ],
+                vec![],
+                None,
+            ),
+            s_expr(e_call(
+                "__elephc_opcache_ini_override",
+                vec![e_var("option"), e_var("oc_raw"), e_int(1)],
+            )),
+            s_expr(e_call(
+                "__elephc_opcache_rt_swap",
+                vec![e_int(OPCACHE_DIRECTIVE_ENABLE), e_int(0)],
+            )),
+            s_return(e_var("oc_previous")),
+        ],
+        vec![],
+        None,
+    ));
     body
 }
 
@@ -1491,9 +1696,10 @@ pub(crate) fn ini_helper_decls(
     };
 
     // The `ini_set()` override wins over every baked or environment-derived value, so it
-    // is consulted FIRST. An empty answer means "never set": the three settable
-    // directives are all numeric, so the empty string is a value none of them can take
-    // and is safe as the absent sentinel.
+    // is consulted FIRST. The presence probe below (`op` = 2, answered `"1"`) is the
+    // "is it set at all?" test; the empty STRING an unset key reads back is NOT a sentinel
+    // no directive can take — a stored `''` is legitimate (see the store's own doc), which
+    // is exactly why presence is probed rather than the value.
     let mut string_body: Vec<Stmt> = vec![
         s_assign(
             "overridden",
