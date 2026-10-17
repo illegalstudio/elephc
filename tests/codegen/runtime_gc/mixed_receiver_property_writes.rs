@@ -40,6 +40,115 @@ echo $t->s, "\n";
     assert_clean(out, "value39\n");
 }
 
+/// Runtime property names must retire copied-out boxed string sources.
+#[test]
+fn test_mixed_receiver_runtime_name_boxed_string_property_write_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class T { public string $s = ""; }
+function w(mixed $o, string $k, mixed $v): void { $o->$k = $v; }
+$t = new T();
+for ($i = 0; $i < 40; $i++) { w($t, "s", "v" . $i); }
+echo $t->s, "\n";
+"#);
+    assert_clean(out, "v39\n");
+}
+
+/// The guard's Stringable path must release its source after conversion.
+#[test]
+fn test_mixed_receiver_named_stringable_property_write_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Label {
+    public function __construct(private string $v) {}
+    public function __toString(): string { return $this->v; }
+}
+function m(int $i): mixed { return new Label("o" . $i); }
+class T { public string $s = ""; }
+function w(mixed $o, int $i): void { $o->s = m($i); }
+$t = new T();
+for ($i = 0; $i < 40; $i++) { w($t, $i); }
+echo $t->s, "\n";
+"#);
+    assert_clean(out, "o39\n");
+}
+
+/// Runtime-name dispatch must retire the Stringable object and its member string.
+#[test]
+fn test_mixed_receiver_runtime_name_stringable_property_write_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Label {
+    public function __construct(private string $v) { echo "new:", $v, "\n"; }
+    public function __toString(): string { return $this->v; }
+    public function __destruct() { echo "drop:", $this->v, "\n"; }
+}
+function m(int $i): mixed { return new Label("o" . $i); }
+class T { public string $s = ""; }
+function w(mixed $o, string $k, int $i): void { $o->$k = m($i); }
+$t = new T();
+for ($i = 0; $i < 3; $i++) { w($t, "s", $i); }
+echo $t->s, "\n";
+"#);
+    assert_clean(out, "new:o0\ndrop:o0\nnew:o1\ndrop:o1\nnew:o2\ndrop:o2\no2\n");
+}
+
+/// A declared-class receiver reaches the same runtime-name retirement boundary.
+#[test]
+fn test_declared_receiver_runtime_name_stringable_property_write_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Label {
+    public function __construct(private string $v) { echo "new:", $v, "\n"; }
+    public function __toString(): string { return $this->v; }
+    public function __destruct() { echo "drop:", $this->v, "\n"; }
+}
+function m(int $i): mixed { return new Label("o" . $i); }
+class T { public string $s = ""; }
+function w(T $o, string $k, int $i): void { $o->$k = m($i); }
+$t = new T();
+for ($i = 0; $i < 3; $i++) { w($t, "s", $i); }
+echo $t->s, "\n";
+"#);
+    assert_clean(out, "new:o0\ndrop:o0\nnew:o1\ndrop:o1\nnew:o2\ndrop:o2\no2\n");
+}
+
+/// Borrowed Stringable inputs remain alive and are destroyed exactly once by their owner.
+#[test]
+fn test_mixed_receiver_runtime_stringable_borrow_preserves_its_owner() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Label {
+    public function __construct(private string $v) {}
+    public function __toString(): string { return $this->v; }
+    public function __destruct() { echo "drop:", $this->v, "\n"; }
+}
+class T { public string $s = ""; }
+function w(mixed $o, string $k, mixed $v): void { $o->$k = $v; }
+$t = new T();
+$held = new Label("held");
+for ($i = 0; $i < 40; $i++) { w($t, "s", $held); }
+echo $t->s, "\n";
+unset($held);
+echo "done\n";
+"#);
+    assert_clean(out, "held\ndrop:held\ndone\n");
+}
+
+/// A temporary destructor observes the stored string, matching PHP's assignment order.
+#[test]
+fn test_mixed_receiver_runtime_stringable_destructor_observes_the_store() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class T { public string $s = "seed"; }
+class Label {
+    public function __construct(private mixed $owner) {}
+    public function __toString(): string { return "next"; }
+    public function __destruct() { echo "drop:", $this->owner->s, "\n"; }
+}
+function m(mixed $t): mixed { return new Label($t); }
+function w(mixed $o, string $k, mixed $v): void { $o->$k = $v; }
+$t = new T();
+w($t, "s", m($t));
+echo "stored:", $t->s, "\n";
+"#);
+    assert_clean(out, "drop:next\nstored:next\n");
+}
+
 /// An array property overwritten the same way, so the released previous occupant owns elements of
 /// its own.
 #[test]
@@ -142,4 +251,48 @@ echo $t->n, ":", $t->s, "\n";
 "#,
     );
     assert_clean(out, "39:value39\n");
+}
+
+/// Every runtime-name scalar arm retires adopted boxes for mixed and declared receivers.
+#[test]
+fn test_runtime_name_numeric_property_sources_are_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class T { public int $n = 0; public bool $b = false; public float $f = 0.0; }
+function box_int(int $i): mixed { return $i; }
+function box_bool(int $i): mixed { return $i % 2 === 1; }
+function box_float(int $i): mixed { return $i + 0.5; }
+function mi(mixed $o, string $k, int $i): void { $o->$k = box_int($i); }
+function mb(mixed $o, string $k, int $i): void { $o->$k = box_bool($i); }
+function mf(mixed $o, string $k, int $i): void { $o->$k = box_float($i); }
+function ti(T $o, string $k, int $i): void { $o->$k = box_int($i); }
+function tb(T $o, string $k, int $i): void { $o->$k = box_bool($i); }
+function tf(T $o, string $k, int $i): void { $o->$k = box_float($i); }
+$a = new T(); $b = new T();
+for ($i = 0; $i < 40; $i++) {
+    mi($a, "n", $i); mb($a, "b", $i); mf($a, "f", $i);
+    ti($b, "n", $i); tb($b, "b", $i); tf($b, "f", $i);
+}
+echo $a->n, ":", $a->b ? 1 : 0, ":", $a->f, "|",
+     $b->n, ":", $b->b ? 1 : 0, ":", $b->f, "\n";
+"#);
+    assert_clean(out, "39:1:39.5|39:1:39.5\n");
+}
+
+/// Receiver, runtime name and RHS execute once; null-coalescing keeps its lazy RHS.
+#[test]
+fn test_runtime_name_assignment_source_order_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class T { public int $n = 1; }
+function receiver(T $o): T { echo "o"; return $o; }
+function key_name(): string { echo "k"; return "n"; }
+function value(int $v): int { echo "v"; return $v; }
+$o = new T();
+receiver($o)->{key_name()} = value(3); echo ":", $o->n, "\n";
+receiver($o)->{key_name()} += value(2); echo ":", $o->n, "\n";
+receiver($o)->{key_name()} ??= value(99); echo ":", $o->n, "\n";
+"#);
+    assert_clean(out, r#"okv:3
+okv:5
+ok:5
+"#);
 }

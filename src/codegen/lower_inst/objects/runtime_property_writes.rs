@@ -474,6 +474,11 @@ fn emit_runtime_name_stacked_write_arm(
                 let base_reg = abi::symbol_scratch_reg(ctx.emitter);
                 abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 16);
                 emit_property_store(ctx, value, slot, base_reg)?;
+                if matches!(slot.php_type.codegen_repr(), PhpType::Str | PhpType::Int | PhpType::Float | PhpType::Bool) {
+                    // Runtime-name scalar slots keep the accepted payload, not their source box.
+                    // Publish first so a Stringable destructor observes the new field value.
+                    property_store_values::release_adopted_mixed_source(ctx, value, &slot.php_type)?;
+                }
                 abi::emit_release_temporary_stack(ctx.emitter, 32);
                 abi::emit_jump(ctx.emitter, done_label);
                 Ok(())
@@ -1374,6 +1379,11 @@ pub(super) fn lower_runtime_mixed_prop_set(
                 let base_reg = abi::symbol_scratch_reg(ctx.emitter);
                 abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 16);
                 emit_property_store(ctx, value, slot, base_reg)?;
+                if matches!(slot.php_type.codegen_repr(), PhpType::Str | PhpType::Int | PhpType::Float | PhpType::Bool) {
+                    // This runtime-name arm can adopt a box the scalar payload no longer needs.
+                    // Release after the store so temporary destructors see the new value.
+                    property_store_values::release_adopted_mixed_source(ctx, value, &slot.php_type)?;
+                }
                 abi::emit_release_temporary_stack(ctx.emitter, 32);
                 abi::emit_jump(ctx.emitter, &done_label);
             }
