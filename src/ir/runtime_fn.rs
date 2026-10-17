@@ -2634,6 +2634,13 @@ impl RuntimeFnId {
                 | RuntimeFnId::StrIreplace
                 // Repetition uses separate concat storage and cannot alias its subject.
                 | RuntimeFnId::StrRepeat
+                // `__rt_sprintf` (and `__rt_vsprintf`, which packs its array and calls it)
+                // always writes the result into `_concat_buf` and never returns a view into
+                // the format or an argument. The default `MayAliasArguments` bucket kept an
+                // owned format temporary alive: `sprintf("%." . $p . "e", $f)` leaked one
+                // block per call, which is the `var_export()` float leak of #629.
+                | RuntimeFnId::Sprintf
+                | RuntimeFnId::Vsprintf
         ) {
             BuiltinResultOwnership::Independent
         } else {
