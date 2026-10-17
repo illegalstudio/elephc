@@ -641,3 +641,144 @@ $d = [10]; pushViaRef($d); echo implode(",", $d), "\n";
         )
     );
 }
+
+/// Verifies `array_flip`, `array_fill_keys`, `array_combine`, `array_pad` and `array_chunk` accept
+/// the shapes their typed helpers cannot read, with php's keys, in a loop under `--heap-debug`.
+///
+/// Integer, boxed or mixed keys, string values, pad values of another type, associative operands
+/// and a declared `array` used to be refused at compile time; the checker now types them as the
+/// boxed PHP array and the lowering hands them to the boxed builders.
+#[test]
+fn test_key_builtins_accept_every_element_type_and_layout() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function bare(array $a): array { return $a; }
+function run(): string {
+    $out = [];
+    for ($i = 0; $i < 30; $i++) {
+        $out = [
+            json_encode(array_flip([1, "a", 2, "b" . $i])),
+            json_encode(array_flip(["x" => 1, "y" => "z"])),
+            json_encode(array_fill_keys([1, 2], "v")),
+            json_encode(array_fill_keys([1, "a", 2.5, true], $i)),
+            json_encode(array_fill_keys(bare(["p", "q"]), "v")),
+            json_encode(array_combine([5, 6], ["x", "y" . $i])),
+            json_encode(array_combine([1, "a"], ["x", 2])),
+            json_encode(array_combine(["x" => "a", "y" => "b"], ["p" => 1, "q" => 2])),
+            json_encode(array_pad([1, 2], 4, "x")),
+            json_encode(array_pad(["a"], -3, "z")),
+            json_encode(array_pad([1, "a"], 4, null)),
+            json_encode(array_pad(["k" => 1, 5 => 2], 4, 0)),
+            json_encode(array_chunk(bare([5 => "x", 9 => "y", 1 => "z"]), 2, true)),
+            json_encode(array_chunk(bare(["a" => 1, "b" => 2]), 1)),
+        ];
+    }
+    return implode("|", $out);
+}
+echo run();
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        r#"{"1":0,"a":1,"2":2,"b29":3}|{"1":"x","z":"y"}|{"1":"v","2":"v"}|{"1":29,"a":29,"2.5":29}|{"p":"v","q":"v"}|{"5":"x","6":"y29"}|{"1":"x","a":2}|{"a":1,"b":2}|[1,2,"x","x"]|["z","z","a"]|[1,"a",null,null]|{"k":1,"0":2,"1":0,"2":0}|[{"5":"x","9":"y"},{"1":"z"}]|[[1],[2]]"#,
+        "{}",
+        out.stderr
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Verifies the boxed `array_combine` / `array_fill_keys` builder copies what it keeps, lets a
+/// later duplicate key win, renders object keys with `__toString`, and raises php's `ValueError`
+/// for a length mismatch and the `__toString` exception without leaking the partial result.
+#[test]
+fn test_boxed_combine_and_fill_keys_own_their_values_and_raise_php_errors() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Tag { public function __construct(public string $n) {} public function __toString(): string { return $this->n; } }
+class Boom { public function __toString(): string { throw new RuntimeException("boom"); } }
+function bare(array $a): array { return $a; }
+function run(): string {
+    $out = [];
+    for ($i = 0; $i < 30; $i++) {
+        $s = "s" . $i;
+        $vals = [$s, "t" . $i];
+        $combined = array_combine([1, 1], $vals);
+        $vals[0] = "changed";
+        $filled = array_fill_keys(["a", "b"], $s);
+        $s = "gone";
+        try { $mismatch = json_encode(array_combine([1, 2], [1])); } catch (ValueError $e) { $mismatch = $e->getMessage(); }
+        try { $thrown = json_encode(array_fill_keys([new Boom()], 1)); } catch (RuntimeException $e) { $thrown = $e->getMessage(); }
+        $out = [
+            json_encode($combined),
+            json_encode($filled),
+            json_encode(array_fill_keys([new Tag("x"), true, null, 7, "08", "8"], [$i])),
+            json_encode(array_combine(bare(["k" => "a", "j" => "b"]), bare([[1], new Tag("v")]))),
+            $mismatch,
+            $thrown,
+        ];
+    }
+    return implode("|", $out);
+}
+echo run();
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        r#"{"1":"t29"}|{"a":"s29","b":"s29"}|{"x":[29],"1":[29],"":[29],"7":[29],"08":[29],"8":[29]}|{"a":[1],"b":{"n":"v"}}|array_combine(): Argument #1 ($keys) and argument #2 ($values) must have the same number of elements|boom"#,
+        "{}",
+        out.stderr
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Verifies the boxed `array_pad` / `array_chunk` builders: an unchanged copy when the array is
+/// long enough, renumbered integer keys around front or back padding, owned copies that outlive
+/// the source, preserved or restarted chunk keys, and both length guards' `ValueError`.
+#[test]
+fn test_boxed_pad_and_chunk_follow_php_keys_and_guards() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Tag { public function __construct(public string $n) {} }
+function bare(array $a): array { return $a; }
+function run(): string {
+    $out = [];
+    for ($i = 0; $i < 30; $i++) {
+        $s = "s" . $i;
+        $src = bare([5 => $s, "k" => [1, $i], 9 => new Tag("t")]);
+        $padded = array_pad($src, -6, "p" . $i);
+        $same = array_pad($src, 2, 0);
+        $tail = array_pad(["a" . $i], 3, [$i]);
+        $chunks = array_chunk($src, 2, true);
+        $lists = array_chunk(bare(["x" => $s, "y" => "w", "z" => 3]), 2);
+        $big = array_chunk(bare([1, 2]), 100);
+        unset($src);
+        $s = "gone";
+        try { $zero = json_encode(array_chunk(bare([1]), 0)); } catch (ValueError $e) { $zero = $e->getMessage(); }
+        try { $huge = json_encode(array_pad(bare([1]), 1073741825, 0)); } catch (ValueError $e) { $huge = $e->getMessage(); }
+        $out = [
+            json_encode($padded),
+            json_encode($same),
+            json_encode($tail),
+            json_encode($chunks),
+            json_encode($lists),
+            json_encode($big),
+            $zero,
+            $huge,
+        ];
+    }
+    return implode("|", $out);
+}
+echo run();
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        r#"{"0":"p29","1":"p29","2":"p29","3":"s29","k":[1,29],"4":{"n":"t"}}|{"5":"s29","k":[1,29],"9":{"n":"t"}}|["a29",[29],[29]]|[{"5":"s29","k":[1,29]},{"9":{"n":"t"}}]|[["s29","w"],[3]]|[[1,2]]|array_chunk(): Argument #2 ($length) must be greater than 0|array_pad(): Argument #2 ($length) must not exceed the maximum allowed array size"#,
+        "{}",
+        out.stderr
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
