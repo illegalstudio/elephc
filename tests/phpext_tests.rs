@@ -20,6 +20,9 @@ use elephc::phpext::{render_registration, PhpSdk};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
+#[path = "phpext/validation.rs"]
+mod validation;
+
 struct Project(PathBuf);
 
 impl Project {

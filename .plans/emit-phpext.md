@@ -122,7 +122,7 @@ PR [#1862](https://github.com/illegalstudio/elephc/pull/1862) now contains the C
 SDK discovery, generated handlers/arginfo, native invocation thunks, deep-copy
 transport, exception translation, guarded host callbacks and request isolation.
 Its producer-owned base mirrors #1743 at
-`9f928d6353139abf8766ffcc63e945f2c9993029`; the author's branch is unchanged.
+`f28e0a49e0db31f91433733f7595c004fce40980`; the author's branch is unchanged.
 
 The actual native thunk lives in `src/codegen_support/cdylib/phpext.rs`, sharing
 the library recovery machinery. `src/phpext/state.rs` collects the entire native
@@ -143,6 +143,22 @@ the embed library's soname. Local NTS and ZTS Valgrind checks pass with these
 fixes. Apple leak inspection pauses the signed harness after full PHP shutdown
 and inspects its live process with Zend's allocator disabled, avoiding atExit
 injection and retaining diagnostics for transport, native and host allocations.
+
+### Review follow-up
+
+The user-reported Greptile review identified three valid issues. EIR output now
+selects the producer's call-graph validator, matching check and native output.
+Source signature validation and adapter generation share one parameter-shape
+rule, so unsupported scalar unions fail before SDK discovery. The native thunk
+has the required instruction-group headings. Three SDK-independent CLI tests
+cover both failures across terminal modes and preserve nullable parameter shapes.
+
+The parent was rewritten from `9f928d6` to `f28e0a4` during this follow-up. Its
+tree delta updates consumer discovery, serialization, cache publication and tests;
+the shared value structures are unchanged. Replay only producer commits onto the
+new exact parent, update the producer-owned mirror, and rerun validation before
+returning #1862 to review. The previous six-platform run remains historical
+evidence; the rebased head requires its own CI result.
 
 ## 2. Architecture and code ownership
 

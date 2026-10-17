@@ -9,6 +9,7 @@
 //! - The C adapter contains no replacement engine symbols or Rust stack frames.
 
 use crate::{exports::ExportedFunction, parser::ast::ExprKind, types::PhpType};
+use super::signature::parameter_type;
 
 /// Renders a complete host adapter using one fixed handler for each exported function.
 pub fn render(name: &str, version: &str, exports: &[&ExportedFunction]) -> Result<String, String> {
@@ -30,7 +31,7 @@ pub fn render(name: &str, version: &str, exports: &[&ExportedFunction]) -> Resul
         for (i, (param, ty)) in sig.params.iter().enumerate() {
             let expr = sig.defaults.get(i).and_then(Option::as_ref);
             let mut default = default_text(expr)?;
-            if matches!(base_type(ty)?.0, PhpType::Float) {
+            if matches!(parameter_type(ty)?.0, PhpType::Float) {
                 if let Some(crate::parser::ast::Expr { kind: ExprKind::IntLiteral(value), .. }) = expr {
                     default = Some(format!("{:?}", *value as f64));
                 }
@@ -45,7 +46,7 @@ pub fn render(name: &str, version: &str, exports: &[&ExportedFunction]) -> Resul
             let initial = default_c(sig.defaults.get(i).and_then(Option::as_ref), &value)?;
             handlers.push_str(&format!("    {initial}\n"));
             if i == required { parse.push_str("        Z_PARAM_OPTIONAL\n"); }
-            let (base, nullable) = base_type(ty)?;
+            let (base, nullable) = parameter_type(ty)?;
             let base = &base;
             let suffix = if nullable { "_OR_NULL" } else { "" };
             if !nullable && matches!(base, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str) {
@@ -110,21 +111,6 @@ pub fn render(name: &str, version: &str, exports: &[&ExportedFunction]) -> Resul
     registration = registration.replace(&rshutdown, &format!("{rshutdown}    free(EP_GLOBAL(snapshot));\n    EP_GLOBAL(snapshot) = NULL;\n"));
     registration = registration.replace("    STANDARD_MODULE_PROPERTIES", &format!("    ZEND_MODULE_GLOBALS({ident}),\n    PHP_GINIT({ident}),\n    PHP_GSHUTDOWN({ident}),\n    NULL,\n    STANDARD_MODULE_PROPERTIES_EX"));
     Ok(registration)
-}
-
-/// Returns the nullable base accepted by Zend parameter parsing.
-fn base_type(ty: &PhpType) -> Result<(PhpType, bool), String> {
-    if ty.is_php_array() { return Ok((ty.clone(), false)); }
-    if let PhpType::Union(members) = ty {
-        let non_null = members.iter().filter(|ty| **ty != PhpType::Void).collect::<Vec<_>>();
-        if non_null.len() != members.len() {
-            if non_null.len() == 1 { return Ok((non_null[0].clone(), true)); }
-            let array = PhpType::Union(non_null.into_iter().cloned().collect());
-            if array.is_php_array() { return Ok((array, true)); }
-        }
-        return Err(format!("PHP export parameter union is not yet supported: {ty:?}"));
-    }
-    Ok((ty.clone(), false))
 }
 
 /// Encodes PHP-visible reflection types using the selected headers' type masks.

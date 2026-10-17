@@ -20,11 +20,27 @@ pub(crate) fn validate(name: &str, sig: &FunctionSig, span: Span) -> Result<(), 
             return Err(fail("typed array parameters are not supported by --emit phpext; use the PHP array type"));
         }
         if !supported(ty) { return Err(fail(&format!("unsupported parameter type {ty:?}"))); }
+        parameter_type(ty).map_err(|detail| fail(&detail))?;
     }
     if !supported(&sig.return_type) && sig.return_type != PhpType::Never {
         return Err(fail(&format!("unsupported return type {:?}", sig.return_type)));
     }
     Ok(())
+}
+
+/// Shares nullable and array parameter shapes between source validation and Zend generation.
+pub(super) fn parameter_type(ty: &PhpType) -> Result<(PhpType, bool), String> {
+    if ty.is_php_array() { return Ok((ty.clone(), false)); }
+    if let PhpType::Union(members) = ty {
+        let non_null = members.iter().filter(|ty| **ty != PhpType::Void).collect::<Vec<_>>();
+        if non_null.len() != members.len() {
+            if non_null.len() == 1 { return Ok((non_null[0].clone(), true)); }
+            let array = PhpType::Union(non_null.into_iter().cloned().collect());
+            if array.is_php_array() { return Ok((array, true)); }
+        }
+        return Err(format!("PHP export parameter union is not yet supported: {ty:?}"));
+    }
+    Ok((ty.clone(), false))
 }
 
 /// Recognizes recursively copyable types; Mixed values are checked again at runtime.

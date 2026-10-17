@@ -54,6 +54,7 @@ fn emit_export(emitter: &mut Emitter, export: &ExportedFunction, heap_debug: boo
     }.into_iter().map(|reg| { used += 8; (reg, used) }).collect::<Vec<_>>();
     let handler = boundary::align_16(used + TRY_HANDLER_SLOT_SIZE);
     let frame = boundary::align_16(handler + 16);
+    // -- preserve the host ABI and establish the contained native boundary --
     emitter.label_global(&emitter.target.extern_symbol(&export.c_name));
     abi::emit_frame_prologue(emitter, frame);
     for (reg, offset) in &preserved { abi::store_at_offset(emitter, reg, *offset); }
@@ -73,6 +74,7 @@ fn emit_export(emitter: &mut Emitter, export: &ExportedFunction, heap_debug: boo
         Arch::AArch64 => emit_boundary_push_aarch64(emitter, &escaped, handler),
         Arch::X86_64 => emit_boundary_push_x86_64(emitter, &escaped, handler),
     }
+    // -- copy transport arguments into owned native boxes and physical slots --
     for (index, ((_, ty), slots)) in export.internal_sig.params.iter()
         .take(boxes.len()).zip(&params).enumerate() {
         abi::load_at_offset(emitter, scratch, args);
@@ -102,8 +104,10 @@ fn emit_export(emitter: &mut Emitter, export: &ExportedFunction, heap_debug: boo
             }
         }
     }
+    // -- invoke the compiled function with its physical EIR signature --
     boundary::emit_prepare_hidden_collector(emitter, hidden);
     emit_call(emitter, export, &params, hidden);
+    // -- copy the owned result into independent transport storage --
     value_boxing::emit_box_current_owned_value_as_mixed(emitter, &export.internal_sig.return_type);
     abi::store_at_offset(emitter, result, saved_result);
     abi::emit_call_label(emitter, "__rt_zval_pack");
@@ -116,6 +120,7 @@ fn emit_export(emitter: &mut Emitter, export: &ExportedFunction, heap_debug: boo
     abi::emit_store_zero_to_local_slot(emitter, status);
     abi::emit_jump(emitter, &cleanup);
 
+    // -- capture native failures before releasing exception and argument owners --
     emitter.label(&escaped);
     // The internal unwinder already detached the hidden collector's cleanup record.
     abi::emit_store_zero_to_local_slot(emitter, hidden.unwrap_or(status));
@@ -133,6 +138,7 @@ fn emit_export(emitter: &mut Emitter, export: &ExportedFunction, heap_debug: boo
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
     abi::emit_call_label(emitter, "__rt_decref_any");
     abi::emit_jump(emitter, &record_error);
+    // -- defer partial native allocation cleanup to request-image rollback --
     emitter.label(&rollback);
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
     for slot in boxes.iter().copied().chain([saved_result]) {
@@ -142,6 +148,7 @@ fn emit_export(emitter: &mut Emitter, export: &ExportedFunction, heap_debug: boo
     abi::emit_load_int_immediate(emitter, result, STATUS_PHP_EXCEPTION as i64);
     abi::store_at_offset(emitter, result, status);
 
+    // -- retire call owners and restore every host callee-saved register --
     emitter.label(&cleanup);
     match emitter.target.arch {
         Arch::AArch64 => emit_boundary_pop_aarch64(emitter, handler),
@@ -160,6 +167,7 @@ fn emit_export(emitter: &mut Emitter, export: &ExportedFunction, heap_debug: boo
 
 /// Materializes physical EIR arguments, including boxed arrays and nullable scalars.
 fn emit_call(emitter: &mut Emitter, export: &ExportedFunction, params: &[Vec<usize>], hidden: Option<usize>) {
+    // -- stage scalar, string and tagged arguments in their physical shapes --
     for ((_, ty), slots) in export.internal_sig.params.iter().zip(params) {
         match ty.codegen_repr() {
             PhpType::Float => abi::load_at_offset(emitter, abi::float_result_reg(emitter), slots[0]),
@@ -180,6 +188,7 @@ fn emit_call(emitter: &mut Emitter, export: &ExportedFunction, params: &[Vec<usi
         abi::load_at_offset(emitter, abi::int_result_reg(emitter), slot);
         abi::emit_push_result_value(emitter, &PhpType::Array(Box::new(PhpType::Mixed)));
     }
+    // -- materialize the target ABI, invoke the body and release outgoing slots --
     let types = export.internal_sig.params.iter().map(|(_, ty)| ty.codegen_repr()).collect::<Vec<_>>();
     let assignments = abi::build_outgoing_arg_assignments_for_target(emitter.target, &types, 0);
     let overflow = abi::materialize_outgoing_args(emitter, &assignments);

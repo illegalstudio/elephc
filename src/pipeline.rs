@@ -783,6 +783,7 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
             &ast,
             &check_result,
             target,
+            emit,
             filename,
             web,
             ir_opt,
