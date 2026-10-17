@@ -134,3 +134,52 @@ fn phpext_validation_rejects_options_before_sdk() {
         }
     }
 }
+
+/// Keeps unused source dependencies subject to the same producer restrictions in every mode.
+#[test]
+fn phpext_validation_rejects_detected_libraries_before_sdk() {
+    let project = Project::new();
+    let source = project.0.join("libraries.php");
+    for export in ["", "#[Export] function php_ok(): int { return 1; }"] {
+        fs::write(&source, format!("<?php function unused(string $value): string {{ return hash('sha256', $value); }} {export}")).unwrap();
+        for mode in [Some("--check"), Some("--emit-ir"), None] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_elephc"));
+            command.args(["--emit", "phpext"]);
+            if let Some(mode) = mode { command.arg(mode); }
+            let output = command.arg(&source)
+                .env("ELEPHC_PHPEXT_PHP_CONFIG", project.0.join("missing-sdk"))
+                .output().unwrap();
+            let diagnostic = String::from_utf8_lossy(&output.stderr);
+            assert!(!output.status.success(), "{mode:?} accepted a detected bridge");
+            assert!(diagnostic.contains("PHP extension output currently requires the core runtime"), "{mode:?}: {diagnostic}");
+            assert!(!diagnostic.contains("query php-config"), "{mode:?}: {diagnostic}");
+        }
+    }
+}
+
+/// Rejects an installed but unused hosted extension before either check/EIR early return.
+#[test]
+fn phpext_validation_rejects_hosted_extensions_before_sdk() {
+    let project = Project::new();
+    let source = project.0.join("hosted.php");
+    fs::write(&source, "<?php #[Export] function php_ok(): int { return 1; }").unwrap();
+    let cache = project.0.join("cache");
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/php_ext/demo");
+    let installed = Command::new(env!("CARGO_BIN_EXE_elephc"))
+        .current_dir(&project.0).args(["extension", "add", "elephc_demo", "--path"])
+        .arg(fixture).env("ELEPHC_NATIVE_CACHE", &cache).output().unwrap();
+    assert!(installed.status.success(), "{}", String::from_utf8_lossy(&installed.stderr));
+    for mode in [Some("--check"), Some("--emit-ir"), None] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_elephc"));
+        command.args(["--emit", "phpext"]);
+        if let Some(mode) = mode { command.arg(mode); }
+        let output = command.arg(&source)
+            .env("ELEPHC_NATIVE_CACHE", &cache)
+            .env("ELEPHC_PHPEXT_PHP_CONFIG", project.0.join("missing-sdk"))
+            .output().unwrap();
+        let diagnostic = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{mode:?} accepted a hosted extension");
+        assert!(diagnostic.contains("PHP extension output currently requires the core runtime"), "{mode:?}: {diagnostic}");
+        assert!(!diagnostic.contains("query php-config"), "{mode:?}: {diagnostic}");
+    }
+}

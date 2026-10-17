@@ -40,6 +40,9 @@ mod output;
 
 use output::{dynamic_eval_capability_warning, output_paths, OutputPaths};
 
+/// Keeps source validation and native link rejection consistent for unsupported producer inputs.
+const PHPEXT_CORE_RUNTIME_ONLY: &str = "PHP extension output currently requires the core runtime without bridges, hosted extensions, web or process monitoring";
+
 /// Runs the full compilation pipeline from PHP source to native binary.
 /// Reads PHP source, tokenizes, parses, resolves names, type-checks, optimizes,
 /// generates assembly, and links into a native binary. Exits on any error.
@@ -97,7 +100,7 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
         || !with_crates.is_empty() || counters || gc_stats
         || instrument != crate::codegen::Instrumentation::Off) {
         crate::progress::clear();
-        eprintln!("PHP extension output currently requires the core runtime without bridges, hosted extensions, web or process monitoring");
+        eprintln!("{PHPEXT_CORE_RUNTIME_ONLY}");
         process::exit(1);
     }
     codegen::set_null_repr(null_repr);
@@ -663,6 +666,12 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
         }
     };
     timings.record_since("typecheck", phase_started);
+    // Source requirements survive declaration pruning, including those from unused functions.
+    if emit == Emit::Phpext && (hosted_php_ext.is_some() || !check_result.required_libraries.is_empty()) {
+        crate::progress::clear();
+        eprintln!("{PHPEXT_CORE_RUNTIME_ONLY}");
+        process::exit(1);
+    }
     for warning in &check_result.warnings {
         errors::report_warning(warning);
     }

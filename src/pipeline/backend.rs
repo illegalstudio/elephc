@@ -186,7 +186,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     }
 
     if emit == Emit::Phpext && (hosted_php_ext.is_some() || !planned_link_libraries.is_empty()) {
-        eprintln!("PHP extension output currently requires the core runtime without bridges, hosted extensions, web or process monitoring");
+        eprintln!("{PHPEXT_CORE_RUNTIME_ONLY}");
         process::exit(1);
     }
 
