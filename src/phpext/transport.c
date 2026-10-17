@@ -23,6 +23,7 @@ typedef struct ep_call {
     size_t output_len;
     size_t output_capacity;
     uintptr_t stack_floor;
+    zend_fiber_context *fiber_context;
     unsigned char *snapshot;
     unsigned char *checkpoint;
     bool host_exception;

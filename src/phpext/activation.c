@@ -43,6 +43,7 @@ uintptr_t elephc_php_stack_floor(void)
 
 ZEND_BEGIN_MODULE_GLOBALS(@IDENT@)
     unsigned char *snapshot;
+    ep_call *active;
 ZEND_END_MODULE_GLOBALS(@IDENT@)
 ZEND_DECLARE_MODULE_GLOBALS(@IDENT@)
 #define EP_GLOBAL(member) ZEND_MODULE_GLOBALS_ACCESSOR(@IDENT@, member)
@@ -168,9 +169,16 @@ static void ep_invoke(INTERNAL_FUNCTION_PARAMETERS, ep_native_function function,
         zend_throw_error(NULL, "elephc PHP extension request is not initialized");
         return;
     }
+    /* Request images contain pointers into parked native stacks. Only synchronous
+     * reentry on their owning host context can safely share those handler chains. */
+    if (EP_GLOBAL(active) && EP_GLOBAL(active)->fiber_context != EG(current_fiber_context)) {
+        zend_throw_error(NULL, "elephc PHP extension has an active native call on another Fiber");
+        return;
+    }
     ep_call *call = calloc(1, sizeof(ep_call));
     if (!call) { zend_throw_error(NULL, "PHP extension activation allocation failed"); return; }
     call->stack_floor = ep_stack_floor();
+    call->fiber_context = EG(current_fiber_context);
     call->snapshot = EP_GLOBAL(snapshot);
     if (!call->stack_floor) { call->error = "Cannot determine the PHP thread stack boundary"; }
     const zval **inputs = ep_alloc(call, count * sizeof(zval *));
@@ -186,9 +194,13 @@ static void ep_invoke(INTERNAL_FUNCTION_PARAMETERS, ep_native_function function,
             call->error = "PHP extension runtime lock failed";
         } else {
             memcpy(elephc_state_begin, EP_GLOBAL(snapshot), ep_state_size);
+            ep_call *parent = EP_GLOBAL(active);
+            EP_GLOBAL(active) = call;
             ep_current = call;
             function(inputs);
             ep_current = NULL;
+            /* The thunk has retired every native frame, including contained unwinds. */
+            EP_GLOBAL(active) = parent;
             /* Infrastructure failures can leave partial native imports or results. Roll back
              * the entire image; ordinary PHP exceptions keep their completed state changes. */
             if (!call->error) { memcpy(call->snapshot, elephc_state_begin, ep_state_size); }
@@ -229,6 +241,7 @@ static void ep_invoke(INTERNAL_FUNCTION_PARAMETERS, ep_native_function function,
 static PHP_GINIT_FUNCTION(@IDENT@)
 {
     @IDENT@_globals->snapshot = NULL;
+    @IDENT@_globals->active = NULL;
 }
 
 /* Also covers partial request startup that never reaches this module's RSHUTDOWN. */
@@ -236,4 +249,5 @@ static PHP_GSHUTDOWN_FUNCTION(@IDENT@)
 {
     free(@IDENT@_globals->snapshot);
     @IDENT@_globals->snapshot = NULL;
+    @IDENT@_globals->active = NULL;
 }

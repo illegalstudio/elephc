@@ -39,3 +39,11 @@ function phpext_output(string $value): string
     echo $value;
     return $value;
 }
+
+#[Export]
+function phpext_pause(string $message): void
+{
+    $values = [];
+    $missing = $values['missing'];
+    throw new RuntimeException($message, 42);
+}

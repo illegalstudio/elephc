@@ -101,28 +101,31 @@ jobs:
       - name: Check iOS library emitter contracts
         run: cargo test -p elephc --test cdylib_tests test_ios_aarch64_emit_asm_pins_string_return_out_parameters
 
+      - name: Install Valgrind for native and adapter memory checks
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y valgrind libc6-dbg
+
       - name: Cache real PHP debug embed SDK
         uses: actions/cache@v6
         with:
           path: target/phpext-test-host
-          key: phpext-embed-8.5.11-debug-${{ matrix.platform.target }}-${{ matrix.phpts }}-v1
+          key: phpext-embed-8.5.11-debug-${{ matrix.platform.target }}-${{ matrix.phpts }}-v2-fibers
 
       - name: Build real PHP debug CLI and embed SDK
         shell: bash
         run: |
           set -euo pipefail
+          flags=(--prefix target/phpext-test-host --debug)
           if [ '${{ matrix.phpts }}' = ts ]; then
-            python3 scripts/phpext/build_host.py --prefix target/phpext-test-host --debug --zts
-          else
-            python3 scripts/phpext/build_host.py --prefix target/phpext-test-host --debug
+            flags+=(--zts)
           fi
+          if [ '${{ runner.os }}' = Linux ]; then
+            flags+=(--with-valgrind)
+          fi
+          python3 scripts/phpext/build_host.py "${flags[@]}"
 
       - name: Verify repeated requests and concurrent ZTS requests in real PHP
         run: python3 scripts/phpext/test_embed.py --php-config target/phpext-test-host/bin/php-config
-
-      - name: Install Valgrind for native and adapter memory checks
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y valgrind libc6-dbg
 
       - name: Check native and adapter leaks with Valgrind
         if: runner.os == 'Linux'

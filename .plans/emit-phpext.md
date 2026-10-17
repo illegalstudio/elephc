@@ -304,6 +304,15 @@ have returned. On resumption the adapter restores the outer thread or Fiber
 stack floor. Core-only capability checks reject bridges and process-monitoring
 state until they have an explicit hosted lifecycle policy.
 
+Each request tracks the active native activation and its host Fiber context.
+Synchronous nested entry on that context is supported. Entry from another Fiber
+or the main context while an activation is parked throws a host Error before
+loading the request image. This prevents shared exception and cleanup chains
+from acquiring pointers into a different suspended C stack. Native return and
+contained unwind restore the previous activation before host result handling;
+request startup and shutdown clear the ownership record. The shared real-PHP
+Fiber driver also runs in every embed lifecycle and native leak-check job.
+
 Nested calls in the same request share persistent request state but receive
 independent activation frames, temporary owners, diagnostics, and recovery
 records. Restore the outer activation on every success and failure path.

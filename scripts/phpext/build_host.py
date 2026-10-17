@@ -19,7 +19,8 @@ SHA256 = "d9be75c08e8c316f4c8f4194d8fbe1750a15f6a6d9d4e3fe72082abeeb800360"
 def build(args):
     """Install an exclusively owned test SDK, cleaning source and partial installs on failure."""
     prefix = Path(args.prefix).resolve()
-    identity = {"version": VERSION, "sha256": SHA256, "zts": args.zts, "debug": args.debug}
+    identity = {"version": VERSION, "sha256": SHA256, "zts": args.zts, "debug": args.debug,
+                "valgrind": args.with_valgrind}
     if prefix.exists():
         marker = prefix / "elephc-test-host.json"
         if marker.is_file() and json.loads(marker.read_text()) == identity:
@@ -44,6 +45,8 @@ def build(args):
                 configure.append("--enable-zts")
             if args.debug:
                 configure.append("--enable-debug")
+            if args.with_valgrind:
+                configure.append("--with-valgrind")
             env = dict(os.environ, CFLAGS="-O1 -g")
             for name, command in [("configure", configure), ("build", ["make", f"-j{args.jobs}"]),
                                   ("install", ["make", "install"])]:
@@ -67,6 +70,7 @@ def main():
     parser.add_argument("--prefix", required=True)
     parser.add_argument("--zts", action="store_true")
     parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--with-valgrind", action="store_true")
     parser.add_argument("--jobs", type=int, default=4)
     build(parser.parse_args())
 

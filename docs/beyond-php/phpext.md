@@ -94,6 +94,13 @@ or Fiber stack boundary. A C bailout guard contains host exceptions and request
 termination until native cleanup completes. Output uses PHP's API and never
 writes directly to file descriptor 1.
 
+Synchronous reentry on the same host Fiber is supported. If an error handler
+suspends a Fiber while native frames remain active, another Fiber or the main
+context cannot enter that module until the owning call finishes. Such overlap
+throws a PHP `Error` before native execution because the shared request image
+contains pointers to the suspended native stack. Other ZTS requests retain
+their independent images and can continue while that Fiber is suspended.
+
 The initial capability policy permits the audited core value runtime and
 builtin Throwables. Transitive `exit`/`die`, eval, opaque invocation, native
 reference construction, bridges, hosted extensions, web mode and process
@@ -113,6 +120,8 @@ cargo test -p elephc --test phpext_tests -- --include-ignored
 The dedicated CI matrix covers PHP 8.5 NTS/ZTS on all three native platforms.
 It also builds a checksum-pinned real PHP debug CLI/embed SDK, executes repeated
 requests, and runs eight concurrent ZTS request threads with small stacks.
+Host Fiber tests cover suspended callbacks, rejected overlap, same-Fiber
+reentry, exception propagation, cancellation, destruction and ownership handoff.
 Valgrind on Linux and Apple's `leaks` tool check the embed lifecycle. Native
 heap pressure and Zend allocation growth are tested separately.
 

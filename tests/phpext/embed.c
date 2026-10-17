@@ -36,7 +36,8 @@ static const char request_code[] =
     "} ob_end_clean();"
     "try { phpext_recurse(100000); throw new Exception('missing native stack guard'); }"
     "catch (Error $e) { if (!str_contains($e->getMessage(), 'runtime failed')) { throw $e; } }"
-    "if (phpext_counter() !== $limit + 1) { throw new Exception('failed stack recovery'); }";
+    "if (phpext_counter() !== $limit + 1) { throw new Exception('failed stack recovery'); }"
+    "require getenv('ELEPHC_EMBED_FIBERS');";
 
 /* Each thread owns Zend globals and four complete request lifecycles. */
 static void *run_requests(void *unused)
