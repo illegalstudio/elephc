@@ -312,6 +312,9 @@ from acquiring pointers into a different suspended C stack. Native return and
 contained unwind restore the previous activation before host result handling;
 request startup and shutdown clear the ownership record. The shared real-PHP
 Fiber driver also runs in every embed lifecycle and native leak-check job.
+The warning dispatcher publishes its owning cleanup record before both native
+and host handler dispatch. A host callback exception, Fiber cancellation or
+Fiber destruction therefore releases the detached native warning buffer.
 
 Nested calls in the same request share persistent request state but receive
 independent activation frames, temporary owners, diagnostics, and recovery

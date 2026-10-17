@@ -82,8 +82,10 @@ jobs:
           php-config --vernum
           php -n -v
 
-      - name: Check SDK parsing and host build validation
-        run: 'cargo test -p elephc --lib phpext::'
+      - name: Check SDK parsing, host build and warning cleanup
+        run: |
+          cargo test -p elephc --lib phpext::
+          cargo test -p elephc --lib warning_dispatch_emits_every_supported_target
 
       - name: Check consumer ABI after sharing value-layout facts
         run: cargo test -p elephc-zend --test abi structures_have_the_layout_rust_gives_them
@@ -137,6 +139,11 @@ jobs:
 
       - name: Check standalone null declaration parsing
         run: cargo test -p elephc --test parser_tests standalone_null
+
+      - name: Check standalone warning cleanup and default output
+        run: |
+          cargo test -p elephc --test codegen_tests test_core_error_regression_ordinary_warning_unwind
+          cargo test -p elephc --test codegen_tests test_core_warning_fragments_newline_key_default_output
 
       - name: Check standalone null declarations in executable output
         run: cargo test -p elephc --test codegen_tests test_standalone_null_parameters_and_returns

@@ -45,5 +45,6 @@ function phpext_pause(string $message): void
 {
     $values = [];
     $missing = $values['missing'];
+    if ($missing !== null) { throw new RuntimeException('unexpected array value'); }
     throw new RuntimeException($message, 42);
 }
