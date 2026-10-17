@@ -553,7 +553,7 @@ fn load_json_source_string(
         }
         PhpType::Float => {
             ctx.load_value_to_result(value)?;
-            abi::emit_call_label(ctx.emitter, "__rt_ftoa");
+            abi::emit_call_label(ctx.emitter, "__rt_ftoa_coerce");
             Ok(())
         }
         PhpType::Bool => lower_bool_json_source(ctx, value),

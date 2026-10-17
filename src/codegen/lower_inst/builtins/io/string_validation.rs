@@ -23,7 +23,7 @@ pub(in crate::codegen::lower_inst) fn load_string_to_result(
         }
         PhpType::Float => {
             ctx.load_value_to_result(value)?;
-            abi::emit_call_label(ctx.emitter, "__rt_ftoa");
+            abi::emit_call_label(ctx.emitter, "__rt_ftoa_coerce");
             Ok(())
         }
         PhpType::Int => {
