@@ -15,11 +15,15 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 mod tests;
 
 pub(crate) const HEADER_SIZE: usize = 64;
+/// First occupied slot in PHP insertion order; -1 denotes an empty hash.
+pub(crate) const HEAD_OFFSET: usize = 24;
 pub(crate) const ENTRIES_OFFSET: usize = 40;
 pub(crate) const PINS_OFFSET: usize = 48;
 /// Signed next automatic integer index; i64::MIN marks an array with no integer insertions.
 pub(crate) const NEXT_INDEX_OFFSET: usize = 56;
 pub(crate) const ENTRY_SIZE: usize = 64;
+/// Next occupied slot in insertion order; -1 marks the final entry.
+pub(crate) const ENTRY_NEXT_OFFSET: usize = 56;
 
 /// Loads the owned entry-storage pointer without changing the hash header register.
 pub(crate) fn emit_entries(emitter: &mut Emitter, destination: &str, hash: &str) {

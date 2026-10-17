@@ -798,7 +798,7 @@ Deleting an entry preserves `next_index`. Growth keeps the counter in the stable
 
 Eval reconstructs an unset array as a hash, preserving integer gaps and copying exact index history after the retained entries. Its index callback returns a status without unwinding through Rust; Magician evaluates the RHS before choosing an index and schedules exhaustion through its own exception context. Zend `zval` packing and unpacking preserve the same counter in `nNextFreeElement`.
 
-The header carries the associative array's reference count and heap kind. Entry storage has raw heap kind `0`; the garbage collector reaches its PHP values through the owning header. Deep release frees keys and values, then the entry allocation, then the header. Both allocations participate in heap accounting.
+The header carries the associative array's reference count and heap kind. Entry storage has raw heap kind `0`; the garbage collector reaches its PHP values through the owning header. Deep release follows the insertion-order chain when freeing keys and values, then releases the entry allocation and the header. It snapshots the successor before a child cleanup callback runs, preserving PHP destructor order independently of physical buckets. Both allocations participate in heap accounting.
 
 `__rt_hash_pin` retains one physical root and increments `pins`. `__rt_hash_unpin` removes the pin before releasing that root, so final release uses ordinary deep cleanup and may invoke destructors. Each pin must have one matching unpin. A pin keeps the hash reachable during cycle collection without changing ordinary PHP copy-on-write decisions. New hashes and COW clones start with zero pins; growth preserves the original header's pin count.
 
