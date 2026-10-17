@@ -18,8 +18,8 @@ use std::collections::HashSet;
 
 use crate::parser::ast::{CastType, Expr, ExprKind, Stmt, StmtKind};
 use crate::types::{
-    array_key_contiguity_is_unproven, merge_array_key_types, normalized_array_key_type, PhpType,
-    TypeEnv,
+    array_key_contiguity_is_unproven, merge_array_key_types, normalized_array_key_type,
+    static_array_key_is_negative, PhpType, TypeEnv,
 };
 
 /// Source recorded for a local assignment that may affect a later loop-carried array rebind.
@@ -211,7 +211,8 @@ fn apply_array_write_evidence(
                 && array_is_still_empty
                 && !index_is_trusted_counter(index, packed_counter, foreach_keys)
                 && array_key_contiguity_is_unproven(index);
-            literal_string_key || unbounded_integer_key
+            // Fixed-point payload widening cannot turn a negative PHP key into a packed slot.
+            literal_string_key || static_array_key_is_negative(index) || unbounded_integer_key
         });
         let updated = match current {
             PhpType::Array(element) if forces_hash => {

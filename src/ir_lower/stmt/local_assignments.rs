@@ -115,7 +115,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
     if mixed_storage_site && !ctx.has_local_slot(name) {
         ctx.declare_local(name, PhpType::Mixed);
     }
-    let (lowered, php_type) = contextualize_local_assignment(ctx, name, value, lowered, span);
+    let (lowered, php_type) = contextualize_local_assignment(ctx, name, lowered, span);
     let php_type = if mixed_storage_site {
         PhpType::Mixed
     } else {
@@ -169,12 +169,12 @@ pub(super) fn closure_captures_local(value: &Expr, name: &str) -> bool {
 
 /// Coerces an assignment into the stable storage contract already known for its local.
 ///
-/// Array payload promotion applies to every RHS shape, while indexed-to-associative conversion
-/// remains limited to literals whose ordered entries can be materialized as hash pairs.
+/// Array payload promotion and indexed-to-associative conversion follow the destination's
+/// storage contract for every RHS shape. Conversion acquires borrowed array storage before
+/// consuming that owner, so the source binding remains intact.
 pub(super) fn contextualize_local_assignment(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
-    value: &Expr,
     lowered: LoweredValue,
     span: Span,
 ) -> (LoweredValue, PhpType) {
@@ -252,18 +252,10 @@ pub(super) fn contextualize_local_assignment(
         return (converted, contextual_ty);
     }
 
-    if matches!(value.kind, ExprKind::ArrayLiteral(_))
-        && matches!(source_repr, PhpType::Array(_))
+    if matches!(source_repr, PhpType::Array(_))
         && matches!(contextual_repr, PhpType::AssocArray { .. })
     {
-        let hash = ctx.emit_value(
-            Op::ArrayToHash,
-            vec![lowered.value],
-            None,
-            contextual_ty.clone(),
-            Op::ArrayToHash.default_effects(),
-            Some(span),
-        );
+        let hash = coerce_typed_assign_value(ctx, lowered, &contextual_ty, span);
         return (hash, contextual_ty);
     }
 

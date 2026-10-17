@@ -73,6 +73,16 @@ pub(crate) fn static_array_key_forces_hash_storage(expr: &Expr) -> bool {
     }
 }
 
+/// Returns whether a literal normalizes to a negative integer key, which can never be packed.
+pub(crate) fn static_array_key_is_negative(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::IntLiteral(value) => *value < 0,
+        ExprKind::FloatLiteral(value) => (*value as i64) < 0,
+        ExprKind::StringLiteral(value) => is_php_integer_array_key(value) && value.starts_with('-'),
+        _ => false,
+    }
+}
+
 /// Merges two array key types from adjacent elements into a unified key type.
 ///
 /// If both sides have the same type, returns that type. Otherwise returns `PhpType::Mixed`

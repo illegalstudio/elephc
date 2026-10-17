@@ -1334,3 +1334,125 @@ echo json_encode($a), "|", json_encode($b);
     );
     assert_eq!(out, "{\"7\":7}|{\"7\":7}");
 }
+
+/// Copied array storage preserves PHP keys, values and independent ownership.
+#[test]
+fn test_copied_array_storage_empty_negative() {
+    let out = crate::support::compile_and_run_with_heap_debug(r#"<?php
+$source = [];
+$copy = $source;
+$copy[-5] = "a";
+$copy[] = "b";
+echo json_encode($source), "|", json_encode($copy), "|", json_encode(array_keys($copy)), "\n";
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "[]|{\"-5\":\"a\",\"-4\":\"b\"}|[-5,-4]\n");
+    assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Copied array storage preserves PHP keys, values and independent ownership.
+#[test]
+fn test_copied_array_storage_empty_sparse() {
+    let out = crate::support::compile_and_run_with_heap_debug(r#"<?php
+$source = [];
+$copy = $source;
+$copy[5] = 11;
+$copy[] = 22;
+echo json_encode($source), "|", json_encode($copy), "|", json_encode(array_keys($copy)), "\n";
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "[]|{\"5\":11,\"6\":22}|[5,6]\n");
+    assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Copied array storage preserves PHP keys, values and independent ownership.
+#[test]
+fn test_copied_array_storage_populated_copy() {
+    let out = crate::support::compile_and_run_with_heap_debug(r#"<?php
+$source = ["first"];
+$copy = $source;
+$copy[-5] = "negative";
+$copy[] = "tail";
+$source[] = "source";
+echo json_encode($source), "|", json_encode($copy), "\n";
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "[\"first\",\"source\"]|{\"0\":\"first\",\"-5\":\"negative\",\"1\":\"tail\"}\n");
+    assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Copied array storage preserves PHP keys, values and independent ownership.
+#[test]
+fn test_copied_array_storage_call_result() {
+    let out = crate::support::compile_and_run_with_heap_debug(r#"<?php
+function empty_result(): array { echo "seed|"; return []; }
+$copy = empty_result();
+$copy[-5] = "a";
+$copy[] = "b";
+echo json_encode($copy), "\n";
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "seed|{\"-5\":\"a\",\"-4\":\"b\"}\n");
+    assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Copied array storage preserves PHP keys, values and independent ownership.
+#[test]
+fn test_copied_array_storage_reference_entries() {
+    let out = crate::support::compile_and_run_with_heap_debug(r#"<?php
+$source = [10];
+$value =& $source[0];
+$copy = $source;
+$copy[-5] = 20;
+$value = 30;
+$copy[] = 40;
+echo json_encode($source), "|", json_encode($copy), "\n";
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "[30]|{\"0\":30,\"-5\":20,\"1\":40}\n");
+    assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Copied array key normalization and branch storage follow PHP without leaking source owners.
+#[test]
+fn test_copied_array_storage_negative_key_coercions() {
+    let out = crate::support::compile_and_run_with_heap_debug(r#"<?php
+$source = [10];
+$numeric = $source;
+$numeric["-5"] = 20;
+$numeric[] = 30;
+$floating = $source;
+$floating[-5.0] = 40;
+$floating[] = 50;
+echo json_encode($source), "|", json_encode($numeric), "|", json_encode($floating), "\n";
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "[10]|{\"0\":10,\"-5\":20,\"1\":30}|{\"0\":10,\"-5\":40,\"1\":50}\n");
+    assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Copied array key normalization and branch storage follow PHP without leaking source owners.
+#[test]
+fn test_copied_array_storage_conditional_write() {
+    let out = crate::support::compile_and_run_with_heap_debug(r#"<?php
+function conditional_copy(bool $write): void {
+    $source = [];
+    $copy = $source;
+    if ($write) { $copy[-5] = "a"; }
+    $copy[] = "b";
+    echo json_encode($source), "|", json_encode($copy), "\n";
+}
+function run_case(): void { conditional_copy(false); conditional_copy(true); }
+run_case();
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "[]|[\"b\"]\n[]|{\"-5\":\"a\",\"-4\":\"b\"}\n");
+    assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

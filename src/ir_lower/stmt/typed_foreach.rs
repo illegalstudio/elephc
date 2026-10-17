@@ -148,7 +148,11 @@ pub(in crate::ir_lower) fn coerce_typed_assign_value(
             // `ArrayToHash` consumes its input owner. An assignment from a borrowed local must
             // preserve that local's indexed owner while producing the independent hash stored in
             // the associative destination; a fresh expression already supplies the owned input.
-            let source = if ctx.value_is_owning_temporary(value) {
+            // Concrete local loads are provisional owners until builder finalization. Their
+            // compensating release disappears, so conversion must retain a separate input.
+            let source_is_consumable = ctx.value_is_owning_temporary(value)
+                && !ctx.value_is_owned_unboxed_local_load(value.value);
+            let source = if source_is_consumable {
                 value
             } else {
                 crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))

@@ -8,6 +8,7 @@
 //! - Preserves statement ordering, CFG shape, EIR effects, and ownership contracts.
 
 use super::*;
+use crate::types::{static_array_key_forces_hash_storage, static_array_key_is_negative};
 
 /// Releases the value operand of an array/hash element write when it is an owned
 /// string. These writes PERSIST (copy) a string value into the container instead
@@ -176,9 +177,19 @@ pub(crate) fn lower_array_assign_with_diagnosed_key(
     // stops a `foreach($arr as $k=>$v) $dst[$k]=$v` rebuild from collapsing a
     // string key onto int 0. A foreach key over a concretely-indexed array is
     // known to be int-valued, so it is left on the coerce path to avoid
-    // needlessly dispatching.
-    if op == Op::ArraySet && index_value.ir_type == IrType::Str {
-        lower_string_key_array_promotion(ctx, array, array_value, index_value, value_value, span);
+    // needlessly dispatching. Negative literal keys can never name a packed slot, and an
+    // empty indexed array cannot represent a nonzero first key without filling a gap.
+    let static_key_needs_hash = static_array_key_is_negative(index)
+        || (matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(),
+            PhpType::Array(element) if is_empty_indexed_array_element(element.as_ref()))
+            && static_array_key_forces_hash_storage(index));
+    if op == Op::ArraySet && (index_value.ir_type == IrType::Str || static_key_needs_hash) {
+        if index_value.ir_type != IrType::Str {
+            index_value = coerce_array_key_to_int_at_span(
+                ctx, index_value, Some(index.span), key_already_diagnosed,
+            );
+        }
+        lower_keyed_array_promotion(ctx, array, array_value, index_value, value_value, span);
         return;
     }
     if op == Op::ArraySet
@@ -295,8 +306,8 @@ pub(super) fn coerce_buffer_set_value(
     coerced
 }
 
-/// Promotes an indexed local array to a Mixed-valued associative array for string-key writes.
-pub(super) fn lower_string_key_array_promotion(
+/// Promotes an indexed local for a key that requires associative storage.
+pub(super) fn lower_keyed_array_promotion(
     ctx: &mut LoweringContext<'_, '_>,
     array: &str,
     array_value: LoweredValue,
@@ -334,8 +345,7 @@ pub(super) fn lower_string_key_array_promotion(
 /// `implode` keep routing to the indexed path) while `Op::ArraySetMixedKey`
 /// dispatches the key tag at runtime: integer keys stay on indexed storage and
 /// string keys promote the destination to a hash. This is the Mixed-key analogue
-/// of `lower_string_key_array_promotion`, which unconditionally promotes because
-/// a literal string key is always a hash key.
+/// of `lower_keyed_array_promotion`, used when the key is known to require hash storage.
 pub(super) fn lower_mixed_key_array_set(
     ctx: &mut LoweringContext<'_, '_>,
     array: &str,
@@ -357,7 +367,7 @@ pub(super) fn lower_mixed_key_array_set(
     ctx.store_mutated_local(array, result, mixed_array_ty, Some(span));
 }
 
-/// Returns the associative type produced by a string-key write to an indexed array.
+/// Returns the associative type produced by a keyed write that cannot preserve indexed storage.
 pub(super) fn promoted_assoc_array_type(current_ty: PhpType, value_ty: PhpType) -> PhpType {
     let value_ty = normalize_array_write_element_type(value_ty.codegen_repr());
     let assoc_value_ty = match current_ty.codegen_repr() {

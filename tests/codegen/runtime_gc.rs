@@ -26,6 +26,8 @@ mod mixed_string_cast_return;
 mod object_cast;
 #[path = "runtime_gc/nullable_string_return.rs"]
 mod nullable_string_return;
+#[path = "runtime_gc/copied_array_storage.rs"]
+mod copied_array_storage;
 #[path = "runtime_gc/iconv.rs"]
 mod iconv;
 #[path = "runtime_gc/mbstring.rs"]
