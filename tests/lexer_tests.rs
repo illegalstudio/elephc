@@ -40,3 +40,10 @@ mod syntax;
 mod attributes;
 #[path = "lexer_tests/lfc.rs"]
 mod lfc;
+
+
+/// Empty PHP statements retain each semicolon token for parser placement checks.
+#[test]
+fn test_declare_related_empty_statement_tokens() {
+    assert_eq!(tokens("<?php ;;"), vec![Token::OpenTag, Token::Semicolon, Token::Semicolon, Token::Eof]);
+}

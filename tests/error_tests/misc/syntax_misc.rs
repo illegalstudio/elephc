@@ -277,3 +277,44 @@ fn test_include_path_with_function_call_errors() {
 }
 
 // --- Static closures ---
+
+
+/// Complete declare bodies do not make an intervening ordinary statement a legal prefix.
+#[test]
+fn test_error_declare_strict_types_rejects_intervening_statements() {
+    for source in [
+        "<?php declare(ticks=1) echo 0; echo 2; declare(strict_types=1);",
+        "<?php declare(ticks=1); ; declare(strict_types=1);",
+        "<?php declare(ticks=1); function before() {} declare(strict_types=1);",
+    ] { expect_error(source, "strict_types declaration must be the very first statement"); }
+}
+
+/// Strict directives nested in an earlier declare body are not top-level directives.
+#[test]
+fn test_error_declare_strict_types_rejects_nested_directives() {
+    for source in [
+        "<?php declare(ticks=1) declare(strict_types=1);",
+        "<?php declare(ticks=1) { declare(strict_types=1); }",
+        "<?php declare(ticks=1): declare(strict_types=1); enddeclare;",
+        "<?php declare(ticks=1) if (true) { declare(strict_types=1); }",
+    ] { expect_error(source, "strict_types declaration must be the very first statement"); }
+}
+
+/// Recovered declaration errors must not leak a placement allowance into nested statements.
+#[test]
+fn test_error_declare_strict_types_after_prefix_rejects_block_mode() {
+    expect_error("<?php declare(ticks=1) echo 0; declare(strict_types=1) { echo 1; }",
+        "strict_types declaration must not use block mode");
+}
+
+
+/// Supporting prior declare blocks must not admit declarations in PHP's bare statement form.
+#[test]
+fn test_error_declare_single_statement_rejects_declarations() {
+    for body in ["function before() {}", "class Before {}", "enum E { case A; }",
+        "trait T {}", "interface I {}", "const A = 1, B = 2;", "use Before;",
+        "namespace N;"] {
+        expect_error(&format!("<?php declare(ticks=1) {body}"),
+            "A declaration cannot be the single-statement body of declare");
+    }
+}

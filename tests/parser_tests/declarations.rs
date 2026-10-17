@@ -461,3 +461,41 @@ fn test_malformed_file_scope_const_declarator_lists_are_rejected() {
     assert!(parse_fails("<?php const A = 1, ;"));
     assert!(parse_fails("<?php const A = 1, B;"));
 }
+
+
+/// Every complete leading declare form can precede the strict directive.
+#[test]
+fn test_declare_strict_types_after_leading_declare_forms() {
+    for prefix in [
+        "declare(ticks=1);", "declare(ticks=1) { echo 0; }",
+        "declare(ticks=1): echo 0; enddeclare;", "declare(ticks=1) echo 0;",
+        "declare(ticks=1) declare(ticks=1) echo 0;",
+        "declare(ticks=1) declare(ticks=1);",
+        "declare(ticks=1) if (true) { echo 0; } else { echo 2; }",
+    ] {
+        let stmts = parse_source(&format!("<?php {prefix} declare(strict_types=1); echo 1;"));
+        assert_eq!(stmts.len(), 3, "{prefix}");
+        assert!(stmts[0].strict_types, "main script prefix: {prefix}");
+        assert!(stmts[2].strict_types, "main script suffix: {prefix}");
+        assert!(matches!(stmts[2].kind, StmtKind::Echo(_)));
+    }
+}
+
+/// Prefix tracking consumes each declare once, even in a long flat sequence.
+#[test]
+fn test_declare_strict_types_after_many_leading_declares() {
+    let source = format!("<?php {} declare(strict_types=1); echo 1;", "declare(ticks=1); ".repeat(128));
+    let stmts = parse_source(&source);
+    assert_eq!(stmts.len(), 130);
+    assert!(stmts.iter().all(|stmt| stmt.strict_types));
+}
+
+
+/// An ordinary empty statement is parsed but is not a leading declare directive.
+#[test]
+fn test_declare_related_empty_statements_parse_as_noops() {
+    let stmts = parse_source("<?php ; if (false); echo 1;");
+    assert!(matches!(&stmts[0].kind, StmtKind::Synthetic(body) if body.is_empty()));
+    assert!(matches!(&stmts[1].kind, StmtKind::If { then_body, .. }
+        if matches!(&then_body[0].kind, StmtKind::Synthetic(body) if body.is_empty())));
+}

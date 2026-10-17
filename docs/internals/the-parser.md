@@ -106,6 +106,14 @@ Things that have a value:
 
 ### Statements (`Stmt`)
 
+The parser also emits synthetic statement groups. Their structure can carry
+checker specializations, such as nested appends into an empty array, and
+source-map boundaries. File and namespace statement lists expose groups that
+contain declarations before function discovery. Name resolution reuses the same
+rule for transformed programs. Both stages preserve ordinary lowered groups. Flattening
+every synthetic group can change types, autovivification and source maps.
+
+
 Things that do something:
 
 Each `Stmt` also carries a source `span` and an `attributes` list. The list is populated only for declaration statements that can legally be decorated with PHP attributes; attributes before non-declaration statements are rejected during parsing.

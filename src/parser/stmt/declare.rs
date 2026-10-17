@@ -41,7 +41,7 @@ pub(super) fn parse_declare(
         "Expected ')' after declare directives",
     )?;
 
-    if strict_types.is_some() && declare_pos != 1 {
+    if strict_types.is_some() && !crate::parser::declare_context::allows_strict_types(declare_pos) {
         return Err(CompileError::new(
             span,
             "strict_types declaration must be the very first statement in the script",
@@ -56,7 +56,7 @@ pub(super) fn parse_declare(
         // Applied only once the directive has passed every placement and form check, so a
         // rejected `declare` never leaves the rest of the file typed under it.
         if let Some(enabled) = strict_types {
-            crate::source::declare_strict_types(enabled);
+            crate::source::declare_strict_types(enabled || crate::source::current_strict_types());
         }
         return Ok(Stmt::new(StmtKind::Synthetic(Vec::new()), span));
     }
@@ -77,7 +77,21 @@ pub(super) fn parse_declare(
                 "Expected a statement after declare(...)",
             ));
         }
-        _ => vec![parse_stmt(tokens, pos)?],
+        _ => {
+            let stmt = parse_stmt(tokens, pos)?;
+            let declaration = matches!(stmt.kind, StmtKind::FunctionDecl { .. }
+                | StmtKind::ClassDecl { .. } | StmtKind::TraitDecl { .. }
+                | StmtKind::InterfaceDecl { .. } | StmtKind::EnumDecl { .. }
+                | StmtKind::ConstDecl { .. } | StmtKind::NamespaceDecl { .. }
+                | StmtKind::NamespaceBlock { .. } | StmtKind::UseDecl { .. })
+                || matches!(&stmt.kind, StmtKind::Synthetic(body)
+                    if !body.is_empty() && body.iter().all(|stmt| matches!(stmt.kind, StmtKind::ConstDecl { .. })));
+            if declaration {
+                return Err(CompileError::new(stmt.span,
+                    "A declaration cannot be the single-statement body of declare"));
+            }
+            vec![stmt]
+        },
     };
 
     Ok(Stmt::new(StmtKind::Synthetic(body), span))

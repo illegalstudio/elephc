@@ -355,7 +355,15 @@ Add the explicit cast the call site means — `takesInt((int) $f)`, `takesFloat(
 
 ### Strict types
 
-A file that opens with `declare(strict_types=1);` gets PHP's strict parameter binding: a declared scalar parameter accepts only an argument of exactly that type, plus the single widening of `int` into a declared `float`. Every conversion in the tables above becomes a compile error naming the `TypeError` PHP would throw at run time.
+A file whose leading `declare` sequence enables `strict_types=1` gets PHP's strict parameter binding: a declared scalar parameter accepts only an argument of exactly that type, plus the single widening of `int` into a declared `float`. Every conversion in the tables above becomes a compile error naming the `TypeError` PHP would throw at run time.
+
+The directive may follow earlier top-level `declare` statements, including a bare
+single-statement body such as `declare(ticks=1) echo 0;`. An ordinary statement
+between declarations, or a strict directive nested inside a body, is rejected.
+The main script uses its final strict flag even for an earlier declare body;
+functions, methods and closures defined before the directive retain their original
+binding mode. A later `declare(strict_types=0)` does not clear an earlier `1`.
+
 
 | Argument type → | `int` | `float` | `string` | `bool` |
 |---|---|---|---|---|

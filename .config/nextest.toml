@@ -131,6 +131,16 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 filter = 'test(native_debug_ranges_stay_in_their_function_sections_on_all_targets)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
+# This ownership check lowers and emits an eval-bridge program for all five targets.
+# Both macOS CI attempts reached 60s without a panic; use the existing all-target budget.
+[[profile.default.overrides]]
+filter = 'binary(elephc) and test(=ir_lower::tests::call_coercion_owners::eval_class_name_results_release_bridge_cells_and_strings_on_all_targets)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'binary(elephc) and test(=ir_lower::tests::call_coercion_owners::eval_class_name_results_release_bridge_cells_and_strings_on_all_targets)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
 # This single-compile fixture force-loads the full PDO surface and static archive. Its first
 # cold run reached the 60s boundary on Linux x86_64 and macOS, while the isolated retries
 # passed, so keep the global budget unchanged and allow this exact link to finish once.

@@ -46,24 +46,13 @@ pub(crate) use assign::{parse_destructuring_pattern_unpack, starts_destructuring
 pub(crate) use namespace_use::token_as_import_name;
 pub(crate) use recovery::recover_to_statement_boundary;
 
-/// Appends one parsed statement to a file- or namespace-scope statement list.
+/// Appends one parsed statement to a file or namespace statement list.
 ///
-/// `const A = 1, B = 2;` parses to one `Synthetic` holding a `ConstDecl` per name (see
-/// `simple::parse_const_decl`). At the two scopes where PHP allows `const`, that group is spliced
-/// into the enclosing list, so every later pass sees exactly what separate `const` statements
-/// produce: the passes that collect top-level declarations, namespace symbol collection among
-/// them, only look at that level. Every other statement is appended unchanged.
+/// Declaration groups must be exposed before function discovery, including
+/// groups produced by a declare body. Ordinary lowered groups keep their shape
+/// because the checker and source-map lowering consume their boundaries.
 pub(crate) fn push_parsed_stmt(stmts: &mut Vec<Stmt>, stmt: Stmt) {
-    let is_const_list = matches!(
-        &stmt.kind,
-        StmtKind::Synthetic(body)
-            if !body.is_empty()
-                && body.iter().all(|inner| matches!(inner.kind, StmtKind::ConstDecl { .. }))
-    );
-    match stmt.kind {
-        StmtKind::Synthetic(body) if is_const_list => stmts.extend(body),
-        kind => stmts.push(Stmt { kind, ..stmt }),
-    }
+    super::declaration_groups::append_root_statement(stmts, stmt);
 }
 
 /// Parses a single PHP statement, including optional PHP 8 attribute groups.
@@ -137,6 +126,10 @@ fn parse_stmt_dispatch(
     span: Span,
 ) -> Result<Stmt, CompileError> {
     match &tokens[*pos].0 {
+        Token::Semicolon => {
+            *pos += 1;
+            Ok(Stmt::new(StmtKind::Synthetic(Vec::new()), span))
+        }
         Token::Echo => simple::parse_echo(tokens, pos, span),
         Token::Print => simple::parse_expr_stmt(tokens, pos, span),
         // `clone $o;` and PHP 8.5's `clone($o, $overrides);` are ordinary expression statements

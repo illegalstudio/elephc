@@ -18,6 +18,8 @@ mod control;
 pub mod expr;
 /// Maps tokens that may legally appear as bareword names (identifiers and semi-reserved keywords).
 mod keyword_name;
+mod declare_context;
+pub(crate) mod declaration_groups;
 pub(crate) mod stmt;
 
 pub(crate) use attributes::{consume_attribute_lists, parse_attribute_lists};
@@ -134,6 +136,7 @@ fn parse_checked_tokens(tokens: &[SpannedToken]) -> Result<Program, Vec<CompileE
     let mut pos = 0;
     let mut stmts = Vec::new();
     let mut errors = Vec::new();
+    let mut leading_declares = true;
 
     // Discard any anonymous classes left over from a previous parse that errored before draining.
     let _ = take_anonymous_classes();
@@ -154,6 +157,8 @@ fn parse_checked_tokens(tokens: &[SpannedToken]) -> Result<Program, Vec<CompileE
         if tokens[pos].0 == Token::Eof {
             break;
         }
+        let allows_strict_types = leading_declares && tokens[pos].0 == Token::Declare;
+        leading_declares = allows_strict_types;
         // Extern blocks can produce multiple stmts. Attributes on declarations
         // flow through parse_stmt below — extern is an elephc-specific block
         // that does not interact with PHP attributes.
@@ -166,7 +171,7 @@ fn parse_checked_tokens(tokens: &[SpannedToken]) -> Result<Program, Vec<CompileE
                 }
             }
         } else {
-            match stmt::parse_stmt(tokens, &mut pos) {
+            match declare_context::parse_top_level_stmt(tokens, &mut pos, allows_strict_types) {
                 Ok(stmt) => stmt::push_parsed_stmt(&mut stmts, stmt),
                 Err(error) => {
                     errors.extend(error.flatten());
@@ -181,6 +186,9 @@ fn parse_checked_tokens(tokens: &[SpannedToken]) -> Result<Program, Vec<CompileE
     stmts.append(&mut take_anonymous_classes());
 
     if errors.is_empty() {
+        if crate::source::current_strict_types() {
+            declare_context::mark_main_strict_types(&mut stmts);
+        }
         Ok(stmts)
     } else {
         Err(errors)

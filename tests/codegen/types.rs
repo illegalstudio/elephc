@@ -22,6 +22,8 @@ mod narrowing;
 mod narrowed_object_arguments;
 #[path = "types/param_coercion.rs"]
 mod param_coercion;
+#[path = "types/declare_groups.rs"]
+mod declare_groups;
 #[path = "types/strict_types.rs"]
 mod strict_types;
 #[path = "types/named_arguments/mod.rs"]
