@@ -146,3 +146,74 @@ echo count($result) . ":" . $result[0] . "," . $result[1];
     );
     assert_eq!(out, "2:first,second");
 }
+
+/// Verifies `array_search` over mixed elements, a mixed-valued hash and a bare `array`.
+///
+/// Each was refused at compile time — "array_search needle PHP type Str for indexed-array element
+/// PHP type Mixed", or "second argument must be array" for a bare `array` — although `in_array`
+/// already scanned the same shapes. The search now uses `in_array`'s boxed scan, keeping each
+/// element's key, so `$strict` is honoured at run time (`1` loosely matches `"1"` and `true`,
+/// strictly neither) and a string key comes back as a string. The loop runs inside a function so
+/// a leaked key box or result shows as live blocks at exit.
+#[test]
+fn test_array_search_over_mixed_elements_and_bare_arrays() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function show(mixed $r): string { return var_export($r, true); }
+function bare(array $a, mixed $needle): string { return show(array_search($needle, $a)); }
+function run(): string {
+    $mixedList = [3, "a", 2.5, "1", true, null];
+    $mixedMap = ["x" => 1, "y" => "b", "z" => 2.5];
+    $out = [];
+    for ($i = 0; $i < 40; $i++) {
+        $out = [
+            show(array_search("a", $mixedList)),
+            show(array_search(1, $mixedList)),
+            show(array_search(1, $mixedList, true)),
+            show(array_search("1", $mixedList, true)),
+            show(array_search(2.5, $mixedList)),
+            show(array_search("b", $mixedMap)),
+            show(array_search(2.5, $mixedMap, true)),
+            show(array_search("q", $mixedMap)),
+            bare(["k" => "v", "w" => 7], 7),
+            bare([10, 20, 30], 30),
+            bare(["s" => "t"], "nope"),
+        ];
+    }
+    return implode("|", $out);
+}
+echo run();
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "1|3|false|3|2|'y'|'z'|false|'w'|2|false", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Verifies a written `$strict` no longer leaks the haystack of `array_search` and `in_array`.
+///
+/// Evaluating a later argument roots the earlier ones, so with `$strict` written the call holds an
+/// OWNED reference to the haystack. Both builtins sat in the default "may alias its arguments"
+/// result bucket, which keeps such an operand alive, and nothing released it: one reference to the
+/// whole haystack leaked per call, on typed arrays too — `origin/main` showed 7 live blocks here.
+#[test]
+fn test_strict_array_search_and_in_array_release_their_haystack() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function run(): string {
+    $l = [10, 20, 30];
+    $m = ["x" => "a", "y" => "b"];
+    $o = "";
+    for ($i = 0; $i < 40; $i++) {
+        $o = var_export(array_search(20, $l, true), true) . var_export(array_search("b", $m, true), true)
+            . var_export(in_array(20, $l, true), true) . var_export(in_array("q", $m, true), true);
+    }
+    return $o;
+}
+echo run();
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "1'y'truefalse", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

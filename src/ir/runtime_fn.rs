@@ -2277,8 +2277,19 @@ impl RuntimeFnId {
                 // The clone override reference guard answers nothing at all: it returns or
                 // throws, so a result temporary would only keep the override array alive.
                 | RuntimeFnId::ElephcCloneOverrideReferenceGuard
+                // `in_array()` answers a bool. In the default bucket an owned haystack — which
+                // is what the call holds once `$strict` is written, because evaluating a later
+                // argument roots the earlier ones — was never released: one leaked reference
+                // to the whole haystack per call.
+                | RuntimeFnId::InArray
         ) {
             return BuiltinResultOwnership::NonHeap;
+        }
+        // `array_search()` boxes a COPY of the matching key (or false), never a view into the
+        // haystack, so an owned haystack operand can be released after the call — the same leak
+        // as `in_array()` above otherwise.
+        if matches!(self, RuntimeFnId::ArraySearch) {
+            return BuiltinResultOwnership::Fresh;
         }
         // Every other iconv entry point boxes a freshly built string, integer, or array,
         // so its result never aliases an argument.
