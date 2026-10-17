@@ -362,6 +362,12 @@ pub(super) fn check_types_impl(
                 .get(name)
                 .map(|flattened| flattened.trait_aliases.as_slice())
                 .unwrap_or(&[]);
+            // A constant an enum imports from a trait is merged into the flattened enum, so read
+            // the flattened list (its own constants plus the traits') rather than the raw AST ones.
+            let enum_constants = flattened_enums
+                .get(name)
+                .map(|flattened| flattened.constants.as_slice())
+                .unwrap_or(constants);
             if let Err(error) = build_enum_info(
                 name,
                 backing_type.as_ref(),
@@ -369,6 +375,7 @@ pub(super) fn check_types_impl(
                 implements,
                 enum_methods,
                 constants,
+                enum_constants,
                 enum_used_traits,
                 enum_trait_aliases,
                 &stmt.attributes,

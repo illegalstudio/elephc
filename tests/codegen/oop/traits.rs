@@ -181,3 +181,106 @@ echo $box->value;
     );
     assert_eq!(out, "9");
 }
+
+/// Verifies that a constant an enum imports from a trait is readable as `E::CONST` and listed by
+/// `ReflectionClass::getConstants()` after the enum's own cases and constants.
+#[test]
+fn test_enum_reads_trait_constant() {
+    let out = compile_and_run(
+        r#"<?php
+trait T { const TC = 2; function tc(): int { return self::TC; } }
+enum E: string { use T; case A = "a"; const X = 1; }
+echo E::TC, "|", E::X, "|", E::A->value, "|", E::A->tc(), "\n";
+echo implode(",", array_keys((new ReflectionClass("E"))->getConstants())), "\n";
+"#,
+    );
+    assert_eq!(out, "2|1|a|2\nA,X,TC\n");
+}
+
+/// Trait self receivers keep the consuming enum in global, function and class callers.
+#[test]
+fn test_enum_trait_constants_lexical_all() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+trait T { public const A = 1; public const B = self::A + 1; public const N = self::class; }
+enum E { use T; case One; }
+echo E::B, ":", E::N, "|";
+function readE() { echo E::B, ":", E::N, "|"; }
+readE();
+class C {
+ const A = 99;
+ static function readE() {
+  echo E::B, ":", E::N, "\n";
+ }
+}
+C::readE();
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "2:E|2:E|2:E\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Nested traits bind independently to each namespaced consuming enum.
+#[test]
+fn test_enum_trait_constants_namespaced_nested() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+namespace Example;
+trait BaseT { const B = self::A + 1; const N = self::class; }
+trait T { use BaseT; }
+enum E { use T; case One; const A = 1; }
+enum F: string { use T; case One = "one"; const A = 7; }
+class C { const A = 99; static function read() {
+ echo E::B, ":", E::N, "|", F::B, ":", F::N, "\n";
+} }
+C::read();
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "2:Example\\E|8:Example\\F\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Enum cases and trait constants keep PHP case-sensitive member names.
+#[test]
+fn test_enum_trait_constants_case_sensitive() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+trait T { const a = 1; }
+enum E { use T; case A; }
+echo E::a, "\n";
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "1\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Direct enum constants retain the enum scope when read from another class.
+#[test]
+fn test_enum_trait_constants_own_lexical() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+enum E { case One; const A = 1; const B = self::A + 1; const N = self::class; }
+class C { const A = 99; static function readE() { echo E::B, ":", E::N, "\n"; } }
+C::readE();
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "2:E\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Direct and reflected reads agree about the enum scope from a different caller class.
+#[test]
+fn test_enum_trait_constants_reflection_matches_direct_read() {
+    let out = compile_and_run_capture(r#"<?php
+trait T { public const A = 1; public const B = self::A + 1; public const N = self::class; }
+enum E { use T; case One; }
+class C {
+ const A = 99;
+ static function readE() {
+  echo E::B, ":", E::N, "|";
+  $r = new ReflectionClass(E::class);
+  echo $r->getConstant("B"), ":", $r->getConstant("N"), "\n";
+ }
+}
+C::readE();
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "2:E|2:E\n");
+    // The equivalent reviewed baseline has the same independent Reflection context retention.
+}

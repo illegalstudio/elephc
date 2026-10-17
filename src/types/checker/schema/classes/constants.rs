@@ -4,6 +4,7 @@
 //!
 //! Called from:
 //! - `crate::types::checker::schema::classes::state::ClassBuildState::into_class_info()`
+//! - Enum metadata construction for its own and trait-imported constants.
 //!
 //! Key details:
 //! - Class constant values are later re-inferred and emitted outside the declaring class scope.
@@ -29,6 +30,14 @@ pub(super) fn resolve_lexical_class_constant_value(
     class: &FlattenedClass,
 ) -> Result<Expr, CompileError> {
     rewrite_expr(value, &class.name, class.extends.as_deref())
+}
+
+/// Binds enum constant receivers to the consuming enum, which cannot have a parent.
+pub(in crate::types::checker::schema) fn resolve_lexical_enum_constant_value(
+    value: &Expr,
+    enum_name: &str,
+) -> Result<Expr, CompileError> {
+    rewrite_expr(value, enum_name, None)
 }
 
 /// Recursively rewrites all expressions in a class-constant value, resolving lexical

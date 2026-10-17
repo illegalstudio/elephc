@@ -16,7 +16,9 @@ use crate::parser::ast::{ClassMethod, ExprKind, Visibility};
 use crate::types::{ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo, FunctionSig, PhpType};
 
 use super::super::Checker;
-use super::classes::{collect_attribute_args, collect_attribute_names};
+use super::classes::{
+    collect_attribute_args, collect_attribute_names, resolve_lexical_enum_constant_value,
+};
 use super::validation::build_method_sig;
 
 /// Propagates concrete return types from overrides to their abstract parent declarations.
@@ -101,6 +103,11 @@ pub(crate) fn propagate_abstract_return_types(checker: &mut Checker) {
 /// - `name`: enum identifier
 /// - `backing_type`: optional `TypeExpr` for backed enums
 /// - `cases`: parsed enum case declarations
+/// - `implements`: interfaces the enum declares
+/// - `user_methods`: the enum's own declared methods
+/// - `user_constants`: the enum's own declared constants, interleaved with `cases` by source span
+/// - `merged_constants`: the enum's own constants plus those imported from used traits, used for
+///   the constant values and reflection metadata
 /// - `span`: source location for error reporting
 /// - `is_internal`: whether compiler-generated source declared the enum (`ClassInfo::is_internal`)
 /// - `used_traits` / `trait_aliases`: flattened direct enum trait-use metadata
@@ -122,6 +129,7 @@ pub(crate) fn build_enum_info(
     implements: &[crate::names::Name],
     user_methods: &[crate::parser::ast::ClassMethod],
     user_constants: &[crate::parser::ast::ClassConst],
+    merged_constants: &[crate::parser::ast::ClassConst],
     used_traits: &[String],
     trait_aliases: &[(String, String)],
     attributes: &[crate::parser::ast::AttributeGroup],
@@ -243,7 +251,7 @@ pub(crate) fn build_enum_info(
         enum_cases,
         implements,
         user_methods,
-        user_constants,
+        merged_constants,
         used_traits,
         trait_aliases,
         span,
@@ -253,15 +261,22 @@ pub(crate) fn build_enum_info(
     )?;
     // PHP keeps cases and constants in one table, in declaration order: `case B; const X;
     // case A;` reflects as B, X, A. The parser keeps them in two lists, so their source spans
-    // are what interleaves them back.
+    // are what interleaves them back. Constants merged in from a trait are appended afterwards,
+    // after the enum's own members.
     let mut declared: Vec<(crate::span::Span, String)> = cases
         .iter()
         .map(|case| (case.span, case.name.clone()))
         .chain(user_constants.iter().map(|constant| (constant.span, constant.name.clone())))
         .collect();
     declared.sort_by_key(|(span, _)| (span.line, span.col));
+    let mut order: Vec<String> = declared.into_iter().map(|(_, name)| name).collect();
+    for constant in merged_constants {
+        if !order.contains(&constant.name) {
+            order.push(constant.name.clone());
+        }
+    }
     if let Some(class_info) = checker.classes.get_mut(name) {
-        class_info.constant_order = declared.into_iter().map(|(_, name)| name).collect();
+        class_info.constant_order = order;
         // The declaration's own attributes (`#[A] enum E {}`), which `ReflectionEnum` and
         // `ReflectionClass` report like a class's.
         class_info.attribute_names = collect_attribute_names(attributes);
@@ -463,8 +478,9 @@ pub(crate) fn insert_enum_metadata(
         method_decls.push(method);
     }
 
-    // User-declared enum constants. Values are kept as their parsed expressions, matching the
-    // class-constant representation.
+    // Enum constants (the declaration's own, plus any trait-imported ones when this is reached
+    // through `build_enum_info`). Bind their lexical receivers before later reads re-infer
+    // the expressions in a function, global scope, or another class.
     let mut constants = HashMap::new();
     let mut constant_types = HashMap::new();
     let mut constant_visibilities = HashMap::new();
@@ -472,7 +488,10 @@ pub(crate) fn insert_enum_metadata(
     let mut constant_attribute_names = HashMap::new();
     let mut constant_attribute_args = HashMap::new();
     for constant in user_constants {
-        constants.insert(constant.name.clone(), constant.value.clone());
+        constants.insert(
+            constant.name.clone(),
+            resolve_lexical_enum_constant_value(&constant.value, name)?,
+        );
         if let Some(type_expr) = &constant.type_expr {
             constant_types.insert(
                 constant.name.clone(),

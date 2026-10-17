@@ -241,6 +241,7 @@ pub fn flatten_classes(
             StmtKind::EnumDecl {
                 name,
                 implements,
+                cases,
                 trait_uses,
                 methods,
                 constants,
@@ -267,6 +268,12 @@ pub fn flatten_classes(
                             continue;
                         }
                     };
+                if let Err(error) = validation::validate_enum_constant_case_collisions(
+                    name, cases, constants, trait_uses, &cache,
+                ) {
+                    errors.extend(error.flatten());
+                    continue;
+                }
                 if let Some(property) = imported_props.first() {
                     errors.push(CompileError::new(
                         property.span,

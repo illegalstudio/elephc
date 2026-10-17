@@ -285,6 +285,8 @@ mod type_system;
 mod reference_detach;
 #[path = "error_tests/exceptions_enums_magic.rs"]
 mod exceptions_enums_magic;
+#[path = "error_tests/enum_trait_constants.rs"]
+mod enum_trait_constants;
 #[path = "error_tests/classes_traits.rs"]
 mod classes_traits;
 #[path = "error_tests/generics_review.rs"]
