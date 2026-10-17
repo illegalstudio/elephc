@@ -589,6 +589,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`fdiv()`](./builtins/math/fdiv.md) | `(float $num1, float $num2): float` | `float` | ✓ | ✓ |
 | [`floor()`](./builtins/math/floor.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`fmod()`](./builtins/math/fmod.md) | `(float $num1, float $num2): float` | `float` | ✓ | ✓ |
+| [`getrandmax()`](./builtins/math/getrandmax.md) | `(): int` | `int` | ✓ | ✓ |
 | [`hexdec()`](./builtins/math/hexdec.md) | `(string $hex_string): mixed` | `mixed` | ✓ | - |
 | [`hypot()`](./builtins/math/hypot.md) | `(float $x, float $y): float` | `float` | ✓ | ✓ |
 | [`intdiv()`](./builtins/math/intdiv.md) | `(int $num1, int $num2): int` | `int` | ✓ | ✓ |
@@ -600,7 +601,9 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`log2()`](./builtins/math/log2.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`max()`](./builtins/math/max.md) | `(mixed $value, ...$values): mixed` | `mixed` | ✓ | ✓ |
 | [`min()`](./builtins/math/min.md) | `(mixed $value, ...$values): mixed` | `mixed` | ✓ | ✓ |
+| [`mt_getrandmax()`](./builtins/math/mt_getrandmax.md) | `(): int` | `int` | ✓ | ✓ |
 | [`mt_rand()`](./builtins/math/mt_rand.md) | `(int $min, int $max): int` | `int` | ✓ | ✓ |
+| [`mt_srand()`](./builtins/math/mt_srand.md) | `(?int $seed = null, int $mode = MT_RAND_MT19937): void` | `void` | ✓ | ✓ |
 | [`octdec()`](./builtins/math/octdec.md) | `(string $octal_string): mixed` | `mixed` | ✓ | - |
 | [`pi()`](./builtins/math/pi.md) | `(): float` | `float` | ✓ | ✓ |
 | [`pow()`](./builtins/math/pow.md) | `(float $num, float $exponent): float` | `float` | ✓ | ✓ |
@@ -611,6 +614,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`sin()`](./builtins/math/sin.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`sinh()`](./builtins/math/sinh.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`sqrt()`](./builtins/math/sqrt.md) | `(float $num): float` | `float` | ✓ | ✓ |
+| [`srand()`](./builtins/math/srand.md) | `(?int $seed = null, int $mode = MT_RAND_MT19937): void` | `void` | ✓ | ✓ |
 | [`tan()`](./builtins/math/tan.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`tanh()`](./builtins/math/tanh.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`clone()`](./builtins/misc/clone.md) | `(object $object, array $withProperties = []): object` | `object` | ✓ | ✓ |

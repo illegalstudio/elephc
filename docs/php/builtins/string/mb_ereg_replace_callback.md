@@ -2,7 +2,7 @@
 title: "mb_ereg_replace_callback()"
 description: "Replaces multibyte regex matches with the string result of a callback receiving all captures."
 sidebar:
-  order: 844
+  order: 848
 ---
 
 ## mb_ereg_replace_callback()

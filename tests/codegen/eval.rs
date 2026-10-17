@@ -6655,6 +6655,20 @@ echo function_exists("array_rand");');
     assert_eq!(out, "idx:assoc:named:call:spread:1");
 }
 
+/// Verifies `mt_srand()` seeds eval's own Mersenne Twister so eval `mt_rand()` / `rand()` return
+/// php's sequence, and that the seeding builtins exist there.
+#[test]
+fn test_eval_mt_srand_reproduces_php_sequences() {
+    let out = compile_and_run(
+        r#"<?php
+eval('mt_srand(42); echo mt_rand(), ",", mt_rand(1, 100), ",", rand(), ",", rand(10, 1), ",";
+srand(7); echo mt_rand(), ",", mt_getrandmax(), ",", getrandmax(), ",";
+echo function_exists("mt_srand") ? 1 : 0, function_exists("srand") ? 1 : 0;');
+"#,
+    );
+    assert_eq!(out, "804318771,68,2041643438,5,163870807,2147483647,2147483647,11");
+}
+
 /// Verifies eval random builtins produce values in their PHP-visible ranges.
 #[test]
 fn test_eval_dispatches_rand_builtin_calls() {

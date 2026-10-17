@@ -2,7 +2,7 @@
 title: "is_double() - internals"
 description: "Compiler internals for is_double(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 960
+  order: 964
 ---
 
 ## `is_double()` - internals

@@ -195,6 +195,10 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Pi,
     /// Dispatches `mt_rand(...)`.
     MtRand,
+    MtSrand,
+    Srand,
+    MtGetrandmax,
+    Getrandmax,
     /// Dispatches `quotemeta(...)`.
     QuoteMeta,
     /// Dispatches `quoted_printable_encode(...)`.
@@ -440,6 +444,10 @@ impl EvalDirectHook {
             Self::Max => eval_builtin_max(args, context, scope, values),
             Self::Min => eval_builtin_min(args, context, scope, values),
             Self::MtRand => eval_builtin_mt_rand(args, context, scope, values),
+            Self::MtSrand => eval_builtin_mt_srand(args, context, scope, values),
+            Self::Srand => eval_builtin_srand(args, context, scope, values),
+            Self::MtGetrandmax => eval_builtin_mt_getrandmax(args, values),
+            Self::Getrandmax => eval_builtin_getrandmax(args, values),
             Self::NetworkEnv => eval_builtin_network_env_call(name, args, context, scope, values),
             Self::Pcntl => eval_builtin_pcntl_expr_call(name, args, context, scope, values),
             Self::Xml => eval_builtin_xml_expr_call(name, args, context, scope, values),

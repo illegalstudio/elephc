@@ -148,6 +148,12 @@ pub(super) fn lower(
         RuntimeFnId::MtRand => Some({
             crate::codegen::lower_inst::builtins::math::lower_rand(ctx, inst, "mt_rand")
         }),
+        RuntimeFnId::MtSrand | RuntimeFnId::Srand => Some({
+            crate::codegen::lower_inst::builtins::math::lower_mt_srand(ctx, inst)
+        }),
+        RuntimeFnId::MtGetrandmax | RuntimeFnId::Getrandmax => Some({
+            crate::codegen::lower_inst::builtins::math::lower_getrandmax(ctx, inst)
+        }),
         RuntimeFnId::Pi => Some({
             crate::codegen::lower_inst::builtins::math::lower_pi(ctx, inst)
         }),

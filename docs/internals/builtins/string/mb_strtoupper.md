@@ -2,7 +2,7 @@
 title: "mb_strtoupper() - internals"
 description: "Compiler internals for mb_strtoupper(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 886
+  order: 890
 ---
 
 ## `mb_strtoupper()` - internals

@@ -2,7 +2,7 @@
 title: "strpos()"
 description: "Finds the numeric position of the first occurrence of a substring."
 sidebar:
-  order: 927
+  order: 931
 ---
 
 ## strpos()

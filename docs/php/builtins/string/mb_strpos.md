@@ -2,7 +2,7 @@
 title: "mb_strpos()"
 description: "Finds the first character position of an encoded substring, or returns false."
 sidebar:
-  order: 879
+  order: 883
 ---
 
 ## mb_strpos()

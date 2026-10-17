@@ -2,7 +2,7 @@
 title: "printf() - internals"
 description: "Compiler internals for printf(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 902
+  order: 906
 ---
 
 ## `printf()` - internals

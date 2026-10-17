@@ -2,7 +2,7 @@
 title: "session_create_id() - internals"
 description: "Compiler internals for session_create_id(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 984
+  order: 988
 ---
 
 ## `session_create_id()` - internals

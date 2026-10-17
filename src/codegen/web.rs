@@ -114,6 +114,7 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     super::enum_singletons::emit_enum_slot_resets(emitter, module);
 
     emit_concat_offset_reset(emitter);
+    emit_mt_seed_reset(emitter);
     emit_core_handler_reset(emitter);
     abi::emit_call_label(emitter, "__rt_resource_inventory_reset");
     abi::emit_call_label(emitter, "__rt_diag_reset");
@@ -396,4 +397,11 @@ fn emit_branch_if_equals_sentinel(emitter: &mut Emitter, label: &str) {
 fn emit_concat_offset_reset(emitter: &mut Emitter) {
     emitter.comment("reset the concat-buffer write offset for the next request");
     abi::emit_store_zero_to_symbol(emitter, "_concat_off", 0);
+}
+
+/// Forgets a request's `mt_srand()`: php's seeding state is a request global, so the next
+/// request draws from a freshly seeded engine (here, the CSPRNG) until it seeds again.
+fn emit_mt_seed_reset(emitter: &mut Emitter) {
+    emitter.comment("forget the request's mt_srand() seed");
+    abi::emit_store_zero_to_symbol(emitter, "_mt_mode", 0);
 }
