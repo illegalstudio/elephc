@@ -362,6 +362,12 @@ impl Emitter {
     /// Emit `bl _func` (macOS) or `bl func` (Linux) for C library calls.
     pub fn bl_c(&mut self, func: &str) {
         match (self.platform, self.target.arch) {
+            // Darwin's `setjmp` saves the signal mask, two system calls on every `try` and
+            // protected destructor; `_setjmp` does not, which is glibc's `setjmp`. Every jump
+            // buffer is filled and consumed here, so `longjmp` follows.
+            (Platform::MacOS, Arch::AArch64) if matches!(func, "setjmp" | "longjmp") => {
+                self.instruction(&format!("bl __{}", func))
+            }
             (Platform::MacOS, Arch::AArch64) => self.instruction(&format!("bl _{}", func)),
             (Platform::Linux, Arch::AArch64) => self.instruction(&format!("bl {}", func)),
             (Platform::Linux, Arch::X86_64) => self.instruction(&format!("call {}", func)),

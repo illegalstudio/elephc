@@ -67,9 +67,38 @@ impl ReturnArgAlias {
     }
 }
 
+/// What the analysis already knows about the callables a body calls, from the previous round
+/// of `collect_return_alias_summaries`.
+#[derive(Debug, Default)]
+struct Callees {
+    /// Function summaries by canonical name.
+    functions: HashMap<String, ReturnArgAlias>,
+    /// Method summaries by (class, case-folded method).
+    methods: HashMap<(String, String), ReturnArgAlias>,
+    /// Declared `extern` functions: their results are always fresh (a C string is copied into
+    /// an owned Elephc string) or not refcounted, so never an argument's storage.
+    externs: HashSet<String>,
+}
+
+/// A reference to the callee context that never takes part in state comparisons: it is the
+/// same for every state of one body, and comparing two maps per loop step would be waste.
+#[derive(Debug, Clone, Copy, Default)]
+struct CalleeRef<'a>(Option<&'a Callees>);
+
+impl PartialEq for CalleeRef<'_> {
+    /// Always equal: one body's states share one context.
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for CalleeRef<'_> {}
+
 /// Local alias provenance plus the parameter facts a cast decision needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AliasState<'a> {
+    /// Summaries of the callables this body may call, when known.
+    callees: CalleeRef<'a>,
     /// Provenance of every live local name.
     locals: HashMap<String, ReturnArgAlias>,
     /// The names of the visible parameters declared exactly `string`. Only those have a bare
@@ -82,6 +111,11 @@ struct AliasState<'a> {
     /// `lower_cast` elides. It starts as the `string` parameters and shrinks as they are
     /// assigned: a declaration says what a slot began as, not what it holds now.
     str_slot_locals: HashSet<String>,
+    /// The callable is declared to return `mixed`, so a returned bare-`Str` slot is boxed, and
+    /// boxing a string COPIES it (`__rt_mixed_from_value` persists the payload): the result
+    /// never reuses the parameter's storage. Claiming it did made every caller skip releasing
+    /// an owned argument -- one leaked string per call (`m(string $s): mixed { return $s; }`).
+    boxes_returned_strings: bool,
 }
 
 impl<'a> AliasState<'a> {
@@ -91,10 +125,12 @@ impl<'a> AliasState<'a> {
         string_parameter_indices: &'a BTreeSet<usize>,
     ) -> Self {
         Self {
+            callees: CalleeRef::default(),
             locals: HashMap::new(),
             string_parameters,
             string_parameter_indices,
             str_slot_locals: string_parameters.iter().cloned().collect(),
+            boxes_returned_strings: false,
         }
     }
 
@@ -141,14 +177,60 @@ impl ReturnAliasSummaries {
 }
 
 /// Collects return/argument alias summaries from all source declarations.
+///
+/// A call to a summarized function or static method reuses only the arguments that callable may
+/// return. Summaries depend on each other (recursion included), so they are the least fixed point
+/// of that system: every callable starts at `None` and rounds re-summarize every body against the
+/// previous round until nothing changes. Each summary only grows (`None` < parameters <
+/// `Unknown`), and the lattice is finite, so the rounds converge; if they have not within the
+/// bound, the conservative summaries -- every call `Unknown` -- are used instead, never a
+/// half-converged optimistic one.
 pub(crate) fn collect_return_alias_summaries(program: &Program) -> ReturnAliasSummaries {
-    let mut summaries = ReturnAliasSummaries::default();
-    collect_declaration_summaries(program, &mut summaries);
-    summaries
+    let mut conservative = ReturnAliasSummaries::default();
+    collect_declaration_summaries(program, &mut conservative, None);
+    let mut externs = HashSet::new();
+    collect_extern_names(program, &mut externs);
+    let mut summaries = ReturnAliasSummaries {
+        functions: conservative.functions.keys().map(|name| (name.clone(), ReturnArgAlias::None)).collect(),
+        methods: conservative.methods.keys().map(|key| (key.clone(), ReturnArgAlias::None)).collect(),
+    };
+    for _ in 0..64 {
+        let callees = Callees {
+            functions: summaries.functions.clone(),
+            methods: summaries.methods.clone(),
+            externs: externs.clone(),
+        };
+        let mut next = ReturnAliasSummaries::default();
+        collect_declaration_summaries(program, &mut next, Some(&callees));
+        if next.functions == summaries.functions && next.methods == summaries.methods {
+            return next;
+        }
+        summaries = next;
+    }
+    conservative
+}
+
+/// Records the canonical names of every `extern function` declaration.
+fn collect_extern_names(statements: &[Stmt], externs: &mut HashSet<String>) {
+    for stmt in statements {
+        match &stmt.kind {
+            StmtKind::ExternFunctionDecl { name, .. } => {
+                externs.insert(name.trim_start_matches('\\').to_string());
+            }
+            StmtKind::NamespaceBlock { body, .. } | StmtKind::Synthetic(body) => {
+                collect_extern_names(body, externs);
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Recursively records summaries for declarations nested in namespace blocks.
-fn collect_declaration_summaries(statements: &[Stmt], summaries: &mut ReturnAliasSummaries) {
+fn collect_declaration_summaries(
+    statements: &[Stmt],
+    summaries: &mut ReturnAliasSummaries,
+    callees: Option<&Callees>,
+) {
     for stmt in statements {
         match &stmt.kind {
             StmtKind::FunctionDecl {
@@ -156,18 +238,21 @@ fn collect_declaration_summaries(statements: &[Stmt], summaries: &mut ReturnAlia
                 params,
                 variadic,
                 by_ref_return,
+                return_type,
                 body,
                 ..
             } => {
                 summaries.functions.insert(
                     name.clone(),
-                    summarize_callable_return_alias(
+                    summarize_with_callees(
                         params
                             .iter()
                             .map(|(name, hint, _, _)| (name.as_str(), hint.as_ref())),
                         variadic.as_deref(),
                         *by_ref_return,
+                        return_type.as_ref(),
                         body,
+                        callees,
                     ),
                 );
             }
@@ -175,10 +260,10 @@ fn collect_declaration_summaries(statements: &[Stmt], summaries: &mut ReturnAlia
             | StmtKind::EnumDecl { name, methods, .. }
             | StmtKind::TraitDecl { name, methods, .. }
             | StmtKind::InterfaceDecl { name, methods, .. } => {
-                collect_method_summaries(name, methods, summaries);
+                collect_method_summaries(name, methods, summaries, callees);
             }
             StmtKind::NamespaceBlock { body, .. } | StmtKind::Synthetic(body) => {
-                collect_declaration_summaries(body, summaries);
+                collect_declaration_summaries(body, summaries, callees);
             }
             _ => {}
         }
@@ -190,17 +275,20 @@ fn collect_method_summaries(
     class_name: &str,
     methods: &[ClassMethod],
     summaries: &mut ReturnAliasSummaries,
+    callees: Option<&Callees>,
 ) {
     for method in methods {
         let summary = if method.has_body {
-            summarize_callable_return_alias(
+            summarize_with_callees(
                 method
                     .params
                     .iter()
                     .map(|(name, hint, _, _)| (name.as_str(), hint.as_ref())),
                 method.variadic.as_deref(),
                 method.by_ref_return,
+                method.return_type.as_ref(),
                 &method.body,
+                callees,
             )
         } else {
             ReturnArgAlias::Unknown
@@ -220,10 +308,27 @@ pub(crate) fn summarize_callable_return_alias<'a>(
     params: impl Iterator<Item = (&'a str, Option<&'a TypeExpr>)>,
     variadic: Option<&str>,
     by_ref_return: bool,
+    return_type: Option<&TypeExpr>,
     body: &[Stmt],
+) -> ReturnArgAlias {
+    summarize_with_callees(params, variadic, by_ref_return, return_type, body, None)
+}
+
+/// `summarize_callable_return_alias`, consulting what is known of the callables the body calls.
+fn summarize_with_callees<'a>(
+    params: impl Iterator<Item = (&'a str, Option<&'a TypeExpr>)>,
+    variadic: Option<&str>,
+    by_ref_return: bool,
+    return_type: Option<&TypeExpr>,
+    body: &[Stmt],
+    callees: Option<&Callees>,
 ) -> ReturnArgAlias {
     if by_ref_return {
         return ReturnArgAlias::Unknown;
+    }
+    // A scalar or void result is never refcounted storage, whatever the body returns.
+    if matches!(return_type, Some(TypeExpr::Int | TypeExpr::Float | TypeExpr::Bool | TypeExpr::Void)) {
+        return ReturnArgAlias::None;
     }
     let params: Vec<(&str, Option<&TypeExpr>)> = params.collect();
     // A variadic is deliberately absent: it collects its arguments into a fresh array, whose
@@ -240,6 +345,11 @@ pub(crate) fn summarize_callable_return_alias<'a>(
         .map(|(index, _)| index)
         .collect();
     let mut state = AliasState::new(&string_parameters, &string_parameter_indices);
+    state.callees = CalleeRef(callees);
+    state.boxes_returned_strings = matches!(
+        return_type,
+        Some(TypeExpr::Named(name)) if name.as_str().eq_ignore_ascii_case("mixed")
+    );
     for (index, (name, _)) in params.iter().enumerate() {
         state
             .locals
@@ -303,7 +413,11 @@ fn analyze_stmt(
             invalidate_all_aliases(state);
         }
         StmtKind::Return(Some(value)) => {
-            *returned = returned.merge(&expr_alias(value, state));
+            let boxed_copy = state.boxes_returned_strings
+                && matches!(&value.kind, ExprKind::Variable(name) if state.has_str_slot(name));
+            if !boxed_copy {
+                *returned = returned.merge(&expr_alias(value, state));
+            }
         }
         StmtKind::Return(None) => {}
         StmtKind::If {
@@ -606,11 +720,15 @@ fn merge_states<'a>(states: Vec<AliasState<'a>>) -> AliasState<'a> {
         .map(|state| state.str_slot_locals.clone())
         .reduce(|acc, next| acc.intersection(&next).cloned().collect())
         .unwrap_or_default();
+    let boxes_returned_strings = states.iter().any(|state| state.boxes_returned_strings);
+    let callees = states.first().map(|state| state.callees).unwrap_or_default();
     AliasState {
+        callees,
         locals,
         string_parameters,
         string_parameter_indices,
         str_slot_locals,
+        boxes_returned_strings,
     }
 }
 
@@ -672,8 +790,25 @@ fn expr_alias(expr: &Expr, state: &AliasState<'_>) -> ReturnArgAlias {
         {
             ReturnArgAlias::None
         }
-        ExprKind::FunctionCall { .. }
-        | ExprKind::ClosureCall { .. }
+        ExprKind::FunctionCall { name, args } => {
+            let canonical = name.as_str().trim_start_matches('\\');
+            match state.callees.0 {
+                Some(callees) if callees.externs.contains(canonical) => ReturnArgAlias::None,
+                Some(callees) => match callees.functions.get(canonical) {
+                    Some(summary) => call_alias(summary, args, state),
+                    None => ReturnArgAlias::Unknown,
+                },
+                None => ReturnArgAlias::Unknown,
+            }
+        }
+        ExprKind::StaticMethodCall { receiver: crate::parser::ast::StaticReceiver::Named(class), method, args } => {
+            let key = (class.as_str().trim_start_matches('\\').to_string(), php_symbol_key(method));
+            match state.callees.0.and_then(|callees| callees.methods.get(&key)) {
+                Some(summary) => call_alias(summary, args, state),
+                None => ReturnArgAlias::Unknown,
+            }
+        }
+        ExprKind::ClosureCall { .. }
         | ExprKind::ExprCall { .. }
         | ExprKind::MethodCall { .. }
         | ExprKind::NullsafeMethodCall { .. }
@@ -695,6 +830,25 @@ fn expr_alias(expr: &Expr, state: &AliasState<'_>) -> ReturnArgAlias {
         | ExprKind::ObjectClassName { .. }
         | ExprKind::MagicConstant(_) => ReturnArgAlias::None,
         _ => ReturnArgAlias::Unknown,
+    }
+}
+
+/// The provenance of a call's result from the callee's summary: only the arguments in positions
+/// the callee may return can come back. A named or spread argument breaks the position mapping,
+/// so it is `Unknown` unless the callee returns no argument at all.
+fn call_alias(summary: &ReturnArgAlias, args: &[Expr], state: &AliasState<'_>) -> ReturnArgAlias {
+    match summary {
+        ReturnArgAlias::None => ReturnArgAlias::None,
+        ReturnArgAlias::Unknown => ReturnArgAlias::Unknown,
+        ReturnArgAlias::Parameters(indices) => {
+            if args.iter().any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_))) {
+                return ReturnArgAlias::Unknown;
+            }
+            indices
+                .iter()
+                .filter_map(|index| args.get(*index))
+                .fold(ReturnArgAlias::None, |alias, arg| alias.merge(&expr_alias(arg, state)))
+        }
     }
 }
 
@@ -816,6 +970,28 @@ fn expr_keeps_str_slot(inner: &Expr, state: &AliasState<'_>) -> bool {
 /// Conservatively invalidates locals that an expression can rewrite by reference.
 fn apply_expr_effects(expr: &Expr, state: &mut AliasState<'_>) {
     match &expr.kind {
+        // A plain property write (`$o->p = v;`, `$o->{$n} = v;`) has exactly the effects of the
+        // statement form `StmtKind::PropertyAssign`: it stores a reference into the object and
+        // cannot rebind a local, so it keeps the same precision instead of the blanket
+        // invalidation below.
+        ExprKind::Assignment {
+            target,
+            value,
+            result_target: None,
+            prelude,
+            conditional_value_temp: None,
+        } if prelude.is_empty()
+            && matches!(
+                &target.kind,
+                ExprKind::PropertyAccess { object, .. } | ExprKind::DynamicPropertyAccess { object, .. }
+                    if matches!(object.kind, ExprKind::Variable(_))
+            ) =>
+        {
+            if let ExprKind::DynamicPropertyAccess { property, .. } = &target.kind {
+                apply_expr_effects(property, state);
+            }
+            apply_expr_effects(value, state);
+        }
         ExprKind::Assignment {
             target,
             value,
@@ -839,7 +1015,14 @@ fn apply_expr_effects(expr: &Expr, state: &mut AliasState<'_>) {
             for arg in args {
                 apply_expr_effects(arg, state);
             }
-            if named_call_can_rebind_unlisted_locals(name.as_str()) {
+            // A declared function or extern reaches the caller's locals only through its
+            // arguments, which `invalidate_call_variables` covers; only an unknown name might be
+            // `extract`-like.
+            let canonical = name.as_str().trim_start_matches('\\');
+            let declared = state.callees.0.is_some_and(|callees| {
+                callees.externs.contains(canonical) || callees.functions.contains_key(canonical)
+            });
+            if !declared && named_call_can_rebind_unlisted_locals(name.as_str()) {
                 invalidate_all_aliases(state);
             } else {
                 invalidate_call_variables(args, state);
@@ -1257,6 +1440,88 @@ mod tests {
         assert_eq!(
             summaries.function("caught"),
             Some(&ReturnArgAlias::Unknown)
+        );
+    }
+
+    /// Verifies a call to a summarized function maps the callee's aliased parameters back
+    /// onto the caller's arguments, and a fresh callee result stays fresh.
+    #[test]
+    fn calls_compose_their_callee_summaries() {
+        let program = parse(
+            "<?php function id(array $a): array { return $a; } function fresh(array $a): array { return []; } function second(array $x, array $y): array { return id($y); } function built(array $x): array { return fresh($x); } class K { static function pick(array $a, array $b): array { return $b; } } function viaStatic(array $x, array $y): array { return K::pick($y, $x); }",
+        );
+        let summaries = collect_return_alias_summaries(&program);
+        assert_eq!(
+            summaries.function("second"),
+            Some(&ReturnArgAlias::Parameters(BTreeSet::from([1])))
+        );
+        assert_eq!(summaries.function("built"), Some(&ReturnArgAlias::None));
+        assert_eq!(
+            summaries.function("viaStatic"),
+            Some(&ReturnArgAlias::Parameters(BTreeSet::from([0])))
+        );
+    }
+
+    /// Verifies a call nobody summarized still makes the result conservative.
+    #[test]
+    fn calls_to_unsummarized_functions_remain_conservative() {
+        let program = parse("<?php function g(array $a): array { return array_reverse_unknown($a); }");
+        let summaries = collect_return_alias_summaries(&program);
+        assert_eq!(summaries.function("g"), Some(&ReturnArgAlias::Unknown));
+    }
+
+    /// Verifies recursion reaches the least fixed point: a self-call adds nothing, and the
+    /// parameter a base case returns is still recorded through the recursive path.
+    #[test]
+    fn recursion_reaches_the_least_fixed_point() {
+        let program = parse(
+            "<?php function down(array $a, int $n): array { if ($n > 0) { return down($a, $n - 1); } return []; } function keep(array $a, array $b, int $n): array { if ($n > 0) { return keep($b, $a, $n - 1); } return $a; } function even(array $a, int $n): array { if ($n > 0) { return odd($a, $n - 1); } return []; } function odd(array $a, int $n): array { return even($a, $n); }",
+        );
+        let summaries = collect_return_alias_summaries(&program);
+        assert_eq!(summaries.function("down"), Some(&ReturnArgAlias::None));
+        // The swap makes either argument reachable as the returned `$a`.
+        assert_eq!(
+            summaries.function("keep"),
+            Some(&ReturnArgAlias::Parameters(BTreeSet::from([0, 1])))
+        );
+        assert_eq!(summaries.function("even"), Some(&ReturnArgAlias::None));
+        assert_eq!(summaries.function("odd"), Some(&ReturnArgAlias::None));
+    }
+
+    /// Verifies a scalar or void return can never alias an argument, whatever the body returns.
+    #[test]
+    fn scalar_returns_never_alias() {
+        let program = parse(
+            "<?php function first(array $a): bool { return $a[0]; } function size(array $a): int { return $a[0]; } function none(array $a): void { return; }",
+        );
+        let summaries = collect_return_alias_summaries(&program);
+        assert_eq!(summaries.function("first"), Some(&ReturnArgAlias::None));
+        assert_eq!(summaries.function("size"), Some(&ReturnArgAlias::None));
+        assert_eq!(summaries.function("none"), Some(&ReturnArgAlias::None));
+    }
+
+    /// Verifies a bare string parameter returned as `mixed` is boxed into fresh storage,
+    /// while an untyped parameter returned the same way still aliases its argument.
+    #[test]
+    fn a_string_parameter_returned_as_mixed_is_a_copy() {
+        let program = parse(
+            "<?php function boxed(string $s): mixed { return $s; } function loose($s): mixed { return $s; }",
+        );
+        let summaries = collect_return_alias_summaries(&program);
+        assert_eq!(summaries.function("boxed"), Some(&ReturnArgAlias::None));
+        assert_ne!(summaries.function("loose"), Some(&ReturnArgAlias::None));
+    }
+
+    /// Verifies storing into a property does not forget which parameter a local aliases.
+    #[test]
+    fn a_property_store_keeps_local_aliases() {
+        let program = parse(
+            "<?php class P { public array $p = []; function f(array $a, array $b): array { $kept = $b; $this->p = $a; return $kept; } }",
+        );
+        let summaries = collect_return_alias_summaries(&program);
+        assert_eq!(
+            summaries.method("P", "f"),
+            Some(&ReturnArgAlias::Parameters(BTreeSet::from([1])))
         );
     }
 }

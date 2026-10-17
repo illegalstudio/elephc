@@ -341,6 +341,8 @@ pub(super) fn lower_closure_with_context(
             .map(|(name, hint, _, _)| (name.as_str(), hint.as_ref())),
         variadic,
         by_ref_return,
+        // Closures keep the conservative summary.
+        None,
         body,
     );
     let closure_operands = captured_values

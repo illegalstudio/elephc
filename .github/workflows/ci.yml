@@ -45,6 +45,7 @@ env:
     -p elephc-instr
     -p elephc-probe
     -p elephc-curl
+    -p elephc-zend
 
 jobs:
   # Compile each platform once, then let that platform's tests start as soon as

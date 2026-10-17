@@ -16,6 +16,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::codegen::abi;
+use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::{Arch, Target};
 use crate::codegen::{
@@ -648,6 +649,10 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     emit_main_static_local_cleanup(ctx);
     emit_main_global_epilogue_cleanup(ctx);
     emit_main_static_property_cleanup(ctx);
+    // Last owner teardown: a destructor above may still reach C code that calls a callback.
+    if module_binds_extern_callbacks(ctx.module) {
+        abi::emit_call_label(ctx.emitter, EXTERN_CALLBACK_RELEASE_LABEL);
+    }
     if module_uses_resource_inventory_cleanup(ctx.module) {
         abi::emit_call_label(ctx.emitter, "__rt_resource_inventory_reset");
     }
@@ -681,6 +686,40 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     }
     abi::emit_exit(ctx.emitter, 0);
     ctx.epilogue_emitted = true;
+}
+
+/// Routine that releases every callable descriptor an extern callback slot retains.
+pub(super) const EXTERN_CALLBACK_RELEASE_LABEL: &str = "__rt_release_extern_callbacks";
+
+/// Returns whether any extern takes a callable, so a callback slot may hold a descriptor.
+pub(super) fn module_binds_extern_callbacks(module: &Module) -> bool {
+    module
+        .extern_decls
+        .iter()
+        .any(|decl| decl.params.iter().any(|param| matches!(param.php_type, PhpType::Callable)))
+}
+
+/// Emits the routine releasing each extern callback slot's descriptor and clearing the slot.
+///
+/// A slot keeps the last callable handed to a C callback alive for the program's life, since C
+/// may call it at any time. Program exit releases them before the heap report, and the `--web`
+/// reset does too: the descriptor lives in the request arena, so a slot surviving the reset
+/// would hand the next binding a retired descriptor to release.
+pub(super) fn emit_extern_callback_release_routine(emitter: &mut Emitter, data: &DataSection) {
+    if emitter.target.arch == Arch::AArch64 {
+        emitter.raw(".align 2");
+    }
+    emitter.blank();
+    emitter.comment("--- extern callback descriptor slots release ---");
+    emitter.label_global(EXTERN_CALLBACK_RELEASE_LABEL);
+    abi::emit_frame_prologue(emitter, 16);
+    for slot in data.extern_callback_slots() {
+        abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), slot, 0);
+        abi::emit_store_zero_to_symbol(emitter, slot, 0);
+        crate::codegen::callable_descriptor::emit_release_current_descriptor(emitter);
+    }
+    abi::emit_frame_restore(emitter, 16);
+    abi::emit_return(emitter);
 }
 
 /// Retires class static owners once, finishing every property before propagating a destructor throw.

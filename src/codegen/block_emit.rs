@@ -196,6 +196,9 @@ pub(super) fn emit_module(
     // handler body is emitted so every function static local (including any in the
     // main body) has been recorded into `data`. The handler prologue's
     // `bl __rt_web_reset` forward-references the label emitted here.
+    if super::frame::module_binds_extern_callbacks(module) {
+        super::frame::emit_extern_callback_release_routine(emitter, data);
+    }
     if web {
         super::web::emit_web_reset(emitter, module, data);
     }

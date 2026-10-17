@@ -391,6 +391,9 @@ pub enum PropertyFetchMode {
     Read,
     /// A silent existence probe: an inaccessible or undefined name answers `null`.
     Probe,
+    /// The probe `isset()` makes: silent like `Probe`, and only the answer's nullness is used,
+    /// so a class answering through magic is asked `__isset` alone, never `__get`, as php does.
+    Isset,
 }
 
 impl PropertyFetchMode {
@@ -399,6 +402,7 @@ impl PropertyFetchMode {
         match self {
             Self::Read => "read",
             Self::Probe => "probe",
+            Self::Isset => "isset",
         }
     }
 

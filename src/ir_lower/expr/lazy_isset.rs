@@ -103,14 +103,14 @@ pub(super) fn lower_lazy_isset_operand(
                 return None;
             }
             let object = lower_expr(ctx, object);
-            let probed = lower_property_probe_from_value(ctx, object, property, arg);
+            let probed = lower_property_isset_probe_from_value(ctx, object, property, arg);
             Some(probe_value_is_set(ctx, probed, arg))
         }
         ExprKind::DynamicPropertyAccess { object, property } => {
             // `isset($o->{$k})` must not raise for a name php refuses, and must not warn for one
             // it has never created, so the read carries php's probe fetch mode.
             let probed =
-                lower_dynamic_property_fetch(ctx, object, property, PropertyFetchMode::Probe, arg);
+                lower_dynamic_property_fetch(ctx, object, property, PropertyFetchMode::Isset, arg);
             Some(probe_value_is_set(ctx, probed, arg))
         }
         // `$o?->{$k}` is a nullsafe CHAIN, so its short-circuit belongs to the chain lowering.

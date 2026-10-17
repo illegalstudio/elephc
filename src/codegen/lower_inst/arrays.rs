@@ -3003,11 +3003,7 @@ fn lower_mixed_array_set_aarch64(
     ctx.load_value_to_reg(array, "x0")?;
     ctx.load_value_to_reg(index, "x1")?;
     abi::emit_pop_reg(ctx.emitter, "x2");
-    if fresh_boxed_value {
-        emit_mixed_array_set_ref_marker_writeback_aarch64(ctx);
-        return Ok(());
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_array_set_mixed");
+    emit_mixed_array_set_ref_marker_writeback_aarch64(ctx, !fresh_boxed_value);
     Ok(())
 }
 
@@ -3031,16 +3027,22 @@ fn lower_mixed_array_set_x86_64(
     ctx.load_value_to_reg(array, "rdi")?;
     ctx.load_value_to_reg(index, "rsi")?;
     abi::emit_pop_reg(ctx.emitter, "rdx");
-    if fresh_boxed_value {
-        emit_mixed_array_set_ref_marker_writeback_x86_64(ctx);
-        return Ok(());
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_array_set_mixed");
+    emit_mixed_array_set_ref_marker_writeback_x86_64(ctx, !fresh_boxed_value);
     Ok(())
 }
 
-/// Stores a fresh boxed-Mixed value through an invoker ref-cell marker on AArch64.
-fn emit_mixed_array_set_ref_marker_writeback_aarch64(ctx: &mut FunctionContext<'_>) {
+/// Stores a boxed-Mixed value through an invoker ref-cell marker on AArch64.
+///
+/// `retained_value` says the value is a Mixed operand retained for this write rather than a
+/// box made here. A by-reference variadic slot holds a marker, and the marker paths below
+/// consume a fresh, unshared box: they free its wrapper or hand it to the caller's cell. A
+/// retained operand used to bypass this check entirely and overwrite the marker, so
+/// `$rest[0] = f()` with a `mixed` result never reached the caller's variable. It is detached
+/// into a fresh box first, only once a marker is found, so ordinary writes keep sharing it.
+fn emit_mixed_array_set_ref_marker_writeback_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    retained_value: bool,
+) {
     let runtime_label = ctx.next_label("mixed_array_set_runtime");
     let mixed_cell_label = ctx.next_label("mixed_array_set_ref_mixed_cell");
     let done_label = ctx.next_label("mixed_array_set_done");
@@ -3056,6 +3058,18 @@ fn emit_mixed_array_set_ref_marker_writeback_aarch64(ctx: &mut FunctionContext<'
     ctx.emitter.instruction("ldr x12, [x11]");                                  // load the existing Mixed tag for marker detection
     ctx.emitter.instruction(&format!("cmp x12, #{}", INVOKER_ARG_REF_CELL_TAG));// check whether the slot aliases caller storage
     ctx.emitter.instruction(&format!("b.ne {}", runtime_label));                // ordinary boxed Mixed slots are replaced by the runtime setter
+    if retained_value {
+        ctx.emitter.instruction("stp x0, x11, [sp, #-16]!");                    // preserve the array result and the marker across the detach
+        ctx.emitter.instruction("str x2, [sp, #-16]!");                         // preserve the retained Mixed operand
+        ctx.emitter.instruction("mov x0, x2");                                  // detach the retained operand into a fresh unshared box
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");
+        ctx.emitter.instruction("ldr x12, [sp]");                               // reload the retained operand
+        ctx.emitter.instruction("str x0, [sp]");                                // keep the fresh box for the marker write
+        ctx.emitter.instruction("mov x0, x12");                                 // drop the reference this write retained
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+        ctx.emitter.instruction("ldr x2, [sp], #16");                           // the fresh box is the value the marker paths consume
+        ctx.emitter.instruction("ldp x0, x11, [sp], #16");                      // restore the array result and the marker
+    }
     ctx.emitter.instruction("ldr x12, [x11, #16]");                             // load the source runtime tag carried by the by-reference marker
     ctx.emitter.instruction("ldr x10, [x11, #8]");                              // load the caller ref-cell address from the marker payload
     ctx.emitter
@@ -3118,7 +3132,10 @@ fn emit_mixed_array_set_ref_marker_writeback_aarch64(ctx: &mut FunctionContext<'
 }
 
 /// Stores a fresh boxed-Mixed value through an invoker ref-cell marker on x86_64.
-fn emit_mixed_array_set_ref_marker_writeback_x86_64(ctx: &mut FunctionContext<'_>) {
+fn emit_mixed_array_set_ref_marker_writeback_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    retained_value: bool,
+) {
     let runtime_label = ctx.next_label("mixed_array_set_runtime");
     let mixed_cell_label = ctx.next_label("mixed_array_set_ref_mixed_cell");
     let done_label = ctx.next_label("mixed_array_set_done");
@@ -3134,6 +3151,20 @@ fn emit_mixed_array_set_ref_marker_writeback_x86_64(ctx: &mut FunctionContext<'_
     ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load the existing Mixed tag for marker detection
     ctx.emitter.instruction(&format!("cmp r11, {}", INVOKER_ARG_REF_CELL_TAG)); // check whether the slot aliases caller storage
     ctx.emitter.instruction(&format!("jne {}", runtime_label));                 // ordinary boxed Mixed slots are replaced by the runtime setter
+    if retained_value {
+        abi::emit_push_reg(ctx.emitter, "rdi");
+        abi::emit_push_reg(ctx.emitter, "r10");
+        abi::emit_push_reg(ctx.emitter, "rdx");
+        ctx.emitter.instruction("mov rax, rdx");                                // detach the retained operand into a fresh unshared box
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");
+        ctx.emitter.instruction("mov r11, QWORD PTR [rsp]");                    // reload the retained operand
+        ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                    // keep the fresh box for the marker write
+        ctx.emitter.instruction("mov rax, r11");                                // drop the reference this write retained
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+        abi::emit_pop_reg(ctx.emitter, "rdx");
+        abi::emit_pop_reg(ctx.emitter, "r10");
+        abi::emit_pop_reg(ctx.emitter, "rdi");
+    }
     ctx.emitter.instruction("mov r11, QWORD PTR [r10 + 16]");                   // load the source runtime tag carried by the by-reference marker
     ctx.emitter.instruction("mov r10, QWORD PTR [r10 + 8]");                    // load the caller ref-cell address from the marker payload
     ctx.emitter

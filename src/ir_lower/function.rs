@@ -1573,6 +1573,8 @@ fn lower_closure_function_with_signature(
                 .map(|(name, hint, _, _)| (name.as_str(), hint.as_ref())),
             None,
             signature.by_ref_return,
+            // Closures keep the conservative summary.
+            None,
             body,
         ),
     });

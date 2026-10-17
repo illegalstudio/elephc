@@ -89,6 +89,9 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     for record in data.static_locals() {
         emit_static_local_reset(emitter, record, &mut labels);
     }
+    if super::frame::module_binds_extern_callbacks(module) {
+        abi::emit_call_label(emitter, super::frame::EXTERN_CALLBACK_RELEASE_LABEL);
+    }
     for (symbol, php_type) in refcounted_static_properties(module) {
         emit_static_property_release(emitter, &symbol, &php_type, &mut labels);
     }

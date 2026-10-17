@@ -3856,3 +3856,153 @@ var_dump($arr);
         "sentinel comparison must precede the array header load, got:\n{body}"
     );
 }
+
+/// An `array<mixed>` promoted to hash storage at run time by a mixed-key write
+/// (`$map[$k] = ...` with `$k` from a function returning `mixed`) keeps its
+/// static indexed type. `var_dump`, `print_r`, `json_encode` and `serialize`
+/// chose their walker from that type alone and read the hash as a list,
+/// printing its header words as values (`[0 => 11, 1 => 3]`); their indexed
+/// walkers now defer to the hash walker when the storage says hash.
+#[test]
+fn test_mixed_key_promoted_array_prints_as_a_hash() {
+    let out = compile_and_run(
+        r#"<?php
+function key_of(int $i): mixed {
+    return $i === 0 ? "alpha" : 7;
+}
+function build(): array {
+    $map = [];
+    for ($i = 0; $i < 2; $i++) {
+        $map[key_of($i)] = $i === 0 ? "a" : "b";
+    }
+    return $map;
+}
+$m = build();
+echo json_encode($m), "\n";
+print_r($m);
+var_dump($m);
+echo json_encode([build(), [1, 2]]), "\n";
+echo serialize($m), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"alpha\":\"a\",\"7\":\"b\"}\n\
+         Array\n(\n    [alpha] => a\n    [7] => b\n)\n\
+         array(2) {\n  [\"alpha\"]=>\n  string(1) \"a\"\n  [7]=>\n  string(1) \"b\"\n}\n\
+         [{\"alpha\":\"a\",\"7\":\"b\"},[1,2]]\n\
+         a:2:{s:5:\"alpha\";s:1:\"a\";i:7;s:1:\"b\";}\n"
+    );
+}
+
+/// The same promoted array, returned from a function typed `mixed`, is boxed.
+/// The box took its tag from the static type, 4 (indexed), so every consumer
+/// of the Mixed value walked a hash as a list: `array_keys` answered `0,1`.
+/// Boxing must tag promoted storage 5 (hash).
+#[test]
+fn test_boxed_mixed_key_promoted_array_keeps_its_keys() {
+    let out = compile_and_run(
+        r#"<?php
+function key_of(int $i): mixed {
+    return $i === 0 ? "alpha" : 7;
+}
+function build(): mixed {
+    $map = [];
+    for ($i = 0; $i < 2; $i++) {
+        $map[key_of($i)] = $i === 0 ? "a" : "b";
+    }
+    return $map;
+}
+$m = build();
+echo implode(",", array_keys($m)), "\n";
+foreach ($m as $k => $v) {
+    echo $k, "=", $v, " ";
+}
+echo "\n", json_encode(["wrapped" => $m]), "\n";
+"#,
+    );
+    assert_eq!(out, "alpha,7\nalpha=a 7=b \n{\"wrapped\":{\"alpha\":\"a\",\"7\":\"b\"}}\n");
+}
+
+/// A write under a key a call returned as `mixed` never released the key cell (the
+/// helper only borrows it) nor a Mixed value the backend retained for the write, so
+/// `$map[key()] = value()` leaked both on every write. The output is PHP's: a shared
+/// copy stays unchanged, and negative and sparse keys promote to a hash.
+#[test]
+fn test_mixed_key_writes_release_the_key_the_value_and_the_old_array() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function skey(int $i): mixed { return "k" . $i; }
+function ikey(int $i): mixed { return $i; }
+function marr(): mixed { return [1, "two"]; }
+function tarr(): array { return [3, "four"]; }
+function tobj(): stdClass { $o = new stdClass(); $o->a = 1; return $o; }
+function indexed(): string {
+    $map = [1, 2];
+    $copy = $map;
+    $map[ikey(2)] = marr();
+    $map[skey(1)] = tarr();
+    $map[ikey(-5)] = 7;
+    return json_encode($copy) . json_encode($map);
+}
+function sparse(): string {
+    $m = [];
+    $m[ikey(3)] = 1;
+    $m[ikey(0)] = 2;
+    return json_encode($m);
+}
+function by_ref(array &$a): void {
+    $a[ikey(count($a))] = "r";
+    $a[skey(9)] = "s";
+}
+function mixed_slot(int $argc): string {
+    $m = $argc > 50 ? "str" : [];
+    $m[ikey(0)] = marr();
+    $m[skey(1)] = tarr();
+    $m[2] = tobj();
+    $m["x"] = marr();
+    return json_encode($m);
+}
+$out = "";
+for ($k = 0; $k < 30; $k++) {
+    $arr = ["x"];
+    by_ref($arr);
+    $out = indexed() . sparse() . json_encode($arr) . mixed_slot($argc);
+}
+echo $out, "\n";
+"#,
+    );
+    assert!(out.success, "stderr: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "[1,2]{\"0\":1,\"1\":2,\"2\":[1,\"two\"],\"k1\":[3,\"four\"],\"-5\":7}",
+            "{\"3\":1,\"0\":2}",
+            "{\"0\":\"x\",\"1\":\"r\",\"k9\":\"s\"}",
+            "{\"0\":[1,\"two\"],\"k1\":[3,\"four\"],\"2\":{\"a\":1},\"x\":[1,\"two\"]}\n",
+        )
+    );
+    assert!(out.stderr.contains("leak summary: clean"), "{}", out.stderr);
+}
+
+
+/// `serialize` of a local the checker still types `array<mixed>` (indexed) after mixed-key
+/// writes promoted it to hash storage. The indexed serializer must hand the hash to the hash
+/// serializer before it appends anything, or the `"alpha"` and `7` entries are read from the
+/// hash header as packed slots and never emitted.
+#[test]
+fn test_serialize_of_a_mixed_key_promoted_local_emits_its_keys() {
+    let out = compile_and_run(
+        r#"<?php
+function key_of(int $i): mixed {
+    return $i === 0 ? "alpha" : 7;
+}
+$map = [];
+for ($i = 0; $i < 2; $i++) {
+    $map[key_of($i)] = $i === 0 ? "a" : "b";
+}
+echo serialize($map), "\n";
+"#,
+    );
+    assert_eq!(out, "a:2:{s:5:\"alpha\";s:1:\"a\";i:7;s:1:\"b\";}\n");
+}

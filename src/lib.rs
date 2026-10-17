@@ -88,6 +88,8 @@ pub mod pdo_prelude;
 /// mysqli (MySQL / MariaDB over the elephc_pdo bridge) prelude injection.
 pub mod mysqli_prelude;
 
+/// Hosting support for real PHP extensions (surface derivation from stubs).
+pub mod php_ext;
 /// PHP language-profile selection and profile-dependence analysis.
 pub mod php_profile;
 /// Reachability pruning of injected prelude declarations.

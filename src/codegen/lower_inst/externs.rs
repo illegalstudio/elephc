@@ -341,6 +341,7 @@ fn emit_stateful_extern_callback_trampoline(
     // the reference undefined.
     let slot_name = ctx.next_global_label("extern_callback_descriptor");
     let slot_label = ctx.data.add_comm(slot_name, 8);
+    ctx.data.record_extern_callback_slot(slot_label.clone());
     let trampoline_label = ctx.next_global_label("extern_callback_trampoline");
     let done_label = ctx.next_label("extern_callback_trampoline_done");
     let trampoline = DeferredExternCallbackTrampoline {
@@ -408,6 +409,7 @@ fn callable_signature_for_value_seen(
     seen.push(value);
     let signature = value_instruction(ctx, value).and_then(|inst| match inst.op {
         Op::FirstClassCallableNew => first_class_callable_signature(ctx, inst),
+        Op::ClosureNew => capturing_closure_signature(ctx, inst),
         Op::LoadLocal => load_local_callable_signature(ctx, inst, seen),
         Op::Acquire | Op::Move | Op::Borrow => inst
             .operands
@@ -476,6 +478,22 @@ fn first_class_callable_signature(
     }
     ctx.callable_function_by_name(target)
         .map(super::function_signature_from_eir)
+}
+
+/// Recovers the visible signature of a closure literal that captures variables.
+///
+/// Captures travel as trailing parameters, which C cannot pass, so such a closure must go
+/// through the descriptor trampoline. A capture-free closure keeps its plain entry point: it
+/// needs no environment, and the trampoline's single slot per call site would make the last
+/// bound callable answer for every earlier binding.
+fn capturing_closure_signature(ctx: &FunctionContext<'_>, inst: &Instruction) -> Option<FunctionSig> {
+    if inst.operands.is_empty() {
+        return None;
+    }
+    let name = first_class_callable_target(ctx, inst)?;
+    let closure = ctx.module.closures.iter().find(|function| function.name == name)?;
+    let visible = closure.params.len().checked_sub(inst.operands.len())?;
+    Some(super::core_closures::function_signature_from_eir_with_param_count(closure, visible))
 }
 
 /// Returns the first-class callable target string attached to an EIR instruction.

@@ -3570,7 +3570,17 @@ fn var_dump_descriptor_rows(
 /// `:private` annotation — rather than the instance class, so an instance of a user
 /// subclass of a Reflection class still hides the slots it inherits. `class_name` is only
 /// the fallback when the declaring class is unknown.
+///
+/// A hosted extension object's wrapper keeps the engine handle in a protected property
+/// too; PHP's object has no such property, so no renderer shows it.
 fn is_reflection_backing_slot(class_info: &ClassInfo, class_name: &str, prop_name: &str) -> bool {
+    if prop_name == crate::php_ext::prelude::HANDLE_PROPERTY
+        && class_info.interfaces.iter().any(|interface| {
+            interface.trim_start_matches('\\').eq_ignore_ascii_case(crate::php_ext::prelude::OBJECT_INTERFACE)
+        })
+    {
+        return true;
+    }
     if !prop_name.starts_with("__")
         || !matches!(
             class_info.property_visibilities.get(prop_name),
