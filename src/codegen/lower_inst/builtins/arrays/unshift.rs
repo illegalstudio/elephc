@@ -58,6 +58,11 @@ pub(super) fn lower_array_unshift(ctx: &mut FunctionContext<'_>, inst: &Instruct
         // a receiver with nowhere to publish the new pointer must be refused rather than left
         // pointing at freed storage.
         receiver.require_writable("array_unshift")?;
+        // A reference-cell load borrows the stored array. Keep a separate helper owner so the
+        // consuming COW split and the subsequent store-back each retire their own reference.
+        if matches!(receiver, ReceiverPlace::RefCell(_)) {
+            receiver.prepare_consuming_storeback(ctx, array)?;
+        }
         ensure_unique_array_unshift_source(ctx, array)?;
         // Reverse source order: prepending v_last first and v_first last leaves the values in
         // PHP's `[v_first, …, v_last, old…]` layout. Growth is re-checked per element because
