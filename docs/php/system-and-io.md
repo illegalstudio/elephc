@@ -296,7 +296,7 @@ An ISO 8601 datetime may carry a trailing explicit timezone: a **numeric UTC off
 
 | Function | Signature | Description |
 |---|---|---|
-| `json_encode()` | `json_encode($value, $flags = 0, $depth = 512): string\|false` | Encode as JSON. Supports int, float, string, bool, null, arrays, mixed payloads, and objects (public properties + `JsonSerializable::jsonSerialize()` dispatch). Multibyte UTF-8 characters are escaped to lowercase-hex `\uXXXX` by default (`é` → `\u00e9`, surrogate pairs for codepoints ≥ U+10000), while the `JSON_HEX_*` replacements use PHP's literal uppercase-hex forms (`<` → `\u003C`). `$flags` observes `JSON_UNESCAPED_SLASHES`, `JSON_UNESCAPED_UNICODE`, `JSON_PRETTY_PRINT`, `JSON_FORCE_OBJECT`, `JSON_NUMERIC_CHECK`, `JSON_PRESERVE_ZERO_FRACTION`, `JSON_HEX_TAG`, `JSON_HEX_AMP`, `JSON_HEX_APOS`, `JSON_HEX_QUOT`, `JSON_PARTIAL_OUTPUT_ON_ERROR`, and `JSON_THROW_ON_ERROR` (Inf/NaN trigger `JSON_ERROR_INF_OR_NAN`, and `$depth` overrun triggers `JSON_ERROR_DEPTH`; the throw flag promotes both to `JsonException`, while partial-output keeps the substituted JSON string). `$depth` defaults to 512 and is enforced for every container encoder (assoc arrays, indexed arrays, objects). The remaining `JSON_INVALID_UTF8_*` flags are accepted and observed for malformed UTF-8 strings. |
+| `json_encode()` | `json_encode($value, $flags = 0, $depth = 512): string\|false` | Encode as JSON. Supports int, float, string, bool, null, arrays, mixed payloads, and objects (public properties + `JsonSerializable::jsonSerialize()` dispatch). Multibyte UTF-8 characters are escaped to lowercase-hex `\uXXXX` by default (`é` → `\u00e9`, surrogate pairs for codepoints ≥ U+10000), while the `JSON_HEX_*` replacements use PHP's literal uppercase-hex forms (`<` → `\u003C`). `$flags` observes `JSON_UNESCAPED_SLASHES`, `JSON_UNESCAPED_UNICODE`, `JSON_UNESCAPED_LINE_TERMINATORS`, `JSON_PRETTY_PRINT`, `JSON_FORCE_OBJECT`, `JSON_NUMERIC_CHECK`, `JSON_PRESERVE_ZERO_FRACTION`, `JSON_HEX_TAG`, `JSON_HEX_AMP`, `JSON_HEX_APOS`, `JSON_HEX_QUOT`, `JSON_PARTIAL_OUTPUT_ON_ERROR`, and `JSON_THROW_ON_ERROR` (Inf/NaN trigger `JSON_ERROR_INF_OR_NAN`, and `$depth` overrun triggers `JSON_ERROR_DEPTH`; the throw flag promotes both to `JsonException`, while partial-output keeps the substituted JSON string). `$depth` defaults to 512 and is enforced for every container encoder (assoc arrays, indexed arrays, objects). The remaining `JSON_INVALID_UTF8_*` flags are accepted and observed for malformed UTF-8 strings. |
 | `json_decode()` | `json_decode($json, $associative = null, $depth = 512, $flags = 0): mixed` | Full structural decoder. Returns a boxed `Mixed` cell whose runtime tag matches the decoded JSON value (null/bool/int/float/string/array/object). For JSON objects, `$associative` selects the shape: the PHP default (`null`/`false`) returns a `stdClass` instance whose properties are accessible with `$obj->name`; `true` returns an associative array indexable with `$obj["name"]`. Property access on the decoded `Mixed` is supported directly — codegen unboxes the cell, checks the stdClass class_id, and routes through the dynamic-property hash. `$depth` is enforced (`JSON_ERROR_DEPTH` on overflow). Failed decodes record PHP 8.6-style one-based line/column data for `json_last_error_msg()` and `JSON_THROW_ON_ERROR`. `$flags` observes `JSON_THROW_ON_ERROR` (raises `JsonException` on syntax/depth failure) and `JSON_BIGINT_AS_STRING` (integer tokens overflowing PHP_INT return as preserved-digit strings instead of wrapping through `__rt_atoi`). |
 | `json_last_error()` | `json_last_error(): int` | Returns the runtime's last JSON error code (`JSON_ERROR_*`). |
 | `json_last_error_msg()` | `json_last_error_msg(): string` | Returns the PHP-compatible message for `json_last_error()` (e.g. `"No error"`, `"Syntax error"`). After `json_decode()` failures, syntax/control-character/depth/UTF-8/UTF-16 messages include a `" near location line:column"` suffix while numeric error codes stay unchanged. |
@@ -319,6 +319,7 @@ The full PHP `JSON_*` family is exposed and can be combined with the bitwise OR 
 | `JSON_UNESCAPED_UNICODE` | 256 | | |
 | `JSON_PARTIAL_OUTPUT_ON_ERROR` | 512 | | |
 | `JSON_PRESERVE_ZERO_FRACTION` | 1024 | | |
+| `JSON_UNESCAPED_LINE_TERMINATORS` | 2048 | | |
 | `JSON_INVALID_UTF8_IGNORE` | 1048576 | | |
 | `JSON_INVALID_UTF8_SUBSTITUTE` | 2097152 | | |
 | `JSON_THROW_ON_ERROR` | 4194304 | | |
@@ -330,7 +331,25 @@ The full PHP `JSON_*` family is exposed and can be combined with the bitwise OR 
 | `JSON_ERROR_STATE_MISMATCH` | 2 | `JSON_ERROR_UNSUPPORTED_TYPE` | 8 |
 | `JSON_ERROR_CTRL_CHAR` | 3 | `JSON_ERROR_INVALID_PROPERTY_NAME` | 9 |
 | `JSON_ERROR_SYNTAX` | 4 | `JSON_ERROR_UTF16` | 10 |
-| `JSON_ERROR_UTF8` | 5 | | |
+| `JSON_ERROR_UTF8` | 5 | `JSON_ERROR_NON_BACKED_ENUM` | 11 |
+
+`JSON_UNESCAPED_LINE_TERMINATORS` keeps U+2028 (line separator) and U+2029
+(paragraph separator) literal only when combined with `JSON_UNESCAPED_UNICODE`.
+Without both flags, those characters use `\u2028` and `\u2029` escapes,
+including in object keys and nested values.
+
+Backed enum cases encode as their integer or string backing value, including in
+nested containers. An enum implementing `JsonSerializable` uses `jsonSerialize()`
+instead, for both unit and backed cases. If it returns the enum receiver itself,
+the result exposes `name`, followed by `value` for backed cases. The serializer
+runs once and the result consumes one object depth level.
+
+Encoding a unit enum without `JsonSerializable` fails with
+`JSON_ERROR_NON_BACKED_ENUM` (11) and the message
+`"Non-backed enums have no default serialization"`.
+`JSON_PARTIAL_OUTPUT_ON_ERROR` substitutes `0`, including in containers, and
+takes precedence over `JSON_THROW_ON_ERROR`. Without partial output, the throw
+flag raises `JsonException` with code 11.
 
 ### Classes and interfaces
 

@@ -33,6 +33,7 @@ mod json_encode_bool;
 mod json_encode_float;
 mod json_ftoa;
 mod json_encode_null;
+mod json_encode_enum;
 mod json_encode_object;
 mod json_encode_str;
 mod json_encode_mixed;
@@ -119,3 +120,6 @@ pub(crate) use strtotime::emit_strtotime_data;
 pub(crate) use strtotime::STRTOTIME_ISO_PAD_BUF_LEN;
 pub(crate) use time::emit_time;
 pub(crate) use unserialize::emit_unserialize;
+
+#[cfg(test)]
+mod json_compatibility_tests;

@@ -10,6 +10,8 @@
 
 use crate::support::*;
 
+#[path = "json/compatibility_constants.rs"]
+mod compatibility_constants;
 #[path = "json/constants.rs"]
 mod constants;
 #[path = "json/last_error.rs"]

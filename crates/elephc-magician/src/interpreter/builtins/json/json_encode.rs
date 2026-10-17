@@ -11,6 +11,9 @@
 //!   `json_decode` instead of a separate area-level helper module.
 
 use super::super::super::*;
+
+mod objects;
+use objects::eval_json_encode_append_object;
 eval_builtin! {
     contract: "json_encode",
     area: Json,
@@ -77,6 +80,7 @@ fn eval_json_encode_result(
         | EVAL_JSON_HEX_QUOT
         | EVAL_JSON_UNESCAPED_SLASHES
         | EVAL_JSON_UNESCAPED_UNICODE
+        | EVAL_JSON_UNESCAPED_LINE_TERMINATORS
         | EVAL_JSON_FORCE_OBJECT
         | EVAL_JSON_PRETTY_PRINT
         | EVAL_JSON_PARTIAL_OUTPUT_ON_ERROR
@@ -100,6 +104,7 @@ fn eval_json_encode_result(
     let mut error = None;
     eval_json_encode_append(
         value,
+        context,
         values,
         flags,
         depth as usize,
@@ -125,6 +130,7 @@ fn eval_json_encode_result(
 /// Appends one JSON value to the output buffer.
 fn eval_json_encode_append(
     value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
     flags: i64,
     depth_limit: usize,
@@ -155,6 +161,7 @@ fn eval_json_encode_append(
         EVAL_TAG_ARRAY => {
             eval_json_encode_append_indexed_array(
                 value,
+                context,
                 values,
                 flags,
                 depth_limit,
@@ -167,6 +174,7 @@ fn eval_json_encode_append(
         EVAL_TAG_ASSOC => {
             eval_json_encode_append_assoc(
                 value,
+                context,
                 values,
                 flags,
                 depth_limit,
@@ -179,6 +187,7 @@ fn eval_json_encode_append(
         EVAL_TAG_OBJECT => {
             eval_json_encode_append_object(
                 value,
+                context,
                 values,
                 flags,
                 depth_limit,
@@ -237,6 +246,7 @@ fn eval_json_encode_append_float(
 /// Appends one indexed eval array as a JSON array or forced JSON object.
 fn eval_json_encode_append_indexed_array(
     value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
     flags: i64,
     depth_limit: usize,
@@ -277,6 +287,7 @@ fn eval_json_encode_append_indexed_array(
         let element = values.array_iter_value(value, position)?;
         eval_json_encode_append(
             element,
+            context,
             values,
             flags,
             depth_limit,
@@ -298,6 +309,7 @@ fn eval_json_encode_append_indexed_array(
 /// Appends one associative eval array as a JSON object.
 fn eval_json_encode_append_assoc(
     value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
     flags: i64,
     depth_limit: usize,
@@ -335,66 +347,7 @@ fn eval_json_encode_append_assoc(
         let element = values.array_iter_value(value, position)?;
         eval_json_encode_append(
             element,
-            values,
-            flags,
-            depth_limit,
-            depth + 1,
-            arrays_seen,
-            error,
-            output,
-        )?;
-    }
-    if pretty && len > 0 {
-        output.push(b'\n');
-        eval_json_encode_pretty_indent(output, depth);
-    }
-    output.push(b'}');
-    arrays_seen.pop();
-    Ok(())
-}
-
-/// Appends one eval runtime object as a JSON object.
-fn eval_json_encode_append_object(
-    value: RuntimeCellHandle,
-    values: &mut impl RuntimeValueOps,
-    flags: i64,
-    depth_limit: usize,
-    depth: usize,
-    arrays_seen: &mut Vec<usize>,
-    error: &mut Option<EvalJsonEncodeError>,
-    output: &mut Vec<u8>,
-) -> Result<(), EvalStatus> {
-    eval_json_encode_enter_array(value, depth_limit, depth, arrays_seen)?;
-    let pretty = flags & EVAL_JSON_PRETTY_PRINT != 0;
-    output.push(b'{');
-    let len = values.object_property_len(value)?;
-    if pretty && len > 0 {
-        output.push(b'\n');
-    }
-    for position in 0..len {
-        if position > 0 {
-            output.push(b',');
-            if pretty {
-                output.push(b'\n');
-            }
-        }
-        if pretty {
-            eval_json_encode_pretty_indent(output, depth + 1);
-        }
-        let key = values.object_property_iter_key(value, position)?;
-        let key_bytes = values.string_bytes(key)?;
-        eval_json_encode_append_string(
-            &key_bytes,
-            flags & !EVAL_JSON_NUMERIC_CHECK,
-            EvalJsonStringPosition::Key,
-            error,
-            output,
-        )?;
-        eval_json_encode_append_colon(flags, output);
-        let property = std::str::from_utf8(&key_bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
-        let element = values.property_get(value, property)?;
-        eval_json_encode_append(
-            element,
+            context,
             values,
             flags,
             depth_limit,
@@ -489,7 +442,10 @@ fn eval_json_encode_append_string(
 fn eval_json_encode_append_char(character: char, flags: i64, output: &mut Vec<u8>) {
     if character.is_ascii() {
         eval_json_encode_append_ascii_byte(character as u8, flags, output);
-    } else if flags & EVAL_JSON_UNESCAPED_UNICODE != 0 {
+    } else if flags & EVAL_JSON_UNESCAPED_UNICODE != 0
+        && (!matches!(character, '\u{2028}' | '\u{2029}')
+            || flags & EVAL_JSON_UNESCAPED_LINE_TERMINATORS != 0)
+    {
         let mut buffer = [0_u8; 4];
         output.extend_from_slice(character.encode_utf8(&mut buffer).as_bytes());
     } else {

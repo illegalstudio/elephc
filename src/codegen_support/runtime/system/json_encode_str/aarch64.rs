@@ -159,19 +159,10 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.label("__rt_json_str_check_unicode");
     emitter.instruction("cmp w14, #128");                                       // is the source byte ASCII (< 0x80)?
     emitter.instruction("b.lo __rt_json_str_check_done");                       // ASCII bytes copy as-is
-    // When JSON_INVALID_UTF8_IGNORE (0x100000) or JSON_INVALID_UTF8_SUBSTITUTE
-    // (0x200000) is set, every multibyte byte must travel through the
-    // validating dispatcher so malformed sequences are observed regardless
-    // of JSON_UNESCAPED_UNICODE — the validator decides whether to skip,
-    // substitute U+FFFD, or raise JSON_ERROR_UTF8.
-    emitter.instruction("mov x10, #3145728");                                   // 0x300000 = JSON_INVALID_UTF8_IGNORE | JSON_INVALID_UTF8_SUBSTITUTE
-    emitter.instruction("tst x19, x10");                                        // is either UTF-8 sanitization flag set? (cached flag)
-    emitter.instruction("b.ne __rt_json_str_utf8_dispatch");                    // always validate when sanitization is requested
-    emitter.instruction("tst x19, #256");                                       // is JSON_UNESCAPED_UNICODE (bit 256) set? (cached flag)
-    emitter.instruction("b.ne __rt_json_str_check_done");                       // flag set → copy the multibyte sequence verbatim
-    // Fall through to the UTF-8 decoder which emits the codepoint as
-    // \uXXXX or \uHHHH\uLLLL (surrogate pair for codepoints >= 0x10000).
-    emitter.instruction("b __rt_json_str_utf8_dispatch");                       // route to the UTF-8 length-class dispatcher
+    // Decode multibyte sequences before choosing raw UTF-8 or an escape.
+    // U+2028 and U+2029 require both unescaped flags, even when other Unicode
+    // characters can be copied literally.
+    emitter.instruction("b __rt_json_str_utf8_dispatch");                       // validate and decode the next UTF-8 sequence
 
     emitter.label("__rt_json_str_check_done");
 
@@ -439,6 +430,9 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("orr w16, w16, w3");                                    // merge bits 6..11
     emitter.instruction("and w9, w9, #0x3F");                                   // b4 & 0x3F → low 6 bits
     emitter.instruction("orr w16, w16, w9");                                    // full 21-bit codepoint
+    emitter.instruction("mov x12, #4");                                         // four source bytes belong to this Unicode scalar
+    emitter.instruction("tst x19, #256");                                       // does JSON_UNESCAPED_UNICODE permit a literal scalar?
+    emitter.instruction("b.ne __rt_json_str_utf8_copy");                        // copy the validated four-byte scalar literally
     // Compute the surrogate pair: cp -= 0x10000; high = 0xD800 + (cp >> 10);
     // low = 0xDC00 + (cp & 0x3FF).
     emitter.instruction("mov w4, #0x10000");                                    // 0x10000 base offset for surrogate pair maths
@@ -466,6 +460,18 @@ pub(super) fn emit(emitter: &mut Emitter) {
 
     // -- emit a BMP codepoint as a single \uXXXX --
     emitter.label("__rt_json_str_utf8_emit_bmp");
+    emitter.instruction("tst x19, #256");                                       // does JSON_UNESCAPED_UNICODE permit literal Unicode?
+    emitter.instruction("b.eq __rt_json_str_utf8_escape_bmp");                  // default encoding escapes all non-ASCII scalars
+    emitter.instruction("mov w9, #0x2028");                                     // first Unicode line separator
+    emitter.instruction("cmp w16, w9");                                         // is this the line separator?
+    emitter.instruction("b.eq __rt_json_str_utf8_line_separator");              // line separators need the additional flag
+    emitter.instruction("add w9, w9, #1");                                      // second Unicode line separator
+    emitter.instruction("cmp w16, w9");                                         // is this the paragraph separator?
+    emitter.instruction("b.ne __rt_json_str_utf8_copy");                        // ordinary Unicode scalars can be copied literally
+    emitter.label("__rt_json_str_utf8_line_separator");
+    emitter.instruction("tst x19, #2048");                                      // is JSON_UNESCAPED_LINE_TERMINATORS also enabled?
+    emitter.instruction("b.ne __rt_json_str_utf8_copy");                        // both flags allow the separator to remain literal
+    emitter.label("__rt_json_str_utf8_escape_bmp");
     emitter.instruction("str x13, [sp, #40]");                                  // checkpoint the source index in scratch slot 40
     emitter.instruction("str x12, [sp, #32]");                                  // checkpoint the bytes-consumed count across the helper call
     emitter.instruction("ldr x11, [sp, #24]");                                  // reload the running write pointer
@@ -474,6 +480,20 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("ldr x13, [sp, #40]");                                  // restore the source index
     emitter.instruction("add x13, x13, x12");                                   // advance past the consumed source bytes
     emitter.instruction("b __rt_json_str_loop");                                // continue scanning the remaining source bytes
+
+    // -- copy a validated UTF-8 scalar without escaping it --
+    emitter.label("__rt_json_str_utf8_copy");
+    emitter.instruction("ldr x1, [sp, #0]");                                    // reload the source slice pointer
+    emitter.instruction("ldr x11, [sp, #24]");                                  // reload the output cursor
+    emitter.instruction("add x10, x13, x12");                                   // compute the source index after this scalar
+    emitter.label("__rt_json_str_utf8_copy_loop");
+    emitter.instruction("ldrb w9, [x1, x13]");                                  // load the next validated UTF-8 byte
+    emitter.instruction("strb w9, [x11], #1");                                  // append the byte and advance the output cursor
+    emitter.instruction("add x13, x13, #1");                                    // advance the source cursor
+    emitter.instruction("cmp x13, x10");                                        // has the complete scalar been copied?
+    emitter.instruction("b.lo __rt_json_str_utf8_copy_loop");                   // copy every byte of the scalar
+    emitter.instruction("str x11, [sp, #24]");                                  // publish the updated output cursor
+    emitter.instruction("b __rt_json_str_loop");                                // continue encoding after the scalar
 
     // -- malformed UTF-8 handler --
     // Reached from any UTF-8 dispatch site that detected an invalid lead

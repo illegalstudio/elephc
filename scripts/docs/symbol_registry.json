@@ -18986,6 +18986,24 @@
       "extension": false,
       "internal": false,
       "module": "json",
+      "name": "JSON_ERROR_NON_BACKED_ENUM",
+      "route": "predefined",
+      "since": "8.1",
+      "value": 11
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "json",
       "name": "JSON_ERROR_RECURSION",
       "route": "predefined",
       "since": null,
@@ -19314,6 +19332,24 @@
       "route": "predefined",
       "since": null,
       "value": 4194304
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "json",
+      "name": "JSON_UNESCAPED_LINE_TERMINATORS",
+      "route": "predefined",
+      "since": null,
+      "value": 2048
     },
     {
       "aot": {

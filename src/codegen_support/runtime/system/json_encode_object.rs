@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Public-property walking and JsonSerializable dispatch depend on emitted per-class JSON descriptors.
+//! - A serializer returning its enum receiver walks its persistent properties once.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -36,6 +37,7 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_object ---");
     emitter.label_global("__rt_json_encode_object");
+    super::json_encode_enum::emit_dispatch(emitter);
 
     // -- set up stack frame --
     // Stack layout (128 bytes):
@@ -113,6 +115,7 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x9]");                                       // capture the outer JSON depth limit before user code can change it
     emitter.instruction("str x10, [sp, #72]");                                  // save _json_depth_limit across jsonSerialize()
     emitter.instruction("str xzr, [sp, #40]");                                  // default the saved prefix heap pointer to null for empty prefixes
+    emitter.instruction("ldr x10, [sp, #24]");                                  // recover the prefix length after saving unrelated JSON state
     emitter.instruction("cbz x10, __rt_json_obj_jsonserialize_invoke");         // skip the prefix copy when there is no caller-visible prefix to preserve
     crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_concat_buf");
     emitter.instruction("mov x2, x10");                                         // copy the prefix length into the str_persist length register
@@ -138,6 +141,8 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("add x13, x13, #1");                                    // advance the prefix copy index
     emitter.instruction("b __rt_json_obj_prefix_restore");                      // continue the prefix restore loop
     emitter.label("__rt_json_obj_jsonserialize_after_restore");
+    emitter.instruction("ldr x0, [sp, #40]");                                   // load the owned prefix copy after its bytes have been restored
+    emitter.instruction("bl __rt_decref_any");                                  // release the temporary string copy, including the null-prefix case
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
     emitter.instruction("ldr x10, [sp, #24]");                                  // reload the saved pre-call concat-buffer offset
     emitter.instruction("str x10, [x9]");                                       // restore the concat-buffer offset so encode_mixed appends at our intended slot
@@ -157,11 +162,32 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #72]");                                  // reload the outer JSON depth limit after user code returns
     emitter.instruction("str x10, [x9]");                                       // restore _json_depth_limit before recursive JSON encoding resumes
     emitter.instruction("ldr x0, [sp, #48]");                                   // restore the boxed mixed return value before encoding it
+    // -- expose persistent enum properties once on a serializer self return --
+    emitter.instruction("cbz x0, __rt_json_obj_jsonserialize_mixed");           // null returns retain the ordinary mixed encoder
+    emitter.instruction("ldr x9, [x0]");                                        // inspect the boxed result tag
+    emitter.instruction("cmp x9, #6");                                          // only object results can be the receiver
+    emitter.instruction("b.ne __rt_json_obj_jsonserialize_mixed");              // other values retain recursive encoding
+    emitter.instruction("ldr x9, [x0, #8]");                                    // load the returned object identity
+    emitter.instruction("ldr x10, [sp, #0]");                                   // load the original receiver identity
+    emitter.instruction("cmp x9, x10");                                         // did jsonSerialize return its own receiver?
+    emitter.instruction("b.ne __rt_json_obj_jsonserialize_mixed");              // distinct objects retain recursive encoding
+    emitter.instruction("ldr x12, [x10]");                                      // load the receiver class id after identity comparison
+    abi::emit_symbol_address(emitter, "x13", "_class_enum_kinds");
+    emitter.instruction("ldr x13, [x13, x12, lsl #3]");                         // identify persistent enum receivers
+    emitter.instruction("cbz x13, __rt_json_obj_jsonserialize_mixed");          // ordinary classes retain their existing recursive path
+    emitter.instruction("bl __rt_decref_mixed");                                // retire the owned result box while its enum receiver remains persistent
+    emitter.instruction("ldr x12, [sp, #0]");                                   // reload the still-owned receiver after cleanup
+    emitter.instruction("ldr x12, [x12]");                                      // recover its class id
+    abi::emit_symbol_address(emitter, "x13", "_class_json_desc_ptrs");
+    emitter.instruction("ldr x13, [x13, x12, lsl #3]");                         // recover the descriptor overwritten by prefix storage
+    emitter.instruction("str x13, [sp, #24]");                                  // restore the descriptor for the property walker
+    emitter.instruction("b __rt_json_obj_walk_props");                          // walk the receiver without invoking the serializer again
+    emitter.label("__rt_json_obj_jsonserialize_mixed");
+    emitter.instruction("ldr x0, [sp, #48]");                                   // reload a non-self result for ordinary recursive encoding
     emitter.instruction("bl __rt_json_encode_mixed");                           // encode the boxed mixed return value as JSON
-    // Save the (x1, x2) result across the depth-exit helper call.
-    emitter.instruction("stp x1, x2, [sp, #32]");                               // checkpoint the encoded result slice across __rt_json_depth_exit
-    emitter.instruction("bl __rt_json_depth_exit");                             // decrement _json_active_depth so a sibling encoder can re-enter cleanly
-    emitter.instruction("ldp x1, x2, [sp, #32]");                               // restore the encoded result slice after the helper call
+    emitter.instruction("stp x1, x2, [sp, #32]");                               // checkpoint the encoded result slice across depth cleanup
+    emitter.instruction("bl __rt_json_depth_exit");                             // balance object entry after recursive result encoding
+    emitter.instruction("ldp x1, x2, [sp, #32]");                               // restore the encoded result slice after cleanup
     emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address after JsonSerializable encoding
     emitter.instruction("add sp, sp, #128");                                    // deallocate the object encoder scratch frame
     emitter.instruction("ret");                                                 // return the JSON encoded result produced by mixed encoding
@@ -423,6 +449,7 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_object ---");
     emitter.label_global("__rt_json_encode_object");
+    super::json_encode_enum::emit_dispatch(emitter);
 
     // Stack layout (rbp-relative, 96 bytes reserved):
     //   [rbp - 8]  = object pointer
@@ -453,7 +480,7 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the running write pointer for the encoder loop
 
     // Bounds-check the class id and resolve the JSON descriptor.
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the object pointer (depth_enter clobbered rax)
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the receiver for descriptor lookup
     emitter.instruction("mov rcx, QWORD PTR [rax]");                            // load class_id from the object header
     abi::emit_load_symbol_to_reg(emitter, "rdi", "_class_gc_desc_count", 0);    // load the total number of registered class descriptors
     emitter.instruction("cmp rcx, rdi");                                        // is the class_id within the descriptor table?
@@ -487,6 +514,7 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "r10", "_json_depth_limit", 0);       // capture the outer JSON depth limit before user code can change it
     emitter.instruction("mov QWORD PTR [rbp - 96], r10");                       // save _json_depth_limit across jsonSerialize()
     emitter.instruction("mov QWORD PTR [rbp - 64], 0");                         // default the saved prefix heap pointer to null for empty prefixes
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // recover the prefix length after saving unrelated JSON state
     emitter.instruction("test r10, r10");                                       // is there any caller-visible prefix to preserve?
     emitter.instruction("jz __rt_json_obj_jsonserialize_invoke_x");             // skip the prefix copy when the prefix is empty
     abi::emit_symbol_address(emitter, "rax", "_concat_buf");                    // materialize the concat-buffer base for the str_persist input
@@ -515,6 +543,8 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rcx, 1");                                          // advance the prefix copy index
     emitter.instruction("jmp __rt_json_obj_prefix_restore_x");                  // continue the prefix restore loop
     emitter.label("__rt_json_obj_jsonserialize_after_restore_x");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // load the owned prefix copy after its bytes have been restored
+    emitter.instruction("call __rt_decref_any");                                // release the temporary string copy, including the null-prefix case
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the saved pre-call concat-buffer offset
     abi::emit_store_reg_to_symbol(emitter, "r10", "_concat_off", 0);            // restore the concat-buffer offset so encode_mixed appends at our intended slot
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the outer JSON error state after user code returns
@@ -528,11 +558,31 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 96]");                       // reload the outer JSON depth limit after user code returns
     abi::emit_store_reg_to_symbol(emitter, "r10", "_json_depth_limit", 0);      // restore _json_depth_limit before recursive JSON encoding resumes
     emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // restore the boxed mixed return value before encoding it
+    // -- expose persistent enum properties once on a serializer self return --
+    emitter.instruction("test rax, rax");                                       // null returns retain the ordinary mixed encoder
+    emitter.instruction("je __rt_json_obj_jsonserialize_mixed_x");              // skip object inspection for a null result
+    emitter.instruction("cmp QWORD PTR [rax], 6");                              // only object results can be the receiver
+    emitter.instruction("jne __rt_json_obj_jsonserialize_mixed_x");             // other values retain recursive encoding
+    emitter.instruction("mov rcx, QWORD PTR [rax + 8]");                        // load the returned object identity
+    emitter.instruction("cmp rcx, QWORD PTR [rbp - 8]");                        // compare against the original receiver identity
+    emitter.instruction("jne __rt_json_obj_jsonserialize_mixed_x");             // distinct objects retain recursive encoding
+    emitter.instruction("mov rcx, QWORD PTR [rcx]");                            // load the receiver class id after identity comparison
+    abi::emit_symbol_address(emitter, "rdi", "_class_enum_kinds");
+    emitter.instruction("cmp QWORD PTR [rdi + rcx*8], 0");                      // identify persistent enum receivers
+    emitter.instruction("je __rt_json_obj_jsonserialize_mixed_x");              // ordinary classes retain their existing recursive path
+    emitter.instruction("call __rt_decref_mixed");                              // retire the owned result box while its enum receiver remains persistent
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the still-owned receiver after cleanup
+    emitter.instruction("mov rcx, QWORD PTR [rax]");                            // recover its class id
+    abi::emit_symbol_address(emitter, "rdi", "_class_json_desc_ptrs");
+    emitter.instruction("mov rdi, QWORD PTR [rdi + rcx*8]");                    // recover the descriptor overwritten by prefix storage
+    emitter.instruction("mov QWORD PTR [rbp - 32], rdi");                       // restore the descriptor for the property walker
+    emitter.instruction("jmp __rt_json_obj_walk_props_x");                      // walk the receiver without invoking the serializer again
+    emitter.label("__rt_json_obj_jsonserialize_mixed_x");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // reload a non-self result for ordinary recursive encoding
     emitter.instruction("call __rt_json_encode_mixed");                         // encode the boxed mixed return value as JSON
-    // Save the (rax, rdx) result across __rt_json_depth_exit.
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // checkpoint the encoded result pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // checkpoint the encoded result length
-    emitter.instruction("call __rt_json_depth_exit");                           // decrement _json_active_depth so a sibling encoder can re-enter cleanly
+    emitter.instruction("call __rt_json_depth_exit");                           // balance object entry after recursive result encoding
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // restore the encoded result pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // restore the encoded result length
     emitter.instruction("mov rsp, rbp");                                        // unwind the encoder scratch frame

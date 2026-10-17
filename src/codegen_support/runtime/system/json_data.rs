@@ -16,7 +16,7 @@
 /// - `_json_true`, `_json_false`, `_json_null` — JSON keywords
 /// - `_json_int_max_str`, `_json_int_min_str` — overflow thresholds for
 ///   `json_decode`'s `JSON_BIGINT_AS_STRING` logic (i64 bounds)
-/// - `_json_err_msg_0` through `_json_err_msg_10` — per-error human-readable
+/// - `_json_err_msg_0` through `_json_err_msg_11`: per-error human-readable
 ///   messages matching PHP's `json_last_error_msg()` exactly
 /// - `_json_err_msg_table` — parallel ptr/len pairs indexed by error code
 /// - `_json_err_msg_count` — total error message count
@@ -60,6 +60,7 @@ pub(crate) fn emit_json_data() -> String {
             "_json_err_msg_10",
             "Single unpaired UTF-16 surrogate in unicode escape",
         ),
+        ("_json_err_msg_11", "Non-backed enums have no default serialization"),
     ];
 
     for (label, message) in messages {

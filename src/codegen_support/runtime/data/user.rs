@@ -345,7 +345,26 @@ pub(crate) fn emit_runtime_data_user(
                 class_info_by_id.get(&class_id),
             ) {
                 (Some(class_name), Some(class_info)) if enums.contains_key(*class_name) => {
-                    enum_case_name_property_offset(class_info)
+                    enum_case_property_offset(class_info, "name")
+                }
+                _ => -1,
+            };
+            out.push_str(&format!("    .quad {}\n", offset));
+        }
+    }
+
+    // Backed JSON enum values use the checked layout instead of assuming a slot order.
+    out.push_str(".globl _class_enum_value_offsets\n_class_enum_value_offsets:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let offset = match (
+                class_name_by_id.get(&class_id),
+                class_info_by_id.get(&class_id),
+            ) {
+                (Some(class_name), Some(class_info))
+                    if enums.get(*class_name).is_some_and(|info| info.backing_type.is_some()) =>
+                {
+                    enum_case_property_offset(class_info, "value")
                 }
                 _ => -1,
             };
@@ -1063,7 +1082,7 @@ pub(crate) fn emit_runtime_data_user(
         // Per-property name strings used by the JSON descriptor below. We
         // emit them as labels before the descriptor so the descriptor
         // table holds plain (ptr, len) pairs.
-        let public_props: Vec<(usize, &(String, PhpType))> = class_info
+        let mut public_props: Vec<(usize, &(String, PhpType))> = class_info
             .properties
             .iter()
             .enumerate()
@@ -1079,6 +1098,10 @@ pub(crate) fn emit_runtime_data_user(
                     .map_or(true, |v| matches!(v, Visibility::Public))
             })
             .collect();
+        if enums.contains_key(class_name.as_str()) {
+            // PHP exposes enum names before backing values, independently of slot layout.
+            public_props.sort_by_key(|(_, (name, _))| name.as_str() != "name");
+        }
         for (prop_index, (prop_name, _)) in &public_props {
             out.push_str(&format!(
                 ".globl _class_json_pname_{}_{}\n_class_json_pname_{}_{}:\n    .ascii {:?}\n",
@@ -3736,20 +3759,14 @@ fn hoist_enum_name_row(rows: &mut Vec<VarDumpRow>) {
     }
 }
 
-/// Returns the byte offset of an enum class's `name` property slot, or `-1` when
-/// the class does not declare one.
-///
-/// Every PHP enum case exposes a readonly `name` holding the case identifier, and
-/// elephc materializes it as an ordinary declared string property — so the case
-/// name `enum(E::C)`, `E Enum` bodies and `\E::C` all print is just that slot's
-/// 16-byte `(ptr, len)` pair. A `-1` result makes the runtime treat the class as a
-/// plain object rather than reading a slot that may not exist.
-fn enum_case_name_property_offset(class_info: &ClassInfo) -> i64 {
+/// Returns the checked byte offset of an enum's name or backing value, or `-1`.
+/// The fallback matches the ordinary property descriptor layout when no offset is recorded.
+fn enum_case_property_offset(class_info: &ClassInfo, property_name: &str) -> i64 {
     class_info
         .properties
         .iter()
         .enumerate()
-        .find(|(_, (prop_name, _))| prop_name == "name")
+        .find(|(_, (prop_name, _))| prop_name == property_name)
         .map(|(layout_index, (prop_name, _))| {
             class_info
                 .property_offsets
