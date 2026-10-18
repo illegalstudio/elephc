@@ -13,6 +13,34 @@ use crate::codegen::platform::Target;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
 
+/// Executable defaults remain runtime values through aliases and indexed string storage.
+#[test]
+fn executable_path_defaults_resolve_and_release_fresh_string_elements_on_all_targets() {
+    for name in SUPPORTED_TARGETS {
+        let target = Target::parse(name).unwrap();
+        let mut module = Module::new(target);
+        module.global_constants.insert("PROGRAM_BINARY".to_string(), (
+            ExprKind::ConstRef("PHP_BINARY".into()), PhpType::Str,
+        ));
+        let default = Expr::new(ExprKind::ConstRef("PROGRAM_BINARY".into()), Span::dummy());
+        let sig = signature(vec![("path".into(), PhpType::Str)], vec![Some(default)], vec![true], None);
+        let defaults = resolve_invoker_defaults(&module, None, &sig);
+        let expected = InvokerDefaultValue::Scalar { kind: CONST_DEFAULT_EXECUTABLE_PATH, payload: 0 };
+        assert!(defaults[0].as_ref().is_some_and(|value| *value == expected), "{name}");
+        let mut emitter = Emitter::new(target);
+        let mut data = DataSection::new();
+        let owners = super::super::InvokerArgumentOwners::new(super::super::INVOKER_BOUNDARY_FRAME_SIZE, 1);
+        let mut ctx = InvokerEmitContext::new("runtime_default", owners, false, false, Vec::new(), target);
+        emit_indexed_array_default(&[InvokerDefaultArrayElement { key: None, default: expected }],
+            &PhpType::Str, &mut emitter, &mut ctx, &mut data);
+        let asm = emitter.output();
+        let load = asm.find("__rt_php_binary").expect("runtime path acquisition");
+        let append = asm.find("__rt_array_push_str").expect("independent array string copy");
+        let release = asm.find("__rt_heap_free_safe").expect("fresh source string retirement");
+        assert!(load < append && append < release, "{name}: {asm}");
+    }
+}
+
 /// Every target this project supports. A default materializer that regressed on one of them
 /// would ship a working compiler for the others, so each assertion runs over the whole set.
 const SUPPORTED_TARGETS: [&str; 5] = [

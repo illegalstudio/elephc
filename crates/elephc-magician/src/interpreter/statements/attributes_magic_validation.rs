@@ -62,11 +62,7 @@ pub(super) struct EvalAotAbstractPropertyRequirement {
 pub(super) fn validate_eval_class_attribute_targets(
     attributes: &[EvalAttribute],
 ) -> Result<(), EvalStatus> {
-    if eval_attributes_have_global_builtin_attribute(attributes, "Override") {
-        Err(EvalStatus::RuntimeFatal)
-    } else {
-        Ok(())
-    }
+    validate_eval_core_attribute_targets(attributes, 1)
 }
 
 /// Rejects builtin attributes that cannot target eval-declared interfaces.
@@ -172,6 +168,7 @@ pub(super) fn validate_eval_enum_attribute_targets(enum_decl: &EvalEnum) -> Resu
 pub(super) fn validate_eval_non_class_attribute_targets(
     attributes: &[EvalAttribute],
 ) -> Result<(), EvalStatus> {
+    validate_eval_core_attribute_targets(attributes, 1)?;
     if eval_attributes_have_global_builtin_attribute(attributes, "AllowDynamicProperties")
         || eval_attributes_have_global_builtin_attribute(attributes, "Override")
     {
@@ -185,24 +182,14 @@ pub(super) fn validate_eval_non_class_attribute_targets(
 pub(super) fn validate_eval_non_method_attribute_targets(
     attributes: &[EvalAttribute],
 ) -> Result<(), EvalStatus> {
-    if eval_attributes_have_global_builtin_attribute(attributes, "AllowDynamicProperties")
-        || eval_attributes_have_global_builtin_attribute(attributes, "Override")
-    {
-        Err(EvalStatus::RuntimeFatal)
-    } else {
-        Ok(())
-    }
+    validate_eval_core_attribute_targets(attributes, 8)
 }
 
 /// Rejects class-only builtin attributes on method declarations.
 pub(super) fn validate_eval_method_attribute_targets(
     attributes: &[EvalAttribute],
 ) -> Result<(), EvalStatus> {
-    if eval_attributes_have_global_builtin_attribute(attributes, "AllowDynamicProperties") {
-        Err(EvalStatus::RuntimeFatal)
-    } else {
-        Ok(())
-    }
+    validate_eval_core_attribute_targets(attributes, 4)
 }
 
 /// Returns whether the attribute list contains one global builtin attribute.

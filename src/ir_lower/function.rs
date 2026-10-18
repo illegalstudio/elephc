@@ -1786,7 +1786,7 @@ fn lower_body_into_function(
     ctx.lower_with_final_string_append_storage(|ctx| {
         if let Some(class) = property_initializers {
             super::property_initializers::lower(ctx, class);
-        } else if !super::throwable_constructors::lower(ctx) {
+        } else if !super::throwable_constructors::lower(ctx) && !super::core_methods::lower(ctx, body) {
             crate::ir_lower::loop_closures::lower_body_observing_numeric_closures(ctx, body);
         }
     });

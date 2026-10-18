@@ -10,6 +10,100 @@
 use super::*;
 use crate::ir::{Effects, Immediate, IrHeapKind, IrType, RuntimeCallTarget};
 
+/// Every missed dynamic class branch retains a boxed runtime argument container on every target.
+#[test]
+fn dynamic_constructor_fallbacks_keep_runtime_argument_containers_on_all_targets() {
+    let source = r#"<?php
+class FallbackOpt { public function __construct($a = 1, $b = 2) {} }
+class FallbackExact { public function __construct(public int $x) {} }
+function fallbackNamed(string $name): mixed { return new $name(b: 5); }
+function fallbackSpread(string $name, array $values): mixed { return new $name(...$values); }
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        for function in ["fallbackNamed", "fallbackSpread"] {
+            let function = module.functions.iter().find(|candidate| candidate.name == function).unwrap();
+            let fallback = function.instructions.iter().find(|inst| inst.op == crate::ir::Op::DynamicObjectNewMixed).unwrap();
+            assert_eq!(fallback.immediate, Some(Immediate::Bool(true)), "{name}: {}", function.name);
+            assert_eq!(fallback.operands.len(), 2, "{name}: {}", function.name);
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+}
+
+/// Runtime constructor binding reaches valid fixed and lexical calls on every supported target.
+#[test]
+fn hidden_constructor_unpack_streams_lower_on_all_targets() {
+    let source = r#"<?php
+class StreamTarget extends ErrorException {
+    public static function make(array $values): static { return new static(...$values); }
+    public function reset(array $values): void { parent::__construct(...$values); }
+}
+$values = [9 => 'fresh', 'filename' => 'named.php'];
+$error = new ErrorException(...$values);
+$error->__construct(...$values);
+$child = StreamTarget::make($values);
+$child->reset($values);
+function invokeStreamConstructor(callable $callback, array $values): void { $callback(...$values); }
+$constructor = $error->__construct(...);
+invokeStreamConstructor($constructor, $values);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        assert!(assembly.contains(&crate::names::method_symbol("ErrorException", "__construct")), "{name}");
+    }
+}
+
+/// A lexical parent call alone keeps its builtin constructor dependency on every target.
+#[test]
+fn parent_static_calls_retain_builtin_throwable_constructors_on_all_targets() {
+    let source = r#"<?php
+class ParentDependency extends Exception {
+    public function reset(): void { parent::__construct('fresh'); }
+}
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        assert!(module.class_methods.iter().any(|method| method.name == "Exception::__construct"), "{name}");
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let symbol = crate::names::method_symbol("Exception", "__construct");
+        assert!(assembly.contains(&format!("{symbol}:")), "{name}: missing referenced parent symbol");
+    }
+}
+
+/// Fixed and dynamic ordinary Throwable allocation retain the new-expression line on every target.
+#[test]
+fn ordinary_throwable_creation_lines_are_stamped_on_all_targets() {
+    let source = "<?php\nfunction fixedLocation(): ErrorException {\nreturn new ErrorException('fixed');\n}\nfunction dynamicLocation(string $class): mixed {\nreturn new $class('dynamic');\n}\nclass StaticLocation extends ErrorException {\npublic static function make(): static {\nreturn new static('factory');\n}\n}\necho fixedLocation()->getLine(), dynamicLocation(ErrorException::class)->getLine(), StaticLocation::make()->getLine();";
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let module = lower_source_at_for_target(source, Path::new("main.php"), Path::new("."), target);
+        let offset = crate::codegen_support::throwable_layout::ordinary_creation_line_offset(
+            "ErrorException", &module.class_infos,
+        ).unwrap();
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        for (function, line) in [("fixedLocation", 3), ("dynamicLocation", 6), ("StaticLocation::make", 10)] {
+            let start = format!("@fn name={function} symbol=");
+            let end = format!("@endfn name={function}");
+            let body = assembly.split_once(&start).unwrap().1.split_once(&end).unwrap().0;
+            let stamp = match target.arch {
+                crate::codegen::platform::Arch::AArch64 => format!("mov x9, #{line}\n    str x9, [x0, #{offset}]"),
+                crate::codegen::platform::Arch::X86_64 => format!("mov QWORD PTR [rax + {offset}], {line}"),
+            };
+            assert!(body.contains(&stamp), "{name}: {function} lacks construction line {line}\n{body}");
+        }
+    }
+}
+
 /// Parent calls release their ABI-created nullable argument after return on every supported target.
 #[test]
 fn lexical_parent_call_retires_default_argument_box_on_all_targets() {

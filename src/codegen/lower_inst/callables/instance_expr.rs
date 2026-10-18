@@ -213,6 +213,12 @@ fn expr_callable_source_instruction<'a>(
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    if inst_ref.op == Op::Acquire {
+        let source = inst_ref.operands.first().copied().ok_or_else(|| {
+            CodegenIrError::invalid_module("callable acquire has no source operand")
+        })?;
+        return expr_callable_source_instruction(ctx, source, owner);
+    }
     if inst_ref.op == Op::LoadLocal {
         return expr_callable_local_source_instruction(ctx, block, index, inst_ref, owner);
     }

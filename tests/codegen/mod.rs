@@ -30,6 +30,7 @@ mod echo_vars;
 mod eval;
 mod eval_generics;
 mod symbol_catalog;
+mod core_classes;
 mod eval_builtin_parity;
 mod eval_callable_ref_errors;
 mod eval_callables;

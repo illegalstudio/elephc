@@ -212,7 +212,7 @@ fn user_constant_value_is_supported(value: &NativeCallableDefault) -> bool {
         | NativeCallableDefault::String(_)
         | NativeCallableDefault::EmptyArray => true,
         NativeCallableDefault::Array(elements) => user_constant_elements_are_supported(elements),
-        NativeCallableDefault::Object { .. } => false,
+        NativeCallableDefault::Object { .. } | NativeCallableDefault::ExecutablePath => false,
     }
 }
 

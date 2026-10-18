@@ -156,6 +156,10 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
         0
     };
     emit_property_defaults(ctx, result, &property_defaults)?;
+    if super::super::is_throwable_like_class(ctx, &class_name) {
+        ctx.load_value_to_result(result)?;
+        emit_regular_throwable_creation_line(ctx, result, abi::int_result_reg(ctx.emitter), class_id);
+    }
     if let Some(constructor) = constructor_impl {
         emit_constructor_call(
             ctx,

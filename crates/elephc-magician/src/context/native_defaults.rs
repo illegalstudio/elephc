@@ -17,6 +17,7 @@ pub enum NativeCallableDefault {
     Int(i64),
     Float(f64),
     String(String),
+    ExecutablePath,
     EmptyArray,
     Array(Vec<NativeCallableArrayDefaultElement>),
     Object {

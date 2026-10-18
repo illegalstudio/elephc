@@ -297,6 +297,7 @@ pub(super) fn check_ref_assign(
                 PhpType::Int | PhpType::Str | PhpType::Mixed
             );
             let supported_key = match array_ty.codegen_repr() {
+                PhpType::Object(ref name) if name.eq_ignore_ascii_case("WeakMap") => true,
                 PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed => {
                     valid_php_key
                 }

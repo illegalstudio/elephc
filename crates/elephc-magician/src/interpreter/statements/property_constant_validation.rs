@@ -99,6 +99,7 @@ pub(super) fn validate_property_parent_redeclaration(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    validate_eval_property_override(class, property, context, values)?;
     let Some(parent) = class.parent() else {
         return Ok(());
     };
@@ -227,7 +228,7 @@ pub(super) fn eval_aot_property_declaring_class(
 pub(super) fn validate_eval_declared_constants(constants: &[EvalClassConstant]) -> Result<(), EvalStatus> {
     let mut names = std::collections::HashSet::new();
     for constant in constants {
-        validate_eval_non_method_attribute_targets(constant.attributes())?;
+        validate_eval_core_attribute_targets(constant.attributes(), 16)?;
         if !names.insert(constant.name().to_string()) {
             return Err(EvalStatus::RuntimeFatal);
         }

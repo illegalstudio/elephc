@@ -52,7 +52,8 @@ pub(super) fn emit_unserialize_magic_call(emitter: &mut Emitter) {
     abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), data);
     abi::emit_store_zero_to_local_slot(emitter, data);
     abi::load_at_offset(emitter, scratch, method);
-    abi::emit_call_reg(emitter, scratch);
+    abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 2), scratch);
+    abi::emit_call_label(emitter, "__rt_unserialize_invoke_modern");
     emitter.comment("unserialize data remains owned until the parser context completes");
 }
 
@@ -70,7 +71,7 @@ mod tests {
             let asm = emitter.output();
             let boxed = asm.find("__rt_mixed_from_value").unwrap();
             let rooted = asm.find("__rt_unserialize_defer_data").unwrap();
-            let invoked = asm.find(if name == "linux-x86_64" { "call r10" } else { "blr x10" }).unwrap();
+            let invoked = asm.find("__rt_unserialize_invoke_modern").unwrap();
             assert!(boxed < rooted && rooted < invoked, "{name}: {asm}");
             let clear = if name == "linux-x86_64" { "mov QWORD PTR [rbp - 80], 0" } else { "stur xzr, [x29, #-192]" };
             assert!(asm[rooted..invoked].contains(clear), "{name}: {asm}");

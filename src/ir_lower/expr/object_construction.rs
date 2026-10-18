@@ -408,7 +408,7 @@ pub(super) fn lower_new_dynamic(
 /// arrive as plain positional arguments. What survives both — a spread whose operand is
 /// only known at runtime, or named arguments the planner could not resolve to a class —
 /// is passed through the runtime argument container rather than dropped on the floor.
-fn lower_new_dynamic_generic(
+pub(super) fn lower_new_dynamic_generic(
     ctx: &mut LoweringContext<'_, '_>,
     name_value: LoweredValue,
     args: &[Expr],
@@ -460,7 +460,11 @@ pub(super) fn lower_new_dynamic_object(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
-    let mut operands = vec![lower_expr(ctx, class_name).value];
+    let class_value = lower_expr(ctx, class_name);
+    if let Some(value) = lower_planned_collector_new(ctx, class_value, fallback_class.as_str(), args, expr) {
+        return value;
+    }
+    let mut operands = vec![class_value.value];
     operands.extend(lower_args(ctx, args));
     let name = format!("{}|{}", fallback_class.as_str(), required_parent.as_str());
     let data = ctx.intern_class_name(&name);
@@ -472,6 +476,30 @@ pub(super) fn lower_new_dynamic_object(
         Op::DynamicObjectNew.default_effects(),
         Some(expr.span),
     )
+}
+
+/// Reuses fixed-class argument binding for late-bound constructors with hidden collectors.
+pub(super) fn lower_planned_collector_new(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: LoweredValue,
+    fallback: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if !args.iter().any(is_spread_arg)
+        || !constructor_signature(ctx, &Name::from(fallback.to_string()))
+            .is_some_and(crate::func_args::sig_collects_surplus_args)
+    {
+        return None;
+    }
+    let candidates = dynamic_new_planned_candidate_classes(ctx, args, true);
+    if candidates.is_empty() { return None; }
+    let mixed = lower_new_dynamic_planned_value(ctx, class_name, &candidates, args, expr);
+    let ty = PhpType::Object(fallback.to_string());
+    let object = ctx.emit_owned_value(Op::MixedUnbox, vec![mixed.value], None, ty.clone(),
+        Op::mixed_unbox_effects(&ty), Some(expr.span));
+    release_coerced_source_if_owned(ctx, mixed, Some(expr.span));
+    Some(object)
 }
 
 /// Returns constructor signature metadata when available for a fixed class.

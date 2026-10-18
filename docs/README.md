@@ -56,6 +56,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [Classes](php/classes.md) — inheritance, interfaces, abstract/final classes, typed/final/static properties, static property redeclarations, constructor promotion, methods, traits, enums, magic methods
 - [SPL](php/spl.md) — SPL interfaces, exceptions, autoload/introspection helpers, and runtime-backed containers
 - [Namespaces](php/namespaces.md) — namespace, use, include/require/include_once/require_once, Composer/SPL autoloading, class introspection, constants, superglobals
+- [Core classes and constants](php/core-symbols.md) - weak references and maps, attributes, enum interfaces, exceptions, and predefined constants
 - [System & I/O](php/system-and-io.md) — system functions, date/time, JSON, filesystem, exec, debugging
 - [Streams](php/streams.md) — stream resources, wrappers, contexts, filters, sockets, TLS, process pipes
 - [Sessions](php/sessions.md) — `session_start()`, `$_SESSION`, session ID and cookie management, file-based storage under `--web`

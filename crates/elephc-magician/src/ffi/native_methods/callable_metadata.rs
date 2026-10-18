@@ -17,6 +17,7 @@ pub(in crate::ffi) fn native_callable_scalar_default(
     default_payload: u64,
 ) -> Option<NativeCallableDefault> {
     match default_kind {
+        elephc_builtin_contract::EXECUTABLE_PATH_DEFAULT_KIND => Some(NativeCallableDefault::ExecutablePath),
         NATIVE_DEFAULT_NULL => Some(NativeCallableDefault::Null),
         NATIVE_DEFAULT_BOOL => Some(NativeCallableDefault::Bool(default_payload != 0)),
         NATIVE_DEFAULT_INT => Some(NativeCallableDefault::Int(default_payload as i64)),

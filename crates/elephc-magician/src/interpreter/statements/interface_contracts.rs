@@ -392,10 +392,15 @@ pub(super) fn class_method_satisfies_aot_interface_requirement(
         return false;
     }
     requirement.signature.as_ref().is_none_or(|signature| {
+        let signature = if requirement.owner.eq_ignore_ascii_case("Serializable") {
+            signature.clone().with_return_type(None)
+        } else {
+            signature.clone()
+        };
         class_method_satisfies_interface_signature(
             method,
             method_owner,
-            signature,
+            &signature,
             &requirement.owner,
             pending_class,
             context,
@@ -460,10 +465,15 @@ pub(super) fn class_method_satisfies_builtin_interface_signature(
     pending_class: Option<&EvalClass>,
     context: &ElephcEvalContext,
 ) -> bool {
+    let requirement = if requirement_owner.eq_ignore_ascii_case("Serializable") {
+        requirement.clone().with_return_type(None)
+    } else {
+        requirement.clone()
+    };
     class_method_satisfies_interface_signature_with_return_mode(
         method,
         method_owner,
-        requirement,
+        &requirement,
         requirement_owner,
         pending_class,
         context,

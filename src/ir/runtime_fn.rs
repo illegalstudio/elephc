@@ -2623,6 +2623,8 @@ impl RuntimeFnId {
                 // leaked the literal replacement array on every call.
                 | RuntimeFnId::ArraySplice
                 | RuntimeFnId::ZvalUnpack
+                // Parsed values own their storage independently of the wire input and options.
+                | RuntimeFnId::Unserialize
         ) {
             BuiltinResultOwnership::Fresh
         } else if matches!(
@@ -2653,6 +2655,9 @@ impl RuntimeFnId {
                 | RuntimeFnId::StrIreplace
                 // Repetition uses separate concat storage and cannot alias its subject.
                 | RuntimeFnId::StrRepeat
+                // Wire bytes occupy concat storage, never an operand's allocation. This also
+                // keeps temporary inputs pinned while serialization hooks can unwind.
+                | RuntimeFnId::Serialize
         ) {
             BuiltinResultOwnership::Independent
         } else {

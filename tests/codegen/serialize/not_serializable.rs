@@ -120,13 +120,12 @@ echo $db->query("SELECT 7")->fetchColumn(), "\n";
     );
 }
 
-/// A user class named after a PHP internal elephc does not register (`WeakMap`,
-/// `ReflectionType`) is an ordinary user class, so it serializes and round-trips instead of
-/// being refused like the internal it shares a name with.
+/// Namespaced user classes sharing an internal short name remain ordinary serializable classes.
 #[test]
 fn test_serialize_keeps_user_classes_named_like_unmodelled_internals() {
     let out = compile_and_run(
         r#"<?php
+namespace Demo;
 class WeakMap { public $a = 1; }
 class ReflectionType { public $b = 'x'; }
 echo serialize(new WeakMap()), "\n";
@@ -137,9 +136,9 @@ echo get_class($copy), " ", $copy->a, "\n";
     );
     assert_eq!(
         out,
-        "O:7:\"WeakMap\":1:{s:1:\"a\";i:1;}\n\
-         O:14:\"ReflectionType\":1:{s:1:\"b\";s:1:\"x\";}\n\
-         WeakMap 1\n"
+        "O:12:\"Demo\\WeakMap\":1:{s:1:\"a\";i:1;}\n\
+         O:19:\"Demo\\ReflectionType\":1:{s:1:\"b\";s:1:\"x\";}\n\
+         Demo\\WeakMap 1\n"
     );
 }
 

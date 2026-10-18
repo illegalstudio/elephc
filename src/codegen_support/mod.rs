@@ -38,6 +38,7 @@ pub(crate) mod sentinels;
 pub(crate) mod source_method_adapters;
 pub(crate) mod stream_filters;
 pub(crate) mod tls;
+pub(crate) mod throwable_layout;
 pub(crate) mod try_handlers;
 mod value_boxing;
 pub(crate) mod visibility;

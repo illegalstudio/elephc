@@ -52,13 +52,15 @@ pub(super) fn lower_store_global(ctx: &mut FunctionContext<'_>, inst: &Instructi
     Ok(())
 }
 
-/// Recognizes an acquired string whose sole payload owner must move into the global box.
+/// Recognizes an owned string whose sole payload owner must move into the global box.
 fn global_store_owns_persisted_string(ctx: &FunctionContext<'_>, value: ValueId, ty: &PhpType) -> bool {
     if ty != &PhpType::Str { return false; }
     let Some(value_ref) = ctx.function.value(value) else { return false; };
     let ValueDef::Instruction { inst, .. } = value_ref.def else { return false; };
     let Some(producer) = ctx.function.instruction(inst) else { return false; };
-    matches!(producer.op, Op::Acquire | Op::StrPersist)
+    (matches!(producer.op, Op::Acquire | Op::StrPersist)
+        || (producer.op == Op::RuntimeCall
+            && producer.immediate == Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ExecutablePath))))
         && !ctx.function.instructions.iter().any(|inst| {
             inst.op == Op::Release && inst.operands.first().copied() == Some(value)
         })

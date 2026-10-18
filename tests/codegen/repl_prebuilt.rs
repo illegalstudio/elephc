@@ -7,12 +7,14 @@
 //! Key details:
 //! - Copies only the compiler and the archives recorded by a real host receipt.
 //! - Old timestamps and a rejecting Cargo stub expose unintended source rebuilds.
-//! - All environment changes are confined to the nested test process.
+//! - Cold and warm CLI sessions use the archived artifacts without rerunning other cache tests.
 
 use super::{fs, stdout, Fixture};
 use crate::support::elephc_cli_bin;
 use std::os::unix::fs::PermissionsExt;
-use std::process::Command;
+use std::os::unix::fs::MetadataExt;
+use std::io::Write;
+use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime};
 
 /// Archived bridges remain reusable even when the checkout sources have newer timestamps.
@@ -46,16 +48,35 @@ fn test_repl_prebuilt_cache_ignores_checkout_timestamps() {
     let paths = std::iter::once(tools).chain(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ).collect::<Vec<_>>();
-    let output = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "codegen::repl::test_repl_cache_reuse_integrity_and_profile", "--nocapture"])
-        .current_dir(&fixture.0)
-        .env("CARGO_BIN_EXE_elephc", compiler)
-        .env("CARGO_TARGET_DIR", "archived-target")
-        .env("ELEPHC_TEST_PREBUILT_BRIDGES", "1")
-        .env("CARGO_NET_OFFLINE", "true")
-        .env("ELEPHC_REPL_BUILD_ATTEMPTS", &attempts)
-        .env("PATH", std::env::join_paths(paths).unwrap())
-        .output().expect("run cache regression against archived bridges");
-    assert!(stdout(&output).contains("1 passed"), "the nested cache test must actually run");
+    let cache = fixture.0.join("archived-cache");
+    let run = |source: &str| {
+        let mut command = Command::new(&compiler);
+        command.args(["repl", "--php-version", "8.5"])
+            .current_dir(&fixture.0)
+            .env("CARGO_TARGET_DIR", "archived-target")
+            .env("XDG_CACHE_HOME", &cache)
+            .env("CARGO_NET_OFFLINE", "true")
+            .env("ELEPHC_REPL_BUILD_ATTEMPTS", &attempts)
+            .env("PATH", std::env::join_paths(&paths).unwrap())
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        for dependency in receipt["dependencies"].as_array().unwrap() {
+            let name = std::path::Path::new(dependency["path"].as_str().unwrap())
+                .file_name().unwrap().to_str().unwrap();
+            let library = name.strip_prefix("lib").unwrap().strip_suffix(".a").unwrap();
+            command.env(format!("{}_LIB_DIR", library.to_ascii_uppercase()), &debug);
+        }
+        let mut child = command.spawn().expect("start archived REPL");
+        child.stdin.take().unwrap().write_all(source.as_bytes()).unwrap();
+        child.wait_with_output().expect("wait for archived REPL")
+    };
+    assert_eq!(stdout(&run("$n = 42;\n")), "int(42)\n");
+    let hosts = fs::read_dir(cache.join("elephc/repl")).unwrap().filter_map(|entry| {
+        let host = entry.unwrap().path().join("host");
+        host.is_file().then_some(host)
+    }).collect::<Vec<_>>();
+    assert_eq!(hosts.len(), 1);
+    let original = fs::metadata(&hosts[0]).unwrap();
+    assert_eq!(stdout(&run("isset($n)\n")), "bool(false)\n");
+    assert_eq!(fs::metadata(&hosts[0]).unwrap().ino(), original.ino(), "archived warm session rebuilt its host");
     assert!(!attempts.exists(), "prebuilt CLI sessions attempted to rebuild a bridge");
 }

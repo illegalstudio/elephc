@@ -71,6 +71,7 @@ pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) 
     emitter.instruction("ldr w9, [x10, x9, lsl #2]");                           // inspect the handle bound to this allocation granule
     emitter.instruction("cbz w9, __rt_heap_free_object_handle_done");           // ordinary non-object allocations need no handle release
     emitter.instruction("stp x0, x30, [sp, #-16]!");                            // preserve the freed pointer and caller return address across the handle release
+    emitter.instruction("bl __rt_weak_reference_retire");                       // invalidate non-owning object observers before storage reuse
     emitter.instruction("bl __rt_object_handle_release");                       // hand this object's PHP handle back to the LIFO pool
     emitter.instruction("ldp x0, x30, [sp], #16");                              // restore the freed pointer and caller return address
     emitter.label("__rt_heap_free_object_handle_done");
@@ -363,7 +364,7 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool, mbstrin
     emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the current heap kind word before deciding whether a zero refcount is stale or legitimately being freed
     emitter.instruction("mov r11, r10");                                        // preserve the full heap kind word while isolating the ownership marker for the stale-free check
     emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker from the packed kind metadata
-    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32));// does this heap-range pointer still carry a live x86_64 heap marker?
+    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // does this heap-range pointer still carry a live x86_64 heap marker?
     emitter.instruction("je __rt_heap_free_debug_checked");                     // yes — a live marker means this is the first legitimate free path, even if refcount is already zero
     emitter.instruction("mov ecx, DWORD PTR [rax - 12]");                       // load the current live refcount before any x86_64 free-side mutations
     emitter.instruction("test ecx, ecx");                                       // does the header still look like a live heap block?
@@ -374,7 +375,7 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool, mbstrin
     emitter.label("__rt_heap_free_debug_checked");
     emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the stamped x86_64 heap kind word from the uniform header
     emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker used to distinguish owned heap payloads from foreign pointers
-    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32));// verify that this payload belongs to the x86_64 heap runtime before mutating allocator state
+    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // verify that this payload belongs to the x86_64 heap runtime before mutating allocator state
     emitter.instruction("jne __rt_heap_free_done");                             // silently ignore foreign/static pointers so callers can safely pass literals or concat-buffer storage
 
     // -- return this block's PHP object handle to the pool before the storage goes --
@@ -388,6 +389,7 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool, mbstrin
     emitter.instruction("cmp DWORD PTR [r9 + r10 * 4], 0");                     // inspect the handle bound to this allocation granule
     emitter.instruction("je __rt_heap_free_object_handle_done");                // ordinary non-object allocations need no handle release
     emitter.instruction("sub rsp, 8");                                          // align the nested handle-release call from frameless entry parity
+    emitter.instruction("call __rt_weak_reference_retire");                     // invalidate non-owning object observers before storage reuse
     emitter.instruction("call __rt_object_handle_release");                     // hand this object's PHP handle back to the LIFO pool
     emitter.instruction("add rsp, 8");                                          // restore entry parity before the optional eval metadata callback
     emitter.label("__rt_heap_free_object_handle_done");

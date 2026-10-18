@@ -25,6 +25,28 @@ pub(super) fn lower(
     target: RuntimeCallTarget,
 ) -> Result<()> {
     match target {
+        RuntimeCallTarget::WeakObjectId => {
+            let receiver = expect_operand(inst, 0)?;
+            ctx.load_value_to_result(receiver)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            let result = abi::int_result_reg(ctx.emitter);
+            let payload = if ctx.emitter.target.arch == crate::codegen::platform::Arch::AArch64 { "x1" } else { "rdi" };
+            abi::emit_reg_move(ctx.emitter, result, payload);
+            abi::emit_call_label(ctx.emitter, "__rt_object_handle_of");
+            store_if_result(ctx, inst)
+        }
+        RuntimeCallTarget::WeakReferenceCreate | RuntimeCallTarget::WeakReferenceGet => {
+            let receiver = expect_operand(inst, 0)?;
+            ctx.load_value_to_result(receiver)?;
+            abi::emit_call_label(ctx.emitter, if target == RuntimeCallTarget::WeakReferenceCreate {
+                "__rt_weak_reference_create"
+            } else { "__rt_weak_reference_get" });
+            store_if_result(ctx, inst)
+        }
+        RuntimeCallTarget::ExecutablePath => {
+            abi::emit_call_label(ctx.emitter, "__rt_php_binary");
+            store_if_result(ctx, inst)
+        }
         RuntimeCallTarget::ThrowableInitialize => lower_throwable_initialize(ctx, inst),
         RuntimeCallTarget::ExceptionChain => lower_exception_chain(ctx, inst),
         RuntimeCallTarget::ArrayFetchForWrite => {

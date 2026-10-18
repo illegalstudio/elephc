@@ -9,6 +9,7 @@
 //! - Eval callbacks become runtime callable descriptors with retained context ownership.
 //! - AOT and eval calls observe one reporting mask, handler stack, and dispatch path.
 //! - The getter wrapper hands eval a retained callback cell without exposing the descriptor.
+//! - Handler throws remain inside a guarded C boundary and return as pending eval exceptions.
 
 use super::eval_callable_helpers::EvalCallableDescriptorSupport;
 use crate::codegen::abi;
@@ -38,15 +39,16 @@ pub(super) fn emit_eval_error_handler_helpers(
             emit_error_reporting_aarch64(module, emitter);
             emit_set_error_handler_aarch64(module, emitter, descriptor_label);
             emit_restore_error_handler(module, emitter);
-            emit_dispatch_error_handler_aarch64(module, emitter);
+
         }
         Arch::X86_64 => {
             emit_error_reporting_x86_64(module, emitter);
             emit_set_error_handler_x86_64(module, emitter, descriptor_label);
             emit_restore_error_handler(module, emitter);
-            emit_dispatch_error_handler_x86_64(module, emitter);
+
         }
     }
+    emit_dispatch_error_handler(module, emitter);
     emit_get_error_handler(module, emitter);
 }
 
@@ -295,96 +297,78 @@ fn emit_get_error_handler(module: &Module, emitter: &mut Emitter) {
     abi::emit_return(emitter);
 }
 
-/// Emits the ARM64 C wrapper for invoking the active native user error handler.
-fn emit_dispatch_error_handler_aarch64(module: &Module, emitter: &mut Emitter) {
-    let done = "__elephc_eval_error_handler_dispatch_done";
-    let fatal = "__elephc_eval_error_handler_dispatch_fatal";
+/// Protects native handler invocation so exceptions return to eval before reaching its catch clauses.
+fn emit_dispatch_error_handler(module: &Module, emitter: &mut Emitter) {
+    use crate::codegen_support::runtime::emit_guarded_cleanup_call;
+    let result = abi::int_result_reg(emitter);
+    let scratch = abi::secondary_scratch_reg(emitter);
+    let done = "__rt_eval_error_dispatch_done";
+    let fatal = "__rt_eval_error_dispatch_fatal";
     label_c_global(module, emitter, "__elephc_eval_error_handler_dispatch");
-    emitter.instruction("sub sp, sp, #64");                                     // reserve inputs, descriptor state, and a standard frame
-    emitter.instruction("stp x29, x30, [sp, #48]");                             // preserve the C caller frame
-    emitter.instruction("add x29, sp, #48");                                    // establish a stable wrapper frame pointer
-    emitter.instruction("str x0, [sp, #0]");                                    // save the emitted PHP error level
-    emitter.instruction("str x1, [sp, #8]");                                    // save the boxed Mixed callback argument array
-    emitter.instruction("str x2, [sp, #16]");                                   // save writable callback-result output storage
-    emitter.instruction("str x3, [sp, #24]");                                   // save writable invocation-state output storage
-    emitter.instruction("str xzr, [x2]");                                       // clear the callback result before probing the active handler
-    emitter.instruction("str xzr, [x3]");                                       // report no invocation unless the descriptor call completes
-    abi::emit_load_symbol_to_reg(emitter, "x9", "_php_error_handler_callable", 0);
-    emitter.instruction(&format!("cbz x9, {done}"));                            // no active descriptor means default error handling
-    emitter.instruction("str x9, [sp, #32]");                                   // preserve the descriptor before the next symbol load borrows x9
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_php_error_handler_mask", 0);
-    emitter.instruction("ldr x11, [sp, #0]");                                   // reload the emitted PHP error level
-    emitter.instruction("tst x10, x11");                                        // check whether the handler accepts this error category
-    emitter.instruction(&format!("b.eq {done}"));                               // a masked handler delegates to the default path
-    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the active descriptor after mask lookup
-    emitter.instruction(&format!(                                               // load the descriptor's uniform invoker entry
-        "ldr x12, [x9, #{}]",
-        callable_descriptor::CALLABLE_DESC_INVOKER_OFFSET
-    ));
-    emitter.instruction(&format!("cbz x12, {fatal}"));                          // reject malformed handler descriptors safely
-    emitter.instruction("mov x0, x9");                                          // invoker argument 0 is the callable descriptor
-    emitter.instruction("ldr x1, [sp, #8]");                                    // invoker argument 1 is the boxed argument array
-    abi::emit_call_label(emitter, "__rt_error_handler_invoke");                  // suspend and restore handler ownership across callback and unwind
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload callback-result output storage
-    emitter.instruction("str x0, [x9]");                                        // transfer the owned boxed callback result to magician
-    emitter.instruction("ldr x9, [sp, #24]");                                   // reload invocation-state output storage
-    emitter.instruction("mov x10, #1");                                         // mark that a matching handler was invoked
-    emitter.instruction("str x10, [x9]");                                       // publish the successful invocation marker
-    emitter.label(done);
-    emitter.instruction("mov w0, #0");                                          // report EvalStatus::Ok to magician
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the C caller frame
-    emitter.instruction("add sp, sp, #64");                                     // release wrapper scratch storage
-    emitter.instruction("ret");                                                 // return to the Rust runtime adapter
+    // -- stage borrowed inputs and clear the caller's result ownership outputs --
+    abi::emit_frame_prologue(emitter, 96);
+    for (index, offset) in [48, 40, 32, 24].into_iter().enumerate() {
+        abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
+    }
+    abi::emit_load_int_immediate(emitter, result, 0);
+    for offset in [32, 24] {
+        abi::load_at_offset(emitter, scratch, offset);
+        abi::emit_store_to_address(emitter, result, scratch, 0);
+    }
+    abi::emit_store_zero_to_local_slot(emitter, 8);
+    abi::emit_load_symbol_to_reg(emitter, result, "_php_error_handler_callable", 0);
+    abi::store_at_offset(emitter, result, 56);
+    abi::emit_branch_if_int_result_zero(emitter, done);
+    abi::emit_load_symbol_to_reg(emitter, scratch, "_php_error_handler_mask", 0);
+    abi::load_at_offset(emitter, result, 48);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("tst {result}, {scratch}"));           // honor the registered PHP diagnostic mask
+            emitter.instruction(&format!("b.eq {done}"));                       // leave masked diagnostics to default reporting
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("test {result}, {scratch}"));          // honor the registered PHP diagnostic mask
+            emitter.instruction(&format!("jz {done}"));                         // leave masked diagnostics to default reporting
+        }
+    }
+    abi::load_at_offset(emitter, result, 56);
+    abi::emit_load_from_address(emitter, result, result, callable_descriptor::CALLABLE_DESC_INVOKER_OFFSET);
+    abi::emit_branch_if_int_result_zero(emitter, fatal);
+    // -- retain the exception inside the C boundary instead of unwinding through Rust --
+    abi::emit_frame_slot_address(emitter, result, 56);
+    emit_guarded_cleanup_call(emitter, "__rt_eval_error_dispatch_callback", result, 8);
+    abi::load_at_offset(emitter, result, 8);
+    abi::emit_branch_if_int_result_zero(emitter, done);
+    abi::emit_store_reg_to_symbol(emitter, result, "_exc_value", 0);
+    abi::emit_load_int_immediate(emitter, result, 3);
+    abi::emit_frame_restore(emitter, 96);
+    abi::emit_return(emitter);
     emitter.label(fatal);
-    emitter.instruction("mov w0, #2");                                          // report EvalStatus::RuntimeFatal for a malformed descriptor
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the C caller frame after failed dispatch
-    emitter.instruction("add sp, sp, #64");                                     // release wrapper scratch storage after failed dispatch
-    emitter.instruction("ret");                                                 // return the failure status to magician
-}
+    abi::emit_load_int_immediate(emitter, result, 2);
+    abi::emit_frame_restore(emitter, 96);
+    abi::emit_return(emitter);
+    emitter.label(done);
+    abi::emit_load_int_immediate(emitter, result, 0);
+    abi::emit_frame_restore(emitter, 96);
+    abi::emit_return(emitter);
 
-/// Emits the x86_64 C wrapper for invoking the active native user error handler.
-fn emit_dispatch_error_handler_x86_64(module: &Module, emitter: &mut Emitter) {
-    let done = "__elephc_eval_error_handler_dispatch_done_x";
-    let fatal = "__elephc_eval_error_handler_dispatch_fatal_x";
-    label_c_global(module, emitter, "__elephc_eval_error_handler_dispatch");
-    emitter.instruction("push rbp");                                            // preserve the C caller frame pointer
-    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
-    emitter.instruction("sub rsp, 32");                                         // reserve arguments and the active descriptor pointer
-    emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the boxed Mixed callback argument array
-    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save writable callback-result output storage
-    emitter.instruction("mov QWORD PTR [rbp - 24], rcx");                       // save writable invocation-state output storage
-    emitter.instruction("mov QWORD PTR [rdx], 0");                              // clear the callback result before probing the active handler
-    emitter.instruction("mov QWORD PTR [rcx], 0");                              // report no invocation unless the descriptor call completes
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_php_error_handler_callable", 0);
-    emitter.instruction("test r10, r10");                                       // check whether a user error handler is active
-    emitter.instruction(&format!("jz {done}"));                                 // no active descriptor means default error handling
-    abi::emit_load_symbol_to_reg(emitter, "r11", "_php_error_handler_mask", 0);
-    emitter.instruction("test r11, rdi");                                       // check whether the handler accepts this error category
-    emitter.instruction(&format!("jz {done}"));                                 // a masked handler delegates to the default path
-    emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // preserve the active descriptor across invocation setup
-    emitter.instruction(&format!(                                               // load the descriptor's uniform invoker entry
-        "mov r11, QWORD PTR [r10 + {}]",
-        callable_descriptor::CALLABLE_DESC_INVOKER_OFFSET
-    ));
-    emitter.instruction("test r11, r11");                                       // validate the descriptor invoker pointer
-    emitter.instruction(&format!("jz {fatal}"));                                // reject malformed handler descriptors safely
-    emitter.instruction("mov rdi, r10");                                        // invoker argument 0 is the callable descriptor
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // invoker argument 1 is the boxed argument array
-    abi::emit_call_label(emitter, "__rt_error_handler_invoke");                  // suspend and restore handler ownership across callback and unwind
-    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload callback-result output storage
-    emitter.instruction("mov QWORD PTR [r10], rax");                            // transfer the owned boxed callback result to magician
-    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload invocation-state output storage
-    emitter.instruction("mov QWORD PTR [r10], 1");                              // publish the successful invocation marker
-    emitter.label(done);
-    emitter.instruction("xor eax, eax");                                        // report EvalStatus::Ok to magician
-    emitter.instruction("mov rsp, rbp");                                        // release wrapper scratch storage
-    emitter.instruction("pop rbp");                                             // restore the C caller frame pointer
-    emitter.instruction("ret");                                                 // return to the Rust runtime adapter
-    emitter.label(fatal);
-    emitter.instruction("mov eax, 2");                                          // report EvalStatus::RuntimeFatal for a malformed descriptor
-    emitter.instruction("mov rsp, rbp");                                        // release wrapper scratch storage after failed dispatch
-    emitter.instruction("pop rbp");                                             // restore the C caller frame after failed dispatch
-    emitter.instruction("ret");                                                 // return the failure status to magician
+    // -- adapt the protected unary record to the existing descriptor invocation helper --
+    emitter.label_global("__rt_eval_error_dispatch_callback");
+    abi::emit_frame_prologue(emitter, 32);
+    let arg0 = abi::int_arg_reg_name(emitter.target, 0);
+    let arg1 = abi::int_arg_reg_name(emitter.target, 1);
+    abi::store_at_offset(emitter, arg0, 8);
+    abi::emit_load_from_address(emitter, arg1, arg0, 16);
+    abi::emit_load_from_address(emitter, arg0, arg0, 0);
+    abi::emit_call_label(emitter, "__rt_error_handler_invoke");
+    abi::load_at_offset(emitter, scratch, 8);
+    abi::emit_load_from_address(emitter, arg1, scratch, 24);
+    abi::emit_store_to_address(emitter, result, arg1, 0);
+    abi::emit_load_from_address(emitter, arg1, scratch, 32);
+    abi::emit_load_int_immediate(emitter, result, 1);
+    abi::emit_store_to_address(emitter, result, arg1, 0);
+    abi::emit_frame_restore(emitter, 32);
+    abi::emit_return(emitter);
 }
 
 /// Clears the globals owned only by an active user error handler.

@@ -520,24 +520,11 @@ pub fn emit_store_result_to_symbol(
                 }
             }
         } else if ty.is_refcounted() {
-            match emitter.target.arch {
-                Arch::AArch64 => {
-                    emitter.instruction("str x0, [sp, #-16]!");                 // preserve the incoming heap pointer while decreffing the previous symbol payload
-                }
-                Arch::X86_64 => {
-                    emitter.instruction(&format!("push {}", int_result_reg(emitter))); // preserve the incoming heap pointer while decreffing the previous symbol payload
-                }
-            }
+            let result = int_result_reg(emitter);
+            emit_push_reg(emitter, result);
             emit_load_symbol_to_reg(emitter, int_result_reg(emitter), symbol, 0);
             emit_decref_if_refcounted(emitter, &ty);
-            match emitter.target.arch {
-                Arch::AArch64 => {
-                    emitter.instruction("ldr x0, [sp], #16");                   // restore the incoming heap pointer after decreffing the previous payload
-                }
-                Arch::X86_64 => {
-                    emitter.instruction(&format!("pop {}", int_result_reg(emitter))); // restore the incoming heap pointer after decreffing the previous payload
-                }
-            }
+            emit_pop_reg(emitter, result);
         }
     }
 

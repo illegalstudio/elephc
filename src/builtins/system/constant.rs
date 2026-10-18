@@ -71,14 +71,14 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             "constant() first argument must be a string literal in AOT mode",
         ));
     };
-    let name = name.trim_start_matches('\\').to_string();
+    let name = elephc_builtin_contract::canonical_constant_name(&name);
     if name.contains("::") {
         return Err(CompileError::new(
             cx.span,
             "constant() class constants are not supported; reference the constant directly",
         ));
     }
-    match cx.checker.constants.get(&name) {
+    match cx.checker.constants.get(name) {
         Some(ty) => Ok(ty.clone()),
         None => Err(CompileError::new(
             cx.span,

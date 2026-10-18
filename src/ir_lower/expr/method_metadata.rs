@@ -30,7 +30,9 @@ pub(super) fn method_signature_for_receiver_type(
     let key = php_symbol_key(method);
     if let Some((class_name, _)) = singular_object_class(object_ty) {
         let normalized = class_name.trim_start_matches('\\');
-        return class_method_signature(ctx, normalized, &key).cloned();
+        if !normalized.is_empty() {
+            return class_method_signature(ctx, normalized, &key).cloned();
+        }
     }
     if dynamic_method_receiver_needs_mixed_fallback(object_ty) {
         if ctx.has_eval_barrier() {
@@ -317,6 +319,7 @@ pub(super) fn common_dynamic_method_signature(
 pub(super) fn dynamic_method_receiver_needs_mixed_fallback(php_type: &PhpType) -> bool {
     match php_type {
         PhpType::Mixed => true,
+        PhpType::Object(name) => name.is_empty(),
         PhpType::Union(members) => members
             .iter()
             .any(|member| matches!(member, PhpType::Mixed | PhpType::Object(_))),

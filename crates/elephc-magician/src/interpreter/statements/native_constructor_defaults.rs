@@ -166,6 +166,7 @@ pub(in crate::interpreter) fn materialize_native_callable_default(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match default {
+        NativeCallableDefault::ExecutablePath => eval_const_fetch("PHP_BINARY", context, values),
         NativeCallableDefault::Null => values.null(),
         NativeCallableDefault::Bool(value) => values.bool_value(*value),
         NativeCallableDefault::Int(value) => values.int(*value),

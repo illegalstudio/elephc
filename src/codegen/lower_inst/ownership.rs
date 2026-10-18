@@ -221,6 +221,9 @@ fn value_is_scratch_string(ctx: &FunctionContext<'_>, value: ValueId) -> Result<
                 crate::ir::RuntimeCallTarget::UnaryString(_),
             )) => true,
             Some(crate::ir::Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::ExecutablePath,
+            )) => true,
+            Some(crate::ir::Immediate::RuntimeCall(
                 crate::ir::RuntimeCallTarget::Pcntl(target),
             )) => matches!(
                 target.result_ownership(),

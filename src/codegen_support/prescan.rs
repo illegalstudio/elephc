@@ -44,13 +44,18 @@ pub(crate) fn collect_constants(
     let target_platform = target.platform;
     let mut constants = HashMap::new();
     for constant in registered_constants() {
-        if let Some(literal) = literal_of(constant.value) {
+        let value = elephc_builtin_contract::core_environment_constant(
+            constant.name, target.platform == Platform::MacOS,
+        ).unwrap_or(constant.value);
+        if let Some(literal) = literal_of(value) {
             constants.insert(
                 constant.name.to_string(),
-                (literal, php_type_of(constant.value)),
+                (literal, php_type_of(value)),
             );
         }
     }
+    // The runtime materializer replaces this metadata slot at every observable fetch.
+    constants.insert("PHP_BINARY".to_string(), (ExprKind::StringLiteral(String::new()), PhpType::Str));
     let php_version = crate::codegen_support::compile_php_version();
     let (fnm_noescape, fnm_pathname) = match target_platform {
         Platform::MacOS => (1, 2),

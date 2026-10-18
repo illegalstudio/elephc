@@ -14,10 +14,11 @@ use crate::codegen_support::try_handlers::{
 
 /// Emits the AArch64 public unserialize entry and its exception-cleanup boundary.
 pub(super) fn emit_entry(emitter: &mut Emitter) {
-    let boundary_bytes = TRY_HANDLER_SLOT_SIZE + 32;
+    let boundary_bytes = TRY_HANDLER_SLOT_SIZE + 48;
     let frame_link_offset = boundary_bytes - 16;
     let source_offset = TRY_HANDLER_SLOT_SIZE;
     let source_len_offset = source_offset + 8;
+    let legacy_offset = source_offset + 16;
 
     // -- entry wrapper: protect begin/end cleanup across hydration-hook throws --
     emitter.blank();
@@ -28,6 +29,8 @@ pub(super) fn emit_entry(emitter: &mut Emitter) {
     emitter.instruction(&format!("add x29, sp, #{}", frame_link_offset));       // establish the protected unserialize wrapper frame
     emitter.instruction(&format!("str x1, [sp, #{}]", source_offset));          // preserve source pointer across setjmp
     emitter.instruction(&format!("str x2, [sp, #{}]", source_len_offset));      // preserve source length across setjmp
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x10", "_unser_legacy_active", 0);
+    emitter.instruction(&format!("str x10, [sp, #{legacy_offset}]"));           // checkpoint sharing before any hydration callback runs
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_handler_top", 0);
     emitter.instruction("str x10, [sp]");                                       // handler.next = previous exception-handler head
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
@@ -53,6 +56,8 @@ pub(super) fn emit_entry(emitter: &mut Emitter) {
     emitter.label("__rt_unserialize_mixed_invalid");
     emitter.instruction("mov x0, #0");                                          // null result signals a bounded parse failure
     emitter.label("__rt_unserialize_mixed_parsed");
+    emitter.instruction(&format!("ldr x10, [sp, #{legacy_offset}]"));           // recover the entry's sharing mode after hydration
+    crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x10", "_unser_legacy_active", 0);
     emitter.instruction(&format!("str x0, [sp, #{}]", source_offset));          // preserve the parsed box while popping the boundary
     emitter.instruction("ldr x10, [sp]");                                       // reload the previous exception-handler head
     crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
@@ -63,6 +68,8 @@ pub(super) fn emit_entry(emitter: &mut Emitter) {
     emitter.instruction(&format!("add sp, sp, #{}", boundary_bytes));           // release the exception boundary frame
     emitter.instruction("ret");                                                 // return the parsed box to the lowering's normal end path
     emitter.label("__rt_unserialize_mixed_throw");
+    emitter.instruction(&format!("ldr x10, [sp, #{legacy_offset}]"));           // recover sharing skipped by a callback's nonlocal throw
+    crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x10", "_unser_legacy_active", 0);
     emitter.instruction("ldr x10, [sp]");                                       // reload the handler preceding this internal boundary
     crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
     emitter.instruction(&format!("ldr x10, [sp, #{}]", TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression skipped by longjmp
@@ -135,6 +142,8 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_unser_at_array");                            // parse array
     emitter.instruction("cmp w9, #79");                                         // ASCII 'O' (object)?
     emitter.instruction("b.eq __rt_unser_at_object");                           // parse object
+    emitter.instruction("cmp w9, #67");                                         // C carries an opaque Serializable payload
+    emitter.instruction("b.eq __rt_unser_at_object");                           // share class allocation and reference publication
     emitter.instruction("b __rt_unser_at_fail");                                // unsupported wire form
 
     // -- null: "N;" --
@@ -367,6 +376,10 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
 
     // -- object: "O:" + namelen + ":\"" + class + "\":" + count + ":{" + count*(key value) + "}" --
     emitter.label("__rt_unser_at_object");
+    emitter.instruction("ldr x9, [sp]");                                        // preserve the original marker before cursor reuse
+    emitter.instruction("ldr x10, [sp, #8]");                                   // load the original object position
+    emitter.instruction("ldrb w9, [x9, x10]");                                  // distinguish C payloads from O property tables
+    emitter.instruction("str x9, [sp, #120]");                                  // retain the marker in unused parser scratch
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload base
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload position
     emitter.instruction("add x10, x10, x11");                                   // pointer to the type byte
@@ -459,6 +472,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload base
     emitter.instruction("sub x12, x12, x9");                                    // body position offset
     emitter.instruction("str x12, [sp, #8]");                                   // advance the cursor to the body
+    super::custom::emit_body(emitter);
     emitter.instruction("ldr x9, [sp, #80]");                                   // reload allowed_classes decision
     emitter.instruction("cbz x9, __rt_unser_obj_default");                      // blocked objects must never inspect class hook tables
     // -- __unserialize magic: parse the body into an assoc array, then call
@@ -571,7 +585,8 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // __wakeup method symbol (0 if none)
     emitter.instruction("cbz x10, __rt_unser_at_obj_box");                      // no __wakeup → box the object directly
     emitter.instruction("ldr x0, [sp, #24]");                                   // $this receiver
-    emitter.instruction("blr x10");                                             // call __wakeup($this)
+    emitter.instruction("mov x1, x10");                                         // pass the wakeup target to the scoped modern adapter
+    crate::codegen_support::abi::emit_call_label(emitter, "__rt_unserialize_invoke_wakeup");
     emitter.label("__rt_unser_at_obj_box");
     emitter.instruction("ldr x0, [sp, #96]");                                   // return the stable box published before body parsing
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload position (at the closing '}')

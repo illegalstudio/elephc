@@ -17,6 +17,7 @@ use super::{expect_operand, store_if_result};
 use crate::codegen::{CodegenIrError, Result};
 
 mod backtrace;
+mod backtrace_sensitive;
 mod constants;
 mod handlers;
 mod introspection;

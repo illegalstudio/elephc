@@ -1116,6 +1116,10 @@ fn walk_stmt(stmt: &Stmt, out: &mut Vec<String>) {
             out.push(name.clone());
             walk_expr(value, out);
         }
+        StmtKind::RefAssign { target, source } => {
+            out.push(target.clone());
+            walk_expr(source, out);
+        }
         StmtKind::StaticPropertyAssign { value, .. }
         | StmtKind::StaticPropertyArrayPush { value, .. } => walk_expr(value, out),
         StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
@@ -1867,6 +1871,7 @@ fn audit_stmt(stmt: &Stmt, out: &mut Vec<String>) {
         StmtKind::Assign { value, .. } | StmtKind::TypedAssign { value, .. } => {
             audit_expr(value, out)
         }
+        StmtKind::RefAssign { source, .. } => audit_expr(source, out),
         StmtKind::StaticPropertyAssign { value, .. }
         | StmtKind::StaticPropertyArrayPush { value, .. } => audit_expr(value, out),
         StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
@@ -2032,7 +2037,7 @@ fn audit_stmt(stmt: &Stmt, out: &mut Vec<String>) {
         StmtKind::ConstDecl { value, .. } => audit_expr(value, out),
         // A namespace body is just declarations, and the audit has to reach them: the PDO
         // driver subclasses all live inside one, and stopping here would exempt them.
-        StmtKind::NamespaceBlock { body, .. } => {
+        StmtKind::NamespaceBlock { body, .. } | StmtKind::Synthetic(body) => {
             for inner in body {
                 audit_stmt(inner, out);
             }

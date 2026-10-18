@@ -30,6 +30,9 @@ const BUILTIN_INTERFACE_NAMES: &[&str] = &[
     "SplObserver",
     "SplSubject",
     "Stringable",
+    "UnitEnum",
+    "BackedEnum",
+    "Serializable",
 ];
 
 /// Injects PHP SPL builtin interfaces into the type environment.
@@ -69,6 +72,33 @@ pub(crate) fn inject_builtin_interfaces(
         "Traversable".to_string(),
         marker_interface("Traversable"),
     );
+
+    let mut cases = builtin_interface_method("cases", TypeExpr::Named(Name::unqualified("array")));
+    cases.is_static = true;
+    let mut unit = marker_interface("UnitEnum");
+    unit.methods.push(cases);
+    interface_map.insert(unit.name.clone(), unit);
+
+    let mut backed = marker_interface("BackedEnum");
+    backed.extends.push("UnitEnum".to_string());
+    for (name, nullable) in [("from", false), ("tryFrom", true)] {
+        let result = TypeExpr::Named(Name::unqualified("static"));
+        let mut method = builtin_interface_method_with_params(
+            name,
+            vec![("value", TypeExpr::Union(vec![TypeExpr::Int, TypeExpr::Str]))],
+            if nullable { TypeExpr::Nullable(Box::new(result)) } else { result },
+        );
+        method.is_static = true;
+        backed.methods.push(method);
+    }
+    interface_map.insert(backed.name.clone(), backed);
+
+    let mut serializable = marker_interface("Serializable");
+    serializable.methods = vec![
+        builtin_interface_method("serialize", TypeExpr::Nullable(Box::new(TypeExpr::Str))),
+        builtin_interface_method_with_params("unserialize", vec![("data", TypeExpr::Str)], TypeExpr::Void),
+    ];
+    interface_map.insert(serializable.name.clone(), serializable);
 
     interface_map.insert(
         "Iterator".to_string(),

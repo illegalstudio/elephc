@@ -837,7 +837,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     pub(crate) fn constant_value(&self, name: &str) -> Option<(ExprKind, PhpType)> {
         self.constants
             .get(name)
-            .or_else(|| self.constants.get(name.trim_start_matches('\\')))
+            .or_else(|| self.constants.get(elephc_builtin_contract::canonical_constant_name(name)))
             .cloned()
     }
 
@@ -3738,11 +3738,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.value_needs_release_after_use(value)
     }
 
-    /// Includes provisional string unboxes in cleanup without claiming their ownership can move.
+    /// Includes provisional string and callable unboxes without claiming their ownership can move.
     ///
-    /// A later store can widen a string local to Mixed after a consumer is lowered. Reading
-    /// that slot then allocates a detached string. Emit its release provisionally and let
-    /// builder finalization prune it when the final slot still lends a concrete string.
+    /// A later store or eval barrier can widen a local to Mixed after a consumer is lowered.
+    /// Reading it then allocates a detached string or retains its callable payload. Emit a
+    /// provisional release and let finalization prune it when storage still lends the value.
     pub(crate) fn value_needs_release_after_use(&self, value: LoweredValue) -> bool {
         if self.write_operand_is_borrowed {
             return false;
@@ -3750,7 +3750,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if self.value_is_owning_temporary(value) {
             return true;
         }
-        if self.builder.value_php_type(value.value).codegen_repr() != PhpType::Str {
+        if !matches!(self.builder.value_php_type(value.value).codegen_repr(), PhpType::Str | PhpType::Callable) {
             return false;
         }
         let Some(inst) = self.builder.value_defining_instruction(value.value) else {

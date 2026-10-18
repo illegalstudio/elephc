@@ -513,7 +513,7 @@ pub(super) fn acquire_borrowed_return_value(
 }
 
 /// Terminates with a return after running active finally bodies from inner to outer.
-pub(super) fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<crate::ir::ValueId>) {
+pub(crate) fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<crate::ir::ValueId>) {
     let saved_finally_stack = ctx.finally_stack.clone();
     let saved_try_loop_depths = ctx.try_loop_depths.clone();
     let saved_taken = ctx.taken_finally_exceptions.clone();

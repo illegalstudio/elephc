@@ -52,6 +52,7 @@ pub(crate) fn php_type_of(value: ConstValue) -> PhpType {
         ConstValue::StreamResource(_) => PhpType::stream_resource(),
         ConstValue::Null => PhpType::Void,
         other => match other.php_type() {
+            ConstType::Null => PhpType::Void,
             ConstType::Int => PhpType::Int,
             ConstType::Float => PhpType::Float,
             ConstType::Str => PhpType::Str,
@@ -95,4 +96,19 @@ mod tests {
         assert!(!is_registered_constant("json_pretty_print"), "constants are case-sensitive");
         assert_eq!(php_type_of(ConstValue::StreamResource(0)), PhpType::stream_resource());
     }
+}
+
+/// Recognizes an executable-path constant alias without folding the runtime-owned path.
+pub(crate) fn is_executable_path_alias(
+    value: &ExprKind,
+    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+) -> bool {
+    let ExprKind::ConstRef(name) = value else { return false };
+    let mut name = name.as_str();
+    for _ in 0..=constants.len() {
+        if elephc_builtin_contract::canonical_constant_name(name) == "PHP_BINARY" { return true; }
+        let Some((ExprKind::ConstRef(next), _)) = constants.get(name) else { return false };
+        name = next.as_str();
+    }
+    false
 }

@@ -25,6 +25,7 @@ mod func_args;
 mod generics;
 mod global_decls;
 mod hash_prelude;
+mod core_prelude;
 mod bcmath_prelude;
 mod image_prelude;
 mod intrinsics;

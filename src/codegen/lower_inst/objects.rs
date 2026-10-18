@@ -207,6 +207,7 @@ use named_property_writes::*;
 use instanceof_entry::*;
 #[allow(unused_imports)]
 use allocation_clone::*;
+pub(super) use allocation_clone::emit_object_allocation;
 #[allow(unused_imports)]
 use interface_layout::*;
 #[allow(unused_imports)]

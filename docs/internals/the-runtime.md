@@ -1065,7 +1065,30 @@ elephc lowers exceptions with a small runtime layer around `_setjmp` / `_longjmp
 | `__rt_throw_current` | Unwind to the nearest active handler or print the fatal uncaught-exception message and exit | reads `_exc_value`, `_exc_handler_top`, `_exc_call_frame_top` | does not return normally |
 | `__rt_rethrow_current` | Re-enter the ordinary throw path with the currently active exception | none (uses global exception state) | does not return normally |
 
-The fatal uncaught-exception path tail-jumps to `__rt_report_uncaught_exception`, which reads the published `_exc_value` and writes `Fatal error: Uncaught <Class>: <message> in <file>:<line>` to stderr before exiting with status 255. The class name comes from `_class_name_entries`, the message from payload offsets 8/16, the line from the payload's creation-line slot (`THROWABLE_CREATION_LINE_OFFSET`, formatted through `__rt_itoa`), and the file from `_script_source_file`. An empty message drops the `": "` separator, and a zero line drops the whole ` in <file>:<line>` suffix, both matching reference PHP.
+The fatal uncaught-exception path tail-jumps to `__rt_report_uncaught_exception`,
+which reads the published `_exc_value` and writes
+`Fatal error: Uncaught <Class>: <message> in <file>:<line>` to stdout before exiting
+with status 255. The class name comes from `_class_name_entries` and the message
+from payload offsets 8/16. The report and public getters share
+`__rt_throwable_location_borrowed`, which resolves creation metadata and independent
+`ErrorException` filename/line overrides without allocating. Getter strings are
+persisted by their public adapter; the report borrows bytes from the published
+receiver and saves pointer, length, and line across syscalls. An explicit zero
+line or empty filename remains visible. A separate known-origin flag omits the
+suffix for synthesized errors with no source location. An empty message drops
+the `": "` separator.
+
+Ordinary Throwable objects, including `ErrorException` and subclasses with extra
+properties, reserve a creation-line word after declared properties and the optional
+dynamic-property hash. Scalar property writes cannot overwrite this metadata.
+`_class_throwable_line_offsets` locates the word; `_class_object_allocation_sizes`
+includes it, while `_class_object_payload_sizes` keeps the property and GC layout
+unchanged. Fixed and dynamic EIR allocation stamp the allocating expression's line
+before the constructor runs. Location readers and uncaught reporting distinguish
+ordinary metadata from the existing compact Throwable prefix. `ErrorException`
+location getters use an explicit constructor override when present, including line zero. Explicit eval calls to
+`__construct` reuse the constructor signature registration when ordinary method
+metadata is absent, so named arguments and defaults use the same binding as `new`.
 
 Codegen guards in `codegen::lower_inst::exceptions` have their OWN uncaught path: they write a fatal message baked at emit time and exit before the throwable is ever allocated, so they never reach this helper. They share `UNCAUGHT_EXIT_STATUS` with it so the status a script observes does not depend on which kind of exception escaped.
 
@@ -1122,9 +1145,9 @@ The `json_encode` implementation uses **type-aware dispatch** — the codegen ca
 
 ### Serialization routines
 
-**Files:** `system/serialize.rs`, `system/unserialize/` (15 Rust modules including `mod.rs`)
+**Files:** `system/serialize.rs`, `system/serialize/`, `system/serialization_hooks.rs`, and `system/unserialize/`
 
-These helpers back PHP's `serialize()` / `unserialize()`. The serializer writes PHP's exact wire format (`N;`, `b:0;`/`b:1;`, `i:<int>;`, `d:<shortest-round-trip>;`, `s:<bytelen>:"<raw>";`, `a:<n>:{...}`, and `O:<len>:"<class>":<n>:{...}`) directly into the [concat buffer](memory-model.md#the-string-buffer-scratch-pad), reusing `__rt_json_ftoa` for shortest-round-trip float digits. Object serialization honors `__sleep()` / `Serializable` and reuses an object back-reference table so repeated instances emit `r:`/`R:` references. A class PHP refuses to serialize (the builtins php-src flags `ZEND_ACC_NOT_SERIALIZABLE` that elephc registers, listed in `NOT_SERIALIZABLE_BUILTIN_CLASSES`: the Reflection family, `Generator`, `Fiber`, the `SplFileInfo` family, `Phar`, `PharData`, and the PDO, curl, gd and XML handles, plus anything extending them) has its `_class_serialize_ptrs` entry pointed at `__rt_throw_serialization_denied` instead of a `__serialize` method. That helper throws a catchable `Exception("Serialization of '<Class>' is not allowed")`, so the denial holds wherever the serializer meets the object: typed, behind `mixed`, nested in an array, or on a subclass that declares its own `__serialize()`. Only elephc's own declaration of a listed class counts (`ClassInfo::is_internal`, set for builtins registered without source and for classes from compiler-generated statements such as an injected prelude), so a user class that shares its name with a PHP internal elephc does not register (`WeakMap`, `ReflectionType`), or with a prelude class the program does not load (`CurlHandle` or `Pdo\Sqlite` without the curl or PDO prelude), serializes normally. A Closure (runtime tag 10, including a `Closure`-typed property slot) throws the same Exception naming `Closure` through `__rt_throw_serialization_denied_name`. The default property walk leaves out a typed property that was never initialized (its slot's high word holds the uninitialized sentinel) and counts only the properties it writes, as PHP does, so an unset `Closure`-typed property is simply omitted. The `__sleep()` path does the same through `__rt_serialize_named_prop`, which reports whether it wrote the named property; because that count is only known once every name was looked up, `__rt_serialize_sleep_body` writes the body first and `__rt_concat_hoist_tail` then moves the `<count>:{` header in front of it inside the concat buffer. On the way back, `__rt_obj_store_prop` checks each parsed value's boxed tag against the property's `_class_serpdiag_*` row: a tag the declared type does not accept raises PHP's catchable `TypeError` (`Cannot assign <value> to property C::$p of type <T>`) through `__rt_unser_throw_property_type_error`, and an accepted `int` is rewritten to a `float` in place only when the declared type includes `float` but not `int` (`int|float` keeps the integer). It then writes each restored slot's high word (the string length, or zero), which clears the uninitialized marker of a typed property declared without a default.
+These helpers back PHP's `serialize()` / `unserialize()`. The serializer writes PHP's exact wire format (`N;`, `b:0;`/`b:1;`, `i:<int>;`, `d:<shortest-round-trip>;`, `s:<bytelen>:"<raw>";`, `a:<n>:{...}`, and `O:<len>:"<class>":<n>:{...}`) directly into the [concat buffer](memory-model.md#the-string-buffer-scratch-pad), reusing `__rt_json_ftoa` for shortest-round-trip float digits. Object serialization honors `__sleep()` / `Serializable` and reuses an object back-reference table so repeated instances emit `r:`/`R:` references. A class PHP refuses to serialize (the builtins php-src flags `ZEND_ACC_NOT_SERIALIZABLE` that elephc registers, listed in `NOT_SERIALIZABLE_BUILTIN_CLASSES`: the Reflection family, `Generator`, `Fiber`, the `SplFileInfo` family, `Phar`, `PharData`, and the PDO, curl, gd and XML handles, plus anything extending them) has its `_class_serialize_ptrs` entry pointed at `__rt_throw_serialization_denied` instead of a `__serialize` method. That helper throws a catchable `Exception("Serialization of '<Class>' is not allowed")`, so the denial holds wherever the serializer meets the object: typed, behind `mixed`, nested in an array, or on a subclass that declares its own `__serialize()`. Only elephc's own declaration of a listed class counts (`ClassInfo::is_internal`, set for builtins registered without source and for classes from compiler-generated statements such as an injected prelude), so a namespaced user class such as `Demo\WeakMap`, a class named `ReflectionType` that elephc does not register, or a user class named like a prelude class the program does not load (`CurlHandle` or `Pdo\Sqlite` without the curl or PDO prelude), serializes normally. A Closure (runtime tag 10, including a `Closure`-typed property slot) throws the same Exception naming `Closure` through `__rt_throw_serialization_denied_name`. The default property walk leaves out a typed property that was never initialized (its slot's high word holds the uninitialized sentinel) and counts only the properties it writes, as PHP does, so an unset `Closure`-typed property is simply omitted. The `__sleep()` path does the same through `__rt_serialize_named_prop`, which reports whether it wrote the named property; because that count is only known once every name was looked up, `__rt_serialize_sleep_body` writes the body first and `__rt_concat_hoist_tail` then moves the `<count>:{` header in front of it inside the concat buffer. On the way back, `__rt_obj_store_prop` checks each parsed value's boxed tag against the property's `_class_serpdiag_*` row: a tag the declared type does not accept raises PHP's catchable `TypeError` (`Cannot assign <value> to property C::$p of type <T>`) through `__rt_unser_throw_property_type_error`, and an accepted `int` is rewritten to a `float` in place only when the declared type includes `float` but not `int` (`int|float` keeps the integer). It then writes each restored slot's high word (the string length, or zero), which clears the uninitialized marker of a typed property declared without a default.
 
 Property metadata follows physical layout slots. A private parent property and a
 child property with the same name keep distinct mangled keys, byte offsets, storage
@@ -1140,10 +1163,23 @@ body under dead stripping instead of crossing into another helper's local label.
 
 `unserialize()` refuses the same classes from its allocation-free preflight. As soon as `__rt_unser_validate_at` has bounded an object's class name, `__rt_unser_refuse_class` asks the `allowed_classes` policy (a blocked class still becomes `__PHP_Incomplete_Class`) and then matches the name case-insensitively against the per-program `_unser_refused_classes` table. That table lists the refused classes the program declares (subclasses included) and the refused builtins it does not declare at all (a Reflection class that declaration pruning removed, or `Closure`), but not a program's own class that merely carries a builtin's name. A match throws `Unserialization of '<Class>' is not allowed`, with the class spelled as declared, through `__rt_throw_unserialization_denied_name`. Because the preflight runs before the decoder, the refusal comes before any object, box or container is allocated and before any `__wakeup()`/`__unserialize()` hook of the payload runs (PHP defers those hooks until the whole payload decoded), so a caught refusal leaves nothing behind; it unwinds through the public entry boundary that closes the unserialize context.
 
+The public `__rt_serialize_call_value` entry protects the reference counter and populated
+object pointer/index pairs with a stack snapshot and guarded dispatch. Ordinary nested
+operations restore that snapshot on success and on exceptions. The scoped adapters in
+`serialization_hooks.rs` select shared registries for legacy `Serializable` callbacks
+and isolated registries for modern hooks. Shared nested decodes promote their temporary
+reference owners to the enclosing context before cleanup; calls without options inherit
+its allowed-class policy. Native hook return metadata distinguishes strings, boxed values,
+null, scalars, and other heap owners, so invalid serialize results throw after cleanup and
+ignored unserialize results are released. EIR declares serialize results independent and
+unserialize results fresh, allowing throwing builtin operand guards to retain and release
+temporary inputs correctly.
+
 The unserializer keeps the fixed runtime-emission order in `unserialize/mod.rs`. Shared diagnostics and per-call context lifecycle are separated from target-specific allowed-class policy parsing, allocation-free validation, recursive decoding, and object-storage/key helpers. The two decoder files are cohesive architecture leaves; every surrounding orchestration or support module remains below the repository's 500-line warning threshold.
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
+| `__rt_serialize_call_value` | Guard a public call and preserve shared or isolated reference state across hooks | value tag + payload | string slice |
 | `__rt_serialize_value` | Tag-dispatching serializer for a raw runtime value, appending its wire form to the concat buffer | value tag + payload | `x1`/`x2` = string slice |
 | `__rt_serialize_mixed` | Unbox a boxed Mixed cell (null pointer → `N;`), then serialize it | `x0` = mixed cell | `x1`/`x2` = string slice |
 | `__rt_serialize_indexed_array` / `__rt_serialize_hash` | Serialize indexed arrays and hashes as `a:<n>:{...}` | array/hash pointer | `x1`/`x2` = string slice |

@@ -63,6 +63,24 @@ pub(super) fn referenced_builtin_spl_methods(module: &Module) -> Vec<(String, St
     {
         for inst in &function.instructions {
             match inst.op {
+                Op::StaticMethodCall => {
+                    let Some((receiver, method)) = string_data_name(module, inst)
+                        .and_then(|name| name.rsplit_once("::")) else {
+                        continue;
+                    };
+                    let lexical_class = function.name.rsplit_once("::").map(|(class, _)| class);
+                    let class_name = match receiver {
+                        "parent" => lexical_class.and_then(|class| module.class_infos.get(class))
+                            .and_then(|class| class.parent.as_deref()),
+                        "self" | "static" => lexical_class,
+                        name => Some(name.trim_start_matches('\\')),
+                    };
+                    if let Some(class_name) = class_name {
+                        push_supported_builtin_spl_method_for_receiver(
+                            &mut methods, module, class_name, &php_method_key(method),
+                        );
+                    }
+                }
                 Op::ObjectNew => {
                     if let Some(class_name) = class_data_name(module, inst) {
                         let construct_key = php_method_key("__construct");

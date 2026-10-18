@@ -202,6 +202,7 @@ pub(super) fn check_types_impl(
         inject_builtin_throwables(&mut interface_map, &mut class_map, &wanted_throwables)
     {
         errors.extend(error.flatten());
+        return Err(CompileError::from_many(errors));
     }
     // The tz_prelude (injected upstream only when the program uses timezone
     // introspection) declares `timezone_location_get`. Its presence gates the

@@ -53,6 +53,8 @@ pub(crate) fn emit_callable_descriptor_release(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_frame_prologue(emitter, 64);
     emitter.instruction("str x0, [sp, #0]");                                    // save descriptor pointer for capture release and final free
     super::super::arrays::deep_cleanup::begin(emitter);
+    super::super::arrays::deep_cleanup::invoke(emitter, "__rt_weak_map_notify", "x0");
+    emitter.instruction("ldr x0, [sp]");                                        // recover descriptor metadata after weak observer callbacks
     emitter.instruction("str xzr, [sp, #24]");                                  // initialize capture index to zero
 
     // -- load environment metadata --
@@ -162,6 +164,9 @@ fn emit_callable_descriptor_release_linux_x86_64(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_frame_prologue(emitter, 64);
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save descriptor pointer for capture release and final free
     super::super::arrays::deep_cleanup::begin(emitter);
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the final Closure identity to weak observers
+    super::super::arrays::deep_cleanup::invoke(emitter, "__rt_weak_map_notify", "rdi");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // recover capture metadata after observer callbacks
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // initialize capture index to zero
 
     emitter.instruction("mov r10, QWORD PTR [rax + 40]");                       // r10 = descriptor environment record pointer

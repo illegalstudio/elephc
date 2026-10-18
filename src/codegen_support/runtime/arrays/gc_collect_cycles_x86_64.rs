@@ -343,6 +343,9 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_gc_destructors");                            // run destructors only after pinning all of their candidate data
     emitter.instruction("test rax, rax");                                       // did user code mutate the graph during a destructor pass?
     emitter.instruction("jnz __rt_gc_collect_cycles_recount");                  // re-evaluate real roots before sweeping any candidate
+    emitter.instruction("call __rt_gc_weak_observers");                         // retire weak keys while candidate snapshots still protect callbacks
+    emitter.instruction("test rax, rax");                                       // callback mutations and new allocations need fresh root analysis
+    emitter.instruction("jnz __rt_gc_collect_cycles_recount");                  // finish all observer changes before sweeping
     emitter.instruction("call __rt_gc_unpin_reachable");                        // surviving nodes retain only their actual PHP owners
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_freeing_unreachable");
     emitter.instruction("mov QWORD PTR [r8], 1");                               // suppress child decrements only while sweeping doomed nodes

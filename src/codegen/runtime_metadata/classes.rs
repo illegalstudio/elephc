@@ -41,6 +41,11 @@ pub(in crate::codegen) fn runtime_class_infos(module: &Module) -> HashMap<String
 /// Returns classes that EIR object allocation or named `instanceof` can reference at runtime.
 pub(in crate::codegen) fn runtime_referenced_class_names(module: &Module) -> HashSet<String> {
     let mut names = HashSet::new();
+    if module.functions.iter().any(|function| function.signature.as_ref().is_some_and(|signature|
+        signature.param_attributes.iter().flatten().flat_map(|group| &group.attributes)
+            .any(|attribute| attribute.name.as_canonical().eq_ignore_ascii_case("SensitiveParameter")))) {
+        names.insert("SensitiveParameterValue".to_string());
+    }
     if module_contains_generator(module) {
         names.insert("Generator".to_string());
     }
@@ -155,7 +160,10 @@ pub(in crate::codegen) fn seed_runtime_throwable_class_names(module: &Module, na
     // eval constructor bridge emits helpers for the whole family (see
     // `codegen::eval_constructor_helpers::BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES`).
     if module.required_runtime_features.eval_bridge {
-        for class_name in ["AssertionError", "UnhandledMatchError"] {
+        for class_name in [
+            "AssertionError", "UnhandledMatchError", "ClosedGeneratorException",
+            "CompileError", "ParseError", "RequestParseBodyException",
+        ] {
             if module.class_infos.contains_key(class_name) {
                 names.insert(class_name.to_string());
             }

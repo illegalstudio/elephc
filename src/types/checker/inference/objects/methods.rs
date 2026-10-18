@@ -1023,6 +1023,15 @@ impl Checker {
                     env,
                     allow_by_ref_spread,
                 )?;
+                if class_name == "WeakReference" && method_key == "create" {
+                    if let Some(argument) = normalized_args.first() {
+                        let actual = self.infer_type(argument, env)?;
+                        if !matches!(actual, PhpType::Object(_) | PhpType::Callable | PhpType::Mixed) {
+                            return Err(CompileError::new(argument.span,
+                                "WeakReference::create() argument must be an object"));
+                        }
+                    }
+                }
                 if allow_by_ref_spread {
                     self.check_user_declared_call_allowing_by_ref_spread(
                         &effective_sig,

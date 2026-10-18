@@ -54,7 +54,7 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
         validate_concrete_class_requirements(class, context)?;
         validate_concrete_class_builtin_interface_requirements(class, context)?;
         validate_concrete_class_aot_parent_requirements(class, context, values)?;
-        validate_concrete_class_aot_interface_requirements(class, context, values)?;
+        validate_concrete_class_aot_interface_requirements(class, context, values, false)?;
     }
     if context.define_class(class.clone()) {
         if let Some(parent) = native_parent.as_deref() {

@@ -354,6 +354,8 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.label("__rt_gc_collect_cycles_free_init");
     emitter.instruction("bl __rt_gc_destructors");                              // protect candidate data and run destructors before reclamation
     emitter.instruction("cbnz x0, __rt_gc_collect_cycles_recount");             // observe mutations and resurrection before choosing doomed nodes
+    emitter.instruction("bl __rt_gc_weak_observers");                           // retire weak keys while candidate snapshots still protect callbacks
+    emitter.instruction("cbnz x0, __rt_gc_collect_cycles_recount");             // mark callback mutations and new allocations before sweeping
     emitter.instruction("bl __rt_gc_unpin_reachable");                          // surviving nodes keep only their real PHP owners
     emitter.instruction("bl __rt_gc_free_begin");                               // start timing graph reclamation separately
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_freeing_unreachable");

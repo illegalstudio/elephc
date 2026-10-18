@@ -9,7 +9,7 @@
 //! Key details:
 //! - Resolution is PURE. Global constants come from `Module::global_constants`, which already
 //!   holds the builtin catalog, and class-like constants follow PHP class, interface and trait
-//!   ancestry, so a folded value never depends on runtime state.
+//!   ancestry. Executable-path defaults retain a runtime marker rather than a host path.
 //! - The resolved tree is target-neutral and carries no ABI encoding beyond the compact scalar
 //!   `kind`/`payload` pair the eval bridge already registers, so both consumers read one shape:
 //!   the eval registration path encodes it, and the descriptor invoker materializes it.
@@ -31,6 +31,8 @@ pub(in crate::codegen) const CONST_DEFAULT_INT: i64 = 2;
 pub(in crate::codegen) const CONST_DEFAULT_FLOAT: i64 = 3;
 /// Compact scalar kind for the empty PHP array in a resolved default.
 pub(in crate::codegen) const CONST_DEFAULT_EMPTY_ARRAY: i64 = 4;
+/// Runtime string default materialized from the generated program's executable path.
+pub(in crate::codegen) const CONST_DEFAULT_EXECUTABLE_PATH: i64 = elephc_builtin_contract::EXECUTABLE_PATH_DEFAULT_KIND as i64;
 
 /// Largest constructor argument count an object-valued default may carry.
 pub(in crate::codegen) const MAX_CONST_DEFAULT_OBJECT_ARGS: usize = u8::MAX as usize;
@@ -565,6 +567,9 @@ fn resolve_global_constant_default(
     name: &str,
     depth: usize,
 ) -> Option<ConstDefaultValue> {
+    if elephc_builtin_contract::canonical_constant_name(name) == "PHP_BINARY" {
+        return Some(ConstDefaultValue::Scalar { kind: CONST_DEFAULT_EXECUTABLE_PATH, payload: 0 });
+    }
     let expr_kind = context
         .module
         .global_constants

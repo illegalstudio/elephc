@@ -27,6 +27,17 @@ pub(super) fn begin_call_argument_evaluation(ctx: &mut LoweringContext<'_, '_>) 
     );
 }
 
+/// Keeps an ordinary synthetic local alive without transferring its borrowed loads to a call.
+pub(super) fn publish_scoped_value_local(ctx: &mut LoweringContext<'_, '_>, name: &str, span: Span) {
+    let slot = ctx.local_slots[name];
+    register_owned_call_operand(ctx, slot, span);
+    ctx.call_argument_evaluation_scopes.last_mut().expect("operand evaluation scope")
+        .owners.push(crate::ir_lower::context::CallArgumentEvaluationOwner {
+            value: None, borrow: None, temp_name: name.to_string(), slot, span,
+            ref_cell_payload: None, scoped_receiver_alias: false,
+        });
+}
+
 /// Publishes a managed synthetic receiver alias while one call argument is evaluated.
 ///
 /// Nested property and element receivers are normalized through local reference aliases. Those
@@ -218,14 +229,15 @@ pub(super) fn finish_call_argument_evaluation(
     let mut intermediates = Vec::new();
     for owner in scope.owners.into_iter().rev() {
         unregister_owned_call_operand(ctx, owner.slot, owner.span);
-        if let Some(payload_type) = owner.ref_cell_payload {
+        if owner.ref_cell_payload.is_some() || owner.value.is_none() {
             // Keep the Borrow marker on the call operand. It tells codegen that the
             // surrounding EIR ledger, rather than the ABI materializer, retires this
             // already-acquired managed cell after the call.
+            // Slot-only value roots likewise remain locals, so their loads stay borrowed.
             intermediates.push(CallArgumentIntermediate {
                 slot: owner.slot,
                 span: owner.span,
-                ref_cell_payload: Some(payload_type),
+                ref_cell_payload: owner.ref_cell_payload,
             });
             continue;
         }

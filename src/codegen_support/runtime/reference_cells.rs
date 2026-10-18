@@ -144,7 +144,7 @@ fn emit_release(emitter: &mut Emitter) {
     abi::emit_jump(emitter, "__rt_local_ref_cell_release");
 }
 
-/// Shares aliased cells but copies singleton cells and retains their contained value.
+/// Shares aliased cells and copies singleton cells with independent boxed value storage.
 fn emit_clone(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
     let scratch = abi::secondary_scratch_reg(emitter);
@@ -207,10 +207,16 @@ fn emit_clone(emitter: &mut Emitter) {
     }
     let tag = match emitter.target.arch { Arch::AArch64 => "x9", Arch::X86_64 => "r9" };
     abi::load_at_offset(emitter, tag, 24);
+    emit_singleton_mixed_clone_branch(emitter);
     emit_payload_dispatch(emitter, "__rt_reference_cell_clone_retain", "__rt_reference_cell_clone_retain");
     abi::emit_jump(emitter, "__rt_reference_cell_clone_finish");
     emitter.label("__rt_reference_cell_clone_retain");
     abi::emit_call_label(emitter, "__rt_incref");
+    abi::emit_jump(emitter, "__rt_reference_cell_clone_finish");
+    emitter.label("__rt_reference_cell_clone_mixed");
+    abi::emit_call_label(emitter, "__rt_mixed_clone");
+    abi::load_at_offset(emitter, scratch, 16);
+    abi::emit_store_to_address(emitter, result, scratch, 0);
     emitter.label("__rt_reference_cell_clone_finish");
     abi::load_at_offset(emitter, result, 16);
     abi::emit_frame_restore(emitter, 48);
@@ -221,6 +227,42 @@ fn emit_clone(emitter: &mut Emitter) {
     abi::emit_return(emitter);
     emitter.label("__rt_reference_cell_clone_shared");
     abi::emit_jump(emitter, "__rt_incref");
+}
+
+/// Separates ordinary Mixed zvals while preserving an independently shared PHP reference wrapper.
+fn emit_singleton_mixed_clone_branch(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x9, #7");                                  // only boxed or iterable payloads can need zval separation
+            emitter.instruction("b.ne __rt_reference_cell_clone_dispatch");     // preserve the ordinary payload-specific ownership path
+            emitter.instruction("ldrb w10, [x0, #-8]");                         // distinguish boxed Mixed storage from a raw iterable container
+            emitter.instruction("cmp w10, #5");                                 // heap kind five owns a boxed PHP value
+            emitter.instruction("b.ne __rt_reference_cell_clone_dispatch");     // raw iterable payloads retain their container identity
+            emitter.instruction("ldr x10, [x0]");                               // inspect whether the boxed value itself carries reference identity
+            emitter.instruction("cmp x10, #7");                                 // persistent PHP reference wrappers use the nested Mixed tag
+            emitter.instruction("b.ne __rt_reference_cell_clone_mixed");        // ordinary boxed values need an independent zval
+            emitter.instruction("ldr x10, [x0, #16]");                          // inspect the persistent-reference marker
+            emitter.instruction("cmp x10, #1");                                 // ordinary nested Mixed boxes have no reference identity
+            emitter.instruction("b.ne __rt_reference_cell_clone_mixed");        // clone an ordinary nested boxed value
+            emitter.instruction("ldr w10, [x0, #-12]");                         // count owners of the inner persistent reference
+            emitter.instruction("cmp w10, #1");                                 // a singleton wrapper can separate like an ordinary value
+            emitter.instruction("b.hi __rt_reference_cell_clone_retain");       // preserve references shared outside the native cell
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp r9, 7");                                   // only boxed or iterable payloads can need zval separation
+            emitter.instruction("jne __rt_reference_cell_clone_dispatch");      // preserve payload-specific ownership for other tags
+            emitter.instruction("cmp BYTE PTR [rax - 8], 5");                   // distinguish boxed Mixed storage from a raw iterable container
+            emitter.instruction("jne __rt_reference_cell_clone_dispatch");      // raw iterable payloads retain their container identity
+            emitter.instruction("cmp QWORD PTR [rax], 7");                      // recognize a potentially persistent reference wrapper
+            emitter.instruction("jne __rt_reference_cell_clone_mixed");         // ordinary boxed values need an independent zval
+            emitter.instruction("cmp QWORD PTR [rax + 16], 1");                 // recognize the persistent-reference ABI marker
+            emitter.instruction("jne __rt_reference_cell_clone_mixed");         // clone an ordinary nested boxed value
+            emitter.instruction("cmp DWORD PTR [rax - 12], 1");                 // count owners of the inner persistent reference
+            emitter.instruction("ja __rt_reference_cell_clone_retain");         // preserve references shared outside the native cell
+        }
+    }
+    abi::emit_jump(emitter, "__rt_reference_cell_clone_mixed");
+    emitter.label("__rt_reference_cell_clone_dispatch");
 }
 
 

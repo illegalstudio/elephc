@@ -64,6 +64,7 @@ pub(crate) fn curl_abi_slots() -> &'static [(&'static str, &'static str)] {
 /// `codegen::lower_inst::exceptions` that report their own synthesized errors without ever
 /// reaching `__rt_report_uncaught_exception`.
 pub(crate) use exceptions::UNCAUGHT_EXIT_STATUS;
+pub(crate) use exceptions::emit_creation_line_load;
 /// Invokes unary cleanup while accumulating destructor exceptions in the caller's frame slot.
 pub(crate) use exceptions::emit_guarded_cleanup_call;
 /// The PHP object-handle pool: binding a handle at allocation and reading one back.

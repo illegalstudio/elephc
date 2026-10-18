@@ -32,6 +32,15 @@ impl Parser {
         &mut self,
         name: String,
     ) -> Result<Vec<EvalStmt>, EvalParseError> {
+        // A dimension can also begin a call, such as $attributes[0]->newInstance().
+        // Keep the dedicated store parser for assignments and empty append dimensions.
+        let mut expression = self.clone();
+        if let Ok(value) = expression.parse_expr() {
+            if expression.consume(TokenKind::Semicolon) {
+                *self = expression;
+                return Ok(vec![EvalStmt::Expr(value)]);
+            }
+        }
         self.advance();
         self.expect(TokenKind::LBracket)?;
         if self.consume(TokenKind::RBracket) {

@@ -297,6 +297,7 @@ pub(super) fn bind_native_signature_args(
                     arg.value,
                     arg.ref_target,
                     by_ref_mode,
+                    context,
                     values,
                 )?;
             } else {
@@ -583,11 +584,12 @@ pub(super) fn bind_native_named_signature_arg(
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
     by_ref_mode: EvalByRefBindingMode<'_>,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     if let Some(param_index) = native_regular_param_index(signature, variadic_index, name) {
         if bound_args[param_index].is_some() {
-            return Err(EvalStatus::RuntimeFatal);
+            return eval_throw_error(&format!("Named parameter ${name} overwrites previous argument"), context, values);
         }
         let ref_target = native_parameter_ref_target(
             signature,
@@ -612,7 +614,7 @@ pub(super) fn bind_native_named_signature_arg(
             native_parameter_ref_target(signature, variadic_index, ref_target, by_ref_mode, values)?;
         return bind_native_variadic_arg(bound_args, variadic_index, key, value, ref_target, values);
     }
-    Err(EvalStatus::RuntimeFatal)
+    eval_throw_error(&format!("Unknown named parameter ${name}"), context, values)
 }
 
 /// Returns the caller writeback target required by a native by-reference parameter.

@@ -106,12 +106,7 @@ pub fn emit_exception_matches(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // finish the instanceof-style catch test
 
     emitter.label("__rt_exception_matches_absent");
-    abi::emit_symbol_address(emitter, "x1", ABSENT_MESSAGE_SYMBOL);             // the diagnostic, not a PHP-visible error
-    emitter.instruction(&format!("mov x2, #{}", ABSENT_MESSAGE.len()));         // its byte length
-    emitter.instruction("mov x0, #2");                                          // fd = stderr, as every other fatal runtime path uses
-    emitter.syscall(4);                                                         // write
-    emitter.instruction(&format!("mov x0, #{}", UNCAUGHT_EXIT_STATUS));         // exit with PHP's uncaught-throwable status
-    emitter.syscall(1);                                                         // exit
+    emit_absent_metadata_fatal(emitter);
 }
 
 /// x86_64/Linux implementation of `__rt_exception_matches`.
@@ -176,14 +171,32 @@ fn emit_exception_matches_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // finish the instanceof-style catch test
 
     emitter.label("__rt_exception_matches_absent");
-    abi::emit_symbol_address(emitter, "rsi", ABSENT_MESSAGE_SYMBOL);            // the diagnostic, not a PHP-visible error
-    emitter.instruction(&format!("mov edx, {}", ABSENT_MESSAGE.len()));         // its byte length
-    emitter.instruction("mov edi, 2");                                          // fd = stderr, as every other fatal runtime path uses
-    emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
-    emitter.instruction("syscall");                                             // write the internal metadata diagnostic to stderr
-    emitter.instruction(&format!("mov edi, {}", UNCAUGHT_EXIT_STATUS));         // exit with PHP's uncaught-throwable status
-    emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit
-    emitter.instruction("syscall");                                             // exit rather than misreport the broken chain as a non-match
+    emit_absent_metadata_fatal(emitter);
+}
+
+/// Emits the shared non-returning diagnostic for a broken emitted parent chain.
+/// Callers keep their own local branch label, including on Mach-O targets.
+pub(super) fn emit_absent_metadata_fatal(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(emitter, "x1", ABSENT_MESSAGE_SYMBOL);             // the diagnostic, not a PHP-visible error
+            emitter.instruction(&format!("mov x2, #{}", ABSENT_MESSAGE.len())); // its byte length
+            emitter.instruction("mov x0, #2");                                  // fd = stderr, as every other fatal runtime path uses
+            emitter.syscall(4);                                                         // write
+            emitter.instruction(&format!("mov x0, #{}", UNCAUGHT_EXIT_STATUS)); // exit with PHP's uncaught-throwable status
+            emitter.syscall(1);                                                         // exit
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(emitter, "rsi", ABSENT_MESSAGE_SYMBOL);            // the diagnostic, not a PHP-visible error
+            emitter.instruction(&format!("mov edx, {}", ABSENT_MESSAGE.len())); // its byte length
+            emitter.instruction("mov edi, 2");                                  // fd = stderr, as every other fatal runtime path uses
+            emitter.instruction("mov eax, 1");                                  // Linux x86_64 syscall 1 = write
+            emitter.instruction("syscall");                                     // write the internal metadata diagnostic to stderr
+            emitter.instruction(&format!("mov edi, {}", UNCAUGHT_EXIT_STATUS)); // exit with PHP's uncaught-throwable status
+            emitter.instruction("mov eax, 60");                                 // Linux x86_64 syscall 60 = exit
+            emitter.instruction("syscall");                                     // exit rather than misreport the broken chain as a non-match
+        }
+    }
 }
 
 #[cfg(test)]

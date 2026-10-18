@@ -46,10 +46,40 @@ pub(super) fn lower_static_settype(
         return None;
     }
     let (var_arg, type_arg) = static_settype_arg_exprs(ctx, name, args)?;
+    let target_ty = static_settype_target_type(&type_arg)?;
+    if matches!(&var_arg.kind, ExprKind::ArrayAccess { array, .. }
+        if instance_object_class_for_ir(ctx, array)
+            .is_some_and(|class| class.eq_ignore_ascii_case("WeakMap")))
+    {
+        let alias = weak_map_places::begin_entry_update(ctx, &var_arg, expr.span)
+            .expect("resolved WeakMap entry has a managed alias");
+        let result = lower_static_settype(ctx, name, &[alias, type_arg], expr)
+            .expect("settype alias retains the same literal target type");
+        weak_map_places::finish_entry_update(ctx);
+        return Some(result);
+    }
     let ExprKind::Variable(local_name) = &var_arg.kind else {
         return None;
     };
-    let target_ty = static_settype_target_type(&type_arg)?;
+    if ctx.is_ref_bound_local(local_name) && ctx.local_type(local_name).codegen_repr() == PhpType::Mixed {
+        let target = match target_ty {
+            PhpType::Int => CastType::Int,
+            PhpType::Float => CastType::Float,
+            PhpType::Str => CastType::String,
+            PhpType::Bool => CastType::Bool,
+            _ => unreachable!("static settype targets are scalar"),
+        };
+        let cast = Expr::new(ExprKind::Cast { target, expr: Box::new(var_arg.clone()) }, expr.span);
+        let assignment = Expr::new(ExprKind::Assignment {
+            target: Box::new(var_arg), value: Box::new(cast), result_target: None,
+            prelude: Vec::new(), conditional_value_temp: None,
+        }, expr.span);
+        let value = lower_expr(ctx, &assignment);
+        if ctx.value_needs_release_after_use(value) {
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
+        }
+        return Some(emit_bool_literal(ctx, true, Some(expr.span)));
+    }
     let sig = call_signature(ctx, name, source_prefers_extension_builtin(name));
     let operands = lower_builtin_call_args(ctx, name, sig.as_ref(), args);
     let result = emit_builtin_call_value(ctx, name, operands, PhpType::Bool, expr.span, None);

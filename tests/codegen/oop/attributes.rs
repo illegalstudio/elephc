@@ -414,13 +414,13 @@ foreach ($names as $n) {
 fn test_class_attribute_names_normalises_fully_qualified_form() {
     let out = compile_and_run(
         r#"<?php
-#[\Override]
+#[\AllowDynamicProperties]
 class A {}
 $names = class_attribute_names('A');
 echo $names[0];
 "#,
     );
-    assert_eq!(out, "Override");
+    assert_eq!(out, "AllowDynamicProperties");
 }
 
 /// Verifies that `class_attribute_names()` returns an empty array for a
@@ -986,19 +986,19 @@ echo count($attrs);
 }
 
 /// Verifies that `class_get_attributes()` returns the resolved short name
-/// (no leading backslash) from a fully-qualified attribute like `#[\Override]`,
+/// (no leading backslash) from a fully-qualified attribute like `#[\AllowDynamicProperties]`,
 /// matching PHP's `ReflectionAttribute::getName()` normalization.
 #[test]
 fn test_class_get_attributes_normalises_fully_qualified_name() {
     let out = compile_and_run(
         r#"<?php
-#[\Override]
+#[\AllowDynamicProperties]
 class A {}
 $attrs = class_get_attributes('A');
 echo $attrs[0]->getName();
 "#,
     );
-    assert_eq!(out, "Override");
+    assert_eq!(out, "AllowDynamicProperties");
 }
 
 /// Verifies that `class_get_attributes()` correctly handles an attribute

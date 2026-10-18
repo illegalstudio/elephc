@@ -85,6 +85,7 @@ enum EvalMethodResultSource {
 }
 
 const BUILTIN_THROWABLE_METHOD_CLASSES: &[&str] = &[
+    "ErrorException",
     "Error",
     "TypeError",
     "ArgumentCountError",
@@ -93,6 +94,10 @@ const BUILTIN_THROWABLE_METHOD_CLASSES: &[&str] = &[
     "DivisionByZeroError",
     "AssertionError",
     "UnhandledMatchError",
+    "ClosedGeneratorException",
+    "CompileError",
+    "ParseError",
+    "RequestParseBodyException",
     "Exception",
     "LogicException",
     "BadFunctionCallException",
@@ -1006,6 +1011,9 @@ fn emit_aarch64_builtin_throwable_method_dispatch(
         emit_aarch64_builtin_throwable_method_name_branch(
             module, emitter, data, "getprevious", BUILTIN_THROWABLE_GET_PREVIOUS_LABEL,
         );
+        for (method, label) in [("getfile", "__elephc_eval_throwable_file"), ("getline", "__elephc_eval_throwable_line")] {
+            emit_aarch64_builtin_throwable_method_name_branch(module, emitter, data, method, label);
+        }
         emitter.label(&next_label);
     }
 }
@@ -1041,6 +1049,9 @@ fn emit_x86_64_builtin_throwable_method_dispatch(
         emit_x86_64_builtin_throwable_method_name_branch(
             module, emitter, data, "getprevious", BUILTIN_THROWABLE_GET_PREVIOUS_LABEL,
         );
+        for (method, label) in [("getfile", "__elephc_eval_throwable_file"), ("getline", "__elephc_eval_throwable_line")] {
+            emit_x86_64_builtin_throwable_method_name_branch(module, emitter, data, method, label);
+        }
         emitter.label(&next_label);
     }
 }
@@ -1309,6 +1320,7 @@ fn emit_aarch64_builtin_throwable_method_bodies(
     emitter.instruction("bl __rt_mixed_from_value");                            // box the Throwable code as a Mixed integer
     emitter.instruction(&format!("b {}", done_label));                          // return the boxed Throwable method result
     emit_builtin_throwable_previous_body(module, emitter, done_label, fail_label);
+    emit_builtin_throwable_location_bodies(module, emitter, done_label, fail_label);
 }
 
 /// Emits x86_64 bodies for compact Throwable methods used by eval.
@@ -1336,6 +1348,36 @@ fn emit_x86_64_builtin_throwable_method_bodies(
     emitter.instruction("call __rt_mixed_from_value");                          // box the Throwable code as a Mixed integer
     emitter.instruction(&format!("jmp {}", done_label));                        // return the boxed Throwable method result
     emit_builtin_throwable_previous_body(module, emitter, done_label, fail_label);
+    emit_builtin_throwable_location_bodies(module, emitter, done_label, fail_label);
+}
+
+/// Materializes runtime-aware Throwable location results for opaque eval method calls.
+fn emit_builtin_throwable_location_bodies(
+    module: &Module,
+    emitter: &mut Emitter,
+    done_label: &str,
+    fail_label: &str,
+) {
+    for file in [true, false] {
+        emitter.label(if file { "__elephc_eval_throwable_file" } else { "__elephc_eval_throwable_line" });
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emit_aarch64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
+                emitter.instruction("ldr x0, [sp, #16]");                       // reload the Throwable receiver for location access
+            }
+            Arch::X86_64 => {
+                emit_x86_64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
+                emitter.instruction("mov rax, QWORD PTR [rbp - 24]");           // reload the Throwable receiver for location access
+            }
+        }
+        abi::emit_call_label(emitter, if file { "__rt_throwable_get_file" } else { "__rt_throwable_get_line" });
+        if file {
+            crate::codegen::emit_box_current_owned_value_as_mixed(emitter, &PhpType::Str);
+        } else {
+            crate::codegen::emit_box_current_value_as_mixed(emitter, &PhpType::Int);
+        }
+        abi::emit_jump(emitter, done_label);
+    }
 }
 
 /// Boxes a borrowed previous link independently so retiring the outer exception cannot invalidate it.
@@ -2187,6 +2229,14 @@ fn emit_aarch64_cast_eval_object_arg(
     class_name: &str,
     fail_label: &str,
 ) {
+    if class_name.is_empty() {
+        emitter.instruction("ldr x0, [x29, #-16]");                             // a generic object hint needs only the runtime object tag
+        emitter.instruction("bl __rt_mixed_unbox");                             // expose the borrowed object payload
+        emitter.instruction("cmp x0, #6");                                      // scalars and null do not satisfy object
+        emitter.instruction(&format!("b.ne {}", fail_label));                   // reject a non-object argument
+        emitter.instruction("mov x0, x1");                                      // pass the native object pointer
+        return;
+    }
     let (label, len) = data.add_string(class_name.as_bytes());
     let is_a_symbol = module.target.extern_symbol("__elephc_eval_value_is_a");
     emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed eval argument for object type validation
@@ -2357,6 +2407,14 @@ fn emit_x86_64_cast_eval_object_arg(
     class_name: &str,
     fail_label: &str,
 ) {
+    if class_name.is_empty() {
+        emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                   // a generic object hint needs only the runtime object tag
+        emitter.instruction("call __rt_mixed_unbox");                           // expose the borrowed object payload
+        emitter.instruction("cmp rax, 6");                                      // scalars and null do not satisfy object
+        emitter.instruction(&format!("jne {}", fail_label));                    // reject a non-object argument
+        emitter.instruction("mov rax, rdi");                                    // pass the native object pointer
+        return;
+    }
     let (label, len) = data.add_string(class_name.as_bytes());
     let is_a_symbol = module.target.extern_symbol("__elephc_eval_value_is_a");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // reload the boxed eval argument for object type validation

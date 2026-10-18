@@ -14,6 +14,7 @@ use super::super::collection_builder::EvalArrayBuilder;
 use super::object_inventory::eval_get_mangled_object_vars;
 use crate::context::{EvalErrorHandlerState, EvalNativeUserConstant};
 
+pub(in crate::interpreter) const E_WARNING: i64 = 2;
 const E_USER_ERROR: i64 = 256;
 const E_USER_WARNING: i64 = 512;
 const E_USER_NOTICE: i64 = 1_024;
@@ -334,7 +335,7 @@ pub(in crate::interpreter) fn eval_dispatch_php_error(
 fn format_user_error(message: &str, level: i64, context: &ElephcEvalContext) -> String {
     let category = match level {
         E_USER_ERROR => "Fatal error",
-        E_USER_WARNING => "Warning",
+        E_WARNING | E_USER_WARNING => "Warning",
         E_DEPRECATED | E_USER_DEPRECATED => "Deprecated",
         _ => "Notice",
     };

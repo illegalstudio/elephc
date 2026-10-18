@@ -52,6 +52,7 @@ mod preg_split;
 mod preg_strip;
 mod regex_locale;
 mod serialize;
+mod serialization_hooks;
 mod shell_exec;
 mod stack_guard;
 mod unserialize;
@@ -59,6 +60,9 @@ mod strtotime;
 mod time;
 mod microtime;
 mod php_uname;
+mod php_binary;
+
+pub(crate) use php_binary::emit_php_binary;
 
 pub(crate) use build_argv::emit_build_argv;
 pub(crate) use date::emit_date;

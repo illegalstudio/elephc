@@ -254,6 +254,9 @@ impl Checker {
     ) -> Result<bool, CompileError> {
         let inferred_ty = self.infer_type(receiver, env)?;
         let receiver_ty = inferred_ty.codegen_repr();
+        if matches!(&receiver_ty, PhpType::Object(class) if class.eq_ignore_ascii_case("WeakMap")) {
+            return Ok(true);
+        }
         let array_like = matches!(
             &receiver_ty,
             PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_)

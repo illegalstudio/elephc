@@ -167,6 +167,17 @@ pub(crate) fn build_enum_info(
     };
 
     let mut seen_case_names = HashSet::new();
+    for interface in implements {
+        let key = php_symbol_key(interface.as_str());
+        if matches!(key.as_str(), "unitenum" | "backedenum") {
+            return Err(CompileError::new(span, "Enum cannot explicitly implement UnitEnum or BackedEnum"));
+        }
+        if resolved_backing.is_none()
+            && checker.interface_extends_interface(interface.as_str(), "BackedEnum")
+        {
+            return Err(CompileError::new(span, "Pure enum cannot implement BackedEnum"));
+        }
+    }
     let mut seen_int_values = HashSet::new();
     let mut seen_string_values = HashSet::new();
     let mut enum_cases = Vec::new();
@@ -497,10 +508,23 @@ pub(crate) fn insert_enum_metadata(
         constant_attribute_args.insert(case.name.clone(), case.attribute_args.clone());
     }
 
-    let interfaces: Vec<String> = implements
+    let mut interfaces: Vec<String> = implements
         .iter()
         .map(|interface| interface.as_str().to_string())
+        .chain(std::iter::once("UnitEnum".to_string()))
+        .chain(backing_type.as_ref().map(|_| "BackedEnum".to_string()))
         .collect();
+    let mut index = 0;
+    while index < interfaces.len() {
+        if let Some(interface) = checker.interfaces.get(&interfaces[index]) {
+            for parent in &interface.parents {
+                if !interfaces.contains(parent) {
+                    interfaces.push(parent.clone());
+                }
+            }
+        }
+        index += 1;
+    }
 
     checker.classes.insert(
         name.to_string(),

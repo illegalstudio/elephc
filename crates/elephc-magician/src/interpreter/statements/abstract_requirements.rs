@@ -64,8 +64,16 @@ pub(super) fn validate_concrete_class_aot_interface_requirements(
     class: &EvalClass,
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
+    is_enum: bool,
 ) -> Result<(), EvalStatus> {
     for requirement in pending_class_aot_interface_method_requirements(class, context, values)? {
+        if is_enum && requirement.is_static
+            && ((requirement.owner.eq_ignore_ascii_case("UnitEnum") && requirement.name.eq_ignore_ascii_case("cases"))
+                || (requirement.owner.eq_ignore_ascii_case("BackedEnum")
+                    && (requirement.name.eq_ignore_ascii_case("from") || requirement.name.eq_ignore_ascii_case("tryFrom"))))
+        {
+            continue;
+        }
         if !class_has_aot_interface_method(class, &requirement, context) {
             return Err(EvalStatus::RuntimeFatal);
         }

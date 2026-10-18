@@ -221,7 +221,17 @@ pub(crate) fn build_attribute_new_instance_body_with_extra(
             continue;
         }
         let condition = factory_condition(factory.id);
-        let then_body = vec![Stmt::new(
+        let mut then_body = Vec::new();
+        if let Some(flags) = crate::types::checker::core_attributes::flags(&factory.class_name) {
+            use crate::synthetic_class::{e_binop, e_int, e_new_fq, e_str, e_this_prop, s_if, s_throw};
+            then_body.push(s_if(e_binop(e_binop(e_this_prop("__target"), BinOp::BitAnd, e_int(flags)), BinOp::StrictEq, e_int(0)),
+                vec![s_throw(e_new_fq("Error", vec![e_str(&format!("Attribute \"{}\" cannot target this declaration", factory.class_name))]))], vec![], None));
+            if flags & elephc_builtin_contract::CORE_ATTRIBUTE_IS_REPEATABLE == 0 {
+                then_body.push(s_if(e_this_prop("__is_repeated"),
+                    vec![s_throw(e_new_fq("Error", vec![e_str(&format!("Attribute \"{}\" must not be repeated", factory.class_name))]))], vec![], None));
+            }
+        }
+        then_body.push(Stmt::new(
             StmtKind::Return(Some(Expr::new(
                 ExprKind::NewObject {
                     class_name: name_from_canonical(&factory.class_name),
@@ -245,7 +255,7 @@ pub(crate) fn build_attribute_new_instance_body_with_extra(
                 span,
             ))),
             span,
-        )];
+        ));
         body.push(Stmt::new(
             StmtKind::If {
                 condition,

@@ -11,6 +11,7 @@
 mod binding_decision_ambiguity;
 mod builtin_enums;
 mod builtin_interfaces;
+pub(crate) mod core_attributes;
 mod builtin_iterators;
 mod builtin_json;
 mod builtin_spl_classes;
@@ -1226,6 +1227,7 @@ fn check_types_on_compiler_stack(
     clone_override_storage::widen_property_unset_storage(&mut checker);
     scope_dynamic_storage::reserve_scope_dynamic_property_storage(&mut checker);
     validate_magic_method_contracts(&checker)?;
+    core_attributes::validate(&checker)?;
 
     let mut warnings = crate::types::warnings::collect_warnings(program);
     warnings.extend(checker.warnings);

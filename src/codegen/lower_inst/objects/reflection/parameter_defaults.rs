@@ -299,6 +299,13 @@ pub(super) fn reflection_parameter_type_metadata(
     type_expr: Option<&TypeExpr>,
     ty: &PhpType,
 ) -> Option<ReflectionParameterTypeMetadata> {
+    if *ty == PhpType::Mixed {
+        if let Some(TypeExpr::Named(name)) = type_expr {
+            if name.as_str().trim_start_matches('\\').eq_ignore_ascii_case("object") {
+                return reflection_declared_type_metadata(type_expr.expect("declared object type"));
+            }
+        }
+    }
     if let Some(TypeExpr::Intersection(members)) = type_expr {
         return reflection_intersection_type_metadata(members);
     }

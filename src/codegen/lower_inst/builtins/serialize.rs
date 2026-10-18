@@ -6,15 +6,12 @@
 //! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
-//! - `serialize()` prepares a `(tag, lo, hi)` triple for the static argument type and
-//!   tail-calls `__rt_serialize_value`; a Mixed argument is unboxed by
-//!   `__rt_serialize_mixed`. The result is a borrowed `_concat_buf` string slice that
-//!   `store_if_result` persists on store, like other string builtins.
-//! - `unserialize()` brackets parsing with begin/end helpers so reentrant hydration
-//!   hooks cannot replace the outer allowed-class policy or reference registry, then
-//!   boxes a PHP `false` when the parser reports failure (a null result pointer).
-//! - Array (`a:`) serialization is added in a later increment; until then a non-scalar
-//!   static argument type is rejected at lowering time rather than mis-serialized.
+//! - `serialize()` adapts static or boxed operands to `(tag, lo, hi)` and enters
+//!   `__rt_serialize_call_value`, which protects reference state across callbacks.
+//!   Its borrowed concat-buffer result is persisted by `store_if_result`.
+//! - `unserialize()` brackets parsing with begin/end helpers, preserving policy and
+//!   reference owners across nested hooks. Serializable callbacks share references;
+//!   modern hooks isolate them. A parser failure is boxed as PHP `false`.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -28,18 +25,14 @@ use super::{expect_operand, store_if_result};
 
 /// Lowers `serialize($value)` into the shared serialize runtime helper.
 ///
-/// Scalar, array, object, and Closure static types are passed to `__rt_serialize_value` as a
-/// tagged value; a Mixed/Union argument is unboxed and dispatched by `__rt_serialize_mixed`.
+/// Scalar, array, object, and Closure static types enter the guarded serializer as a
+/// tagged value; a Mixed/Union argument is first unboxed by `__rt_mixed_unbox`.
 /// A Closure makes the runtime throw, as PHP does. Other static types are rejected.
 pub(crate) fn lower_serialize(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "serialize", 1)?;
     let value = expect_operand(inst, 0)?;
     let value_ty = ctx.value_php_type(value)?;
     let is_x86 = ctx.emitter.target.arch == Arch::X86_64;
-
-    // Reset the reference-tracking state (value counter + seen-objects map) so this
-    // top-level serialize() assigns r:/R: indices from scratch, matching PHP.
-    abi::emit_call_label(ctx.emitter, "__rt_serialize_begin");
 
     match value_ty.codegen_repr() {
         PhpType::Int => {
@@ -53,7 +46,7 @@ pub(crate) fn lower_serialize(ctx: &mut FunctionContext<'_>, inst: &Instruction)
                 ctx.emitter.instruction("mov x0, #0");                          // value_tag = int
                 ctx.emitter.instruction("mov x2, #0");                          // value_hi unused
             }
-            abi::emit_call_label(ctx.emitter, "__rt_serialize_value");
+            abi::emit_call_label(ctx.emitter, "__rt_serialize_call_value");
         }
         PhpType::Bool => {
             ctx.load_value_to_result(value)?;
@@ -66,7 +59,7 @@ pub(crate) fn lower_serialize(ctx: &mut FunctionContext<'_>, inst: &Instruction)
                 ctx.emitter.instruction("mov x0, #3");                          // value_tag = bool
                 ctx.emitter.instruction("mov x2, #0");                          // value_hi unused
             }
-            abi::emit_call_label(ctx.emitter, "__rt_serialize_value");
+            abi::emit_call_label(ctx.emitter, "__rt_serialize_call_value");
         }
         PhpType::Float => {
             ctx.load_value_to_result(value)?;
@@ -79,7 +72,7 @@ pub(crate) fn lower_serialize(ctx: &mut FunctionContext<'_>, inst: &Instruction)
                 ctx.emitter.instruction("mov x0, #2");                          // value_tag = float
                 ctx.emitter.instruction("mov x2, #0");                          // value_hi unused
             }
-            abi::emit_call_label(ctx.emitter, "__rt_serialize_value");
+            abi::emit_call_label(ctx.emitter, "__rt_serialize_call_value");
         }
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
@@ -90,7 +83,7 @@ pub(crate) fn lower_serialize(ctx: &mut FunctionContext<'_>, inst: &Instruction)
             } else {
                 ctx.emitter.instruction("mov x0, #1");                          // value_tag = string (lo/hi already in x1/x2)
             }
-            abi::emit_call_label(ctx.emitter, "__rt_serialize_value");
+            abi::emit_call_label(ctx.emitter, "__rt_serialize_call_value");
         }
         PhpType::Void | PhpType::Never => {
             if is_x86 {
@@ -102,11 +95,16 @@ pub(crate) fn lower_serialize(ctx: &mut FunctionContext<'_>, inst: &Instruction)
                 ctx.emitter.instruction("mov x1, #0");                          // value_lo unused
                 ctx.emitter.instruction("mov x2, #0");                          // value_hi unused
             }
-            abi::emit_call_label(ctx.emitter, "__rt_serialize_value");
+            abi::emit_call_label(ctx.emitter, "__rt_serialize_call_value");
         }
         PhpType::Mixed | PhpType::Union(_) => {
             ctx.load_value_to_result(value)?;
-            abi::emit_call_label(ctx.emitter, "__rt_serialize_mixed");
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            if is_x86 {
+                ctx.emitter.instruction("mov rsi, rdi");                        // stage the unboxed payload before overwriting the native tag argument
+                ctx.emitter.instruction("mov rdi, rax");                        // adapt the unboxed runtime tag to the serializer C argument
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_serialize_call_value");
         }
         PhpType::Array(_) => {
             ctx.load_value_to_result(value)?;
@@ -119,7 +117,7 @@ pub(crate) fn lower_serialize(ctx: &mut FunctionContext<'_>, inst: &Instruction)
                 ctx.emitter.instruction("mov x0, #4");                          // value_tag = indexed array
                 ctx.emitter.instruction("mov x2, #0");                          // value_hi unused
             }
-            abi::emit_call_label(ctx.emitter, "__rt_serialize_value");
+            abi::emit_call_label(ctx.emitter, "__rt_serialize_call_value");
         }
         PhpType::AssocArray { .. } => {
             ctx.load_value_to_result(value)?;
@@ -132,7 +130,7 @@ pub(crate) fn lower_serialize(ctx: &mut FunctionContext<'_>, inst: &Instruction)
                 ctx.emitter.instruction("mov x0, #5");                          // value_tag = associative array
                 ctx.emitter.instruction("mov x2, #0");                          // value_hi unused
             }
-            abi::emit_call_label(ctx.emitter, "__rt_serialize_value");
+            abi::emit_call_label(ctx.emitter, "__rt_serialize_call_value");
         }
         PhpType::Object(_) => {
             ctx.load_value_to_result(value)?;
@@ -145,7 +143,7 @@ pub(crate) fn lower_serialize(ctx: &mut FunctionContext<'_>, inst: &Instruction)
                 ctx.emitter.instruction("mov x0, #6");                          // value_tag = object
                 ctx.emitter.instruction("mov x2, #0");                          // value_hi unused
             }
-            abi::emit_call_label(ctx.emitter, "__rt_serialize_value");
+            abi::emit_call_label(ctx.emitter, "__rt_serialize_call_value");
         }
         PhpType::Callable => {
             // A Closure reaches the runtime like any tagged value, which throws PHP's catchable
@@ -160,7 +158,7 @@ pub(crate) fn lower_serialize(ctx: &mut FunctionContext<'_>, inst: &Instruction)
                 ctx.emitter.instruction("mov x0, #10");                         // value_tag = Closure
                 ctx.emitter.instruction("mov x2, #0");                          // value_hi unused
             }
-            abi::emit_call_label(ctx.emitter, "__rt_serialize_value");
+            abi::emit_call_label(ctx.emitter, "__rt_serialize_call_value");
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -216,6 +214,9 @@ pub(crate) fn lower_unserialize(ctx: &mut FunctionContext<'_>, inst: &Instructio
     // this unserialize() call's own pre-order value indices. Static option types
     // are rejected above so every emitted begin has a matching runtime end path.
     abi::emit_call_label(ctx.emitter, "__rt_unserialize_begin");
+    if options.is_none() {
+        abi::emit_call_label(ctx.emitter, "__rt_unserialize_inherit_policy");
+    }
     if let (Some(options), Some(options_ty)) = (options, options_ty) {
         ctx.load_value_to_result(options)?;
         match options_ty {

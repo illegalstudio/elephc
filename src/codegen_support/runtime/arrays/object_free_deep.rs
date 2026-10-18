@@ -10,12 +10,10 @@
 //! - Destructor exceptions are deferred until sibling owners and the object storage have been released.
 
 use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::runtime::exceptions::deep_cleanup::Scope;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::abi;
 use crate::codegen_support::RuntimeFeatures;
 
-const CLEANUP: Scope = Scope { arm: 32, x86: 48 };
 
 /// Emits the `__rt_object_free_deep` runtime helper for ARM64.
 /// Frees an object instance and recursively releases all heap-backed property payloads
@@ -99,7 +97,9 @@ pub fn emit_object_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction("orr w9, w9, #0x80000000");                             // suppress recursive release while dismantling the final object graph
     emitter.instruction("str w9, [x0, #-12]");                                  // keep an in-progress allocation distinct from a free-list block
     emitter.instruction("ldr x0, [sp]");                                        // pass the final object identity after resurrection was ruled out
-    CLEANUP.call(emitter, "__rt_eval_object_release_children", true);           // detach hidden eval edges and contain receiver destructor throws
+    super::deep_cleanup::invoke(emitter, "__rt_weak_map_notify", "x0");
+    emitter.instruction("ldr x0, [sp]");                                        // restore the key after observer callbacks
+    super::deep_cleanup::invoke(emitter, "__rt_eval_object_release_children", "x0");
     emitter.instruction("ldr x0, [sp]");                                        // restore the object pointer before property cleanup
 
     // -- incomplete objects own a persisted original class name plus a semantic
@@ -396,7 +396,9 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFe
     emitter.label("__rt_object_free_deep_release");
     emitter.instruction("or DWORD PTR [rax - 12], 0x80000000");                 // suppress recursive final release and preserve heap liveness during cleanup
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the final object identity after resurrection was ruled out
-    CLEANUP.call(emitter, "__rt_eval_object_release_children", true);           // detach hidden eval edges and contain receiver destructor throws
+    super::deep_cleanup::invoke(emitter, "__rt_weak_map_notify", "rdi");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // restore the key after observer callbacks
+    super::deep_cleanup::invoke(emitter, "__rt_eval_object_release_children", "rdi");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // restore the object pointer before property cleanup
 
     // -- incomplete objects own a persisted original class name plus a semantic

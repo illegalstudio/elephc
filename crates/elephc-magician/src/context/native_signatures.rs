@@ -386,7 +386,8 @@ impl ElephcEvalContext {
             })
     }
 
-    /// Returns native AOT instance-method signature metadata by PHP class and method name.
+    /// Returns native AOT method metadata, including constructor-only registrations.
+    /// Explicit __construct calls share named/default binding with new-object construction.
     pub fn native_method_signature(
         &self,
         class_name: &str,
@@ -395,6 +396,11 @@ impl ElephcEvalContext {
         self.native_methods
             .get(&native_method_key(class_name, method_name))
             .cloned()
+            .or_else(|| {
+                method_name.eq_ignore_ascii_case("__construct")
+                    .then(|| self.native_constructor_signature(class_name))
+                    .flatten()
+            })
     }
 
     /// Returns native AOT static-method signature metadata by PHP class and method name.

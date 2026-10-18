@@ -119,7 +119,12 @@ fn emit_constant_hash(
     allocate_mixed_hash(ctx, entries.len().saturating_mul(2).max(16));
     for (name, value, ty) in entries {
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-        emit_boxed_constant_value(ctx, value, ty)?;
+        if name == "PHP_BINARY" {
+            abi::emit_call_label(ctx.emitter, "__rt_php_binary");
+            emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Str);
+        } else {
+            emit_boxed_constant_value(ctx, value, ty)?;
+        }
         insert_boxed_hash_value(ctx, name);
     }
     Ok(())
@@ -147,6 +152,16 @@ fn emit_boxed_constant_value(
     declared_type: &PhpType,
 ) -> Result<()> {
     match value {
+        ExprKind::ConstRef(name) => {
+            if elephc_builtin_contract::canonical_constant_name(name.as_str()) == "PHP_BINARY" {
+                abi::emit_call_label(ctx.emitter, "__rt_php_binary");
+                emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Str);
+            } else {
+                let (value, ty) = ctx.module.global_constants.get(name.as_str()).cloned()
+                    .ok_or_else(|| unsupported_constant_value(value))?;
+                emit_boxed_constant_value(ctx, &value, &ty)?;
+            }
+        }
         ExprKind::IntLiteral(value) => {
             abi::emit_load_int_immediate(
                 ctx.emitter,

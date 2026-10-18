@@ -104,7 +104,11 @@ fn apply_static_method(
     method: &ClassMethod,
 ) -> Result<(), CompileError> {
     let method_key = php_symbol_key(&method.name);
-    let sig = build_method_sig(checker, method, &class.name)?;
+    let mut sig = build_method_sig(checker, method, &class.name)?;
+    if class.name == "WeakReference" && method_key == "create" && method.span == crate::span::Span::dummy() {
+        // Box the generic object boundary so native Closure descriptors keep their runtime tag.
+        sig.params[0].1 = crate::types::PhpType::Mixed;
+    }
     if state.final_methods.contains(&method_key) {
         return Err(final_method_error(
             state
@@ -236,7 +240,14 @@ fn apply_instance_method(
     let method_key = php_symbol_key(&method.name);
     let internal_exception_override = injected_exception_final_override(class, method, &method_key);
     let inherited_declaring_class = state.method_declaring_classes.get(&method_key).cloned();
-    let sig = build_method_sig(checker, method, &class.name)?;
+    let mut sig = build_method_sig(checker, method, &class.name)?;
+    let serializable = state.interfaces.iter().chain(class.implements.iter()).any(|name|
+        name.eq_ignore_ascii_case("Serializable") || checker.interface_extends_interface(name, "Serializable"));
+    if serializable && method_key == "unserialize"
+        && method.params.first().is_some_and(|(_, ty, _, _)| ty.is_none())
+    {
+        if let Some((_, ty)) = sig.params.first_mut() { *ty = crate::types::PhpType::Mixed; }
+    }
     if state.final_static_methods.contains(&method_key) {
         return Err(final_method_error(
             state

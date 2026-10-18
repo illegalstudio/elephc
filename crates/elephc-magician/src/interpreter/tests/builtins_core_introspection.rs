@@ -10,6 +10,27 @@
 use super::super::*;
 use super::support::*;
 
+/// Portable Core constants preserve literal types and special lookup in standalone eval.
+#[test]
+fn execute_program_core_constants_preserve_literal_types() {
+    let program = parse_fragment(br#"
+$constants = get_defined_constants(true);
+echo PHP_FLOAT_DIG, ":", PHP_OUTPUT_HANDLER_STDFLAGS, ":", UPLOAD_ERR_EXTENSION, ":";
+echo constant("tRuE") === true ? "true:" : "bad:";
+echo constant("False") === false ? "false:" : "bad:";
+echo constant("null") === null ? "null:" : "bad:";
+echo defined("true") && defined("FALSE") && defined("Null") ? "defined:" : "bad:";
+echo $constants["Core"]["PHP_DEBUG"] === false ? "bool:" : "bad:";
+echo array_key_exists("NULL", $constants["Core"]) ? "present" : "bad";
+return $constants["Core"]["NULL"];
+"#).expect("parse Core constants");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute Core constants");
+    assert_eq!(values.output, "15:112:8:true:false:null:defined:bool:present");
+    assert_eq!(values.get(result), FakeValue::Null);
+}
+
 /// Flat inventories allocate only their returned hash, never an abandoned user-category hash.
 #[test]
 fn execute_program_flat_constant_inventory_has_no_unused_category() {
@@ -425,9 +446,7 @@ echo $vars["local"] . ":" . $callbackVars["local"] . ":";
 echo $arrayCallbackVars["local"] . ":" . $constants["user"]["LOCAL_CONSTANT"] . ":";
 echo $constants["Core"]["PHP_INT_SIZE"] . ":";
 echo $constants["Core"]["PHP_FLOAT_MAX"] > 1.0 ? "float:" : "bad-float:";
-echo isset($constants["Core"]["PHP_MAXPATHLEN"])
-    || isset($constants["Core"]["PATH_SEPARATOR"])
-    ? "extra:" : "catalog:";
+echo $constants["Core"]["PHP_MAXPATHLEN"] > 0 ? "paths:" : "bad-paths:";
 echo in_array("local_function", $functions["user"]) ? "function:" : "bad:";
 echo count($functions["internal"]) === count($includeDisabled["internal"])
     && count($functions["user"]) === count($includeDisabled["user"])
@@ -461,7 +480,7 @@ return get_extension_funcs("missing");"#,
 
     assert_eq!(
         values.output,
-        "7:7:7:9:8:float:catalog:function:flag:62:1:2:3:files"
+        "7:7:7:9:8:float:paths:function:flag:62:1:2:3:files"
     );
     assert_eq!(values.get(result), FakeValue::Bool(false));
 }

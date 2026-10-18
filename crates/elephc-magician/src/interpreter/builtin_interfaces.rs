@@ -120,6 +120,18 @@ pub(super) fn builtin_interface_method_requirements(
                 Some(builtin_type(EvalParameterTypeVariant::String)),
             ),
         ));
+    } else if interface.eq_ignore_ascii_case("Serializable") {
+        requirements.push((
+            String::from("Serializable"),
+            builtin_interface_method("serialize", &[], Some(EvalParameterType::new(
+                vec![EvalParameterTypeVariant::String], true,
+            ))),
+        ));
+        requirements.push((
+            String::from("Serializable"),
+            builtin_interface_method("unserialize", &[("data", builtin_type(EvalParameterTypeVariant::String))],
+                Some(builtin_type(EvalParameterTypeVariant::Void))),
+        ));
     } else if interface.eq_ignore_ascii_case("JsonSerializable") {
         requirements.push((
             String::from("JsonSerializable"),

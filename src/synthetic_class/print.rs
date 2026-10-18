@@ -356,6 +356,9 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
         StmtKind::Assign { name, value } => {
             format!("{indent}${name} = {};", expression(value))
         }
+        StmtKind::RefAssign { target, source } => {
+            format!("{indent}${target} = &{};", expression(source))
+        }
         StmtKind::TypedAssign {
             type_expr: declared,
             name,
@@ -1076,6 +1079,26 @@ mod tests {
         assert!(rendered.contains("function accept(string|int|null $value)"));
         assert!(rendered.contains("function finish(): void"));
         round_trip("null union and void return spellings", &program);
+    }
+
+    /// Property and nested-entry references round-trip while auditing calls inside their sources.
+    #[test]
+    fn reference_assignments_round_trip_and_audit_source_calls() {
+        use crate::synthetic_class::{called_function_names, e_call, e_index, e_int, e_this_prop, e_var};
+        let program = vec![
+            Stmt::new(StmtKind::RefAssign {
+                target: "entries".into(), source: e_this_prop("values"),
+            }, crate::span::Span::dummy()),
+            Stmt::new(StmtKind::RefAssign {
+                target: "value".into(),
+                source: e_index(e_index(e_var("entries"), e_call("key", vec![])), e_int(1)),
+            }, crate::span::Span::dummy()),
+        ];
+        round_trip("managed property and entry references", &program);
+        assert_eq!(called_function_names(&program), vec!["key"]);
+        let reads = crate::synthetic_class::reads_of(&program);
+        assert!(reads.contains(&"entries".to_string()));
+        assert!(reads.contains(&"value".to_string()));
     }
 
     /// THE PROPERTY THAT MAKES THIS TOOL USABLE AS AN ORACLE: printing a built prelude and

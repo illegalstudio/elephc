@@ -145,6 +145,7 @@ impl Checker {
                 let result = self.infer_type_with_assignment_effects(expr, env);
                 self.statement_position_expr = saved_statement_position;
                 result?;
+                super::core_attributes::check_discarded(self, expr, env);
                 Ok(())
             }
             StmtKind::FunctionDecl { .. } => Ok(()),

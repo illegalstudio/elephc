@@ -166,6 +166,9 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     system::emit_microtime_str(emitter);
     system::emit_microtime_mixed(emitter);
     system::emit_php_uname(emitter);
+    system::emit_php_binary(emitter);
+    super::objects::emit_weak_reference(emitter);
+    super::objects::emit_weak_map(emitter);
     system::emit_getenv(emitter);
     system::emit_getenv_all(emitter);
     system::emit_shell_exec(emitter);
@@ -219,6 +222,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     exceptions::emit_class_implements_interface(emitter);
     exceptions::emit_dynamic_instanceof(emitter);
     exceptions::emit_exception_matches(emitter);
+    exceptions::emit_location(emitter);
     exceptions::emit_report_uncaught_exception(emitter);
     exceptions::emit_throw_current(emitter);
     exceptions::emit_rethrow_current(emitter);

@@ -91,21 +91,45 @@ fn execute_context_function_call_array_binds_declared_named_args() {
 
     assert_eq!(values.get(result), FakeValue::Int(12));
 }
-/// Verifies `call_user_func_array` rejects positional values after named keys.
+/// Ordering errors are catchable and use the call-array message without an unpacking suffix.
 #[test]
 fn execute_program_call_user_func_array_rejects_positional_after_named_arg() {
     let program = parse_fragment(
         br#"function dyn($x, $y) { return $x + $y; }
-return call_user_func_array("dyn", ["y" => 2, 1]);"#,
+try { call_user_func_array("dyn", ["y" => 2, 1]); }
+catch (Error $error) { return get_class($error) . ":" . $error->getMessage(); }
+return "missed";"#,
     )
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
-    let result = execute_program(&program, &mut scope, &mut values);
+    let result = execute_program(&program, &mut scope, &mut values).expect("catch argument ordering error");
 
-    assert_eq!(result, Err(EvalStatus::RuntimeFatal));
+    assert_eq!(values.get(result), FakeValue::String(
+        "Error:Cannot use positional argument after named argument".to_string(),
+    ));
 }
+
+/// Context-level call arrays retain the same catchable error and shorter ordering message.
+#[test]
+fn execute_context_function_call_array_rejects_positional_after_named_arg() {
+    let program = parse_fragment(br#"function dyn($x, $y) { return $x + $y; }
+return ["y" => 2, 1];"#).expect("parse context call-array fragment");
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let args = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("create context call array");
+    let result = execute_context_function_call_array(&mut context, "dyn", args, &mut values);
+    assert_eq!(result, Err(EvalStatus::UncaughtThrowable));
+    let error = context.take_pending_throw().expect("pending argument ordering Error");
+    let message = values.property_get(error, "message").expect("ordering message");
+    assert_eq!(values.get(message), FakeValue::String(
+        "Cannot use positional argument after named argument".to_string(),
+    ));
+}
+
 /// Verifies `call_user_func_array` inside eval can dispatch a supported builtin.
 #[test]
 fn execute_program_call_user_func_array_dispatches_builtin() {

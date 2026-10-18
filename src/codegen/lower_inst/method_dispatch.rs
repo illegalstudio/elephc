@@ -17,9 +17,14 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let object = expect_operand(inst, 0)?;
     let method_name = method_name_data(ctx, inst)?.to_string();
     if let Some((class_name, true)) = objects::nullable_object_receiver_class(ctx, object)? {
-        return lower_nullable_receiver_method_call(ctx, inst, object, &class_name, &method_name);
+        if !class_name.is_empty() {
+            return lower_nullable_receiver_method_call(ctx, inst, object, &class_name, &method_name);
+        }
     }
     let object_ty = ctx.value_php_type(object)?.codegen_repr();
+    if matches!(&object_ty, PhpType::Object(name) if name.is_empty()) {
+        return lower_mixed_method_call(ctx, inst, object, &method_name);
+    }
     if matches!(object_ty, PhpType::Mixed | PhpType::Union(_)) {
         if let Some(state) = fiber_state_predicate_method(&method_name) {
             return lower_mixed_fiber_state_predicate(ctx, inst, object, &method_name, state);
@@ -164,9 +169,13 @@ pub(super) fn lower_mixed_method_call(
         })
         .collect::<Vec<_>>();
 
-    ctx.load_value_to_result(object)?;
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    emit_mixed_method_object_payload_or_fatal(ctx, receiver_reg, &non_object_label);
+    if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Object(_)) {
+        ctx.load_value_to_reg(object, receiver_reg)?;
+    } else {
+        ctx.load_value_to_result(object)?;
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        emit_mixed_method_object_payload_or_fatal(ctx, receiver_reg, &non_object_label);
+    }
     emit_mixed_method_class_dispatch(
         ctx,
         receiver_reg,

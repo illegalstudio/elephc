@@ -137,6 +137,11 @@ fn execute_program_rejects_invalid_builtin_attribute_targets() {
             "Override property",
         ),
         (
+            br#"class EvalPrivateAttrParent { private int $value; }
+class EvalInvalidPrivateOverride extends EvalPrivateAttrParent { #[\Override] public int $value; }"#,
+            "Override private parent property",
+        ),
+        (
             br#"class EvalInvalidAttrConstant { #[\AllowDynamicProperties] public const VALUE = 1; }"#,
             "AllowDynamicProperties constant",
         ),

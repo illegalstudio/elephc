@@ -309,4 +309,19 @@ mod tests {
         assert!(!is_generated_local_name("__elephc_func_arg_value"));
         assert!(!is_generated_local_name("__elephc_func_args"));
     }
+
+    /// Compiler-owned collectors remain stable when eval forces another frame-capture pass.
+    #[test]
+    fn existing_hidden_collector_is_not_reinterpreted_as_a_source_variadic() {
+        let tokens = crate::lexer::tokenize("<?php function countArguments(int $value = 1): int { return func_num_args(); } eval($source);").unwrap();
+        let program = crate::parser::parse(&tokens).unwrap();
+        let once = super::desugar(program).unwrap();
+        let twice = super::desugar(once).unwrap();
+        let crate::parser::ast::StmtKind::FunctionDecl { params, variadic, body, .. } = &twice[0].kind else {
+            panic!("the fixture function must remain first");
+        };
+        assert_eq!(params.len(), 1, "a hidden count parameter must not be added on the second pass");
+        assert_eq!(variadic.as_deref(), Some(HIDDEN_ARGS_PARAM));
+        assert_eq!(body.len(), 1, "the existing collector must not receive a new snapshot loop");
+    }
 }

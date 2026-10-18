@@ -54,6 +54,10 @@ pub(crate) const ALWAYS_REGISTERED_THROWABLES: &[&str] = &[
 const UNRAISED_THROWABLES: &[&str] = &[
     "AssertionError",
     "UnhandledMatchError",
+    "ClosedGeneratorException",
+    "CompileError",
+    "ParseError",
+    "RequestParseBodyException",
 ];
 
 /// (class, parent) for the SPL exception hierarchy, in `builtin_spl_exceptions` order.
@@ -235,7 +239,13 @@ fn insert_with_ancestors(name: &str, wanted: &mut HashSet<String>) {
         current = SPL_EXCEPTION_PARENTS
             .iter()
             .find(|(child, _)| *child == class_name)
-            .map(|(_, parent)| *parent);
+            .map(|(_, parent)| *parent)
+            .or_else(|| match class_name {
+                "ParseError" => Some("CompileError"),
+                "CompileError" => Some("Error"),
+                "ClosedGeneratorException" | "RequestParseBodyException" => Some("Exception"),
+                _ => None,
+            });
     }
 }
 

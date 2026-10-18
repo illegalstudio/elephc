@@ -288,6 +288,13 @@ pub(super) fn lower_array_access_from_value(
         _ => Op::RuntimeCall,
     };
     let result_type = array_access_result_type(ctx, array_value.value, op, expr);
+    let index_owner = if op == Op::RuntimeCall
+        && ctx.builder.value_php_type(index_value.value).codegen_repr() == PhpType::Callable
+    {
+        let (rooted, owner) = root_owned_call_operand(ctx, index_value, index.span);
+        index_value = rooted;
+        owner
+    } else { None };
     let mut operands = vec![array_value.value, index_value.value];
     if matches!(op, Op::RuntimeCall) {
         let warning_flag = emit_bool_literal(ctx, warn_on_missing, Some(expr.span));
@@ -307,7 +314,13 @@ pub(super) fn lower_array_access_from_value(
     // it — release it here or it leaks per read (issue #500). Int-coerced
     // index paths rebound `index_value` to a non-owning raw cast, so the
     // owning-temporary gate makes this a no-op for them.
-    release_coerced_source_if_owned(ctx, index_value, Some(index.span));
+    if let Some(owner) = index_owner {
+        guard_descriptor_container(ctx, result, expr.span);
+        retire_owned_call_operand(ctx, owner, expr.span);
+        ctx.unguard_call_argument(result.value, expr.span);
+    } else {
+        release_coerced_source_if_owned(ctx, index_value, Some(index.span));
+    }
     // Array access consumes an owning receiver produced by an earlier read,
     // call, or one-shot temp. Preserve borrowed string/callable payloads before
     // dropping that receiver; boxed and retained container reads are already

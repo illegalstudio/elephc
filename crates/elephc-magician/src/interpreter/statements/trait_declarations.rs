@@ -774,6 +774,7 @@ pub(super) fn validate_eval_class_modifiers(
     }
     for method in class.methods() {
         validate_eval_method_attribute_targets(method.attributes())?;
+        for attributes in method.parameter_attributes() { validate_eval_core_attribute_targets(attributes, 32)?; }
         validate_eval_magic_method(method)?;
         if method.is_abstract() && method.is_final() {
             return Err(EvalStatus::RuntimeFatal);

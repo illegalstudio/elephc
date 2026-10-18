@@ -20,6 +20,9 @@ try { $unused = true ? throw $plain_object : null; } catch (Error $error) { echo
         crate::codegen::platform::Target::parse(target).unwrap(),
     );
     let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    assert!(asm.contains("Cannot throw objects that do not implement Throwable"), "{target}");
+    let main = asm.split_once("@fn name=main symbol=").expect("main assembly region").1;
+    let asm = main.split_once("@endfn name=main").expect("main assembly end").0;
     for marker in [
         "release a non-object thrown box before raising Error",
         "release a non-Throwable object box before raising Error",
@@ -32,7 +35,6 @@ try { $unused = true ? throw $plain_object : null; } catch (Error $error) { echo
             assert!(release < error_class, "{target}: cleanup precedes Error creation");
         }
     }
-    assert!(asm.contains("Cannot throw objects that do not implement Throwable"), "{target}");
 }
 
 /// macOS ARM64 emits distinct, owned Error branches for invalid Mixed throws.

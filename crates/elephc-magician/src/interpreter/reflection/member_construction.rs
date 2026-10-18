@@ -818,6 +818,7 @@ pub(super) fn eval_reflection_native_callable_parameter_defaults(
 /// Converts one registered native default into an eval constant expression.
 pub(super) fn eval_reflection_native_callable_default_expr(default: &NativeCallableDefault) -> EvalExpr {
     match default {
+        NativeCallableDefault::ExecutablePath => EvalExpr::ConstFetch("PHP_BINARY".to_string()),
         NativeCallableDefault::Null => EvalExpr::Const(EvalConst::Null),
         NativeCallableDefault::Bool(value) => EvalExpr::Const(EvalConst::Bool(*value)),
         NativeCallableDefault::Int(value) => EvalExpr::Const(EvalConst::Int(*value)),

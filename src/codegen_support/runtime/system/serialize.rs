@@ -4,12 +4,12 @@
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::system`.
-//! - The EIR `serialize()` lowering in `crate::codegen_support::lower_inst::builtins::system`.
+//! - The EIR `serialize()` lowering in `crate::codegen::lower_inst::builtins::serialize`.
 //!
 //! Key details:
 //! - Output is the exact PHP wire format: `N;`, `b:0;`/`b:1;`, `i:<int>;`,
 //!   `d:<shortest-round-trip>;` (`d:INF;`/`d:-INF;`/`d:NAN;` for non-finite),
-//!   `s:<bytelen>:"<raw>";`, and (added in a later increment) `a:<n>:{...}`.
+//!   `s:<bytelen>:"<raw>";`, `a:<n>:{...}`, and object or custom payload records.
 //! - Float digits reuse `__rt_json_ftoa` (serialize_precision = -1, the same
 //!   shortest-round-trip formatter PHP uses for serialize floats), passing the
 //!   uppercase `'E'` exponent marker so exponential floats match PHP's
@@ -34,6 +34,8 @@ use crate::codegen_support::sentinels::{
 };
 
 mod magic_result;
+mod custom;
+mod context;
 mod sleep_result;
 
 /// Emits `__rt_serialize_value`, the tag-dispatching serializer, and the
@@ -51,6 +53,9 @@ pub(crate) fn emit_serialize(emitter: &mut Emitter) {
     }
     magic_result::emit_magic_result(emitter);
     sleep_result::emit_sleep_result(emitter);
+    custom::emit(emitter);
+    context::emit(emitter);
+    super::serialization_hooks::emit(emitter);
 }
 
 /// AArch64 implementation of `__rt_serialize_mixed` and `__rt_serialize_value`.
@@ -642,6 +647,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x10, #-2");                                        // synthetic __PHP_Incomplete_Class id
     emitter.instruction("cmp x1, x10");                                         // is this a semantic __PHP_Incomplete_Class payload?
     emitter.instruction("b.eq __rt_serialize_object_incomplete");               // serialize its retained class name and property hash
+    custom::emit_probe(emitter);
     emit_symbol_address(emitter, "x9", "_class_name_entries");
     emitter.instruction("add x10, x9, x1, lsl #4");                             // entry = base + class_id*16
     emitter.instruction("ldr x11, [x10]");                                      // class name pointer
@@ -668,7 +674,8 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x10, [sp, #24]");                                  // save it so any method scratch can be rewound away
     emitter.instruction("ldr x0, [sp, #0]");                                    // $this receiver for the method call
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload the __serialize target
-    emitter.instruction("blr x10");                                             // transfer the raw or boxed array result from __serialize($this)
+    emitter.instruction("mov x1, x10");                                         // pass the modern hook target to the scoped adapter
+    abi::emit_call_label(emitter, "__rt_serialize_invoke_modern");
     emitter.instruction("str x0, [sp, #32]");                                   // save the returned array pointer
     emit_symbol_address(emitter, "x9", "_concat_off");
     emitter.instruction("ldr x10, [sp, #24]");                                  // reload the saved post-prefix offset
@@ -710,7 +717,8 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x10, [sp, #24]");                                  // save it for the scratch rewind
     emitter.instruction("ldr x0, [sp, #0]");                                    // $this receiver
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload the __sleep target
-    emitter.instruction("blr x10");                                             // call __sleep($this) -> x0 = names array (indexed)
+    emitter.instruction("mov x1, x10");                                         // pass the sleep target to the scoped adapter
+    abi::emit_call_label(emitter, "__rt_serialize_invoke_modern");
     emitter.instruction("str x0, [sp, #32]");                                   // save the names array pointer
     emit_symbol_address(emitter, "x9", "_concat_off");
     emitter.instruction("ldr x10, [sp, #24]");                                  // reload the saved post-prefix offset
@@ -1588,6 +1596,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the class id
     emitter.instruction("cmp rax, -2");                                         // synthetic __PHP_Incomplete_Class id
     emitter.instruction("je __rt_serialize_object_incomplete_x");               // serialize its retained class name and property hash
+    custom::emit_probe(emitter);
     emit_symbol_address(emitter, "r10", "_class_name_entries");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // class id
     emitter.instruction("shl rcx, 4");                                          // class_id * 16 (entry stride)
@@ -1616,7 +1625,8 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save it so method scratch can be rewound away
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // $this receiver for the method call
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the __serialize target
-    emitter.instruction("call r10");                                            // transfer the raw or boxed array result from __serialize($this)
+    emitter.instruction("mov rsi, r10");                                        // pass the modern hook target to the scoped adapter
+    abi::emit_call_label(emitter, "__rt_serialize_invoke_modern");
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the returned array pointer
     emit_symbol_address(emitter, "r10", "_concat_off");
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the saved post-prefix offset
@@ -1658,7 +1668,8 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save it for the scratch rewind
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // $this receiver
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the __sleep target
-    emitter.instruction("call r10");                                            // __sleep($this) -> rax = names array (indexed)
+    emitter.instruction("mov rsi, r10");                                        // pass the sleep target to the scoped adapter
+    abi::emit_call_label(emitter, "__rt_serialize_invoke_modern");
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the names array pointer
     emit_symbol_address(emitter, "r10", "_concat_off");
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the saved post-prefix offset

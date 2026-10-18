@@ -65,6 +65,14 @@ pub enum RuntimeArgumentLayout {
 /// Typed runtime operation selected by backend-neutral EIR lowering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RuntimeCallTarget {
+    /// Returns an owned string naming the currently running executable.
+    ExecutablePath,
+    /// Returns the unique live weak wrapper for an object, acquiring its returned owner.
+    WeakReferenceCreate,
+    /// Reads the stable identity of a validated boxed object or Closure.
+    WeakObjectId,
+    /// Returns a freshly boxed nullable referent without retaining it in the wrapper.
+    WeakReferenceGet,
     /// Initializes a builtin Throwable constructor without assuming a compact receiver layout.
     ThrowableInitialize,
     /// Appends an exception to the END of another's `previous` chain, as php-src's
@@ -126,6 +134,22 @@ impl RuntimeCallTarget {
     /// Returns the logical signature shared by EIR validation and backend lowering.
     pub fn signature(self) -> Option<RuntimeCallSignature> {
         match self {
+            RuntimeCallTarget::WeakObjectId => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Mixed)],
+                result: IrType::I64,
+            }),
+            RuntimeCallTarget::WeakReferenceCreate => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Mixed)],
+                result: IrType::Heap(IrHeapKind::Object),
+            }),
+            RuntimeCallTarget::WeakReferenceGet => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Object)],
+                result: IrType::Heap(IrHeapKind::Mixed),
+            }),
+            RuntimeCallTarget::ExecutablePath => Some(RuntimeCallSignature::Fixed {
+                parameters: &[],
+                result: IrType::Str,
+            }),
             RuntimeCallTarget::ThrowableInitialize => Some(RuntimeCallSignature::Fixed {
                 parameters: &[IrType::Heap(IrHeapKind::Object), IrType::Str, IrType::I64, IrType::Heap(IrHeapKind::Mixed)],
                 result: IrType::Void,
@@ -199,6 +223,10 @@ impl RuntimeCallTarget {
     /// Returns the stable backend-neutral spelling used by textual EIR.
     pub fn as_eir(self) -> &'static str {
         match self {
+            RuntimeCallTarget::WeakObjectId => "object.weak_identity",
+            RuntimeCallTarget::WeakReferenceCreate => "object.weak_reference_create",
+            RuntimeCallTarget::WeakReferenceGet => "object.weak_reference_get",
+            RuntimeCallTarget::ExecutablePath => "process.executable_path",
             RuntimeCallTarget::ThrowableInitialize => "object.throwable_initialize",
             RuntimeCallTarget::ExceptionChain => "object.exception_chain",
             RuntimeCallTarget::ArrayFetchForWrite => "array.fetch_for_write",

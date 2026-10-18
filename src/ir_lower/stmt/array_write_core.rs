@@ -99,6 +99,11 @@ pub(super) fn lower_array_assign(
     let update = desugared_element_update(value, span, |read| {
         reads_local_array_element(read, array, index)
     });
+    if matches!(&update, Some(ElementUpdate::Compound))
+        && crate::ir_lower::expr::lower_weak_map_incdec_stmt(ctx, value, span)
+    {
+        return;
+    }
     if let Some(ElementUpdate::NullCoalesce { read, default }) = update {
         crate::ir_lower::expr::lower_null_coalesce_update_stmt(ctx, read, default, span);
         return;
@@ -159,11 +164,8 @@ pub(crate) fn lower_array_assign_with_diagnosed_key(
 ) {
     let array_value = load_array_local_for_write(ctx, array, span);
     let op = array_set_op(array_value.ir_type);
-    if op == Op::RuntimeCall && matches!(
-        array_value.ir_type,
-        IrType::Heap(crate::ir::IrHeapKind::Mixed | crate::ir::IrHeapKind::Union)
-    ) {
-        lower_boxed_array_local_set(ctx, array_value, index, value, span, key_already_diagnosed);
+    if op == Op::RuntimeCall {
+        lower_boxed_array_set(ctx, array_value, index, value, span, key_already_diagnosed);
         return;
     }
     let (mut index_value, mut value_value) = lower_write_key_and_value(ctx, index, value);
@@ -239,7 +241,7 @@ pub(crate) fn lower_array_assign_with_diagnosed_key(
 /// The backend copies strings and retains other payloads in a separate consumed box.
 /// `key_already_diagnosed` marks the write half of a compound update, whose read already
 /// reported a float key's conversion, so the boxed writer rebuilds the key silently.
-fn lower_boxed_array_local_set(
+pub(super) fn lower_boxed_array_set(
     ctx: &mut LoweringContext<'_, '_>,
     array: LoweredValue,
     index: &Expr,
@@ -248,6 +250,8 @@ fn lower_boxed_array_local_set(
     key_already_diagnosed: bool,
 ) {
     let mut roots = Vec::new();
+    let (array, receiver_owner) = crate::ir_lower::expr::root_owned_call_operand(ctx, array, span);
+    if let Some(owner) = receiver_owner { roots.push(owner); }
     let mut lower_operand = |ctx: &mut LoweringContext<'_, '_>, expr: &Expr| {
         let value = lower_expr(ctx, expr);
         let (value, root) = crate::ir_lower::expr::root_owned_call_operand(ctx, value, expr.span);

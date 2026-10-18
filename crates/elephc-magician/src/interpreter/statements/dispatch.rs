@@ -170,6 +170,8 @@ pub(in crate::interpreter) fn execute_stmt(
             body,
         } => {
             let key = name.to_ascii_lowercase();
+            validate_eval_core_attribute_targets(attributes, 2)?;
+            for attributes in parameter_attributes { validate_eval_core_attribute_targets(attributes, 32)?; }
             if context.generic_function_template(name).is_some() { return Err(EvalStatus::RuntimeFatal); }
             let mut function = EvalFunction::new(name.clone(), params.clone(), body.clone())
                 .with_attributes(attributes.clone())
@@ -330,8 +332,11 @@ pub(in crate::interpreter) fn execute_stmt(
             Ok(EvalControl::None)
         }
         EvalStmt::Expr(expr) => {
-            let result = eval_expr(expr, context, scope, values)?;
-            release_expr_result(result, context, values)?;
+            let result = eval_discarded_core_expr(expr, context, scope, values)?;
+            let warned = warn_eval_discarded_call(expr, context, values);
+            let released = release_expr_result(result, context, values);
+            warned?;
+            released?;
             Ok(EvalControl::None)
         }
     }

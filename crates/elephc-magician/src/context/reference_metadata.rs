@@ -29,6 +29,8 @@ pub struct EvalFunctionArgsFrame {
     actual_count: usize,
     surplus: Vec<RuntimeCellHandle>,
     scope: *const ElephcEvalScope,
+    sensitive_parameters: Vec<bool>,
+    sensitive_variadic: Option<usize>,
 }
 
 /// One active eval callable as exposed through PHP backtrace functions.
@@ -118,12 +120,29 @@ impl EvalFunctionArgsFrame {
             actual_count,
             surplus,
             scope: std::ptr::null(),
+            sensitive_parameters: Vec::new(),
+            sensitive_variadic: None,
         }
     }
 
     /// Associates the frame with the stable stack scope used for this activation.
     pub(crate) fn bind_scope(&mut self, scope: &ElephcEvalScope) {
         self.scope = scope as *const ElephcEvalScope;
+    }
+
+    /// Keeps redaction metadata separate from func_get_args, which returns real arguments.
+    pub(crate) fn set_sensitive_parameters(&mut self, attributes: &[Vec<crate::eval_ir::EvalAttribute>], variadic: &[bool]) {
+        self.sensitive_parameters = attributes.iter().map(|attributes| attributes.iter()
+            .any(|attribute| attribute.name().trim_start_matches('\\').eq_ignore_ascii_case("SensitiveParameter")))
+            .collect();
+        self.sensitive_variadic = variadic.iter().position(|variadic| *variadic)
+            .filter(|index| self.sensitive_parameters.get(*index).copied().unwrap_or(false));
+    }
+
+    /// Reports whether a positional argument belongs to a sensitive fixed or variadic parameter.
+    pub(crate) fn is_sensitive(&self, position: usize) -> bool {
+        self.sensitive_parameters.get(position).copied().unwrap_or(false)
+            || self.sensitive_variadic.is_some_and(|start| position >= start)
     }
 
     /// Returns the live activation scope associated before the frame was pushed.

@@ -15,6 +15,7 @@ use crate::codegen_support::sentinels::REFERENCE_CELL_HEAP_KIND;
 
 /// Emits destructor snapshots, reachable-node unpinning, and snapshot disposal for every target.
 pub fn emit_gc_destructors(emitter: &mut Emitter) {
+    super::gc_weak_observers::emit(emitter);
     super::gc_exceptions::emit_gc_exception_helpers(emitter);
     match emitter.target.arch {
         Arch::AArch64 => {

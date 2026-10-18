@@ -177,6 +177,11 @@ impl RuntimeValueOps for ElephcRuntimeOps {
             )
         };
         self.release(arg_array)?;
+        if status == EvalStatus::UncaughtThrowable.code() {
+            let thrown = self.take_pending_native_throwable().ok_or(EvalStatus::RuntimeFatal)?;
+            self.schedule_pending_throw(thrown)?;
+            return Err(EvalStatus::UncaughtThrowable);
+        }
         if status != EvalStatus::Ok.code() {
             return Err(EvalStatus::RuntimeFatal);
         }

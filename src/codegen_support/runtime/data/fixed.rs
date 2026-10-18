@@ -19,7 +19,7 @@ use super::{
     OB_NTC_G_GET_FLUSH, OB_NTC_NO_CLEAN, OB_NTC_NO_END_CLEAN, OB_NTC_NO_END_FLUSH,
     NAMED_PARAMETER_OVERWRITE_PREFIX, NAMED_PARAMETER_OVERWRITE_SUFFIX,
     OB_NTC_NO_FLUSH, OB_NTC_NO_GET_FLUSH, OBJECT_NOT_ARRAY_PREFIX, OBJECT_NOT_ARRAY_SUFFIX,
-    SERIALIZATION_DENIED_PREFIX, SERIALIZATION_DENIED_SUFFIX, UNSERIALIZATION_DENIED_PREFIX,
+    SERIALIZATION_DENIED_PREFIX, SERIALIZATION_DENIED_SUFFIX, SERIALIZABLE_RESULT_SUFFIX, UNSERIALIZATION_DENIED_PREFIX,
     CLOSURE_CLASS_NAME, POSITIONAL_AFTER_NAMED_MSG, UNKNOWN_NAMED_PARAMETER_PREFIX,
     OB_WARN_BAD_CALLBACK_GENERIC,
     OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX,
@@ -119,6 +119,7 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&format!(
         ".globl _serialization_denied_suffix\n_serialization_denied_suffix:\n    .ascii {SERIALIZATION_DENIED_SUFFIX:?}\n"
     ));
+    out.push_str(&format!(".globl _serializable_result_suffix\n_serializable_result_suffix:\n    .ascii {SERIALIZABLE_RESULT_SUFFIX:?}\n"));
     out.push_str(&format!(
         ".globl _unserialization_denied_prefix\n_unserialization_denied_prefix:\n    .ascii {UNSERIALIZATION_DENIED_PREFIX:?}\n"
     ));
@@ -309,6 +310,8 @@ pub(crate) fn emit_runtime_data_fixed(
     // policy/depth fields through _unser_context. Capacity bounds the per-call object/value
     // count; overflow degrades gracefully (serialize stops deduping, unserialize fails the ref).
     out.push_str(&comm_directive("_ser_value_counter", 8, target));
+    out.push_str(&comm_directive("_ser_legacy_active", 8, target));
+    out.push_str(&comm_directive("_unser_legacy_active", 8, target));
     out.push_str(&comm_directive("_ser_obj_count", 8, target));
     out.push_str(&comm_directive("_ser_obj_ptrs", 524288, target));
     out.push_str(&comm_directive("_ser_obj_idxs", 524288, target));
@@ -523,6 +526,11 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive(
         "_obj_handle_index",
         crate::codegen_support::runtime::object_handle_index_slots(heap_size) * 4,
+        target,
+    ));
+    out.push_str(&comm_directive(
+        "_obj_weak_reference_index",
+        crate::codegen_support::runtime::object_handle_index_slots(heap_size) * 8,
         target,
     ));
     out.push_str(&comm_directive(

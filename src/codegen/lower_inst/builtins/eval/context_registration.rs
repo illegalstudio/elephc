@@ -97,6 +97,10 @@ fn register_eval_native_global_constant(
     value: &ExprKind,
     ty: &PhpType,
 ) -> Result<()> {
+    if name == "PHP_BINARY" {
+        register_eval_executable_constant(ctx, context_offset, name, "__elephc_eval_register_native_global_constant");
+        return Ok(());
+    }
     let (kind, word, string_value) = eval_native_global_constant_abi_value(value, ty)?;
     register_eval_native_scalar_constant(
         ctx,
@@ -108,6 +112,26 @@ fn register_eval_native_global_constant(
         "__elephc_eval_register_native_global_constant",
     );
     Ok(())
+}
+
+/// Registers the running executable path under either a Core name or a user alias.
+fn register_eval_executable_constant(
+    ctx: &mut FunctionContext<'_>, context_offset: usize, name: &str, symbol: &str,
+) {
+    abi::emit_call_label(ctx.emitter, "__rt_php_binary");
+    let (ptr, len) = abi::string_result_regs(ctx.emitter);
+    abi::emit_push_reg_pair(ctx.emitter, ptr, len);
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    emit_eval_constant_name_args(ctx, name);
+    let target = ctx.emitter.target;
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 3), NATIVE_GLOBAL_CONSTANT_STRING);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 4), 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 5), 8);
+    abi::emit_call_label(ctx.emitter, &target.extern_symbol(symbol));
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result, 0);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
 }
 
 /// Registers the AOT user-declared constant inventory with a newly allocated eval context.
@@ -134,6 +158,10 @@ pub(super) fn register_eval_native_user_constants(
         .collect::<Vec<_>>();
     entries.sort_by(|left, right| left.0.cmp(&right.0));
     for (name, value, ty) in entries {
+        if crate::types::predefined_constants::is_executable_path_alias(&value, &ctx.module.global_constants) {
+            register_eval_executable_constant(ctx, context_offset, &name, "__elephc_eval_register_native_user_constant");
+            continue;
+        }
         let Some(encoded) = eval_native_user_constant_value(&value, &ty) else {
             continue;
         };

@@ -10,6 +10,21 @@
 
 use super::*;
 
+/// Runtime executable defaults survive the shared scalar and nested-array metadata wire formats.
+#[test]
+fn executable_path_default_metadata_survives_scalar_and_array_decoding() {
+    let kind = elephc_builtin_contract::EXECUTABLE_PATH_DEFAULT_KIND;
+    assert_eq!(native_callable_scalar_default(kind, 0), Some(NativeCallableDefault::ExecutablePath));
+    let expected = NativeCallableDefault::Array(vec![NativeCallableArrayDefaultElement {
+        key: None,
+        value: NativeCallableDefault::ExecutablePath,
+    }]);
+    let NativeCallableDefault::Array(elements) = &expected else { unreachable!() };
+    let spec = native_array_default_record(elements);
+    let decoded = unsafe { native_callable_array_default(spec.as_ptr(), spec.len() as u64) };
+    assert_eq!(decoded, Some(expected));
+}
+
 /// Verifies native AOT object defaults can carry nested object constructor args.
 #[test]
 fn register_native_object_default_decodes_nested_objects() {

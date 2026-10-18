@@ -40,6 +40,10 @@ use super::eval_callable_helpers::EvalCallableDescriptorSupport;
 use super::eval_argument_helpers::emit_borrowed_string_arg;
 
 const BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES: &[&str] = &[
+    "ClosedGeneratorException",
+    "CompileError",
+    "ParseError",
+    "RequestParseBodyException",
     "Error",
     "TypeError",
     "ArgumentCountError",

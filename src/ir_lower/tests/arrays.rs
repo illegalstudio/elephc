@@ -1202,7 +1202,8 @@ echo count($owner->items), count(PhpArrayWrites::$shared);
         let module = super::lower_source_at_for_target(
             source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
         );
-        let instructions = module.functions.iter().chain(&module.class_methods)
+        let instructions = module.class_methods.iter()
+            .filter(|function| function.name == "PhpArrayWrites::write")
             .flat_map(|function| &function.instructions)
             .collect::<Vec<_>>();
         let fetches = instructions.iter().filter(|inst| inst.op == Op::PropGetForWrite)
@@ -1376,7 +1377,8 @@ if ($argc > 1) { $a = 0; $b[0] = "x"; } else { $a = "ciao"; }
 echo $a, "|", $b[0];
 "#,
     );
-    let text = print_module(&module);
+    let main = module.functions.iter().find(|function| function.flags.is_main).unwrap();
+    let text = crate::ir::print_function(main);
     assert_eq!(
         text.matches("php=mixed own=maybe_owned = load_local slot[2]")
             .count(),

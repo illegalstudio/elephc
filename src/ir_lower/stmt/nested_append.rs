@@ -166,8 +166,11 @@ pub(super) fn recognize<'a>(
     // anything else falls open to ordinary lowering. A property container is gated at lowering
     // time instead, on the IR type of the loaded property.
     if let BaseKind::Local(name) = base {
+        let ty = ctx.local_type(name);
+        let supported = matches!(&ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+            || matches!(&ty, PhpType::Object(class) if class.eq_ignore_ascii_case("WeakMap"));
         if !ctx.has_local_slot(name)
-            || !matches!(ctx.local_type(name), PhpType::Array(_) | PhpType::AssocArray { .. })
+            || !supported
         {
             return None;
         }
@@ -202,6 +205,11 @@ pub(super) fn recognize<'a>(
 pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup<'_>, span: Span) {
     for stmt in group.prefix {
         super::lower_stmt(ctx, stmt);
+    }
+    if let (StmtKind::Assign { value: target, .. }, StmtKind::ArrayPush { value, .. }) =
+        (&group.read.kind, &group.push.kind)
+    {
+        if crate::ir_lower::expr::lower_weak_map_append(ctx, target, value, span) { return; }
     }
 
     // Load the container and probe the key. For a local this is a `LoadLocal`; for a property it is

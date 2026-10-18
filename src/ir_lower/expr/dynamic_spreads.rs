@@ -1,8 +1,8 @@
 //! Purpose:
-//! Materializes fixed-arity builtin calls whose unpacked PHP arrays have boxed storage.
+//! Materializes runtime unpack streams for fixed signatures and hidden argument collectors.
 //!
 //! Called from:
-//! - Builtin signature-based argument lowering, including statically selected CUF/FCC targets.
+//! - Shared signature-based argument lowering and statically selected builtin callable targets.
 //!
 //! Key details:
 //! - Consumes the shared source plan, then binds runtime keys without discarding named arguments.
@@ -17,6 +17,8 @@ struct SpreadBindings {
     filled: Vec<String>,
     next: String,
     named: String,
+    actual: String,
+    collector: Option<String>,
     span: Span,
 }
 
@@ -27,7 +29,7 @@ enum StagedSpreadArgument {
     Positional(String),
 }
 
-/// Lowers boxed unpack sources for fixed signatures without references or hidden parameters.
+/// Lowers unpack sources for by-value fixed signatures and compiler-owned surplus collectors.
 pub(super) fn lower_boxed_spread_args(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
@@ -35,12 +37,13 @@ pub(super) fn lower_boxed_spread_args(
     builtin: &str,
     preserve_values: bool,
 ) -> Option<Vec<ValueId>> {
-    if sig.variadic.is_some() || sig.ref_params.iter().any(|by_ref| *by_ref)
-        || !preserve_values && sig.defaults.iter().any(Option::is_some)
+    let hidden = crate::func_args::sig_collects_surplus_args(sig);
+    if sig.variadic.is_some() && !hidden || sig.ref_params.iter().any(|by_ref| *by_ref)
+        || !hidden && !preserve_values && sig.defaults.iter().any(Option::is_some)
         || crate::func_args::sig_has_hidden_argc_param(sig)
         || !args.iter().any(|arg| match &arg.kind {
             ExprKind::Spread(source) => {
-                preserve_values
+                hidden || preserve_values
                     || array_literal_element_type_for_ir(ctx, source).codegen_repr() == PhpType::Mixed
                     || nested_spread_assoc_literal(source)
             }
@@ -56,7 +59,7 @@ pub(super) fn lower_boxed_spread_args(
         staged.push(match &arg.kind {
             ExprKind::Spread(source) => StagedSpreadArgument::Spread(root_value(ctx, source)),
             ExprKind::NamedArg { name, value } => {
-                let index = crate::types::call_args::named_param_index(sig, sig.params.len(), name)
+                let index = crate::types::call_args::named_param_index(sig, crate::types::call_args::regular_param_count(sig), name)
                     .expect("shared planner validated fixed named argument");
                 StagedSpreadArgument::Named(index, root_value(ctx, value))
             }
@@ -67,9 +70,14 @@ pub(super) fn lower_boxed_spread_args(
         slots: Vec::new(), filled: Vec::new(),
         next: initialize_slot(ctx, PhpType::Int, &Expr::new(ExprKind::IntLiteral(0), span)),
         named: initialize_slot(ctx, PhpType::Bool, &Expr::new(ExprKind::BoolLiteral(false), span)),
+        actual: initialize_slot(ctx, PhpType::Int, &Expr::new(ExprKind::IntLiteral(0), span)),
+        collector: hidden.then(|| initialize_owned_slot(ctx, variadic_array_type(sig),
+            &Expr::new(ExprKind::ArrayLiteral(if crate::func_args::sig_collects_optional_arg_count(sig) {
+                vec![Expr::new(ExprKind::IntLiteral(0), span)]
+            } else { Vec::new() }), span))),
         span,
     };
-    for _ in &sig.params {
+    for _ in 0..crate::types::call_args::regular_param_count(sig) {
         state
             .slots
             .push(initialize_owned_slot(
@@ -82,15 +90,30 @@ pub(super) fn lower_boxed_spread_args(
     for arg in &staged {
         match arg {
             StagedSpreadArgument::Spread(source) => lower_source(ctx, sig, &state, source),
-            StagedSpreadArgument::Named(index, value) => bind_named(ctx, &state, *index, value),
+            StagedSpreadArgument::Named(index, value) => bind_named(ctx, sig, &state, *index, value),
             StagedSpreadArgument::Positional(value) => bind_positional(ctx, &state, value),
         }
     }
-    let count = ctx.load_local(&state.next, Some(span));
-    let max = emit_i64_at_span(ctx, sig.params.len() as i64, span);
-    let valid = compare_ints(ctx, count.value, max.value, CmpPredicate::Sle, span);
-    require(ctx, valid, "ArgumentCountError", &format!("{builtin}(): Too many arguments for unpacked call"), span);
+    if !hidden {
+        let count = ctx.load_local(&state.next, Some(span));
+        let max = emit_i64_at_span(ctx, state.slots.len() as i64, span);
+        let valid = compare_ints(ctx, count.value, max.value, CmpPredicate::Sle, span);
+        require(ctx, valid, "ArgumentCountError", &format!("{builtin}(): Too many arguments for unpacked call"), span);
+    }
     for (index, filled) in state.filled.iter().enumerate() {
+        if hidden {
+            if let Some(Some(default)) = sig.defaults.get(index) {
+                let ready = ctx.load_local(filled, Some(span));
+                let done = ctx.builder.create_named_block("spread.default.done", Vec::new());
+                let missing = ctx.builder.create_named_block("spread.default.missing", Vec::new());
+                conditional(ctx, ready.value, done, missing);
+                ctx.builder.position_at_end(missing);
+                store_expr_into_temp(ctx, &state.slots[index], PhpType::Mixed, default, span);
+                branch(ctx, done);
+                ctx.builder.position_at_end(done);
+                continue;
+            }
+        }
         if preserve_values && sig.defaults.get(index).is_some_and(Option::is_some) {
             continue;
         }
@@ -103,6 +126,21 @@ pub(super) fn lower_boxed_spread_args(
         let owned = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
         ctx.builder.set_value_ownership(owned.value, Ownership::Owned);
         operands.push(owned.value);
+    }
+    if let Some(collector) = &state.collector {
+        if crate::func_args::sig_collects_optional_arg_count(sig) {
+            let update = Stmt::new(StmtKind::ArrayAssign {
+                array: collector.clone(),
+                index: Expr::new(ExprKind::IntLiteral(0), span),
+                value: Expr::new(ExprKind::Variable(state.actual.clone()), span),
+            }, span);
+            crate::ir_lower::stmt::lower_stmt(ctx, &update);
+        }
+        let value = ctx.load_local(collector, Some(span));
+        let owned = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
+        ctx.builder.set_value_ownership(owned.value, Ownership::Owned);
+        operands.push(owned.value);
+        retire_slot(ctx, collector, span);
     }
     for slot in state.slots.into_iter().rev() {
         retire_slot(ctx, &slot, span);
@@ -198,7 +236,7 @@ fn lower_source(ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSig, state: &Sp
     bind_positional(ctx, state, &value_slot);
     branch(ctx, done);
     ctx.builder.position_at_end(named);
-    for (index, (name, _)) in sig.params.iter().enumerate() {
+    for (index, (name, _)) in sig.params.iter().take(state.slots.len()).enumerate() {
         let matches = Expr::new(ExprKind::BinaryOp {
             left: Box::new(key.clone()), op: BinOp::StrictEq,
             right: Box::new(Expr::new(ExprKind::StringLiteral(name.clone()), state.span)),
@@ -208,11 +246,19 @@ fn lower_source(ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSig, state: &Sp
         let other = ctx.builder.create_named_block("spread.name.next", Vec::new());
         conditional(ctx, matches.value, matched, other);
         ctx.builder.position_at_end(matched);
-        bind_named(ctx, state, index, &value_slot);
+        bind_named(ctx, sig, state, index, &value_slot);
         branch(ctx, done);
         ctx.builder.position_at_end(other);
     }
-    throw(ctx, "Error", "Unknown named parameter in unpacked call", state.span);
+    if state.collector.is_some() {
+        let message = Expr::new(ExprKind::BinaryOp {
+            left: Box::new(Expr::new(ExprKind::StringLiteral("Unknown named parameter $".to_string()), state.span)),
+            op: BinOp::Concat, right: Box::new(key),
+        }, state.span);
+        throw_expression(ctx, "Error", message, state.span);
+    } else {
+        throw(ctx, "Error", "Unknown named parameter in unpacked call", state.span);
+    }
     ctx.builder.position_at_end(done);
     // Keep the slot layouts stable across the loop backedge. The next iteration's
     // stores release these values, and the exit path retires the final pair.
@@ -226,12 +272,17 @@ fn lower_source(ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSig, state: &Sp
 }
 
 /// Binds a string-keyed value after checking that the parameter has not already been populated.
-fn bind_named(ctx: &mut LoweringContext<'_, '_>, state: &SpreadBindings, index: usize, value: &str) {
+fn bind_named(ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSig, state: &SpreadBindings, index: usize, value: &str) {
     let occupied = ctx.load_local(&state.filled[index], Some(state.span));
     let zero = emit_i64_at_span(ctx, 0, state.span);
     let free = compare_ints(ctx, occupied.value, zero.value, CmpPredicate::Eq, state.span);
-    require(ctx, free, "Error", "Named parameter overwrites previous argument", state.span);
+    let message = if state.collector.is_some() {
+        format!("Named parameter ${} overwrites previous argument", sig.params[index].0)
+    } else { "Named parameter overwrites previous argument".to_string() };
+    require(ctx, free, "Error", &message, state.span);
     bind_slot(ctx, state, index, value);
+    let extent = emit_i64_at_span(ctx, index as i64 + 1, state.span);
+    extend_actual_count(ctx, state, extent);
     set_flag(ctx, &state.named, state.span);
 }
 
@@ -254,12 +305,33 @@ fn bind_positional(ctx: &mut LoweringContext<'_, '_>, state: &SpreadBindings, va
         branch(ctx, done);
         ctx.builder.position_at_end(other);
     }
+    if let Some(collector) = &state.collector {
+        let array = ctx.load_local(collector, Some(state.span));
+        let value = ctx.load_local(value, Some(state.span));
+        ctx.emit_void(Op::ArrayPush, vec![array.value, value.value], None,
+            Op::ArrayPush.default_effects(), Some(state.span));
+    }
     branch(ctx, done);
     ctx.builder.position_at_end(done);
     let one = emit_i64_at_span(ctx, 1, state.span);
     let incremented = ctx.emit_value(Op::IAdd, vec![next.value, one.value], None, PhpType::Int,
         Op::IAdd.default_effects(), Some(state.span));
     ctx.store_local(&state.next, incremented, PhpType::Int, Some(state.span));
+    extend_actual_count(ctx, state, incremented);
+}
+
+/// Tracks PHP's argument extent, including default-filled gaps before named parameters.
+fn extend_actual_count(ctx: &mut LoweringContext<'_, '_>, state: &SpreadBindings, extent: LoweredValue) {
+    if state.collector.is_none() { return; }
+    let current = ctx.load_local(&state.actual, Some(state.span));
+    let greater = compare_ints(ctx, extent.value, current.value, CmpPredicate::Sgt, state.span);
+    let update = ctx.builder.create_named_block("spread.count.update", Vec::new());
+    let done = ctx.builder.create_named_block("spread.count.done", Vec::new());
+    conditional(ctx, greater.value, update, done);
+    ctx.builder.position_at_end(update);
+    ctx.store_local(&state.actual, extent, PhpType::Int, Some(state.span));
+    branch(ctx, done);
+    ctx.builder.position_at_end(done);
 }
 
 /// Copies the value into its parameter root and marks that parameter as supplied.
@@ -292,9 +364,14 @@ fn require(ctx: &mut LoweringContext<'_, '_>, valid: LoweredValue, class: &str, 
 
 /// Emits a PHP exception through the ordinary object construction and throw path.
 fn throw(ctx: &mut LoweringContext<'_, '_>, class: &str, message: &str, span: Span) {
+    throw_expression(ctx, class, Expr::new(ExprKind::StringLiteral(message.to_string()), span), span);
+}
+
+/// Constructs a catchable binding error whose message includes a runtime argument name.
+fn throw_expression(ctx: &mut LoweringContext<'_, '_>, class: &str, message: Expr, span: Span) {
     let exception = Expr::new(ExprKind::NewObject {
         class_name: Name::unqualified(class),
-        args: vec![Expr::new(ExprKind::StringLiteral(message.to_string()), span)],
+        args: vec![message],
     }, span);
     let exception = lower_expr(ctx, &exception);
     ctx.builder.terminate(Terminator::Throw { value: exception.value });

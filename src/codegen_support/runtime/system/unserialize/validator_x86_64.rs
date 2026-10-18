@@ -103,6 +103,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("je __rt_unser_validate_array_x");                      // recurse over the array entries
     emitter.instruction("cmp r8d, 79");                                         // object marker (O)?
     emitter.instruction("je __rt_unser_validate_object_x");                     // recurse over the object properties
+    emitter.instruction("cmp r8d, 67");                                         // C uses the same class and counted envelope
+    emitter.instruction("je __rt_unser_validate_object_x");                     // bound its opaque body before any callback
     emitter.instruction("cmp r8d, 114");                                        // back-reference marker (r)?
     emitter.instruction("je __rt_unser_validate_ref_x");                        // validate the back-reference index
     emitter.instruction("cmp r8d, 82");                                         // by-reference marker (R)?
@@ -338,6 +340,19 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("cmp BYTE PTR [rdi + r8], 123");                        // exact opening brace
     emitter.instruction("jne __rt_unser_validate_at_fail_x");                   // properties must open with a brace
     emitter.instruction("add r8, 1");                                           // step past the opening brace
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // original object position before cursor reuse
+    emitter.instruction("movzx r10d, BYTE PTR [rdi + r10]");                    // distinguish raw C bytes from O properties
+    emitter.instruction("cmp r10d, 67");                                        // C lengths count bytes rather than key/value pairs
+    emitter.instruction("jne __rt_unser_validate_object_properties_x");         // O continues the recursive property walk
+    emitter.instruction("mov r10, r9");                                         // remaining source bytes after the opening brace
+    emitter.instruction("sub r10, r8");                                         // exclude the already validated header
+    emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // validated opaque byte length
+    emitter.instruction("cmp r11, r10");                                        // reserve one byte for the closing brace
+    emitter.instruction("jae __rt_unser_validate_at_fail_x");                   // reject truncated and overflowing opaque payloads
+    emitter.instruction("add r8, r11");                                         // skip exactly the declared opaque byte count
+    emitter.instruction("mov QWORD PTR [rbp - 16], r8");                        // publish the closing delimiter position
+    emitter.instruction("jmp __rt_unser_validate_container_close_x");           // reuse the exact closing-brace check
+    emitter.label("__rt_unser_validate_object_properties_x");
     emitter.instruction("mov QWORD PTR [rbp - 16], r8");                        // first property key
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // property index
     emitter.label("__rt_unser_validate_object_loop_x");

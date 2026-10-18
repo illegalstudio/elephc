@@ -665,6 +665,10 @@ pub(super) fn instance_callable_object_class_and_nullability(
         ExprKind::PropertyAccess { object, property } => {
             property_access_expr_type_for_ir(ctx, object, property)?
         }
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            static_property_result_type(ctx, receiver, property, object)
+        }
+        ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)?,
         ExprKind::NullsafePropertyAccess { object, property } => {
             nullsafe_property_access_expr_type_for_ir(ctx, object, property)?
         }
@@ -677,6 +681,21 @@ pub(super) fn instance_callable_object_class_and_nullability(
         ExprKind::StaticMethodCall {
             receiver, method, ..
         } => static_method_call_expr_type_for_ir(ctx, receiver, method)?,
+        ExprKind::ClosureCall { var, .. } => {
+            if let Some(target) = ctx.static_callable_local(var) {
+                static_callable_return_type(ctx, &target)
+            } else {
+                ctx.callable_param_signature(var)?.return_type.clone()
+            }
+        }
+        ExprKind::ExprCall { callee, .. } => {
+            if let ExprKind::Closure { return_type: Some(ty), .. } = &callee.kind {
+                ctx.type_expr_to_php_type_for_value(ty)
+            } else {
+                let target = static_callable_binding_for_expr(ctx, callee)?;
+                static_callable_return_type(ctx, &target)
+            }
+        }
         _ => infer_expr_type_syntactic(object),
     };
     let (class_name, nullable) = singular_object_class(&object_type)?;

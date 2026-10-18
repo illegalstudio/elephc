@@ -13,6 +13,7 @@ mod abstract_requirements;
 mod array_updates;
 mod array_append;
 mod attributes_magic_validation;
+mod core_attributes;
 mod callable_objects;
 mod class_declarations;
 mod class_resolution;
@@ -61,6 +62,7 @@ pub(crate) use class_resolution::eval_object_clone_with_properties_result as eva
 #[cfg(not(test))]
 pub(crate) use instance_property_access::eval_property_set_result as eval_property_set_for_ffi;
 use attributes_magic_validation::*;
+use core_attributes::*;
 pub(in crate::interpreter) use callable_objects::*;
 pub(in crate::interpreter) use class_declarations::*;
 pub(in crate::interpreter) use class_resolution::*;

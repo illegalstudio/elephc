@@ -117,6 +117,7 @@ fn eval_native_user_constant_element<V: RuntimeValueOps>(
     values: &mut V,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match value {
+        NativeCallableDefault::ExecutablePath => Err(EvalStatus::RuntimeFatal),
         NativeCallableDefault::Null => values.null(),
         NativeCallableDefault::Bool(value) => values.bool_value(*value),
         NativeCallableDefault::Int(value) => values.int(*value),
@@ -143,6 +144,8 @@ pub(in crate::interpreter) fn eval_predefined_constant(
         return Ok(None);
     };
     match value {
+        EvalPredefinedConstant::Null => values.null().map(Some),
+        EvalPredefinedConstant::Bool(value) => values.bool_value(value).map(Some),
         EvalPredefinedConstant::Int(value) => values.int(value).map(Some),
         EvalPredefinedConstant::Float(value) => values.float(value).map(Some),
         EvalPredefinedConstant::String(value) => values.string(value).map(Some),
@@ -171,9 +174,10 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
         ConstValue::Int(value) => Some(EvalPredefinedConstant::Int(value)),
         ConstValue::Float(value) => Some(EvalPredefinedConstant::Float(value)),
         ConstValue::Str(value) => Some(EvalPredefinedConstant::String(value)),
-        // Booleans, null, and stream resources have no predefined-constant representation
-        // here; the catalog's eval route already reports them unsupported.
-        ConstValue::Bool(_) | ConstValue::Null | ConstValue::StreamResource(_) => None,
+        ConstValue::Bool(value) => Some(EvalPredefinedConstant::Bool(value)),
+        ConstValue::Null => Some(EvalPredefinedConstant::Null),
+        // Standalone eval has no stream-resource provider; native programs register theirs.
+        ConstValue::StreamResource(_) => None,
         // A target-dependent name without an arm above is a catalog/interpreter mismatch,
         // which `every_catalogued_constant_has_its_declared_eval_route` reports.
         ConstValue::TargetDependent(_) => None,
@@ -183,8 +187,22 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
 /// Values the catalog marks `TargetDependent`: Magician computes them for the target it is
 /// linked into and the PHP profile it emulates, under the catalogued name.
 fn eval_target_dependent_constant(name: &str) -> Option<EvalPredefinedConstant> {
-    let is_macos = cfg!(target_os = "macos");
+    let is_macos = cfg!(target_vendor = "apple");
+    if let Some(value) = elephc_builtin_contract::core_environment_constant(name, is_macos) {
+        return Some(match value {
+            ConstValue::Str(value) => EvalPredefinedConstant::String(value),
+            ConstValue::Int(value) => EvalPredefinedConstant::Int(value),
+            ConstValue::Bool(value) => EvalPredefinedConstant::Bool(value),
+            _ => unreachable!("Core environment metadata contains only strings, integers, and booleans"),
+        });
+    }
     Some(match name {
+        "PHP_BINARY" => {
+            static BINARY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+            EvalPredefinedConstant::String(BINARY.get_or_init(|| {
+                std::env::current_exe().map(|path| path.to_string_lossy().into_owned()).unwrap_or_default()
+            }))
+        }
         "ICONV_IMPL" => EvalPredefinedConstant::String(elephc_iconv::implementation_name(is_macos)),
         "ICONV_VERSION" => EvalPredefinedConstant::String(elephc_iconv::ICONV_VERSION),
         "PHP_OS" => EvalPredefinedConstant::String(eval_php_os_name()),

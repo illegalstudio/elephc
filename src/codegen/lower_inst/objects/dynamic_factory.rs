@@ -375,6 +375,10 @@ pub(super) fn emit_dynamic_new_candidate(
     )?;
     ctx.store_result_value(result)?;
     emit_property_defaults(ctx, result, &candidate.property_defaults)?;
+    if super::super::is_throwable_like_class(ctx, &candidate.class_name) {
+        ctx.load_value_to_result(result)?;
+        emit_regular_throwable_creation_line(ctx, result, abi::int_result_reg(ctx.emitter), candidate.class_id);
+    }
     if let Some(constructor) = &candidate.constructor_impl {
         emit_constructor_call(
             ctx,

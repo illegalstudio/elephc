@@ -45,6 +45,8 @@ mod progress;
 pub mod bcmath_prelude;
 /// Incremental hashing standard-library prelude injection.
 pub mod hash_prelude;
+/// Core attribute and sensitive-value class declarations.
+pub mod core_prelude;
 /// Image (GD/Exif/Imagick/Gmagick/Cairo) standard-library prelude injection.
 pub mod image_prelude;
 /// Intrinsic call handling.

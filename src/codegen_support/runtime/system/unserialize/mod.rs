@@ -38,6 +38,8 @@ mod decoder_aarch64;
 mod decoder_x86_64;
 mod diagnostics;
 mod magic_call;
+mod custom;
+mod legacy_context;
 mod parser_owners;
 mod reference_registry;
 mod refused_classes;
@@ -57,6 +59,7 @@ use crate::codegen_support::platform::Arch;
 /// `false`. Its target ABI is documented by the decoder entry module.
 pub(crate) fn emit_unserialize(emitter: &mut Emitter) {
     temporaries::emit_unserialize_temporaries(emitter);
+    legacy_context::emit(emitter);
     reference_registry::emit_register_array(emitter);
     match emitter.target.arch {
         Arch::AArch64 => allowed_classes_aarch64::emit(emitter),

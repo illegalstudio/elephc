@@ -27,6 +27,8 @@ pub(super) fn emit_entry(emitter: &mut Emitter) {
     emitter.instruction(&format!("sub rsp, {}", boundary_bytes));               // reserve the handler record plus source/result spills
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve source pointer across setjmp
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // preserve source length across setjmp
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_unser_legacy_active", 0);
+    emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // checkpoint legacy sharing before a hydration hook can throw
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
     emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", previous_handler_offset)); // handler.next = previous exception-handler head
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
@@ -54,6 +56,8 @@ pub(super) fn emit_entry(emitter: &mut Emitter) {
     emitter.label("__rt_unserialize_mixed_invalid_x");
     emitter.instruction("xor eax, eax");                                        // null result signals a bounded parse failure
     emitter.label("__rt_unserialize_mixed_parsed_x");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // restore the entry's sharing mode after successful hydration
+    crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "r10", "_unser_legacy_active", 0);
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the parsed box while popping the boundary
     emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", previous_handler_offset)); // reload the previous exception-handler head
     crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
@@ -63,6 +67,8 @@ pub(super) fn emit_entry(emitter: &mut Emitter) {
     emitter.instruction("leave");                                               // release the exception boundary and restore the caller frame
     emitter.instruction("ret");                                                 // return the parsed box to the lowering's normal end path
     emitter.label("__rt_unserialize_mixed_throw_x");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // restore sharing skipped by a callback's nonlocal throw
+    crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "r10", "_unser_legacy_active", 0);
     emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", previous_handler_offset)); // reload the handler preceding this internal boundary
     crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
     emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", boundary_bytes - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression skipped by longjmp
@@ -84,7 +90,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
     // [104]=unfinished array [112]=unfinished hook data; cleanup records at rsp+0/48/96.
-    emitter.instruction("sub rsp, 256");                                        // recursive parser frame (with a reference-index slot)
+    emitter.instruction("sub rsp, 272");                                        // keep custom-envelope scratch separate from all three cleanup records
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the base pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the current position
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the end position
@@ -129,6 +135,8 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("je __rt_unser_at_array");                              // parse array
     emitter.instruction("cmp r9d, 79");                                         // ASCII 'O' (object)?
     emitter.instruction("je __rt_unser_at_object");                             // parse object
+    emitter.instruction("cmp r9d, 67");                                         // C carries an opaque Serializable payload
+    emitter.instruction("je __rt_unser_at_object");                             // share class allocation and reference publication
     emitter.instruction("jmp __rt_unser_at_fail");                              // unsupported wire form
 
     // -- null: "N;" --
@@ -349,6 +357,10 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
 
     // -- object: "O:" + namelen + ":\"" + class + "\":" + count + ":{" + count*(key value) + "}" --
     emitter.label("__rt_unser_at_object");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // preserve the original marker before cursor reuse
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // load the original object position
+    emitter.instruction("movzx r9d, BYTE PTR [r10 + r11]");                     // distinguish C payloads from O property tables
+    emitter.instruction("mov QWORD PTR [rbp - 120], r9");                       // retain the marker in unused parser scratch
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload base
     emitter.instruction("add r10, QWORD PTR [rbp - 16]");                       // pointer to the type byte
     emitter.instruction("add r10, 2");                                          // skip "O:" to the class-name length digits
@@ -442,6 +454,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("add r10, 2");                                          // skip ':' and '{' to the body
     emitter.instruction("sub r10, QWORD PTR [rbp - 8]");                        // body position offset
     emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // advance the cursor to the body
+    super::custom::emit_body(emitter);
     emitter.instruction("cmp QWORD PTR [rbp - 80], 0");                         // blocked objects cannot inspect class hook tables
     emitter.instruction("je __rt_unser_obj_default");                           // parse properties without hydration
     // -- __unserialize magic: parse the body into an assoc array, then call
@@ -556,7 +569,8 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("test r10, r10");                                       // does the class define __wakeup?
     emitter.instruction("jz __rt_unser_at_obj_box");                            // no → box the object directly
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // $this receiver
-    emitter.instruction("call r10");                                            // call __wakeup($this)
+    emitter.instruction("mov rsi, r10");                                        // pass the wakeup target to the scoped modern adapter
+    crate::codegen_support::abi::emit_call_label(emitter, "__rt_unserialize_invoke_wakeup");
     emitter.label("__rt_unser_at_obj_box");
     emitter.instruction("mov rax, QWORD PTR [rbp - 96]");                       // return the stable box published before body parsing
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload position (at the closing '}')
@@ -592,7 +606,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r8", "_unser_depth", 0); // load parser depth before returning to the caller
     emitter.instruction("sub r8, 1");                                           // release this completed recursive parser frame
     crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "r8", "_unser_depth", 0); // keep sibling parses independent
-    emitter.instruction("add rsp, 256");                                        // deallocate the parser frame
+    emitter.instruction("add rsp, 272");                                        // release the parser frame and custom-envelope scratch
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return rax=box, rdx=newpos
 

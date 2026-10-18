@@ -267,6 +267,34 @@ survivingPropertyReference();
 
 /// Cloning separates singleton reference cells but preserves cells with a live external alias.
 #[test]
+fn test_core_singleton_mixed_reference_cell_clone_detaches_value_storage() {
+    let source = r#"<?php
+class MixedCloneReferenceHolder { public mixed $value = ['n' => 0]; }
+function cloneMixedReferenceValue(): void {
+    $original = new MixedCloneReferenceHolder();
+    $reference = &$original->value;
+    unset($reference);
+    $copy = clone $original;
+    $copyReference = &$copy->value;
+    $copyReference['n'] = 1;
+    echo $original->value['n'], ':', $copy->value['n'], ';';
+    $reference = &$original->value;
+    $shared = clone $original;
+    $sharedReference = &$shared->value;
+    $sharedReference['n'] = 2;
+    echo $original->value['n'], ':', $reference['n'];
+    unset($sharedReference, $copyReference, $reference, $shared, $copy, $original);
+}
+cloneMixedReferenceValue();
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "0:1;2:2", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Cloning separates singleton reference cells but preserves cells with a live external alias.
+#[test]
 fn test_core_owned_property_reference_clone_preserves_php_aliases() {
     let source = r#"<?php
 class ClonePropertyHolder { public array $items = [1]; }

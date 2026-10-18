@@ -10,6 +10,35 @@
 
 use crate::support::*;
 
+/// By-value nullable callable parameters retire boxes read through positional and named references.
+#[test]
+fn test_nullable_descriptor_reference_arguments_release_materialized_boxes() {
+    let source = r#"<?php
+function nullableReferenceValue(?int $line): int { return $line ?? 0; }
+function invokeNullableReference(callable $callback, &...$values): int { return $callback(...$values); }
+$nullableCallback = nullableReferenceValue(...);
+$line = 7;
+$total = 0;
+for ($i = 0; $i < 3; $i++) {
+    $total += invokeNullableReference($nullableCallback, $line);
+    $line++;
+    $total += invokeNullableReference(callback: $nullableCallback, line: $line);
+    $line++;
+}
+$textLine = '14';
+$total += invokeNullableReference($nullableCallback, $textLine);
+$total += invokeNullableReference(callback: $nullableCallback, line: $textLine);
+$nullLine = null;
+$total += invokeNullableReference($nullableCallback, $nullLine);
+echo $total;
+unset($line, $textLine, $nullLine, $nullableCallback);
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "85", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Earlier by-value arguments retire cleanly when a later source argument throws.
 #[test]
 fn test_core_call_argument_evaluation_owners_balance_throw_and_alias_paths() {

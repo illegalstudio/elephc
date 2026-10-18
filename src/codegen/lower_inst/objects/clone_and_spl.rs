@@ -71,6 +71,16 @@ pub(in crate::codegen::lower_inst) fn lower_object_clone_shallow(
     let dest_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_pop_reg(ctx.emitter, source_reg);
     ctx.load_value_to_reg(result, dest_reg)?;
+    if let Some(offset) = crate::codegen_support::throwable_layout::ordinary_creation_line_offset_by_id(
+        class_id, &ctx.module.class_infos,
+    ) {
+        let scratch = abi::tertiary_scratch_reg(ctx.emitter);
+        let stem = ctx.next_label("throwable_clone_line");
+        crate::codegen_support::runtime::emit_creation_line_load(
+            ctx.emitter, source_reg, result_reg, scratch, &stem,
+        );
+        abi::emit_store_to_address(ctx.emitter, result_reg, dest_reg, offset);
+    }
     emit_clone_declared_property_slots(ctx, source_reg, dest_reg, property_count,
         &retained_offsets, &owned_reference_property_offsets);
     if allow_dynamic_properties {

@@ -541,7 +541,12 @@ pub(super) fn emit_ref_arg_cell_block(
         }
         let source_ty = ctx.load_value_to_result(cell.source_value)?;
         coerce_ref_cell_store_value(ctx, &source_ty, &cell.cell_ty)?;
-        if source_ty.codegen_repr() == cell.cell_ty.codegen_repr() {
+        let source_repr = source_ty.codegen_repr();
+        let cell_repr = cell.cell_ty.codegen_repr();
+        // Runtime-shaped array parameters accept hash storage without allocating a conversion.
+        let borrowed_container = matches!(source_repr, PhpType::AssocArray { .. })
+            && matches!(cell_repr, PhpType::Array(ref element) if element.codegen_repr() == PhpType::Mixed);
+        if source_repr == cell_repr || borrowed_container {
             // EIR still owns the default operand. The mutable cell needs its own retain
             // because the callee can replace it before EIR retires that original owner.
             if cell.cell_ty.codegen_repr() == PhpType::Str {

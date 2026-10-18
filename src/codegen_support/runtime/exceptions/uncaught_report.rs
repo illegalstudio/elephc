@@ -19,16 +19,10 @@
 //!   An empty message drops the `: ` separator entirely; that is why the length is tested before
 //!   the separator is written, not after.
 //!
-//! - THE ` in <file>:<line>` SUFFIX. The line is the one stamped into the compact Throwable
-//!   payload at `THROWABLE_CREATION_LINE_OFFSET` by whichever emitter allocated it, and the file
-//!   is the module's canonical source path in `_script_source_file`. Both are the CONSTRUCTION
-//!   site, not the throw site, because that is what PHP reports: `$e = new RuntimeException(...)`
-//!   on line 2 followed by `throw $e;` on line 5 prints line 2.
-//!
-//!   A zero line means no user `new` stood behind the Throwable — an `ArithmeticError` raised by a
-//!   division, a `TypeError` from an argument check — and the suffix is then OMITTED rather than
-//!   printed as `:0`. Same for an empty `_script_source_file_len`. Printing a fabricated origin
-//!   would be worse than printing none.
+//! - The ` in <file>:<line>` suffix uses the same borrowed lookup as the public getters.
+//!   Ordinary and compact creation storage supply defaults; ErrorException overrides either
+//!   component independently. Explicit line zero and an empty filename remain visible.
+//!   Synthesized errors with no known location omit the suffix.
 //!
 //! - WHAT THIS STILL DOES NOT EMIT. PHP continues with `Stack trace:`, `#0 {main}` and
 //!   `  thrown in <file> on line <n>`. `Throwable::getTrace()` and `getTraceAsString()` remain
@@ -43,26 +37,11 @@
 //!   without a throwable (an internal invariant break); reporting a class read from a null pointer
 //!   would turn a diagnostic into a segfault.
 //!
-//! - Register discipline: only caller-saved scratch (`x9`-`x11`, `r8`-`r10`) holds state across
-//!   the `write` syscalls, and the helper never returns, so no callee-saved register is disturbed.
-//!   The throwable pointer is RE-READ from `_exc_value` at each step of the location block rather
-//!   than parked in a register, because `abi::emit_load_symbol_to_reg` resolves an AArch64 symbol
-//!   through `x9` — the very register holding it. The helper is entered by a TAIL JUMP from
-//!   `__rt_throw_current`, so there is no frame to spill into either; `_exc_value` is still
-//!   published throughout, which makes the global the cheapest place to keep it. The x86_64 arm
-//!   re-reads in the same places purely to keep the two listings comparable: SysV `syscall` clobbers
-//!   only `rcx`/`r11`, so `r8` would in fact have survived.
-//!
-//! - Stack alignment across `__rt_itoa` was checked rather than assumed. Because this helper is
-//!   reached by a tail jump, `rsp` arrives 16-aligned or 8-off depending on whether the throwing
-//!   site `call`ed or `jmp`ed into `__rt_throw_current`, so the call cannot guarantee SysV's
-//!   entry invariant. It does not need to: the x86_64 `__rt_itoa` body is `push rbp` … `pop rbp`
-//!   with no SSE operand, no `sub rsp`, and no nested call, so nothing there faults on a
-//!   misaligned stack. The AArch64 side is unconditionally safe — `sp` is 16-aligned at every
-//!   memory access by AAPCS64, and `sub sp, sp, #16` preserves that.
+//! - The published exception owns borrowed filename bytes throughout reporting. A small
+//!   stack area preserves the pointer, length, and line across syscalls. The x86_64 entry
+//!   realigns the stack before any nested helper call; this fatal path never returns.
 
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::sentinels::THROWABLE_CREATION_LINE_OFFSET;
 use crate::codegen_support::{abi, emit::Emitter};
 
 /// Byte length of `"Fatal error: Uncaught "`.
@@ -141,33 +120,25 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     emitter.syscall(4);
 
     emitter.label("__rt_uncaught_location");
-    abi::emit_load_symbol_to_reg(emitter, "x9", "_exc_value", 0);               // re-read: x9 is AArch64's symbol scratch, so every symbol load below overwrites it
-    emitter.instruction(&format!(
-        "ldr x10, [x9, #{}]",
-        THROWABLE_CREATION_LINE_OFFSET
-    ));                                                                         // creation line stamped by the allocating `new`
-    emitter.instruction("cbz x10, __rt_uncaught_newline");                      // line 0 means no user `new` behind this throwable: omit rather than invent
-    abi::emit_load_symbol_to_reg(emitter, "x11", "_script_source_file_len", 0);
-    emitter.instruction("cbz x11, __rt_uncaught_newline");                      // a module with no source path has no filename to print
-
+    emitter.instruction("sub sp, sp, #32");                                     // preserve borrowed filename and line across write syscalls
+    abi::emit_load_symbol_to_reg(emitter, "x0", "_exc_value", 0);
+    abi::emit_call_label(emitter, "__rt_throwable_location_borrowed");
+    emitter.instruction("stp x1, x2, [sp]");                                    // save the resolved borrowed filename pointer and length
+    emitter.instruction("str x0, [sp, #16]");                                   // save the effective line before output overwrites result registers
+    emitter.instruction("cbz x3, __rt_uncaught_newline");                       // omit only unknown origins, preserving explicit zero and empty overrides
     abi::emit_symbol_address(emitter, "x1", "_uncaught_exc_in");
-    emitter.instruction(&format!("mov x2, #{}", UNCAUGHT_IN_LEN));              // " in "
+    emitter.instruction(&format!("mov x2, #{}", UNCAUGHT_IN_LEN));              // introduce the effective location
     emitter.instruction("mov x0, #1");                                          // fd = stdout
     emitter.syscall(4);
-    abi::emit_symbol_address(emitter, "x1", "_script_source_file");
-    abi::emit_load_symbol_to_reg(emitter, "x2", "_script_source_file_len", 0);
+    emitter.instruction("ldp x1, x2, [sp]");                                    // print the resolved filename, including an explicit empty string
     emitter.instruction("mov x0, #1");                                          // fd = stdout
     emitter.syscall(4);
     abi::emit_symbol_address(emitter, "x1", "_uncaught_exc_colon");
-    emitter.instruction(&format!("mov x2, #{}", UNCAUGHT_COLON_LEN));           // ":"
+    emitter.instruction(&format!("mov x2, #{}", UNCAUGHT_COLON_LEN));           // separate the filename and line
     emitter.instruction("mov x0, #1");                                          // fd = stdout
     emitter.syscall(4);
-    abi::emit_load_symbol_to_reg(emitter, "x9", "_exc_value", 0);               // reload: the file-length load above resolved its symbol through x9
-    emitter.instruction(&format!(
-        "ldr x0, [x9, #{}]",
-        THROWABLE_CREATION_LINE_OFFSET
-    ));                                                                         // itoa takes the line in x0
-    emitter.instruction("bl __rt_itoa");                                        // returns pointer in x1 and length in x2 — already the write arguments
+    emitter.instruction("ldr x0, [sp, #16]");                                   // format the effective line saved before output began
+    emitter.instruction("bl __rt_itoa");                                        // return digit bytes in the write argument registers
     emitter.instruction("mov x0, #1");                                          // fd = stdout
     emitter.syscall(4);
 
@@ -207,7 +178,7 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov edx, {}", UNCAUGHT_PREFIX_LEN));          // "Fatal error: Uncaught "
     emitter.instruction("mov edi, 1");                                          // fd = stdout: PHP writes this report to stdout, not stderr (measured)
     emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
-    emitter.instruction("syscall");                                             // write the fatal-error prefix to stderr
+    emitter.instruction("syscall");                                             // write the fatal-error prefix to stdout
 
     emitter.instruction("mov r9, QWORD PTR [r8]");                              // runtime class id from the object header
     abi::emit_symbol_address(emitter, "r10", "_class_name_count");
@@ -221,7 +192,7 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // class-name length
     emitter.instruction("mov edi, 1");                                          // fd = stdout
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
-    emitter.instruction("syscall");                                             // write the throwable class name to stderr
+    emitter.instruction("syscall");                                             // write the throwable class name to stdout
 
     emitter.label("__rt_uncaught_no_name");
     emitter.instruction("mov rdx, QWORD PTR [r8 + 16]");                        // Throwable message length lives at payload offset 16
@@ -231,50 +202,43 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov edx, {}", UNCAUGHT_SEPARATOR_LEN));       // ": "
     emitter.instruction("mov edi, 1");                                          // fd = stdout
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
-    emitter.instruction("syscall");                                             // write the message separator to stderr
+    emitter.instruction("syscall");                                             // write the message separator to stdout
     emitter.instruction("mov rsi, QWORD PTR [r8 + 8]");                         // Throwable message pointer lives at payload offset 8
     emitter.instruction("mov rdx, QWORD PTR [r8 + 16]");                        // and its length at offset 16
     emitter.instruction("mov edi, 1");                                          // fd = stdout
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
-    emitter.instruction("syscall");                                             // write the throwable message to stderr
+    emitter.instruction("syscall");                                             // write the throwable message to stdout
 
     emitter.label("__rt_uncaught_location");
-    abi::emit_load_symbol_to_reg(emitter, "r8", "_exc_value", 0);               // re-read for symmetry with the AArch64 arm, whose x9 scratch makes this mandatory
-    emitter.instruction(&format!(
-        "mov r9, QWORD PTR [r8 + {}]",
-        THROWABLE_CREATION_LINE_OFFSET
-    ));                                                                         // creation line stamped by the allocating `new`
-    emitter.instruction("test r9, r9");                                         // line 0 means no user `new` behind this throwable: omit rather than invent
-    emitter.instruction("jz __rt_uncaught_newline");                            // omit a location when the throwable has no creation line
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_script_source_file_len", 0);
-    emitter.instruction("test r10, r10");                                       // a module with no source path has no filename to print
-    emitter.instruction("jz __rt_uncaught_newline");                            // omit a location when the module has no source filename
-
+    emitter.instruction("sub rsp, 32");                                         // preserve borrowed filename and line across write syscalls
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_exc_value", 0);
+    abi::emit_call_label(emitter, "__rt_throwable_location_borrowed");
+    emitter.instruction("mov QWORD PTR [rsp], rax");                            // save the resolved borrowed filename pointer
+    emitter.instruction("mov QWORD PTR [rsp + 8], rdx");                        // save the resolved filename length, including an explicit zero
+    emitter.instruction("mov QWORD PTR [rsp + 16], rcx");                       // preserve the effective line before syscall clobbers rcx
+    emitter.instruction("test r8, r8");                                         // distinguish explicit zero from an unknown origin
+    emitter.instruction("jz __rt_uncaught_newline");                            // omit only unknown origins, preserving explicit zero and empty overrides
     abi::emit_symbol_address(emitter, "rsi", "_uncaught_exc_in");
-    emitter.instruction(&format!("mov edx, {}", UNCAUGHT_IN_LEN));              // " in "
+    emitter.instruction(&format!("mov edx, {}", UNCAUGHT_IN_LEN));              // introduce the effective location
     emitter.instruction("mov edi, 1");                                          // fd = stdout
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
-    emitter.instruction("syscall");                                             // write the location introducer to stderr
-    abi::emit_symbol_address(emitter, "rsi", "_script_source_file");
-    abi::emit_load_symbol_to_reg(emitter, "rdx", "_script_source_file_len", 0);
+    emitter.instruction("syscall");                                             // write the location introducer to stdout
+    emitter.instruction("mov rsi, QWORD PTR [rsp]");                            // print the filename bytes owned by the published exception
+    emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");                        // preserve an explicitly empty filename
     emitter.instruction("mov edi, 1");                                          // fd = stdout
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
-    emitter.instruction("syscall");                                             // write the source filename to stderr
+    emitter.instruction("syscall");                                             // write the effective filename to stdout
     abi::emit_symbol_address(emitter, "rsi", "_uncaught_exc_colon");
-    emitter.instruction(&format!("mov edx, {}", UNCAUGHT_COLON_LEN));           // ":"
+    emitter.instruction(&format!("mov edx, {}", UNCAUGHT_COLON_LEN));           // separate the filename and line
     emitter.instruction("mov edi, 1");                                          // fd = stdout
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
-    emitter.instruction("syscall");                                             // write the filename/line separator to stderr
-    abi::emit_load_symbol_to_reg(emitter, "r8", "_exc_value", 0);               // reload for symmetry: SysV `syscall` spares r8/r9, but the AArch64 arm cannot
-    emitter.instruction(&format!(
-        "mov rax, QWORD PTR [r8 + {}]",
-        THROWABLE_CREATION_LINE_OFFSET
-    ));                                                                         // itoa takes the line in rax
-    emitter.instruction("call __rt_itoa");                                      // returns pointer in rax and length in rdx
-    emitter.instruction("mov rsi, rax");                                        // move the digits out of rax before it becomes the syscall number
+    emitter.instruction("syscall");                                             // write the filename/line separator to stdout
+    emitter.instruction("mov rax, QWORD PTR [rsp + 16]");                       // format the line saved before the first syscall
+    emitter.instruction("call __rt_itoa");                                      // return digit bytes and length in the ordinary result registers
+    emitter.instruction("mov rsi, rax");                                        // preserve digit bytes before loading the write syscall number
     emitter.instruction("mov edi, 1");                                          // fd = stdout
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
-    emitter.instruction("syscall");                                             // write the decimal creation line to stderr
+    emitter.instruction("syscall");                                             // write the effective line to stdout
 
     emitter.label("__rt_uncaught_newline");
     abi::emit_symbol_address(emitter, "rsi", "_uncaught_exc_nl");
@@ -285,16 +249,18 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov edi, {}", UNCAUGHT_EXIT_STATUS));         // PHP exits 255 for an uncaught exception
     emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit
     emitter.instruction("syscall");                                             // exit the process after reporting the throwable
+    emitter.instruction("ud2");                                                 // keep the terminal syscall from falling through into a differently sized frame
 
     emitter.label("__rt_uncaught_fallback");
     abi::emit_symbol_address(emitter, "rsi", "_uncaught_exc_msg");
     emitter.instruction(&format!("mov edx, {}", UNCAUGHT_FALLBACK_LEN));        // the pre-existing constant message
     emitter.instruction("mov edi, 1");                                          // fd = stdout
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
-    emitter.instruction("syscall");                                             // write the constant fallback diagnostic to stderr
+    emitter.instruction("syscall");                                             // write the constant fallback diagnostic to stdout
     emitter.instruction(&format!("mov edi, {}", UNCAUGHT_EXIT_STATUS));         // same status as the reporting path
     emitter.instruction("mov eax, 60");                                         // syscall 60 = exit
     emitter.instruction("syscall");                                             // exit the process after the fallback diagnostic
+    emitter.instruction("ud2");                                                 // terminate control flow if the exit syscall unexpectedly returns
 }
 
 #[cfg(test)]
@@ -326,7 +292,7 @@ mod tests {
         // The stream and the exit status both live in x0, so they are pinned separately now that
         // `mov x0, #1` is a legitimate fd. The count above is what still guards the exit status —
         // it caught a revision that had left the fallback on the old `1`.
-        assert_eq!(asm.matches("mov x0, #2\n").count(), 0, "the report must not write to stderr");
+        assert_eq!(asm.matches("mov x0, #2\n").count(), 0, "the report must not write to stdout");
         assert!(
             asm.matches("mov x0, #1\n").count() >= 2,
             "every write in the report goes to stdout, where PHP puts it"
@@ -345,13 +311,13 @@ mod tests {
         let asm = emitter.output();
         assert!(asm.contains("cbz x2, __rt_uncaught_location"));
         assert!(asm.contains("__rt_uncaught_location:\n"));
-        assert!(asm.contains(&format!("ldr x10, [x9, #{}]", THROWABLE_CREATION_LINE_OFFSET)));
-        assert!(asm.contains("cbz x10, __rt_uncaught_newline"));
-        assert!(asm.contains("cbz x11, __rt_uncaught_newline"));
+        assert!(asm.contains("bl __rt_throwable_location_borrowed"));
+        assert!(asm.contains("cbz x3, __rt_uncaught_newline"));
+        assert!(asm.contains("ldp x1, x2, [sp]"));
         assert!(asm.contains("_uncaught_exc_in"));
-        assert!(asm.contains("_script_source_file"));
+        assert!(asm.contains("__rt_throwable_location_borrowed"));
         assert!(asm.contains("_uncaught_exc_colon"));
-        assert!(asm.contains(&format!("ldr x0, [x9, #{}]", THROWABLE_CREATION_LINE_OFFSET)));
+        assert!(asm.contains("ldr x0, [sp, #16]"));
         assert!(asm.contains("bl __rt_itoa"));
     }
 
@@ -374,7 +340,7 @@ mod tests {
         assert!(asm.contains("mov rsi, QWORD PTR [r8 + 8]"));
         assert_eq!(asm.matches("mov edi, 255").count(), 2);
         // See the AArch64 test: stream and exit status are pinned apart.
-        assert_eq!(asm.matches("mov edi, 2\n").count(), 0, "the report must not write to stderr");
+        assert_eq!(asm.matches("mov edi, 2\n").count(), 0, "the report must not write to stdout");
         assert!(
             asm.matches("mov edi, 1\n").count() >= 2,
             "every write in the report goes to stdout, where PHP puts it"
@@ -385,7 +351,7 @@ mod tests {
     ///
     /// `mov rsi, rax` is the one instruction with no AArch64 counterpart and no visible effect
     /// until it is missing: `__rt_itoa` returns the digits in `rax`, which the very next
-    /// instruction overwrites with the `write` syscall number. Without the move, stderr gets a
+    /// instruction overwrites with the `write` syscall number. Without the move, stdout gets a
     /// pointer built from `1` and the process dies on a bad address instead of printing a line.
     #[test]
     fn test_uncaught_report_x86_64_appends_the_source_location() {
@@ -394,18 +360,13 @@ mod tests {
         let asm = emitter.output();
         assert!(asm.contains("jz __rt_uncaught_location"));
         assert!(asm.contains("__rt_uncaught_location:\n"));
-        assert!(asm.contains(&format!(
-            "mov r9, QWORD PTR [r8 + {}]",
-            THROWABLE_CREATION_LINE_OFFSET
-        )));
-        assert_eq!(asm.matches("jz __rt_uncaught_newline").count(), 2);
+        assert!(asm.contains("call __rt_throwable_location_borrowed"));
+        assert_eq!(asm.matches("jz __rt_uncaught_newline").count(), 1);
+        assert!(asm.contains("mov rsi, QWORD PTR [rsp]"));
         assert!(asm.contains("_uncaught_exc_in"));
-        assert!(asm.contains("_script_source_file"));
+        assert!(asm.contains("__rt_throwable_location_borrowed"));
         assert!(asm.contains("_uncaught_exc_colon"));
-        assert!(asm.contains(&format!(
-            "mov rax, QWORD PTR [r8 + {}]",
-            THROWABLE_CREATION_LINE_OFFSET
-        )));
+        assert!(asm.contains("mov rax, QWORD PTR [rsp + 16]"));
         assert!(asm.contains("call __rt_itoa"));
         assert!(asm.contains("mov rsi, rax"));
     }
