@@ -319,23 +319,103 @@ pub(super) fn class_has_builtin_interface_method(
 }
 
 /// Returns whether a class or its eval parents satisfy one generated/AOT interface method.
+///
+/// When neither the class nor its eval parents declare the method, it may still be inherited
+/// from a builtin/AOT parent: a class that extends `Exception` satisfies `Throwable`'s methods
+/// through that parent, so the AOT dispatch hierarchy is consulted before giving up.
 pub(super) fn class_has_aot_interface_method(
     class: &EvalClass,
     requirement: &EvalAotInterfaceMethodRequirement,
     context: &ElephcEvalContext,
-) -> bool {
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
     if let Some((declaring_class, method)) = pending_class_method(class, &requirement.name, context)
     {
-        return class_method_satisfies_aot_interface_requirement(
+        return Ok(class_method_satisfies_aot_interface_requirement(
             &method,
             &declaring_class,
             requirement,
             Some(class),
             context,
             true,
-        );
+        ));
     }
-    false
+    // The class's eval parents may themselves be eval classes, and `native_class_parent` is only
+    // recorded for an eval class whose DIRECT parent is native. Walking from the direct parent
+    // therefore loses the inherited AOT method after two eval parents, so resolve the nearest
+    // runtime/AOT ancestor first (review follow-up for #1736).
+    let Some(parent) = class.parent() else {
+        return Ok(false);
+    };
+    // Resolve an alias (`class_alias('RuntimeException', 'AliasRE')`) to its target first, then
+    // step an eval parent past its own eval ancestors to the nearest runtime/AOT class. A NATIVE
+    // parent IS that class already, and stepping past it (as `class_native_parent_name` does)
+    // would skip the very methods it declares
+    // (`class Child extends Service implements Marker {}` where `Service` declares `ping`).
+    let resolved_parent = context
+        .resolve_class_name(parent)
+        .unwrap_or_else(|| parent.trim_start_matches('\\').to_string());
+    let native_parent = if context.class(&resolved_parent).is_some() {
+        context
+            .class_native_parent_name(&resolved_parent)
+            .unwrap_or(resolved_parent)
+    } else {
+        resolved_parent
+    };
+    let Some((method_owner, visibility, is_static, is_abstract)) =
+        eval_aot_method_dispatch_metadata_in_hierarchy(
+            &native_parent,
+            &requirement.name,
+            context,
+            values,
+        )?
+    else {
+        return Ok(false);
+    };
+    if visibility != EvalVisibility::Public || is_static != requirement.is_static || is_abstract {
+        return Ok(false);
+    }
+    // Builtin methods such as Throwable::getMessage may expose dispatch metadata without a
+    // registered signature. Preserve that fallback, but compare every available AOT signature.
+    let Some(method) = eval_aot_method_signature_requirement(
+        &method_owner,
+        &requirement.name,
+        is_static,
+        context,
+        values,
+    )? else {
+        return Ok(true);
+    };
+    let Some(required) = requirement.signature.as_ref() else {
+        return Ok(true);
+    };
+    Ok(method_signature_accepts(
+        method.params().len(),
+        method.parameter_defaults(),
+        method.parameter_is_by_ref(),
+        method.parameter_is_variadic(),
+        required.params().len(),
+        required.parameter_defaults(),
+        required.parameter_is_by_ref(),
+        required.parameter_is_variadic(),
+    ) && method_parameter_type_signature_accepts(
+        method.parameter_types(),
+        method.parameter_is_variadic(),
+        &method_owner,
+        required.parameter_types(),
+        required.parameter_is_variadic(),
+        &requirement.owner,
+        required.params().len(),
+        Some(class),
+        context,
+    ) && method_return_type_signature_accepts(
+        method.return_type(),
+        &method_owner,
+        required.return_type(),
+        &requirement.owner,
+        Some(class),
+        context,
+    ))
 }
 
 /// Returns whether a class or its eval parents satisfy one interface method signature.
