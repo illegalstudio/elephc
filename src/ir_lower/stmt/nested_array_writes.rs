@@ -26,16 +26,31 @@ pub(super) fn lower_nested_array_assign(
     // container for every slot representation. The parent chain itself is
     // lowered with fetch-for-write semantics so missing or null intermediate
     // elements autovivify as arrays instead of dropping the write (#555).
+    let stable_root = nested_target_has_stable_root(target);
+    let original_target = target;
+    let mut key_owners = Vec::new();
+    let prepared_target = stable_root.then(|| snapshot_nested_write_indices(ctx, target, &mut key_owners));
+    let target = prepared_target.as_ref().unwrap_or(target);
     if let ExprKind::ArrayAccess { array, index } = &target.kind {
-        // PHP reads a plain-variable index at STORE time, and a nested target reads EVERY one of
-        // them there: `$a[$i][$i] = ($i = 1)` writes through the index the right-hand side left
-        // behind, not the one it started with. Deferring the whole target is sound only when it
-        // carries no index EXPRESSION — otherwise a call would move across the right-hand side —
-        // so the shape is checked and anything else keeps the original order. Constant
-        // propagation applies the same rule ahead of this pass; fixing either alone changes
-        // nothing, because the fold has already replaced the variable by the time lowering runs.
-        let deferred = nested_target_is_all_bare_variables(target);
-        let value_first = deferred.then(|| lower_expr(ctx, value));
+        // Computed key results were captured in source order before the RHS. Bare variable
+        // operands stay in the place and are read at store time, including mixed chains.
+        // Fetch stable local/property/static roots only after the value. Pin that value over
+        // COW and callbacks, and rebox a concrete local if an operand changed its representation.
+        let root_written = stable_root
+            && (nested_value_may_write_root(ctx, original_target, value)
+                || nested_value_may_write_root(ctx, original_target, original_target));
+        let mut pinned_slot = None;
+        let value_first = if stable_root {
+            let lowered = lower_expr(ctx, value);
+            let (pinned, slot) = crate::ir_lower::expr::root_call_operand(ctx, lowered, span);
+            pinned_slot = slot;
+            if root_written {
+                rebox_nested_root_local(ctx, target, span);
+            }
+            Some(pinned)
+        } else {
+            None
+        };
         let parent = lower_nested_assign_parent(ctx, array, span);
         let key = lower_expr(ctx, index);
         let value = match value_first {
@@ -50,7 +65,11 @@ pub(super) fn lower_nested_array_assign(
             Some(span),
         );
         release_persisted_string_operand(ctx, key, span);
-        release_persisted_string_operand(ctx, value, span);
+        if let Some(slot) = pinned_slot {
+            crate::ir_lower::expr::retire_owned_call_operand(ctx, slot, span);
+        } else {
+            release_persisted_string_operand(ctx, value, span);
+        }
         // Parent subscript reads of Mixed/refcounted elements are owning
         // temporaries (`ArrayGet`/`HashGet`/`RuntimeCall` return a +1 caller
         // reference — fresh, retained, or installed by autovivification). The
@@ -59,6 +78,9 @@ pub(super) fn lower_nested_array_assign(
         // `$this`) are left to normal scope cleanup.
         if ctx.value_is_owning_temporary(parent) {
             crate::ir_lower::ownership::release_if_owned(ctx, parent, Some(span));
+        }
+        for slot in key_owners.into_iter().rev() {
+            crate::ir_lower::expr::retire_owned_call_operand(ctx, slot, span);
         }
         return;
     }
@@ -250,18 +272,102 @@ pub(super) fn lower_hash_parent_fetch_for_write(
     )
 }
 
-/// Returns true when every part of a nested write target is a bare variable.
+/// Puts a nested write's root local back into boxed `Mixed` storage after a value that
+/// reassigned it to a concrete array.
 ///
-/// `$a[$i][$j]` qualifies; `$a[f()][$i]` does not. With no index expression there is no side
-/// effect whose order could change, so deferring the target past the right-hand side moves only
-/// the READ of each variable — which is exactly PHP's store-time rule applied to a chain.
-fn nested_target_is_all_bare_variables(target: &Expr) -> bool {
-    match &target.kind {
-        ExprKind::Variable(_) => true,
-        ExprKind::ArrayAccess { array, index } => {
-            matches!(index.kind, ExprKind::Variable(_))
-                && nested_target_is_all_bare_variables(array)
+/// The checker accepted the nested write for a `Mixed` root, the only kind the nested writer
+/// supports (besides `ArrayAccess`). A value such as `($m = ["a" => [...]])` retypes the local to
+/// a concrete hash before the parent chain is fetched, which that writer would refuse. Boxing
+/// retains the payload, and the store releases the slot's previous owner.
+fn rebox_nested_root_local(ctx: &mut LoweringContext<'_, '_>, target: &Expr, span: Span) {
+    let mut root = target;
+    while let ExprKind::ArrayAccess { array, .. } = &root.kind {
+        root = array;
+    }
+    let ExprKind::Variable(name) = &root.kind else {
+        return;
+    };
+    let ty = ctx.local_type(name).codegen_repr();
+    if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+        return;
+    }
+    let current = ctx.load_local(name, Some(span));
+    let boxed = ctx.box_value_as_mixed(current, PhpType::Mixed, Some(span));
+    ctx.store_call_argument_local(name, boxed, PhpType::Mixed, Some(span));
+}
+
+/// Returns true when the value of a nested write may write the chain's root, so the value has to
+/// run before the parent chain is fetched. The root is the innermost container: a local, a
+/// property or a static property, each checked by its own `element_write_order` gate.
+fn nested_value_may_write_root(ctx: &LoweringContext<'_, '_>, target: &Expr, value: &Expr) -> bool {
+    let mut root = target;
+    while let ExprKind::ArrayAccess { array, .. } = &root.kind {
+        root = array;
+    }
+    match &root.kind {
+        ExprKind::Variable(name) => {
+            super::element_write_order::element_write_operands_may_write_receiver(ctx, name, &[value])
+        }
+        ExprKind::PropertyAccess { property, .. } => {
+            super::element_write_order::property_element_operands_may_write_property(property, &[value])
+        }
+        ExprKind::StaticPropertyAccess { property, .. } => {
+            super::element_write_order::static_property_element_operands_may_write_property(
+                property,
+                &[value],
+            )
         }
         _ => false,
+    }
+}
+
+/// Returns whether fetching the root later moves no effectful base expression.
+///
+/// Computed indices are handled separately; locals, simple object properties and static
+/// properties can be fetched after the operands without replaying a receiver call.
+fn nested_target_has_stable_root(target: &Expr) -> bool {
+    match &target.kind {
+        ExprKind::Variable(_) | ExprKind::StaticPropertyAccess { .. } => true,
+        ExprKind::PropertyAccess { object, .. } => {
+            matches!(object.kind, ExprKind::Variable(_) | ExprKind::This)
+        }
+        ExprKind::ArrayAccess { array, .. } => nested_target_has_stable_root(array),
+        _ => false,
+    }
+}
+
+/// Captures computed keys before the RHS, leaving literals and PHP variable operands late.
+fn snapshot_nested_write_indices(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &Expr,
+    owners: &mut Vec<crate::ir::LocalSlotId>,
+) -> Expr {
+    match &target.kind {
+        ExprKind::ArrayAccess { array, index } => {
+            let array = snapshot_nested_write_indices(ctx, array, owners);
+            let index = if matches!(index.kind,
+                ExprKind::Variable(_) | ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)
+                | ExprKind::StringLiteral(_) | ExprKind::BoolLiteral(_) | ExprKind::Null)
+            {
+                index.as_ref().clone()
+            } else {
+                let value = lower_expr(ctx, index);
+                let (value, owner) = crate::ir_lower::expr::root_named_call_operand(ctx, value, index.span);
+                let name = if let Some((name, slot)) = owner {
+                    owners.push(slot);
+                    name
+                } else {
+                    let ty = ctx.builder.value_php_type(value.value);
+                    let name = ctx.declare_hidden_temp(ty.clone());
+                    ctx.store_local(&name, value, ty, Some(index.span));
+                    name
+                };
+                Expr::new(ExprKind::Variable(name), index.span)
+            };
+            Expr::new(ExprKind::ArrayAccess {
+                array: Box::new(array), index: Box::new(index),
+            }, target.span)
+        }
+        _ => target.clone(),
     }
 }
