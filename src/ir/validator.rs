@@ -482,6 +482,7 @@ fn validate_instruction_immediate(
         ConstStr | ConstClassName | DataAddr | Warn | IncludeOnceMark | IncludeOnceGuard
         | FunctionVariantMark | FunctionVariantDispatch | LoadPropRefCell
         | LoadPropRefCellChecked
+        | BindPropRefCell
         | LoadStaticPropertyRefCell
         | EvalFunctionCallArray | EvalFunctionExists | EvalClassExists | EvalConstantExists
         | EvalConstantFetch
@@ -489,12 +490,15 @@ fn validate_instruction_immediate(
         | EnumBackingStringToInt
         | EnumBackingMixedToInt
         | PackedFieldMixedToInt
-        | ReturnBoundaryMixedToInt
         | PropInitialized
         | StaticPropInitialized
         | ReflectionStaticPropertyInitialized => {
             require_immediate(inst_id, inst, "data id", |imm| matches!(imm, Imm::Data(_)))
         }
+        // The profiled form carries `strict_types` for a declared-return check.
+        ReturnBoundaryMixedToInt => require_immediate(inst_id, inst, "data id", |imm| {
+            matches!(imm, Imm::Data(_) | Imm::ProfiledData { .. })
+        }),
         EvalLiteralCall => require_immediate(inst_id, inst, "profiled data id", |imm| {
             matches!(imm, Imm::Data(_) | Imm::ProfiledData { .. })
         }),
@@ -519,7 +523,7 @@ fn validate_instruction_immediate(
         | InvokerRefArg => require_immediate(inst_id, inst, "local slot", |imm| {
             matches!(imm, Imm::LocalSlot(_))
         }),
-        BindRefCellPtr => require_immediate(inst_id, inst, "reference alias slot or alias/owner pair", |imm| {
+        BindRefCellPtr | LoadLocalRefCellPtr => require_immediate(inst_id, inst, "reference alias slot or alias/owner pair", |imm| {
             matches!(imm, Imm::LocalSlot(_) | Imm::LocalSlotPair { .. })
         }),
         PromoteLocalRefCell | AliasLocalRefCell | RetainLocalRefCell | AdoptRefCellPtr => require_immediate(inst_id, inst, "local slot pair", |imm| {
@@ -796,9 +800,23 @@ fn validate_opcode_rules(
         // receiver's element slot, so its operand shape is pinned tighter than the shared read
         // arm above: an indexed receiver and an already int-coerced key, never a runtime-tagged
         // one.
+        //
+        // The one exception is a boxed `Mixed` result (a nested write's parent cell): that read
+        // goes through the key-normalizing `__rt_array_get_mixed_key`, which also dispatches on
+        // the receiver's runtime storage kind, so a runtime-tagged key is accepted there.
         ArrayGetForWrite => {
             check_count(inst_id, inst, 2, "2")?;
             check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Array), "Heap(Array)")?;
+            let key = inst.operands[1];
+            let key_ty = function
+                .value(key)
+                .ok_or(ValidationError::UnknownValue(key))?
+                .ir_type;
+            if inst.result_type == IrType::Heap(IrHeapKind::Mixed)
+                && matches!(key_ty, IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union))
+            {
+                return Ok(());
+            }
             check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")
         }
         // The hash counterpart of the fetch-for-write read. A nested write can also emit it
@@ -889,6 +907,11 @@ fn validate_opcode_rules(
             check_count_at_least(inst_id, inst, 1, "at least 1")
         }
         PropSet => check_count(inst_id, inst, 2, "2"),
+        LoadLocalRefCellPtr => check_count(inst_id, inst, 0, "0"),
+        BindPropRefCell => check_count(inst_id, inst, 2, "2"),
+        LoadDynamicPropRefCell => check_count(inst_id, inst, 2, "2"),
+        BindDynamicPropRefCell => check_count(inst_id, inst, 3, "3"),
+        BindArrayElemRefCell => check_count(inst_id, inst, 3, "3"),
         PropUnset => check_count(inst_id, inst, 1, "1"),
         // The receiver plus the runtime name. `PropUnset` names its property in an immediate, so
         // it takes one operand; this op takes the name as a VALUE, which is the whole difference
@@ -896,6 +919,7 @@ fn validate_opcode_rules(
         DynamicPropUnset => check_count(inst_id, inst, 2, "2"),
         CallablePtr
         | NormalizeCallable
+        | CallableReflectionMeta
         | PdoAdapterAddr
         | DynamicClassHasConstructor
         | DynamicPdoStatementClassStatus

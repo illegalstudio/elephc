@@ -187,12 +187,10 @@ fn test_error_parenthesis_free_new_rejects_immediate_postfix_access() {
 /// Verifies unsupported dynamic class-name references after `new` fail instead of miscompiling.
 #[test]
 fn test_error_dynamic_new_rejects_unsupported_class_name_references() {
+    // `new $box->className` / `new $classes[0]` are PHP class-name references and compile;
+    // a constant fetch after the reference is not part of PHP's `new` grammar.
     expect_error(
-        "<?php class Box { public $className = \"stdClass\"; } $box = new Box(); $object = new $box->className;",
-        "Dynamic class-name expressions after 'new' are not supported",
-    );
-    expect_error(
-        "<?php $classes = [\"stdClass\"]; $object = new $classes[0];",
+        "<?php class Box { public $className = \"stdClass\"; } $box = new Box(); $object = new $box->className::FOO;",
         "Dynamic class-name expressions after 'new' are not supported",
     );
 }
@@ -230,10 +228,10 @@ fn test_error_nullsafe_first_class_callable_is_rejected() {
 /// Verifies the error diagnostic for nullsafe assignment target is rejected.
 #[test]
 fn test_error_nullsafe_assignment_target_is_rejected() {
-    // nullsafe cannot appear on the left-hand side of an assignment.
+    // nullsafe cannot appear on the left-hand side of an assignment; PHP's own diagnostic.
     expect_error(
         "<?php class Profile {} class User { public ?Profile $profile; } $user = new User(); $user?->profile = new Profile();",
-        "Invalid assignment target",
+        "Can't use nullsafe operator in write context",
     );
 }
 

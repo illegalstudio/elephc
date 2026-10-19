@@ -2,7 +2,7 @@
 title: "__elephc_hash_ctx_copy() - internals"
 description: "Compiler internals for __elephc_hash_ctx_copy(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1130
+  order: 1138
 ---
 
 ## `__elephc_hash_ctx_copy()` - internals

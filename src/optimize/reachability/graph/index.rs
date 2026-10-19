@@ -281,6 +281,7 @@ impl DeclarationIndex {
                 StmtKind::Echo(_)
                 | StmtKind::Assign { .. }
                 | StmtKind::RefAssign { .. }
+                | StmtKind::RefAssignPlace { .. }
                 | StmtKind::ArrayAssign { .. }
                 | StmtKind::NestedArrayAssign { .. }
                 | StmtKind::ArrayPush { .. }

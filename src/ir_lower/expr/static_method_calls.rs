@@ -172,9 +172,10 @@ pub(super) fn lower_static_method_call(
         static_method_late_static_return_for_ir(ctx, receiver, dispatch_method),
         late_static_receiver_type.as_deref(),
     ) {
-        (Some(return_type), Some(receiver_type)) => {
-            late_static_return_type_for_ir(ctx, &return_type, receiver_type)
-        }
+        (Some(return_type), Some(receiver_type)) => late_static_result_within_abi(
+            late_static_return_type_for_ir(ctx, &return_type, receiver_type),
+            &result_type,
+        ),
         _ => result_type,
     };
     let return_alias = static_method_return_arg_alias(ctx, receiver, dispatch_method);
@@ -529,10 +530,9 @@ pub(in crate::ir_lower) fn static_method_call_expr_type_for_ir(
         static_method_late_static_return_for_ir(ctx, receiver, method),
         static_late_binding_receiver_type_for_ir(ctx, receiver),
     ) {
-        (Some(return_type), Some(receiver_type)) => Some(late_static_return_type_for_ir(
-            ctx,
-            &return_type,
-            &receiver_type,
+        (Some(return_type), Some(receiver_type)) => Some(late_static_result_within_abi(
+            late_static_return_type_for_ir(ctx, &return_type, &receiver_type),
+            &nominal,
         )),
         _ => Some(nominal),
     }

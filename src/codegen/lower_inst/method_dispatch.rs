@@ -195,7 +195,15 @@ pub(super) fn lower_mixed_method_call(
         builtins::lower_eval_method_call(ctx, inst, object, method_name)?;
         abi::emit_jump(ctx.emitter, &done_label);
     } else {
-        emit_method_call_on_null_fatal(ctx, method_name);
+        // An object whose runtime class declares no such method: PHP's catchable
+        // `Call to undefined method C::m()` (a parent|child union receiver reaches it when the
+        // object is the parent), not the null-receiver message.
+        super::conversions::emit_runtime_class_error(
+            ctx,
+            receiver_reg,
+            "Call to undefined method ",
+            &format!("::{}()", method_name),
+        );
     }
 
     ctx.emitter.label(&non_object_label);

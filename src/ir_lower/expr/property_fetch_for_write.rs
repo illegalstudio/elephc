@@ -47,6 +47,30 @@ pub(crate) fn by_ref_foreach_property_source_is_addressable(
     object: &Expr,
     property: &str,
 ) -> bool {
+    property_write_source_is_addressable(ctx, object, property, false)
+}
+
+/// Returns whether a nested write or unset through `$object->property[...]` reaches the slot.
+///
+/// This is the boxed (`mixed_root`) twin of `by_ref_foreach_property_source_is_addressable`:
+/// `lower_nested_assignment_property_source` only hands back the property's own cell for a
+/// Mixed-represented fixed slot behind a stable receiver; any other shape is a detached copy,
+/// and mutating it would drop the write in silence.
+pub(crate) fn nested_write_property_source_is_addressable(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+) -> bool {
+    property_write_source_is_addressable(ctx, object, property, true)
+}
+
+/// Shared pre-lowering classification of a fetch-for-write property source.
+fn property_write_source_is_addressable(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    mixed_root: bool,
+) -> bool {
     let Some((class_name, nullable)) = instance_callable_object_class_and_nullability(ctx, object)
     else {
         return false;
@@ -65,7 +89,7 @@ pub(crate) fn by_ref_foreach_property_source_is_addressable(
     {
         return false;
     }
-    property_is_splittable_container_slot(ctx, &class_name, property, false)
+    property_is_splittable_container_slot(ctx, &class_name, property, mixed_root)
         && receiver_is_stable_backing_storage(ctx, object)
 }
 

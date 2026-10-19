@@ -94,6 +94,8 @@ mod declarations;
 mod extensions;
 #[path = "parser_tests/magic_constants.rs"]
 mod magic_constants;
+#[path = "parser_tests/variable_variables.rs"]
+mod variable_variables;
 #[path = "parser_tests/never.rs"]
 mod never;
 #[path = "parser_tests/attributes.rs"]

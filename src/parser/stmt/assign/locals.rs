@@ -32,12 +32,21 @@ pub(in crate::parser::stmt) fn parse_incdec_stmt(
         next_token,
         Some(Token::Identifier(_)) | Some(Token::Self_) | Some(Token::Parent) | Some(Token::Static)
     ) && tokens.get(*pos + 1).map(|(t, _)| t) == Some(&Token::DoubleColon)
-        && tokens.get(*pos + 2).map(|(t, _)| t).is_some_and(|t| matches!(t, Token::Variable(_)));
+        && tokens
+            .get(*pos + 2)
+            .map(|(t, _)| t)
+            .is_some_and(|t| matches!(t, Token::Variable(_) | Token::Dollar));
 
     if is_scoped {
         let lhs_expr = crate::parser::expr::parse_expr(tokens, pos)
             .map_err(|_| CompileError::new(span, "Expected variable after '++'"))?;
         expect_semicolon(tokens, pos)?;
+        if !matches!(lhs_expr.kind, ExprKind::StaticPropertyAccess { .. }) {
+            // `++self::$rand[$i];` / `--static::$x->n;`: the static property is only the base
+            // of a larger place. With the value discarded, prefix and postfix spellings share
+            // the read-modify-write lowering of the complex postfix targets.
+            return super::postfix::lower_postfix_incdec_assignment(lhs_expr, is_increment, span);
+        }
         let op = if is_increment {
             crate::parser::ast::BinOp::Add
         } else {
@@ -50,17 +59,25 @@ pub(in crate::parser::stmt) fn parse_incdec_stmt(
             one,
             span,
         );
-        if let ExprKind::StaticPropertyAccess { receiver, property } = lhs_expr.kind {
-            return Ok(Stmt::new(
-                StmtKind::StaticPropertyAssign {
-                    receiver,
-                    property,
-                    value,
-                },
-                span,
-            ));
-        }
-        return Err(CompileError::new(span, "Invalid increment target"));
+        let ExprKind::StaticPropertyAccess { receiver, property } = lhs_expr.kind else {
+            unreachable!("checked above");
+        };
+        return Ok(Stmt::new(
+            StmtKind::StaticPropertyAssign {
+                receiver,
+                property,
+                value,
+            },
+            span,
+        ));
+    }
+
+    // `++$c::$p[k];` goes through a dynamic class: reject it with the targeted write error.
+    if matches!(next_token, Some(Token::Variable(_) | Token::This))
+        && tokens.get(*pos + 1).map(|(t, _)| t) == Some(&Token::DoubleColon)
+    {
+        let lhs_expr = crate::parser::expr::parse_expr(tokens, pos)?;
+        crate::parser::expr::reject_dynamic_member_write(&lhs_expr, span)?;
     }
 
     // `++$this->n;`, `++$obj->n;`, and `++$a[0];` target storage the simple local path
@@ -152,21 +169,35 @@ pub(in crate::parser::stmt) fn parse_static_var(
 ) -> Result<Stmt, CompileError> {
     *pos += 1; // consume 'static'
 
-    let name = match tokens.get(*pos).map(|(t, _)| t) {
-        Some(Token::Variable(n)) => n.clone(),
-        _ => return Err(CompileError::new(span, "Expected variable after 'static'")),
-    };
-    *pos += 1;
-
-    let init = if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Assign)) {
+    // `static $a = null, $b = 0;` declares several static locals in one statement (as in
+    // symfony/polyfill-uuid); each declarator becomes its own `StaticVar`, in source order.
+    let mut declarations = Vec::new();
+    loop {
+        let name = match tokens.get(*pos).map(|(t, _)| t) {
+            Some(Token::Variable(n)) => n.clone(),
+            _ => return Err(CompileError::new(span, "Expected variable after 'static'")),
+        };
         *pos += 1;
-        parse_assignment_value_expr(tokens, pos)?
-    } else {
-        Expr::new(ExprKind::Null, span)
-    };
+
+        let init = if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Assign)) {
+            *pos += 1;
+            parse_assignment_value_expr(tokens, pos)?
+        } else {
+            Expr::new(ExprKind::Null, span)
+        };
+        declarations.push(Stmt::new(StmtKind::StaticVar { name, init }, span));
+        if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Comma)) {
+            *pos += 1;
+            continue;
+        }
+        break;
+    }
     expect_semicolon(tokens, pos)?;
 
-    Ok(Stmt::new(StmtKind::StaticVar { name, init }, span))
+    if declarations.len() == 1 {
+        return Ok(declarations.pop().expect("one declaration was just checked"));
+    }
+    Ok(Stmt::new(StmtKind::Synthetic(declarations), span))
 }
 
 /// Returns true if the token sequence at `pos` looks like a typed local assignment:

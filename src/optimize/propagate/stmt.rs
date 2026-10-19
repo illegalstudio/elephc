@@ -234,6 +234,20 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
                 HashMap::new(),
             )
         }
+        StmtKind::RefAssignPlace { target, source } => {
+            // `$a[k] = &$x` / `$o->p = &$x`: the place and the source share one reference cell
+            // from here on, so neither root may carry a constant (see `RefAssign` above).
+            if let Some(root) = lvalue_root(&target) {
+                mark_reference_volatile(root);
+            }
+            if let Some(root) = lvalue_root(&source) {
+                mark_reference_volatile(root);
+            }
+            (
+                Stmt::new(StmtKind::RefAssignPlace { target, source }, span),
+                HashMap::new(),
+            )
+        }
         StmtKind::TypedAssign {
             type_expr,
             name,

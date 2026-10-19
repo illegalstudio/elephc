@@ -153,6 +153,136 @@ fn lower_if_chain(
     merge_reachable
 }
 
+/// Local-representation join for the two lazy edges of an expression (`&&`, `||`, `?:`, `??`,
+/// `? :`).
+///
+/// An operand on one edge may store into a local with another representation
+/// (`$b = null; $c || $b = f();`, `$n = 0; $c && $n = 2.5;`). The expression lowerings used to
+/// let that operand's flow-sensitive type leak past the merge, so the code after it read the
+/// skipped edge's slot with the stored representation: `var_dump($b)` printed a raw integer
+/// where PHP prints `NULL`. Each edge now starts from the split's types and ends in a deferred
+/// tail. When the edges agree, the merge simply takes their types; when they disagree only in
+/// array storage the tails are reconciled exactly as an `if` statement's arms are. Any other
+/// disagreement (including null against an array: adopting the array left the skipped edge's
+/// null word typed as an array, so `=== null`, `is_array` and `$a[] = v` misread it) is joined
+/// as boxed `mixed`: each edge boxes its own value at its tail.
+pub(crate) struct LazyBranchJoin {
+    merge: BlockId,
+    split_types: TypeEnv,
+    split_static_callables: HashMap<String, StaticCallableBinding>,
+    arms: Vec<IfArmExit>,
+}
+
+impl LazyBranchJoin {
+    /// Snapshots the split point of a lazy expression whose edges meet at `merge`.
+    pub(crate) fn begin(ctx: &LoweringContext<'_, '_>, merge: BlockId) -> Self {
+        Self {
+            merge,
+            split_types: ctx.local_types_snapshot(),
+            split_static_callables: ctx.static_callable_locals_snapshot(),
+            arms: Vec::new(),
+        }
+    }
+
+    /// Restores the split's flow-sensitive facts at the start of an edge.
+    pub(crate) fn enter_edge(&self, ctx: &mut LoweringContext<'_, '_>) {
+        ctx.restore_local_types(self.split_types.clone());
+        ctx.restore_static_callable_locals(self.split_static_callables.clone());
+    }
+
+    /// Ends an edge (in place of a branch to the merge block).
+    pub(crate) fn exit_edge(&mut self, ctx: &mut LoweringContext<'_, '_>) {
+        if !ctx.builder.insertion_block_is_terminated() {
+            record_if_arm_exit(ctx, &mut self.arms);
+        }
+    }
+
+    /// Connects every edge to the merge block and positions the builder there.
+    pub(crate) fn finish(self, ctx: &mut LoweringContext<'_, '_>, span: Span) {
+        let Self { merge, split_types, split_static_callables, arms } = self;
+        let mut names = arms
+            .iter()
+            .flat_map(|arm| arm.types.keys().cloned())
+            .collect::<Vec<_>>();
+        names.sort();
+        names.dedup();
+        let mut needs_array_join = false;
+        let mut adopted = TypeEnv::new();
+        let mut boxed: Vec<String> = Vec::new();
+        for name in &names {
+            let types = arms.iter().map(|arm| arm.types.get(name)).collect::<Vec<_>>();
+            if types.windows(2).all(|pair| pair[0] == pair[1]) {
+                continue;
+            }
+            // A name some edge never binds is a temporary or a local only that edge defines; it
+            // keeps the binding edge's type, as before this join existed.
+            if types.iter().any(Option::is_none) {
+                if let Some(ty) = types.iter().flatten().next() {
+                    adopted.insert(name.clone(), (*ty).clone());
+                }
+                continue;
+            }
+            let reprs = types
+                .iter()
+                .map(|ty| ty.map(PhpType::codegen_repr))
+                .collect::<Vec<_>>();
+
+            let is_array = |ty: &Option<PhpType>| {
+                matches!(ty, Some(PhpType::Array(_) | PhpType::AssocArray { .. }))
+            };
+            if reprs.iter().all(is_array) {
+                needs_array_join = true;
+                continue;
+            }
+            // Any other disagreement (null and int, int and float, an object and a boxed
+            // `mixed`, ...) is joined as boxed `mixed`: every edge boxes its own value before it
+            // reaches the merge, so the merge reads one representation whichever edge ran.
+            boxed.push(name.clone());
+        }
+        if !boxed.is_empty() {
+            for arm in &arms {
+                ctx.restore_local_types(arm.types.clone());
+                ctx.builder.position_at_end(arm.tail);
+                for name in &boxed {
+                    let current = ctx.load_local(name, Some(span));
+                    let current_ty = ctx.builder.value_php_type(current.value);
+                    let value = if current_ty.codegen_repr() == PhpType::Mixed {
+                        current
+                    } else {
+                        ctx.box_value_as_mixed(current, PhpType::Mixed, Some(span))
+                    };
+                    ctx.store_mutated_local(name, value, PhpType::Mixed, Some(span));
+                }
+            }
+            for name in &boxed {
+                adopted.insert(name.clone(), PhpType::Mixed);
+            }
+        }
+        if needs_array_join {
+            finish_if_type_join(ctx, arms, merge, span);
+        } else {
+            for arm in &arms {
+                ctx.builder.position_at_end(arm.tail);
+                ctx.builder.terminate(Terminator::Br { target: merge, args: Vec::new() });
+            }
+            match arms.first() {
+                Some(first) => {
+                    ctx.restore_local_types(first.types.clone());
+                    ctx.restore_static_callable_locals(join_arm_static_callables(&arms));
+                }
+                None => {
+                    ctx.restore_local_types(split_types);
+                    ctx.restore_static_callable_locals(split_static_callables);
+                }
+            }
+        }
+        for (name, ty) in adopted {
+            ctx.set_local_type(&name, ty);
+        }
+        ctx.builder.position_at_end(merge);
+    }
+}
+
 /// Defers one reachable arm's merge edge so representation conversions can be inserted later.
 fn record_if_arm_exit(ctx: &mut LoweringContext<'_, '_>, arms: &mut Vec<IfArmExit>) {
     let tail = ctx.builder.create_named_block("if.arm", Vec::new());

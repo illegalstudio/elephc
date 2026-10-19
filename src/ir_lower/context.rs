@@ -312,6 +312,9 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// target. Those locals get boxed `Mixed` frame storage from their first store, so
     /// every read of the slot is already a boxed load instead of an owned string detach.
     pub string_incdec_locals: &'m HashSet<(String, String)>,
+    /// Maybe-undefined locals of this frame -> their hidden defined-flag local
+    /// (`crate::ir_lower::maybe_undefined`).
+    pub maybe_undefined_flags: HashMap<String, String>,
     /// Spans of the `unset()` ARGUMENTS whose local binding the CHECKER decided to kill
     /// (`CheckResult::local_bind_kill_sites`), each mapped to the SET of locals killed at that
     /// position. At one of these spans `unset_local` abandons the frame slot after releasing its
@@ -391,6 +394,11 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// from the body. Only a declared boundary carries PHP's coercive-mode verification
     /// (TypeError on a non-coercible runtime value); an inferred return must never throw.
     pub return_type_is_declared: bool,
+    /// The declared return names the literal `true` type, which the checker carries as `bool`.
+    pub return_literal_true: bool,
+    /// The declared scalar return of a method body its override family boxed into a Mixed call
+    /// ABI: a `return` first coerces to it, exactly as the unboxed body would, then boxes.
+    pub boxed_return_contract: Option<PhpType>,
     /// `true` when the function/closure being lowered returns by reference (`function &f()`),
     /// so a `return $obj->prop` yields the property's ref-cell pointer instead of a value copy.
     pub by_ref_return: bool,
@@ -531,6 +539,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             generic_call_sites,
             loop_storage_types,
             string_incdec_locals,
+            maybe_undefined_flags: HashMap::new(),
             bind_kill_sites,
             ref_detach_sites,
             retype_sites,
@@ -562,6 +571,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             return_type,
             return_php_type,
             return_type_is_declared: false,
+            return_literal_true: false,
+            boxed_return_contract: None,
             by_ref_return: false,
             in_main,
             all_global_var_names,
@@ -3417,6 +3428,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::ClosureBind
                     | Op::FirstClassCallableNew
                     | Op::CallableArrayNew
+                    // Normalization returns its own reference to the descriptor (a retained
+                    // existing Closure or a freshly bound one); the consumer must take it over.
+                    | Op::NormalizeCallable
                     | Op::BufferNew
                     | Op::GeneratorNew
                     | Op::CatchBind
@@ -4401,6 +4415,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             span,
         );
         self.initialized_slots.insert(slot);
+        // Any store defines a maybe-undefined local (see `crate::ir_lower::maybe_undefined`).
+        if !self.maybe_undefined_flags.is_empty() {
+            let defined = self
+                .maybe_undefined_flags
+                .iter()
+                .find(|(name, _)| self.local_slots.get(name.as_str()) == Some(&slot))
+                .map(|(name, _)| name.clone());
+            if let Some(name) = defined {
+                crate::ir_lower::maybe_undefined::set_flag(self, &name, true, span);
+            }
+        }
     }
 
     /// Emits a ref-cell store that carries the alias target type for backend dereference.
@@ -4589,6 +4614,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             return value;
         }
         if input.ir_type == IrType::I64 {
+            // A null-typed local is carried in an `I64` word holding the null SENTINEL, which is
+            // non-zero: branching on it directly took `$c = null; $c || f();` down the TRUE edge
+            // (skipping `f()`) and `$c && f()` down the false one. PHP's null is always falsy.
+            if self.builder.value_php_type(input.value) == PhpType::Void {
+                return crate::ir_lower::expr::emit_bool_literal(self, false, span);
+            }
             return input;
         }
         self.emit_value(
@@ -5158,6 +5189,7 @@ pub(crate) fn type_expr_to_php_type(type_expr: &TypeExpr) -> PhpType {
         TypeExpr::Float => PhpType::Float,
         TypeExpr::Bool => PhpType::Bool,
         TypeExpr::False => PhpType::False,
+        TypeExpr::True => PhpType::Bool,
         TypeExpr::Str => PhpType::Str,
         TypeExpr::Void => PhpType::Void,
         TypeExpr::Never => PhpType::Never,

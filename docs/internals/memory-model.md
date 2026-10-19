@@ -714,6 +714,109 @@ elephc --heap-debug heavy.php            # enable runtime heap verification
 
 The minimum is 64KB.
 
+### Binding a place by reference
+
+`$o->p = &$x`, `$a[$k] = &$x` (at any depth) and the by-reference array literal elements
+`[&$x]` / `['k' => &$x]` all lower to one statement, `StmtKind::RefAssignPlace`, whose source is
+always a plain variable: the parser first binds any other source (`&$pipes[0]`,
+`&$this->stream`) to a hidden local with the ordinary `$tmp = &<source>`, evaluating the
+place's computed indices into hidden locals before it so PHP's target-first order holds, and
+unsets the hidden locals afterwards. A literal with reference elements is rebuilt as PHP's
+ordered writes into a hidden table (each key, value and reference source evaluated at its own
+position; a later duplicate key replaces a reference instead of writing through it), and the
+table is MOVED into the expression's value so no hidden holder outlives the literal. Any
+reference to a readonly property raises `Cannot indirectly modify readonly property`.
+
+The model is the one the rest of this section uses: a PHP reference set is ONE managed
+reference cell (heap kind `REFERENCE_CELL_HEAP_KIND`). Locals own it through their alias and
+owner slots, reference properties hold it in their slot (GC tag 11), and hash entries hold it as
+runtime value tag 11. Binding a place gives the source a cell (promoting a plain local in place,
+which keeps its identity; an undefined source is first defined as null, like PHP's `&$v`),
+RETAINS that cell into the place and only then releases what the place held before
+(`BindPropRefCell`, `BindArrayElemRefCell` → `__rt_hash_entry_bind_reference`). The release
+runs after the place is republished because it can run a destructor that observes it.
+Consequences, all pinned by `tests/codegen/reference_places.rs`:
+
+- a write through either side lands in the shared cell, and `unset` of one side releases only
+  that side's owner;
+- an array copy shares a reference element while it has other holders, and separates it when
+  the copy's table is the sole holder, as PHP's `zend_array_dup` does;
+- object walkers (`var_dump`, `print_r`, `var_export`, `serialize`, `json_encode`,
+  `get_object_vars`/`(array)`, `unserialize`) follow a reference property's slot through
+  `REFERENCE_PROPERTY_TAG_FLAG` in the descriptor tag, and `var_dump` prints PHP's `&` marker
+  for an element or property whose cell has more than one owner.
+
+Cells are typed, PHP references are not. A hash entry cell always holds a boxed `Mixed`, so an
+element place widens its source local to `Mixed` storage; a property cell holds the property's
+storage representation, so an UNTYPED property that becomes part of a reference set is widened
+to boxed storage (PHP `array` when both sides are arrays, `mixed` otherwise), and a declared one
+must agree with its source. A disagreement is a compile-time refusal, never a reinterpreted
+payload.
+
+A by-reference parameter's address belongs to the caller and may be a frame slot or an array
+interior, so it cannot be co-owned by a place that outlives the call. The checker records every
+by-reference parameter a body binds into a place (`CheckResult::escaping_ref_params`), and a
+call whose argument is a plain local lends that local as a managed cell of the parameter's
+representation. A call that still hands over an unmanaged address (a dynamic callable whose
+signature is not resolved at the call) is caught at the binding by `LoadLocalRefCellPtr`,
+which accepts only a live managed cell and otherwise raises the catchable
+`Error: Cannot bind a reference to storage that has no independent reference cell` before
+anything is published. Superglobals, `global` aliases and static properties live in
+program-global storage with no cell and are refused at compile time as place sources.
+
+#### New elements and runtime-named properties
+
+A reference to a NEW element (`$r = &$a[]`, `$r = &$this->list[$k][]`, `$a[] = &$x`,
+`foreach ($src as &$d[])`) is desugared by the parser into PHP's fetch for writing: the
+container's effectful sub-expressions are evaluated once into hidden locals, `$c[] = null`
+creates the element, and the binding then names it as `$c[(int) array_key_last($c)]` (an append
+always lands at the container's next integer key, which is its last key once the append
+succeeded). A by-reference foreach into a place binds a hidden loop variable and starts the body
+with `<place> = &$tmp`; the hidden variable is unset after the loop. `f($a[])` as a
+by-reference argument is refused at compile time.
+
+`$o->{$k} = &$v`, `$o->{$k}['x'] = &$v` and `$o->{$k}[] = &$v` dispatch on the runtime name
+(`ir_lower::expr::dynamic_reference_places`). Every property of the receiver's class and of its
+subclasses gets an arm that lowers the statically named binding, after the checker promoted
+every property that can share the reference (untyped ones are widened to boxed storage, typed
+ones must already be boxed; any other typed property throws an explicit elephc `Error` when the
+name selects it). A name that selects no declared property is an entry of the object's
+per-instance property hash (a `stdClass` property, or a dynamic property of a class with hash
+storage): `BindDynamicPropRefCell` stamps that hash entry tag 11 over the source's cell exactly
+like an array entry (`__rt_property_hash_reference`, which allocates, splits and inserts the
+entry first), and `LoadDynamicPropRefCell` promotes it to give an element place its container.
+Property-hash readers already dereference tag 11 (`__rt_hash_get`) and writers write through it
+(`__rt_hash_set`). A receiver of unknown class is accepted only when it is a `stdClass` at run
+time; a class whose subclasses place the hash at different offsets throws an explicit `Error`.
+
+The source form `$r = &$o->{$k}` (and `$x = &$x->{$k}`) uses the same arms: each one produces the
+selected property's cell (`LoadPropRefCell` for a declared property, `LoadDynamicPropRefCell` for
+a property-hash entry, which creates a missing property as null), the cells meet in one
+merge-block parameter and the target is bound to it once. `$r = &$o->{$k}[$i]` is desugared by
+the parser to a hidden `$c = &$o->{$k}` followed by `$r = &$c[$i]`.
+
+#### Self-references, readonly places and typed reference sets
+
+- **Self-referencing arrays** (`$a[] = &$a`, `$a[0][] = &$a[0]`, two arrays referencing each
+  other) are real cycles through a tag-11 entry. `var_dump` and `print_r` keep every array/hash
+  table they are walking on the same bounded `_vd_seen` stack the object walker uses (2048
+  entries), so a revisited table renders PHP's `*RECURSION*` marker (without the `&` of the
+  reference that reached it) instead of recursing until the stack overflows. Sibling copies of
+  one table are not on each other's walk path and render in full. When a hash is copied for
+  copy-on-write, a singleton tag-11 cell whose value is that very table stays SHARED, exactly as
+  php's `zend_array_dup` does, so `$b = $a; $b[0] = 1;` writes through the self-reference into
+  `$a` (bug69376); every other singleton cell still separates.
+- **Readonly properties** (an enum's `name`/`value` included) never become reference cells: every
+  reference to one throws `Cannot indirectly modify readonly property`, so the checker skips them
+  when it applies reference-property promotions, and lowering throws before any cell would be
+  loaded (`$r = &$o->ro`, `$o->ro = &$x`, `foreach ($o->ro as &$v)`, `foreach ($o->ro[$k] as &$v)`,
+  `foreach ($src as &$o->ro)`, and `return $o->ro;` from a by-reference function).
+- **A PHP variable bound by reference** (`$x = &$list`, `use (&$list)`) shares one cell with every
+  name of its reference set, and those names keep their own static type. Making its entries
+  referenceable (`foreach ($x as &$v)`, `$y = &$x[0]`, `$x[0] = &$z`) re-lays the shared payload
+  out as a hash of boxed Mixed entries, which a typed-element alias would misread, so that shape
+  is refused at compile time when the elements are typed; with mixed elements it binds.
+
 ## Array layout
 
 Arrays are heap-allocated with a 24-byte header followed by contiguous elements:

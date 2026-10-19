@@ -110,6 +110,11 @@ impl ScopePass {
 }
 
 impl Pass for ScopePass {
+    /// Magic constants in constant initializers are lowered too.
+    fn walks_class_const_values(&self) -> bool {
+        true
+    }
+
     /// Transforms a magic constant into a string literal based on current lexical scope.
     ///
     /// - `__NAMESPACE__`: current namespace or empty string.

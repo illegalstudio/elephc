@@ -138,8 +138,7 @@ impl Checker {
             .collect();
         let prev_by_ref_return = self.current_by_ref_return;
         self.current_by_ref_return = decl.by_ref_return;
-        self.loop_storage_types
-            .retain(|(scope, _), _| scope != &function_key);
+        self.clear_loop_storage_scope(&function_key);
         let previous_loop_storage_scope =
             std::mem::replace(&mut self.current_loop_storage_scope, function_key.clone());
         self.resolving_functions.insert(function_key.clone());
@@ -266,7 +265,7 @@ impl Checker {
         } else if !all_return_infos.is_empty() {
             return_type = all_return_infos[0].ty.clone();
             for return_info in &all_return_infos[1..] {
-                return_type = Self::wider_type(&return_type, &return_info.ty);
+                return_type = Self::wider_return_type(&return_type, &return_info.ty);
             }
         }
 

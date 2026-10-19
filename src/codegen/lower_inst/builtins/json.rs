@@ -128,8 +128,19 @@ fn reset_json_validation_state(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Clears JSON encoder state after all EIR operands have already evaluated.
+///
+/// The recursion guard's table stack (`_json_seen_n`) is cleared only when no outer encode is
+/// active (`_json_active_depth == 0`): a `json_encode()` nested inside `jsonSerialize()` keeps the
+/// outer walk's tables, which is also what php's per-table recursion flag does, and clearing at
+/// a top-level call drops whatever an encode that threw mid-walk left behind.
 fn reset_json_encode_state(ctx: &mut FunctionContext<'_>) {
     abi::emit_store_zero_to_symbol(ctx.emitter, "_json_last_error", 0);
+    let keep = ctx.next_label("json_seen_keep");
+    let scratch = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_json_active_depth", 0);
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &keep);
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_json_seen_n", 0);
+    ctx.emitter.label(&keep);
     abi::emit_store_zero_to_symbol(ctx.emitter, "_json_active_depth", 0);
     abi::emit_store_zero_to_symbol(ctx.emitter, "_json_indent_depth", 0);
     abi::emit_store_zero_to_symbol(ctx.emitter, "_json_error_location_active", 0);

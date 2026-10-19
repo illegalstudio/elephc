@@ -21,7 +21,14 @@ use super::{parse_block, DocBlock};
 pub(super) fn collect(source: &str) -> HashMap<(u32, u32), DocBlock> {
     let source = source.strip_prefix('\u{feff}').unwrap_or(source);
     let mut blocks = HashMap::new();
-    let Ok(tokens) = tokenize(source).or_else(|_| tokenize_with_mode(source, SourceMode::Lfc)) else {
+    // A tagless (`.lfc`) source has no open tag; a PHP source always has one (inline HTML before
+    // the first tag lexes fine, so a lexer failure no longer tells the two apart).
+    let tokenized = if source.contains("<?php") || source.contains("<?=") {
+        tokenize(source).or_else(|_| tokenize_with_mode(source, SourceMode::Lfc))
+    } else {
+        tokenize_with_mode(source, SourceMode::Lfc)
+    };
+    let Ok(tokens) = tokenized else {
         return blocks;
     };
     let mut lines = Vec::new();
@@ -86,8 +93,18 @@ fn last_docblock(mut gap: &str) -> Option<&str> {
         if gap.is_empty() {
             return last;
         }
-        if gap.starts_with("//") || gap.starts_with('#') {
-            gap = gap.find('\n').map_or("", |end| &gap[end + 1..]);
+        if let Some(rest) = gap.strip_prefix("?>") {
+            // A close tag ends PHP mode; inline HTML between tags is its own token, never part of
+            // the gap, so the next thing in the gap is the following open tag.
+            gap = rest;
+        } else if gap.starts_with("<?=") {
+            gap = &gap[3..];
+        } else if gap.len() >= 5 && gap.is_char_boundary(5) && gap[..5].eq_ignore_ascii_case("<?php") {
+            gap = &gap[5..];
+        } else if gap.starts_with("//") || gap.starts_with('#') {
+            // A line comment also ends at `?>`, which is then left in the gap.
+            let end = gap.find('\n').map_or(gap.len(), |end| end + 1);
+            gap = &gap[gap[..end].find("?>").unwrap_or(end)..];
         } else if gap.starts_with("/*") {
             // The opener is consumed before the closer is searched for, as php's lexer does: in
             // `/*/ kept */` the `*` of `/*` and the `/` after it are not a closer, so finding `*/`

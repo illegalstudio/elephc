@@ -1984,3 +1984,38 @@ object(Mine)#1 (1) {
 }
 "#);
 }
+
+/// A virtual hooked property (hooks that never touch a backing slot) has no storage, and PHP's
+/// renderers skip it. Rendering it read the layout fallback offset (`uninitialized(string)`, or
+/// a garbage string for a pointer-carrying slot).
+#[test]
+fn virtual_hooked_property_is_not_rendered() {
+    let out = run_php(
+        "vd_virtual_hooked_property",
+        concat!(
+            "<?php\n",
+            "class A {\n",
+            "    private string $n = 'x';\n",
+            "    public string $name { get => $this->n; }\n",
+            "    public int $len { get => strlen($this->n); }\n",
+            "}\n",
+            "$a = new A();\n",
+            "var_dump($a); print_r($a); echo \"\\n\", $a->name, $a->len, \"\\n\";\n",
+        ),
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "object(A)#1 (1) {\n",
+            "  [\"n\":\"A\":private]=>\n",
+            "  string(1) \"x\"\n",
+            "}\n",
+            "A Object\n",
+            "(\n",
+            "    [n:A:private] => x\n",
+            ")\n",
+            "\n",
+            "x1\n",
+        )
+    );
+}

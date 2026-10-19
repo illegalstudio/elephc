@@ -156,6 +156,23 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.instruction("b __rt_fwrite_return");                                // continue at target label
     emitter.label("__rt_fwrite_syscall");
     emitter.syscall(4);
+    // A failed write() leaves the errno (Darwin, carry set) or -errno (Linux) in x0. On
+    // Darwin that positive errno read back as a byte count: fwrite() on a read-only stream
+    // answered int(9) (EBADF) where PHP answers false.
+    if emitter.platform.needs_cmp_before_error_branch() {
+        emitter.instruction("cmp x0, #0");                                      // Linux: a negative result is -errno
+    }
+    emitter.instruction(&emitter.platform.branch_on_syscall_success("__rt_fwrite_return")); // keep the byte count of a successful write
+    // A non-blocking stream whose buffer is full reports EAGAIN/EWOULDBLOCK; PHP (bug #79000)
+    // answers int(0) for it, not false.
+    if emitter.platform.needs_cmp_before_error_branch() {
+        emitter.instruction(&format!("cmn x0, #{}", emitter.platform.would_block_errno())); // Linux: is the result -EAGAIN/-EWOULDBLOCK?
+    } else {
+        emitter.instruction(&format!("cmp x0, #{}", emitter.platform.would_block_errno())); // macOS: is the errno EAGAIN/EWOULDBLOCK?
+    }
+    emitter.instruction("mov x0, #-1");                                         // the lowering boxes -1 as PHP false
+    emitter.instruction("b.ne __rt_fwrite_return");                             // any other failure stays false
+    emitter.instruction("mov x0, #0");                                          // would-block: nothing written, int(0) like PHP
     emitter.label("__rt_fwrite_return");
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the frame
@@ -284,6 +301,14 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_fwrite_return_x86");                          // continue at target label
     emitter.label("__rt_fwrite_syscall_x86");
     emitter.instruction("call write");                                          // write the payload through libc write()
+    // EAGAIN/EWOULDBLOCK on a non-blocking stream is int(0) in PHP (bug #79000), not false.
+    emitter.instruction("cmp rax, -1");                                         // did libc write() fail?
+    emitter.instruction("jne __rt_fwrite_return_x86");                          // no: return the byte count
+    emitter.instruction("call __errno_location");                               // fetch errno after the failed write()
+    emitter.instruction("cmp DWORD PTR [rax], 11");                             // is it EAGAIN/EWOULDBLOCK from a non-blocking fd?
+    emitter.instruction("mov rax, -1");                                         // the lowering boxes -1 as PHP false
+    emitter.instruction("jne __rt_fwrite_return_x86");                          // any other failure stays false
+    emitter.instruction("xor eax, eax");                                        // would-block: nothing written, int(0) like PHP
     emitter.label("__rt_fwrite_return_x86");
     emitter.instruction("add rsp, 32");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

@@ -84,6 +84,10 @@ pub(crate) enum CallableDescriptorShape {
 }
 
 /// Metadata describing how the descriptor should invoke or adapt the target.
+///
+/// `aux_name` carries the PHP scope class `ReflectionFunction::getClosureScopeClass()` reports:
+/// the lexical class of a closure literal or the declaring class of a method target. It is
+/// left empty when the descriptor has no class scope or cannot know it statically.
 #[derive(Clone, Debug)]
 pub(crate) struct CallableDescriptorInvocation {
     pub(crate) shape: CallableDescriptorShape,
@@ -123,6 +127,12 @@ impl CallableDescriptorInvocation {
             method_name: None,
             aux_name: None,
         }
+    }
+
+    /// Records the PHP scope class reported by `ReflectionFunction::getClosureScopeClass()`.
+    pub(crate) fn with_scope_class(mut self, scope_class: Option<String>) -> Self {
+        self.aux_name = scope_class.map(|name| name.trim_start_matches('\\').to_string());
+        self
     }
 
     /// Creates invocation metadata for method-like callable targets.

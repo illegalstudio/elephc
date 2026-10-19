@@ -378,6 +378,11 @@ impl<'a> ConversionScan<'a> {
                 self.name(target);
                 self.expr(source);
             }
+            StmtKind::RefAssignPlace { target, source } => {
+                self.mutation();
+                self.expr(target);
+                self.expr(source);
+            }
             StmtKind::ArrayAssign { array, index, value } => {
                 self.mutation();
                 self.name(array);

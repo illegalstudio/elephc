@@ -11,7 +11,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileWarning;
-use crate::parser::ast::{ClassMethod, Expr, Stmt, StmtKind};
+use crate::parser::ast::{ClassMethod, Expr, ExprKind, Stmt, StmtKind};
 use crate::span::Span;
 
 use super::expr_reads::{collect_closure_warnings_in_stmt, collect_expr_reads};
@@ -26,7 +26,7 @@ pub(super) struct ScopeUsage {
 
 impl ScopeUsage {
     /// Records a variable declaration, keeping the first span encountered for each name.
-    fn declare(&mut self, name: &str, span: Span) {
+    pub(super) fn declare(&mut self, name: &str, span: Span) {
         self.declared.entry(name.to_string()).or_insert(span);
     }
 
@@ -191,6 +191,14 @@ pub(super) fn collect_scope_reads(
             StmtKind::RefAssign { target, source } => {
                 collect_expr_reads(source, scope, warnings);
                 scope.declare(target, stmt.span);
+            }
+            StmtKind::RefAssignPlace { target, source } => {
+                collect_expr_reads(target, scope, warnings);
+                // `&$v` binds (and, when undefined, creates) `$v` rather than reading it.
+                match &source.kind {
+                    ExprKind::Variable(name) => scope.declare(name, stmt.span),
+                    _ => collect_expr_reads(source, scope, warnings),
+                }
             }
             StmtKind::TypedAssign { name, value, .. } => {
                 collect_expr_reads(value, scope, warnings);

@@ -155,6 +155,9 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
 
     crate::progress::phase("resolve");
     let phase_started = Instant::now();
+    // Site ids of `elephc.includes.toml` are relative to the application root; without a
+    // manifest yet, `--dynamic-includes=report` names them relative to the entry's directory.
+    resolver::set_dynamic_include_app_root(parent);
     // `resolve_collecting_includes` also hands back the canonical path of every file the
     // resolver statically inlined — group 2 of the OPcache script manifest.
     let (ast, opcache_included_files) =
@@ -162,10 +165,14 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
         Ok(resolved) => resolved,
         Err(e) => {
             crate::progress::clear();
+            print_dynamic_include_report();
             errors::report(&e);
             process::exit(1);
         }
     };
+    // The entry file lexes with the default source identity. Registered after the resolver,
+    // which rewinds the identity counter, so later diagnostics can name it (`Span::source_path`).
+    Span::register_source_path(0, filename.to_string());
     let ast = match autoload::collect_aliases(ast) {
         Ok(ast) => ast,
         Err(error) => {
@@ -193,6 +200,24 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
         errors::report(&error);
         process::exit(1);
     }
+
+    // The preludes below are decided on the entry program, but the autoload pass that loads the
+    // Composer class files runs after name resolution, much later. Probe that closure now, so a
+    // vendor file that uses PDO or curl gets its prelude as if the entry file used it.
+    crate::progress::phase("autoload-prelude-probe");
+    let phase_started = Instant::now();
+    let autoloaded_preludes = if repl_output.is_some() {
+        HashSet::new()
+    } else {
+        autoload::prelude_probe::autoloaded_prelude_groups(
+            &ast,
+            parent,
+            &autoload_registry,
+            &defines,
+        )
+    };
+    timings.record_since("autoload-prelude-probe", phase_started);
+    let autoloaded = |group: &str| autoloaded_preludes.contains(group);
 
     let mut prelude_inventory = optimize::reachability::PreludeInventory::new();
     // `curl` belongs here for the same reason `pdo` does, and NOT listing it is a silent
@@ -237,7 +262,7 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     // injects when `force || detect(...)`, so `force = pdo_used` reproduces the
     // exact decision without a second AST walk (the injected PDO prelude would
     // otherwise be re-scanned by the mysqli detection below too).
-    let pdo_used = pdo_force || pdo_prelude::program_uses_pdo(&ast);
+    let pdo_used = pdo_force || autoloaded("pdo") || pdo_prelude::program_uses_pdo(&ast);
     let ast = if php_version == crate::web_prelude::PhpVersion::default() {
         pdo_prelude::inject_if_used(ast, pdo_used, &mut prelude_inventory)
     } else {
@@ -262,7 +287,8 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     crate::progress::phase("mysqli-prelude");
     let phase_started = Instant::now();
     let mysqli_force = with_crates.contains("mysqli");
-    let mysqli_used = mysqli_force || mysqli_prelude::program_uses_mysqli(&ast);
+    let mysqli_used =
+        mysqli_force || autoloaded("mysqli") || mysqli_prelude::program_uses_mysqli(&ast);
     let ast =
         mysqli_prelude::inject_if_used(ast, mysqli_used, php_version, &mut prelude_inventory);
     if mysqli_used {
@@ -279,7 +305,7 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     let phase_started = Instant::now();
     let ast = tz_prelude::inject_if_used(
         ast,
-        with_crates.contains("tz"),
+        with_crates.contains("tz") || autoloaded("tz"),
         &mut prelude_inventory,
     );
     timings.record_since("tz-prelude", phase_started);
@@ -300,7 +326,11 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     // before name resolution so the call resolves to the injected function.
     crate::progress::phase("var-export-prelude");
     let phase_started = Instant::now();
-    let ast = var_export_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = var_export_prelude::inject_if_used_or_referenced_elsewhere(
+        ast,
+        autoloaded("var_export"),
+        &mut prelude_inventory,
+    );
     timings.record_since("var-export-prelude", phase_started);
 
     // Inject the OPcache preludes (pure elephc-PHP functions): `opcache_get_configuration()`
@@ -392,7 +422,7 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     let phase_started = Instant::now();
     let ast = crate::image_prelude::inject_if_used(
         ast,
-        with_crates.contains("image"),
+        with_crates.contains("image") || autoloaded("image"),
         &mut prelude_inventory,
     );
     timings.record_since("image-prelude", phase_started);
@@ -405,7 +435,8 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     // detected, and before name resolution so a namespaced caller resolves to it.
     crate::progress::phase("hash-prelude");
     let phase_started = Instant::now();
-    let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast =
+        crate::hash_prelude::inject_if_used(ast, autoloaded("hash"), &mut prelude_inventory);
     let ast = crate::core_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::bcmath_prelude::inject_if_used(ast, with_crates.contains("bcmath"), &mut prelude_inventory);
     timings.record_since("hash-prelude", phase_started);
@@ -423,13 +454,13 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     let ast = if php_version == crate::php_version::PhpVersion::default() {
         crate::curl_prelude::inject_if_used(
             ast,
-            with_crates.contains("curl"),
+            with_crates.contains("curl") || autoloaded("curl"),
             &mut prelude_inventory,
         )
     } else {
         crate::curl_prelude::inject_if_used_for_version(
             ast,
-            with_crates.contains("curl"),
+            with_crates.contains("curl") || autoloaded("curl"),
             php_version,
             &mut prelude_inventory,
         )
@@ -445,7 +476,7 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     let phase_started = Instant::now();
     let ast = crate::xml_prelude::inject_if_used(
         ast,
-        with_crates.contains("xml"),
+        with_crates.contains("xml") || autoloaded("xml"),
         &mut prelude_inventory,
     );
     timings.record_since("xml-prelude", phase_started);
@@ -499,6 +530,7 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
         Ok(resolved) => resolved,
         Err(e) => {
             crate::progress::clear();
+            print_dynamic_include_report();
             errors::report(&e);
             process::exit(1);
         }
@@ -521,11 +553,62 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
             Ok(resolved) => resolved,
             Err(e) => {
                 crate::progress::clear();
+                print_dynamic_include_report();
                 errors::report(&e);
                 process::exit(1);
             }
         };
     timings.record_since("autoload-run", phase_started);
+    // `--dynamic-includes=report` wants the inventory, not a binary: every file the program can
+    // reach has been resolved by now (autoloaded classes included).
+    // `elephc.includes.toml` entries no site matched: stale/misspelled when their file is
+    // compiled (an error), another entry point's when it is not (a warning).
+    let program_files: HashSet<std::path::PathBuf> = std::iter::once(
+        Path::new(filename).canonicalize().unwrap_or_else(|_| Path::new(filename).to_path_buf()),
+    )
+    .chain(opcache_included_files.iter().cloned())
+    .chain(opcache_autoloaded_files.iter().cloned())
+    .collect();
+    let orphans = resolver::dynamic_include_orphan_entries(&program_files);
+    let describe = |entries: &[(std::path::PathBuf, String)]| {
+        entries
+            .iter()
+            .map(|(path, id)| format!("{} ({})", id, path.display()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    if resolver::dynamic_include_report_mode() {
+        crate::progress::clear();
+        print_dynamic_include_report();
+        for (label, entries) in [("STALE (file compiled, no such site)", &orphans.stale), ("unreached (file not in this program)", &orphans.unreached)] {
+            if !entries.is_empty() {
+                println!("\n# manifest entries matching no site, {}: {}", label, describe(entries));
+            }
+        }
+        process::exit(0);
+    }
+    if !orphans.unreached.is_empty() {
+        errors::report_warning(&errors::CompileWarning::new(
+            Span::new(0, 0),
+            &format!(
+                "include manifest entries for files this program does not compile (another entry point's, or unreachable code): {}",
+                describe(&orphans.unreached)
+            ),
+        ));
+    }
+    if !orphans.stale.is_empty() {
+        crate::progress::clear();
+        errors::report(&errors::CompileError::new(
+            Span::new(0, 0),
+            &format!(
+                "include manifest entries match no include/require site of their (compiled) file \
+                 (stale manifest or misspelled id; fix or remove them, \
+                 `elephc --dynamic-includes=report` lists the real sites): {}",
+                describe(&orphans.stale)
+            ),
+        ));
+        process::exit(1);
+    }
 
     // Inject the object-cast prelude (two pure elephc-PHP functions) only when the program
     // spells a `(object)` cast, so other binaries carry nothing.
@@ -549,6 +632,37 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
     };
     timings.record_since("object-cast-prelude", phase_started);
 
+    // Inject the PHP-written stdlib functions (`pack`, `unpack`, `strspn`, `version_compare`, ...)
+    // the program references. Runs AFTER `autoload::run` for the same reason as the object-cast
+    // prelude: vendor and PSR-4 class files only join the AST there, so a call to `\random_bytes`
+    // inside an autoloaded class was invisible to an earlier injection. The declarations are
+    // name-resolved on the way in because this position is past the pipeline's resolution pass.
+    crate::progress::phase("stdlib-prelude");
+    let phase_started = Instant::now();
+    let ast = match crate::stdlib_prelude::inject_if_used(ast, &mut prelude_inventory) {
+        Ok(injected) => injected,
+        Err(e) => {
+            crate::progress::clear();
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
+    timings.record_since("stdlib-prelude", phase_started);
+
+    // Inject the declared-return coercion helper LAST among the preludes, so its detection sees
+    // every injected declaration's return annotation too. `ir_lower` lowers a `return` whose static type
+    // does not prove a declared scalar contract (`mixed` into `: bool`, `?int`, `int|string`, ...)
+    // to a call of it; declaration reachability keeps it only when some reachable declaration has
+    // a scalar return annotation, so other binaries carry nothing.
+    let ast = match crate::return_coerce_prelude::inject(ast, &mut prelude_inventory) {
+        Ok(injected) => injected,
+        Err(e) => {
+            crate::progress::clear();
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
+
     // Desugar PHP's argument-introspection constructs (`func_num_args`, `func_get_args`,
     // `func_get_arg`) into plain PHP: every function scope that uses one gains the hidden
     // `mixed ...$__elephc_func_args` parameter, so the surplus positional arguments PHP
@@ -567,6 +681,20 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
         }
     };
     timings.record_since("func-args", phase_started);
+
+    // Lower variable variables (`$$name`, `${expr}`) into plain PHP over the frame's
+    // compile-time locals, before the AST optimizer and the checker see them.
+    crate::progress::phase("variable-variables");
+    let phase_started = Instant::now();
+    let ast = match crate::variable_variables::desugar(ast) {
+        Ok(desugared) => desugared,
+        Err(e) => {
+            crate::progress::clear();
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
+    timings.record_since("variable-variables", phase_started);
 
     // Complete the OPcache script manifest now that all three groups exist, and re-render the
     // manifest-dependent functions injected above against it. This is a pure substitution of
@@ -853,4 +981,11 @@ fn compile_inner(config: CliConfig, repl_output: Option<&str>) {
         emit_asm,
         timings: &mut timings,
     });
+}
+
+/// Prints the `--dynamic-includes=report` inventory, when that mode is on.
+fn print_dynamic_include_report() {
+    if resolver::dynamic_include_report_mode() {
+        print!("{}", resolver::render_dynamic_include_report());
+    }
 }

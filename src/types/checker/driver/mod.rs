@@ -32,6 +32,7 @@ use super::builtin_enums::inject_builtin_enums;
 use super::builtin_interfaces::{apply_implicit_stringable_interfaces, inject_builtin_interfaces};
 use super::builtin_iterators::{inject_builtin_iterators, patch_builtin_generator_signatures};
 use super::builtin_json::{inject_builtin_json_interfaces, patch_builtin_json_signatures};
+use super::builtin_native_interfaces::inject_builtin_native_interfaces;
 use super::builtin_spl_classes::{
     inject_builtin_spl_classes, patch_builtin_spl_storage_signatures,
 };
@@ -130,7 +131,7 @@ pub(super) fn check_types_impl(
         let key = php_symbol_key(&class.name);
         if !seen_classes.insert(key) {
             errors.push(CompileError::new(
-                crate::span::Span::dummy(),
+                class.span,
                 &format!("Duplicate class declaration: {}", class.name),
             ));
             continue;
@@ -248,6 +249,12 @@ pub(super) fn check_types_impl(
     if let Err(error) = inject_builtin_json_interfaces(&mut interface_map, &mut class_map) {
         errors.extend(error.flatten());
     }
+    // UnitEnum/BackedEnum (implicit on every enum), Serializable, SessionHandlerInterface.
+    if let Err(error) =
+        inject_builtin_native_interfaces(program, &mut interface_map, &mut class_map)
+    {
+        errors.extend(error.flatten());
+    }
     // Pay-for-use, because the checker's walk over these 41 classes is 27 ms — 54% of the
     // type-check phase of a trivial program. See `program_may_reference_spl` for the measurement
     // and for why under-detecting here is a readable compile error rather than a miscompile.
@@ -280,6 +287,11 @@ pub(super) fn check_types_impl(
     ) {
         errors.extend(error.flatten());
     }
+    super::schema::validation::apply_implicit_tostring_return_types(
+        &mut class_map,
+        &mut flattened_classes,
+        &interface_map,
+    );
     checker.declared_classes = class_map.keys().cloned().collect();
     checker.declared_interfaces = interface_map.keys().cloned().collect();
     checker.declared_traits = declared_traits.clone();
@@ -383,6 +395,9 @@ pub(super) fn check_types_impl(
         }
     }
     checker.box_untyped_interface_method_params();
+    // Before any function body is inferred: `function go(A $a) { return $a->m(); }` is typed
+    // from the family return its overrides can share, not from one override's declaration.
+    checker.unify_override_family_returns();
     report_class_id_inventory(&checker);
     errors.extend(validate_deferred_declaration_defaults(
         &mut checker,
@@ -409,6 +424,10 @@ pub(super) fn check_types_impl(
     patch_builtin_generator_signatures(&mut checker);
     patch_builtin_spl_storage_signatures(&mut checker);
     patch_magic_method_signatures(&mut checker);
+    // A declared `public function __toString(): string` makes the class `Stringable` before any
+    // body or call is checked, so `f(Stringable $s)` accepts it at the first top-level pass.
+    // Untyped `__toString` methods join after the method pass infers their return (below).
+    apply_implicit_stringable_interfaces(&mut checker.classes);
 
     checker.prescan_extern_decls(program, &mut errors);
 
@@ -438,11 +457,73 @@ pub(super) fn check_types_impl(
     // into method-checkable units here — their signatures already live in `checker.classes`.
     let mut methods_to_check = flattened_classes.clone();
     methods_to_check.extend(flatten_enum_methods(program, &flattened_enums));
+    let method_errors_start = errors.len();
     checker.type_check_methods_until_stable(&methods_to_check, &mut errors)?;
     patch_builtin_spl_storage_signatures(&mut checker);
     apply_implicit_stringable_interfaces(&mut checker.classes);
 
-    let (final_global_env, final_top_level_errors) = checker.check_top_level_program(program);
+    // The initial top-level pass, and every function body it resolved, ran before any method
+    // return type was inferred, so a call whose receiver is itself a call result
+    // (`$m->a()->b($v)`, the fluent style, or `$x = $m->a(); $x->b($v);`) saw the `Int`
+    // placeholder as its receiver and taught `b` nothing. A later pass that does resolve the
+    // receiver specializes `b`'s untyped parameters from `$v` — after `b`'s body was last
+    // checked against the narrower types, so the body and its call sites disagreed about the
+    // parameter and the property it fills (a string list holding a boxed array printed `""`, or
+    // a pointer as an int), silently. So function bodies are re-checked once the method pass
+    // has return types, and whenever the top level or a function body still changes a class or
+    // function signature, the method bodies, the function bodies and the top level all run
+    // again, until none of them moves.
+    let mut final_rounds_remaining = (methods_to_check.len().max(1) * 2) + 1;
+    let mut oscillation = super::fixpoint_trace::OscillationDetector::new("outer");
+    let (final_global_env, final_top_level_errors) = loop {
+        let classes_before = checker.classes.clone();
+        let functions_before = checker.functions.clone();
+        let statics_before = checker.static_local_declared_types.clone();
+        checker.recheck_resolved_function_bodies();
+        checker.widen_dynamic_only_passthrough_returns();
+        let outcome = checker.check_top_level_program(program);
+        if super::fixpoint_trace::enabled() {
+            super::fixpoint_trace::report_class_changes(
+                &format!("outer round (remaining {final_rounds_remaining}) functions+top level"),
+                std::time::Duration::ZERO,
+                &classes_before,
+                &checker.classes,
+            );
+            super::fixpoint_trace::report_function_changes(
+                "outer round functions",
+                &functions_before,
+                &checker.functions,
+            );
+        }
+        // The builtin SPL storage patch below re-pins fields such as
+        // `CallbackFilterIterator::$callback` before every method pass, so a round that only
+        // moved a pinned field changes nothing the next round reads. Compare modulo the patch:
+        // otherwise a constructor call that widens the pinned field keeps the loop alternating
+        // until the oscillation detector refuses the program. The classes the top level left
+        // are kept as they are.
+        let classes_after = checker.classes.clone();
+        patch_builtin_spl_storage_signatures(&mut checker);
+        let patched_after = std::mem::replace(&mut checker.classes, classes_after);
+        let stabilized = patched_after == classes_before
+            && checker.functions == functions_before
+            && checker.static_local_declared_types == statics_before;
+        if stabilized || final_rounds_remaining == 0 {
+            break outcome;
+        }
+        if let Some(message) = oscillation.record(
+            &classes_before,
+            &patched_after,
+            Some((&functions_before, &checker.functions)),
+        ) {
+            errors.push(CompileError::new(crate::span::Span::dummy(), &message));
+            return Err(CompileError::from_many(errors));
+        }
+        final_rounds_remaining -= 1;
+        errors.truncate(method_errors_start);
+        checker.type_check_methods_until_stable(&methods_to_check, &mut errors)?;
+        patch_builtin_spl_storage_signatures(&mut checker);
+        apply_implicit_stringable_interfaces(&mut checker.classes);
+    };
     for (initial_errors, final_errors) in initial_top_level_errors
         .into_iter()
         .zip(final_top_level_errors.into_iter())
@@ -538,6 +619,57 @@ mod tests {
         assert!(!class.static_method_impl_classes.contains_key("statik"));
         assert_eq!(class.method_declaring_classes.get("instance").map(String::as_str), Some("State"));
         assert_eq!(class.static_method_declaring_classes.get("statik").map(String::as_str), Some("State"));
+    }
+
+    /// The outer method/function/top-level fixpoint must converge when a method's untyped
+    /// variadic is both promoted to the descriptor container (a first-class callable inside a
+    /// method body) and called with a string from the top level.
+    ///
+    /// The method pass promoted `is`'s collector to `array<mixed>`, the top-level re-check joined
+    /// the `'api/*'` call site back into `array<string>` (`Str` absorbs `Mixed` in the coercion
+    /// join), and the two alternated until the round budget ran out; on a codebase with thousands
+    /// of classes that budget is thousands of rounds. The collector must end as the wider `array<mixed>`, the only type the
+    /// descriptor invoker and both call sites agree on.
+    #[test]
+    fn promoted_method_variadic_is_not_narrowed_back_by_a_top_level_call() {
+        let source = r#"<?php
+class Req {
+    public function is(...$patterns) {
+        foreach ($patterns as $p) { if ($p === "api/x") return true; }
+        return false;
+    }
+}
+class Mw {
+    public function check(Req $r) {
+        $f = $r->is(...);
+        return $f("api/x");
+    }
+}
+$g = fn (Req $r) => $r->is('api/*');
+var_dump($g(new Req()));
+var_dump((new Mw())->check(new Req()));
+"#;
+        let tokens = crate::lexer::tokenize(source).expect("tokenize");
+        let program = crate::parser::parse(&tokens).expect("parse");
+        let program = crate::name_resolver::resolve(program).expect("name resolve");
+        let checked = crate::types::checker::check_types(
+            &program,
+            crate::codegen_support::platform::Target::new(
+                crate::codegen_support::platform::Platform::MacOS,
+                crate::codegen_support::platform::Arch::AArch64,
+            ),
+        )
+        .expect("check");
+        let is_sig = checked
+            .classes
+            .get("Req")
+            .and_then(|class| class.methods.get("is"))
+            .expect("Req::is signature");
+        assert_eq!(
+            is_sig.params.last().map(|(_, ty)| ty.clone()),
+            Some(crate::types::PhpType::Array(Box::new(crate::types::PhpType::Mixed))),
+            "the promoted collector must stay array<mixed>"
+        );
     }
 
     /// Class ids must not depend on HashMap iteration order.

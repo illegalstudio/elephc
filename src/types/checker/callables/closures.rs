@@ -60,6 +60,12 @@ impl Checker {
         }
 
         let mut closure_env = env.clone();
+        // A possibly undefined capture arrives as `mixed` (see `condition_edges`).
+        for cap in captures {
+            if self.capture_may_be_undefined(cap, span) {
+                closure_env.insert(cap.clone(), PhpType::Mixed);
+            }
+        }
         let mut param_types = Vec::new();
         let mut param_type_exprs = Vec::new();
         let mut defaults = Vec::new();

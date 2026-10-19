@@ -169,7 +169,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             // Before `leave_closure`, for the reason the function arm documents: a struct
             // literal's fields are evaluated after the statements above it.
             let new_variadic_type = variadic_type.map(|ty| pass.transform_type(ty, span));
-            let new_return_type = return_type.map(|ty| pass.transform_type(ty, span));
+            let new_return_type = return_type.map(|ty| pass.transform_return_type(ty, span));
             pass.leave_closure();
             ExprKind::Closure {
                 params: new_params,
@@ -194,7 +194,10 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             once,
             required,
         } => ExprKind::IncludeValue {
-            path: Box::new(walk_expr(*path, pass)),
+            path: Box::new({
+                let walked = walk_expr(*path, pass);
+                pass.transform_include_path(walked, span)
+            }),
             once,
             required,
         },
@@ -335,6 +338,9 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
         },
         ExprKind::YieldFrom(inner) => ExprKind::YieldFrom(Box::new(walk_expr(*inner, pass))),
     };
+    if matches!(kind, ExprKind::IncludeValue { .. }) {
+        return pass.transform_include_value(Expr { kind, span });
+    }
     Expr { kind, span }
 }
 

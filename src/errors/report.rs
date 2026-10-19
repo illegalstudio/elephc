@@ -23,7 +23,8 @@ use super::{CompileError, CompileWarning};
 ///
 /// Recursively prints any related errors attached to the main error.
 pub fn print_error(error: &CompileError) {
-    let plain = format_diagnostic("error", &error.file, error.span, &error.message);
+    let file = diagnostic_file(&error.file, error.span);
+    let plain = format_diagnostic("error", &file, error.span, &error.message);
     if crate::progress::is_decorated() {
         eprintln!(
             "{} {}",
@@ -44,7 +45,8 @@ pub fn print_error(error: &CompileError) {
 /// - With line and column: `warning[line:col]: message`
 /// - With no location metadata: `warning: message`
 pub fn print_warning(warning: &CompileWarning) {
-    let plain = format_diagnostic("warning", &None, warning.span, &warning.message);
+    let file = diagnostic_file(&None, warning.span);
+    let plain = format_diagnostic("warning", &file, warning.span, &warning.message);
     if crate::progress::is_decorated() {
         eprintln!(
             "{} {}",
@@ -54,6 +56,19 @@ pub fn print_warning(warning: &CompileWarning) {
     } else {
         eprintln!("{}", plain);
     }
+}
+
+/// The file a diagnostic names: the one the error was tagged with, else the file its span was
+/// lexed from (`Span::source_path`). Checker and later diagnostics only carry a span, so this is
+/// what puts `file:line:col` on an error inside an included or autoloaded file.
+fn diagnostic_file(file: &Option<String>, span: crate::span::Span) -> Option<String> {
+    if file.is_some() {
+        return file.clone();
+    }
+    if span.line == 0 {
+        return None;
+    }
+    span.source_path()
 }
 
 /// Builds the plain `kind[location]: message` diagnostic text shared by both
@@ -96,6 +111,19 @@ mod tests {
     fn format_diagnostic_line_col_only() {
         let msg = format_diagnostic("warning", &None, Span::new(3, 5), "bad");
         assert_eq!(msg, "warning[3:5]: bad");
+    }
+
+    /// A span lexed from a registered file names that file even when the error was not tagged.
+    #[test]
+    fn diagnostic_file_falls_back_to_the_span_source() {
+        let span = Span::new_in_source(4, 2, 9_001);
+        Span::register_source_path(9_001, "vendor/a/B.php");
+        assert_eq!(diagnostic_file(&None, span).as_deref(), Some("vendor/a/B.php"));
+        assert_eq!(
+            diagnostic_file(&Some("x.php".to_string()), span).as_deref(),
+            Some("x.php")
+        );
+        assert_eq!(diagnostic_file(&None, Span::new_in_source(4, 2, 9_002)), None);
     }
 
     /// Verifies diagnostics omit the location brackets when no location is available.

@@ -95,6 +95,22 @@ pub(super) fn lower_strict_eq(
         emit_pointer_compare(ctx, lhs, rhs, is_equal)?;
         return store_if_result(ctx, inst);
     }
+    // `$this->items === null` / `self::$cache === null` on an untyped null-defaulted property
+    // later assigned an array: such slots keep the plain array representation and encode PHP
+    // null as a null container pointer (see `untyped_property_value_needs_nullable_storage`),
+    // so the comparison must test that pointer instead of folding to "different types".
+    let null_container_operand = match (&lhs_ty, &rhs_ty) {
+        (container, PhpType::Void | PhpType::Never) if is_nullable_container(container) => Some(lhs),
+        (PhpType::Void | PhpType::Never, container) if is_nullable_container(container) => Some(rhs),
+        _ => None,
+    };
+    if let Some(container) = null_container_operand {
+        super::predicates::emit_is_null_result(ctx, container)?;
+        if !is_equal {
+            emit_invert_bool_result(ctx);
+        }
+        return store_if_result(ctx, inst);
+    }
     if lhs_ty != rhs_ty {
         emit_bool_literal(ctx, !is_equal);
         return store_if_result(ctx, inst);
@@ -1399,6 +1415,24 @@ fn emit_string_eq_call(
 }
 
 /// Emits a concrete boolean value into the integer result register.
+/// Whether a concrete value of this representation can carry PHP null as a null (or
+/// null-sentinel) container pointer.
+fn is_nullable_container(ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable | PhpType::Object(_))
+}
+
+/// Flips the 0/1 boolean in the integer result register.
+fn emit_invert_bool_result(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("eor x0, x0, #1");                          // turn the null test into its `!==` complement
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("xor rax, 1");                              // turn the null test into its `!==` complement
+        }
+    }
+}
+
 fn emit_bool_literal(ctx: &mut FunctionContext<'_>, value: bool) {
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), i64::from(value));
 }

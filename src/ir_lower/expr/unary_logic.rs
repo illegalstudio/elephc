@@ -167,9 +167,13 @@ pub(super) fn lower_logical_binary(
     let lhs = lower_expr(ctx, left);
     let lhs = ctx.truthy_consuming(lhs, Some(left.span));
     let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
+    // The right operand runs on one edge only, so a local it initializes (`$ok || $b = f()`)
+    // is initialized after the merge only if it already was, exactly as for `?:`.
+    let split_initialized = ctx.initialized_slots_snapshot();
     let rhs_block = ctx.builder.create_named_block("logical.rhs", Vec::new());
     let const_block = ctx.builder.create_named_block("logical.const", Vec::new());
     let merge = ctx.builder.create_named_block("logical.merge", Vec::new());
+    let mut join = crate::ir_lower::stmt::LazyBranchJoin::begin(ctx, merge);
     let (then_target, else_target) = match op {
         BinOp::And => (rhs_block, const_block),
         BinOp::Or => (const_block, rhs_block),
@@ -184,17 +188,32 @@ pub(super) fn lower_logical_binary(
     });
 
     ctx.builder.position_at_end(rhs_block);
+    ctx.restore_initialized_slots(split_initialized.clone());
+    join.enter_edge(ctx);
     let rhs = lower_expr(ctx, right);
     let rhs = ctx.truthy_consuming(rhs, Some(right.span));
     store_value_into_temp(ctx, &temp_name, PhpType::Bool, rhs, expr.span);
-    branch_to(ctx, merge);
+    let rhs_reachable = !ctx.builder.insertion_block_is_terminated();
+    let rhs_initialized = ctx.initialized_slots_snapshot();
+    join.exit_edge(ctx);
 
     ctx.builder.position_at_end(const_block);
+    ctx.restore_initialized_slots(split_initialized.clone());
+    join.enter_edge(ctx);
     let const_value = emit_bool_literal(ctx, matches!(op, BinOp::Or), Some(expr.span));
     store_value_into_temp(ctx, &temp_name, PhpType::Bool, const_value, expr.span);
-    branch_to(ctx, merge);
+    let const_reachable = !ctx.builder.insertion_block_is_terminated();
+    let const_initialized = ctx.initialized_slots_snapshot();
+    join.exit_edge(ctx);
 
-    ctx.builder.position_at_end(merge);
+    join.finish(ctx, expr.span);
+    ctx.restore_initialized_slots(merge_initialized_slots_for_expr(
+        &split_initialized,
+        rhs_initialized,
+        rhs_reachable,
+        const_initialized,
+        const_reachable,
+    ));
     take_owned_temp(ctx, &temp_name, expr.span)
 }
 

@@ -27,6 +27,7 @@ use crate::parser::ast::{
 use crate::types::{CheckResult, ClassInfo, FunctionSig, InterfaceInfo, PhpType};
 
 mod metadata;
+mod virtual_abi;
 mod runtime_features;
 mod eval_aot;
 /// Read by `builtin_datetime`, which decides whether a module's eval fragments can reach the
@@ -95,6 +96,9 @@ fn lower_on_compiler_stack(
     web: bool,
 ) -> Result<Module, LoweringError> {
     super::diagnostics::begin_collection();
+    super::maybe_undefined::install(&check_result.maybe_undefined);
+    super::expr::install_escaping_ref_params(&check_result.escaping_ref_params);
+    super::expr::install_static_local_declared_types(&check_result.static_local_declared_types);
     let mut module = Module::new(target);
     module.source_path = source_path.map(canonical_source_path);
     module.web = web;

@@ -480,6 +480,7 @@ pub(super) fn lower_load_array_elem_ref_cell(
     inst: &Instruction,
 ) -> Result<()> {
     let create_missing = inst.op == Op::LoadArrayElemRefCell;
+    let mode = ElemRefMode::Load { create_missing };
     let array = expect_operand(inst, 0)?;
     let index = expect_operand(inst, 1)?;
     let array_ty = ctx.value_php_type(array)?;
@@ -494,10 +495,10 @@ pub(super) fn lower_load_array_elem_ref_cell(
         super::iterators::convert_loaded_indexed_source_to_hash(ctx);
         ctx.store_result_value(array)?;
         receiver.store_back_container_writeback(ctx, array)?;
-        return lower_hash_elem_ref_cell(ctx, inst, array, index, true);
+        return lower_hash_elem_ref_cell(ctx, inst, array, index, mode);
     }
     if matches!(array_ty.codegen_repr(), PhpType::AssocArray { .. }) {
-        return lower_hash_elem_ref_cell(ctx, inst, array, index, create_missing);
+        return lower_hash_elem_ref_cell(ctx, inst, array, index, mode);
     }
     if matches!(array_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
         let receiver = ReceiverPlace::resolve(ctx, array)?;
@@ -505,10 +506,10 @@ pub(super) fn lower_load_array_elem_ref_cell(
         separate_shared_mixed_array_receiver(ctx, &receiver, array)?;
         return match ctx.emitter.target.arch {
             Arch::AArch64 => lower_load_mixed_array_elem_ref_cell_aarch64(
-                ctx, inst, array, index, create_missing,
+                ctx, inst, array, index, mode,
             ),
             Arch::X86_64 => lower_load_mixed_array_elem_ref_cell_x86_64(
-                ctx, inst, array, index, create_missing,
+                ctx, inst, array, index, mode,
             ),
         };
     }
@@ -530,17 +531,17 @@ fn lower_hash_elem_ref_cell(
     inst: &Instruction,
     hash: ValueId,
     key: ValueId,
-    create_missing: bool,
+    mode: ElemRefMode,
 ) -> Result<()> {
     let receiver = ReceiverPlace::resolve(ctx, hash)?;
     receiver.require_writable("hash element reference")?;
     receiver.reload_local_value(ctx, hash)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            lower_hash_elem_ref_cell_aarch64(ctx, hash, key, &receiver, create_missing)?
+            lower_hash_elem_ref_cell_aarch64(ctx, hash, key, &receiver, mode)?
         }
         Arch::X86_64 => {
-            lower_hash_elem_ref_cell_x86_64(ctx, hash, key, &receiver, create_missing)?
+            lower_hash_elem_ref_cell_x86_64(ctx, hash, key, &receiver, mode)?
         }
     }
     store_ref_cell_pointer_result(ctx, inst)
@@ -552,7 +553,7 @@ fn lower_hash_elem_ref_cell_aarch64(
     hash: ValueId,
     key: ValueId,
     receiver: &ReceiverPlace,
-    create_missing: bool,
+    mode: ElemRefMode,
 ) -> Result<()> {
     let found = ctx.next_label("hash_elem_ref_found");
     let done = ctx.next_label("hash_elem_ref_done");
@@ -566,7 +567,7 @@ fn lower_hash_elem_ref_cell_aarch64(
     abi::emit_call_label(ctx.emitter, "__rt_hash_get");
     ctx.emitter.instruction(&format!("cbnz x4, {found}"));                      // skip insertion when the requested key already exists
 
-    if create_missing {
+    if mode.creates_missing() {
         receiver.reprepare_consuming_storeback(ctx, hash)?;
         crate::codegen::literal_defaults::emit_boxed_null_literal_to_result(ctx);
         abi::emit_push_reg(ctx.emitter, "x0");
@@ -591,7 +592,7 @@ fn lower_hash_elem_ref_cell_aarch64(
 
     ctx.emitter.label(&found);
     ctx.emitter.instruction("add x0, x4, #24");                                 // address the entry's low value word for reference promotion
-    abi::emit_call_label(ctx.emitter, "__rt_hash_entry_make_reference");
+    emit_entry_reference_publish(ctx, mode)?;
     ctx.emitter.label(&done);
     Ok(())
 }
@@ -602,7 +603,7 @@ fn lower_hash_elem_ref_cell_x86_64(
     hash: ValueId,
     key: ValueId,
     receiver: &ReceiverPlace,
-    create_missing: bool,
+    mode: ElemRefMode,
 ) -> Result<()> {
     let found = ctx.next_label("hash_elem_ref_found");
     let done = ctx.next_label("hash_elem_ref_done");
@@ -617,7 +618,7 @@ fn lower_hash_elem_ref_cell_x86_64(
     ctx.emitter.instruction("test r8, r8");                                     // check whether the requested key already exists
     ctx.emitter.instruction(&format!("jnz {found}"));                           // preserve an existing entry without overwriting its value
 
-    if create_missing {
+    if mode.creates_missing() {
         receiver.reprepare_consuming_storeback(ctx, hash)?;
         crate::codegen::literal_defaults::emit_boxed_null_literal_to_result(ctx);
         abi::emit_push_reg(ctx.emitter, "rax");
@@ -642,7 +643,7 @@ fn lower_hash_elem_ref_cell_x86_64(
 
     ctx.emitter.label(&found);
     ctx.emitter.instruction("lea rdi, [r8 + 24]");                              // address the entry's low value word for reference promotion
-    abi::emit_call_label(ctx.emitter, "__rt_hash_entry_make_reference");
+    emit_entry_reference_publish(ctx, mode)?;
     ctx.emitter.label(&done);
     Ok(())
 }
@@ -769,13 +770,14 @@ fn lower_load_mixed_array_elem_ref_cell_aarch64(
     inst: &Instruction,
     array: ValueId,
     index: ValueId,
-    create_missing: bool,
+    mode: ElemRefMode,
 ) -> Result<()> {
     let indexed_label = ctx.next_label("mixed_array_elem_ref_indexed");
     let hash_label = ctx.next_label("mixed_array_elem_ref_hash");
     let fetch_label = ctx.next_label("mixed_array_elem_ref_fetch");
     let missing_label = ctx.next_label("mixed_array_elem_ref_missing");
     let null_label = ctx.next_label("mixed_array_elem_ref_null");
+    let autoviv_label = ctx.next_label("mixed_array_elem_ref_autoviv");
     let done_label = ctx.next_label("mixed_array_elem_ref_done");
     ctx.load_value_to_reg(array, "x0")?;
     abi::emit_push_reg(ctx.emitter, "x0");
@@ -784,6 +786,10 @@ fn lower_load_mixed_array_elem_ref_cell_aarch64(
     ctx.emitter.instruction(&format!("b.eq {indexed_label}"));                  // promote indexed children before exposing an element reference
     ctx.emitter.instruction("cmp x0, #5");                                      // runtime tag 5 identifies an associative child container
     ctx.emitter.instruction(&format!("b.eq {hash_label}"));                     // normalize existing hashes to Mixed entry storage
+    if mode.creates_missing() {
+        ctx.emitter.instruction("cmp x0, #8");                                  // runtime tag 8 identifies a null child slot
+        ctx.emitter.instruction(&format!("b.eq {autoviv_label}"));              // a write through a null child creates that child array, as PHP does
+    }
     ctx.emitter.instruction(&format!("b {null_label}"));                        // non-array Mixed payloads have no addressable element
 
     ctx.emitter.label(&indexed_label);
@@ -807,12 +813,12 @@ fn lower_load_mixed_array_elem_ref_cell_aarch64(
     abi::emit_call_label(ctx.emitter, "__rt_hash_get");
     ctx.emitter.instruction(&format!("cbz x4, {missing_label}"));               // handle a missing key according to address-of versus foreach semantics
     ctx.emitter.instruction("add x0, x4, #24");                                 // pass the matched hash entry's value-low address
-    abi::emit_call_label(ctx.emitter, "__rt_hash_entry_make_reference");
+    emit_entry_reference_publish(ctx, mode)?;
     abi::emit_pop_reg(ctx.emitter, "x9");
     ctx.emitter.instruction(&format!("b {done_label}"));                        // return the managed tag-11 reference cell
 
     ctx.emitter.label(&missing_label);
-    if create_missing {
+    if mode.creates_missing() {
         ctx.emitter.instruction("ldr x9, [sp]");                                // reload the owning Mixed box before inserting the missing key
         ctx.emitter.instruction("ldr x0, [x9, #8]");                            // recover the normalized hash pointer from its box
         abi::emit_push_reg(ctx.emitter, "x0");
@@ -833,7 +839,7 @@ fn lower_load_mixed_array_elem_ref_cell_aarch64(
         abi::emit_pop_reg(ctx.emitter, "x0");
         abi::emit_call_label(ctx.emitter, "__rt_hash_get");
         ctx.emitter.instruction("add x0, x4, #24");                             // address the newly inserted entry payload
-        abi::emit_call_label(ctx.emitter, "__rt_hash_entry_make_reference");
+        emit_entry_reference_publish(ctx, mode)?;
         abi::emit_pop_reg(ctx.emitter, "x9");
         ctx.emitter.instruction(&format!("b {done_label}"));                    // return the new managed entry cell
     } else {
@@ -843,8 +849,16 @@ fn lower_load_mixed_array_elem_ref_cell_aarch64(
         ctx.emitter.instruction(&format!("b {done_label}"));                    // foreach source lookup leaves the hash unchanged
     }
 
+    if mode.creates_missing() {
+        ctx.emitter.label(&autoviv_label);
+        ctx.emitter.instruction("ldr x9, [sp]");                                // reload the owning Mixed box of the null child
+        ctx.emitter.instruction(&format!("cbz x9, {null_label}"));              // an absent box has nowhere to publish a new child array
+        emit_autovivified_child_hash(ctx);
+        ctx.emitter.instruction(&format!("b {fetch_label}"));                   // publish the new child and resolve the requested entry
+    }
     ctx.emitter.label(&null_label);
     abi::emit_pop_reg(ctx.emitter, "x9");
+    emit_scalar_container_bind_error(ctx, mode);
     abi::emit_load_int_immediate(ctx.emitter, "x0", 0);
     ctx.emitter.label(&done_label);
     store_ref_cell_pointer_result(ctx, inst)
@@ -856,13 +870,14 @@ fn lower_load_mixed_array_elem_ref_cell_x86_64(
     inst: &Instruction,
     array: ValueId,
     index: ValueId,
-    create_missing: bool,
+    mode: ElemRefMode,
 ) -> Result<()> {
     let indexed_label = ctx.next_label("mixed_array_elem_ref_indexed");
     let hash_label = ctx.next_label("mixed_array_elem_ref_hash");
     let fetch_label = ctx.next_label("mixed_array_elem_ref_fetch");
     let missing_label = ctx.next_label("mixed_array_elem_ref_missing");
     let null_label = ctx.next_label("mixed_array_elem_ref_null");
+    let autoviv_label = ctx.next_label("mixed_array_elem_ref_autoviv");
     let done_label = ctx.next_label("mixed_array_elem_ref_done");
     ctx.load_value_to_reg(array, "rax")?;
     abi::emit_push_reg(ctx.emitter, "rax");
@@ -871,6 +886,10 @@ fn lower_load_mixed_array_elem_ref_cell_x86_64(
     ctx.emitter.instruction(&format!("je {indexed_label}"));                    // promote indexed children before exposing an element reference
     ctx.emitter.instruction("cmp rax, 5");                                      // runtime tag 5 identifies an associative child container
     ctx.emitter.instruction(&format!("je {hash_label}"));                       // normalize existing hashes to Mixed entry storage
+    if mode.creates_missing() {
+        ctx.emitter.instruction("cmp rax, 8");                                  // runtime tag 8 identifies a null child slot
+        ctx.emitter.instruction(&format!("je {autoviv_label}"));                // a write through a null child creates that child array, as PHP does
+    }
     ctx.emitter.instruction(&format!("jmp {null_label}"));                      // non-array Mixed payloads have no addressable element
 
     ctx.emitter.label(&indexed_label);
@@ -892,12 +911,12 @@ fn lower_load_mixed_array_elem_ref_cell_x86_64(
     ctx.emitter.instruction("test r8, r8");                                     // a missing key cannot supply a managed entry cell
     ctx.emitter.instruction(&format!("jz {missing_label}"));                    // handle a missing key according to address-of versus foreach semantics
     ctx.emitter.instruction("lea rdi, [r8 + 24]");                              // pass the matched hash entry's value-low address
-    abi::emit_call_label(ctx.emitter, "__rt_hash_entry_make_reference");
+    emit_entry_reference_publish(ctx, mode)?;
     abi::emit_pop_reg(ctx.emitter, "r10");
     ctx.emitter.instruction(&format!("jmp {done_label}"));                      // return the managed tag-11 reference cell
 
     ctx.emitter.label(&missing_label);
-    if create_missing {
+    if mode.creates_missing() {
         ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                    // reload the owning Mixed box before inserting the missing key
         ctx.emitter.instruction("mov rax, QWORD PTR [r10 + 8]");                // recover the normalized hash pointer from its box
         abi::emit_push_reg(ctx.emitter, "rax");
@@ -918,7 +937,7 @@ fn lower_load_mixed_array_elem_ref_cell_x86_64(
         abi::emit_pop_reg(ctx.emitter, "rdi");
         abi::emit_call_label(ctx.emitter, "__rt_hash_get");
         ctx.emitter.instruction("lea rdi, [r8 + 24]");                          // address the newly inserted entry payload
-        abi::emit_call_label(ctx.emitter, "__rt_hash_entry_make_reference");
+        emit_entry_reference_publish(ctx, mode)?;
         abi::emit_pop_reg(ctx.emitter, "r10");
         ctx.emitter.instruction(&format!("jmp {done_label}"));                  // return the new managed entry cell
     } else {
@@ -928,8 +947,17 @@ fn lower_load_mixed_array_elem_ref_cell_x86_64(
         ctx.emitter.instruction(&format!("jmp {done_label}"));                  // foreach source lookup leaves the hash unchanged
     }
 
+    if mode.creates_missing() {
+        ctx.emitter.label(&autoviv_label);
+        ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                    // reload the owning Mixed box of the null child
+        ctx.emitter.instruction("test r10, r10");                               // an absent box has nowhere to publish a new child array
+        ctx.emitter.instruction(&format!("jz {null_label}"));                   // keep the no-element answer for an absent box
+        emit_autovivified_child_hash(ctx);
+        ctx.emitter.instruction(&format!("jmp {fetch_label}"));                 // publish the new child and resolve the requested entry
+    }
     ctx.emitter.label(&null_label);
     abi::emit_pop_reg(ctx.emitter, "r10");
+    emit_scalar_container_bind_error(ctx, mode);
     abi::emit_load_int_immediate(ctx.emitter, "rax", 0);
     ctx.emitter.label(&done_label);
     store_ref_cell_pointer_result(ctx, inst)
@@ -944,6 +972,102 @@ fn ref_cell_element_size(elem_ty: &PhpType) -> i64 {
         16
     } else {
         8
+    }
+}
+
+/// What an element reference lowering does with the entry it resolves.
+#[derive(Clone, Copy)]
+enum ElemRefMode {
+    /// `LoadArrayElemRefCell` / `...Existing`: promote the entry and return its cell.
+    Load { create_missing: bool },
+    /// `BindArrayElemRefCell`: make the entry hold this existing cell (`$a[$k] = &$x`).
+    Bind(ValueId),
+}
+
+impl ElemRefMode {
+    /// Whether a missing key (or a null child container) is created rather than reported.
+    fn creates_missing(self) -> bool {
+        match self {
+            Self::Load { create_missing } => create_missing,
+            Self::Bind(_) => true,
+        }
+    }
+}
+
+/// Emits the final step on a resolved hash entry whose value-low address is in the first
+/// argument register: promote it to a reference cell, or bind it to the given one.
+fn emit_entry_reference_publish(ctx: &mut FunctionContext<'_>, mode: ElemRefMode) -> Result<()> {
+    match mode {
+        ElemRefMode::Load { .. } => {
+            abi::emit_call_label(ctx.emitter, "__rt_hash_entry_make_reference");
+        }
+        ElemRefMode::Bind(cell) => {
+            let cell_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+            ctx.load_value_to_reg(cell, cell_reg)?;
+            abi::emit_call_label(ctx.emitter, "__rt_hash_entry_bind_reference");
+        }
+    }
+    Ok(())
+}
+
+/// Allocates the empty boxed-Mixed hash that replaces a null child container on a write path.
+fn emit_autovivified_child_hash(ctx: &mut FunctionContext<'_>) {
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 16);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        runtime_value_tag(&PhpType::Mixed) as i64,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_hash_new");
+}
+
+/// A binding has no element to fall back on when the child container holds a scalar: PHP raises
+/// "Cannot use a scalar value as an array" there, and returning no cell would drop the binding.
+fn emit_scalar_container_bind_error(ctx: &mut FunctionContext<'_>, mode: ElemRefMode) {
+    if matches!(mode, ElemRefMode::Bind(_)) {
+        abi::emit_call_label(ctx.emitter, "__rt_reference_bind_scalar_container_error");
+    }
+}
+
+/// Lowers `BindArrayElemRefCell`: `$array[index] = &$x` over boxed-Mixed hash storage.
+///
+/// Shares every container step with the address-of lowering above (separation, packed-to-hash
+/// promotion, missing-key insertion, null-child autovivification); only the final entry step
+/// differs, binding the source's existing cell instead of promoting the entry's own value.
+pub(super) fn lower_bind_array_elem_ref_cell(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let index = expect_operand(inst, 1)?;
+    let cell = expect_operand(inst, 2)?;
+    let mode = ElemRefMode::Bind(cell);
+    let array_ty = ctx.value_php_type(array)?;
+    match array_ty.codegen_repr() {
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => {
+            let receiver = ReceiverPlace::resolve(ctx, array)?;
+            receiver.require_writable("runtime-shaped array element reference binding")?;
+            receiver.reload_local_value(ctx, array)?;
+            receiver.prepare_consuming_storeback(ctx, array)?;
+            ctx.load_value_to_result(array)?;
+            super::iterators::convert_loaded_indexed_source_to_hash(ctx);
+            ctx.store_result_value(array)?;
+            receiver.store_back_container_writeback(ctx, array)?;
+            lower_hash_elem_ref_cell(ctx, inst, array, index, mode)
+        }
+        PhpType::AssocArray { .. } => lower_hash_elem_ref_cell(ctx, inst, array, index, mode),
+        PhpType::Mixed | PhpType::Union(_) => {
+            let receiver = ReceiverPlace::resolve(ctx, array)?;
+            receiver.reload_local_value(ctx, array)?;
+            separate_shared_mixed_array_receiver(ctx, &receiver, array)?;
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => lower_load_mixed_array_elem_ref_cell_aarch64(ctx, inst, array, index, mode),
+                Arch::X86_64 => lower_load_mixed_array_elem_ref_cell_x86_64(ctx, inst, array, index, mode),
+            }
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "bind_array_elem_ref_cell on {other:?} storage, which cannot hold a reference cell"
+        ))),
     }
 }
 

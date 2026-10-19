@@ -24,6 +24,19 @@ pub(super) fn lower_offset_unset(ctx: &mut FunctionContext<'_>, inst: &Instructi
         return Err(CodegenIrError::invalid_module("offset_unset expects a boxed PHP array"));
     }
     ctx.load_value_to_reg(cell, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+    // PHP's `unset($null[$k])` is a silent no-op (an absent dimension reads as null too).
+    let done = ctx.next_label("offset_unset_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [x0]");                            // inspect the boxed value's runtime tag
+            ctx.emitter.instruction("cmp x9, #8");                              // runtime tag 8 = null
+            ctx.emitter.instruction(&format!("b.eq {done}"));                   // nothing to remove from null
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp QWORD PTR [rdi], 8");                  // runtime tag 8 = null
+            ctx.emitter.instruction(&format!("je {done}"));                     // nothing to remove from null
+        }
+    }
     abi::emit_call_label(ctx.emitter, "__rt_mixed_cell_promote_to_hash");
     let valid = ctx.next_label("offset_unset_array");
     match ctx.emitter.target.arch {
@@ -35,7 +48,7 @@ pub(super) fn lower_offset_unset(ctx: &mut FunctionContext<'_>, inst: &Instructi
             ctx.emitter.instruction(&format!("jnz {valid}"));                   // a nonzero result is the cell's installed unique hash
         }
     }
-    super::exceptions::emit_type_error(ctx, "Cannot unset offset in a non-array variable");
+    super::exceptions::emit_error(ctx, "Cannot unset offset in a non-array variable");
     ctx.emitter.label(&valid);
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     match ctx.emitter.target.arch {
@@ -49,5 +62,6 @@ pub(super) fn lower_offset_unset(ctx: &mut FunctionContext<'_>, inst: &Instructi
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_hash_unset");
+    ctx.emitter.label(&done);
     Ok(())
 }

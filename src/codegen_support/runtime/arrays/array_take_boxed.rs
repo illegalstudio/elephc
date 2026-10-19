@@ -144,6 +144,16 @@ fn emit_take(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_hash_unset");
     abi::load_at_offset(emitter, result, 48);
     match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction("cbnz x0, __rt_array_take_rewound"), // shift renumbers below instead
+        Arch::X86_64 => {
+            emitter.instruction("test rax, rax");                               // only pop rewinds the automatic index
+            emitter.instruction("jnz __rt_array_take_rewound");                 // shift renumbers below instead
+        }
+    }
+    emit_pop_rewind_next_index(emitter, 16, 32, 40, "__rt_array_take");
+    emitter.label("__rt_array_take_rewound");
+    abi::load_at_offset(emitter, result, 48);
+    match emitter.target.arch {
         Arch::AArch64 => emitter.instruction("cbz x0, __rt_array_take_done"),   // pop leaves every surviving key unchanged
         Arch::X86_64 => {
             emitter.instruction("test rax, rax");                               // inspect whether surviving numeric keys need rebuilding
@@ -262,6 +272,7 @@ fn emit_hash_pop(emitter: &mut Emitter) {
     abi::load_at_offset(emitter, arg1, 16);
     abi::load_at_offset(emitter, arg2, 24);
     abi::emit_call_label(emitter, "__rt_hash_unset");
+    emit_pop_rewind_next_index(emitter, 8, 16, 24, "__rt_hash_pop_boxed");
     abi::emit_jump(emitter, "__rt_hash_pop_boxed_done");
 
     emitter.label("__rt_hash_pop_boxed_empty");
@@ -280,6 +291,48 @@ fn emit_hash_pop(emitter: &mut Emitter) {
     abi::load_at_offset(emitter, result, 32);
     abi::emit_frame_restore(emitter, 48);
     abi::emit_return(emitter);
+}
+
+/// PHP's `array_pop` rewinds the automatic index when it removed the last appended integer key
+/// (`$a = [1, 2]; array_pop($a); $a[] = 3;` is `[1, 3]`): `nNextFreeElement` drops by one when
+/// the removed key is an integer equal to it minus one. Reads the hash pointer and the removed
+/// key words from FP-relative slots; clobbers only scratch registers.
+fn emit_pop_rewind_next_index(
+    emitter: &mut Emitter,
+    hash_offset: usize,
+    key_lo_offset: usize,
+    key_hi_offset: usize,
+    prefix: &str,
+) {
+    let done = format!("{prefix}_rewind_done");
+    let next_index = super::hash_layout::NEXT_INDEX_OFFSET;
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::load_at_offset(emitter, "x9", key_hi_offset);
+            emitter.instruction("cmn x9, #1");                                  // integer keys carry the negative-one length sentinel
+            emitter.instruction(&format!("b.ne {done}"));                       // a string key leaves the automatic index alone
+            abi::load_at_offset(emitter, "x9", hash_offset);
+            abi::load_at_offset(emitter, "x10", key_lo_offset);
+            emitter.instruction(&format!("ldr x11, [x9, #{next_index}]"));      // read the persistent next integer key
+            emitter.instruction("sub x11, x11, #1");                            // the key the last append would have used
+            emitter.instruction("cmp x10, x11");                                // was the removed key exactly that one?
+            emitter.instruction(&format!("b.ne {done}"));                       // an older key keeps the counter
+            emitter.instruction(&format!("str x10, [x9, #{next_index}]"));      // rewind so the next append reuses the removed key
+        }
+        Arch::X86_64 => {
+            abi::load_at_offset(emitter, "r10", key_hi_offset);
+            emitter.instruction("cmp r10, -1");                                 // integer keys carry the negative-one length sentinel
+            emitter.instruction(&format!("jne {done}"));                        // a string key leaves the automatic index alone
+            abi::load_at_offset(emitter, "r10", hash_offset);
+            abi::load_at_offset(emitter, "r11", key_lo_offset);
+            emitter.instruction(&format!("mov rcx, QWORD PTR [r10 + {next_index}]")); // read the persistent next integer key
+            emitter.instruction("sub rcx, 1");                                  // the key the last append would have used
+            emitter.instruction("cmp r11, rcx");                                // was the removed key exactly that one?
+            emitter.instruction(&format!("jne {done}"));                        // an older key keeps the counter
+            emitter.instruction(&format!("mov QWORD PTR [r10 + {next_index}], r11")); // rewind so the next append reuses the removed key
+        }
+    }
+    emitter.label(&done);
 }
 
 #[cfg(test)]

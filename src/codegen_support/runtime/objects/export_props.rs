@@ -258,6 +258,7 @@ pub fn emit_obj_prop_value(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_obj_prop_value_null");                       // PHP omits it, so report PHP null
     emitter.instruction("ldr x1, [x14]");                                       // load the slot low word (the payload)
     emitter.instruction("ldr x0, [x13, #24]");                                  // load the property's runtime value tag
+    crate::codegen_support::sentinels::emit_deref_reference_property_slot(emitter, "x0", "x1", "x2");
     emit_resolve_tagged_scalar_property_tag(emitter, "x0", "x2");
 
     emitter.label("__rt_obj_prop_value_tagged");
@@ -330,6 +331,7 @@ fn emit_obj_prop_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_obj_prop_value_null_x86");                     // PHP omits it, so report PHP null
     emitter.instruction("mov rdi, QWORD PTR [r10]");                            // load the slot low word (the payload)
     emitter.instruction("mov rax, QWORD PTR [rax + 24]");                       // load the property's runtime value tag
+    crate::codegen_support::sentinels::emit_deref_reference_property_slot(emitter, "rax", "rdi", "rsi");
     emit_resolve_tagged_scalar_property_tag(emitter, "rax", "rsi");
 
     emitter.label("__rt_obj_prop_value_tagged_x86");

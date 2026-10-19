@@ -222,6 +222,8 @@ pub fn flatten_classes(
                         merged_methods,
                         name,
                     );
+                let merged_constants =
+                    crate::magic_constants::bind_trait_class_constant_values(merged_constants, name);
                 flattened.push(FlattenedClass {
                     name: name.clone(),
                     span: stmt.span,
@@ -304,6 +306,8 @@ pub fn flatten_classes(
                         merged_methods,
                         name,
                     );
+                let merged_constants =
+                    crate::magic_constants::bind_trait_class_constant_values(merged_constants, name);
                 flattened_enums.insert(
                     name.clone(),
                     FlattenedClass {

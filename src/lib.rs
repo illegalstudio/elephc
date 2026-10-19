@@ -82,6 +82,8 @@ pub mod opcache_prelude;
 pub mod shared_ini_prelude;
 /// PHP `(object)` cast standard-library prelude injection.
 pub mod object_cast_prelude;
+/// Return-type coercion helper prelude (declared scalar returns, coercive and strict modes).
+pub mod return_coerce_prelude;
 /// Optimizer passes.
 pub mod optimize;
 /// Parser for PHP syntax.
@@ -117,8 +119,12 @@ pub mod types;
 /// Conditionally-injected timezone-introspection prelude (extern + marshalling).
 pub mod tz_prelude;
 pub mod xml_prelude;
+/// Conditionally-injected PHP-written stdlib functions (`pack`, `unpack`, `version_compare`, ...).
+pub mod stdlib_prelude;
 /// Conditionally-injected `var_export` prelude (elephc-PHP rendering function).
 pub mod var_export_prelude;
+/// Variable-variable (`$$name`, `${expr}`) desugaring against the frame's compile-time locals.
+pub mod variable_variables;
 /// Conditionally-injected PHP version-surface prelude (`zend_version`, `php_sapi_name`,
 /// `ini_restore`).
 pub mod version_prelude;

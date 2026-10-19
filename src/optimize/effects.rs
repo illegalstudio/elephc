@@ -90,8 +90,12 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         StmtKind::ExprStmt(expr)
         | StmtKind::ConstDecl { value: expr, .. }
         | StmtKind::StaticVar { init: expr, .. }
-        | StmtKind::ListUnpack { value: expr, .. }
-        | StmtKind::Return(Some(expr)) => expr_effect(expr),
+        | StmtKind::ListUnpack { value: expr, .. } => expr_effect(expr),
+        // A `return` checked against a declared scalar type can throw `TypeError` in this frame.
+        StmtKind::Return(Some(expr)) if super::exception_flow::return_check_may_throw(expr) => {
+            expr_effect(expr).with_may_throw()
+        }
+        StmtKind::Return(Some(expr)) => expr_effect(expr),
         StmtKind::Throw(expr) => expr_effect(expr).with_side_effects().with_may_throw(),
         StmtKind::Assign { value, .. }
         | StmtKind::TypedAssign { value, .. }
@@ -101,6 +105,11 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         // The source can call PHP or resolve a property, and rebinding can retire a target
         // whose destructor throws or changes globals. Keep the enclosing exception boundary.
         StmtKind::RefAssign { source, .. } => expr_effect(source)
+            .with_side_effects()
+            .with_may_throw()
+            .with_writes_globals(),
+        StmtKind::RefAssignPlace { target, source } => expr_effect(target)
+            .combine(expr_effect(source))
             .with_side_effects()
             .with_may_throw()
             .with_writes_globals(),
@@ -406,10 +415,11 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
                 combine_effects(patterns.iter().map(expr_effect)).combine(expr_effect(value))
             })))
             .combine(
+                // Without `default`, an unmatched subject throws `UnhandledMatchError`.
                 default
                     .as_ref()
                     .map(|expr| expr_effect(expr))
-                    .unwrap_or(Effect::PURE),
+                    .unwrap_or_else(|| Effect::PURE.with_side_effects().with_may_throw()),
             ),
         ExprKind::ArrayAccess { array, index } => {
             let evaluated = expr_effect(array).combine(expr_effect(index));

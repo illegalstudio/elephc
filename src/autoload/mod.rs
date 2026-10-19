@@ -12,6 +12,7 @@
 //!   loaded, which `crate::opcache_prelude` bakes into the OPcache script manifest.
 
 mod alias;
+pub mod prelude_probe;
 mod index;
 mod interpret;
 mod registry;
@@ -135,7 +136,19 @@ fn run_collecting_included_on_compiler_stack(
                 let canonical = path.canonicalize().unwrap_or(path);
                 if included.insert(canonical.clone()) {
                     let (loaded, loaded_includes) =
-                        load_autoloaded_file(&canonical, base_dir, defines)?;
+                        match load_autoloaded_file(&canonical, base_dir, defines) {
+                            Ok(loaded) => loaded,
+                            // `--dynamic-includes=report` inventories the whole reachable
+                            // program: a class file that fails for an unrelated reason is
+                            // listed and skipped rather than ending the walk.
+                            Err(error) if crate::resolver::dynamic_include_report_mode() => {
+                                crate::resolver::dynamic_includes::record_skipped_file(
+                                    &canonical, &error,
+                                );
+                                continue;
+                            }
+                            Err(error) => return Err(error),
+                        };
                     nested_includes.extend(loaded_includes);
                     insertions.push((stmt_idx, loaded));
                 }
@@ -210,13 +223,18 @@ fn load_autoloaded_file(
     })?;
     let file_label = path.display().to_string();
     let source_mode = crate::source::SourceMode::from_path(path);
-    let tokens = crate::lexer::tokenize_with_mode(&content, source_mode)
-        .map_err(|e| e.with_file(file_label.clone()))?;
+    // Its own source identity, so its spans differ from every other file's and a diagnostic
+    // raised anywhere in it can name it (`Span::source_path`).
+    let source_id = Span::fresh_source_id();
+    Span::register_source_path(source_id, file_label.clone());
+    let tokens =
+        crate::lexer::tokenize_with_mode_and_source_id(&content, source_mode, source_id)
+            .map_err(|e| e.with_file(file_label.clone()))?;
     let parsed = crate::parser::parse_with_mode(&tokens, source_mode)
         .map_err(|e| e.with_file(file_label.clone()))?;
     let parsed =
         crate::source::finalize_physical_program(parsed, &content, path, source_mode, defines)?;
-    let (resolved, nested_includes) = crate::resolver::resolve_collecting_includes_with_defines(
+    let (resolved, nested_includes) = crate::resolver::resolve_collecting_includes_continuing(
         parsed,
         path.parent().unwrap_or(base_dir),
         defines,

@@ -37,17 +37,28 @@ pub fn emit_file_get_contents(emitter: &mut Emitter) {
     let fd_off = locals_start;                // +0: fd
     let heap_off = locals_start + 8;          // +8: heap buffer ptr
     let bread_off = locals_start + 16;        // +16: bytes read
-    let frame_size = (locals_start + 24 + 16 + 15) & !15; // +24 locals + 16 saved regs, aligned
+    let quiet_off = locals_start + 24;        // +24: 1 when an internal caller reports the failure itself
+    let frame_size = (locals_start + 32 + 16 + 15) & !15; // +32 locals + 16 saved regs, aligned
     let save_offset = frame_size - 16;
 
     emitter.blank();
     emitter.comment("--- runtime: file_get_contents ---");
+    // Every entry branches to a GLOBAL body label: on Mach-O each global symbol starts its own
+    // atom, and a branch to a local label in another atom carries no relocation, so the
+    // linker's dead-strip dropped the body when only the quiet entry was referenced.
+    emitter.label_global("__rt_file_get_contents_quiet");
+    emitter.instruction("mov x3, #1");                                          // internal callers (copy()) report their own failure
+    emitter.instruction("b __rt_file_get_contents_body");                       // share the PHP-visible body
     emitter.label_global("__rt_file_get_contents");
+    emitter.instruction("mov x3, #0");                                          // PHP-visible calls warn when the open fails
+    emitter.instruction("b __rt_file_get_contents_body");                       // share the body (cross-atom safe: global target)
+    emitter.label_global("__rt_file_get_contents_body");
 
     // -- set up stack frame --
     emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack for stat buf + locals + frame
     emitter.instruction(&format!("stp x29, x30, [sp, #{}]", save_offset));      // save frame pointer and return address
     emitter.instruction(&format!("add x29, sp, #{}", save_offset));             // establish new frame pointer
+    emitter.instruction(&format!("str x3, [sp, #{}]", quiet_off));              // save the quiet flag across the cstr call
 
     // -- null-terminate the filename --
     emitter.instruction("bl __rt_cstr");                                        // convert filename to C string, x0=cstr path
@@ -93,6 +104,15 @@ pub fn emit_file_get_contents(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x1, [sp, #{}]", heap_off));               // buffer pointer for read
     emitter.instruction("ldr x2, [sp, #8]");                                    // file size = bytes to read
     emitter.syscall(3);
+    // A failed read() (a directory opened O_RDONLY reads EISDIR) leaves the errno (Darwin,
+    // carry set) or -errno (Linux) in x0; taken as a length it exposed uninitialised heap
+    // bytes. PHP returns an empty string for a read that fails after the open succeeded.
+    if plat.needs_cmp_before_error_branch() {
+        emitter.instruction("cmp x0, #0");                                      // Linux: a negative result is -errno
+    }
+    emitter.instruction(&plat.branch_on_syscall_success("__rt_file_get_contents_read_ok")); // keep the byte count of a successful read
+    emitter.instruction("mov x0, #0");                                          // a failed read yields the empty string, never errno bytes
+    emitter.label("__rt_file_get_contents_read_ok");
     emitter.instruction(&format!("str x0, [sp, #{}]", bread_off));              // save actual bytes read
 
     // -- close the file --
@@ -109,9 +129,12 @@ pub fn emit_file_get_contents(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 
     emitter.label("__rt_file_get_contents_fail");
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", quiet_off));              // reload the quiet flag
+    emitter.instruction("cbnz x9, __rt_file_get_contents_fail_quiet");          // internal callers emit their own warning
     abi::emit_symbol_address(emitter, "x1", "_diag_file_get_contents_failed_msg");
     emitter.instruction(&format!("mov x2, #{}", FILE_GET_CONTENTS_FAILED_WARNING.len())); // pass the warning byte length to the diagnostic helper
     emitter.instruction("bl __rt_diag_warning");                                // emit or suppress the file_get_contents() failure warning
+    emitter.label("__rt_file_get_contents_fail_quiet");
     emitter.instruction("mov x1, #0");                                          // return an empty string pointer on read-path failure
     emitter.instruction("mov x2, #0");                                          // return an empty string length on read-path failure
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address on the failure path
@@ -134,14 +157,22 @@ fn emit_file_get_contents_linux_x86_64(emitter: &mut Emitter) {
     let fd_off = 24usize;
     let heap_off = 32usize;
     let bread_off = 40usize;
+    let quiet_off = 48usize; // just above the stat buffer: frame_size >= stat_buf + 48
 
     emitter.blank();
     emitter.comment("--- runtime: file_get_contents ---");
+    emitter.label_global("__rt_file_get_contents_quiet");
+    emitter.instruction("mov r9d, 1");                                          // internal callers (copy()) report their own failure
+    emitter.instruction("jmp __rt_file_get_contents_body_x86");                 // share the PHP-visible body
     emitter.label_global("__rt_file_get_contents");
+    emitter.instruction("xor r9d, r9d");                                        // PHP-visible calls warn when the open fails
+    emitter.instruction("jmp __rt_file_get_contents_body_x86");                 // share the body (global target, safe under section GC)
+    emitter.label_global("__rt_file_get_contents_body_x86");
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while file_get_contents uses stat and I/O spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the temporary path, size, fd, and heap pointer slots
     emitter.instruction(&format!("sub rsp, {}", frame_size));                   // reserve an aligned Linux stat buffer plus local spill slots for the read-path helper
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r9", quiet_off));   // save the quiet flag across the cstr call
 
     emitter.instruction("call __rt_cstr");                                      // convert the elephc filename in rax/rdx into a null-terminated C path in rax
     emitter.instruction(&format!("mov QWORD PTR [rbp - {}], rax", path_off));   // preserve the C path pointer across the libc stat(), open(), read(), and close() calls
@@ -173,6 +204,10 @@ fn emit_file_get_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rsi, QWORD PTR [rbp - {}]", heap_off));   // pass the owned destination buffer as the second libc read() argument
     emitter.instruction(&format!("mov rdx, QWORD PTR [rbp - {}]", size_slot_off)); // pass the requested byte count from the stat-derived file size to libc read()
     emitter.instruction("call read");                                           // read the entire file payload into the owned elephc string buffer through libc read()
+    emitter.instruction("test rax, rax");                                       // libc read() returns -1 (ssize_t) on failure, e.g. EISDIR
+    emitter.instruction("jns __rt_file_get_contents_read_ok_x86");              // keep the byte count of a successful read
+    emitter.instruction("xor eax, eax");                                        // a failed read yields the empty string, never a negative length
+    emitter.label("__rt_file_get_contents_read_ok_x86");
     emitter.instruction(&format!("mov QWORD PTR [rbp - {}], rax", bread_off));  // preserve the actual read byte count for the final elephc string result pair
 
     emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {}]", fd_off));     // reload the file descriptor before closing the successfully opened source file
@@ -185,9 +220,12 @@ fn emit_file_get_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the owned file contents as an elephc string
 
     emitter.label("__rt_file_get_contents_fail");
+    emitter.instruction(&format!("cmp QWORD PTR [rbp - {}], 0", quiet_off));    // internal callers emit their own warning
+    emitter.instruction("jne __rt_file_get_contents_fail_quiet_x86");           // skip the PHP-visible warning for them
     abi::emit_symbol_address(emitter, "rdi", "_diag_file_get_contents_failed_msg"); // pass the file_get_contents() warning text pointer to the diagnostic helper
     emitter.instruction(&format!("mov esi, {}", FILE_GET_CONTENTS_FAILED_WARNING.len())); // pass the warning byte length to the diagnostic helper
     emitter.instruction("call __rt_diag_warning");                              // emit or suppress the file_get_contents() failure warning
+    emitter.label("__rt_file_get_contents_fail_quiet_x86");
     emitter.instruction("xor eax, eax");                                        // return an empty string pointer when the file could not be stated or opened
     emitter.instruction("xor edx, edx");                                        // return an empty string length when the file could not be stated or opened
     emitter.instruction(&format!("add rsp, {}", frame_size));                   // release the temporary Linux stat buffer and local spill slots on the failure path

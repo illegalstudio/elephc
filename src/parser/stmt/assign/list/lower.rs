@@ -8,7 +8,8 @@
 //! Key details:
 //! - Lowering preserves assignment target spans and skips invalid append targets that cannot be represented safely.
 
-use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
+use crate::names::{Name, NameKind};
+use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind};
 use crate::span::Span;
 
 use super::{ListEntry, ListPattern, ListTarget};
@@ -28,6 +29,101 @@ pub(super) fn lower_list_unpack(pattern: ListPattern, value: Expr, span: Span) -
     let source = lowerer.bind_temp(value);
     lowerer.lower_pattern(&pattern, source);
     Stmt::new(StmtKind::Synthetic(lowerer.stmts), span)
+}
+
+/// Lowers `<pattern> = <value>` used as a loop condition into the loop-head statements
+/// documented on `parse_destructuring_loop_condition`.
+pub(super) fn lower_loop_condition_unpack(
+    pattern: ListPattern,
+    value: Expr,
+    span: Span,
+) -> Vec<Stmt> {
+    let temp = crate::names::generated_local_name(&format!(
+        "__elephc_loop_cond_{}_{}",
+        span.line, span.col
+    ));
+    let temp_expr = Expr::new(ExprKind::Variable(temp.clone()), span);
+    let builtin_check = |builtin: &str| {
+        Expr::new(
+            ExprKind::FunctionCall {
+                name: Name::from_parts(NameKind::FullyQualified, vec![builtin.to_string()]),
+                args: vec![temp_expr.clone()],
+            },
+            span,
+        )
+    };
+    let unpackable = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(builtin_check("is_array")),
+            op: BinOp::Or,
+            right: Box::new(builtin_check("is_object")),
+        },
+        span,
+    );
+    let mut null_targets = Vec::new();
+    lower_null_pattern(&pattern, span, &mut null_targets);
+    let unpack = lower_list_unpack(pattern, temp_expr.clone(), span);
+    vec![
+        Stmt::new(StmtKind::Assign { name: temp, value }, span),
+        Stmt::new(
+            StmtKind::If {
+                condition: unpackable,
+                then_body: vec![unpack],
+                elseif_clauses: Vec::new(),
+                else_body: Some(null_targets),
+            },
+            span,
+        ),
+        Stmt::new(
+            StmtKind::If {
+                condition: Expr::new(ExprKind::Not(Box::new(temp_expr)), span),
+                then_body: vec![Stmt::new(StmtKind::Break(1), span)],
+                elseif_clauses: Vec::new(),
+                else_body: None,
+            },
+            span,
+        ),
+    ]
+}
+
+/// Appends, in source order, the statements that set every target of `pattern` to `null`:
+/// what PHP does when the destructured value is neither an array nor an object. A key that
+/// is not a literal is still evaluated (as PHP does) before its target is written.
+fn lower_null_pattern(pattern: &ListPattern, span: Span, stmts: &mut Vec<Stmt>) {
+    for entry in &pattern.entries {
+        let ListEntry::Target { key, target } = entry else {
+            continue;
+        };
+        if let Some(key) = key {
+            if !matches!(
+                key.kind,
+                ExprKind::StringLiteral(_)
+                    | ExprKind::IntLiteral(_)
+                    | ExprKind::FloatLiteral(_)
+                    | ExprKind::BoolLiteral(_)
+                    | ExprKind::Null
+                    | ExprKind::Variable(_)
+                    | ExprKind::ConstRef(_)
+                    | ExprKind::ClassConstant { .. }
+            ) {
+                stmts.push(Stmt::new(StmtKind::ExprStmt(key.clone()), span));
+            }
+        }
+        let null = Expr::new(ExprKind::Null, span);
+        match target {
+            ListTarget::Nested(nested) => lower_null_pattern(nested, span, stmts),
+            ListTarget::Expr(expr) => {
+                if let Some(stmt) = lower_assignment_target(expr.clone(), null, span) {
+                    stmts.push(stmt);
+                }
+            }
+            ListTarget::Append(base) => {
+                if let Some(stmt) = lower_append_target(base.clone(), null, span) {
+                    stmts.push(stmt);
+                }
+            }
+        }
+    }
 }
 
 /// Returns `Some(vars)` if every entry in the pattern is a bare `$variable` with no key and

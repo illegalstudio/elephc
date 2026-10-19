@@ -106,7 +106,12 @@ pub(super) fn lower_boxed_usort(
 /// Selects places whose stable reference identity can be represented by existing EIR primitives.
 fn supported_place(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> bool {
     match &expr.kind {
-        ExprKind::Variable(_) | ExprKind::StaticPropertyAccess { .. } => true,
+        // A `static` local has no reference cell to alias; `ref_place_args` copies it into a
+        // hidden local first, which then reaches this path as a plain variable.
+        ExprKind::Variable(name) => {
+            ctx.local_kinds.get(name) != Some(&crate::ir::LocalKind::StaticLocal)
+        }
+        ExprKind::StaticPropertyAccess { .. } => true,
         ExprKind::PropertyAccess { object, property } => {
             let Some(ty) = ref_place_args::static_place_type(ctx, object) else { return false; };
             let PhpType::Object(class) = ty.codegen_repr() else { return false; };

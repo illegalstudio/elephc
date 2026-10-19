@@ -332,6 +332,9 @@ fn stmt_refs_listid(stmt: &Stmt) -> bool {
         StmtKind::ArrayAssign { index, value, .. } => {
             expr_refs_listid(index) || expr_refs_listid(value)
         }
+        StmtKind::RefAssignPlace { target, source } => {
+            expr_refs_listid(target) || expr_refs_listid(source)
+        }
         StmtKind::NestedArrayAssign { target, value } => {
             expr_refs_listid(target) || expr_refs_listid(value)
         }

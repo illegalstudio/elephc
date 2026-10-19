@@ -23,6 +23,8 @@ mod files;
 pub(crate) mod streams;
 #[path = "io/filesystem.rs"]
 mod filesystem;
+#[path = "io/file_open_failures.rs"]
+mod file_open_failures;
 #[path = "io/misc.rs"]
 mod misc;
 #[path = "io/stat_ext.rs"]

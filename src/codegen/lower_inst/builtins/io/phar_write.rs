@@ -59,6 +59,9 @@ pub(crate) fn lower_file_put_contents(
         Arch::AArch64 => lower_file_put_contents_arm64(ctx, path, data, flags, helper)?,
         Arch::X86_64 => lower_file_put_contents_x86_64(ctx, path, data, flags, helper)?,
     }
+    // The runtime answers `-1` for a destination it could not open or write; PHP's
+    // result is `false`, never `int(-1)`.
+    box_negative_int_or_false_result(ctx, "file_put_contents");
     store_if_result(ctx, inst)
 }
 
@@ -78,6 +81,7 @@ pub(super) fn lower_literal_phar_file_put_contents(
                 ctx.emitter.instruction("mov rax, -1");                         // unresolved phar write target returns failure
             }
         }
+        box_negative_int_or_false_result(ctx, "file_put_contents");
         return store_if_result(ctx, inst);
     }
     match ctx.emitter.target.arch {
@@ -106,6 +110,7 @@ pub(super) fn lower_literal_phar_file_put_contents(
             abi::emit_pop_reg(ctx.emitter, "rax");
         }
     }
+    box_negative_int_or_false_result(ctx, "file_put_contents");
     store_if_result(ctx, inst)
 }
 

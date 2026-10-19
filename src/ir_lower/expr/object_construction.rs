@@ -28,6 +28,26 @@ pub(super) fn lower_new_object(
             return emit_fixed_object_new(ctx, class_name.as_str(), operands, php_type, expr.span);
         }
     }
+    if php_symbol_key(class_name.as_str().trim_start_matches('\\')) == "reflectionfunction" {
+        if let [arg] = args {
+            // The checker accepts a string LITERAL (static metadata) or a Closure value. The
+            // Closure is passed through untouched so the reflector reads its runtime descriptor.
+            if !matches!(
+                arg.kind,
+                ExprKind::StringLiteral(_) | ExprKind::NamedArg { .. } | ExprKind::Spread(_)
+            ) {
+                let closure = lower_expr(ctx, arg);
+                let php_type = PhpType::Object(class_name.as_str().to_string());
+                return emit_fixed_object_new(
+                    ctx,
+                    class_name.as_str(),
+                    vec![closure.value],
+                    php_type,
+                    expr.span,
+                );
+            }
+        }
+    }
     if php_symbol_key(class_name.as_str().trim_start_matches('\\')) == "reflectionmethod" {
         if let Some(operands) = lower_reflection_method_constructor_operands(ctx, args) {
             let php_type = PhpType::Object(class_name.as_str().to_string());

@@ -8,7 +8,12 @@
 //! Key details:
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
+use crate::codegen_support::abi;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
+
+/// Mirrors `_diag_scandir_failed_msg` in the fixed runtime data; the length immediate passed
+/// to `__rt_diag_warning` is derived from it.
+pub(crate) const SCANDIR_FAILED_WARNING: &str = "Warning: scandir(): Failed to open directory\n";
 
 /// Emits the `__rt_scandir` runtime helper for listing directory entries.
 ///
@@ -56,7 +61,7 @@ pub fn emit_scandir(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the C path for the directory open
     emitter.bl_c("opendir");                                         // opendir(cstr), x0=DIR* or NULL
     emitter.instruction("str x0, [sp, #0]");                                    // save DIR pointer on stack
-    emitter.instruction("cbz x0, __rt_scandir_ret");                            // a missing directory must not reach readdir(NULL), which segfaults
+    emitter.instruction("cbz x0, __rt_scandir_open_failed");                    // a missing directory must not reach readdir(NULL), which segfaults
 
     // -- read directory entries in a loop --
     emitter.label("__rt_scandir_loop");
@@ -88,6 +93,16 @@ pub fn emit_scandir(emitter: &mut Emitter) {
     emitter.label("__rt_scandir_close");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload DIR pointer
     emitter.bl_c("closedir");                                        // closedir(DIR*)
+
+    emitter.instruction("b __rt_scandir_ret");                                  // skip the open-failure warning
+
+    // -- opendir() failed: PHP answers false, which the `array<string>` result type cannot
+    // carry (the checker rejects `array|false` in `array_diff()` and friends), so the empty
+    // array stands in for it and the failure is at least reported, never silent --
+    emitter.label("__rt_scandir_open_failed");
+    abi::emit_symbol_address(emitter, "x1", "_diag_scandir_failed_msg");
+    emitter.instruction(&format!("mov x2, #{}", SCANDIR_FAILED_WARNING.len())); // pass the warning byte length to the diagnostic helper
+    emitter.instruction("bl __rt_diag_warning");                                // emit or suppress the scandir() failure warning
 
     // -- return array pointer --
     emitter.label("__rt_scandir_ret");
@@ -125,7 +140,7 @@ fn emit_scandir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call opendir");                                        // open the directory stream through libc opendir()
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the DIR* handle across the readdir() loop and the final closedir() call
     emitter.instruction("test rax, rax");                                       // detect opendir() failure before entering the directory iteration loop
-    emitter.instruction("jz __rt_scandir_ret");                                 // return the empty result array when the directory stream cannot be opened
+    emitter.instruction("jz __rt_scandir_open_failed_x86");                     // return the empty result array when the directory stream cannot be opened
 
     emitter.label("__rt_scandir_loop");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the DIR* handle before asking libc for the next directory entry
@@ -150,6 +165,13 @@ fn emit_scandir_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_scandir_close");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the DIR* handle before closing the directory stream
     emitter.instruction("call closedir");                                       // close the directory stream through libc closedir()
+
+    emitter.instruction("jmp __rt_scandir_ret");                                // skip the open-failure warning
+
+    emitter.label("__rt_scandir_open_failed_x86");
+    abi::emit_symbol_address(emitter, "rdi", "_diag_scandir_failed_msg");       // pass the scandir() warning text pointer to the diagnostic helper
+    emitter.instruction(&format!("mov esi, {}", SCANDIR_FAILED_WARNING.len())); // pass the warning byte length to the diagnostic helper
+    emitter.instruction("call __rt_diag_warning");                              // emit or suppress the scandir() failure warning
 
     emitter.label("__rt_scandir_ret");
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return the destination string array pointer in the canonical x86_64 integer result register
@@ -186,8 +208,8 @@ mod tests {
                 .find("__rt_scandir_loop:")
                 .expect("scandir iterates the directory");
             let guard = &asm[open_at..loop_at];
-            let branches_away = guard.contains("cbz x0, __rt_scandir_ret")
-                || guard.contains("jz __rt_scandir_ret");
+            let branches_away = guard.contains("cbz x0, __rt_scandir_open_failed")
+                || guard.contains("jz __rt_scandir_open_failed_x86");
             assert!(
                 branches_away,
                 "{arch:?}: a null DIR* must skip the loop, or readdir(NULL) segfaults:\n{guard}"

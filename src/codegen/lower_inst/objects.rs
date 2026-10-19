@@ -172,6 +172,7 @@ mod property_store_values;
 mod typed_property_guards;
 mod instanceof_helpers;
 mod mixed_property_type_guard;
+mod property_hash_references;
 
 #[allow(unused_imports)]
 use fixed_new::*;
@@ -235,10 +236,11 @@ pub(super) use fiber_dynamic_entry::{
 pub(super) use fixed_new::lower_object_new;
 pub(super) use instanceof_entry::{lower_instanceof, lower_instanceof_dynamic};
 pub(super) use known_property_reads::{
-    lower_load_prop_ref_cell, lower_load_prop_ref_cell_checked, lower_prop_get,
+    lower_bind_prop_ref_cell, lower_load_prop_ref_cell, lower_load_prop_ref_cell_checked, lower_prop_get,
     lower_prop_initialized,
 };
 pub(super) use property_fetch_for_write::lower_prop_get_for_write;
+pub(super) use property_hash_references::lower_dynamic_prop_ref_cell;
 pub(super) use mixed_property_type_guard::{BOOL_TAG, OBJECT_TAG, RUNTIME_TAGS};
 pub(super) use property_store_values::{lower_packed_field_mixed_to_int, release_adopted_mixed_source};
 pub(super) use property_resolution::{

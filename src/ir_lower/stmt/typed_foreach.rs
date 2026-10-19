@@ -190,6 +190,22 @@ pub(super) fn lower_foreach(
     body: &[Stmt],
     loop_span: Span,
 ) {
+    // `foreach ($o->readonly as &$v)` (or an element of it, or an enum's `value`): php evaluates
+    // the receiver and throws "Cannot indirectly modify readonly property" before iterating.
+    // The throw does not terminate the block: the loop below still lowers (it is unreachable at
+    // run time) so the body's bindings stay on the same path as every later statement, which
+    // the backend's per-slot representation tracking relies on.
+    if value_by_ref {
+        if let Some((object, message)) =
+            crate::ir_lower::expr::readonly_by_ref_foreach_source(ctx, array)
+        {
+            let receiver = lower_expr(ctx, object);
+            if ctx.value_is_owning_temporary(receiver) {
+                crate::ir_lower::ownership::release_if_owned(ctx, receiver, Some(array.span));
+            }
+            super::lower_throw_access_error_expr(ctx, &message, array.span);
+        }
+    }
     // Apply the checker-computed loop header contract before lowering the source expression so
     // an iterated-and-mutated array is loaded with its stable payload representation.
     apply_loop_storage_contracts(ctx, loop_span, Some(array.span));
@@ -576,6 +592,32 @@ pub(crate) fn promote_by_ref_foreach_source(
     if matches!(source_ty, PhpType::Mixed | PhpType::Iterable | PhpType::Union(_)) {
         return Some(slot);
     }
+    // A PHP variable bound by reference (`$x = &$list`, `use (&$list)`) shares ONE cell with
+    // every other name of its reference set, and those names keep their own static type. The
+    // promotion below re-lays the shared payload out as a hash of boxed Mixed entries; a
+    // typed-element alias elsewhere would then read hash internals as packed ints or strings
+    // (or release the old layout with the new one's destructor). With Mixed elements the other
+    // names already dispatch on the runtime layout, so only typed elements are refused.
+    if ctx.is_ref_bound_local(name) && !is_synthetic_place_alias(name) {
+        let typed_elements = match &source_ty {
+            PhpType::Array(elem) => elem.codegen_repr() != PhpType::Mixed,
+            PhpType::AssocArray { value, .. } => value.codegen_repr() != PhpType::Mixed,
+            _ => false,
+        };
+        if typed_elements {
+            crate::ir_lower::diagnostics::refuse(
+                array.span,
+                &format!(
+                    "Unsupported by-reference iteration or element reference: ${name} is part of \
+                     a PHP reference set and is stored as {source_ty:?}; making its entries \
+                     referenceable would convert the shared storage to a hash of mixed while the \
+                     other names of the reference set keep the typed layout. Iterate or reference \
+                     the original variable, or give the array mixed elements"
+                ),
+            );
+            return None;
+        }
+    }
     if let PhpType::AssocArray { key, value } = source_ty {
         if value.codegen_repr() != PhpType::Mixed {
             let storage_ty = PhpType::AssocArray {
@@ -616,9 +658,14 @@ pub(crate) fn promote_by_ref_foreach_source(
     };
     // ArrayToHash consumes its input owner. Retain only a synthetic reference alias: an
     // ordinary local deliberately transfers its old owner into the conversion, while the
-    // alias must leave the property or parent element's owner intact until store-back.
+    // alias must leave the property or parent element's owner intact until store-back. A PHP
+    // variable bound by reference is NOT such an alias: its cell owns the payload exactly as a
+    // plain local's slot does, and the backend recognises `ArrayToHash(LoadRefCell(slot))`
+    // stored back into that slot as consuming the cell's previous owner. An extra retain there
+    // broke that pattern, and the store then released the old packed array with the hash
+    // destructor.
     let array_value = ctx.load_local(name, Some(array.span));
-    let array_value = if ctx.is_ref_bound_local(name) {
+    let array_value = if ctx.is_ref_bound_local(name) && is_synthetic_place_alias(name) {
         crate::ir_lower::ownership::acquire_if_refcounted(
             ctx,
             array_value,
@@ -834,4 +881,11 @@ fn retain_object_foreach_source(
         crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
     }
     retained
+}
+
+/// Whether `name` is a synthetic place alias minted for a property, static-property or element
+/// source, as opposed to a PHP variable the program bound by reference.
+fn is_synthetic_place_alias(name: &str) -> bool {
+    name.starts_with(crate::names::SYNTHETIC_PLACE_LOCAL_STEM)
+        && crate::names::is_generated_local_name(name)
 }

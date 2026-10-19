@@ -41,7 +41,9 @@ pub(super) fn stmt_fallback_reason(stmt: &Stmt) -> Option<EvalAotFallbackReason>
         StmtKind::Global { .. } | StmtKind::StaticVar { .. } => {
             Some(EvalAotFallbackReason::GlobalOrStatic)
         }
-        StmtKind::RefAssign { .. } => Some(EvalAotFallbackReason::ReferenceOrByRef),
+        StmtKind::RefAssign { .. } | StmtKind::RefAssignPlace { .. } => {
+            Some(EvalAotFallbackReason::ReferenceOrByRef)
+        }
         StmtKind::Foreach {
             array,
             value_by_ref,

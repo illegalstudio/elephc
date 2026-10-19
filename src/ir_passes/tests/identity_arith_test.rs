@@ -203,3 +203,26 @@ fn divide_by_zero_is_not_folded() {
     assert!(!changed, "x / 0 must be preserved to trap");
     assert_eq!(function.instructions[2].op, Op::IDiv);
 }
+
+/// `true * 1` must not fold onto the `bool` operand: the `i64` storage matches, but PHP's
+/// result is the INTEGER `1`, and redirecting the use changed its PHP type
+/// (`+true` printed `bool(true)`, `null * 1` printed `NULL`).
+#[test]
+fn mul_one_keeps_an_operand_of_another_php_type() {
+    let mut function = Function::new("bool_mul".to_string(), IrType::I64, PhpType::Int);
+    let flag;
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![(IrType::I64, PhpType::Bool)]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        flag = builder.block_param(entry, 0);
+        let one = builder.emit_const_i64(1);
+        let result = builder
+            .emit(Op::IMul, vec![flag, one], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+            .expect("mul result");
+        builder.terminate(Terminator::Return { value: Some(result) });
+    }
+    IdentityArith.run(&mut function, &mut DataPool::default());
+    assert_ne!(return_value(&function), Some(flag), "never returns the bool operand");
+}

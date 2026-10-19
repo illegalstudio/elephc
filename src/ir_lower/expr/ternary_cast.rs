@@ -10,6 +10,10 @@
 use super::*;
 
 /// Lowers a ternary expression with lazy branch evaluation.
+///
+/// Each branch is lowered and parked first; the merge temp is typed from the two lowered values
+/// (see [`PendingBranchValue`]), so a branch the pre-lowering estimate cannot name is never coerced
+/// into another branch's representation.
 pub(super) fn lower_ternary(
     ctx: &mut LoweringContext<'_, '_>,
     condition: &Expr,
@@ -19,12 +23,11 @@ pub(super) fn lower_ternary(
 ) -> LoweredValue {
     let cond = lower_expr(ctx, condition);
     let cond = ctx.truthy_consuming(cond, Some(condition.span));
-    let result_type = branch_merge_result_type(ctx, then_expr, else_expr, expr);
-    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let split_initialized = ctx.initialized_slots_snapshot();
     let then_block = ctx.builder.create_named_block("ternary.then", Vec::new());
     let else_block = ctx.builder.create_named_block("ternary.else", Vec::new());
     let merge = ctx.builder.create_named_block("ternary.merge", Vec::new());
+    let mut join = crate::ir_lower::stmt::LazyBranchJoin::begin(ctx, merge);
     ctx.builder.terminate(Terminator::CondBr {
         cond: cond.value,
         then_target: then_block,
@@ -35,19 +38,29 @@ pub(super) fn lower_ternary(
 
     ctx.builder.position_at_end(then_block);
     ctx.restore_initialized_slots(split_initialized.clone());
-    store_expr_into_temp(ctx, &temp_name, result_type.clone(), then_expr, expr.span);
-    let then_reachable = !ctx.builder.insertion_block_is_terminated();
-    let then_initialized = ctx.initialized_slots_snapshot();
-    branch_to(ctx, merge);
+    join.enter_edge(ctx);
+    let then_branch = lower_pending_branch(ctx, then_expr);
 
     ctx.builder.position_at_end(else_block);
     ctx.restore_initialized_slots(split_initialized.clone());
-    store_expr_into_temp(ctx, &temp_name, result_type, else_expr, expr.span);
-    let else_reachable = !ctx.builder.insertion_block_is_terminated();
-    let else_initialized = ctx.initialized_slots_snapshot();
-    branch_to(ctx, merge);
+    join.enter_edge(ctx);
+    let else_branch = lower_pending_branch(ctx, else_expr);
 
-    ctx.builder.position_at_end(merge);
+    let then_reachable = then_branch.is_some();
+    let else_reachable = else_branch.is_some();
+    let (temp_name, branches) = store_pending_branches(
+        ctx,
+        then_branch.into_iter().chain(else_branch).collect(),
+        merge,
+        Some(expr),
+        Some(&mut join),
+        expr.span,
+    );
+    let mut stored = branches.iter().map(|branch| branch.initialized().clone());
+    let then_initialized = if then_reachable { stored.next().unwrap_or_default() } else { HashSet::new() };
+    let else_initialized = if else_reachable { stored.next().unwrap_or_default() } else { HashSet::new() };
+
+    join.finish(ctx, expr.span);
     ctx.restore_initialized_slots(merge_initialized_slots_for_expr(
         &split_initialized,
         then_initialized,

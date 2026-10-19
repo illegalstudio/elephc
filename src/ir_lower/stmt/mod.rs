@@ -43,6 +43,7 @@ mod statement_basics;
 mod local_assignments;
 mod string_append;
 mod conditionals;
+pub(crate) use conditionals::LazyBranchJoin;
 mod loops;
 mod array_write_core;
 mod nested_array_writes;
@@ -91,6 +92,7 @@ pub(crate) use instance_property_writes::{
 };
 pub(super) use typed_foreach::coerce_typed_assign_value;
 pub(crate) use typed_foreach::promote_by_ref_foreach_source;
+pub(crate) use return_coercions::coerce_boxed_family_param;
 pub(super) use instance_property_writes::contextualize_property_array_value;
 pub(super) use property_array_writes::release_property_assignment_source_after_retaining_store;
 pub(super) use array_write_core::{
@@ -100,6 +102,8 @@ pub(crate) use array_write_core::{
     desugared_element_update, lower_array_assign_with_diagnosed_key,
 };
 pub(crate) use property_array_writes::lower_property_array_assign_with_diagnosed_key;
+pub(crate) use nested_array_writes::{lower_nested_assign_parent, nested_parent_is_write_through};
+pub(crate) use static_property_helpers::static_property_type;
 pub(crate) use static_property_writes::lower_static_property_array_assign_with_diagnosed_key;
 pub(super) use array_write_storage::{
     finish_indexed_array_local_write, load_array_local_for_write, prepare_indexed_array_local_write,
@@ -146,6 +150,9 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         StmtKind::Echo(expr) => lower_echo(ctx, expr, stmt.span),
         StmtKind::Assign { name, value } => lower_assign(ctx, name, value, stmt.span),
         StmtKind::RefAssign { target, source } => lower_ref_assign(ctx, target, source, stmt.span),
+        StmtKind::RefAssignPlace { target, source } => {
+            crate::ir_lower::expr::lower_ref_assign_place(ctx, target, source, stmt.span)
+        }
         StmtKind::If {
             condition,
             then_body,
@@ -197,6 +204,15 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
             name,
             value,
         } => lower_typed_assign(ctx, type_expr, name, value, stmt.span),
+        StmtKind::Foreach {
+            array,
+            key_var,
+            value_var,
+            value_by_ref,
+            body,
+        } if !*value_by_ref && foreach_source_is_static_local(ctx, array) => {
+            lower_foreach_over_static_snapshot(ctx, array, key_var.as_deref(), value_var, body, stmt.span)
+        }
         StmtKind::Foreach {
             array,
             key_var,
@@ -315,4 +331,47 @@ fn local_slot_is_convertible_here(ctx: &LoweringContext<'_, '_>, name: &str) -> 
             .local_slots
             .get(name)
             .is_some_and(|slot| ctx.slot_is_initialized(*slot))
+}
+
+/// Whether a by-value `foreach` iterates a `static` local directly.
+fn foreach_source_is_static_local(ctx: &LoweringContext<'_, '_>, array: &Expr) -> bool {
+    match &array.kind {
+        ExprKind::Variable(name) => {
+            ctx.local_kinds.get(name) == Some(&crate::ir::LocalKind::StaticLocal)
+                || ctx.local_uses_global_storage(name)
+        }
+        ExprKind::StaticPropertyAccess { .. } => true,
+        _ => false,
+    }
+}
+
+/// Lowers `foreach ($static as ...)` over a snapshot of the static, as PHP does.
+///
+/// A by-value `foreach` iterates the array as it was when the loop started: writes to the
+/// variable inside the body copy-on-write split away from the iterated array. A `static` local
+/// is read from its symbol on every access, so iterating it directly let the loop walk the
+/// elements its own body appended. A hidden local holding its own reference to
+/// the array is iterated instead, and released once the loop is done.
+fn lower_foreach_over_static_snapshot(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &Expr,
+    key_var: Option<&str>,
+    value_var: &str,
+    body: &[Stmt],
+    span: Span,
+) {
+    let read = crate::ir_lower::expr::lower_expr(ctx, array);
+    let php_type = static_property_helpers::normalize_value_php_type(ctx.builder.value_php_type(read.value));
+    let snapshot = ctx.declare_synthetic_php_local(php_type.clone());
+    ctx.store_local(&snapshot, read, php_type.clone(), Some(array.span));
+    let source = Expr::new(ExprKind::Variable(snapshot.clone()), array.span);
+    lower_foreach(ctx, &source, key_var, value_var, false, body, span);
+    let slot = ctx.declare_local(&snapshot, php_type);
+    ctx.emit_void(
+        Op::ReleaseLocalSlot,
+        Vec::new(),
+        Some(Immediate::LocalSlot(slot)),
+        Op::ReleaseLocalSlot.default_effects(),
+        Some(span),
+    );
 }

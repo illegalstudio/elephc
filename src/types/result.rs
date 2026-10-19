@@ -119,6 +119,12 @@ pub struct CheckResult {
     /// `(function-like scope, local name)` pairs for `string` locals that are a `++`/`--`
     /// target, so EIR lowering can give them boxed `Mixed` storage from their first store.
     pub string_incdec_locals: HashSet<(String, String)>,
+    /// The declared type the checker settled on for each written `static $x = [<array>];` local,
+    /// keyed by `(function-like scope, local name)`: the literal's own type while every write
+    /// keeps it, boxed PHP `array` otherwise (see `Checker::decide_written_static_type`).
+    pub static_local_declared_types: HashMap<(String, String), PhpType>,
+    /// Locals that may be undefined where they are read (see [`MaybeUndefinedLocals`]).
+    pub maybe_undefined: MaybeUndefinedLocals,
     /// The `unset()` arguments whose local binding the checker killed, as span -> the SET of local
     /// NAMES killed at that position, so EIR lowering abandons the old frame slot (after releasing
     /// its value) instead of null-storing into it.
@@ -152,6 +158,13 @@ pub struct CheckResult {
     /// Unlike binding kills, these preserve the checker's escaped-reference type restrictions.
     /// Lowering keeps the old capture storage type and retires only this binding's cell owner.
     pub local_ref_detach_sites: HashMap<Span, HashSet<String>>,
+    /// By-reference parameters whose body binds them into a property or array element
+    /// (`$this->p = &$param`), as (parameter name, position). The binding needs a managed
+    /// reference cell, so every call site whose argument is a plain local promotes that local
+    /// before the call instead of lending its frame slot. Keyed by name and position rather than
+    /// by callee because call sites see only the selected signature; a spurious match only
+    /// promotes a local that did not need it.
+    pub escaping_ref_params: HashSet<(String, usize)>,
     /// The statement-form assignments the checker re-bound to a fresh binding of an incompatible
     /// type, as span -> the SET of local NAMES re-bound at that position, so EIR lowering mints a
     /// new slot there. Read by `crate::ir_lower` alongside `local_bind_kill_sites`, and keyed the
@@ -376,4 +389,20 @@ enum EnumMetaTarget {
             )]
         );
     }
+}
+
+/// Locals that a join point (`if`, a lazy `&&`/`||`/`?:`/`??`/`? :` edge, a loop body) may leave
+/// undefined, and the reads that observe them in that state.
+///
+/// EIR lowering gives each named local a hidden "defined" flag, cleared at frame entry and set by
+/// every store, and lowers each recorded read as `flag ? value : null`, warning `Undefined
+/// variable` first when the read is a plain one (`isset`, `??` and `empty` probe silently; `@`
+/// silences the warning through the ordinary suppression scope). Every other local keeps its
+/// native storage and its ordinary reads.
+#[derive(Debug, Clone, Default)]
+pub struct MaybeUndefinedLocals {
+    /// Function-like scope (`main`, a function or method name) -> the locals needing a flag.
+    pub by_scope: HashMap<String, HashSet<String>>,
+    /// `(read span, local name)` -> whether the read warns when the local is undefined.
+    pub reads: HashMap<(Span, String), bool>,
 }

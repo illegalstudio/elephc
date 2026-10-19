@@ -394,6 +394,10 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
             scan_expr(index, usage);
             scan_expr(value, usage);
         }
+        StmtKind::RefAssignPlace { target, source } => {
+            scan_expr(target, usage);
+            scan_expr(source, usage);
+        }
         StmtKind::NestedArrayAssign { target, value } => {
             scan_expr(target, usage);
             scan_expr(value, usage);
@@ -773,6 +777,9 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             }
             if let Some(default) = default {
                 scan_expr(default, usage);
+            } else {
+                // An unmatched subject throws `UnhandledMatchError`, which no source line names.
+                usage.classes.insert(php_symbol_key("UnhandledMatchError"));
             }
         }
         ExprKind::ArrayAccess { array, index } => {

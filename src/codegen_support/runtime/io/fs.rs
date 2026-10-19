@@ -8,7 +8,12 @@
 //! Key details:
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
+use crate::codegen_support::abi;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
+
+/// Mirrors `_diag_copy_failed_msg` in the fixed runtime data; the length immediate passed to
+/// `__rt_diag_warning` is derived from it.
+pub(crate) const COPY_FAILED_WARNING: &str = "Warning: copy(): Failed to open stream\n";
 
 /// Emits all filesystem runtime helpers: `__rt_unlink`, `__rt_mkdir`, `__rt_rmdir`,
 /// `__rt_chdir`, `__rt_rename`, and `__rt_copy`.
@@ -224,35 +229,53 @@ pub fn emit_fs(emitter: &mut Emitter) {
     // __rt_copy: copy a file
     // Input:  x1/x2=from path, x3/x4=to path
     // Output: x0=1 on success, 0 on failure
+    //
+    // A source that cannot be opened, a directory source, or a destination that cannot be
+    // opened is PHP's `false` with a warning, and leaves no destination behind. An empty
+    // source copies to an empty destination and is `true`. The read and write go through the
+    // quiet entries of the shared helpers so the warning names copy(), not them.
     // ================================================================
     emitter.blank();
     emitter.comment("--- runtime: copy ---");
     emitter.label_global("__rt_copy");
 
     // -- set up stack frame --
-    emitter.instruction("sub sp, sp, #48");                                     // allocate 48 bytes on the stack
-    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #32");                                    // establish new frame pointer
-
-    // -- save destination path for after reading source --
+    emitter.instruction("sub sp, sp, #64");                                     // allocate 64 bytes on the stack
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #48");                                    // establish new frame pointer
+    emitter.instruction("stp x1, x2, [sp, #0]");                                // save 'from' path ptr and len on stack
     emitter.instruction("stp x3, x4, [sp, #16]");                               // save 'to' path ptr and len on stack
 
+    // -- a directory source is refused, as PHP does --
+    emitter.instruction("bl __rt_is_dir");                                      // x0 = 1 when the source is a directory
+    emitter.instruction("cbnz x0, __rt_copy_fail");                             // never copy a directory's read error as an empty file
+
     // -- read source file contents --
-    emitter.instruction("bl __rt_file_get_contents");                           // read source, x1=data ptr, x2=data len
+    emitter.instruction("ldp x1, x2, [sp, #0]");                                // reload source path ptr and len
+    emitter.instruction("bl __rt_file_get_contents_quiet");                     // read source, x1=data ptr (0 on failure), x2=data len
+    emitter.instruction("cbz x1, __rt_copy_fail");                              // an unreadable source must not create the destination
 
     // -- write contents to destination file --
     emitter.instruction("mov x3, x1");                                          // move data ptr to x3 (data arg)
     emitter.instruction("mov x4, x2");                                          // move data len to x4 (data arg)
     emitter.instruction("ldp x1, x2, [sp, #16]");                               // reload destination path ptr and len
-    emitter.instruction("bl __rt_file_put_contents");                           // write data to dest file, x0=bytes written
+    emitter.instruction("bl __rt_file_put_contents_quiet");                     // write data to dest file, x0=bytes written or -1
+    emitter.instruction("tbnz x0, #63, __rt_copy_fail");                        // a negative result is a destination that could not be written
 
-    // -- return 1 if bytes were written --
-    emitter.instruction("cmp x0, #0");                                          // check if any bytes were written
-    emitter.instruction("cset x0, gt");                                         // x0 = 1 if bytes written > 0
+    // -- any non-negative byte count is success, including an empty source --
+    emitter.instruction("mov x0, #1");                                          // copy() succeeded
+    emitter.instruction("b __rt_copy_ret");                                     // skip the failure exit
+
+    emitter.label("__rt_copy_fail");
+    abi::emit_symbol_address(emitter, "x1", "_diag_copy_failed_msg");
+    emitter.instruction(&format!("mov x2, #{}", COPY_FAILED_WARNING.len()));    // pass the warning byte length to the diagnostic helper
+    emitter.instruction("bl __rt_diag_warning");                                // emit or suppress the copy() failure warning
+    emitter.instruction("mov x0, #0");                                          // copy() failed
 
     // -- restore frame and return --
-    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
+    emitter.label("__rt_copy_ret");
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
 }
 
@@ -316,21 +339,37 @@ fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_copy");
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while copy() uses path and payload spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved destination path and copied file payload
-    emitter.instruction("sub rsp, 32");                                         // reserve aligned stack space for the destination path pair and copied payload pair
+    emitter.instruction("sub rsp, 48");                                         // reserve aligned stack space for the source, destination, and copied payload pairs
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the destination elephc path pointer while the source file is read into owned storage
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the destination elephc path length while the source file is read into owned storage
-    emitter.instruction("call __rt_file_get_contents");                         // read the source file into an owned elephc string before writing it to the destination path
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the source elephc path pointer across the directory check
+    emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save the source elephc path length across the directory check
+    emitter.instruction("call __rt_is_dir");                                    // rax = 1 when the source is a directory
+    emitter.instruction("test rax, rax");                                       // PHP refuses a directory source
+    emitter.instruction("jnz __rt_copy_fail_x86");                              // never copy a directory's read error as an empty file
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the source elephc path pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // reload the source elephc path length
+    emitter.instruction("call __rt_file_get_contents_quiet");                   // read the source file; rax = 0 when it could not be opened
+    emitter.instruction("test rax, rax");                                       // an unreadable source must not create the destination
+    emitter.instruction("jz __rt_copy_fail_x86");                               // report copy() failure without touching the destination
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the copied file payload pointer across the destination-path reload and write helper call
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // preserve the copied file payload length across the destination-path reload and write helper call
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the destination elephc path pointer into the primary x86_64 string argument register
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the destination elephc path length into the primary x86_64 string length register
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the copied file payload pointer as the data pointer argument to file_put_contents()
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // pass the copied file payload length as the data length argument to file_put_contents()
-    emitter.instruction("call __rt_file_put_contents");                         // write the copied file payload into the destination path through the shared file_put_contents() helper
-    emitter.instruction("cmp rax, 0");                                          // treat zero-byte writes as success so empty files can still be copied correctly
-    emitter.instruction("setge al");                                            // convert the signed write result into a boolean success byte where any non-negative byte count is success
-    emitter.instruction("movzx rax, al");                                       // widen the boolean success byte into the canonical integer result register
-    emitter.instruction("add rsp, 32");                                         // release the aligned stack locals used by copy()
+    emitter.instruction("call __rt_file_put_contents_quiet");                   // write the copied file payload into the destination path through the shared file_put_contents() helper
+    emitter.instruction("test rax, rax");                                       // a negative result is a destination that could not be written
+    emitter.instruction("js __rt_copy_fail_x86");                               // report copy() failure for an unwritable destination
+    emitter.instruction("mov eax, 1");                                          // any non-negative byte count is success, including an empty source
+    emitter.instruction("jmp __rt_copy_ret_x86");                               // skip the failure exit
+    emitter.label("__rt_copy_fail_x86");
+    abi::emit_symbol_address(emitter, "rdi", "_diag_copy_failed_msg");          // pass the copy() warning text pointer to the diagnostic helper
+    emitter.instruction(&format!("mov esi, {}", COPY_FAILED_WARNING.len()));    // pass the warning byte length to the diagnostic helper
+    emitter.instruction("call __rt_diag_warning");                              // emit or suppress the copy() failure warning
+    emitter.instruction("xor eax, eax");                                        // copy() failed
+    emitter.label("__rt_copy_ret_x86");
+    emitter.instruction("add rsp, 48");                                         // release the aligned stack locals used by copy()
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the copy() success predicate
     emitter.instruction("ret");                                                 // return the copy() success predicate to the caller
 

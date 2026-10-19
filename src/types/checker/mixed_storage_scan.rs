@@ -117,6 +117,10 @@ struct Facts {
     /// may appear more than once — nested guards on it — which is why this is a stack rather than a
     /// map, and why the lookup takes the last matching entry.
     open_guards: Vec<(String, usize)>,
+    /// Locals passed directly as an argument to a call that may bind it by reference. Such a
+    /// local is not tracked as maybe-undefined (`Checker::local_is_flaggable`): the call passes
+    /// its storage, which the defined-flag read would replace with a copy.
+    by_ref_arguments: std::collections::HashSet<String>,
 }
 
 impl Checker {
@@ -164,6 +168,7 @@ impl Checker {
         // mode-independent). Installed before the early return below for exactly that reason.
         self.body_contains_eval = facts.contains_eval;
         self.program_contains_eval |= facts.contains_eval;
+        self.by_ref_argument_locals = std::mem::take(&mut facts.by_ref_arguments);
 
         // This visit RE-DECIDES every assignment site in this body, so a decision a SUPERSEDED
         // walk recorded for one of them is dropped first. The checker walks a body more than
@@ -699,7 +704,13 @@ fn collect_type_guarded_block(
     depth: u32,
     facts: &mut Facts,
 ) {
-    let guarded = type_guard_subject(condition);
+    // `instanceof <Template>` does not narrow to the template's member-less marker (see
+    // `Checker::guard_narrowing`), and what it narrows to depends on the local's current type,
+    // which this syntactic scan does not know. Not recognising it costs at most a spurious
+    // warning, never a missing mark.
+    let guarded = type_guard_subject(condition).filter(|(_, target)| {
+        !matches!(target, PhpType::Object(class) if checker.names_generic_template(class))
+    });
     if let Some((name, target)) = &guarded {
         let region = facts.guard_regions.len();
         facts.guard_regions.push(GuardRegion {
@@ -845,6 +856,12 @@ fn collect_stmt_in_current_source_mode(checker: &Checker, stmt: &Stmt, depth: u3
         StmtKind::RefAssign { target, source } => {
             disqualify(facts, target);
             disqualify_root(facts, source);
+            collect_expr(checker, source, depth, facts);
+        }
+        StmtKind::RefAssignPlace { target, source } => {
+            disqualify_root(facts, target);
+            disqualify_root(facts, source);
+            collect_expr(checker, target, depth, facts);
             collect_expr(checker, source, depth, facts);
         }
         StmtKind::ArrayAssign { array, index, value } => {
@@ -1261,6 +1278,18 @@ fn collect_exprs(checker: &Checker, exprs: &[Expr], depth: u32, facts: &mut Fact
 fn disqualify_call_arguments(facts: &mut Facts, args: &[Expr]) {
     for arg in args {
         disqualify_root(facts, arg);
+        let mut root = arg;
+        loop {
+            match &root.kind {
+                ExprKind::Variable(name) => {
+                    facts.by_ref_arguments.insert(name.clone());
+                    break;
+                }
+                ExprKind::NamedArg { value, .. } | ExprKind::Spread(value) => root = value,
+                ExprKind::ArrayAccess { array, .. } => root = array,
+                _ => break,
+            }
+        }
     }
 }
 

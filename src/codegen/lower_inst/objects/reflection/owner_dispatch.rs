@@ -32,7 +32,11 @@ pub(in crate::codegen::lower_inst::objects) fn lower_reflection_owner_new(
     inst: &Instruction,
     class_name: &str,
 ) -> Result<()> {
-    if let Some(object_operand) = reflection_object_operand(ctx, class_name, inst)? {
+    if let Some(closure) = reflection_function_closure_operand(ctx, class_name, inst)? {
+        emit_reflection_function_from_closure(ctx, closure)?;
+    } else if let Some(name) = reflection_class_named_operand(ctx, class_name, inst)? {
+        emit_reflection_class_named(ctx, name)?;
+    } else if let Some(object_operand) = reflection_object_operand(ctx, class_name, inst)? {
         emit_reflection_owner_from_runtime_object(ctx, class_name, object_operand)?;
     } else {
         let metadata = reflection_owner_metadata(ctx, class_name, inst)?;

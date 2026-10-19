@@ -580,7 +580,17 @@ the insertion-order chain for associative arrays, so `current()`/`key()` on a ha
 `O(position)`. A full `while (current(...)) { next(...); }` traversal of a large hash is
 therefore quadratic; prefer `foreach` when you do not need the pointer.
 
-**Not supported yet:** `compact()` and `extract()` need dynamic access to the
-current variable scope. Magician's materialized named scope makes that behavior
-feasible, but these functions are not wired into the compiler or interpreter
-today. Use an associative array explicitly in portable elephc code.
+**Scope builtins.** `compact()` is supported with literal names (strings or literal arrays of
+strings): `compact('a', ['b', 'c'])` builds `['a' => $a, ...]` in argument order, and a name the
+function never spells is skipped with PHP's `compact(): Undefined variable $x` warning (raised as
+`E_USER_WARNING`). A local that is only conditionally assigned before the call (assigned in a
+branch, a loop, a `try`, after the call, or possibly by `extract()`) is rejected at compile time,
+because PHP omits it when undefined and elephc cannot yet test that at runtime; assign it
+unconditionally before `compact()`. A runtime name list is rejected at compile time.
+`extract()` with a `this` key throws `Cannot re-assign $this` like PHP. `extract($array)` and
+`extract($array, EXTR_SKIP)` are supported as statements inside functions: each local the
+function spells is assigned from a matching key. `EXTR_SKIP` must come before the function
+mentions any local other than its parameters (elephc cannot test at runtime whether a `null`
+local exists), keys that name no spelled local are dropped, and `extract()` is rejected in a
+function that also reads variables dynamically (`$$name`, `get_defined_vars()`). Other modes,
+and using `extract()`'s return value, are rejected at compile time.

@@ -240,6 +240,32 @@ impl SharedCodegenState {
         ));
     }
 
+    /// Returns the classes a runtime-selected static-method descriptor may name as its called
+    /// class (callable arrays `['C', 'm']` and `'C::m'` strings resolved when the call runs).
+    ///
+    /// Each such descriptor bakes the class id into its entry wrapper, so `static::class`,
+    /// `static::K` and `static::m()` inside the method need that class's runtime metadata even
+    /// when nothing else in the program names the class.
+    pub(super) fn runtime_static_dispatch_class_names(&self) -> std::collections::HashSet<String> {
+        let mut names = std::collections::HashSet::new();
+        for case in &self.runtime_static_method_descriptor_case_entries {
+            names.insert(case.class_name.clone());
+        }
+        for (_, cases) in &self.runtime_static_method_descriptor_cases {
+            names.extend(cases.iter().map(|case| case.class_name.clone()));
+        }
+        for (_, _, _, cases) in &self.runtime_string_descriptor_cases {
+            for case in cases {
+                if let Some((class_name, _)) =
+                    case.php_name.as_deref().and_then(|name| name.rsplit_once("::"))
+                {
+                    names.insert(class_name.trim_start_matches('\\').to_string());
+                }
+            }
+        }
+        names
+    }
+
     /// Returns the module-wide public static-method descriptor cases, if emitted.
     pub(super) fn runtime_static_method_descriptor_cases(
         &self,

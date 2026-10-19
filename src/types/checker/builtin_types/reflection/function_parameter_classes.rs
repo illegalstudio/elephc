@@ -25,6 +25,8 @@ pub(super) fn builtin_reflection_function() -> FlattenedClass {
     {
         *constructor = builtin_reflection_function_constructor_method();
     }
+    add_reflection_name_property(&mut class);
+    add_reflection_function_closure_members(&mut class);
     class
 }
 

@@ -51,6 +51,7 @@ pub(crate) fn emit_serialize(emitter: &mut Emitter) {
         Arch::X86_64 => emit_serialize_x86_64(emitter),
         Arch::AArch64 => emit_serialize_aarch64(emitter),
     }
+    emit_serialize_ref_cell(emitter);
     magic_result::emit_magic_result(emitter);
     sleep_result::emit_sleep_result(emitter);
     custom::emit(emitter);
@@ -518,7 +519,15 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_serialize_hash_close");                      // close the container when done
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the hash pointer
     emitter.instruction("ldr x1, [sp, #16]");                                   // reload the iterator cursor
-    emitter.instruction("bl __rt_hash_iter_next_value");                        // next entry -> x0..x5
+    // -- a tag-11 entry is a member of a PHP reference set: remember its cell so a
+    //    later member of the same set serializes as R:<index>; (php's var_hash) --
+    emitter.instruction("bl __rt_hash_iter_next");                              // next raw entry -> x0..x5 (tag 11 keeps its cell)
+    emitter.instruction("str xzr, [sp, #72]");                                  // assume the entry is not a reference
+    emitter.instruction("cmp x5, #11");                                         // is the entry a member of a reference set?
+    emitter.instruction("b.ne __rt_serialize_hash_entry_plain");                // plain entries carry no cell
+    emitter.instruction("str x3, [sp, #72]");                                   // remember the entry's reference cell
+    emitter.label("__rt_serialize_hash_entry_plain");
+    emitter.instruction("bl __rt_hash_entry_deref");                            // replace a reference cell with the value it owns
     emitter.instruction("str x0, [sp, #16]");                                   // save the advanced cursor
     emitter.instruction("str x1, [sp, #32]");                                   // save the key pointer / integer key
     emitter.instruction("str x2, [sp, #40]");                                   // save the key length (-1 for int keys)
@@ -540,10 +549,19 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_serialize_value");                             // append the i:K; key
     emitter.label("__rt_serialize_hash_key_done");
     emit_uncount_key_aarch64(emitter);                                          // keys do not consume a reference index
+    emitter.instruction("ldr x0, [sp, #72]");                                   // reload the entry's reference cell, if any
+    emitter.instruction("cbz x0, __rt_serialize_hash_value_plain");             // plain entries serialize their value
+    emitter.instruction("bl __rt_serialize_ref_cell");                          // R:<index>; for a reference set already serialized
+    emitter.instruction("cbnz x0, __rt_serialize_hash_value_done");             // the back-reference replaces the value
+    emitter.label("__rt_serialize_hash_value_plain");
     emitter.instruction("ldr x0, [sp, #64]");                                   // reload the value tag
     emitter.instruction("ldr x1, [sp, #48]");                                   // reload the value low payload word
     emitter.instruction("ldr x2, [sp, #56]");                                   // reload the value high payload word
     emitter.instruction("bl __rt_serialize_value");                             // append the serialized value
+    emitter.instruction("ldr x0, [sp, #72]");                                   // reload the entry's reference cell, if any
+    emitter.instruction("cbz x0, __rt_serialize_hash_value_done");              // plain entries registered nothing
+    emitter.instruction("bl __rt_serialize_ref_cell_leave");                    // the reference set is no longer being serialized
+    emitter.label("__rt_serialize_hash_value_done");
     emitter.instruction("ldr x4, [sp, #24]");                                   // reload the written-entry count
     emitter.instruction("add x4, x4, #1");                                      // count this entry as written
     emitter.instruction("str x4, [sp, #24]");                                   // persist the written-entry count
@@ -792,6 +810,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [x7]");                                        // value low payload word
     emitter.instruction("ldr x2, [x7, #8]");                                    // value high payload word
     emitter.instruction("mov x0, x10");                                         // value tag
+    crate::codegen_support::sentinels::emit_deref_reference_property_slot(emitter, "x0", "x1", "x2");
     emit_resolve_tagged_scalar_property_tag(emitter, "x0", "x2");
     emitter.instruction("bl __rt_serialize_value");                             // append the serialized property value
     emitter.label("__rt_serialize_object_next");
@@ -893,6 +912,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [x7]");                                        // value low payload word
     emitter.instruction("ldr x2, [x7, #8]");                                    // value high payload word
     emitter.instruction("mov x0, x10");                                         // value tag
+    crate::codegen_support::sentinels::emit_deref_reference_property_slot(emitter, "x0", "x1", "x2");
     emit_resolve_tagged_scalar_property_tag(emitter, "x0", "x2");
     emitter.instruction("bl __rt_serialize_value");                             // append the serialized property value
     emitter.instruction("mov x0, #1");                                          // report one property written
@@ -1467,7 +1487,15 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jae __rt_serialize_hash_close");                       // close the container when done
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the hash pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // reload the iterator cursor
-    emitter.instruction("call __rt_hash_iter_next_value");                      // next entry -> rax,rdi,rdx,rcx,r8,r9
+    // -- a tag-11 entry is a member of a PHP reference set: remember its cell so a
+    //    later member of the same set serializes as R:<index>; (php's var_hash) --
+    emitter.instruction("call __rt_hash_iter_next");                            // next raw entry -> rax,rdi,rdx,rcx,r8,r9
+    emitter.instruction("mov QWORD PTR [rbp - 80], 0");                         // assume the entry is not a reference
+    emitter.instruction("cmp r9, 11");                                          // is the entry a member of a reference set?
+    emitter.instruction("jne __rt_serialize_hash_entry_plain");                 // plain entries carry no cell
+    emitter.instruction("mov QWORD PTR [rbp - 80], rcx");                       // remember the entry's reference cell
+    emitter.label("__rt_serialize_hash_entry_plain");
+    emitter.instruction("call __rt_hash_entry_deref");                          // replace a reference cell with the value it owns
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the advanced cursor
     emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // save the key pointer / integer key
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save the key length (-1 for int keys)
@@ -1488,10 +1516,22 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_serialize_value");                           // append the i:K; key
     emitter.label("__rt_serialize_hash_key_done");
     emit_uncount_key_x86_64(emitter);                                           // keys do not consume a reference index
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 80]");                       // reload the entry's reference cell, if any
+    emitter.instruction("test rdi, rdi");                                       // is the entry a reference?
+    emitter.instruction("jz __rt_serialize_hash_value_plain");                  // plain entries serialize their value
+    emitter.instruction("call __rt_serialize_ref_cell");                        // R:<index>; for a reference set already serialized
+    emitter.instruction("test rax, rax");                                       // was a back-reference emitted?
+    emitter.instruction("jnz __rt_serialize_hash_value_done");                  // the back-reference replaces the value
+    emitter.label("__rt_serialize_hash_value_plain");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 72]");                       // reload the value tag
     emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // reload the value low payload word
     emitter.instruction("mov rdx, QWORD PTR [rbp - 64]");                       // reload the value high payload word
     emitter.instruction("call __rt_serialize_value");                           // append the serialized value
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 80]");                       // reload the entry's reference cell, if any
+    emitter.instruction("test rdi, rdi");                                       // is the entry a reference?
+    emitter.instruction("jz __rt_serialize_hash_value_done");                   // plain entries registered nothing
+    emitter.instruction("call __rt_serialize_ref_cell_leave");                  // the reference set is no longer being serialized
+    emitter.label("__rt_serialize_hash_value_done");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the written-entry count
     emitter.instruction("add rcx, 1");                                          // count this entry as written
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // persist the written-entry count
@@ -1746,6 +1786,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rcx]");                            // value low payload word
     emitter.instruction("mov rdx, QWORD PTR [rcx + 8]");                        // value high payload word
     emitter.instruction("mov rdi, r9");                                         // value tag
+    crate::codegen_support::sentinels::emit_deref_reference_property_slot(emitter, "rdi", "rsi", "rdx");
     emit_resolve_tagged_scalar_property_tag(emitter, "rdi", "rdx");
     emitter.instruction("call __rt_serialize_value");                           // append the serialized property value
     emitter.label("__rt_serialize_object_next");
@@ -1847,6 +1888,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rcx]");                            // value low payload word
     emitter.instruction("mov rdx, QWORD PTR [rcx + 8]");                        // value high payload word
     emitter.instruction("mov rdi, r9");                                         // value tag
+    crate::codegen_support::sentinels::emit_deref_reference_property_slot(emitter, "rdi", "rsi", "rdx");
     emit_resolve_tagged_scalar_property_tag(emitter, "rdi", "rdx");
     emitter.instruction("call __rt_serialize_value");                           // append the serialized property value
     emitter.instruction("mov eax, 1");                                          // report one property written
@@ -1983,4 +2025,161 @@ fn emit_serialize_copy_run_x86_64(emitter: &mut Emitter, prefix: &str) {
     emitter.instruction(&format!("jmp {}", loop_label));                        // continue copying digit bytes
     emitter.label(&done_label);
     emitter.instruction("add r11, r8");                                         // advance the write pointer past the digits
+}
+
+/// Emits `__rt_serialize_ref_cell`: php's var_hash for reference sets, restricted to the cells
+/// whose value is CURRENTLY being serialized. Input: AArch64 `x0` / x86_64 `rdi` = the managed
+/// reference cell of a tag-11 hash entry. When the cell is on the walk path, appends
+/// `R:<index>;` and returns 1 (a reference back-reference does not consume an index, as in php).
+/// Otherwise registers the cell under the index its value is about to take
+/// (`_ser_value_counter + 1`; the value's own serialization advances the counter) and returns 0;
+/// `__rt_serialize_ref_cell_leave` retires the registration once the value is written. Cells
+/// share the identity map with objects: the two are distinct heap blocks.
+///
+/// This is what lets `serialize()` terminate on a self-referencing array (`$a[] = &$a` gives
+/// php's `a:1:{i:0;a:1:{i:0;R:2;}}`). Sibling members of one reference set (`[&$x, &$x]`) keep
+/// serializing their value, as before: elephc's `unserialize()` resolves `R:` only to objects,
+/// so emitting php's `R:2` there would break the round trip.
+fn emit_serialize_ref_cell(emitter: &mut Emitter) {
+    emit_serialize_ref_cell_leave(emitter);
+    use crate::codegen_support::abi::emit_symbol_address;
+    emitter.blank();
+    emitter.comment("--- runtime: serialize_ref_cell (reference-set back-reference) ---");
+    emitter.label_global("__rt_serialize_ref_cell");
+    if emitter.target.arch == Arch::X86_64 {
+        emitter.instruction("push rbp");                                        // save the caller frame pointer
+        emitter.instruction("mov rbp, rsp");                                    // establish the dedup frame
+        emitter.instruction("sub rsp, 32");                                     // reserve frame slots
+        emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                    // save the cell pointer
+        emit_symbol_address(emitter, "r9", "_ser_obj_count");
+        emitter.instruction("mov r9, QWORD PTR [r9]");                          // number of registered identities
+        emitter.instruction("xor r10, r10");                                    // scan index = 0
+        emitter.label("__rt_serialize_ref_cell_scan");
+        emitter.instruction("cmp r10, r9");                                     // scanned every registered identity?
+        emitter.instruction("jge __rt_serialize_ref_cell_new");                 // not seen → register the cell
+        emit_symbol_address(emitter, "r11", "_ser_obj_ptrs");
+        emitter.instruction("mov rax, QWORD PTR [r11 + r10*8]");                // registered identity
+        emitter.instruction("cmp rax, QWORD PTR [rbp - 8]");                    // the same reference set?
+        emitter.instruction("je __rt_serialize_ref_cell_found");                // already serialized → back-reference
+        emitter.instruction("add r10, 1");                                      // next registered identity
+        emitter.instruction("jmp __rt_serialize_ref_cell_scan");                // continue scanning
+        emitter.label("__rt_serialize_ref_cell_found");
+        emit_symbol_address(emitter, "r11", "_ser_obj_idxs");
+        emitter.instruction("mov rax, QWORD PTR [r11 + r10*8]");                // the recorded index
+        emitter.instruction("mov QWORD PTR [rbp - 16], rax");                   // save it across the literal appends
+        emit_append_literal_x86_64(emitter, &[b'R', b':'], "the reference back-reference prefix");
+        emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                   // reload the index
+        emitter.instruction("call __rt_serialize_uint");                        // append the index digits (value in rax)
+        emit_append_literal_x86_64(emitter, &[b';'], "the back-reference terminator");
+        emitter.instruction("mov rax, 1");                                      // signal: R:<index>; emitted
+        emitter.instruction("jmp __rt_serialize_ref_cell_ret");                 // return to the caller
+        emitter.label("__rt_serialize_ref_cell_new");
+        emit_symbol_address(emitter, "r9", "_ser_obj_count");
+        emitter.instruction("mov rcx, QWORD PTR [r9]");                         // current registered count
+        emitter.instruction("cmp rcx, 65536");                                  // is the identity map full?
+        emitter.instruction("jge __rt_serialize_ref_cell_done");                // full → serialize the value as is
+        emit_symbol_address(emitter, "r11", "_ser_obj_ptrs");
+        emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                    // cell pointer
+        emitter.instruction("mov QWORD PTR [r11 + rcx*8], rax");                // record the cell
+        emit_symbol_address(emitter, "r10", "_ser_value_counter");
+        emitter.instruction("mov rax, QWORD PTR [r10]");                        // values serialized so far
+        emitter.instruction("add rax, 1");                                      // the index the cell's value takes
+        emit_symbol_address(emitter, "r11", "_ser_obj_idxs");
+        emitter.instruction("mov QWORD PTR [r11 + rcx*8], rax");                // record the cell's index
+        emitter.instruction("add rcx, 1");                                      // grow the map
+        emitter.instruction("mov QWORD PTR [r9], rcx");                         // publish the new count
+        emitter.label("__rt_serialize_ref_cell_done");
+        emitter.instruction("mov rax, 0");                                      // signal: serialize the value
+        emitter.label("__rt_serialize_ref_cell_ret");
+        emitter.instruction("add rsp, 32");                                     // deallocate the dedup frame
+        emitter.instruction("pop rbp");                                         // restore the caller frame pointer
+        emitter.instruction("ret");                                             // return the back-reference flag in rax
+        return;
+    }
+    emitter.instruction("sub sp, sp, #32");                                     // frame for the dedup helper
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #16");                                    // establish the new frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // save the cell pointer
+    emit_symbol_address(emitter, "x9", "_ser_obj_count");
+    emitter.instruction("ldr x9, [x9]");                                        // number of registered identities
+    emitter.instruction("mov x10, #0");                                         // scan index = 0
+    emitter.label("__rt_serialize_ref_cell_scan");
+    emitter.instruction("cmp x10, x9");                                         // scanned every registered identity?
+    emitter.instruction("b.ge __rt_serialize_ref_cell_new");                    // not seen → register the cell
+    emit_symbol_address(emitter, "x11", "_ser_obj_ptrs");
+    emitter.instruction("ldr x12, [x11, x10, lsl #3]");                         // registered identity
+    emitter.instruction("ldr x13, [sp, #0]");                                   // this cell pointer
+    emitter.instruction("cmp x12, x13");                                        // the same reference set?
+    emitter.instruction("b.eq __rt_serialize_ref_cell_found");                  // already serialized → back-reference
+    emitter.instruction("add x10, x10, #1");                                    // next registered identity
+    emitter.instruction("b __rt_serialize_ref_cell_scan");                      // continue scanning
+    emitter.label("__rt_serialize_ref_cell_found");
+    emit_symbol_address(emitter, "x11", "_ser_obj_idxs");
+    emitter.instruction("ldr x0, [x11, x10, lsl #3]");                          // the recorded index
+    emitter.instruction("str x0, [sp, #8]");                                    // save it across the literal appends
+    emit_append_literal_aarch64(emitter, &[b'R', b':'], "the reference back-reference prefix");
+    emitter.instruction("ldr x0, [sp, #8]");                                    // reload the index
+    emitter.instruction("bl __rt_serialize_uint");                              // append the index digits
+    emit_append_literal_aarch64(emitter, &[b';'], "the back-reference terminator");
+    emitter.instruction("mov x0, #1");                                          // signal: R:<index>; emitted
+    emitter.instruction("b __rt_serialize_ref_cell_ret");                       // return to the caller
+    emitter.label("__rt_serialize_ref_cell_new");
+    emit_symbol_address(emitter, "x11", "_ser_obj_count");
+    emitter.instruction("ldr x12, [x11]");                                      // current registered count
+    emitter.instruction("mov x13, #65536");                                     // identity-map capacity
+    emitter.instruction("cmp x12, x13");                                        // is the map full?
+    emitter.instruction("b.ge __rt_serialize_ref_cell_done");                   // full → serialize the value as is
+    emit_symbol_address(emitter, "x13", "_ser_obj_ptrs");
+    emitter.instruction("ldr x14, [sp, #0]");                                   // cell pointer
+    emitter.instruction("str x14, [x13, x12, lsl #3]");                         // record the cell
+    emit_symbol_address(emitter, "x9", "_ser_value_counter");
+    emitter.instruction("ldr x10, [x9]");                                       // values serialized so far
+    emitter.instruction("add x10, x10, #1");                                    // the index the cell's value takes
+    emit_symbol_address(emitter, "x13", "_ser_obj_idxs");
+    emitter.instruction("str x10, [x13, x12, lsl #3]");                         // record the cell's index
+    emitter.instruction("add x12, x12, #1");                                    // grow the map
+    emitter.instruction("str x12, [x11]");                                      // publish the new count
+    emitter.label("__rt_serialize_ref_cell_done");
+    emitter.instruction("mov x0, #0");                                          // signal: serialize the value
+    emitter.label("__rt_serialize_ref_cell_ret");
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // deallocate the dedup frame
+    emitter.instruction("ret");                                                 // return the back-reference flag in x0
+}
+
+/// Emits `__rt_serialize_ref_cell_leave` (AArch64 `x0` / x86_64 `rdi` = cell): zeroes the most
+/// recent identity-map entry for the cell, so only the cells on the current walk path answer
+/// `__rt_serialize_ref_cell`. A zero entry never matches a live pointer. Leaf helper.
+fn emit_serialize_ref_cell_leave(emitter: &mut Emitter) {
+    use crate::codegen_support::abi::emit_symbol_address;
+    emitter.blank();
+    emitter.comment("--- runtime: serialize_ref_cell_leave (retire a walked reference set) ---");
+    emitter.label_global("__rt_serialize_ref_cell_leave");
+    if emitter.target.arch == Arch::X86_64 {
+        emit_symbol_address(emitter, "r9", "_ser_obj_count");
+        emitter.instruction("mov r10, QWORD PTR [r9]");                         // number of registered identities
+        emit_symbol_address(emitter, "r11", "_ser_obj_ptrs");
+        emitter.label("__rt_serialize_ref_cell_leave_scan");
+        emitter.instruction("test r10, r10");                                   // scanned every registered identity?
+        emitter.instruction("jz __rt_serialize_ref_cell_leave_done");           // the cell was not registered (map full)
+        emitter.instruction("sub r10, 1");                                      // step back to the previous registration
+        emitter.instruction("cmp QWORD PTR [r11 + r10*8], rdi");                // is it this cell?
+        emitter.instruction("jne __rt_serialize_ref_cell_leave_scan");          // keep scanning backwards
+        emitter.instruction("mov QWORD PTR [r11 + r10*8], 0");                  // retire the registration
+        emitter.label("__rt_serialize_ref_cell_leave_done");
+        emitter.instruction("ret");                                             // return to the hash serializer
+        return;
+    }
+    emit_symbol_address(emitter, "x9", "_ser_obj_count");
+    emitter.instruction("ldr x10, [x9]");                                       // number of registered identities
+    emit_symbol_address(emitter, "x11", "_ser_obj_ptrs");
+    emitter.label("__rt_serialize_ref_cell_leave_scan");
+    emitter.instruction("cbz x10, __rt_serialize_ref_cell_leave_done");         // the cell was not registered (map full)
+    emitter.instruction("sub x10, x10, #1");                                    // step back to the previous registration
+    emitter.instruction("ldr x12, [x11, x10, lsl #3]");                         // registered identity
+    emitter.instruction("cmp x12, x0");                                         // is it this cell?
+    emitter.instruction("b.ne __rt_serialize_ref_cell_leave_scan");             // keep scanning backwards
+    emitter.instruction("str xzr, [x11, x10, lsl #3]");                         // retire the registration
+    emitter.label("__rt_serialize_ref_cell_leave_done");
+    emitter.instruction("ret");                                                 // return to the hash serializer
 }

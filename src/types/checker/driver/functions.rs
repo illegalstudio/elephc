@@ -134,6 +134,12 @@ impl Checker {
     /// Returns true if `name` resolves to any declared function: user declaration, variant group, or
     /// extern. Resolution is case-insensitive via PHP symbol key matching.
     pub(crate) fn has_function_decl_folded(&self, name: &str) -> bool {
+        if self.fn_decls.contains_key(name)
+            || self.function_variant_groups.contains_key(name)
+            || self.extern_functions.contains_key(name)
+        {
+            return true;
+        }
         let key = php_symbol_key(name);
         self.fn_decls
             .keys()
@@ -195,6 +201,60 @@ impl Checker {
             }
         }
         self.resolve_function_variant_groups(errors);
+    }
+
+    /// Re-checks every resolved function body against its current signature.
+    ///
+    /// A body is checked when its first call site resolves it, which happens in the initial
+    /// top-level pass, before any method return type is inferred. A receiver typed by a method
+    /// call (`$x = $m->add('b'); $x->add([1]);`, or a chain) then read the `Int` placeholder,
+    /// the call taught `add` nothing, and nothing ever checked the body again: the method kept a
+    /// parameter narrower than the value the body passes it. Running the body once more, after
+    /// the method pass, lets those calls resolve and specialize their callees.
+    ///
+    /// The re-check is not the authoritative diagnostic pass — the call-site resolution that
+    /// first walked the body is, and it may have run in a context this one does not rebuild
+    /// (the initial pass tolerates provisional errors a later pass clears). So a body whose
+    /// re-check fails keeps the signature and completion state it had before, exactly as
+    /// without the re-check, and the re-check's errors are dropped.
+    ///
+    /// Generic templates have no signature of their own, and include-variant groups unify their
+    /// variants' signatures through `ensure_function_variant_group_signature`, so both stay on
+    /// the paths that already own them.
+    pub(super) fn recheck_resolved_function_bodies(&mut self) {
+        let variant_symbols: std::collections::HashSet<&String> =
+            self.function_variant_groups.values().flatten().collect();
+        let mut names: Vec<String> = self
+            .fn_decls
+            .iter()
+            .filter(|(name, decl)| {
+                decl.type_params.is_empty()
+                    && self.functions.contains_key(*name)
+                    && !variant_symbols.contains(name)
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
+        names.sort();
+        for name in names {
+            let (Some(decl), Some(previous_sig)) =
+                (self.fn_decls.get(&name).cloned(), self.functions.get(&name).cloned())
+            else {
+                continue;
+            };
+            let was_completed = self.completed_function_signatures.contains(&name);
+            let param_types = previous_sig.params.clone();
+            if self
+                .resolve_function_signature(&name, &decl, param_types)
+                .is_err()
+            {
+                self.functions.insert(name.clone(), previous_sig);
+                if was_completed {
+                    self.completed_function_signatures.insert(name);
+                } else {
+                    self.completed_function_signatures.remove(&name);
+                }
+            }
+        }
     }
 
     /// Reports whether a real call site ever invoked this declaration with an argument list.
@@ -452,6 +512,11 @@ impl Checker {
 /// matching) key if one exists. Used to translate case-insensitive names to their actual declared
 /// spelling.
 fn folded_map_key<T>(map: &HashMap<String, T>, name: &str) -> Option<String> {
+    // A spelling that is itself a key is the canonical one: a case-insensitive symbol table
+    // never holds two spellings of one name, so the scan below could only find this same key.
+    if map.contains_key(name) {
+        return Some(name.to_string());
+    }
     let key = php_symbol_key(name);
     map.keys()
         .find(|existing| php_symbol_key(existing) == key)

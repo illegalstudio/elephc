@@ -122,6 +122,32 @@ fn isset_object_receiver_type(checker: &Checker, ty: &PhpType) -> bool {
 /// Like `isset()`, `unset()` accepts a never-declared chain root (PHP's `unset($never)`
 /// is a silent no-op), so the root is bound to `null` for the operand.
 fn check_unset_arg(checker: &mut Checker, arg: &Expr, env: &TypeEnv) -> Result<(), CompileError> {
+    // `unset($s)` on a `static` local only drops the local binding in PHP; the static keeps its
+    // value for the next call. elephc's binding IS the static symbol, so it cannot do that.
+    if let ExprKind::Variable(name) = &arg.kind {
+        if checker.active_statics.contains(name) {
+            return Err(CompileError::new(
+                arg.span,
+                &format!(
+                    "unset() of the static local ${name} is not supported yet: the static would \
+                     lose its value for the next call; assign null to it instead if that is meant"
+                ),
+            ));
+        }
+    }
+    // `unset(C::$p[$k])` removes the element through the static slot's boxed cell.
+    if let ExprKind::ArrayAccess { array, .. } = &arg.kind {
+        crate::types::checker::stmt_check::assignments::widen_static_property_element_root(checker, array, false)?;
+    }
+    // Untyped property / static property roots of an element unset (`unset($o->p[$k])`,
+    // `unset($o->p[$a][$b])`) take the boxed PHP-array representation their stored cell needs.
+    // For a static root the static-property widening above already covers it (including `static::` subclasses);
+    // this then only covers instance properties and a null-defaulted static (to `mixed`).
+    if matches!(arg.kind, ExprKind::ArrayAccess { .. }) {
+        crate::types::checker::stmt_check::assignments::widen_property_root_for_element_write(
+            checker, arg, arg.span, env,
+        )?;
+    }
     let probed = null_probe_env(checker, arg, env);
     let env = probed.as_ref().unwrap_or(env);
     if let ExprKind::PropertyAccess { object, property }

@@ -55,6 +55,13 @@ pub(in crate::codegen::lower_inst) fn lower_prop_get_for_write(
     emit_null_receiver_error(ctx, base_reg, &property);
     if slot_supports_untyped_unset_marker(&slot) {
         emit_recreate_removed_untyped_property_for_write(ctx, object, &slot, base_reg)?;
+    } else if slot.is_declared && slot.is_reference {
+        // A reference slot keeps its initialization marker inside the cell (cell[0]); the
+        // object-slot guard would read the cell pointer's neighbour and let the sentinel through
+        // as a container.
+        let cell_reg = reference_pointer_reg(ctx, base_reg);
+        abi::emit_load_from_address(ctx.emitter, cell_reg, base_reg, slot.offset);
+        emit_uninitialized_owned_ref_property_guard(ctx, &slot, cell_reg);
     } else if slot.is_declared {
         emit_uninitialized_typed_property_guard(ctx, &slot, base_reg);
     }

@@ -212,34 +212,45 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
         if crate::ir_lower::expr::lower_weak_map_append(ctx, target, value, span) { return; }
     }
 
+    if let BaseKind::Local(name) = &group.base {
+        if lower_local_append_through_parent_cell(ctx, group, name, span) {
+            return;
+        }
+    }
+
     // Load the container and probe the key. For a local this is a `LoadLocal`; for a property it is
     // an ordinary property read, which is pure and can be replayed.
     let container = load_container(ctx, group, span);
-    let isset_op = match container.ir_type {
-        IrType::Heap(IrHeapKind::Hash) => Op::HashIsset,
-        IrType::Heap(IrHeapKind::Array) => Op::ArrayIsset,
+    match container.ir_type {
+        IrType::Heap(IrHeapKind::Hash | IrHeapKind::Array) => {}
         // Anything else (a `Mixed` property, an object) is out of scope: fall open to today's
         // lowering, which is what the parser's desugar already produces.
         _ => {
+            if !matches!(group.base, BaseKind::StaticProperty { .. }) {
+                crate::ir_lower::ownership::release_if_owned(ctx, container, Some(span));
+            }
             super::lower_stmt(ctx, group.read);
             super::lower_stmt(ctx, group.push);
             super::lower_stmt(ctx, group.write_back);
             return;
         }
-    };
-    let key = lower_expr(ctx, group.index);
-    let present = ctx.emit_value(
-        isset_op,
-        vec![container.value, key.value],
-        None,
-        PhpType::Bool,
-        isset_op.default_effects(),
-        Some(span),
+    }
+    // The probe classifies the key from its LOWERED value: a string or runtime-tagged key on an
+    // indexed container goes through the silent mixed-key read instead of `ArrayIsset`, which
+    // only takes an integer key (`$a[$k][] = $v` with a string `$k`).
+    let present = crate::ir_lower::expr::lower_native_isset_offset_probe_from_value(
+        ctx,
+        container,
+        group.index,
+        group.index,
     );
-    if matches!(group.base, BaseKind::Local(_)) {
+    // The probe's container read is released for a local and for a property base: a property
+    // read arrives as an owning temporary (`PropGet` acquires), and keeping it leaked the outer
+    // container once per `$this->p[$k][] = $v`. A static-property load is the symbol's own
+    // borrowed payload and is never released here.
+    if !matches!(group.base, BaseKind::StaticProperty { .. }) {
         crate::ir_lower::ownership::release_if_owned(ctx, container, Some(span));
     }
-    crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
 
     // Snapshot the definitely-initialized locals before the split and restore them at the head of
     // the arm, exactly as `lower_if_chain` does; the vivify arm initializes nothing new, so the
@@ -287,6 +298,14 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
             // a prefix temporary, so neither is evaluated twice observably.
             let container = ctx.load_local(name, Some(span));
             let key = lower_expr(ctx, group.index);
+            // Dense storage detaches by slot index only; a non-integer key on a statically
+            // indexed local (whose runtime storage may already be a hash) keeps the plain
+            // copy-on-write push instead.
+            if container.ir_type == IrType::Heap(IrHeapKind::Array) && key.ir_type != IrType::I64 {
+                super::lower_stmt(ctx, group.push);
+                super::lower_stmt(ctx, group.write_back);
+                return;
+            }
             ctx.emit_void(
                 Op::SlotDetach,
                 vec![container.value, key.value],
@@ -362,4 +381,67 @@ fn vivify_stmt(group: &NestedAppendGroup<'_>, span: Span) -> Stmt {
         },
     };
     Stmt::new(kind, span)
+}
+
+/// Lowers `$local[$k][] = $v` by fetching `$local[$k]` for write and appending through its cell.
+///
+/// A statically indexed `Array(Mixed)` local may hold HASH storage at run time: a nested write
+/// with a gap key (`$a[5]['k'] = 1`) or a string-valued boxed key promotes it in place
+/// (`__rt_array_ensure_elem_for_write`). The probe / vivify / `SlotDetach` sequence below
+/// assumes dense storage for an integer key, so after such a write it read slots out of a hash
+/// table — silently wrong groups (`$g[$id]['n'] = …; $g[9][] = 1`) or a SIGSEGV. The fetch-for-
+/// write parent dispatches on the runtime container kind, autovivifies a missing or null bucket,
+/// and `Op::MixedArrayAppend` appends in place through the stored cell (no copy, so no O(n^2)).
+/// Returns `false` (nothing emitted) for locals whose parent fetch is not write-through.
+fn lower_local_append_through_parent_cell(
+    ctx: &mut LoweringContext<'_, '_>,
+    group: &NestedAppendGroup<'_>,
+    name: &str,
+    span: Span,
+) -> bool {
+    let StmtKind::ArrayPush { value, .. } = &group.push.kind else {
+        return false;
+    };
+    let parent_expr = Expr::new(
+        ExprKind::ArrayAccess {
+            array: Box::new(Expr::new(ExprKind::Variable(name.to_string()), span)),
+            index: Box::new(group.index.clone()),
+        },
+        span,
+    );
+    // Only containers whose elements are ALREADY boxed: those are the ones a nested write can
+    // promote to hash storage at run time, and the ones the parent fetch reaches without
+    // retyping the local (a concretely typed `array<int, array<int>>` keeps the dense path,
+    // which is correct for it and agrees with the checker's element type).
+    let boxed_elements = match ctx.local_type(name).codegen_repr() {
+        PhpType::Array(elem) => matches!(elem.codegen_repr(), PhpType::Mixed | PhpType::Never | PhpType::Void),
+        PhpType::AssocArray { value, .. } => value.codegen_repr() == PhpType::Mixed,
+        _ => false,
+    };
+    if !boxed_elements || ctx.is_ref_bound_local(name) {
+        return false;
+    }
+    let cell = super::lower_nested_assign_parent(ctx, &parent_expr, span);
+    if cell.ir_type != IrType::Heap(IrHeapKind::Mixed) {
+        crate::ir_lower::diagnostics::refuse(
+            span,
+            "Nested array append through this container is not supported",
+        );
+        return true;
+    }
+    let value = lower_expr(ctx, value);
+    ctx.emit_void(
+        Op::MixedArrayAppend,
+        vec![cell.value, value.value],
+        None,
+        Op::MixedArrayAppend.default_effects(),
+        Some(span),
+    );
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
+    if ctx.value_is_owning_temporary(cell) {
+        crate::ir_lower::ownership::release_if_owned(ctx, cell, Some(span));
+    }
+    true
 }

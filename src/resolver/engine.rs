@@ -16,6 +16,7 @@ use crate::names::canonical_name_for_decl;
 use crate::parser::ast::{CatchClause, ClassMethod, ExprKind, Stmt, StmtKind};
 
 use super::discovery::FunctionVariantRegistry;
+use super::dynamic_includes::{lower_dynamic_include, SiteCapture};
 use super::engine_includes::{
     discard_first_include_return, expand_value_include, resolve_include_stmt,
     IncludeValueCapture,
@@ -63,6 +64,24 @@ fn try_expand_value_include(
         StmtKind::Assign { name, .. } => IncludeValueCapture::Assign(name.clone()),
         _ => IncludeValueCapture::Return,
     };
+    let site_capture = match &capture {
+        IncludeValueCapture::Assign(name) => SiteCapture::Assign(name.clone()),
+        IncludeValueCapture::Return => SiteCapture::Return,
+    };
+    // A dynamic path closed by `elephc.includes.toml` becomes a dispatch over STATIC includes,
+    // which this same loop then resolves like any other.
+    if let Some(lowered) =
+        lower_dynamic_include(stmt.span, path, *once, *required, site_capture, state)?
+    {
+        return Ok(Some(resolve_stmts(
+            lowered,
+            base_dir,
+            declared_once,
+            include_chain,
+            state,
+            function_variants,
+        )?));
+    }
     let expanded = expand_value_include(
         stmt.span,
         path,
@@ -106,6 +125,24 @@ pub(super) fn resolve_stmts(
             result.extend(expanded);
             continue;
         }
+        // An include anywhere else in the statement's own expressions (an argument, an operand,
+        // a `??=` value...) is bound to a hidden local first: each hoisted `$tmp = include F;`
+        // goes through this loop (and is expanded above), then the rewritten statement is
+        // resolved as usual.
+        let stmt = match super::value_include_hoist::hoist_value_includes(&stmt)? {
+            Some((hoisted, rewritten)) => {
+                result.extend(resolve_stmts(
+                    hoisted,
+                    base_dir,
+                    declared_once,
+                    include_chain,
+                    state,
+                    function_variants,
+                )?);
+                rewritten
+            }
+            None => stmt,
+        };
 
         let stmt = resolve_stmt_exprs(
             stmt,
@@ -117,6 +154,24 @@ pub(super) fn resolve_stmts(
         )?;
         match &stmt.kind {
             StmtKind::Include { path, once, required } => {
+                if let Some(lowered) = lower_dynamic_include(
+                    stmt.span,
+                    path,
+                    *once,
+                    *required,
+                    SiteCapture::Stmt,
+                    state,
+                )? {
+                    result.extend(resolve_stmts(
+                        lowered,
+                        base_dir,
+                        declared_once,
+                        include_chain,
+                        state,
+                        function_variants,
+                    )?);
+                    continue;
+                }
                 if let Some(mut resolved) = resolve_include_stmt(
                     &stmt,
                     path,

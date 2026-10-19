@@ -9,6 +9,7 @@
 //! - Every emitted token carries a span used later for parser and semantic diagnostics.
 
 mod cursor;
+mod inline_html;
 mod literals;
 mod scan;
 /// Lexer token module.

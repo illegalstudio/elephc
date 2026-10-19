@@ -143,6 +143,78 @@ impl Checker {
             && !self.interfaces.contains_key(type_name)
     }
 
+    /// Validates the static type of a `throw` operand (statement and expression forms).
+    ///
+    /// Besides a single Throwable object, this accepts boxed operands, which codegen throws
+    /// through the runtime check that raises PHP's `Error("Can only throw objects")` /
+    /// `Error("Cannot throw objects that do not implement Throwable")`:
+    /// - a union whose members are all Throwable objects or null: a join of sibling exception
+    ///   classes (`$a ? new A : new B`) or a `?Throwable` parameter;
+    /// - `mixed`, such as a local joined from `null` and an exception across a loop
+    ///   (`$e = null; foreach (...) { $e ??= new E; } throw $e ?? new F;`).
+    ///
+    /// A read of a local a join point may have left undefined is typed `mixed` by
+    /// `condition_edges`, so its own type is checked instead: a maybe-undefined scalar is still
+    /// rejected statically.
+    pub(crate) fn check_thrown_type(
+        &self,
+        operand: &Expr,
+        thrown_ty: PhpType,
+        env: &TypeEnv,
+        span: crate::span::Span,
+    ) -> Result<(), CompileError> {
+        let thrown_ty = match (&thrown_ty, &operand.kind) {
+            (PhpType::Mixed, crate::parser::ast::ExprKind::Variable(name))
+                if self
+                    .maybe_undefined_result
+                    .reads
+                    .contains_key(&(operand.span, name.clone())) =>
+            {
+                env.get(name).cloned().unwrap_or(PhpType::Mixed)
+            }
+            _ => thrown_ty,
+        };
+        let is_throwable_object = |type_name: &str| {
+            self.object_type_implements_throwable(type_name)
+                || self.object_type_may_be_eval_declared(type_name)
+        };
+        let accepted = match &thrown_ty {
+            PhpType::Object(type_name) => is_throwable_object(type_name),
+            PhpType::Mixed => true,
+            PhpType::Union(members) => {
+                let mut objects = members.iter().filter_map(|member| match member {
+                    PhpType::Object(type_name) => Some(type_name),
+                    _ => None,
+                });
+                let only_objects_or_null = members
+                    .iter()
+                    .all(|member| matches!(member, PhpType::Object(_) | PhpType::Void));
+                if !only_objects_or_null || members.iter().all(|m| *m == PhpType::Void) {
+                    false
+                } else if objects.all(|type_name| is_throwable_object(type_name)) {
+                    true
+                } else {
+                    return Err(CompileError::new(
+                        span,
+                        "Type error: throw requires an object implementing Throwable",
+                    ));
+                }
+            }
+            _ => false,
+        };
+        if accepted {
+            return Ok(());
+        }
+        Err(CompileError::new(
+            span,
+            if matches!(thrown_ty, PhpType::Object(_)) {
+                "Type error: throw requires an object implementing Throwable"
+            } else {
+                "Type error: throw requires an object value"
+            },
+        ))
+    }
+
     /// Returns true if `type_name` (a class or interface) implements `Throwable`,
     /// checking both direct implementation and interface extension chains.
     pub(crate) fn object_type_implements_throwable(&self, type_name: &str) -> bool {
@@ -359,6 +431,34 @@ impl Checker {
         None
     }
 
+    /// The classes whose `prop_name` slot is the one `declaring_class` declares (see
+    /// `Checker::property_sharers_index`).
+    fn property_sharers(&mut self, prop_name: &str, declaring_class: &str) -> Vec<String> {
+        let class_count = self.classes.len();
+        if self
+            .property_sharers_index
+            .as_ref()
+            .is_none_or(|(built_for, _)| *built_for != class_count)
+        {
+            let mut index: std::collections::HashMap<(String, String), Vec<String>> =
+                std::collections::HashMap::new();
+            for (name, info) in &self.classes {
+                for (property, owner) in &info.property_declaring_classes {
+                    index
+                        .entry((property.clone(), owner.clone()))
+                        .or_default()
+                        .push(name.clone());
+                }
+            }
+            self.property_sharers_index = Some((class_count, index));
+        }
+        self.property_sharers_index
+            .as_ref()
+            .and_then(|(_, index)| index.get(&(prop_name.to_string(), declaring_class.to_string())))
+            .cloned()
+            .unwrap_or_default()
+    }
+
     /// Propagates a resolved constructor argument type into the corresponding constructor
     /// parameter and property slot for all classes that share an inherited property from
     /// `declaring_class`. Used to sharpen types across an inheritance hierarchy after
@@ -396,43 +496,75 @@ impl Checker {
             return;
         };
 
-        for class_info in self.classes.values_mut() {
-            let shares_inherited_property = class_info
-                .property_declaring_classes
-                .get(&prop_name)
-                .is_some_and(|owner| owner == &declaring_class);
-
-            if !shares_inherited_property {
-                continue;
+        // Every write below is a JOIN (`crate::types::checker::lattice`), with a one-time
+        // adoption over the slot's pre-observation type. The last constructor call used to
+        // REPLACE the shared slot: `new A(1); new B("s"); new C(1.5)` typed the inherited `$v`
+        // `float` for all three (gettype printed `double` for the int and the string), and on
+        // Laravel `new HttpResponseException($symfonyResponse)` in one body and
+        // `new HttpResponseException($illuminateResponse)` in another alternated
+        // `$response` (and `getResponse()`'s return) between the two classes every round.
+        let incoming = if param_is_ref { PhpType::Mixed } else { arg_ty.clone() };
+        for sharer in self.property_sharers(&prop_name, &declaring_class) {
+            let (property_slot, param_current, internal) = {
+                let Some(class_info) = self.classes.get(&sharer) else {
+                    continue;
+                };
+                // Compiler-owned (prelude/builtin) classes keep the historical rebind: their slot
+                // storage is pinned again after every method pass by the builtin patches
+                // (`patch_builtin_spl_storage_signatures` forces `CallbackFilterIterator::$callback`
+                // to `callable`), so they are not a lattice writer, and the descriptor lowering of
+                // a runtime callable array relies on the constructor's last argument shape.
+                let internal = class_info.is_internal;
+                let property_slot = (!class_info.visible_property_is_declared(&prop_name))
+                    .then(|| class_info.visible_property_index(&prop_name))
+                    .flatten()
+                    .and_then(|slot| class_info.properties.get(slot).map(|prop| (slot, prop.1.clone())));
+                // Sharing a property does not erase another constructor's declared contract or
+                // make a different parameter position refer to this property's constructor input.
+                let maps_same_property = class_info
+                    .constructor_param_to_prop
+                    .get(param_index)
+                    .and_then(|mapped| mapped.as_ref())
+                    == Some(&prop_name);
+                let param_current = (!param_has_declared_type && maps_same_property)
+                    .then(|| class_info.methods.get("__construct"))
+                    .flatten()
+                    .filter(|sig| !sig.declared_params.get(param_index).copied().unwrap_or(false))
+                    .and_then(|sig| sig.params.get(param_index).map(|(_, ty)| ty.clone()));
+                (property_slot, param_current, internal)
+            };
+            let property_key = (format!("ctor-prop:{}::${}", sharer, prop_name), 0usize);
+            let new_property = property_slot.map(|(slot, current)| {
+                let adopt = internal || !self.param_specialization_seen.contains(&property_key);
+                let joined = if adopt { incoming.clone() } else { self.join_observed_type(&current, &incoming) };
+                (slot, joined)
+            });
+            let param_key = (format!("ctor-param:{}", sharer), param_index);
+            let new_param = param_current.map(|current| {
+                if !internal && self.param_specialization_seen.contains(&param_key) {
+                    self.join_observed_type(&current, &incoming)
+                } else {
+                    incoming.clone()
+                }
+            });
+            if new_property.is_some() {
+                self.param_specialization_seen.insert(property_key);
             }
-
-            let property_has_declared_type = class_info.visible_property_is_declared(&prop_name);
-            if !property_has_declared_type {
-                if let Some(slot) = class_info.visible_property_index(&prop_name) {
-                    if let Some(prop) = class_info.properties.get_mut(slot) {
-                        prop.1 = if param_is_ref {
-                            PhpType::Mixed
-                        } else {
-                            arg_ty.clone()
-                        };
-                    }
+            if new_param.is_some() {
+                self.param_specialization_seen.insert(param_key);
+            }
+            let Some(class_info) = self.classes.get_mut(&sharer) else {
+                continue;
+            };
+            if let Some((slot, ty)) = new_property {
+                if let Some(prop) = class_info.properties.get_mut(slot) {
+                    prop.1 = ty;
                 }
             }
-
-            // Sharing a property does not erase another constructor's declared contract or
-            // make a different parameter position refer to this property's constructor input.
-            let maps_same_property = class_info.constructor_param_to_prop.get(param_index)
-                .and_then(|mapped| mapped.as_ref()) == Some(&prop_name);
-            if !param_has_declared_type && maps_same_property {
+            if let Some(ty) = new_param {
                 if let Some(sig) = class_info.methods.get_mut("__construct") {
-                    if !sig.declared_params.get(param_index).copied().unwrap_or(false) {
-                        if let Some((_, param_ty)) = sig.params.get_mut(param_index) {
-                            *param_ty = if param_is_ref {
-                                PhpType::Mixed
-                            } else {
-                                arg_ty.clone()
-                            };
-                        }
+                    if let Some((_, param_ty)) = sig.params.get_mut(param_index) {
+                        *param_ty = ty;
                     }
                 }
             }

@@ -11,6 +11,14 @@ use super::*;
 
 /// Builds the `ReflectionClass` shell with retained eval metadata accessors.
 pub(super) fn builtin_reflection_class() -> FlattenedClass {
+    let mut class = builtin_reflection_class_shell();
+    add_reflection_name_property(&mut class);
+    add_reflection_class_name_only_members(&mut class);
+    class
+}
+
+/// Builds the metadata-backed `ReflectionClass` shell before the runtime-target members.
+fn builtin_reflection_class_shell() -> FlattenedClass {
     FlattenedClass {
         name: "ReflectionClass".to_string(),
         span: dummy(),
@@ -421,6 +429,7 @@ pub(super) fn reflection_enum_inherited_method_is_supported(method_name: &str) -
         method_name.to_ascii_lowercase().as_str(),
         "__construct"
             | "__tostring"
+            | "__propget_name"
             | "getname"
             | "getshortname"
             | "getnamespacename"

@@ -425,6 +425,21 @@ fn coerce_tostring_return_to_string_result(
 
 /// Throws PHP's catchable object-to-string `Error`, including the runtime class name.
 fn emit_mixed_missing_tostring_error(ctx: &mut FunctionContext<'_>, receiver_reg: &str) {
+    emit_runtime_class_error(
+        ctx,
+        receiver_reg,
+        "Object of class ",
+        " could not be converted to string",
+    );
+}
+
+/// Throws a catchable `Error` whose message is `prefix . <runtime class of receiver> . suffix`.
+pub(super) fn emit_runtime_class_error(
+    ctx: &mut FunctionContext<'_>,
+    receiver_reg: &str,
+    prefix: &str,
+    suffix: &str,
+) {
     let (message_ptr, message_len) = abi::string_result_regs(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -442,14 +457,14 @@ fn emit_mixed_missing_tostring_error(ctx: &mut FunctionContext<'_>, receiver_reg
             ctx.emitter.instruction(&format!("mov {}, QWORD PTR [r10 + r9 + 8]", message_len)); // borrow the receiver class-name length
         }
     }
-    emit_string_result_concat_prefix(ctx, "Object of class ");
-    emit_string_result_concat_suffix(ctx, " could not be converted to string");
+    emit_string_result_concat_prefix(ctx, prefix);
+    emit_string_result_concat_suffix(ctx, suffix);
     abi::emit_call_label(ctx.emitter, "__rt_str_persist");
     super::exceptions::emit_error_from_string_result(ctx);
 }
 
 /// Prepends a static fragment to the active string result.
-fn emit_string_result_concat_prefix(ctx: &mut FunctionContext<'_>, prefix: &str) {
+pub(super) fn emit_string_result_concat_prefix(ctx: &mut FunctionContext<'_>, prefix: &str) {
     let (text_ptr, text_len) = abi::string_result_regs(ctx.emitter);
     let (right_ptr, right_len) = concat_right_operand_regs(ctx);
     let (prefix_label, prefix_len) = ctx.data.add_string(prefix.as_bytes());
@@ -461,7 +476,7 @@ fn emit_string_result_concat_prefix(ctx: &mut FunctionContext<'_>, prefix: &str)
 }
 
 /// Appends a static fragment to the active string result.
-fn emit_string_result_concat_suffix(ctx: &mut FunctionContext<'_>, suffix: &str) {
+pub(super) fn emit_string_result_concat_suffix(ctx: &mut FunctionContext<'_>, suffix: &str) {
     let (right_ptr, right_len) = concat_right_operand_regs(ctx);
     let (suffix_label, suffix_len) = ctx.data.add_string(suffix.as_bytes());
     abi::emit_symbol_address(ctx.emitter, right_ptr, &suffix_label);
@@ -487,8 +502,63 @@ fn lower_object_to_string(
     if object_class_has_tostring(ctx, normalized) {
         return lower_runtime_object_method_call(ctx, inst, normalized, "__toString");
     }
+    if !ctx.module.class_infos.contains_key(normalized) {
+        // The static type is an interface (`Stringable`, a user interface declaring
+        // `__toString`, ...): it names no method body, so the conversion is decided by the
+        // object's RUNTIME class, exactly as for a boxed Mixed object. A static fatal here
+        // rejected every `(string) $s` over a `Stringable` parameter.
+        return lower_object_to_string_by_runtime_class(ctx, inst);
+    }
     emit_missing_tostring_fatal(ctx, normalized);
     Ok(())
+}
+
+/// Lowers `(string) $object` by dispatching `__toString()` on the object's runtime class id.
+///
+/// Shares the candidate ladder of the boxed-Mixed string context; a runtime class without
+/// `__toString()` throws PHP's catchable object-to-string `Error`.
+fn lower_object_to_string_by_runtime_class(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    let candidates = mixed_method_candidates(ctx, "__toString", 1)?;
+    let receiver_reg = abi::nested_call_reg(ctx.emitter);
+    let no_match_label = ctx.next_label("object_string_no_match");
+    let done_label = ctx.next_label("object_string_done");
+    let match_labels = candidates
+        .iter()
+        .map(|candidate| {
+            ctx.next_label(&format!(
+                "object_string_{}",
+                label_fragment(&candidate.class_name)
+            ))
+        })
+        .collect::<Vec<_>>();
+    ctx.load_value_to_result(value)?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    ctx.emitter
+        .instruction(&format!("mov {}, {}", receiver_reg, result_reg)); // preserve the object pointer for __toString dispatch
+    emit_mixed_method_class_dispatch(
+        ctx,
+        receiver_reg,
+        &candidates,
+        &match_labels,
+        &no_match_label,
+    );
+    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        let return_ty = emit_mixed_tostring_candidate_call(ctx, value, receiver_reg, candidate)?;
+        coerce_tostring_return_to_string_result(ctx, &return_ty)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+    ctx.emitter.label(&no_match_label);
+    emit_mixed_missing_tostring_error(ctx, receiver_reg);
+    ctx.emitter.label(&done_label);
+    if let Some(result) = inst.result {
+        ctx.store_runtime_return_ownership(result);
+    }
+    store_if_result(ctx, inst)
 }
 
 /// Returns true when class metadata exposes a `__toString()` method.

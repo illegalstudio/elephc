@@ -13,3 +13,4 @@ mod basic;
 mod discovery;
 mod function_variants;
 mod paths_and_errors;
+mod value_positions;

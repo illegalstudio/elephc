@@ -74,6 +74,9 @@ pub enum Token {
 
     // Identifiers
     Variable(String),
+    /// A `$` that starts a variable variable (`$$name`, `${expr}`): the variable name is the
+    /// value of the following simple variable, nested `$`, or braced expression.
+    Dollar,
     Identifier(String),
 
     // Keywords

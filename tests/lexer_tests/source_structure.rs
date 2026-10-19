@@ -48,10 +48,20 @@ fn test_consecutive_comments() {
 
 // --- Complex tokens ---
 
-/// Verifies missing `<?php` open tag produces a lex error.
+/// Verifies a source with no open tag is inline HTML (PHP prints it), not a lex error.
 #[test]
-fn test_missing_open_tag() {
-    assert!(tokenize("echo \"hi\";").is_err());
+fn test_missing_open_tag_is_inline_html() {
+    let t = tokens("echo \"hi\";");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Echo,
+            Token::StringLiteral("echo \"hi\";".into()),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
 }
 
 /// Verifies an unterminated double-quoted string produces a lex error.
@@ -114,4 +124,104 @@ fn test_open_tag_with_comment_no_code() {
 fn test_open_tag_with_block_comment_no_code() {
     let t = tokens("<?php /* empty */");
     assert_eq!(t, vec![Token::OpenTag, Token::Eof]);
+}
+
+// --- Inline HTML outside PHP tags ---
+
+/// Verifies leading HTML becomes `echo "text";` after the structural open tag.
+#[test]
+fn test_leading_inline_html_is_echoed() {
+    let t = tokens("Hello <?php echo 1;");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Echo,
+            Token::StringLiteral("Hello ".into()),
+            Token::Semicolon,
+            Token::Echo,
+            Token::IntLiteral(1),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
+/// Verifies `?>` is a `;`, swallows one newline, and the HTML after it is echoed.
+#[test]
+fn test_close_tag_swallows_one_newline_and_echoes_html() {
+    let t = tokens("<?php echo 1 ?>\n\nx<?php echo 2;");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Echo,
+            Token::IntLiteral(1),
+            Token::Semicolon,
+            Token::Echo,
+            Token::StringLiteral("\nx".into()),
+            Token::Semicolon,
+            Token::Echo,
+            Token::IntLiteral(2),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
+/// Verifies `<?=` is `echo`, and a file ending in `?>` produces no trailing output.
+#[test]
+fn test_short_echo_tag_and_trailing_close_tag() {
+    let t = tokens("<?= 5 ?>\n");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Echo,
+            Token::IntLiteral(5),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
+/// Verifies `<?phpx` and `<?xml` are plain text, not open tags, and the short `<?` is text.
+#[test]
+fn test_non_tags_stay_html() {
+    let t = tokens("<?xml a?> <?phpx <? q ?>");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Echo,
+            Token::StringLiteral("<?xml a?> <?phpx <? q ?>".into()),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
+/// Verifies a `//` comment ends at `?>`, which then closes the PHP block.
+#[test]
+fn test_line_comment_ends_at_close_tag() {
+    let t = tokens("<?php // c ?>HTML");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Semicolon,
+            Token::Echo,
+            Token::StringLiteral("HTML".into()),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
+/// Verifies line numbers after inline HTML stay exact.
+#[test]
+fn test_span_lines_after_inline_html() {
+    let spanned = tokenize("a\nb\n<?php\n$x").unwrap();
+    let var = spanned.iter().find(|(t, _)| matches!(t, Token::Variable(_))).unwrap();
+    assert_eq!(var.1.span.line, 4);
 }

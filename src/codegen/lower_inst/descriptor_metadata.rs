@@ -245,6 +245,7 @@ pub(super) fn first_class_static_method_descriptor(
         .get(&method_key)?
         .clone();
     let wrapper_sig = crate::codegen::callable_dispatch::static_method_runtime_wrapper_sig(&sig);
+    let scope_class = impl_class.to_string();
     let entry_label = emit_static_method_descriptor_entry_wrapper(
         ctx,
         impl_class,
@@ -264,7 +265,8 @@ pub(super) fn first_class_static_method_descriptor(
             callable_descriptor::CallableDescriptorShape::StaticMethod,
             Some(receiver),
             method_key,
-        ),
+        )
+        .with_scope_class(Some(scope_class)),
     })
 }
 

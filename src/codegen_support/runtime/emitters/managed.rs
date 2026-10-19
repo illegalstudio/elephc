@@ -68,6 +68,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_hash_insert_owned(emitter);
     arrays::emit_hash_get(emitter);
     arrays::emit_hash_iter(emitter);
+    arrays::emit_hash_entry_bind_reference(emitter);
     arrays::emit_call_argument_unpack(emitter);
     arrays::emit_hash_union(emitter);
     arrays::emit_hash_spread(emitter);
@@ -248,6 +249,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     objects::emit_stdclass_from_hash(emitter);
     objects::emit_stdclass_get(emitter);
     objects::emit_stdclass_set(emitter);
+    objects::emit_property_hash_reference(emitter);
     objects::emit_mixed_property_get(emitter);
     objects::emit_mixed_property_set(emitter);
     objects::emit_magic_set_guard(emitter);

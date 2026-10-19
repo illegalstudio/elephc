@@ -717,6 +717,7 @@ dependencies = [
  "inventory",
  "libc",
  "lzma-rs",
+ "md-5 0.10.6",
  "rustls",
  "rustls-pemfile",
  "serde",

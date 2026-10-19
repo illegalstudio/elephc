@@ -33,6 +33,13 @@ impl Symbols {
             .or_else(|| self.extern_functions.get(&key))
             .cloned()
             .or_else(|| canonical_builtin_function_name(name))
+            // The stdlib prelude declares these global functions only after name resolution
+            // (past `autoload::run`), so the resolver must already treat them as global
+            // fallbacks: an unqualified `random_bytes()` inside `namespace App;` binds to the
+            // global function instead of the non-existent `App\random_bytes`.
+            .or_else(|| {
+                crate::stdlib_prelude::provides(name).then(|| name.to_ascii_lowercase())
+            })
     }
 
     /// Returns whether `name` resolves to a user-declared (or extern) function,

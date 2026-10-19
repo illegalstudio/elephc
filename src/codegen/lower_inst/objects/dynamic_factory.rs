@@ -448,6 +448,23 @@ pub(super) fn emit_dynamic_new_class_not_found_fatal(ctx: &mut FunctionContext<'
     abi::emit_exit(ctx.emitter, 1);
 }
 
+/// Throws PHP's catchable `Error: Class "<name>" not found` for source-level `new $name` /
+/// `new (expr)`, with the class name on the 16-byte temporary the caller pushed.
+///
+/// The fatal above is still what the fiber entry uses; a plain `new` must be catchable, as
+/// `try { new ($name)(); } catch (Error $e)` is in PHP. Without a handler the shared throw path
+/// prints PHP's `Uncaught Error` report.
+pub(super) fn emit_dynamic_new_class_not_found_error(ctx: &mut FunctionContext<'_>) {
+    let (name_ptr, name_len) = abi::string_result_regs(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, name_ptr, 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, name_len, 8);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    super::super::conversions::emit_string_result_concat_prefix(ctx, "Class \"");
+    super::super::conversions::emit_string_result_concat_suffix(ctx, "\" not found");
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    super::super::exceptions::emit_error_from_string_result(ctx);
+}
+
 /// Emits PHP's fatal diagnostic for `new $name` when the class expression is not a string.
 pub(super) fn emit_dynamic_new_invalid_class_name_fatal(ctx: &mut FunctionContext<'_>) {
     emit_fatal_message(

@@ -19,6 +19,8 @@ pub mod expr;
 /// Maps tokens that may legally appear as bareword names (identifiers and semi-reserved keywords).
 mod keyword_name;
 pub(crate) mod stmt;
+/// Variable-variable (`$$name`, `${expr}`) parsing into the frame-access shape.
+mod variable_variables;
 
 pub(crate) use attributes::{consume_attribute_lists, parse_attribute_lists};
 
@@ -63,6 +65,17 @@ pub(crate) fn next_anonymous_class_name() -> String {
         id
     });
     format!("class@anonymous#{}", id)
+}
+
+/// Returns the next anonymous-class number, for [`restore_anonymous_class_counter`].
+pub(crate) fn anonymous_class_counter() -> usize {
+    ANONYMOUS_CLASS_COUNTER.with(|counter| counter.get())
+}
+
+/// Rewinds the anonymous-class numbering after a parse whose result is discarded (the autoload
+/// prelude probe), so the real parse names its anonymous classes exactly as without it.
+pub(crate) fn restore_anonymous_class_counter(next: usize) {
+    ANONYMOUS_CLASS_COUNTER.with(|counter| counter.set(next));
 }
 
 /// Records a hoisted anonymous-class `ClassDecl` so the current parse appends it to the program.
@@ -166,11 +179,12 @@ fn parse_checked_tokens(tokens: &[SpannedToken]) -> Result<Program, Vec<CompileE
                 }
             }
         } else {
+            let stmt_start = pos;
             match stmt::parse_stmt(tokens, &mut pos) {
                 Ok(stmt) => stmt::push_parsed_stmt(&mut stmts, stmt),
                 Err(error) => {
                     errors.extend(error.flatten());
-                    stmt::recover_to_statement_boundary(tokens, &mut pos);
+                    stmt::recover_after_failed_stmt(tokens, &mut pos, stmt_start);
                 }
             }
         }

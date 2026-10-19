@@ -164,7 +164,21 @@ impl Checker {
             &receiver_ty,
         );
 
-        self.infer_type(value, env)?;
+        let val_ty = self.infer_type(value, env)?;
+        // An array value can land on any array slot the name selects; the lowering stores it
+        // with that slot's static name when the representations agree, so each array slot of
+        // the receiver's class absorbs the value's element type (no slot changes kind).
+        if matches!(val_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+            let receiver_class = match &obj_ty {
+                PhpType::Object(class_name) => Some(class_name.clone()),
+                _ => self.union_single_object_class(&obj_ty),
+            };
+            if let Some(class_name) = receiver_class {
+                crate::types::checker::stmt_check::assignments::refine_array_slots_for_dynamic_array_write(
+                    self, &class_name, &val_ty,
+                );
+            }
+        }
         if let Some(result_target) = result_target {
             self.infer_type(result_target, env)?;
         }

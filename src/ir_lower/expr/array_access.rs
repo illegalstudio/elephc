@@ -221,7 +221,173 @@ pub(super) fn lower_array_access_from_value(
     expr: &Expr,
     warn_on_missing: bool,
 ) -> LoweredValue {
-    let mut index_value = lower_expr(ctx, index);
+    let index_value = lower_expr(ctx, index);
+    if boxed_receiver_may_hold_string(ctx, array_value) {
+        return lower_boxed_receiver_access_with_string_split(
+            ctx,
+            array_value,
+            index_value,
+            index,
+            expr,
+            warn_on_missing,
+        );
+    }
+    lower_array_access_from_values(ctx, array_value, index_value, index, expr, warn_on_missing)
+}
+
+/// Returns whether a boxed (`mixed` / union) receiver may hold a string at runtime.
+///
+/// `__rt_mixed_array_get` only understands arrays, hashes and objects: a boxed string answers
+/// null, so `f()[0]` on a `mixed` string result printed `""` instead of the character.
+fn boxed_receiver_may_hold_string(ctx: &LoweringContext<'_, '_>, array_value: LoweredValue) -> bool {
+    if !matches!(array_value.ir_type, IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union)) {
+        return false;
+    }
+    match ctx.builder.value_php_type(array_value.value) {
+        PhpType::Mixed => true,
+        PhpType::Union(members) => members
+            .iter()
+            .any(|member| matches!(member.codegen_repr(), PhpType::Str | PhpType::Mixed)),
+        _ => false,
+    }
+}
+
+/// Lowers `$boxed[$k]` with a runtime split: a string payload takes the string-offset read
+/// (`StrCharAt`, with its warnings), anything else the boxed container / `ArrayAccess` read.
+/// Receiver and key are evaluated once, before the split, as in PHP.
+fn lower_boxed_receiver_access_with_string_split(
+    ctx: &mut LoweringContext<'_, '_>,
+    array_value: LoweredValue,
+    index_value: LoweredValue,
+    index: &Expr,
+    expr: &Expr,
+    warn_on_missing: bool,
+) -> LoweredValue {
+    let is_string = ctx.emit_value(
+        Op::TypePredicate,
+        vec![array_value.value],
+        Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::String)),
+        PhpType::Bool,
+        Op::TypePredicate.default_effects(),
+        Some(expr.span),
+    );
+    let result_type = PhpType::Mixed;
+    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
+    let string_block = ctx.builder.create_named_block("mixed.index.string", Vec::new());
+    let boxed_block = ctx.builder.create_named_block("mixed.index.boxed", Vec::new());
+    let merge = ctx.builder.create_named_block("mixed.index.merge", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_string.value,
+        then_target: string_block,
+        then_args: Vec::new(),
+        else_target: boxed_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(string_block);
+    // The cast yields a fresh string and releases an owning receiver.
+    let string_value = coerce_to_string_at_span(ctx, array_value, Some(expr.span));
+    let offset = string_offset_index(ctx, index_value, index);
+    // `StrCharAt` answers a slice of its receiver (or the null sentinel for a silent miss), so
+    // the character is persisted before the cast string is released.
+    let char_value = ctx.emit_value(
+        Op::StrCharAt,
+        vec![string_value.value, offset.value],
+        Some(Immediate::Bool(warn_on_missing)),
+        PhpType::Str,
+        Op::StrCharAt.default_effects(),
+        Some(expr.span),
+    );
+    if warn_on_missing {
+        store_persisted_char(ctx, &temp_name, char_value, expr);
+        crate::ir_lower::ownership::release_if_owned(ctx, string_value, Some(expr.span));
+        branch_to(ctx, merge);
+    } else {
+        let missing = ctx.emit_value(
+            Op::IsNull,
+            vec![char_value.value],
+            None,
+            PhpType::Bool,
+            Op::IsNull.default_effects(),
+            Some(expr.span),
+        );
+        let missing_block = ctx.builder.create_named_block("mixed.index.string.miss", Vec::new());
+        let hit_block = ctx.builder.create_named_block("mixed.index.string.hit", Vec::new());
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: missing.value,
+            then_target: missing_block,
+            then_args: Vec::new(),
+            else_target: hit_block,
+            else_args: Vec::new(),
+        });
+        ctx.builder.position_at_end(missing_block);
+        let null_value = lower_boxed_null(ctx, expr);
+        store_value_into_temp(ctx, &temp_name, result_type.clone(), null_value, expr.span);
+        crate::ir_lower::ownership::release_if_owned(ctx, string_value, Some(expr.span));
+        branch_to(ctx, merge);
+        ctx.builder.position_at_end(hit_block);
+        store_persisted_char(ctx, &temp_name, char_value, expr);
+        crate::ir_lower::ownership::release_if_owned(ctx, string_value, Some(expr.span));
+        branch_to(ctx, merge);
+    }
+
+    ctx.builder.position_at_end(boxed_block);
+    let read = lower_array_access_from_values(ctx, array_value, index_value, index, expr, warn_on_missing);
+    store_value_into_temp(ctx, &temp_name, result_type, read, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    take_owned_temp(ctx, &temp_name, expr.span)
+}
+
+/// Persists a `StrCharAt` slice into its own string and stores it boxed into `temp_name`.
+fn store_persisted_char(
+    ctx: &mut LoweringContext<'_, '_>,
+    temp_name: &str,
+    char_value: LoweredValue,
+    expr: &Expr,
+) {
+    let persisted = ctx.emit_value(
+        Op::StrPersist,
+        vec![char_value.value],
+        None,
+        PhpType::Str,
+        Op::StrPersist.default_effects(),
+        Some(expr.span),
+    );
+    store_value_into_temp(ctx, temp_name, PhpType::Mixed, persisted, expr.span);
+}
+
+/// Converts an evaluated string-offset key to the integer `StrCharAt` expects, exactly like the
+/// statically typed string read: float truncation warns, a boxed key is cast and released.
+fn string_offset_index(
+    ctx: &mut LoweringContext<'_, '_>,
+    index_value: LoweredValue,
+    index: &Expr,
+) -> LoweredValue {
+    if index_value.ir_type == IrType::F64 {
+        return ctx.emit_value(
+            Op::FToI,
+            vec![index_value.value],
+            Some(Immediate::Bool(true)),
+            PhpType::Int,
+            Op::FToI.default_effects() | Effects::MAY_WARN,
+            Some(index.span),
+        );
+    }
+    coerce_string_offset_to_int(ctx, index_value, index.span)
+}
+
+/// Lowers array access once both the receiver and the key are evaluated.
+fn lower_array_access_from_values(
+    ctx: &mut LoweringContext<'_, '_>,
+    array_value: LoweredValue,
+    index_value: LoweredValue,
+    index: &Expr,
+    expr: &Expr,
+    warn_on_missing: bool,
+) -> LoweredValue {
+    let mut index_value = index_value;
     let op = match array_value.ir_type {
         IrType::Heap(IrHeapKind::Array) => {
             let index_ty = lowered_index_expr_key_type(ctx, index, index_value.value);

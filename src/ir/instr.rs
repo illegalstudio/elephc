@@ -941,6 +941,10 @@ pub enum Op {
     CallablePtr,
     /// Normalizes any supported PHP callable form into an owned descriptor.
     NormalizeCallable,
+    /// Reads one reflection fact from a Closure's runtime descriptor; the `I64` immediate picks
+    /// it (`0` = `isAnonymous()` as bool, `1` = `getClosureScopeClass()` name as a borrowed
+    /// string, empty for no scope). Throws `Error` when the descriptor cannot answer.
+    CallableReflectionMeta,
     /// Returns the address of one compiler-emitted PDO callback adapter.
     PdoAdapterAddr,
     /// Reports whether an AOT class selected by runtime name has a constructor.
@@ -1000,6 +1004,31 @@ pub enum Op {
     /// PHP address-of operation, a missing key warns and returns no cell without inserting null.
     /// Operands: array, index. No immediate.
     LoadArrayElemRefCellExisting,
+    /// Loads the reference-cell pointer a ref-bound local's slot holds, for binding it into a
+    /// property or array element (`$o->p = &$x`, `$a[k] = &$x`). A `LocalSlotPair` immediate
+    /// (alias slot, owner slot) names a cell this frame owns; a bare `LocalSlot` names a
+    /// borrowed address (a by-reference parameter), which the backend validates as a live
+    /// managed cell at run time and otherwise raises a catchable `Error`. Result: `Pointer`.
+    LoadLocalRefCellPtr,
+    /// Makes an object's reference property slot hold the given managed cell (`$o->p = &$x`):
+    /// retains the new cell, publishes it, then releases the previous one. Operands: object,
+    /// cell pointer. Immediate: property name data id.
+    BindPropRefCell,
+    /// Makes an array element hold the given managed cell (`$a[k] = &$x`). The container is
+    /// normalized to boxed-Mixed hash storage exactly like `LoadArrayElemRefCell` (separating a
+    /// shared table and inserting a missing key), the entry's previous value or cell is released
+    /// and the entry is stamped tag 11 over the retained cell. Operands: array, index, cell.
+    BindArrayElemRefCell,
+    /// Promotes the property a runtime name selects in an object's per-instance property hash
+    /// (a `stdClass` property, or a dynamic property of a class with hash storage) to a managed
+    /// reference cell and returns that cell, inserting null for a missing name
+    /// (`$o->{$k}['x'] = &$v` reaches its container this way). Operands: object, name.
+    /// Result: `Pointer`.
+    LoadDynamicPropRefCell,
+    /// Makes the property a runtime name selects in an object's per-instance property hash hold
+    /// the given managed cell (`$o->{$k} = &$v` on `stdClass` or a dynamic property).
+    /// Operands: object, name, cell pointer.
+    BindDynamicPropRefCell,
     /// Binds a local slot to a ref-cell pointer. A LocalSlot immediate borrows the cell;
     /// a LocalSlotPair gives the target and an owned cell slot, retaining the cell for scope cleanup.
     BindRefCellPtr,
@@ -1252,10 +1281,14 @@ impl Op {
             }
             InvokerRefArg => E::READS_LOCAL | E::ALLOC_HEAP,
             MixedBox | MixedClone | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
-            | FirstClassCallableNew | CallableArrayNew | NormalizeCallable | BufferNew
+            | FirstClassCallableNew | CallableArrayNew | BufferNew
             | GeneratorNew => {
                 E::ALLOC_HEAP
             }
+            // A value that names nothing callable throws (`$v(...)`, `Closure::fromCallable()`)
+            // or aborts (bridge normalization), so the conversion is never dead code.
+            NormalizeCallable => E::ALLOC_HEAP | E::MAY_THROW,
+            CallableReflectionMeta => E::READS_HEAP | E::MAY_THROW,
             ClosureNew => E::READS_LOCAL | E::WRITES_LOCAL
                 | E::READS_HEAP | E::WRITES_HEAP | E::READS_GLOBAL
                 | E::WRITES_GLOBAL | E::ALLOC_HEAP | E::MAY_THROW | E::REFCOUNT_OP,
@@ -1334,6 +1367,13 @@ impl Op {
             BindRefCellPtr | AdoptRefCellPtr => {
                 E::WRITES_LOCAL | E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
             }
+            // The borrowed form validates the address and raises a catchable `Error`.
+            LoadLocalRefCellPtr => E::READS_LOCAL | E::READS_HEAP | E::MAY_THROW,
+            // Releasing the replaced cell or value can run an arbitrary destructor.
+            BindPropRefCell | BindArrayElemRefCell => E::all(),
+            // Both can allocate or split the property hash and release a replaced value, which
+            // can run an arbitrary destructor, and both can emit the dynamic-creation notice.
+            LoadDynamicPropRefCell | BindDynamicPropRefCell => E::all(),
             // Replacing a pending return can retire a payload with an arbitrary destructor.
             AcquireRefCell => E::all(),
             // `DynamicPropUnset` carries exactly `PropUnset`'s contract: the same storage is
@@ -1682,6 +1722,7 @@ impl Op {
             }
             CallablePtr => "callable_ptr",
             NormalizeCallable => "normalize_callable",
+            CallableReflectionMeta => "callable_reflection_meta",
             PdoAdapterAddr => "pdo_adapter_addr",
             DynamicClassHasConstructor => "dynamic_class_has_constructor",
             DynamicPdoStatementClassStatus => "dynamic_pdo_statement_class_status",
@@ -1698,6 +1739,11 @@ impl Op {
             LoadArrayElemRefCell => "load_array_elem_ref_cell",
             LoadArrayElemRefCellExisting => "load_array_elem_ref_cell_existing",
             BindRefCellPtr => "bind_ref_cell_ptr",
+            LoadLocalRefCellPtr => "load_local_ref_cell_ptr",
+            BindPropRefCell => "bind_prop_ref_cell",
+            LoadDynamicPropRefCell => "load_dynamic_prop_ref_cell",
+            BindDynamicPropRefCell => "bind_dynamic_prop_ref_cell",
+            BindArrayElemRefCell => "bind_array_elem_ref_cell",
             AdoptRefCellPtr => "adopt_ref_cell_ptr",
             AcquireRefCell => "acquire_ref_cell",
             DynamicPropGet => "dynamic_prop_get",

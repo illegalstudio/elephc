@@ -52,6 +52,9 @@ fn stmt_uses_this(stmt: &Stmt) -> bool {
         | StmtKind::TypedAssign { value: e, .. }
         | StmtKind::ArrayPush { value: e, .. } => expr_uses_this(e),
         StmtKind::RefAssign { .. } => false,
+        StmtKind::RefAssignPlace { target, source } => {
+            expr_uses_this(target) || expr_uses_this(source)
+        }
         StmtKind::ArrayAssign { index, value, .. } => {
             expr_uses_this(index) || expr_uses_this(value)
         }
@@ -236,6 +239,10 @@ fn stmt_must_not_use_this(stmt: &Stmt, span: Span) -> Result<(), CompileError> {
         | StmtKind::TypedAssign { value: e, .. }
         | StmtKind::ArrayPush { value: e, .. } => expr_must_not_use_this(e, span),
         StmtKind::RefAssign { .. } => Ok(()),
+        StmtKind::RefAssignPlace { target, source } => {
+            expr_must_not_use_this(target, span)?;
+            expr_must_not_use_this(source, span)
+        }
         StmtKind::ArrayAssign { index, value, .. } => {
             expr_must_not_use_this(index, span)?;
             expr_must_not_use_this(value, span)

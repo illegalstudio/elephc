@@ -117,7 +117,9 @@ impl Interpreter {
                 path,
                 once: _,
                 required: _,
-            } => match self.eval(path) {
+            // The site marker `resolver::dynamic_includes::mark` puts around a dynamic path is
+            // transparent here: the rule interpreter evaluates the path itself.
+            } => match self.eval(crate::resolver::dynamic_includes::unwrap_site(path)) {
                 Some(Value::Str { value, .. }) => Flow::Include(PathBuf::from(value)),
                 _ => Flow::Unfoldable,
             },

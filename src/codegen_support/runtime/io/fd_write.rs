@@ -39,6 +39,14 @@ pub fn emit_fd_write(emitter: &mut Emitter) {
     emitter.instruction("b __rt_user_wrapper_fwrite");                          // wrapper fd: tail-call stream_write (uncond → cross-atom safe)
     emitter.label("__rt_fd_write_real_fd");
     emitter.syscall(4);                                                         // normal fd: write(fd, buf, len) → x0 = bytes written
+    // Darwin reports a failed write as a positive errno with the carry set; normalize it to
+    // -1 like Linux's -errno so no caller adds an errno to a byte count.
+    if emitter.platform.needs_cmp_before_error_branch() {
+        emitter.instruction("cmp x0, #0");                                      // Linux: a negative result is -errno
+    }
+    emitter.instruction(&emitter.platform.branch_on_syscall_success("__rt_fd_write_ok")); // keep the byte count of a successful write
+    emitter.instruction("mov x0, #-1");                                         // a failed write is -1, never an errno byte count
+    emitter.label("__rt_fd_write_ok");
     emitter.instruction("ret");                                                 // return the byte count
 }
 

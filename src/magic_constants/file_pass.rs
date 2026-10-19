@@ -44,6 +44,11 @@ struct FilePass {
 }
 
 impl Pass for FilePass {
+    /// Magic constants in constant initializers are lowered too.
+    fn walks_class_const_values(&self) -> bool {
+        true
+    }
+
     /// Transforms `__FILE__` → the stored file path string and `__DIR__` → the stored directory string.
     /// All other `MagicConstant` variants are returned unchanged.
     fn transform_magic(&self, _span: Span, mc: MagicConstant) -> ExprKind {

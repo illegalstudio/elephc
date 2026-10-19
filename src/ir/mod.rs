@@ -47,7 +47,7 @@ pub use instr::{
     PropertyFetchMode, RuntimeId,
 };
 pub use module::{
-    ClassTable, CloneOverrideApplicator, DataId, DataPool, EnumTable, ExternDecl, ExternParamDecl,
+    ClassTable, CloneOverrideApplicator, DataId, FamilyBodyContract, DataPool, EnumTable, ExternDecl, ExternParamDecl,
     InterfaceTable, Module, PackedLayoutTable, TraitMethodInfo,
 };
 pub use pcntl_runtime::{PcntlRuntime, PcntlTargetSupport};

@@ -11,7 +11,9 @@
 mod arrays;
 mod locals;
 mod properties;
+pub(crate) use properties::{refine_array_slots_for_dynamic_array_write, refine_array_slots_for_dynamic_push};
 mod properties_null_coalesce;
+mod reference_places;
 mod static_properties;
 
 use crate::errors::CompileError;
@@ -19,6 +21,57 @@ use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind, NESTED_APPEND_TEMP_PREF
 use crate::types::{normalized_array_key_type, PhpType, TypeEnv};
 
 use super::super::Checker;
+
+/// Returns the type a `static $x = <init>;` local carries at its declaration, from the type of
+/// its initializer.
+///
+/// The value a static holds when the declaration is reached is whatever the PREVIOUS call left
+/// in it, not the initializer. An initializer that says nothing about that value (`static $x;`,
+/// `static $x = null;`, `static $x = [];`) would otherwise make every later read fold against
+/// null or an empty array: `$x ??= make()` re-ran `make()` on every call and `$c[$k] ?? 0` never
+/// saw the keys an earlier call stored. Such a static is boxed `Mixed` storage, read at run time.
+/// An informative initializer (`static $n = 0;`, `static $m = ['a' => 1];`) keeps its type, and an
+/// assignment of another type is refused or widened by the ordinary local rules.
+/// An array initializer keeps the array contract as PHP's general (boxed) `array`, so array
+/// builtins still accept it while its keys and elements are read at run time: a later call can
+/// store any key or value into it (`static $u = ['x' => 0]; $u[3] = 1;` rewrote a string-keyed
+/// hash slot as another layout and corrupted it).
+///
+/// A non-empty literal array keeps its precise element types when the body never writes the
+/// static after its declaration (`static $map = ['x' => [1]]; return $map[$k];`): nothing can
+/// change its layout, and `$map['x']` stays an `array` for `: array`, `array_map`, `sort`...
+/// `written` is that body scan (`crate::ir_lower::written_static_locals`).
+pub(crate) fn static_local_declared_type(init_ty: PhpType, written: bool) -> PhpType {
+    match init_ty.codegen_repr() {
+        PhpType::Void | PhpType::Never => PhpType::Mixed,
+        PhpType::Array(element) if matches!(element.codegen_repr(), PhpType::Never | PhpType::Void) => {
+            PhpType::php_array()
+        }
+        PhpType::Array(_) | PhpType::AssocArray { .. } if written => PhpType::php_array(),
+        _ => init_ty,
+    }
+}
+
+/// Widens the untyped static array property an element chain starts from (`C::$p[$k]..`) to
+/// the boxed PHP array representation its addressable (reference/unset) path needs.
+/// `widen_null_default` also widens a null-defaulted slot, which a reference autovivifies into
+/// an array; an `unset` leaves it null.
+pub(crate) fn widen_static_property_element_root(
+    checker: &mut Checker,
+    container: &Expr,
+    widen_null_default: bool,
+) -> Result<(), CompileError> {
+    if let Some((receiver, property)) = locals::element_static_property_root(container) {
+        static_properties::widen_referenced_untyped_static_property(
+            checker,
+            receiver,
+            property,
+            container.span,
+            widen_null_default,
+        )?;
+    }
+    Ok(())
+}
 
 impl Checker {
     /// Type-checks the parser-generated `$array[$index][] = $value` sequence when
@@ -136,6 +189,13 @@ impl Checker {
         stmt: &Stmt,
         env: &mut TypeEnv,
     ) -> Result<(), CompileError> {
+        // A by-reference array literal (`[&$this->p]`) lowers into its expression's prelude as
+        // ordered writes, `Synthetic` groups and `unset(...)` statements (see
+        // `parser::expr::prefix::build_reference_literal`); those are checked as the ordinary
+        // statements they are.
+        if matches!(stmt.kind, StmtKind::Synthetic(_) | StmtKind::ExprStmt(_)) {
+            return self.check_stmt(stmt, env);
+        }
         let result = match &stmt.kind {
             StmtKind::Assign { name, value } => {
                 // The one statement-form local assignment: `stmt_form: true` makes an
@@ -145,6 +205,9 @@ impl Checker {
             }
             StmtKind::RefAssign { target, source } => {
                 locals::check_ref_assign(self, target, source, stmt.span, env)
+            }
+            StmtKind::RefAssignPlace { target, source } => {
+                reference_places::check_ref_assign_place(self, target, source, stmt.span, env)
             }
             StmtKind::ArrayAssign {
                 array,
@@ -289,6 +352,8 @@ impl Checker {
             StmtKind::RefAssign { target, .. } => {
                 Self::purge_property_narrowings_for_root(env, target)
             }
+            // The place may be (or reach) a property, and its new cell can be written through.
+            StmtKind::RefAssignPlace { .. } => Self::purge_property_narrowings(env),
             StmtKind::ListUnpack { vars, .. } | StmtKind::Global { vars } => {
                 for name in vars {
                     Self::purge_property_narrowings_for_root(env, name);
@@ -306,5 +371,49 @@ fn assignment_target_may_write_property(target: &Expr) -> bool {
         ExprKind::Variable(_) => false,
         ExprKind::ArrayAccess { array, .. } => assignment_target_may_write_property(array),
         _ => true,
+    }
+}
+
+/// Widens the untyped property or static property at the root of an element write chain.
+///
+/// Called for nested writes (`$o->p[$k1][$k2] = v`) and for element `unset()`s whose receiver is
+/// a property (`unset($o->p[$k])`, `unset($o->p[$k1][$k2])`): both mutate the slot through its
+/// stored cell, which only the boxed PHP-array representation provides.
+pub(crate) fn widen_property_root_for_element_write(
+    checker: &mut Checker,
+    target: &Expr,
+    span: crate::span::Span,
+    env: &TypeEnv,
+) -> Result<(), CompileError> {
+    let mut root = target;
+    while let ExprKind::ArrayAccess { array, .. } = &root.kind {
+        root = array;
+    }
+    match &root.kind {
+        ExprKind::PropertyAccess { object, property } => {
+            properties::widen_property_root_for_nested_write(checker, object, property, env)
+        }
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            static_properties::widen_static_property_root_for_nested_write(
+                checker, receiver, property, span,
+            )
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Models write-context autovivification on the local root of a nested `unset()` target
+/// (`unset($c[$k1][$k2])`): the removal goes through the same boxed parent cells as a nested write,
+/// so the root's element type is widened the same way.
+pub(crate) fn widen_local_root_for_nested_unset(
+    checker: &mut Checker,
+    target: &Expr,
+    env: &mut TypeEnv,
+) -> Result<(), CompileError> {
+    match &target.kind {
+        ExprKind::ArrayAccess { array, .. } if matches!(array.kind, ExprKind::ArrayAccess { .. }) => {
+            arrays::widen_nested_write_local_root(checker, target, env)
+        }
+        _ => Ok(()),
     }
 }

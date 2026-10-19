@@ -199,6 +199,15 @@ pub(super) fn emit_instance_method_first_class_callable(
         )));
     }
     let receiver_ty = PhpType::Object(normalized_class.clone());
+    // A subclass override would make the runtime receiver's method, not `impl_class`, the
+    // Closure's scope, so the scope is only recorded when no override can be selected.
+    let scope_class = (!crate::codegen::lower_inst::callables::instance_method_may_be_overridden(
+        ctx,
+        &normalized_class,
+        &method_key,
+        &impl_class,
+    ))
+    .then(|| impl_class.clone());
     let captures = vec![("receiver".to_string(), receiver_ty.clone(), false)];
     let entry_label =
         emit_instance_method_descriptor_entry_wrapper(ctx, &impl_class, &method_key, &sig)?;
@@ -219,7 +228,8 @@ pub(super) fn emit_instance_method_first_class_callable(
             callable_descriptor::CallableDescriptorShape::InstanceMethod,
             Some(normalized_class),
             method_name,
-        ),
+        )
+        .with_scope_class(scope_class),
         Some(&invoker_label),
     );
     emit_runtime_descriptor_with_receiver_capture(ctx, &descriptor_label, receiver, &receiver_ty)?;

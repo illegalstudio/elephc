@@ -95,6 +95,73 @@ pub(crate) const TAGGED_SCALAR_ARRAY_VALUE_TYPE: i64 = 11;
 /// carries it: there a tagged slot is `0`, since it owns no heap reference.
 pub(crate) const TAGGED_SCALAR_PROPERTY_TAG: u64 = 12;
 
+/// Flag a class property descriptor ORs into a property's value tag when the property's slot
+/// holds a POINTER to its value's storage instead of the value: an object-owned reference
+/// property (whose slot holds a managed reference cell) or a by-reference promoted constructor
+/// property (whose slot borrows the caller's storage). The pointee has the slot's `{low, high}`
+/// layout and the low byte is the tag of the value it holds, so a walker dereferences once with
+/// [`emit_deref_reference_property_slot`] and then dispatches exactly as for a plain slot. The
+/// GC descriptor never carries it: it uses tag `11` for an owned cell and `0` for a borrow.
+pub(crate) const REFERENCE_PROPERTY_TAG_FLAG: u64 = 0x100;
+
+/// Follows a reference property slot to the value it aliases.
+///
+/// Expects a descriptor's tag in `tag_reg` and the SLOT's low and high words in `low_reg` and
+/// `high_reg`. When the tag carries [`REFERENCE_PROPERTY_TAG_FLAG`], the low word is the address
+/// of the aliased storage: its two words replace the slot's and the flag is cleared. Every other
+/// tag passes through unchanged. Run it before [`emit_resolve_tagged_scalar_property_tag`].
+pub(crate) fn emit_deref_reference_property_slot(
+    emitter: &mut Emitter,
+    tag_reg: &str,
+    low_reg: &str,
+    high_reg: &str,
+) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("tst {}, #{}", tag_reg, REFERENCE_PROPERTY_TAG_FLAG)); // does the slot hold a pointer to the aliased value?
+            emitter.instruction("b.eq 1f");                                     // a plain slot holds its value inline
+            emitter.instruction(&format!("ldr {}, [{}, #8]", high_reg, low_reg)); // read the aliased value's high word
+            emitter.instruction(&format!("ldr {}, [{}]", low_reg, low_reg));    // read the aliased value's low word
+            emitter.instruction(&format!("and {}, {}, #0xff", tag_reg, tag_reg)); // keep the aliased value's own tag
+            emitter.raw("1:");
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("test {}, {}", tag_reg, REFERENCE_PROPERTY_TAG_FLAG)); // does the slot hold a pointer to the aliased value?
+            emitter.instruction("jz 1f");                                       // a plain slot holds its value inline
+            emitter.instruction(&format!("mov {}, QWORD PTR [{} + 8]", high_reg, low_reg)); // read the aliased value's high word
+            emitter.instruction(&format!("mov {}, QWORD PTR [{}]", low_reg, low_reg)); // read the aliased value's low word
+            emitter.instruction(&format!("and {}, 0xff", tag_reg));             // keep the aliased value's own tag
+            emitter.raw("1:");
+        }
+    }
+}
+
+/// Address form of [`emit_deref_reference_property_slot`] for a walker that WRITES a slot: when
+/// the tag carries [`REFERENCE_PROPERTY_TAG_FLAG`], `slot_reg` is replaced by the address the
+/// slot points to and the flag is cleared, so the store lands in the shared storage.
+pub(crate) fn emit_deref_reference_property_address(
+    emitter: &mut Emitter,
+    tag_reg: &str,
+    slot_reg: &str,
+) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("tst {}, #{}", tag_reg, REFERENCE_PROPERTY_TAG_FLAG)); // does the slot hold a pointer to the aliased value?
+            emitter.instruction("b.eq 1f");                                     // a plain slot is written in place
+            emitter.instruction(&format!("ldr {}, [{}]", slot_reg, slot_reg));  // write through to the aliased storage instead
+            emitter.instruction(&format!("and {}, {}, #0xff", tag_reg, tag_reg)); // keep the aliased value's own tag
+            emitter.raw("1:");
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("test {}, {}", tag_reg, REFERENCE_PROPERTY_TAG_FLAG)); // does the slot hold a pointer to the aliased value?
+            emitter.instruction("jz 1f");                                       // a plain slot is written in place
+            emitter.instruction(&format!("mov {}, QWORD PTR [{}]", slot_reg, slot_reg)); // write through to the aliased storage instead
+            emitter.instruction(&format!("and {}, 0xff", tag_reg));             // keep the aliased value's own tag
+            emitter.raw("1:");
+        }
+    }
+}
+
 /// Accepted-tag mask bit that admits a `false` member's boxed tag-3 payload only when it is zero.
 ///
 /// `true` and `false` share runtime value tag 3, so a declared `false` (or `int|false`) member

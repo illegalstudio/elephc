@@ -319,6 +319,9 @@ pub(super) fn lower_ref_assign(ctx: &mut LoweringContext<'_, '_>, target: &str, 
         ExprKind::ArrayAccess { .. } => {
             crate::ir_lower::expr::lower_ref_assign_array_elem(ctx, target, source, span);
         }
+        ExprKind::DynamicPropertyAccess { .. } => {
+            crate::ir_lower::expr::lower_ref_assign_dynamic_property(ctx, target, source, span);
+        }
         _ => {
             // Other source shapes are rejected by the checker;
             // evaluate for side effects to keep lowering total.

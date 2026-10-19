@@ -838,6 +838,7 @@ fn dump_prelude_contract_seed_on_request() {
             TypeExpr::Float => "float".to_string(),
             TypeExpr::Bool => "bool".to_string(),
             TypeExpr::False => "false".to_string(),
+            TypeExpr::True => "true".to_string(),
             TypeExpr::Str => "string".to_string(),
             TypeExpr::Void => "void".to_string(),
             TypeExpr::Never => "never".to_string(),

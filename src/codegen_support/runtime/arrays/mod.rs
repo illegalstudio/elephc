@@ -474,6 +474,7 @@ pub use hash_ensure_unique::emit_hash_ensure_unique;
 pub use hash_insert_owned::emit_hash_insert_owned;
 /// Emit owned hash insert helper.
 pub use hash_iter::emit_hash_iter;
+pub use hash_entry_reference::emit_hash_entry_bind_reference;
 /// Emit hash iterator helper.
 pub use hash_new::emit_hash_new;
 /// Emit new hash helper.

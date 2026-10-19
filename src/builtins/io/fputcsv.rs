@@ -5,7 +5,8 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - `check` validates the `stream` argument is a stream resource and returns `Int`.
+//! - `check` validates the `stream` argument is a stream resource and returns `int|false`
+//!   (a failed write is `false`, the runtime's `-1` boxed by the lowering).
 //! - Arguments are pre-inferred by the registry before the hook runs.
 
 use crate::builtins::spec::BuiltinCheckCtx;
@@ -20,7 +21,7 @@ builtin! {
     ),
 }
 
-/// Validates the stream argument is a stream resource and returns `Int`.
+/// Validates the stream argument is a stream resource and returns `int|false`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     crate::types::checker::builtins::io::common::ensure_stream_resource(
         cx.checker,
@@ -28,5 +29,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         &cx.args[0],
         cx.env,
     )?;
-    Ok(PhpType::Int)
+    Ok(cx.checker.normalize_union_type(vec![PhpType::Int, PhpType::False]))
 }

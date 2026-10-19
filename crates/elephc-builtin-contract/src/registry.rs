@@ -157,8 +157,15 @@ mod tests {
         // feature; see `crate::catalog_curl`'s module doc.
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         // +11 over main: the `__elephc_opcache_rt_*` runtime script-cache helpers this
-        // branch adds (see `support.rs` for the roll-call).
-        assert_eq!(contracts().len(), 1160 + curl_surface);
+        // branch adds (see `support.rs` for the roll-call), +3 for the internal
+        // `__elephc_dynamic_{class_constant,static_property,static_call}` desugar targets of
+        // `$class::X`, +5 for the internal first-class-callable / Closure reflection helpers
+        // (`__elephc_closure_from_callable{,_type_error}`, `__elephc_callable_is_anonymous`,
+        // `__elephc_callable_scope_class`, `__elephc_reflection_class_named`), +1 for the
+        // `__elephc_dynamic_property_push` desugar target of `$obj->{$name}[] = $v`, +1 for
+        // `__elephc_include_warning`, the E_WARNING of a manifest-closed dynamic include,
+        // +14 for the internal `__elephc_bcnumber_*` BcMath\Number helpers from main.
+        assert_eq!(contracts().len(), 1170 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

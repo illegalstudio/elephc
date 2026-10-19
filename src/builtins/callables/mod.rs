@@ -67,6 +67,23 @@ pub mod __elephc_clone_override_reference_guard;
 // express for a runtime `mixed` today.
 #[allow(non_snake_case)]
 pub mod __elephc_object_is_enum;
+
+// Internal Closure conversions behind `$callable(...)` and a non-literal
+// `Closure::fromCallable()`: they turn a runtime callable value into a descriptor
+// and throw PHP's Error/TypeError when the value names nothing callable.
+#[allow(non_snake_case)]
+pub mod __elephc_closure_from_callable;
+#[allow(non_snake_case)]
+pub mod __elephc_closure_from_callable_type_error;
+
+// Internal descriptor reads behind `ReflectionFunction` over a runtime Closure, plus the
+// name-only `ReflectionClass` its `getClosureScopeClass()` returns.
+#[allow(non_snake_case)]
+pub mod __elephc_callable_is_anonymous;
+#[allow(non_snake_case)]
+pub mod __elephc_callable_scope_class;
+#[allow(non_snake_case)]
+pub mod __elephc_reflection_class_named;
 #[allow(non_snake_case)]
 pub mod __elephc_object_prop_count;
 #[allow(non_snake_case)]

@@ -180,6 +180,7 @@ fn record_statements(group: &mut PreludeGroup, statements: &[Stmt], namespace: O
             StmtKind::Echo(_)
             | StmtKind::Assign { .. }
             | StmtKind::RefAssign { .. }
+            | StmtKind::RefAssignPlace { .. }
             | StmtKind::ArrayAssign { .. }
             | StmtKind::NestedArrayAssign { .. }
             | StmtKind::ArrayPush { .. }

@@ -131,6 +131,7 @@ pub(super) fn lower_builtin_callable_body(
         None,
         return_type,
         signature.declared_return,
+        false,
         &signature.params,
         None,
         false,

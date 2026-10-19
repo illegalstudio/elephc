@@ -121,6 +121,7 @@ fn dummy_check_result() -> CheckResult {
     );
 
     CheckResult {
+        escaping_ref_params: std::collections::HashSet::new(),
         requested_instantiations: Vec::new(),
         requested_class_instantiations: Vec::new(),
         requested_method_instantiations: Vec::new(),
@@ -150,7 +151,9 @@ fn dummy_check_result() -> CheckResult {
         buffer_read_sites: Default::default(),
         first_class_builtin_call_types: HashMap::new(),
         loop_storage_types: HashMap::new(),
+        maybe_undefined: Default::default(),
         string_incdec_locals: Default::default(),
+        static_local_declared_types: Default::default(),
         local_bind_kill_sites: Default::default(),
         local_ref_detach_sites: Default::default(),
         local_retype_sites: Default::default(),

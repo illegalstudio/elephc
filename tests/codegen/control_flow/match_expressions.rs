@@ -428,13 +428,10 @@ echo gettype(pick(0)), "|", gettype(pick(1));
     assert_eq!(out, "object|string");
 }
 
-/// Pins the documented int/bool arm-merge incompatibility (see "Known
-/// incompatibilities with PHP" in docs/php/types.md): int and bool arms share
-/// one runtime representation, so both arms observe it — PHP would print
-/// "integer|boolean" here. If this test starts failing with PHP's output, the
-/// incompatibility got fixed: update the docs entry alongside.
+/// Int and bool arms share one register representation but not a PHP type: each arm keeps its
+/// own type, as in PHP (this used to collapse both arms to `bool`).
 #[test]
-fn test_match_int_and_bool_arms_merge_documented_divergence() {
+fn test_match_int_and_bool_arms_keep_their_types() {
     let out = compile_and_run(
         r#"<?php
 $r = match($argc) {
@@ -448,7 +445,7 @@ $w = match($argc) {
 echo gettype($r), "|", gettype($w);
 "#,
     );
-    assert_eq!(out, "boolean|boolean");
+    assert_eq!(out, "integer|boolean");
 }
 
 /// Tests that heterogeneous scalar match arms stay heap-balanced: the boxed

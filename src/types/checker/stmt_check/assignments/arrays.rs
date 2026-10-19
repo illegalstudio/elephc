@@ -230,6 +230,8 @@ pub(super) fn check_nested_array_assign(
         return Err(CompileError::new(span, "Invalid assignment target"));
     };
 
+    widen_nested_write_local_root(checker, target, env)?;
+    super::widen_property_root_for_element_write(checker, target, span, env)?;
     let arr_ty = checker.infer_type_with_assignment_effects(array, env)?;
     checker.infer_type_with_assignment_effects(index, env)?;
     checker.infer_type_with_assignment_effects(value, env)?;
@@ -249,6 +251,90 @@ pub(super) fn check_nested_array_assign(
             "Nested array assignment requires a Mixed or ArrayAccess target",
         )),
     }
+}
+
+/// Models PHP write-context autovivification on the LOCAL root of a nested write.
+///
+/// `$c[$k1][$k2] = v` makes `$c[$k1]` an autovivified array, so the root's element type becomes
+/// `Mixed` and its key type follows `$k1` exactly as a flat `$c[$k1] = …` write would: a
+/// string-valued key (literal, variable, property or call) means hash storage, a runtime-tagged
+/// key keeps `Array(Mixed)` for the tag-dispatching helpers, and an integer key keeps indexed
+/// storage (a gap is promoted at runtime). Without this the root kept its empty `array<never>`
+/// type, the inner levels typed as `never` ("Cannot index non-array" / "requires a Mixed
+/// target"), and return/parameter types derived from the root disagreed with the hash storage
+/// the lowering builds.
+///
+/// Only roots whose elements are already `Mixed` (or not yet known) are widened: those are
+/// exactly the containers the nested-write lowering autovivifies through. A declared element
+/// type is a contract and is left alone.
+pub(super) fn widen_nested_write_local_root(
+    checker: &mut Checker,
+    target: &Expr,
+    env: &mut TypeEnv,
+) -> Result<(), CompileError> {
+    let mut current = target;
+    let mut root_index = None;
+    while let ExprKind::ArrayAccess { array, index } = &current.kind {
+        if matches!(array.kind, ExprKind::Variable(_)) {
+            root_index = Some(index.as_ref());
+        }
+        current = array;
+    }
+    let (ExprKind::Variable(name), Some(index)) = (&current.kind, root_index) else {
+        return Ok(());
+    };
+    if checker.typed_local_names.contains_key(name.as_str()) {
+        return Ok(());
+    }
+    let Some(root_ty) = env.get(name).cloned() else {
+        return Ok(());
+    };
+    let idx_ty = checker.infer_type(index, env)?;
+    let normalized = normalized_array_key_type(index, idx_ty.clone());
+    let is_foreach_key =
+        matches!(&index.kind, ExprKind::Variable(key) if checker.is_foreach_key(key));
+    let string_key = !is_foreach_key
+        && (matches!(normalized, PhpType::Str) || matches!(idx_ty, PhpType::Str));
+    let widened = match &root_ty {
+        PhpType::Array(elem)
+            if matches!(elem.as_ref(), PhpType::Never)
+                || elem.codegen_repr() == PhpType::Mixed
+                || is_concrete_container(elem) =>
+        {
+            if string_key {
+                let key = if matches!(elem.as_ref(), PhpType::Never) {
+                    PhpType::Str
+                } else {
+                    merge_array_key_types(PhpType::Int, PhpType::Str)
+                };
+                PhpType::AssocArray {
+                    key: Box::new(key),
+                    value: Box::new(PhpType::Mixed),
+                }
+            } else {
+                PhpType::Array(Box::new(PhpType::Mixed))
+            }
+        }
+        PhpType::AssocArray { key, value }
+            if value.codegen_repr() == PhpType::Mixed || is_concrete_container(value) =>
+        {
+            PhpType::AssocArray {
+                key: Box::new(merge_array_key_types(*key.clone(), normalized)),
+                value: Box::new(PhpType::Mixed),
+            }
+        }
+        _ => return Ok(()),
+    };
+    if widened != root_ty {
+        env.insert(name.clone(), widened);
+    }
+    Ok(())
+}
+
+/// Returns whether an element type is itself a concretely typed array, whose slots the
+/// nested-write lowering boxes (`ArrayToMixed` / `HashToMixed`) before writing through them.
+fn is_concrete_container(ty: &PhpType) -> bool {
+    matches!(ty.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
 }
 
 /// Validates and updates the type environment for `$array[] = $value` (push) assignments.
@@ -281,6 +367,13 @@ pub(super) fn check_array_push(
             let merged_ty = checker
                 .merge_array_element_type(elem_ty, &val_ty)
                 .unwrap_or(PhpType::Mixed);
+            // `$a = []; $a[] = null;`: a list slot has no `null`-only representation (`Void`
+            // has no storage), so the element is boxed like a literal `null` element is.
+            let merged_ty = if merged_ty.codegen_repr() == PhpType::Void {
+                PhpType::Mixed
+            } else {
+                merged_ty
+            };
             env.insert(array.to_string(), PhpType::Array(Box::new(merged_ty)));
         }
     } else if let PhpType::AssocArray {

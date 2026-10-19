@@ -270,7 +270,11 @@ impl Checker {
                 });
             if seen_idx < regular_param_count
                 && (!declared || generic_array_param)
-                && !matches!(actual_ty, PhpType::Never | PhpType::Callable)
+                // A `Callable` argument is an observation like any other: skipping it
+                // left `function value($v)` called with a closure AND with a string typed as
+                // whichever non-callable arrived, and the closure (or the string) was then
+                // read through the wrong representation. It joins, so the mix is `mixed`.
+                && !matches!(actual_ty, PhpType::Never)
                 && (!matches!(actual_ty, PhpType::Void)
                     || crate::codegen::sentinels::null_repr_is_tagged())
             {
@@ -311,7 +315,7 @@ impl Checker {
                     // rather than a single (wrong) type. A no-op for an already-`Mixed`
                     // or patched parameter (so e.g. `Generator::send`'s value stays
                     // `Mixed`).
-                    let widened = Self::union_param_type(&param_types[seen_idx].1, &actual_ty);
+                    let widened = self.join_observed_type(&param_types[seen_idx].1, &actual_ty);
                     if param_types[seen_idx].1 != widened {
                         param_types[seen_idx].1 = widened;
                         changed = true;
@@ -319,6 +323,29 @@ impl Checker {
                 }
             }
             seen_idx += 1;
+        }
+
+        // An OMITTED argument still binds its default. A `null` default on an untyped parameter
+        // that another call site specialized to `float` has no in-band null in a float slot, so
+        // the default was materialized as `0.0`; the omitted call widens it to `float|null`,
+        // exactly as an explicit `null` argument does through `union_param_type`.
+        let named_call = args.iter().any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. }));
+        if !named_call {
+            for idx in seen_idx..regular_param_count {
+                let declared = stored_sig.declared_params.get(idx).copied().unwrap_or(false);
+                let null_default = matches!(
+                    stored_sig.defaults.get(idx),
+                    Some(Some(default)) if matches!(default.kind, ExprKind::Null)
+                );
+                if !declared
+                    && null_default
+                    && matches!(param_types[idx].1, PhpType::Float | PhpType::Callable)
+                {
+                    param_types[idx].1 =
+                        Self::union_param_type(&param_types[idx].1, &PhpType::Void);
+                    changed = true;
+                }
+            }
         }
 
         if !variadic_param_is_by_ref(stored_sig)

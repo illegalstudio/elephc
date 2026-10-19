@@ -12,7 +12,7 @@ use crate::lexer::{SpannedToken, Token};
 use crate::parser::ast::Stmt;
 use crate::span::Span;
 
-use super::{parse_stmt, recover_to_statement_boundary};
+use super::{parse_stmt, recover_after_failed_stmt};
 
 /// Parses a braced block `{ stmts }`, returning statements or accumulated errors.
 pub fn parse_block(tokens: &[SpannedToken], pos: &mut usize) -> Result<Vec<Stmt>, CompileError> {
@@ -26,11 +26,12 @@ pub fn parse_block(tokens: &[SpannedToken], pos: &mut usize) -> Result<Vec<Stmt>
     let mut stmts = Vec::new();
     let mut errors = Vec::new();
     while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
+        let stmt_start = *pos;
         match parse_stmt(tokens, pos) {
             Ok(stmt) => stmts.push(stmt),
             Err(error) => {
                 errors.extend(error.flatten());
-                recover_to_statement_boundary(tokens, pos);
+                recover_after_failed_stmt(tokens, pos, stmt_start);
             }
         }
     }

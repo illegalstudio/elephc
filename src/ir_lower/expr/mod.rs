@@ -33,6 +33,12 @@ use crate::types::{
 use std::collections::HashSet;
 
 mod constants;
+mod maybe_undefined_read;
+mod dynamic_class_access;
+mod scoped_dynamic_calls;
+mod dynamic_property_push;
+mod dynamic_reference_places;
+mod lsb_taint;
 mod nullsafe_chain;
 mod ref_place_args;
 mod boxed_user_sort;
@@ -82,6 +88,7 @@ mod closure_calls;
 mod descriptor_calls;
 mod object_construction;
 mod property_access;
+mod reference_places;
 mod reference_returns;
 use reference_returns::{
     begin_reference_return_call, finish_reference_return_call, finish_reference_return_value,
@@ -122,6 +129,7 @@ use function_calls::*;
 use eval_barriers::*;
 use lazy_isset::*;
 use native_isset::*;
+pub(crate) use native_isset::lower_native_isset_offset_probe_from_value;
 use callable_probes::*;
 use descriptor_invoke::*;
 use call_operand_owners::*;
@@ -190,7 +198,9 @@ pub(crate) use callable_tracking::{
 };
 #[allow(unused_imports)]
 pub(crate) use callable_tracking::LoweredCallableArrayAssignment;
-pub(crate) use closures::{body_contains_eval_call, lower_closure_for_assignment};
+pub(crate) use closures::{
+    body_contains_eval_call, expr_writes_local, lower_closure_for_assignment, written_static_locals,
+};
 pub(crate) use indexed_array_literals::{
     array_literal_type_for_ir, lower_array_literal_with_expected_type,
 };
@@ -208,14 +218,20 @@ pub(crate) use instanceof_coercions::{
     coerce_array_key_to_int_at_span, coerce_to_int_at_span,
 };
 pub(crate) use merge_temps::emit_bool_literal;
+pub(crate) use reference_places::{
+    install_escaping_ref_params, install_static_local_declared_types, static_local_declared_type_for,
+    lower_ref_assign_place,
+};
+pub(crate) use dynamic_reference_places::lower_ref_assign_dynamic_property;
 pub(crate) use property_access::{
     lower_owned_ref_assign_array_elem, lower_ref_assign_array_elem, lower_ref_assign_call,
     lower_ref_assign_property, lower_ref_assign_static_property,
-    prepare_scoped_addressable_ref_array_receiver, static_property_result_type,
+    prepare_scoped_addressable_ref_array_receiver, readonly_by_ref_foreach_source,
+    readonly_reference_error, static_property_result_type,
 };
 pub(crate) use property_fetch_for_write::{
     by_ref_foreach_property_source_is_addressable, lower_by_ref_foreach_property_source,
-    lower_nested_assignment_property_source,
+    lower_nested_assignment_property_source, nested_write_property_source_is_addressable,
 };
 pub(crate) use string_concat::string_op_uses_scratch_storage;
 pub(super) use assoc_array_literals::{
@@ -256,7 +272,8 @@ fn lower_expr_inner(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredVa
         ExprKind::FloatLiteral(value) => lower_float_literal(ctx, *value, expr),
         ExprKind::BoolLiteral(value) => lower_bool_literal(ctx, *value, expr),
         ExprKind::Null => lower_null(ctx, expr),
-        ExprKind::Variable(name) => ctx.load_local(name, Some(expr.span)),
+        ExprKind::Variable(name) => maybe_undefined_read::lower_flagged_read(ctx, name, expr)
+            .unwrap_or_else(|| ctx.load_local(name, Some(expr.span))),
         ExprKind::BinaryOp { left, op, right } => lower_binary(ctx, left, op, right, expr),
         ExprKind::InstanceOf { value, target } => lower_instanceof(ctx, value, target, expr),
         ExprKind::Negate(inner) => lower_numeric_unary(ctx, inner, Op::INeg, Op::FNeg, expr),

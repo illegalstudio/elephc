@@ -1285,3 +1285,114 @@ echo "n=$n\n";
          n=3\n"
     );
 }
+
+/// A local a join point may leave undefined is read as `mixed` (see `condition_edges`); throwing
+/// it must type-check against the local's own Throwable type and raise `Error` when it was never
+/// assigned (php-src `Zend/tests/exception_set_previous_leak.phpt`).
+#[test]
+fn test_throw_maybe_undefined_throwable_local() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function rethrow_in_finally() {
+    try {
+        throw new Exception("Test");
+    } catch (Exception $e) {
+        throw $e;
+    } finally {
+        throw $e;
+    }
+}
+function maybe_defined(bool $define) {
+    if ($define) { $e = new LogicException("defined"); }
+    throw $e;
+}
+try { rethrow_in_finally(); } catch (Exception $x) { echo $x->getMessage(), "|"; }
+try { maybe_defined(true); } catch (LogicException $x) { echo $x->getMessage(), "|"; }
+try { maybe_defined(false); } catch (Error $x) { echo get_class($x), ":", $x->getMessage(), "|"; }
+unset($x);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert!(out.stdout.starts_with("Test|defined|"), "{}", out.stdout);
+    assert!(out.stdout.ends_with("Error:Can only throw objects|"), "{}", out.stdout);
+    let all = format!("{}{}", out.stdout, out.stderr);
+    assert!(all.contains("Undefined variable $e"), "{all}");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A throw operand joined from sibling Throwable classes, or a `?Throwable` parameter, is boxed;
+/// it is thrown through the runtime check (Symfony `RoundRobinTransport::send()` shape).
+#[test]
+fn test_throw_union_of_throwables_and_nullable_throwable() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Failed extends RuntimeException {}
+function pick(int $which) {
+    $err = $which === 1 ? new LogicException("logic") : new RuntimeException("runtime");
+    throw $err;
+}
+function collect(array $items) {
+    $exception = null;
+    foreach ($items as $item) {
+        $exception ??= new Failed("all failed");
+    }
+    throw $exception ?? new LogicException("none");
+}
+function nullable(?Failed $e) {
+    throw $e;
+}
+function as_expression(int $which) {
+    $err = $which === 1 ? new LogicException("expr-logic") : new Failed("expr-failed");
+    return $which > 0 ? $which : throw $err;
+}
+try { pick(1); } catch (Exception $x) { echo get_class($x), ":", $x->getMessage(), "|"; }
+try { pick(2); } catch (Exception $x) { echo get_class($x), ":", $x->getMessage(), "|"; }
+try { collect([1]); } catch (Exception $x) { echo get_class($x), ":", $x->getMessage(), "|"; }
+try { collect([]); } catch (Exception $x) { echo get_class($x), ":", $x->getMessage(), "|"; }
+try { nullable(new Failed("set")); } catch (Exception $x) { echo get_class($x), ":", $x->getMessage(), "|"; }
+try { nullable(null); } catch (Error $x) { echo get_class($x), ":", $x->getMessage(), "|"; }
+try { as_expression(0); } catch (Exception $x) { echo get_class($x), ":", $x->getMessage(), "|"; }
+echo as_expression(5);
+unset($x);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "LogicException:logic|RuntimeException:runtime|Failed:all failed|LogicException:none|\
+         Failed:set|Error:Can only throw objects|Failed:expr-failed|5",
+        "{}",
+        out.stderr
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A closure or arrow fn returning `$c ? new E : null` is lowered with an Object return type, so
+/// its null result reaches `throw` as an Object-typed null; codegen must raise PHP's
+/// `Error("Can only throw objects")` instead of publishing the null pointer. (The closure's
+/// null-return unboxing has its own pre-existing leak, so this test asserts output only.)
+#[test]
+fn test_throw_object_typed_null_from_closure_raises_error() {
+    let out = compile_and_run(r#"<?php
+class E extends Exception {}
+$arrow = fn($c) => $c ? new E("arrow") : null;
+try { $z = $arrow(false); throw $z; } catch (Error $x) { echo "arrow:", $x->getMessage(), "\n"; }
+$arrow_obj = fn($c) => $c ? new E("arrow") : null;
+try { throw $arrow_obj(true); } catch (E $x) { echo "arrow-obj:", $x->getMessage(), "\n"; }
+function arrow_in_function() {
+    $fn = fn(bool $c) => $c ? new E("a") : null;
+    try { throw $fn(false); } catch (Error $x) { echo "infn:", $x->getMessage(), "\n"; }
+}
+function closure_in_function() {
+    $fn = function (bool $c) { return $c ? new E("a") : null; };
+    try { throw $fn(false); } catch (Error $x) { echo "closure:", $x->getMessage(), "\n"; }
+}
+arrow_in_function();
+closure_in_function();
+echo "end\n";
+"#);
+    assert_eq!(
+        out,
+        "arrow:Can only throw objects\n\
+         arrow-obj:arrow\n\
+         infn:Can only throw objects\n\
+         closure:Can only throw objects\n\
+         end\n"
+    );
+}

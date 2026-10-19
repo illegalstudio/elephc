@@ -101,15 +101,26 @@ impl Checker {
     }
     /// Returns a variable type, allowing dynamic eval-created locals after an eval barrier.
     fn variable_type_or_eval_dynamic(
-        &self,
+        &mut self,
         name: &str,
         span: Span,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
-        env.get(name)
+        let ty = env
+            .get(name)
             .cloned()
             .or_else(|| self.eval_barrier_active.then_some(PhpType::Mixed))
-            .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", name)))
+            .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", name)))?;
+        // A local a join point may have left undefined reads as `null` there (see
+        // `condition_edges`), so its read is boxed.
+        if self.record_maybe_undefined_read(name, span) {
+            // Already a boxed representation: keep the precise members and add null.
+            if ty.codegen_repr() == PhpType::Mixed && ty != PhpType::Mixed {
+                return Ok(self.normalize_union_type(vec![ty, PhpType::Void]));
+            }
+            return Ok(PhpType::Mixed);
+        }
+        Ok(ty)
     }
 
     /// Merges ordinary elements and spread values for a literal that may carry string keys.

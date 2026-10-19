@@ -48,6 +48,7 @@ mod native_deps;
 mod names;
 mod numeric_string;
 mod object_cast_prelude;
+mod return_coerce_prelude;
 mod opcache;
 mod opcache_prelude;
 mod shared_ini_prelude;
@@ -83,7 +84,9 @@ mod timings;
 mod types;
 mod tz_prelude;
 mod xml_prelude;
+mod stdlib_prelude;
 mod var_export_prelude;
+mod variable_variables;
 mod version_prelude;
 mod web_prelude;
 

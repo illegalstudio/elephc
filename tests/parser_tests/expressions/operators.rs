@@ -13,9 +13,12 @@ use super::*;
 #[test]
 fn test_unary_plus_precedence() {
     let stmts = parse_source("<?php echo +$n ** 2 * 3;");
+    // php-src compiles `+expr` as `expr * 1` (`zend_compile_unary_pm`).
     let expected = Stmt::echo(Expr::binop(
-        Expr::binop(Expr::int_lit(0), BinOp::Add,
-            Expr::binop(Expr::var("n"), BinOp::Pow, Expr::int_lit(2))),
+        Expr::binop(
+            Expr::binop(Expr::var("n"), BinOp::Pow, Expr::int_lit(2)),
+            BinOp::Mul, Expr::int_lit(1),
+        ),
         BinOp::Mul, Expr::int_lit(3),
     ));
     assert_eq!(stmts, vec![expected]);

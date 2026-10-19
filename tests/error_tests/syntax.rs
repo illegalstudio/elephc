@@ -9,12 +9,8 @@
 
 use super::*;
 
-/// Verifies the error diagnostic for missing open tag.
-#[test]
-fn test_error_missing_open_tag() {
-    // PHP code starting outside an open tag produces a "missing open tag" error.
-    expect_error("echo \"hi\";", "<?php");
-}
+// A source without an open tag is no longer an error: PHP treats it as inline HTML and prints it
+// (see `tests/codegen/inline_html.rs`).
 
 /// Verifies the error diagnostic for unterminated string.
 #[test]
@@ -401,8 +397,9 @@ fn test_error_unexpected_token_in_expr() {
 /// Verifies the error diagnostic for unexpected token in stmt.
 #[test]
 fn test_error_unexpected_token_in_stmt() {
-    // A bare expression statement (e.g., `42;`) in statement position produces "Unexpected token".
-    expect_error("<?php 42;", "Unexpected token");
+    // A token that cannot begin any statement or expression produces "Unexpected token".
+    // (`42;` is a valid PHP expression statement and now compiles.)
+    expect_error("<?php => 42;", "Unexpected token at statement position");
 }
 
 /// Verifies the error diagnostic for missing function name.
@@ -652,26 +649,100 @@ fn test_error_goto_label_is_not_supported() {
 
 // --- References inside array literals ---
 
-/// Verifies `[&$x]` reports the unsupported construct by name instead of "Unexpected token:
-/// Ampersand". elephc arrays hold values, so an element cannot alias a variable's storage.
+/// Verifies a by-reference element whose source is not a place is refused by name.
 #[test]
-fn test_error_reference_element_in_array_literal() {
+fn test_error_reference_element_with_computed_source() {
     expect_error(
-        "<?php $first = 1; $r = [&$first];",
-        "Reference elements in array literals (`[&$x]`) are not supported",
+        "<?php $a = 1; $r = [&($a + 1)];",
+        "A by-reference array element must alias a variable",
     );
 }
 
-/// Verifies the same diagnostic covers a keyed element and the legacy `array(...)` spelling.
+/// Verifies a by-reference element after a spread is refused, since its key is not knowable.
 #[test]
-fn test_error_reference_element_in_keyed_and_legacy_array_literals() {
+fn test_error_reference_element_after_spread() {
     expect_error(
-        "<?php $a = 1; $r = [\"k\" => &$a];",
-        "Reference elements in array literals (`[&$x]`) are not supported",
+        "<?php $a = [1]; $x = 2; $r = [...$a, &$x];",
+        "A key-less by-reference array element (`&$x`) is not supported after a spread",
+    );
+}
+
+/// Verifies a static property cannot be bound into an object property or element.
+#[test]
+fn test_error_reference_place_from_static_property() {
+    expect_error(
+        "<?php class S { public static $p; public $q; } $o = new S; $o->q = &S::$p;",
+        "Binding a static property into an object property or array element by reference",
+    );
+}
+
+/// Verifies a reference used as an array KEY is rejected.
+#[test]
+fn test_error_reference_as_array_key() {
+    expect_error("<?php $x = 1; $r = [&$x => 1];", "An array key cannot be a reference");
+}
+
+/// Verifies a new-element reference (`&$a[]`) inside an array literal is PHP's compile error.
+#[test]
+fn test_error_reference_new_element_in_literal() {
+    expect_error("<?php $b = []; $l = [&$b[]];", "Cannot use [] for reading");
+    expect_error("<?php $b = []; $l = ['k' => &$b[]];", "Cannot use [] for reading");
+}
+
+/// Verifies `f($a[])` names the unsupported by-reference argument form.
+#[test]
+fn test_error_reference_new_element_argument() {
+    expect_error(
+        "<?php function f(&$x) {} $a = []; f($a[]);",
+        "elephc does not support a new array element (`$a[]`) as a by-reference argument",
+    );
+}
+
+/// Verifies a new-element reference needs a variable, property or element container.
+#[test]
+fn test_error_reference_new_element_container() {
+    expect_error(
+        "<?php function g() { return []; } $r = &g()[];",
+        "A reference to a new array element (`&$a[]`, `$a[] = &$x`) needs a variable, property or array element as its container",
     );
     expect_error(
-        "<?php $a = 1; $r = array(&$a);",
-        "Reference elements in array literals (`[&$x]`) are not supported",
+        "<?php function g() { return []; } $x = 1; g()[] = &$x;",
+        "A reference to a new array element (`&$a[]`, `$a[] = &$x`) needs a variable, property or array element as its container",
+    );
+}
+
+/// Verifies a runtime-named reference source checks its receiver and its name.
+#[test]
+fn test_error_reference_dynamic_property_source() {
+    expect_error(
+        "<?php $x = 5; $k = 'a'; $r = &$x->{$k};",
+        "Property assignment requires an object",
+    );
+    expect_error(
+        "<?php $o = new stdClass; $k = 1.5; $r = &$o->{$k};",
+        "Dynamic property name must be string or integer",
+    );
+}
+
+/// Verifies a runtime-named reference place checks its receiver and its name.
+#[test]
+fn test_error_reference_dynamic_property_place() {
+    expect_error(
+        "<?php $x = 5; $k = 'a'; $v = 1; $x->{$k} = &$v;",
+        "Property assignment requires an object",
+    );
+    expect_error(
+        "<?php $o = new stdClass; $k = 1.5; $v = 1; $o->{$k} = &$v;",
+        "Dynamic property name must be string or integer",
+    );
+}
+
+/// Verifies a typed property cannot share a reference with a local of another representation.
+#[test]
+fn test_error_reference_property_representation_mismatch() {
+    expect_error(
+        "<?php class T { public int $n = 0; } $t = new T(); $s = \"x\"; $t->n = &$s;",
+        "Property T::$n expects int, got string",
     );
 }
 
@@ -772,40 +843,20 @@ fn test_error_for_clause_rejects_include() {
     );
 }
 
-/// Pins the parser invariant the `for`-clause include guard rests on: `include` is an
-/// expression in exactly ONE position, the whole right-hand side of a plain assignment or a
-/// `return`.
-///
-/// `ExprKind::IncludeValue` has two construction sites, both in `try_parse_value_include`, and
-/// the assignment one builds a plain `StmtKind::Assign` BEFORE `parse_assignment_value_expr`
-/// runs. So no typed, indexed, property or static-property assignment can carry one, and the
-/// guard in `parse_for_clause` does not need to walk for them.
-///
-/// Raised in review on issue #476 as a possible hole. It is not one today — but it is an
-/// invariant nobody was testing, so if any of these ever starts parsing, this fails and points
-/// at that guard.
+/// Verifies an include that IS a `for` clause keeps the for-clause diagnostic now that include is
+/// an expression everywhere: `K::$s = include F` and `int $v = include F` are ordinary
+/// assignments whose value is the include, and the clause is not a statement list the resolver
+/// can expand it into. (An include NESTED in a clause is refused by the resolver; see
+/// `test_error_include_expression_in_unsupported_position`.)
 #[test]
-fn test_error_include_is_only_an_expression_in_an_assignment_rhs() {
+fn test_error_include_as_a_for_clause_value() {
     expect_error(
-        r#"<?php int $a = include "f.php";"#,
-        "Unexpected token: Include",
+        r#"<?php class K { public static $s; } for (K::$s = include "f.php"; false; ) {} echo 1;"#,
+        "include/require is not supported in a for clause",
     );
-    expect_error(
-        r#"<?php $a = []; $a[0] = include "f.php";"#,
-        "Unexpected token: Include",
-    );
-    expect_error(
-        r#"<?php $o = new stdClass(); $o->p = include "f.php";"#,
-        "Unexpected token: Include",
-    );
-    expect_error(
-        r#"<?php class K { public static $s; } K::$s = include "f.php";"#,
-        "Unexpected token: Include",
-    );
-    // The same rejection inside a clause, which is the case the review asked about.
     expect_error(
         r#"<?php for (int $v = include "f.php"; false; ) {} echo 1;"#,
-        "Unexpected token: Include",
+        "include/require is not supported in a for clause",
     );
 }
 
@@ -881,4 +932,84 @@ fn test_error_class_constant_name_after_comma() {
         expect_error(&format!("<?php {owner} C {{ const ; }}"), "Expected class constant name after 'const'");
     }
     expect_error("<?php class C { const FIRST = 1; const ; }", "Expected class constant name after 'const'");
+}
+
+/// Verifies PHP 8.5's rejection of attributes on a multi-constant declaration list.
+#[test]
+fn test_error_attribute_on_const_list_is_rejected() {
+    expect_error(
+        "<?php #[Foo] const A = 1, B = 2; echo A;",
+        "Cannot apply attributes to multiple constants at once",
+    );
+}
+
+/// Verifies a non-declaration statement after attributes is still rejected (const is now allowed).
+#[test]
+fn test_error_attribute_on_return_is_rejected() {
+    expect_error(
+        "<?php function f() { #[Foo] return 1; } echo f();",
+        "Attributes are only allowed before declarations",
+    );
+}
+
+/// Verifies a destructuring `while` condition that is not the whole condition fails clearly.
+#[test]
+fn test_error_while_destructuring_must_be_whole_condition() {
+    expect_error(
+        "<?php $q = []; while ([$a] = array_shift($q) or false) { echo $a; }",
+        "must be the whole condition",
+    );
+}
+
+/// Verifies a trailing comma in a `static` declaration list is rejected like PHP.
+#[test]
+fn test_error_static_var_list_trailing_comma() {
+    expect_error(
+        "<?php function f() { static $a = 1, ; return $a; } echo f();",
+        "Expected variable after 'static'",
+    );
+}
+
+/// Verifies that a lone reserved keyword stays reserved where PHP 8 rejects it: the keyword
+/// is a name segment only when a `\` touches it inside a qualified name (T_NAME_QUALIFIED).
+#[test]
+fn test_error_lone_keyword_is_not_a_name_segment() {
+    expect_error("<?php use A\\{Default};", "Expected imported name inside group use declaration");
+    expect_error("<?php use A\\{List\\X, Match};", "Expected imported name inside group use declaration");
+    expect_error("<?php use A\\ Default;", "Expected identifier after '\\' in imported name");
+    expect_error("<?php use Default\\{X};", "Expected imported name after 'use'");
+    expect_error("<?php new Default;", "Expected class name after 'new'");
+    expect_error("<?php class Default {}", "Expected class name after 'class'");
+    expect_error("<?php function f(Default $x) {}", "Expected parameter variable");
+    expect_error("<?php echo Default\\ X;", "Unexpected token: Default");
+}
+
+/// Verifies PHP's "'\static' is an invalid class name" for fully qualified `\self`, `\parent`,
+/// and `\static` outside a `::class` fetch.
+#[test]
+fn test_error_fully_qualified_special_class_names_are_invalid() {
+    expect_error(
+        "<?php class A { const X = 'ax'; static function f() { return \\self::X; } }",
+        "'\\self' is an invalid class name",
+    );
+    expect_error(
+        "<?php class P { static function g() { return 1; } } class C extends P { static function f() { return \\parent::g(); } }",
+        "'\\parent' is an invalid class name",
+    );
+    expect_error(
+        "<?php class P { static function f() { return \\static::f(); } }",
+        "'\\static' is an invalid class name",
+    );
+    expect_error(
+        "<?php class P { static function mk() { return new \\static; } }",
+        "'\\static' is an invalid class name",
+    );
+    expect_error(
+        "<?php class A { function f(\\self $x): \\self { return $x; } }",
+        "'\\self' is an invalid class name",
+    );
+    expect_error(
+        "<?php class A { function f($o) { return $o instanceof \\static; } }",
+        "'\\static' is an invalid class name",
+    );
 }

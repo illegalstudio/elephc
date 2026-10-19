@@ -655,6 +655,7 @@ fn type_expr(ty: &TypeExpr) -> String {
         TypeExpr::Float => "float".to_string(),
         TypeExpr::Bool => "bool".to_string(),
         TypeExpr::False => "false".to_string(),
+        TypeExpr::True => "true".to_string(),
         TypeExpr::Str => "string".to_string(),
         TypeExpr::Void => "void".to_string(),
         TypeExpr::Never => "never".to_string(),

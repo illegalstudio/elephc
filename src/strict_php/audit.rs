@@ -66,6 +66,30 @@ fn reject_reserved_name(errors: &mut Vec<CompileError>, span: Span, name: &Name)
     }
 }
 
+/// Returns true for the call the parser itself synthesizes for PHP's `$class::NAME`,
+/// `$class::$prop` and `$class::method(...)` (`crate::parser::expr::pratt::parse_dynamic_class_member_read`).
+///
+/// The source was plain PHP, so the reserved-name rule must not fire on it. A hand-written call
+/// of the identical shape (literal member name second) is indistinguishable after parsing and is accepted too;
+/// it has exactly the semantics of the PHP construct it spells.
+fn is_dynamic_class_member_desugar(name: &Name, args: &[Expr]) -> bool {
+    let bare = name.parts.last().map(String::as_str).unwrap_or_default();
+    match bare {
+        "__elephc_dynamic_class_constant" | "__elephc_dynamic_static_property" => {
+            matches!(args, [_, Expr { kind: ExprKind::StringLiteral(_), .. }])
+        }
+        // `$obj->{$name}[] = $v`.
+        "__elephc_dynamic_property_push" => args.len() == 3,
+        // `self::$m()` / `C::{expr}()` mark the named class with a `::class` receiver.
+        "__elephc_dynamic_static_call" => matches!(
+            args,
+            [_, Expr { kind: ExprKind::StringLiteral(_), .. }, ..]
+                | [Expr { kind: ExprKind::ClassConstant { .. } | ExprKind::StringLiteral(_), .. }, _, ..]
+        ),
+        _ => false,
+    }
+}
+
 /// Audits a statement list in order.
 fn audit_stmts(stmts: &[Stmt], errors: &mut Vec<CompileError>) {
     for stmt in stmts {
@@ -158,6 +182,10 @@ fn audit_stmt(stmt: &Stmt, errors: &mut Vec<CompileError>) {
             audit_expr(index, errors);
             audit_expr(value, errors);
         }
+        StmtKind::RefAssignPlace { target, source } => {
+            audit_expr(target, errors);
+            audit_expr(source, errors);
+        }
         StmtKind::NestedArrayAssign { target, value } => {
             audit_expr(target, errors);
             audit_expr(value, errors);
@@ -206,7 +234,7 @@ fn audit_stmt(stmt: &Stmt, errors: &mut Vec<CompileError>) {
             path,
             once: _,
             required: _,
-        } => audit_expr(path, errors),
+        } => audit_expr(crate::resolver::dynamic_includes::unwrap_site(path), errors),
         StmtKind::IncludeOnceMark { label: _ } => {}
         StmtKind::IncludeOnceGuard { label: _, body } => audit_stmts(body, errors),
         StmtKind::Throw(expr) => audit_expr(expr, errors),
@@ -585,7 +613,9 @@ fn audit_expr(expr: &Expr, errors: &mut Vec<CompileError>) {
             audit_stmts(prelude, errors);
         }
         ExprKind::FunctionCall { name, args } => {
-            reject_reserved_name(errors, span, name);
+            if !is_dynamic_class_member_desugar(name, args) {
+                reject_reserved_name(errors, span, name);
+            }
             audit_exprs(args, errors);
         }
         ExprKind::ArrayLiteral(items) => audit_exprs(items, errors),
@@ -661,7 +691,7 @@ fn audit_expr(expr: &Expr, errors: &mut Vec<CompileError>) {
             path,
             once: _,
             required: _,
-        } => audit_expr(path, errors),
+        } => audit_expr(crate::resolver::dynamic_includes::unwrap_site(path), errors),
         ExprKind::ClosureCall { var: _, args } => audit_exprs(args, errors),
         ExprKind::ExprCall { callee, args } => {
             audit_expr(callee, errors);
@@ -891,6 +921,7 @@ fn audit_type(type_expr: &TypeExpr, span: Span, errors: &mut Vec<CompileError>) 
         | TypeExpr::Float
         | TypeExpr::Bool
         | TypeExpr::False
+        | TypeExpr::True
         | TypeExpr::Str
         | TypeExpr::Void
         | TypeExpr::Never

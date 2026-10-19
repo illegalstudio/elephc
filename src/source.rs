@@ -185,13 +185,43 @@ pub fn finalize_physical_program(
     // Per physical file, because the lexer discards comments and they are recovered from the
     // source text by line: that only means anything while the file is still its own, before
     // include resolution splices every file into one program without rebasing line numbers.
-    let program = crate::docblock::apply(program, source);
+    // Escape hatch: `ELEPHC_PHPDOC_GENERICS=off` reads every doc comment as php-src does (as a
+    // comment), restoring the pre-generics behaviour for code whose PHPDoc elephc cannot honour.
+    let program = if phpdoc_generics_disabled(std::env::var("ELEPHC_PHPDOC_GENERICS").ok().as_deref()) {
+        program
+    } else {
+        crate::docblock::apply(program, source)
+    };
     Ok(crate::conditional::apply(program, defines))
+}
+
+/// Whether the `ELEPHC_PHPDOC_GENERICS` escape hatch turns PHPDoc generics off.
+///
+/// `off`, `0` and `false` disable them, in any letter case; anything else (or no value) keeps
+/// the default, so a typo never silently changes how a program compiles in the other direction.
+fn phpdoc_generics_disabled(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        let value = value.trim();
+        ["off", "0", "false"]
+            .iter()
+            .any(|off| value.eq_ignore_ascii_case(off))
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies the PHPDoc generics escape hatch accepts `off|0|false` in any case and nothing else.
+    #[test]
+    fn phpdoc_generics_escape_hatch_values() {
+        for off in ["off", "OFF", "Off", "0", "false", "FALSE", "False", " off "] {
+            assert!(phpdoc_generics_disabled(Some(off)), "{off:?} should disable");
+        }
+        for on in [None, Some(""), Some("on"), Some("1"), Some("true"), Some("no")] {
+            assert!(!phpdoc_generics_disabled(on), "{on:?} should keep generics");
+        }
+    }
 
     /// Verifies `.lfc` classification is case-insensitive while other suffixes remain PHP mode.
     #[test]

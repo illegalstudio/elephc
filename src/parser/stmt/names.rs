@@ -60,6 +60,15 @@ pub(crate) fn parse_name(
     if *pos < tokens.len() && tokens[*pos].0 == Token::Backslash {
         kind = NameKind::FullyQualified;
         *pos += 1;
+        if let Some((token @ (Token::Self_ | Token::Parent | Token::Static), metadata)) =
+            tokens.get(*pos)
+        {
+            let word = token.word_spelling(metadata).unwrap_or_default();
+            return Err(CompileError::new(
+                span,
+                &format!("'\\{word}' is an invalid class name"),
+            ));
+        }
     }
 
     let mut parts = Vec::new();

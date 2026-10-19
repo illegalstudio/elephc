@@ -310,13 +310,31 @@ fn promote_reference_return_local_argument(
     index: usize,
     arg: &Expr,
 ) {
-    if !sig.by_ref_return || !sig.ref_params.get(index).copied().unwrap_or(false) {
+    if !sig.ref_params.get(index).copied().unwrap_or(false) {
         return;
     }
     let ExprKind::Variable(name) = &arg.kind else {
         return;
     };
-    ctx.promote_local_ref_cell(name, Some(arg.span));
+    if sig.by_ref_return {
+        ctx.promote_local_ref_cell(name, Some(arg.span));
+        return;
+    }
+    let Some((param_name, param_ty)) = sig.params.get(index) else {
+        return;
+    };
+    if !super::reference_places::param_escapes_by_reference(param_name, index) {
+        return;
+    }
+    // The callee binds this parameter into a property or element, which must co-own a managed
+    // cell: lend one instead of the frame slot. The cell must store the parameter's own
+    // representation, or the callee would read the payload as something else.
+    let param_repr = param_ty.codegen_repr();
+    if param_repr == PhpType::Mixed {
+        ctx.promote_local_mixed_ref_cell(name, Some(arg.span));
+    } else if ctx.local_type(name).codegen_repr() == param_repr {
+        ctx.promote_local_ref_cell(name, Some(arg.span));
+    }
 }
 
 /// Protects an incidental value view of an earlier reference place without replacing the place.

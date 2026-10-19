@@ -84,15 +84,18 @@ pub(super) fn collect_object_reference_entry_checks(
 ) {
     for stmt in stmts {
         match &stmt.kind {
-            StmtKind::FunctionDecl { name, params, .. } => {
-                if params_have_object_reference(params) {
+            StmtKind::FunctionDecl { name, params, return_type, .. } => {
+                if params_have_object_reference(params) || return_type_is_checked(return_type) {
                     functions.insert(name.clone());
                 }
             }
             StmtKind::ClassDecl { name, methods, .. }
             | StmtKind::InterfaceDecl { name, methods, .. }
             | StmtKind::TraitDecl { name, methods, .. } => {
-                for method in methods.iter().filter(|method| params_have_object_reference(&method.params)) {
+                for method in methods.iter().filter(|method| {
+                    params_have_object_reference(&method.params)
+                        || return_type_is_checked(&method.return_type)
+                }) {
                     let key = method_effect_key(name, &method.name);
                     if method.is_static {
                         static_methods.insert(key, true);
@@ -107,6 +110,13 @@ pub(super) fn collect_object_reference_entry_checks(
             _ => {}
         }
     }
+}
+
+/// Returns whether a declared return type is verified at run time and may throw `TypeError`.
+fn return_type_is_checked(return_type: &Option<TypeExpr>) -> bool {
+    return_type
+        .as_ref()
+        .is_some_and(crate::return_coerce_prelude::annotation_may_need_coercion)
 }
 
 /// Finds hints whose by-reference entry check may reject a previously retyped cell.

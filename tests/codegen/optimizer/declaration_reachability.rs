@@ -107,8 +107,16 @@ fn test_exception_routing_example_prunes_catch_only_declarations() {
     );
     let ir = String::from_utf8_lossy(&emitted.stdout);
     assert!(ir.contains("function settle("), "missing the live pipeline stage: {ir}");
+    // The injected return-coercion helper (`__elephc_return_coerce`, kept because the example
+    // declares scalar returns) has its own `catch (Throwable)` around `__toString()`; only the
+    // example's own clauses are counted.
+    let user_catch_binds: usize = ir
+        .split("\n  function ")
+        .filter(|function| !function.starts_with("__elephc_return_coerce("))
+        .map(|function| function.matches("= catch_bind").count())
+        .sum();
     assert_eq!(
-        ir.matches("= catch_bind").count(),
+        user_catch_binds,
         6,
         "four of the example's ten catch clauses can never run: {ir}"
     );

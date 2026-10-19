@@ -66,6 +66,7 @@ struct ArrayWrite<'a> {
 pub fn loop_carried_storage_types(
     body: &[Stmt],
     update: Option<&Stmt>,
+    condition: Option<&Expr>,
     entry: &TypeEnv,
     packed_counter: Option<&str>,
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
@@ -74,6 +75,18 @@ pub fn loop_carried_storage_types(
     collect_value_assignments(body, &mut assignments);
     if let Some(update) = update {
         collect_value_assignment_stmt(update, &mut assignments);
+    }
+    // A store in a lazily evaluated operand of the loop CONDITION (`while ($i < 3 && ($x = 10))`)
+    // runs on some evaluations of the header and not on others, so the header's local must hold
+    // both representations; see `lazy_condition_contract`.
+    let mut lazy_condition_names = HashSet::new();
+    if let Some(condition) = condition {
+        let mut lazy = Vec::new();
+        collect_lazy_operand_assignments(condition, &mut lazy);
+        for (name, _) in &lazy {
+            lazy_condition_names.insert((*name).to_string());
+        }
+        assignments.extend(lazy);
     }
 
     let mut writes = Vec::new();
@@ -108,6 +121,20 @@ pub fn loop_carried_storage_types(
             break;
         }
     }
+    // A local whose ENTRIES the body makes referenceable (`$y = &$a[$k]`, `$a[$k] = &$x`,
+    // `$a[] = &$x`, `foreach ($a as &$v)`) is re-laid out as a hash of boxed Mixed entries by
+    // lowering, so the next iteration starts from that hash. The header must hold it too, or
+    // the second iteration runs the packed-array ops on the hash (gc_012's
+    // `$a[$i][0] = &$a[$i]` SIGBUS'd on its second pass).
+    let mut referenced_roots = HashSet::new();
+    collect_referenced_element_roots(body, &mut referenced_roots);
+    for name in referenced_roots {
+        if let Some(current) = fixed.get(name).cloned() {
+            if let Some(hash) = referenceable_entries_storage(&current) {
+                fixed.insert(name.to_string(), hash);
+            }
+        }
+    }
 
     let mut contracts = entry
         .iter()
@@ -121,11 +148,83 @@ pub fn loop_carried_storage_types(
                 )
                 .map(|contract| (name.clone(), contract));
             }
-            null_entry_contract(entry_ty, fixed_ty).map(|contract| (name.clone(), contract))
+            null_entry_contract(entry_ty, fixed_ty)
+                .or_else(|| {
+                    lazy_condition_names
+                        .contains(name)
+                        .then(|| lazy_condition_contract(entry_ty, fixed_ty))
+                        .flatten()
+                })
+                .map(|contract| (name.clone(), contract))
         })
         .collect::<Vec<_>>();
     contracts.sort_by(|left, right| left.0.cmp(&right.0));
     contracts
+}
+
+/// The storage a container takes once its entries are referenceable: a hash whose entries are
+/// boxed Mixed (the cell lives in the entry), keeping an associative key type. `None` for a
+/// non-array or an already-referenceable hash.
+fn referenceable_entries_storage(current: &PhpType) -> Option<PhpType> {
+    match current.codegen_repr() {
+        PhpType::Array(_) => Some(PhpType::AssocArray {
+            key: Box::new(PhpType::Int),
+            value: Box::new(PhpType::Mixed),
+        }),
+        PhpType::AssocArray { key, value } if value.codegen_repr() != PhpType::Mixed => {
+            Some(PhpType::AssocArray {
+                key,
+                value: Box::new(PhpType::Mixed),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Collects the root local of every container whose entries a statement makes referenceable:
+/// the place of `<elem> = &$x`, the source of `$y = &<elem>`, and a by-reference `foreach` source.
+fn collect_referenced_element_roots<'a>(statements: &'a [Stmt], out: &mut HashSet<&'a str>) {
+    for statement in statements {
+        match &statement.kind {
+            StmtKind::RefAssignPlace { target, .. } => {
+                if let ExprKind::ArrayAccess { array, .. } = &target.kind {
+                    insert_access_root(array, out);
+                }
+            }
+            StmtKind::RefAssign { source, .. } => {
+                if let ExprKind::ArrayAccess { array, .. } = &source.kind {
+                    insert_access_root(array, out);
+                }
+            }
+            StmtKind::Foreach {
+                array,
+                value_by_ref,
+                body,
+                ..
+            } => {
+                if *value_by_ref {
+                    insert_access_root(array, out);
+                }
+                collect_referenced_element_roots(body, out);
+                continue;
+            }
+            _ => {}
+        }
+        for nested in nested_statement_bodies(statement) {
+            collect_referenced_element_roots(nested, out);
+        }
+    }
+}
+
+/// Records the local at the root of an `ArrayAccess` chain, if the chain starts at one.
+fn insert_access_root<'a>(expr: &'a Expr, out: &mut HashSet<&'a str>) {
+    let mut current = expr;
+    while let ExprKind::ArrayAccess { array, .. } = &current.kind {
+        current = array;
+    }
+    if let ExprKind::Variable(name) = &current.kind {
+        out.insert(name.as_str());
+    }
 }
 
 /// Applies every collected local assignment monotonically to one fixed-point iteration.
@@ -562,6 +661,71 @@ fn null_entry_contract(entry_ty: &PhpType, fixed_ty: &PhpType) -> Option<PhpType
     Some(PhpType::Mixed)
 }
 
+/// Storage contract for a scalar local a lazy operand of the loop condition retypes.
+///
+/// EIR lowers the condition ONCE, against the types the header is entered with, and joins the
+/// operand's store with the edge that skipped it (`LazyBranchJoin`) as boxed `mixed`. Without a
+/// header contract the back edge then carried that box into a header still typed with the entry
+/// representation: `$x = null; while ($i < 3 && ($x = 10)) {}` left `NULL` (and leaked the box),
+/// and a null-typed `!$x` was folded to a constant. Boxing the local before the loop gives the
+/// header, both edges and the back edge one representation.
+fn lazy_condition_contract(entry_ty: &PhpType, fixed_ty: &PhpType) -> Option<PhpType> {
+    let (entry_repr, fixed_repr) = (entry_ty.codegen_repr(), fixed_ty.codegen_repr());
+    if entry_repr == fixed_repr || entry_repr == PhpType::Mixed {
+        return None;
+    }
+    Some(PhpType::Mixed)
+}
+
+/// Collects the local stores that sit in a lazily evaluated operand of `expr`: the right side of
+/// `&&`/`||`/`and`/`or`, the default of `?:` and `??`, and both arms of `? :`. Stores outside
+/// such an operand run on every evaluation and need no contract of their own.
+fn collect_lazy_operand_assignments<'a>(
+    expr: &'a Expr,
+    out: &mut Vec<(&'a str, AssignedValue<'a>)>,
+) {
+    match &expr.kind {
+        ExprKind::BinaryOp {
+            left,
+            op: crate::parser::ast::BinOp::And | crate::parser::ast::BinOp::Or,
+            right,
+        } => {
+            collect_lazy_operand_assignments(left, out);
+            collect_value_assignments_from_expr(right, out);
+        }
+        ExprKind::ShortTernary { value, default } | ExprKind::NullCoalesce { value, default } => {
+            collect_lazy_operand_assignments(value, out);
+            collect_value_assignments_from_expr(default, out);
+        }
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            collect_lazy_operand_assignments(condition, out);
+            collect_value_assignments_from_expr(then_expr, out);
+            collect_value_assignments_from_expr(else_expr, out);
+        }
+        ExprKind::Assignment {
+            target,
+            value,
+            conditional_value_temp,
+            ..
+        } if conditional_value_temp.is_none() => {
+            // `$x ??= v` on a local is lazy too: its value is a `??` whose default is `v`.
+            if let ExprKind::Variable(name) = &target.kind {
+                if matches!(value.kind, ExprKind::NullCoalesce { .. }) {
+                    out.push((name, AssignedValue::Expr(value)));
+                }
+            }
+            collect_lazy_operand_assignments(value, out);
+        }
+        _ => visit_child_expressions(expr, &mut |child| {
+            collect_lazy_operand_assignments(child, out)
+        }),
+    }
+}
+
 /// Returns a self-evident scalar type when semantic inference is unavailable.
 fn precise_scalar_expr_type(value: &Expr) -> Option<PhpType> {
     match &value.kind {
@@ -605,6 +769,13 @@ fn collect_value_assignment_stmt<'a>(
         StmtKind::RefAssign { target, source } => {
             collect_value_assignments_from_expr(source, out);
             out.push((target, AssignedValue::Opaque));
+        }
+        StmtKind::RefAssignPlace { target, source } => {
+            collect_value_assignments_from_expr(target, out);
+            collect_value_assignments_from_expr(source, out);
+            if let ExprKind::Variable(name) = &source.kind {
+                out.push((name, AssignedValue::Opaque));
+            }
         }
         StmtKind::ListUnpack { vars, value } => {
             collect_value_assignments_from_expr(value, out);
@@ -863,7 +1034,7 @@ fn collect_foreach_key_names<'a>(statements: &'a [Stmt], out: &mut HashSet<&'a s
 }
 
 /// Returns the statement lists nested directly inside one statement.
-fn nested_statement_bodies(statement: &Stmt) -> Vec<&[Stmt]> {
+pub(super) fn nested_statement_bodies(statement: &Stmt) -> Vec<&[Stmt]> {
     match &statement.kind {
         StmtKind::If {
             then_body,

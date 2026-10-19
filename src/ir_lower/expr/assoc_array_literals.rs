@@ -114,9 +114,21 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
             target: CastType::Array,
             expr: inner,
         } => array_cast_literal_element_type(ctx, inner),
-        ExprKind::Ternary { .. } => {
-            // Use the actual branch-merge representation before choosing hash storage.
-            ir_array_storage_type(materialized_expr_type_for_merge(ctx, value))
+        // Every lazily merged expression lowers through a merge temp typed from its branches;
+        // typing the slot from the syntactic fallback (`int` for most branch shapes) coerced a
+        // string or boxed branch into an integer element.
+        ExprKind::Ternary { .. }
+        | ExprKind::ShortTernary { .. }
+        | ExprKind::NullCoalesce { .. }
+        | ExprKind::Match { .. } => {
+            // A merge that may yield null is a nullable tagged scalar in a local, which an array
+            // slot cannot hold; such an element is boxed like a literal `null` element.
+            let merged = materialized_expr_type_for_merge(ctx, value);
+            if php_type_allows_null(&merged) {
+                PhpType::Mixed
+            } else {
+                ir_array_storage_type(merged)
+            }
         }
         ExprKind::ConstRef(name) => ctx
             .constant_value(name.as_str())
@@ -170,6 +182,11 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
                 .and_then(materializable_array_element_type)
                 .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value)))
         }
+        // Same as the indexed literal: a static property has declared slot storage, while the
+        // syntactic fallback types it `int` (`['k' => P::$a]` stored `1`).
+        ExprKind::StaticPropertyAccess { receiver, property } => ir_array_storage_type(
+            static_property_result_type(ctx, receiver, property, value),
+        ),
         ExprKind::StaticMethodCall { receiver, method, .. } => {
             static_method_call_expr_type_for_ir(ctx, receiver, method)
                 .and_then(materializable_array_element_type)

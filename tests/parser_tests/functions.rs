@@ -666,15 +666,16 @@ fn test_parse_t_or_false_preserves_literal_union_member() {
 }
 
 #[test]
-/// Verifies that the `true` literal type also widens to `bool`, so `int|true` parses as
-/// `Union([Int, Bool])`.
-fn test_parse_t_or_true_widens_to_bool_union() {
+/// Verifies that the `true` literal type is kept as its own member, so `int|true` parses as
+/// `Union([Int, True])`; the checker treats it as `bool`, and a declared `: true` return checks
+/// the value.
+fn test_parse_t_or_true_keeps_literal_true_member() {
     let stmts = parse_source("<?php function f(int|true $x): int { return 0; }");
     match &stmts[0].kind {
         StmtKind::FunctionDecl { params, .. } => {
             assert_eq!(
                 params[0].1,
-                Some(TypeExpr::Union(vec![TypeExpr::Int, TypeExpr::Bool]))
+                Some(TypeExpr::Union(vec![TypeExpr::Int, TypeExpr::True]))
             );
         }
         other => panic!("Expected FunctionDecl, got {:?}", other),
@@ -949,6 +950,27 @@ fn test_parse_first_class_callable_function() {
                 assert_eq!(name.as_str(), "strlen");
             }
             other => panic!("Expected function first-class callable, got {:?}", other),
+        },
+        other => panic!("Expected assignment, got {:?}", other),
+    }
+}
+
+#[test]
+// Verifies that `<?php $g = $cb(...);` parses to the internal Closure conversion over the
+// variable, the `Closure::fromCallable($cb)` semantics PHP gives first-class callable syntax
+// on a runtime value.
+/// Verifies that parse first class callable on a variable.
+fn test_parse_first_class_callable_on_variable() {
+    let stmts = parse_source("<?php $g = $cb(...);");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::FunctionCall { name, args } => {
+                assert_eq!(name.as_str(), "__elephc_closure_from_callable");
+                assert!(name.is_fully_qualified());
+                assert_eq!(args.len(), 1);
+                assert_eq!(args[0].kind, ExprKind::Variable("cb".to_string()));
+            }
+            other => panic!("Expected the Closure conversion call, got {:?}", other),
         },
         other => panic!("Expected assignment, got {:?}", other),
     }

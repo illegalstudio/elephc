@@ -472,6 +472,9 @@ impl Checker {
         env: &TypeEnv,
         param_hints: &[PhpType],
     ) -> Result<PhpType, CompileError> {
+        let is_arrow = matches!(&expr.kind, ExprKind::Closure { is_arrow: true, .. });
+        let arrow_undefined_captures =
+            self.record_maybe_undefined_captures(captures, capture_refs, is_arrow, expr.span);
         let mut closure_sig = self.prepare_closure_signature_context_with_param_hints(
             params,
             variadic,
@@ -522,8 +525,7 @@ impl Checker {
             &previous_loop_storage_scope,
             expr.span,
         );
-        self.loop_storage_types
-            .retain(|(scope, _), _| scope != &loop_storage_scope);
+        self.clear_loop_storage_scope(&loop_storage_scope);
         self.current_loop_storage_scope = loop_storage_scope;
         // The storage this closure's frame ALREADY holds on entry: its by-VALUE captures, each
         // with the type it arrives with, read from the ENCLOSING environment. Deliberately not
@@ -535,7 +537,16 @@ impl Checker {
         let pre_bound_own_storage: std::collections::HashMap<String, PhpType> = captures
             .iter()
             .chain(params.iter().map(|(name, _, _, _)| name))
-            .filter_map(|name| env.get(name).map(|ty| (name.clone(), ty.clone())))
+            .filter_map(|name| {
+                env.get(name).map(|ty| {
+                    let ty = if self.capture_may_be_undefined(name, expr.span) {
+                        PhpType::Mixed
+                    } else {
+                        ty.clone()
+                    };
+                    (name.clone(), ty)
+                })
+            })
             .collect();
         let body_result = self.with_local_storage_context(
             closure_ref_params,
@@ -543,6 +554,10 @@ impl Checker {
             pre_bound_own_storage,
             body,
             |checker| {
+                // An arrow function's silently captured undefined local stays undefined.
+                for name in &arrow_undefined_captures {
+                    checker.mark_maybe_undefined(name);
+                }
                 for stmt in body {
                     checker.check_stmt(stmt, &mut closure_sig.env)?;
                 }
@@ -574,7 +589,14 @@ impl Checker {
             CompileError::new(expr.span, &format!("Undefined variable: ${}", var))
         })?;
         if var_ty != PhpType::Callable {
-            if matches!(var_ty.codegen_repr(), PhpType::Str | PhpType::Mixed) {
+            // `$v instanceof Closure ? $v(...) : $v` narrows a mixed `$v` to `Closure` for the
+            // then-branch. The storage is still the boxed value, and a Closure is exactly what
+            // the runtime callable dispatch invokes, so the narrowed call is a runtime call like
+            // the mixed one. Rejecting it made Laravel's `value()` fail to re-resolve once its
+            // parameter widened, which silently kept the stale `int` return.
+            if matches!(var_ty.codegen_repr(), PhpType::Str | PhpType::Mixed)
+                || is_closure_object_type(&var_ty)
+            {
                 // A boxed array read can carry any runtime callable shape.
                 // The callee is only known at runtime, but PHP rejects
                 // unpacking after named arguments while compiling the call.
@@ -770,7 +792,21 @@ impl Checker {
             return Ok(ret_ty);
         }
         let callee_ty = self.infer_type(callee, env)?;
-        if matches!(callee_ty.codegen_repr(), PhpType::Str | PhpType::Mixed) {
+        // `($this->callback)(...$args)`: an untyped property's static type only reflects its
+        // declared default (`null`) or the array it was refined to (`[$obj, 'm']`), not which
+        // callable it holds; its value is a runtime callable exactly like a boxed one (the
+        // lowering dispatches on the runtime value).
+        let untyped_member_callee = matches!(
+                callee_ty.codegen_repr(),
+                PhpType::Void | PhpType::Array(_) | PhpType::AssocArray { .. }
+            )
+            && matches!(
+                callee.kind,
+                ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. }
+            );
+        if untyped_member_callee
+            || matches!(callee_ty.codegen_repr(), PhpType::Str | PhpType::Mixed)
+        {
             // String and boxed callables resolve at runtime; PHP still rejects unpacking
             // after named arguments while compiling the call expression.
             let callee_desc = match &callee.kind {
@@ -1767,4 +1803,11 @@ fn is_one_int_literal(expr: &Expr) -> bool {
 /// Returns `true` if `expr` is an empty array literal (`[]`).
 fn is_empty_indexed_array_literal(expr: &Expr) -> bool {
     matches!(&expr.kind, ExprKind::ArrayLiteral(elems) if elems.is_empty())
+}
+
+/// Whether `ty` is the builtin `Closure` class as an object type (an `instanceof Closure`
+/// narrowing), which the runtime callable dispatch can invoke.
+fn is_closure_object_type(ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Object(name)
+        if crate::names::php_symbol_key(name.trim_start_matches('\\')) == "closure")
 }

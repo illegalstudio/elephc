@@ -8,13 +8,14 @@
 //! Key details:
 //! - Object inference depends on flattened class metadata, visibility, inheritance, and declared property types.
 
+use std::collections::{HashMap, HashSet};
+
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver, TypeExpr};
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
 use super::super::super::Checker;
-use super::super::syntactic::wider_type_syntactic;
 
 impl Checker {
     /// Infers the type of a method call expression (`$obj->method(...)`).
@@ -77,16 +78,38 @@ impl Checker {
             // the method must exist on every object member; codegen dispatches on
             // the runtime class id and the result is the union of each member's
             // return type. A non-object runtime value faults like PHP.
+            //
+            // On a union the lattice join built from untyped observations (never one the
+            // program declares), a member that does not declare the method at all is skipped as
+            // long as another member does: PHP resolves the method on the runtime class, and the codegen
+            // dispatch (`lower_mixed_method_call`) branches on the class id over every class
+            // that declares it, throwing PHP's `Call to undefined method` Error for any other.
+            // This is what keeps a parent|child join (`P0|P1` with `extra()` only on `P1`,
+            // `crate::types::checker::lattice`) as permissive as the single class the old
+            // "first writer wins" rule happened to keep.
             let object_classes = self.union_object_classes(&obj_ty);
             if object_classes.len() >= 2 {
+                let lenient = self.joined_object_unions.borrow().contains(&format!("{obj_ty:?}"));
                 let mut return_types = Vec::with_capacity(object_classes.len());
+                let mut first_missing: Option<CompileError> = None;
                 for class_name in &object_classes {
-                    let return_ty = if self.interfaces.contains_key(class_name) {
-                        self.infer_method_call_on_interface_type(class_name, method, args, expr, env)?
+                    let result = if self.interfaces.contains_key(class_name) {
+                        self.infer_method_call_on_interface_type(class_name, method, args, expr, env)
                     } else {
-                        self.infer_method_call_on_class_type(class_name, method, args, expr, env)?
+                        self.infer_method_call_on_class_type(class_name, method, args, expr, env)
                     };
-                    return_types.push(return_ty);
+                    match result {
+                        Ok(return_ty) => return_types.push(return_ty),
+                        Err(error) if lenient && error.message.starts_with("Undefined method:") => {
+                            first_missing.get_or_insert(error);
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
+                if return_types.is_empty() {
+                    if let Some(error) = first_missing {
+                        return Err(error);
+                    }
                 }
                 return Ok(self.normalize_union_type(return_types));
             }
@@ -561,6 +584,13 @@ impl Checker {
             .get(&impl_class_name)
             .map(|class_info| Self::declared_method_param_flags(class_info, &method_key, false))
             .unwrap_or_default();
+        self.widen_override_untyped_method_params(
+            class_name,
+            &impl_class_name,
+            &method_key,
+            &arg_types,
+        );
+        let joined = self.joined_param_observations(&impl_class_name, &method_key, false, &arg_types);
         if let Some(class_info) = self.classes.get_mut(&impl_class_name) {
             if let Some(sig) = class_info.methods.get_mut(&method_key) {
                 let regular_param_count = if sig.variadic.is_some() {
@@ -589,7 +619,7 @@ impl Checker {
                         && !self.interface_method_boxed_params.contains(&(
                             format!("{}::{}", impl_class_name, method_key), i,
                         ))
-                        && !matches!(*arg_ty, PhpType::Void | PhpType::Never | PhpType::Callable)
+                        && !matches!(*arg_ty, PhpType::Void | PhpType::Never)
                     {
                         let key = (format!("{}::{}", impl_class_name, method_key), i);
                         let seen = self.param_specialization_seen.contains(&key);
@@ -597,7 +627,7 @@ impl Checker {
                             self.param_specialization_seen.insert(key);
                             sig.params[i].1 = arg_ty.clone();
                         } else {
-                            sig.params[i].1 = Self::union_param_type(&sig.params[i].1, arg_ty);
+                            sig.params[i].1 = joined[i].clone().unwrap_or(PhpType::Mixed);
                         }
                     }
                 }
@@ -630,11 +660,11 @@ impl Checker {
                 {
                     let mut elem_ty = arg_types[regular_param_count].clone();
                     for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
-                        elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
+                        elem_ty = Self::union_param_type(&elem_ty, arg_ty);
                     }
                     if let Some((_, PhpType::Array(existing_elem_ty))) = sig.params.last_mut() {
                         **existing_elem_ty =
-                            wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
+                            widen_method_variadic_element(existing_elem_ty.as_ref(), &elem_ty);
                     }
                 }
                 return Ok(late_static_return_type
@@ -643,6 +673,142 @@ impl Checker {
             }
         }
         Ok(PhpType::Int)
+    }
+
+    /// Widens the untyped parameters of every override a call on `receiver_class` can reach.
+    ///
+    /// The call is typed against the receiver's class, so the specialization below teaches only
+    /// the body that class dispatches to. A subclass that overrides the method runs ITS body
+    /// whenever the object is that subclass — `$parentTyped->add($v)`, or a fluent `: self`
+    /// chain — and kept the narrower types its own direct calls taught it: the override stored
+    /// the boxed argument into a slot typed for something else and printed a pointer. Every
+    /// override below the receiver class gets the same widening, by the same rules.
+    fn widen_override_untyped_method_params(
+        &mut self,
+        receiver_class: &str,
+        receiver_impl_class: &str,
+        method_key: &str,
+        arg_types: &[PhpType],
+    ) {
+        let mut override_impls: Vec<String> = self
+            .class_and_descendants(receiver_class)
+            .into_iter()
+            .filter_map(|name| self.classes.get(&name))
+            .filter_map(|info| info.method_impl_classes.get(method_key).cloned())
+            .filter(|impl_class| impl_class != receiver_impl_class)
+            .collect();
+        override_impls.sort();
+        override_impls.dedup();
+        for impl_class in override_impls {
+            let declared_flags = self
+                .classes
+                .get(&impl_class)
+                .map(|info| Self::declared_method_param_flags(info, method_key, false))
+                .unwrap_or_default();
+            let key_owner = format!("{}::{}", impl_class, method_key);
+            let joined = self.joined_param_observations(&impl_class, method_key, false, arg_types);
+            let Some(sig) = self
+                .classes
+                .get_mut(&impl_class)
+                .and_then(|info| info.methods.get_mut(method_key))
+            else {
+                continue;
+            };
+            let regular_param_count = if sig.variadic.is_some() {
+                sig.params.len().saturating_sub(1)
+            } else {
+                sig.params.len()
+            };
+            for (i, arg_ty) in arg_types.iter().enumerate() {
+                if i >= regular_param_count
+                    || declared_flags.get(i).copied().unwrap_or(false)
+                    || sig.ref_params.get(i).copied().unwrap_or(false)
+                    || self
+                        .interface_method_boxed_params
+                        .contains(&(key_owner.clone(), i))
+                    || matches!(*arg_ty, PhpType::Void | PhpType::Never)
+                {
+                    continue;
+                }
+                let key = (key_owner.clone(), i);
+                if sig.params[i].1 == PhpType::Int && !self.param_specialization_seen.contains(&key)
+                {
+                    self.param_specialization_seen.insert(key);
+                    sig.params[i].1 = arg_ty.clone();
+                } else {
+                    sig.params[i].1 = joined[i].clone().unwrap_or(PhpType::Mixed);
+                }
+            }
+        }
+    }
+
+    /// Joins every call-site argument type into the stored type of the parameter it binds
+    /// (`crate::types::checker::lattice`), computed before the signature is borrowed mutably
+    /// because a class join reads the hierarchy. `None` past the signature's parameters.
+    fn joined_param_observations(
+        &self,
+        class_name: &str,
+        method_key: &str,
+        is_static: bool,
+        arg_types: &[PhpType],
+    ) -> Vec<Option<PhpType>> {
+        let sig = self.classes.get(class_name).and_then(|class_info| {
+            if is_static {
+                class_info.static_methods.get(method_key)
+            } else {
+                class_info.methods.get(method_key)
+            }
+        });
+        arg_types
+            .iter()
+            .enumerate()
+            .map(|(i, arg_ty)| {
+                sig.and_then(|sig| sig.params.get(i))
+                    .map(|(_, stored)| self.join_observed_type(stored, arg_ty))
+            })
+            .collect()
+    }
+
+    /// Returns `ancestor` (when it is a registered class) and every registered class below it.
+    ///
+    /// The same set the parent-chain walk `class is ancestor or one of its subclasses` selects
+    /// over the whole table, found from the children index instead: a cycle in the parent
+    /// links is cut by the visited set, exactly where the walk's hop limit cut it.
+    pub(crate) fn class_and_descendants(&mut self, ancestor: &str) -> Vec<String> {
+        let class_count = self.classes.len();
+        if self
+            .class_children_index
+            .as_ref()
+            .is_none_or(|(built_for, _)| *built_for != class_count)
+        {
+            let mut children: HashMap<String, Vec<String>> = HashMap::new();
+            for (name, info) in &self.classes {
+                if let Some(parent) = &info.parent {
+                    children.entry(parent.clone()).or_default().push(name.clone());
+                }
+            }
+            self.class_children_index = Some((class_count, children));
+        }
+        let children = &self
+            .class_children_index
+            .as_ref()
+            .expect("children index built above")
+            .1;
+        let mut found = Vec::new();
+        let mut visited: HashSet<&str> = HashSet::new();
+        let mut stack: Vec<&str> = vec![ancestor];
+        while let Some(name) = stack.pop() {
+            if !visited.insert(name) {
+                continue;
+            }
+            if self.classes.contains_key(name) {
+                found.push(name.to_string());
+            }
+            if let Some(direct) = children.get(name) {
+                stack.extend(direct.iter().map(String::as_str));
+            }
+        }
+        found
     }
 
     /// Returns preserved late-static return syntax for an instance method.
@@ -766,6 +932,18 @@ impl Checker {
             .get(&impl_class_name)
             .map(|class_info| Self::declared_method_param_flags(class_info, method_key, is_static))
             .unwrap_or_default();
+        // The declared generic `array $args` resolves to `array<mixed>`, a placeholder rather
+        // than an observation, so the first call site's element type is ADOPTED over it — once.
+        // Re-adopting whenever the stored element was `mixed` turned the join into a
+        // replacement: `C::days(1); C::hours(1.5); C::mins(2)` went int → mixed → int, the float
+        // was read as an int's bit pattern, and Carbon's `CarbonInterval::__callStatic`
+        // alternated `array<int>` / `array<float>` between the method pass and the top level
+        // for every outer round (`crate::types::checker::lattice`).
+        let adopt_key = (
+            format!("magic:{}::{}", impl_class_name, method_key),
+            1usize,
+        );
+        let may_adopt = !self.param_specialization_seen.contains(&adopt_key);
         let sig_slot = self.classes.get_mut(&impl_class_name).and_then(|class_info| {
             if is_static {
                 class_info.static_methods.get_mut(method_key)
@@ -779,9 +957,13 @@ impl Checker {
             }
             if sig.params.len() > 1 {
                 let declared_array_param = declared_flags.get(1).copied().unwrap_or(false);
+                if !matches!(elem_ty, PhpType::Never) {
+                    self.param_specialization_seen.insert(adopt_key);
+                }
                 sig.params[1].1 = match &sig.params[1].1 {
                     PhpType::Array(existing)
                         if declared_array_param
+                            && may_adopt
                             && matches!(existing.as_ref(), PhpType::Mixed)
                             && !matches!(elem_ty, PhpType::Mixed) =>
                     {
@@ -1244,6 +1426,7 @@ impl Checker {
             .get(class_name)
             .map(|class_info| Self::declared_method_param_flags(class_info, &method_key, true))
             .unwrap_or_default();
+        let joined = self.joined_param_observations(class_name, &method_key, true, &arg_types);
         if let Some(class_info) = self.classes.get_mut(class_name) {
             if let Some(sig) = class_info.static_methods.get_mut(&method_key) {
                 let regular_param_count = if sig.variadic.is_some() {
@@ -1265,7 +1448,7 @@ impl Checker {
                     }
                     if i < regular_param_count
                         && !static_declared_flags.get(i).copied().unwrap_or(false)
-                        && !matches!(*arg_ty, PhpType::Void | PhpType::Never | PhpType::Callable)
+                        && !matches!(*arg_ty, PhpType::Void | PhpType::Never)
                     {
                         let key = (format!("static:{}::{}", class_name, method), i);
                         let seen = self.param_specialization_seen.contains(&key);
@@ -1273,7 +1456,7 @@ impl Checker {
                             self.param_specialization_seen.insert(key);
                             sig.params[i].1 = arg_ty.clone();
                         } else {
-                            sig.params[i].1 = Self::union_param_type(&sig.params[i].1, arg_ty);
+                            sig.params[i].1 = joined[i].clone().unwrap_or(PhpType::Mixed);
                         }
                     }
                 }
@@ -1306,11 +1489,11 @@ impl Checker {
                 {
                     let mut elem_ty = arg_types[regular_param_count].clone();
                     for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
-                        elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
+                        elem_ty = Self::union_param_type(&elem_ty, arg_ty);
                     }
                     if let Some((_, PhpType::Array(existing_elem_ty))) = sig.params.last_mut() {
                         **existing_elem_ty =
-                            wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
+                            widen_method_variadic_element(existing_elem_ty.as_ref(), &elem_ty);
                     }
                 }
                 return Ok(late_static_static_return_type
@@ -1324,6 +1507,12 @@ impl Checker {
                 .get(&direct_impl_class_name)
                 .map(|class_info| Self::declared_method_param_flags(class_info, &method_key, false))
                 .unwrap_or_default();
+            let joined = self.joined_param_observations(
+                &direct_impl_class_name,
+                &method_key,
+                false,
+                &arg_types,
+            );
             if let Some(sig) = self
                 .classes
                 .get_mut(&direct_impl_class_name)
@@ -1348,7 +1537,7 @@ impl Checker {
                     }
                     if i < regular_param_count
                         && !instance_declared_flags.get(i).copied().unwrap_or(false)
-                        && !matches!(*arg_ty, PhpType::Void | PhpType::Never | PhpType::Callable)
+                        && !matches!(*arg_ty, PhpType::Void | PhpType::Never)
                     {
                         let key = (format!("{}::{}", direct_impl_class_name, method), i);
                         let seen = self.param_specialization_seen.contains(&key);
@@ -1356,7 +1545,7 @@ impl Checker {
                             self.param_specialization_seen.insert(key);
                             sig.params[i].1 = arg_ty.clone();
                         } else {
-                            sig.params[i].1 = Self::union_param_type(&sig.params[i].1, arg_ty);
+                            sig.params[i].1 = joined[i].clone().unwrap_or(PhpType::Mixed);
                         }
                     }
                 }
@@ -1371,11 +1560,11 @@ impl Checker {
                 {
                     let mut elem_ty = arg_types[regular_param_count].clone();
                     for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
-                        elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
+                        elem_ty = Self::union_param_type(&elem_ty, arg_ty);
                     }
                     if let Some((_, PhpType::Array(existing_elem_ty))) = sig.params.last_mut() {
                         **existing_elem_ty =
-                            wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
+                            widen_method_variadic_element(existing_elem_ty.as_ref(), &elem_ty);
                     }
                 }
                 return Ok(late_static_instance_return_type
@@ -1498,6 +1687,28 @@ fn method_variadic_tail_needs_iterable(
                     .any(|(param_name, _)| param_name == name)
         )
     })
+}
+
+/// Joins a call site's argument type into a method's untyped variadic element type.
+///
+/// MONOTONE: the stored element only ever widens. `wider_type_syntactic` follows PHP's coercion
+/// order, in which `Str` absorbs every other arm, so on its own it turned a `mixed` element back
+/// into `string` whenever a string argument arrived. `mixed` is exactly what a first-class
+/// callable or callable array promotes the collector to (the descriptor container,
+/// `crate::types::signatures::descriptor_variadic_container`), so the method pass promoted it,
+/// the top-level re-check of a string call site narrowed it again, and the outer fixpoint
+/// alternated between the two until its pass budget ran out (Laravel's
+/// `Illuminate\Http\Request::is(...$patterns)`: thousands of rounds). A `mixed` element holds any
+/// argument already, so it stays.
+///
+/// Both the per-call fold and this widening are the lattice join of
+/// `crate::types::checker::lattice` (scalar tags never absorb each other): `wider_type_syntactic`
+/// typed `cat('x', 1, 2.0)`'s collector `array<string>` and read the int and float through it.
+fn widen_method_variadic_element(existing: &PhpType, incoming: &PhpType) -> PhpType {
+    if *existing == PhpType::Mixed {
+        return PhpType::Mixed;
+    }
+    Checker::union_param_type(existing, incoming)
 }
 
 /// Returns whether a method signature stores its variadic slot by reference.

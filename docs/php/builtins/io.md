@@ -19,12 +19,12 @@ sidebar:
 | [`fgets()`](./io/fgets.md) | `(resource $stream): mixed` | `mixed` | ✓ | ✓ |
 | [`file()`](./io/file.md) | `(string $filename, int $flags = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`file_get_contents()`](./io/file_get_contents.md) | `(string $filename, bool $use_include_path = false, mixed $context = null, int $offset = 0, int $length = null): mixed` | `mixed` | ✓ | ✓ |
-| [`file_put_contents()`](./io/file_put_contents.md) | `(string $filename, string $data, int $flags = 0): int` | `int` | ✓ | ✓ |
+| [`file_put_contents()`](./io/file_put_contents.md) | `(string $filename, string $data, int $flags = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`flock()`](./io/flock.md) | `(resource $stream, int $operation, bool $would_block = null): bool` | `bool` | ✓ | ✓ |
 | [`fopen()`](./io/fopen.md) | `(string $filename, string $mode, bool $use_include_path = false, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
 | [`fpassthru()`](./io/fpassthru.md) | `(resource $stream): int` | `int` | ✓ | ✓ |
 | [`fprintf()`](./io/fprintf.md) | `(resource $stream, string $format, ...$values): int` | `int` | ✓ | ✓ |
-| [`fputcsv()`](./io/fputcsv.md) | `(resource $stream, array $fields, string $separator = ',', string $enclosure = '"'): int` | `int` | ✓ | ✓ |
+| [`fputcsv()`](./io/fputcsv.md) | `(resource $stream, array $fields, string $separator = ',', string $enclosure = '"'): mixed` | `mixed` | ✓ | ✓ |
 | [`fread()`](./io/fread.md) | `(resource $stream, int $length): string` | `string` | ✓ | ✓ |
 | [`fscanf()`](./io/fscanf.md) | `(resource $stream, string $format, ...$vars): array` | `array` | ✓ | ✓ |
 | [`fseek()`](./io/fseek.md) | `(resource $stream, int $offset, int $whence = 0): int` | `int` | ✓ | ✓ |

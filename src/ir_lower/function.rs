@@ -116,6 +116,7 @@ pub(crate) fn lower_main(
         None,
         PhpType::Void,
         false,
+        false,
         &[],
         None,
         true,
@@ -254,6 +255,7 @@ pub(crate) fn lower_user_function(
         None,
         body_return_type.clone(),
         signature.declared_return,
+        crate::return_coerce_prelude::annotation_is_literal_true(return_type),
         &eir_signature.params,
         None,
         false,
@@ -289,6 +291,35 @@ pub(crate) fn lower_class_method(
         .cloned()
         .unwrap_or(fallback);
     let name = format!("{}::{}", class_name, method_name);
+    if let Some(contract) = module.family_body_contracts.get(&(
+        class_name.to_string(),
+        php_symbol_key(method_name),
+        is_static,
+    )) {
+        let params = contract
+            .params
+            .iter()
+            .filter_map(|(index, ty)| {
+                let (param_name, _) = signature.params.get(*index)?;
+                let prefix = format!(
+                    "{}(): Argument #{} (${}) must be of type {}, ",
+                    name,
+                    index + 1,
+                    param_name,
+                    match ty.codegen_repr() {
+                        PhpType::Int => "int",
+                        PhpType::Float => "float",
+                        PhpType::Bool => "bool",
+                        _ => "string",
+                    }
+                );
+                Some((param_name.clone(), ty.clone(), prefix))
+            })
+            .collect();
+        PENDING_FAMILY_CONTRACT.with(|pending| {
+            *pending.borrow_mut() = Some((params, contract.declared_return.clone()));
+        });
+    }
     // Generator methods lower their body as a Mixed-returning coroutine; see
     // `generator_body_return_type`.
     let method_body_return_type = generator_body_return_type(body, &signature.return_type, signature.is_generator);
@@ -378,6 +409,7 @@ pub(crate) fn lower_class_method(
         Some(class_name.to_string()),
         method_body_return_type.clone(),
         signature.declared_return,
+        crate::return_coerce_prelude::annotation_is_literal_true(return_type),
         &body_params,
         None,
         false,
@@ -495,6 +527,7 @@ pub(crate) fn lower_eval_aot_function(
         None,
         return_type,
         signature.declared_return,
+        false,
         &[],
         None,
         false,
@@ -623,6 +656,7 @@ pub(crate) fn lower_eval_aot_scope_function(
         None,
         return_type,
         signature.declared_return,
+        false,
         &signature.params,
         None,
         false,
@@ -740,6 +774,7 @@ pub(crate) fn lower_property_init_thunk(
         constants,
         Some(class_name.to_string()),
         PhpType::Void,
+        false,
         false,
         &params,
         None,
@@ -1107,6 +1142,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         Some(class_name.to_string()),
         PhpType::Void,
         false,
+        false,
         &params,
         None,
         false,
@@ -1227,6 +1263,7 @@ pub(crate) fn lower_clone_override_function(
         constants,
         scope.map(str::to_string),
         PhpType::Void,
+        false,
         false,
         params,
         None,
@@ -1388,6 +1425,7 @@ pub(crate) fn lower_eval_native_default_helpers(
             Some(class_name),
             PhpType::Mixed,
             true,
+            false,
             &[],
             None,
             false,
@@ -1455,6 +1493,7 @@ pub(crate) fn lower_closure_function(
         name,
         params,
         signature,
+        crate::return_coerce_prelude::annotation_is_literal_true(return_type),
         body,
         captures,
         self_ref_callable_capture,
@@ -1516,6 +1555,7 @@ pub(crate) fn lower_closure_function_with_context(
         name,
         params,
         signature,
+        crate::return_coerce_prelude::annotation_is_literal_true(return_type),
         body,
         captures,
         self_ref_callable_capture,
@@ -1529,6 +1569,7 @@ fn lower_closure_function_with_signature(
     name: &str,
     params: &AstParams,
     signature: FunctionSig,
+    return_literal_true: bool,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
     self_ref_callable_capture: Option<&str>,
@@ -1615,6 +1656,7 @@ fn lower_closure_function_with_signature(
         parent.current_class.clone(),
         closure_body_return_type.clone(),
         signature.declared_return,
+        return_literal_true,
         &lowered_params,
         recursive_binding,
         false,
@@ -1626,6 +1668,15 @@ fn lower_closure_function_with_signature(
     );
     parent.extend_closures(std::iter::once(function).chain(closures));
     signature
+}
+
+thread_local! {
+    /// The family contract `lower_class_method` hands to the very next body it lowers:
+    /// `(param name, declared type, TypeError prefix)` per boxed parameter, and the boxed
+    /// declared return. Taken before any nested closure body can be lowered.
+    static PENDING_FAMILY_CONTRACT: std::cell::RefCell<
+        Option<(Vec<(String, PhpType, String)>, Option<PhpType>)>,
+    > = const { std::cell::RefCell::new(None) };
 }
 
 /// Lowers the supplied statements into `function` and appends a default terminator if needed.
@@ -1675,6 +1726,7 @@ fn lower_body_into_function(
     current_class: Option<String>,
     return_php_type: PhpType,
     return_type_is_declared: bool,
+    return_literal_true: bool,
     params: &[(String, PhpType)],
     recursive_closure_binding: Option<RecursiveClosureBinding>,
     in_main: bool,
@@ -1747,6 +1799,7 @@ fn lower_body_into_function(
     }
     ctx.by_ref_return = function_by_ref_return;
     ctx.return_type_is_declared = return_type_is_declared;
+    ctx.return_literal_true = return_literal_true;
     if let Some((scope_param, read_names, write_names, flush_names)) = eval_scope_reads {
         ctx.enable_eval_scope_access(scope_param, read_names, write_names, flush_names);
     }
@@ -1783,11 +1836,26 @@ fn lower_body_into_function(
         ctx.privatize_container_param(name, php_type, None);
     }
     seed_recursive_closure_binding(&mut ctx, recursive_closure_binding);
+    // A method body boxed into its override family's call ABI enforces its own declared scalar
+    // contract: the caller no longer coerces the argument, and the shared slot takes a Mixed
+    // result (`crate::ir_lower::program::virtual_abi`).
+    if let Some((params, declared_return)) =
+        PENDING_FAMILY_CONTRACT.with(|pending| pending.borrow_mut().take())
+    {
+        for (param_name, declared, prefix) in &params {
+            crate::ir_lower::stmt::coerce_boxed_family_param(&mut ctx, param_name, declared, prefix);
+        }
+        ctx.boxed_return_contract = declared_return;
+    }
     ctx.lower_with_final_string_append_storage(|ctx| {
         if let Some(class) = property_initializers {
             super::property_initializers::lower(ctx, class);
-        } else if !super::throwable_constructors::lower(ctx) && !super::core_methods::lower(ctx, body) {
-            crate::ir_lower::loop_closures::lower_body_observing_numeric_closures(ctx, body);
+        } else if !super::throwable_constructors::lower(ctx) {
+            // Flags first: a native Core method body still lowers its leading statement.
+            super::maybe_undefined::init_frame_flags(ctx);
+            if !super::core_methods::lower(ctx, body) {
+                crate::ir_lower::loop_closures::lower_body_observing_numeric_closures(ctx, body);
+            }
         }
     });
     terminate_open_block(&mut ctx);
@@ -2361,6 +2429,18 @@ fn direct_closure_return_expr_type(
         | ExprKind::ExprCall { .. }
         | ExprKind::Pipe { .. }
         | ExprKind::NullsafeDynamicMethodCall { .. } => return PhpType::Mixed,
+        // `return $o->p = v;`, `return $this['env'] = v;`, `return $list[] = v;`: a write to a
+        // place other than a plain local yields its value through a prelude or a result
+        // temporary, which the syntactic fallback below types as `Int`, so the closure
+        // returned a string or an object through an int slot and printed 0. The write's
+        // result is handed back boxed instead.
+        ExprKind::Assignment { target, result_target, prelude, .. }
+            if result_target.is_some()
+                || !prelude.is_empty()
+                || !matches!(target.kind, ExprKind::Variable(_)) =>
+        {
+            return PhpType::Mixed;
+        }
         _ => {}
     }
     // An array literal returned directly is stamped with this inferred type and its elements

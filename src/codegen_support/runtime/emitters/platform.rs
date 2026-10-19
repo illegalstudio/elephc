@@ -147,6 +147,8 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_vd_seen_find(emitter);
     io::emit_vd_seen_push(emitter);
     io::emit_vd_seen_pop(emitter);
+    io::emit_seen_stack_helpers(emitter, "json");
+    io::emit_seen_stack_helpers(emitter, "cmp");
     io::emit_var_dump_pad(emitter);
     io::emit_var_dump_indent_step(emitter);
     io::emit_var_dump_emit_indexed_key(emitter);

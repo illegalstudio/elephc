@@ -148,11 +148,15 @@ pub(in crate::codegen) fn referenced_static_method_class_names(module: &Module) 
         .chain(module.runtime_callable_invokers.iter())
     {
         for inst in &function.instructions {
-            if !matches!(inst.op, Op::StaticMethodCall) {
-                continue;
-            }
-            let Some(Immediate::Data(data)) = inst.immediate else {
-                continue;
+            // A `C::m(...)` first-class callable (also the form a tracked `['C', 'm']` array
+            // lowers to) bakes C's class id into its descriptor entry exactly like a direct call.
+            let data = match (inst.op, &inst.immediate) {
+                (Op::StaticMethodCall, Some(Immediate::Data(data))) => *data,
+                (
+                    Op::FirstClassCallableNew,
+                    Some(Immediate::Data(data) | Immediate::ProfiledData { data, .. }),
+                ) => *data,
+                _ => continue,
             };
             let Some(label) = module.data.strings.get(data.as_raw() as usize) else {
                 continue;

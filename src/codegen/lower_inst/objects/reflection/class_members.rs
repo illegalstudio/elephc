@@ -18,7 +18,17 @@ pub(super) fn reflection_class_method_names(ctx: &FunctionContext<'_>, class_nam
         let Some((resolved_name, info)) = resolve_reflection_class(ctx, &current_name) else {
             break;
         };
-        push_unique_method_names(info.methods.keys(), &mut names, &mut seen);
+        // Property-hook accessors (`__propget_*` / `__propset_*`) are compiler-generated
+        // methods, not PHP methods: PHP's Reflection never lists them.
+        let php_methods = info.methods.keys().filter(|method| {
+            let declaring = info
+                .method_declaring_classes
+                .get(*method)
+                .and_then(|class| ctx.module.class_infos.get(class))
+                .unwrap_or(info);
+            !declaring.is_property_hook_method(method)
+        });
+        push_unique_method_names(php_methods, &mut names, &mut seen);
         push_unique_method_names(info.static_methods.keys(), &mut names, &mut seen);
         current = info.parent.clone();
         if current.as_deref() == Some(resolved_name) {

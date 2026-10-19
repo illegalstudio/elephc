@@ -640,6 +640,23 @@ impl Checker {
         }
     }
 
+    /// Folds two `return` types of a function WITHOUT a declared return type.
+    ///
+    /// An undeclared return performs no coercion, so the `Str`/`Float` absorption that
+    /// [`Self::wider_type`] applies is wrong here: `if ($k) { return 1; } return "s";`
+    /// inferred `string`, and the int branch reached the caller as `"1"` (likewise `1` came back
+    /// as `float(1)` next to a float branch, and an array next to a string was stringified).
+    /// When `wider_type` would pick one scalar that one of the two arms does not travel in, the
+    /// honest answer is `Mixed`, which carries each value with its own tag.
+    pub(crate) fn wider_return_type(a: &PhpType, b: &PhpType) -> PhpType {
+        let wide = Self::wider_type(a, b);
+        let absorbed = |arm: &PhpType| arm != &wide && !matches!(arm, PhpType::Never);
+        if matches!(wide, PhpType::Str | PhpType::Float) && (absorbed(a) || absorbed(b)) {
+            return PhpType::Mixed;
+        }
+        wide
+    }
+
     /// Unions two inferred parameter types for call-site specialization: identical
     /// types stay, `Void`/`Never` are absorbed by the other type, and any genuine
     /// disagreement widens to `Mixed`. Unlike `wider_type` (which lets `Str`/`Float`
@@ -656,6 +673,19 @@ impl Checker {
                 if crate::codegen::sentinels::null_repr_is_tagged() =>
             {
                 PhpType::Union(vec![PhpType::Int, PhpType::Void])
+            }
+            // A float slot has no in-band null: a `null` default (or argument) joined with a
+            // float call site was absorbed into `Float` and read back as `0.0`. `float|null`
+            // keeps both, boxed.
+            (PhpType::Void, PhpType::Float) | (PhpType::Float, PhpType::Void) => {
+                PhpType::Union(vec![PhpType::Float, PhpType::Void])
+            }
+            // A callable slot has no null either: `tap($v, $callback = null)` called with a
+            // closure and without one typed `$callback` plain `callable`, `is_null()` folded to
+            // false, and the omitted call invoked a null descriptor (segfault). `callable|null`
+            // keeps both, boxed.
+            (PhpType::Void, PhpType::Callable) | (PhpType::Callable, PhpType::Void) => {
+                PhpType::Union(vec![PhpType::Callable, PhpType::Void])
             }
             (PhpType::Void | PhpType::Never, other) | (other, PhpType::Void | PhpType::Never) => {
                 other.clone()

@@ -154,6 +154,18 @@ pub enum StmtKind {
         /// by-reference-returning callee (`f()`, `$o->m()`, `($c)()`).
         source: Expr,
     },
+    /// `<place> = &<source>;` where the place is NOT a plain local: an object property
+    /// (`$this->p = &$x`) or an array element at any depth (`$a[$k]['x'] = &$x`).
+    ///
+    /// PHP makes the place and the source share one reference (zval) from here on: a write
+    /// through either side is seen through the other, and `unset` of either side only drops
+    /// that side's link. elephc models a reference set as one managed reference cell, so the
+    /// place adopts the source's cell (see `docs/internals/memory-model.md`, "Binding a place
+    /// by reference"). `source` accepts the same shapes as [`StmtKind::RefAssign`].
+    RefAssignPlace {
+        target: Expr,
+        source: Expr,
+    },
     If {
         condition: Expr,
         then_body: Vec<Stmt>,

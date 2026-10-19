@@ -1531,11 +1531,15 @@ foreach ($o->x as &$v) { $v = $v * 2; }
     let release_pos = body
         .find("__rt_decref_mixed")
         .unwrap_or_else(|| panic!("missing old property zval release in:\n{body}"));
-    let cell_reload_pos = body
+    // The reference-slot initialization guard also loads the cell pointer before the split,
+    // so the reload and the republish are searched after the old owner's release.
+    let cell_reload_pos = body[release_pos..]
         .find(cell_reload)
+        .map(|pos| pos + release_pos)
         .unwrap_or_else(|| panic!("missing property cell reload `{cell_reload}` in:\n{body}"));
-    let store_pos = body
+    let store_pos = body[cell_reload_pos..]
         .find(cell_store)
+        .map(|pos| pos + cell_reload_pos)
         .unwrap_or_else(|| panic!("missing cell republish `{cell_store}` in:\n{body}"));
     assert!(
         load_pos < call_pos

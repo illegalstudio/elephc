@@ -122,6 +122,7 @@ fn type_refs_mysqli(type_expr: &TypeExpr) -> bool {
         | TypeExpr::Float
         | TypeExpr::Bool
         | TypeExpr::False
+        | TypeExpr::True
         | TypeExpr::Str
         | TypeExpr::Void
         | TypeExpr::Never
@@ -452,6 +453,9 @@ fn stmt_refs_mysqli(stmt: &Stmt) -> bool {
         }
         StmtKind::ArrayAssign { index, value, .. } => {
             expr_refs_mysqli(index) || expr_refs_mysqli(value)
+        }
+        StmtKind::RefAssignPlace { target, source } => {
+            expr_refs_mysqli(target) || expr_refs_mysqli(source)
         }
         StmtKind::NestedArrayAssign { target, value } => {
             expr_refs_mysqli(target) || expr_refs_mysqli(value)

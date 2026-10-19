@@ -264,6 +264,12 @@ pub(crate) const NAMED_PARAMETER_OVERWRITE_SUFFIX: &str = " overwrites previous 
 ///
 /// Only a non-variadic callee raises it: a variadic one collects every unmatched name instead.
 pub(crate) const UNKNOWN_NAMED_PARAMETER_PREFIX: &str = "Unknown named parameter $";
+/// Callee name PHP prints for an anonymous function in `{closure}(): Argument #1 ($x) not passed`.
+pub(crate) const CLOSURE_CALLEE_DISPLAY_NAME: &str = "{closure}";
+/// PHP's Error for `$string[] = v`.
+pub(crate) const STRING_APPEND_MSG: &str = "[] operator not supported for strings";
+/// PHP's Error for `$scalar[] = v` on an int, float or `true`.
+pub(crate) const SCALAR_AS_ARRAY_MSG: &str = "Cannot use a scalar value as an array";
 /// PHP's catchable Error when a positional entry follows a named one in a container.
 ///
 /// Nothing runtime-dependent appears in it, so the Throwable points straight at these bytes.

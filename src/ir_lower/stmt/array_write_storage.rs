@@ -74,6 +74,21 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
         release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, span);
         return;
     }
+    if op == Op::RuntimeCall && push_is_offset_set_null(ctx, array_value) {
+        // `$obj[] = v` on a user ArrayAccess object is `$obj->offsetSet(null, v)`: the
+        // three-operand subscript write dispatches to `offsetSet`. Only the SPL containers
+        // keep the two-operand form, which their `append`/`push` intrinsics implement.
+        let null = lower_expr(ctx, &Expr::new(ExprKind::Null, span));
+        ctx.emit_void(
+            op,
+            vec![array_value.value, null.value, value.value],
+            None,
+            effects_lookup::runtime_effects(),
+            Some(span),
+        );
+        release_persisted_string_operand(ctx, value, span);
+        return;
+    }
     ctx.emit_void(
         op,
         vec![array_value.value, value.value],
@@ -82,6 +97,44 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
         Some(span),
     );
     release_persisted_string_operand(ctx, value, span);
+}
+
+/// Returns whether `$receiver[] = v` must call `offsetSet(null, v)`: the receiver is an
+/// ArrayAccess object without a built-in container's native append, or a user class overriding
+/// a built-in container's `offsetSet`.
+fn push_is_offset_set_null(ctx: &LoweringContext<'_, '_>, receiver: LoweredValue) -> bool {
+    let ty = ctx.builder.value_php_type(receiver.value);
+    let PhpType::Object(class_name) = ty.codegen_repr() else {
+        return false;
+    };
+    if !type_satisfies_array_access_for_ir(ctx, &ty) {
+        return false;
+    }
+    let class_name = class_name.trim_start_matches('\\').to_string();
+    // A user class that overrides `offsetSet` (`class MyAO extends ArrayObject`) gets its own
+    // override called, as PHP does, even above an SPL container's native append.
+    if let Some(info) = ctx.classes.get(class_name.as_str()) {
+        let declaring = info.method_declaring_classes.get("offsetset");
+        if declaring
+            .and_then(|declaring| ctx.classes.get(declaring.as_str()))
+            .is_some_and(|declaring| !declaring.is_internal)
+        {
+            return true;
+        }
+    }
+    let mut current = Some(class_name);
+    while let Some(name) = current {
+        let Some(info) = ctx.classes.get(name.as_str()) else {
+            // An interface receiver (`ArrayAccess $a`) has no native append either.
+            return ctx.interfaces.contains_key(name.as_str());
+        };
+        // Built-in containers with a native append keep their runtime intrinsics.
+        if info.is_internal && (info.methods.contains_key("append") || info.methods.contains_key("push")) {
+            return false;
+        }
+        current = info.parent.clone();
+    }
+    true
 }
 
 /// Prepares an indexed-array local for an offset assignment.
@@ -243,6 +296,12 @@ pub(super) fn is_empty_indexed_array_element(elem_ty: &PhpType) -> bool {
 }
 
 /// Preserves the first concrete value type written into an empty indexed array.
+///
+/// A `null` first value (`$a = []; $a[] = null;`) has no list-slot representation (`Void` has no
+/// storage), so the slot is boxed like a literal `null` array element.
 pub(super) fn normalize_empty_array_write_element_type(item_type: PhpType) -> PhpType {
-    normalize_materialized_element_type(item_type)
+    match item_type.codegen_repr() {
+        PhpType::Void => PhpType::Mixed,
+        _ => normalize_materialized_element_type(item_type),
+    }
 }

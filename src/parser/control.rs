@@ -20,7 +20,8 @@ use crate::parser::ast::{CatchClause, Expr, ExprKind, Stmt, StmtKind};
 use crate::parser::expr::parse_expr;
 use crate::parser::stmt::{
     expect_semicolon, expect_token, name_starts_at, parse_block, parse_body,
-    parse_destructuring_pattern_unpack, parse_stmt, starts_destructuring_pattern,
+    parse_destructuring_loop_condition, parse_destructuring_pattern_unpack, parse_stmt,
+    starts_destructuring_assignment, starts_destructuring_pattern,
 };
 use crate::span::Span;
 
@@ -182,6 +183,23 @@ pub fn parse_while(
 ) -> Result<Stmt, CompileError> {
     *pos += 1;
     expect_token(tokens, pos, &Token::LParen, "Expected '(' after 'while'")?;
+    // `while ([$a, $b] = array_shift($q))`: the destructuring runs at the head of every
+    // iteration, so the loop becomes `while (true) { <head>; <body> }` (see
+    // `parse_destructuring_loop_condition` for the head and why it keeps PHP's semantics).
+    if starts_destructuring_assignment(tokens, *pos) {
+        let head = parse_destructuring_loop_condition(tokens, pos, span, "while")?;
+        expect_token(tokens, pos, &Token::RParen, "Expected ')' after while condition")?;
+        let body = parse_control_body(tokens, pos, &Token::EndWhile, "endwhile")?;
+        let mut loop_body = head;
+        loop_body.extend(body);
+        return Ok(Stmt::new(
+            StmtKind::While {
+                condition: Expr::new(ExprKind::BoolLiteral(true), span),
+                body: loop_body,
+            },
+            span,
+        ));
+    }
     let condition = parse_expr(tokens, pos)?;
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after while condition")?;
     let body = parse_control_body(tokens, pos, &Token::EndWhile, "endwhile")?;
@@ -235,14 +253,10 @@ pub fn parse_foreach(
         ));
     }
 
-    let first_var = match tokens.get(*pos).map(|(t, _)| t) {
-        Some(Token::Variable(n)) => n.clone(),
-        _ => return Err(CompileError::new(span, "Expected variable after 'as'")),
-    };
-    *pos += 1;
+    let first_target = parse_foreach_target(tokens, pos, span, "Expected variable after 'as'")?;
 
     // Check for => (foreach $arr as $key => $value)
-    let (key_var, value_var, value_by_ref, unpack) =
+    let (key_target, value_target, value_by_ref, unpack) =
         if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleArrow {
         if first_by_ref {
             return Err(CompileError::new(
@@ -269,36 +283,209 @@ pub fn parse_foreach(
                 ));
             }
             let (val_var, unpack) = parse_foreach_pattern_target(tokens, pos, span)?;
-            (Some(first_var), val_var, false, Some(unpack))
+            (Some(first_target), ForeachTarget::Var(val_var), false, Some(unpack))
         } else {
-            let val_var = match tokens.get(*pos).map(|(t, _)| t) {
-                Some(Token::Variable(n)) => n.clone(),
-                _ => return Err(CompileError::new(span, "Expected variable after '=>'")),
-            };
-            *pos += 1;
-            (Some(first_var), val_var, value_by_ref, None)
+            let value_target =
+                parse_foreach_target(tokens, pos, span, "Expected variable after '=>'")?;
+            (Some(first_target), value_target, value_by_ref, None)
         }
     } else {
-        (None, first_var, first_by_ref, None)
+        (None, first_target, first_by_ref, None)
+    };
+    let (key_var, value_var, place_stores) =
+        bind_foreach_targets(key_target, value_target, value_by_ref, span)?;
+    let unpack = match (place_stores, unpack) {
+        (Some(stores), None) => Some(stores),
+        (None, unpack) => unpack,
+        // `foreach ($m as $o->k => [$a, $b])`: unpack the value before storing the key.
+        (Some(stores), Some(unpack)) => {
+            let StmtKind::Synthetic(mut stores) = stores.kind else {
+                unreachable!("place stores are a synthetic group");
+            };
+            stores.insert(1, unpack);
+            Some(Stmt::new(StmtKind::Synthetic(stores), span))
+        }
     };
 
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after foreach")?;
+    if value_by_ref {
+        crate::parser::expr::reject_dynamic_member_write(&array, span)?;
+    }
     let body = parse_control_body(tokens, pos, &Token::EndForeach, "endforeach")?;
     let body = match unpack {
         Some(unpack) => prepend_stmt(unpack, body),
         None => body,
     };
 
-    Ok(Stmt::new(
+    let hidden_ref_value = value_by_ref && is_hidden_foreach_temp(&value_var);
+    let foreach = Stmt::new(
         StmtKind::Foreach {
             array,
             key_var,
-            value_var,
+            value_var: value_var.clone(),
             value_by_ref,
             body,
         },
         span,
-    ))
+    );
+    if !hidden_ref_value {
+        return Ok(foreach);
+    }
+    // The hidden by-reference loop variable of a place target keeps the last element's
+    // reference set alive after the loop; PHP has no such holder, so drop it.
+    let unset = Stmt::new(
+        StmtKind::ExprStmt(Expr::new(
+            ExprKind::FunctionCall {
+                name: "unset".into(),
+                args: vec![Expr::new(ExprKind::Variable(value_var), span)],
+            },
+            span,
+        )),
+        span,
+    );
+    Ok(Stmt::new(StmtKind::Synthetic(vec![foreach, unset]), span))
+}
+
+/// Whether `name` is the hidden loop variable `bind_foreach_targets` made for a place target.
+fn is_hidden_foreach_temp(name: &str) -> bool {
+    name.starts_with("__elephc_foreach_value_") && crate::names::is_generated_local_name(name)
+}
+
+/// One `foreach` key or value target.
+enum ForeachTarget {
+    /// `$name`, bound by the loop itself.
+    Var(String),
+    /// A writable place (`$stub->class`, `$a['k']`, `$o->{$p}`, `C::$x`), assigned per iteration.
+    Place(Expr),
+    /// `$place[]`: each iteration appends to the place.
+    Append(Expr),
+}
+
+/// Parses one foreach target up to the `=>` or `)` that ends it.
+fn parse_foreach_target(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+    expected: &str,
+) -> Result<ForeachTarget, CompileError> {
+    if let Some(Token::Variable(name)) = tokens.get(*pos).map(|(token, _)| token) {
+        if matches!(
+            tokens.get(*pos + 1).map(|(token, _)| token),
+            Some(Token::DoubleArrow | Token::RParen)
+        ) {
+            let name = name.clone();
+            *pos += 1;
+            return Ok(ForeachTarget::Var(name));
+        }
+    }
+    // `foreach ($item as $stub->class => $stub->position)`: find the end of the target.
+    let mut depth = 0usize;
+    let mut end = *pos;
+    while end < tokens.len() {
+        match tokens[end].0 {
+            Token::LParen | Token::LBracket | Token::LBrace => depth += 1,
+            Token::RParen if depth == 0 => break,
+            Token::RParen | Token::RBracket | Token::RBrace => depth = depth.saturating_sub(1),
+            Token::DoubleArrow if depth == 0 => break,
+            Token::Semicolon if depth == 0 => break,
+            _ => {}
+        }
+        end += 1;
+    }
+    let append = end >= *pos + 3
+        && tokens[end - 2].0 == Token::LBracket
+        && tokens[end - 1].0 == Token::RBracket;
+    let place_tokens = &tokens[*pos..if append { end - 2 } else { end }];
+    if place_tokens.is_empty() {
+        return Err(CompileError::new(span, expected));
+    }
+    let mut place_pos = 0;
+    let place = parse_expr(place_tokens, &mut place_pos)?;
+    if place_pos != place_tokens.len() {
+        return Err(CompileError::new(span, "Expected ')' after foreach"));
+    }
+    let writable = matches!(
+        place.kind,
+        ExprKind::PropertyAccess { .. }
+            | ExprKind::DynamicPropertyAccess { .. }
+            | ExprKind::StaticPropertyAccess { .. }
+            | ExprKind::ArrayAccess { .. }
+    ) || append && matches!(place.kind, ExprKind::Variable(_) | ExprKind::This);
+    if !writable {
+        return Err(CompileError::new(span, expected));
+    }
+    *pos = end;
+    Ok(if append { ForeachTarget::Append(place) } else { ForeachTarget::Place(place) })
+}
+
+/// Turns the parsed targets into loop variables. When a target is not a plain variable, the
+/// loop binds hidden temporaries and the body starts by storing them, value first and then the
+/// key, which is the order PHP assigns a foreach's targets in.
+fn bind_foreach_targets(
+    key: Option<ForeachTarget>,
+    value: ForeachTarget,
+    value_by_ref: bool,
+    span: Span,
+) -> Result<(Option<String>, String, Option<Stmt>), CompileError> {
+    let is_var = |target: &ForeachTarget| matches!(target, ForeachTarget::Var(_));
+    if is_var(&value) && key.as_ref().is_none_or(is_var) {
+        let ForeachTarget::Var(value) = value else { unreachable!() };
+        let key = key.map(|key| match key {
+            ForeachTarget::Var(key) => key,
+            _ => unreachable!(),
+        });
+        return Ok((key, value, None));
+    }
+    let temp = |role: &str| {
+        crate::names::generated_local_name(&format!(
+            "__elephc_foreach_{role}_{}_{}",
+            span.line, span.col
+        ))
+    };
+    let store = |target: ForeachTarget, temp: &str| -> Result<Stmt, CompileError> {
+        let source = Expr::new(ExprKind::Variable(temp.to_string()), span);
+        match target {
+            ForeachTarget::Var(name) => {
+                Ok(Stmt::new(StmtKind::Assign { name, value: source }, span))
+            }
+            ForeachTarget::Place(place) => Ok(Stmt::new(
+                crate::parser::stmt::assignment_target_store_stmt(place, source, span)?,
+                span,
+            )),
+            ForeachTarget::Append(place) => {
+                crate::parser::stmt::append_to_place_stmt(place, source, span)
+            }
+        }
+    };
+    let value_temp = temp("value");
+    // `foreach ($a as &$o->p)` / `&$list[]` / `&$m['k']`: the loop binds a hidden local by
+    // reference to each element, and the body first binds the place to that same reference
+    // (`$o->p = &$tmp`, `$list[] = &$tmp`), which is what PHP's assign-by-reference into the
+    // place does. The hidden local is unset after the loop (see `parse_foreach`).
+    let value_store = if value_by_ref {
+        let source = Expr::new(ExprKind::Variable(value_temp.clone()), span);
+        match value {
+            ForeachTarget::Var(name) => Stmt::new(StmtKind::RefAssign { target: name, source }, span),
+            ForeachTarget::Place(place) => crate::parser::stmt::lower_place_ref_assign(place, source, span)?,
+            ForeachTarget::Append(container) => crate::parser::stmt::lower_append_ref_assign(
+                container,
+                crate::parser::stmt::RefSource::Expr(source),
+                span,
+            )?,
+        }
+    } else {
+        store(value, &value_temp)?
+    };
+    let mut stores = vec![value_store];
+    let key_temp = match key {
+        Some(key) => {
+            let key_temp = temp("key");
+            stores.push(store(key, &key_temp)?);
+            Some(key_temp)
+        }
+        None => None,
+    };
+    Ok((key_temp, value_temp, Some(Stmt::new(StmtKind::Synthetic(stores), span))))
 }
 
 /// Parses a `foreach` value destructuring pattern into a hidden loop variable plus the
@@ -628,15 +815,11 @@ fn parse_for_clause(
 /// consumer treats as `unreachable!()` — `for ($v = include "f.php"; …)` reached that panic
 /// once the clause started going through the real statement parser.
 ///
-/// Only two shapes can reach it, which is why this is a match and not a tree walk.
-/// `ExprKind::IncludeValue` has exactly TWO construction sites, both calling
-/// `parser::stmt::simple::try_parse_value_include`: `parse_return`, whose `Return` is not on
-/// the clause allow-list, and `parse_simple_assign`, which builds a plain `StmtKind::Assign`
-/// and only for `AssignmentOperator::Assign`. That branch runs BEFORE
-/// `parse_assignment_value_expr`, so no typed, indexed, property or static-property
-/// assignment can carry one — `include` reaches those through the ordinary expression
-/// parser, which rejects it. `test_error_include_is_only_an_expression_in_an_assignment_rhs`
-/// pins that invariant, and fails here if it ever changes.
+/// This match only names the clause shapes that ARE an include (`include F`, `<target> = include
+/// F`, and their hoisted forms), so they get the for-clause diagnostic. An include NESTED in a
+/// clause (`for ($v = 1 + include F; …)`, `for (K::$s = include F; …)`) is also an expression
+/// now, and is rejected by the resolver's safety net (`resolver::exprs::resolve_expr`), which
+/// refuses any `ExprKind::IncludeValue` that `resolver::value_include_hoist` did not lower.
 ///
 /// A closure body is deliberately NOT inspected. Its include is DEFERRED: it runs when the
 /// closure is called, not while the clause is evaluated, so
@@ -645,7 +828,15 @@ fn parse_for_clause(
 fn clause_runs_an_include(stmt: &Stmt) -> bool {
     match &stmt.kind {
         StmtKind::Include { .. } => true,
-        StmtKind::Assign { value, .. } => matches!(value.kind, ExprKind::IncludeValue { .. }),
+        StmtKind::Assign { value, .. }
+        | StmtKind::TypedAssign { value, .. }
+        | StmtKind::ArrayAssign { value, .. }
+        | StmtKind::ArrayPush { value, .. }
+        | StmtKind::PropertyAssign { value, .. }
+        | StmtKind::StaticPropertyAssign { value, .. }
+        | StmtKind::StaticPropertyArrayAssign { value, .. }
+        | StmtKind::StaticPropertyArrayPush { value, .. }
+        | StmtKind::ExprStmt(value) => matches!(value.kind, ExprKind::IncludeValue { .. }),
         StmtKind::Synthetic(pieces) => pieces.iter().any(clause_runs_an_include),
         _ => false,
     }
@@ -729,6 +920,10 @@ pub fn parse_switch(
         *pos += 1;
     } else {
         expect_token(tokens, pos, &Token::LBrace, "Expected '{' after switch")?;
+    }
+    // PHP's grammar allows one `;` before the first case (`switch (x): ?>` lexes `?>` as `;`).
+    if *pos < tokens.len() && tokens[*pos].0 == Token::Semicolon {
+        *pos += 1;
     }
     // The case list ends at `}` in the brace form and at `endswitch` in the alternative form.
     let close = if alternative {

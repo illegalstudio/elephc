@@ -184,7 +184,11 @@ fn collect_refs_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
             }
         }
         StmtKind::Assign { value, .. } => collect_refs_expr(value, out),
-        StmtKind::RefAssign { .. } => {}
+        StmtKind::RefAssign { source, .. } => collect_refs_expr(source, out),
+        StmtKind::RefAssignPlace { target, source } => {
+            collect_refs_expr(target, out);
+            collect_refs_expr(source, out);
+        }
         StmtKind::ExprStmt(e) => collect_refs_expr(e, out),
         StmtKind::Return(Some(e)) => collect_refs_expr(e, out),
         StmtKind::Echo(e) => collect_refs_expr(e, out),

@@ -49,7 +49,184 @@ pub(super) fn take_owned_temp(
     value
 }
 
-/// Chooses a merge temp type from contextual branch materialization and fallback metadata.
+/// One lazily lowered branch result of a ternary, `?:`, `??` or `match`, held in SSA until every
+/// branch of the merge is lowered.
+///
+/// The merge temporary used to be declared BEFORE its branches were lowered, with a type guessed
+/// from the branch expressions (`materialized_expr_type_for_merge`). Any expression the guess
+/// could not name fell back to the syntactic `int` default, and the branch value was then coerced
+/// into that slot: `$c ? null : $r->n` over a `mixed` `$r` printed the string payload's pointer as
+/// an integer, and `$r === false ? false : $r->n` printed `int(0)` for a string property. Parking
+/// each branch value and storing it only once every branch's real lowered type is known makes the
+/// merge type a fact rather than a guess.
+pub(super) struct PendingBranchValue {
+    /// The block the branch value was produced in; it is still open (unterminated).
+    block: BlockId,
+    value: LoweredValue,
+    /// The type this branch contributes to the merge (normally the value's own type); `None` when
+    /// the branch can never yield a value at run time and so constrains nothing.
+    merge_type: Option<PhpType>,
+    /// Definitely initialized slots at the end of the branch.
+    initialized: HashSet<LocalSlotId>,
+    /// A tested-but-not-forwarded value (`?:`/`??` default arm) released after the store.
+    discarded: Option<LoweredValue>,
+    /// Flow-sensitive local types at the end of the branch, restored before its store when a
+    /// [`crate::ir_lower::stmt::LazyBranchJoin`] reconciles the edges (see `store_pending_branches`).
+    types: crate::types::TypeEnv,
+}
+
+impl PendingBranchValue {
+    /// Drops the null member from the type this branch contributes to the merge, for an arm a
+    /// guard has proven non-null (the value arm of `??`, the truthy arm of `?:`). An arm whose
+    /// only possible value is null is unreachable and contributes nothing.
+    pub(super) fn excluding_null(mut self) -> Self {
+        self.merge_type = match self.merge_type.take().map(non_null_merge_type) {
+            Some(PhpType::Void) | None => None,
+            Some(non_null) => Some(normalize_value_php_type(non_null)),
+        };
+        self
+    }
+
+    /// Returns the definitely initialized slots at the end of the branch, after its store.
+    pub(super) fn initialized(&self) -> &HashSet<LocalSlotId> {
+        &self.initialized
+    }
+}
+
+/// Returns the type a proven-non-null arm of `??`/`?:` contributes to a merge: `php_type` without
+/// its null member, when the merge store can reach that narrower representation from the value's
+/// own one.
+///
+/// A scalar or array narrowed out of a boxed `mixed` cell is converted by `coerce_value_for_temp`
+/// (cast or payload unbox), and a tagged `?int` narrows to its raw scalar. A nullable object
+/// (`?X`, represented as a boxed `mixed` cell) has no such conversion: narrowing it to `X` typed
+/// the merge temp as an object pointer and stored the BOX pointer in it, so `$p ?: $d` over
+/// `?X $p` read garbage or crashed. Such an arm keeps its nullable type, and the merge stays boxed.
+pub(super) fn non_null_merge_type(php_type: PhpType) -> PhpType {
+    let value_repr = php_type.codegen_repr();
+    let non_null = strip_void_from_union(php_type.clone());
+    let narrowed_repr = non_null.codegen_repr();
+    let reachable = narrowed_repr == value_repr
+        || value_repr != PhpType::Mixed
+        || matches!(
+            narrowed_repr,
+            PhpType::Void
+                | PhpType::Int
+                | PhpType::Bool
+                | PhpType::Float
+                | PhpType::Str
+                | PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+        );
+    if reachable {
+        non_null
+    } else {
+        php_type
+    }
+}
+
+/// Lowers one branch expression and parks its value; `None` when the branch cannot fall through.
+pub(super) fn lower_pending_branch(
+    ctx: &mut LoweringContext<'_, '_>,
+    expr: &Expr,
+) -> Option<PendingBranchValue> {
+    let value = lower_expr(ctx, expr);
+    park_pending_branch(ctx, value, None)
+}
+
+/// Parks an already lowered branch value at the current insertion point.
+pub(super) fn park_pending_branch(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    discarded: Option<LoweredValue>,
+) -> Option<PendingBranchValue> {
+    if ctx.builder.insertion_block_is_terminated() {
+        return None;
+    }
+    let block = ctx.builder.insertion_block()?;
+    let merge_type = Some(normalize_value_php_type(ctx.builder.value_php_type(value.value)));
+    Some(PendingBranchValue {
+        block,
+        value,
+        merge_type,
+        initialized: ctx.initialized_slots_snapshot(),
+        discarded,
+        types: ctx.local_types_snapshot(),
+    })
+}
+
+/// Chooses the merge temp type from the branches' LOWERED value types.
+///
+/// Uses the same join as the pre-lowering estimate (`nullable_aware_branch_merge_type`), so
+/// homogeneous branches keep their native representation (`int`/`int` stays an unboxed `int`,
+/// `string`/`string` a string, one class an object pointer); only branches whose real
+/// representations differ widen, to boxed `mixed` or a nullable tagged scalar.
+pub(super) fn pending_branch_merge_type(branches: &[PendingBranchValue]) -> PhpType {
+    let mut merged: Option<PhpType> = None;
+    for branch in branches {
+        let Some(ty) = &branch.merge_type else {
+            continue;
+        };
+        merged = Some(match merged {
+            Some(acc) => nullable_aware_branch_merge_type(&acc, ty),
+            None => ty.clone(),
+        });
+    }
+    merged.unwrap_or(PhpType::Void)
+}
+
+/// Declares the merge temp, stores every parked branch value into it at the end of its own block
+/// and branches each one to `merge`. Returns the temp name and the parked branches, whose
+/// `initialized` sets now include the temp store.
+///
+/// `container_fallback` is the whole merge expression for a ternary or `match`. A merge of
+/// ARRAY branches keeps the widening against that expression's syntactic type that those
+/// constructs always applied: a branch array can be a missed-read sentinel (`$rows[5]` over
+/// `array<array<int>>`), which the boxed merge turns into PHP `null` but an elementwise
+/// `ArrayToMixed` conversion would dereference. Scalar and object merges need no such guard and
+/// keep their exact lowered type.
+///
+/// With a `join`, each branch's own local types are restored before its store and the branch
+/// ends in the join's deferred tail instead of a direct branch to `merge`, so the join can
+/// reconcile locals a branch retyped AFTER the temp store; the caller then calls
+/// `LazyBranchJoin::finish`.
+pub(super) fn store_pending_branches(
+    ctx: &mut LoweringContext<'_, '_>,
+    mut branches: Vec<PendingBranchValue>,
+    merge: BlockId,
+    container_fallback: Option<&Expr>,
+    mut join: Option<&mut crate::ir_lower::stmt::LazyBranchJoin>,
+    span: crate::span::Span,
+) -> (String, Vec<PendingBranchValue>) {
+    let mut result_type = pending_branch_merge_type(&branches);
+    if let Some(whole) = container_fallback {
+        if matches!(result_type.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. }) {
+            result_type = wider_type_for_merge(&fallback_expr_type(whole).codegen_repr(), &result_type);
+        }
+    }
+    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
+    for branch in &mut branches {
+        ctx.builder.position_at_end(branch.block);
+        ctx.restore_initialized_slots(branch.initialized.clone());
+        if join.is_some() {
+            ctx.restore_local_types(branch.types.clone());
+        }
+        store_value_into_temp(ctx, &temp_name, result_type.clone(), branch.value, span);
+        if let Some(discarded) = branch.discarded {
+            release_discarded_branch_value(ctx, discarded, span);
+        }
+        branch.initialized = ctx.initialized_slots_snapshot();
+        match join.as_deref_mut() {
+            Some(join) => join.exit_edge(ctx),
+            None => branch_to(ctx, merge),
+        }
+    }
+    (temp_name, branches)
+}
+
+/// Estimates a ternary's merge type before it is lowered, for a consumer that must type a slot
+/// first (an array-literal element, an enclosing merge estimate). The ternary itself types its
+/// merge temp from the lowered branch values (see [`PendingBranchValue`]).
 pub(super) fn branch_merge_result_type(
     ctx: &LoweringContext<'_, '_>,
     then_expr: &Expr,
@@ -66,9 +243,9 @@ pub(super) fn branch_merge_result_type(
     wider_type_for_merge(&fallback_ty, &branch_ty.codegen_repr())
 }
 
-/// Chooses a match hidden-temp type by merging every arm result type, so
-/// heterogeneous arms (e.g. object/array/string) materialize a Mixed temp
-/// boxed per arm instead of coercing all arms to one unified scalar type.
+/// Estimates a `match` merge type before it is lowered by merging every arm result estimate, so
+/// heterogeneous arms (e.g. object/array/string) estimate a Mixed slot instead of one unified
+/// scalar type. `lower_match` itself types its temp from the lowered arm values.
 pub(super) fn match_merge_result_type(
     ctx: &LoweringContext<'_, '_>,
     arms: &[(Vec<Expr>, Expr)],
@@ -93,16 +270,18 @@ pub(super) fn match_merge_result_type(
     wider_type_for_merge(&fallback_ty, &merged.codegen_repr())
 }
 
-/// Chooses a short-ternary hidden-temp type without reintroducing the
-/// scalar-biased syntactic join used by the parser-only fallback inference.
+/// Estimates a short-ternary merge type before it is lowered, without the scalar-biased
+/// syntactic join; `lower_short_ternary` itself types its temp from the lowered arm values.
 pub(super) fn short_ternary_merge_result_type(
     ctx: &LoweringContext<'_, '_>,
     value: &Expr,
     default: &Expr,
 ) -> PhpType {
-    let value_ty = materialized_expr_type_for_merge(ctx, value).codegen_repr();
-    let default_ty = materialized_expr_type_for_merge(ctx, default).codegen_repr();
-    wider_type_for_merge(&value_ty, &default_ty)
+    // Mirrors `lower_short_ternary`: the value arm only reaches the merge when truthy (so never
+    // null), and a null default keeps the merge nullable.
+    let value_ty = non_null_merge_type(materialized_expr_type_for_merge(ctx, value));
+    let default_ty = materialized_expr_type_for_merge(ctx, default);
+    nullable_aware_branch_merge_type(&value_ty, &default_ty)
 }
 
 /// Chooses a ternary branch merge type without erasing PHP null branches.
@@ -127,7 +306,10 @@ pub(super) fn php_type_allows_null(php_type: &PhpType) -> bool {
     }
 }
 
-/// Estimates the value type an expression will materialize during branch lowering.
+/// Estimates the value type an expression will materialize, before it is lowered.
+///
+/// An expression it cannot name answers boxed `mixed` (never the syntactic `int` default), so a
+/// slot typed from the estimate can always hold the lowered value.
 pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> PhpType {
     match &expr.kind {
         ExprKind::Variable(name) => normalize_value_php_type(ctx.local_type(name).codegen_repr()),
@@ -154,12 +336,38 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         ExprKind::ShortTernary { value, default } => {
             short_ternary_merge_result_type(ctx, value, default)
         }
-        ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
-            .unwrap_or_else(|| fallback_expr_type(expr)),
-        ExprKind::PropertyAccess { object, property } => {
-            property_access_expr_type_for_ir(ctx, object, property)
-                .unwrap_or_else(|| fallback_expr_type(expr))
+        ExprKind::NullCoalesce { value, default } => {
+            // Mirrors `lower_null_coalesce`: the value arm only reaches the merge when non-null.
+            let value_ty = non_null_merge_type(materialized_expr_type_for_merge(ctx, value));
+            let default_ty = materialized_expr_type_for_merge(ctx, default);
+            nullable_aware_branch_merge_type(&value_ty, &default_ty)
         }
+        // A receiver, container or constant this pre-lowering estimate cannot resolve says nothing
+        // about the value's representation, and the syntactic fallback would answer `int` for it.
+        // Every arm below names the type when it can and otherwise answers boxed `mixed`, which
+        // holds whatever the expression yields.
+        ExprKind::ArrayAccess { array, .. } => {
+            array_access_expr_value_type_for_ir(ctx, array).unwrap_or(PhpType::Mixed)
+        }
+        ExprKind::PropertyAccess { object, property } => {
+            property_access_expr_type_for_ir(ctx, object, property).unwrap_or(PhpType::Mixed)
+        }
+        ExprKind::NullsafePropertyAccess { object, property } => {
+            nullsafe_property_access_expr_type_for_ir(ctx, object, property)
+                .unwrap_or(PhpType::Mixed)
+        }
+        ExprKind::ConstRef(name) => ctx
+            .constant_value(name.as_str())
+            .map(|(_, ty)| normalize_value_php_type(ty))
+            .unwrap_or(PhpType::Mixed),
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            scoped_constant_value_type_for_ir(ctx, receiver, name, expr)
+        }
+        ExprKind::Not(_) => PhpType::Bool,
+        ExprKind::Clone(inner) => match materialized_expr_type_for_merge(ctx, inner).codegen_repr() {
+            object @ PhpType::Object(_) => object,
+            _ => PhpType::Mixed,
+        },
         // Calls are typed from the return metadata their own lowering uses. The syntactic
         // fallback answers `int` for every call outside its builtin allowlist, and a merge temp
         // typed from that guess coerced a string, array or object branch into an integer slot or,
@@ -178,7 +386,55 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         }
         ExprKind::ClosureCall { var, .. } => closure_call_type_for_merge(ctx, var),
         ExprKind::ExprCall { .. } => PhpType::Mixed,
-        _ => fallback_expr_type(expr),
+        // An assignment yields the stored value. The syntactic fallback answers `int` for it, so
+        // `$c ?: $o = new C` typed its merge temp as an integer and the backend refused to cast
+        // the object. A plain local store yields its value's type; a write with a prelude or a
+        // result temporary (a property, a dimension, an append) merges as boxed `mixed`.
+        ExprKind::Assignment { target, value, result_target, prelude, .. } => {
+            if result_target.is_none()
+                && prelude.is_empty()
+                && matches!(target.kind, ExprKind::Variable(_))
+            {
+                materialized_expr_type_for_merge(ctx, value)
+            } else {
+                PhpType::Mixed
+            }
+        }
+        _ if syntactic_merge_type_is_exact(expr) => fallback_expr_type(expr),
+        _ => PhpType::Mixed,
+    }
+}
+
+/// Returns true when `infer_expr_type_syntactic` names the exact representation `expr` lowers to.
+///
+/// The syntactic inference ends in a `_ => int` default, so for any other expression kind (a
+/// negation of a float, a static property, a dynamic property, a pipe, an assignment, ...) its
+/// answer is a guess, and a merge temp typed from that guess coerced the branch into an integer
+/// slot or a nullable tagged `?int`.
+fn syntactic_merge_type_is_exact(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::StringLiteral(_)
+        | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null
+        | ExprKind::Throw(_)
+        | ExprKind::InstanceOf { .. }
+        | ExprKind::NewObject { .. }
+        | ExprKind::Closure { .. }
+        | ExprKind::FirstClassCallable(_)
+        | ExprKind::ArrayLiteral(_)
+        | ExprKind::ArrayLiteralAssoc(_)
+        | ExprKind::ArrayLiteralMixed(_)
+        | ExprKind::Print(_) => true,
+        ExprKind::Cast { target, .. } => matches!(
+            target,
+            CastType::Int | CastType::Float | CastType::String | CastType::Bool
+        ),
+        // Operator results keep the coercion order the operator lowering itself implements
+        // (`.` is a string, comparisons are booleans, arithmetic is typed by its own rules).
+        ExprKind::BinaryOp { .. } => true,
+        _ => false,
     }
 }
 

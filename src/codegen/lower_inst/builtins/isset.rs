@@ -98,6 +98,12 @@ fn emit_loaded_isset_missing_result(ctx: &mut FunctionContext<'_>, value: ValueI
             Ok(())
         }
         PhpType::Int | PhpType::Bool => emit_scalar_value_is_null_sentinel(ctx, value),
+        // An untyped null-defaulted property later assigned an array (or an object) keeps the
+        // plain container representation and encodes PHP null as a null container pointer:
+        // `isset(self::$cache)` must test it rather than answer "set".
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable | PhpType::Object(_) => {
+            predicates::emit_is_null_result(ctx, value)
+        }
         _ => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
             Ok(())

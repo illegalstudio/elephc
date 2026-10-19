@@ -269,6 +269,9 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     // for the high word to avoid clobbering the caller's x19.
     emitter.instruction("ldr x14, [x9]");                                       // load the property low payload word
     emitter.instruction("ldr x15, [x9, #8]");                                   // load the property high payload word without clobbering caller x19
+    emitter.instruction("ldr x17, [sp, #56]");                                  // load the property type tag to follow a reference slot
+    crate::codegen_support::sentinels::emit_deref_reference_property_slot(emitter, "x17", "x14", "x15");
+    emitter.instruction("str x17, [sp, #56]");                                  // keep the aliased value's tag for the dispatch below
     emitter.instruction("str x14, [sp, #64]");                                  // save the property low payload across the encoder dispatch
     emitter.instruction("str x15, [sp, #72]");                                  // save the property high payload across the encoder dispatch
 
@@ -632,6 +635,9 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rax, rcx");                                        // resolve the absolute address of the property slot
     emitter.instruction("mov rdx, QWORD PTR [rax]");                            // load the property low payload word
     emitter.instruction("mov rsi, QWORD PTR [rax + 8]");                        // load the property high payload word
+    emitter.instruction("mov r9, QWORD PTR [rbp - 64]");                        // load the property type tag to follow a reference slot
+    crate::codegen_support::sentinels::emit_deref_reference_property_slot(emitter, "r9", "rdx", "rsi");
+    emitter.instruction("mov QWORD PTR [rbp - 64], r9");                        // keep the aliased value's tag for the dispatch below
     emitter.instruction("mov QWORD PTR [rbp - 72], rdx");                       // save the property low payload across the encoder dispatch
     emitter.instruction("mov QWORD PTR [rbp - 80], rsi");                       // save the property high payload across the encoder dispatch
 

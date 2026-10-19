@@ -55,7 +55,6 @@ fn test_reference_detach_rejects_conditional_and_shared_storage() {
         "<?php $text = 'x'; $saved = function() use (&$text) { return $text; }; eval('return null;'); unset($text); echo $saved();",
         "<?php function shared() { global $text; } $text = 'x'; $saved = function() use (&$text) { return $text; }; unset($text); echo $saved();",
         "<?php $text = 'x'; function shared() { global $text; $saved = function() use (&$text) { return $text; }; unset($text); echo $saved(); } shared();",
-        "<?php function shared() { static $text = 'x'; $saved = function() use (&$text) { return $text; }; unset($text); echo $saved(); } shared();",
         "<?php string $text = 'x'; $saved = function() use (&$text) { return $text; }; unset($text); echo $saved();",
         "<?php $values = ['x']; foreach ($values as &$text) { $saved = function() use (&$text) { return $text; }; unset($text); echo $saved(); }",
     ] {
@@ -63,6 +62,15 @@ fn test_reference_detach_rejects_conditional_and_shared_storage() {
             .unwrap_or_else(|error| panic!("{}\n{source}", error.message));
         assert!(result.local_ref_detach_sites.is_empty(), "{source}: {:?}", result.local_ref_detach_sites);
     }
+}
+
+/// A static local is never detached: `unset()` of one is refused outright.
+#[test]
+fn test_reference_detach_static_local_unset_is_refused() {
+    expect_error(
+        "<?php function shared() { static $text = 'x'; $saved = function() use (&$text) { return $text; }; unset($text); echo $saved(); } shared();",
+        "unset() of the static local $text",
+    );
 }
 
 /// An incoming by-reference parameter can detach its callee-local name from caller storage.

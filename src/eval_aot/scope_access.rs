@@ -88,6 +88,14 @@ pub(super) fn collect_stmt_scope_access(stmt: &Stmt, access: &mut EvalScopeAcces
             collect_expr_scope_access(index, access);
             collect_expr_scope_access(value, access);
         }
+        StmtKind::RefAssignPlace { target, source } => {
+            collect_assignment_target_scope_access(target, access);
+            collect_expr_scope_access(source, access);
+            // A variable source joins the reference set (and is created when undefined).
+            if let ExprKind::Variable(name) = &source.kind {
+                access.write(name);
+            }
+        }
         StmtKind::NestedArrayAssign { target, value } => {
             collect_assignment_target_scope_access(target, access);
             collect_expr_scope_access(value, access);

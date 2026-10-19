@@ -362,6 +362,8 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("PHP_OUTPUT_HANDLER_STDFLAGS", Core, ConstValue::Int(112)),
     constant!("PHP_OUTPUT_HANDLER_WRITE", Core, ConstValue::Int(0)),
     constant!("PHP_PREFIX", Core, ConstValue::TargetDependent(ConstType::Str)),
+    constant!("PHP_QUERY_RFC1738", Standard, ConstValue::Int(1)),
+    constant!("PHP_QUERY_RFC3986", Standard, ConstValue::Int(2)),
     constant!("PHP_RELEASE_VERSION", Core, ConstValue::TargetDependent(ConstType::Int)),
     constant!("PHP_ROUND_HALF_DOWN", Standard, ConstValue::Int(2)),
     constant!("PHP_ROUND_HALF_EVEN", Standard, ConstValue::Int(3)),

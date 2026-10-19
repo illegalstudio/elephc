@@ -49,6 +49,16 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
 
     // -- save hash table pointer --
     emitter.instruction("str x0, [sp, #0]");                                    // save hash ptr
+    // -- php's GC_PROTECT_RECURSION: a hash reached again through a reference (`$a[] = &$a`)
+    //    records JSON_ERROR_RECURSION (throwing under JSON_THROW_ON_ERROR) and encodes as
+    //    `null`, which is what JSON_PARTIAL_OUTPUT_ON_ERROR shows; otherwise the walk would
+    //    recurse until it overran `_concat_buf`. Only a reference set can close such a cycle,
+    //    and every cycle passes through a hash, so this encoder is the one that guards. --
+    emitter.instruction("bl __rt_json_seen_find");                              // is this hash already being encoded? (x0 = hash)
+    emitter.instruction("cbnz x0, __rt_json_assoc_recursion");                  // a revisited hash encodes as null with JSON_ERROR_RECURSION
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload hash ptr
+    emitter.instruction("bl __rt_json_seen_push");                              // mark the hash as being encoded
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload hash ptr
 
     // -- initialize list-shape tracking. Associative arrays are emitted in
     //    object form first; if every key is the sequential integer key
@@ -430,6 +440,26 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.instruction("str x10, [x9]");                                       // store updated offset
 
     // -- tear down and return --
+    emitter.instruction("bl __rt_json_seen_pop");                               // the hash is no longer being encoded
+    emitter.instruction("ldr x19, [sp, #120]");                                 // restore caller x19 after using it as the flag cache
+    emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #128");                                    // deallocate stack frame
+    emitter.instruction("ret");                                                 // return to caller
+
+    emitter.label("__rt_json_assoc_recursion");
+    emitter.instruction("mov x0, #6");                                          // JSON_ERROR_RECURSION = 6
+    emitter.instruction("bl __rt_json_throw_error");                            // record the error and throw when JSON_THROW_ON_ERROR is set
+    abi::emit_symbol_address(emitter, "x9", "_concat_off");                     // resolve the concat offset
+    emitter.instruction("ldr x10, [x9]");                                       // load the current concat offset
+    abi::emit_symbol_address(emitter, "x11", "_concat_buf");                    // resolve the concat buffer
+    emitter.instruction("add x11, x11, x10");                                   // write position of the substituted value
+    emitter.instruction("movz w12, #0x756e");                                   // low half of the bytes "nu"
+    emitter.instruction("movk w12, #0x6c6c, lsl #16");                          // high half of the bytes "ll"
+    emitter.instruction("str w12, [x11]");                                      // write `null` in place of the revisited hash
+    emitter.instruction("mov x1, x11");                                         // result slice start
+    emitter.instruction("mov x2, #4");                                          // len("null") = 4
+    emitter.instruction("add x10, x10, #4");                                    // advance the concat offset past `null`
+    emitter.instruction("str x10, [x9]");                                       // publish the updated concat offset
     emitter.instruction("ldr x19, [sp, #120]");                                 // restore caller x19 after using it as the flag cache
     emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #128");                                    // deallocate stack frame
@@ -449,6 +479,18 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 112");                                        // reserve local slots including list-shape tracking and saved r15
     emitter.instruction("mov QWORD PTR [rbp - 104], r15");                      // preserve caller r15 before caching active JSON flags
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the source associative-array pointer across nested JSON helper calls
+    // -- php's GC_PROTECT_RECURSION: a hash reached again through a reference (`$a[] = &$a`)
+    //    records JSON_ERROR_RECURSION (throwing under JSON_THROW_ON_ERROR) and encodes as
+    //    `null`, which is what JSON_PARTIAL_OUTPUT_ON_ERROR shows; otherwise the walk would
+    //    recurse until it overran `_concat_buf`. Only a reference set can close such a cycle,
+    //    and every cycle passes through a hash, so this encoder is the one that guards. --
+    emitter.instruction("mov rdi, rax");                                        // pass the hash to the recursion guard
+    emitter.instruction("call __rt_json_seen_find");                            // is this hash already being encoded?
+    emitter.instruction("test rax, rax");                                       // did the guard report a revisit?
+    emitter.instruction("jnz __rt_json_assoc_recursion_x");                     // a revisited hash encodes as null with JSON_ERROR_RECURSION
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the hash pointer
+    emitter.instruction("call __rt_json_seen_push");                            // mark the hash as being encoded
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // restore the hash pointer for the encoder
 
     // Track list-shape while the object form is emitted. If every key is the
     // sequential integer key 0..count-1, the finished buffer is compacted
@@ -786,6 +828,23 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, r11");                                        // copy the final concat-buffer write pointer before converting it into an absolute offset
     emitter.instruction("sub rcx, r10");                                        // compute the new absolute concat-buffer offset after the encoded JSON object
     abi::emit_store_reg_to_symbol(emitter, "rcx", "_concat_off", 0);            // publish the updated concat-buffer offset so later writers append after this JSON object
+    emitter.instruction("call __rt_json_seen_pop");                             // the hash is no longer being encoded
+    emitter.instruction("mov r15, QWORD PTR [rbp - 104]");                      // restore caller r15 after using it as the flag cache
+    emitter.instruction("add rsp, 112");                                        // release the local JSON-assoc scratch frame before returning to generated code
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code
+    emitter.instruction("ret");                                                 // return the encoded JSON object slice in the x86_64 string result registers
+
+    emitter.label("__rt_json_assoc_recursion_x");
+    emitter.instruction("mov rax, 6");                                          // JSON_ERROR_RECURSION = 6
+    emitter.instruction("call __rt_json_throw_error");                          // record the error and throw when JSON_THROW_ON_ERROR is set
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // load the current concat offset
+    abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // resolve the concat buffer
+    emitter.instruction("add r11, r10");                                        // write position of the substituted value
+    emitter.instruction("mov DWORD PTR [r11], 0x6c6c756e");                     // write `null` in place of the revisited hash
+    emitter.instruction("mov rax, r11");                                        // result slice start
+    emitter.instruction("mov rdx, 4");                                          // len("null") = 4
+    emitter.instruction("add r10, 4");                                          // advance the concat offset past `null`
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_concat_off", 0);            // publish the updated concat offset
     emitter.instruction("mov r15, QWORD PTR [rbp - 104]");                      // restore caller r15 after using it as the flag cache
     emitter.instruction("add rsp, 112");                                        // release the local JSON-assoc scratch frame before returning to generated code
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code

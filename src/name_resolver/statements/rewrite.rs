@@ -138,7 +138,12 @@ pub(super) fn resolve_regular_stmt(
         },
         StmtKind::RefAssign { target, source } => StmtKind::RefAssign {
             target: target.clone(),
-            source: source.clone(),
+            // A static-property source (`&Foo::$p`) names a class like any other expression.
+            source: ctx.expr(source),
+        },
+        StmtKind::RefAssignPlace { target, source } => StmtKind::RefAssignPlace {
+            target: ctx.expr(target),
+            source: ctx.expr(source),
         },
         StmtKind::TypedAssign {
             type_expr,

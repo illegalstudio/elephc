@@ -52,6 +52,7 @@ mod signature_patch_class;
 mod signature_patch_common;
 mod signature_patch_members;
 mod signature_patch_types;
+mod runtime_targets;
 
 #[allow(unused_imports)]
 use injection::*;
@@ -79,6 +80,8 @@ use property_values::*;
 use owner_class::*;
 #[allow(unused_imports)]
 use owner_methods::*;
+#[allow(unused_imports)]
+use runtime_targets::*;
 #[allow(unused_imports)]
 use owner_helpers::*;
 #[allow(unused_imports)]

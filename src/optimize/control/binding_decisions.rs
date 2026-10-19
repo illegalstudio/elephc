@@ -66,6 +66,9 @@ fn stmt_carries_decision(stmt: &Stmt) -> bool {
         StmtKind::ArrayAssign { array: _, index, value } => {
             expr_carries_decision(index) || expr_carries_decision(value)
         }
+        StmtKind::RefAssignPlace { target, source } => {
+            expr_carries_decision(target) || expr_carries_decision(source)
+        }
         StmtKind::NestedArrayAssign { target, value } => {
             expr_carries_decision(target) || expr_carries_decision(value)
         }

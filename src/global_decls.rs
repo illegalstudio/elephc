@@ -192,6 +192,10 @@ fn collect_in_stmt(stmt: &Stmt, names: &mut HashSet<String>) {
             collect_in_expr(index, names);
             collect_in_expr(value, names);
         }
+        StmtKind::RefAssignPlace { target, source } => {
+            collect_in_expr(target, names);
+            collect_in_expr(source, names);
+        }
         StmtKind::NestedArrayAssign { target, value } => {
             collect_in_expr(target, names);
             collect_in_expr(value, names);

@@ -17,6 +17,13 @@ use std::path::{Path, PathBuf};
 mod contains;
 mod declarations;
 mod discovery;
+pub(crate) mod dynamic_includes;
+pub use dynamic_includes::{
+    orphan_entries as dynamic_include_orphan_entries,
+    render_report as render_dynamic_include_report, report_mode as dynamic_include_report_mode,
+    set_app_root as set_dynamic_include_app_root, set_manifest_override as set_include_manifest,
+    set_report_mode as set_dynamic_include_report_mode,
+};
 mod engine;
 mod engine_includes;
 mod exprs;
@@ -28,6 +35,7 @@ pub(crate) use include_once::include_once_label;
 mod include_path;
 mod state;
 mod stmt_exprs;
+mod value_include_hoist;
 
 use crate::errors::CompileError;
 use crate::parser::ast::{Program, Stmt, StmtKind};
@@ -115,6 +123,48 @@ pub fn resolve_collecting_includes_with_defines(
     defines: &HashSet<String>,
 ) -> Result<(Program, Vec<PathBuf>), CompileError> {
     crate::compiler_stack::with_compiler_stack(|| {
+        Span::reset_source_ids();
+        resolve_collecting_includes_with_defines_inner(program, base_dir, defines)
+    })
+}
+
+/// The resolver's hidden-temporary counters at one moment; see [`counters_checkpoint`].
+#[derive(Debug, Clone, Copy)]
+pub struct ResolverCounters([usize; 3]);
+
+/// Captures the counters that name the resolver's hidden temporaries, to hand back to
+/// [`restore_counters`] after a resolution whose result is discarded (the autoload prelude
+/// probe), so the real resolution names its temporaries exactly as without it.
+pub fn counters_checkpoint() -> ResolverCounters {
+    use std::sync::atomic::Ordering::SeqCst;
+    ResolverCounters([
+        value_include_hoist::HOIST_COUNTER.load(SeqCst),
+        engine_includes::VALUE_INCLUDE_COUNTER.load(SeqCst),
+        dynamic_includes::TEMP_COUNTER.load(SeqCst),
+    ])
+}
+
+/// Rewinds the resolver's hidden-temporary counters to a [`counters_checkpoint`].
+pub fn restore_counters(checkpoint: ResolverCounters) {
+    use std::sync::atomic::Ordering::SeqCst;
+    let [hoist, value_include, temp] = checkpoint.0;
+    value_include_hoist::HOIST_COUNTER.store(hoist, SeqCst);
+    engine_includes::VALUE_INCLUDE_COUNTER.store(value_include, SeqCst);
+    dynamic_includes::TEMP_COUNTER.store(temp, SeqCst);
+}
+
+/// Resolves the includes of a file loaded INTO an ongoing compile (an autoloaded class file).
+///
+/// Unlike [`resolve_collecting_includes_with_defines`] it keeps the source identities the
+/// compile already handed out, so a file this pulls in never reuses the identity of another
+/// file of the same program: spans of different files stay distinct, and each diagnostic can
+/// name its own file.
+pub fn resolve_collecting_includes_continuing(
+    program: Program,
+    base_dir: &Path,
+    defines: &HashSet<String>,
+) -> Result<(Program, Vec<PathBuf>), CompileError> {
+    crate::compiler_stack::with_compiler_stack(|| {
         resolve_collecting_includes_with_defines_inner(program, base_dir, defines)
     })
 }
@@ -125,7 +175,6 @@ fn resolve_collecting_includes_with_defines_inner(
     base_dir: &Path,
     defines: &HashSet<String>,
 ) -> Result<(Program, Vec<PathBuf>), CompileError> {
-    Span::reset_source_ids();
     if !has_includes(&program) {
         return Ok((program, Vec::new()));
     }

@@ -612,9 +612,21 @@ pub(super) fn array_literal_element_type_for_ir(
             target: CastType::Array,
             expr: inner,
         } => array_cast_literal_element_type(ctx, inner),
-        ExprKind::Ternary { .. } => {
-            // Keep array element ownership consistent with the lowered branch result.
-            ir_array_storage_type(materialized_expr_type_for_merge(ctx, item))
+        // Every lazily merged expression lowers through a merge temp typed from its branches;
+        // typing the slot from the syntactic fallback (`int` for most branch shapes) coerced a
+        // string or boxed branch into an integer element.
+        ExprKind::Ternary { .. }
+        | ExprKind::ShortTernary { .. }
+        | ExprKind::NullCoalesce { .. }
+        | ExprKind::Match { .. } => {
+            // A merge that may yield null is a nullable tagged scalar in a local, which an array
+            // slot cannot hold; such an element is boxed like a literal `null` element.
+            let merged = materialized_expr_type_for_merge(ctx, item);
+            if php_type_allows_null(&merged) {
+                PhpType::Mixed
+            } else {
+                ir_array_storage_type(merged)
+            }
         }
         ExprKind::Spread(inner) => match array_literal_spread_source_type_for_ir(ctx, inner).codegen_repr() {
             // A spread of an empty/unknown array (`array<never>`, e.g. a `$x = []` local or a
@@ -681,6 +693,12 @@ pub(super) fn array_literal_element_type_for_ir(
             property,
         )
         .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item))),
+        // A static property has declared storage; the syntactic fallback answers `int` for it,
+        // which stamped `[P::$a, 5]` as `array<int>` and cast the array element to `int(1)`.
+        // The declared (or inferred) slot type is what the element read yields.
+        ExprKind::StaticPropertyAccess { receiver, property } => ir_array_storage_type(
+            static_property_result_type(ctx, receiver, property, item),
+        ),
         _ => ir_array_storage_type(infer_expr_type_syntactic(item)),
     }
 }

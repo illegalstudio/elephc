@@ -100,6 +100,11 @@ pub(super) fn lower_prop_get_nonnull(
     object: ValueId,
     property: &str,
 ) -> Result<()> {
+    if union_receiver_names_enum_interface(ctx, object)? {
+        // `?BackedEnum`, `BackedEnum|string`: the object member is an interface with no slot
+        // layout, and the union is already a mixed cell, so read through runtime dispatch.
+        return lower_mixed_prop_get(ctx, inst, object, property);
+    }
     if let Some((class_name, true)) = nullable_object_receiver_class(ctx, object)? {
         return lower_nullable_prop_get_with_warning(ctx, inst, object, &class_name, property);
     }
@@ -230,6 +235,57 @@ pub(in crate::codegen::lower_inst) fn lower_load_prop_ref_cell(
         emit_uninitialized_owned_ref_property_guard(ctx, &slot, int_reg);
     }
     store_ref_cell_pointer_result(ctx, inst)
+}
+
+/// Lowers `BindPropRefCell` (`$obj->prop = &$x`): the reference property's slot adopts the
+/// source's managed cell.
+///
+/// The new cell is retained BEFORE the slot's previous cell is released (rebinding a property to
+/// the cell it already holds is then a net no-op), and the slot is republished before that
+/// release runs, because the release can run a destructor that reads the property. Only
+/// object-owned reference properties reach here: lowering refuses a by-reference promoted
+/// constructor property, whose slot borrows a caller address it does not own.
+pub(in crate::codegen::lower_inst) fn lower_bind_prop_ref_cell(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let object = expect_operand(inst, 0)?;
+    let cell = expect_operand(inst, 1)?;
+    let property = property_name_immediate(ctx, inst)?.to_string();
+    let Some(slot) = typed_receiver_reference_slot(ctx, object, &property, inst)? else {
+        return Ok(());
+    };
+    let owned = ctx
+        .module
+        .class_infos
+        .get(&slot.class_name)
+        .is_some_and(|class| class.owned_reference_properties.contains(&slot.property));
+    if !slot.is_reference || !owned {
+        return Err(CodegenIrError::unsupported(format!(
+            "bind_prop_ref_cell on {}::${}, which does not own a reference cell",
+            slot.class_name, slot.property
+        )));
+    }
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(cell, result_reg)?;
+    abi::emit_call_label(ctx.emitter, "__rt_incref");                         // the property becomes one more owner of the reference set
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, base_reg)?;
+    let old_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_from_address(ctx.emitter, old_reg, base_reg, slot.offset);  // take the previous cell out of the property slot
+    let new_reg = abi::tertiary_scratch_reg(ctx.emitter);
+    abi::emit_pop_reg(ctx.emitter, new_reg);
+    abi::emit_store_to_address(ctx.emitter, new_reg, base_reg, slot.offset);   // publish the shared cell in the property slot
+    move_scratch_to_result(ctx, old_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_any");                     // drop the property's share of its previous cell
+    Ok(())
+}
+
+/// Moves a scratch register into the integer result register for a unary runtime call.
+fn move_scratch_to_result(ctx: &mut FunctionContext<'_>, source: &str) {
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_reg_move(ctx.emitter, result, source);
 }
 
 /// Lowers `LoadPropRefCellChecked`: the by-reference-return form of the load above, which hands
@@ -909,4 +965,21 @@ pub(super) fn lower_runtime_allow_dynamic_prop_get(
     emit_boxed_null(ctx);
     ctx.emitter.label(&done_label);
     cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())
+}
+
+/// Whether a union receiver's object member is `UnitEnum`/`BackedEnum` (or extends them).
+fn union_receiver_names_enum_interface(ctx: &FunctionContext<'_>, object: ValueId) -> Result<bool> {
+    let PhpType::Union(members) = raw_value_php_type(ctx, object)? else {
+        return Ok(false);
+    };
+    Ok(members.iter().any(|member| match member {
+        PhpType::Object(name) => {
+            !ctx.module.class_infos.contains_key(name.trim_start_matches('\\'))
+                && crate::types::checker::builtin_native_interfaces::is_enum_contract_interface(
+                    &ctx.module.interface_infos,
+                    name,
+                )
+        }
+        _ => false,
+    }))
 }

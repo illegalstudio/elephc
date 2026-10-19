@@ -1149,6 +1149,7 @@ fn ty_expr(ty: &TypeExpr) -> String {
         TypeExpr::Float => "TypeExpr::Float".to_string(),
         TypeExpr::Bool => "TypeExpr::Bool".to_string(),
         TypeExpr::False => "TypeExpr::False".to_string(),
+        TypeExpr::True => "TypeExpr::True".to_string(),
         TypeExpr::Str => "TypeExpr::Str".to_string(),
         TypeExpr::Void => "TypeExpr::Void".to_string(),
         TypeExpr::Ptr(None) => "t_ptr()".to_string(),

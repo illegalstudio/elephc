@@ -71,7 +71,7 @@ pub(super) fn lower_nullable_native_isset_offset_probe(
 }
 
 /// Lowers native array/hash `isset` once the receiver has already been evaluated.
-pub(super) fn lower_native_isset_offset_probe_from_value(
+pub(crate) fn lower_native_isset_offset_probe_from_value(
     ctx: &mut LoweringContext<'_, '_>,
     array_value: LoweredValue,
     index: &Expr,

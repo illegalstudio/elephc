@@ -375,6 +375,7 @@ fn check_source_for_php_version(
     );
     let ast = elephc::name_resolver::resolve(ast).map_err(|e| e.message.clone())?;
     let ast = elephc::func_args::desugar(ast).map_err(|e| e.message.clone())?;
+    let ast = elephc::variable_variables::desugar(ast).map_err(|e| e.message.clone())?;
     let ast = elephc::optimize::fold_constants(ast);
     types::check(&ast).map_err(|e| e.message.clone())?;
     Ok(())

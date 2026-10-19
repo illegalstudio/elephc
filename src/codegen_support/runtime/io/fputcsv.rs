@@ -70,6 +70,7 @@ pub fn emit_fputcsv(emitter: &mut Emitter) {
     emitter.add_lo12("x1", "x1", "__rt_fputcsv_comma_lit");          // resolve exact address
     emitter.instruction("mov x2, #1");                                          // write 1 byte (comma)
     emitter.instruction("bl __rt_fd_write");                                    // write this segment (wrapper-aware: stream_write or raw write)
+    emitter.instruction("tbnz x0, #63, __rt_fputcsv_fail");                     // a failed segment write makes the whole fputcsv() false, as in PHP
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload total bytes
     emitter.instruction("add x9, x9, x0");                                      // add bytes written
     emitter.instruction("str x9, [sp, #16]");                                   // save updated total
@@ -114,6 +115,7 @@ pub fn emit_fputcsv(emitter: &mut Emitter) {
     emitter.add_lo12("x1", "x1", "__rt_fputcsv_quote_lit");          // resolve exact address
     emitter.instruction("mov x2, #1");                                          // write 1 byte (quote)
     emitter.instruction("bl __rt_fd_write");                                    // write this segment (wrapper-aware: stream_write or raw write)
+    emitter.instruction("tbnz x0, #63, __rt_fputcsv_fail");                     // a failed segment write makes the whole fputcsv() false, as in PHP
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload total bytes
     emitter.instruction("add x9, x9, x0");                                      // add bytes written
     emitter.instruction("str x9, [sp, #16]");                                   // save updated total
@@ -136,6 +138,7 @@ pub fn emit_fputcsv(emitter: &mut Emitter) {
     emitter.add_lo12("x1", "x1", "__rt_fputcsv_quote_lit");          // resolve exact address
     emitter.instruction("mov x2, #1");                                          // write 1 byte (escape quote)
     emitter.instruction("bl __rt_fd_write");                                    // write this segment (wrapper-aware: stream_write or raw write)
+    emitter.instruction("tbnz x0, #63, __rt_fputcsv_fail");                     // a failed segment write makes the whole fputcsv() false, as in PHP
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload total bytes
     emitter.instruction("add x9, x9, x0");                                      // add bytes written
     emitter.instruction("str x9, [sp, #16]");                                   // save updated total
@@ -149,6 +152,7 @@ pub fn emit_fputcsv(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd
     emitter.instruction("mov x2, #1");                                          // write 1 byte
     emitter.instruction("bl __rt_fd_write");                                    // write this segment (wrapper-aware: stream_write or raw write)
+    emitter.instruction("tbnz x0, #63, __rt_fputcsv_fail");                     // a failed segment write makes the whole fputcsv() false, as in PHP
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload total bytes
     emitter.instruction("add x9, x9, x0");                                      // add bytes written
     emitter.instruction("str x9, [sp, #16]");                                   // save updated total
@@ -163,6 +167,7 @@ pub fn emit_fputcsv(emitter: &mut Emitter) {
     emitter.add_lo12("x1", "x1", "__rt_fputcsv_quote_lit");          // resolve exact address
     emitter.instruction("mov x2, #1");                                          // write 1 byte (quote)
     emitter.instruction("bl __rt_fd_write");                                    // write this segment (wrapper-aware: stream_write or raw write)
+    emitter.instruction("tbnz x0, #63, __rt_fputcsv_fail");                     // a failed segment write makes the whole fputcsv() false, as in PHP
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload total bytes
     emitter.instruction("add x9, x9, x0");                                      // add bytes written
     emitter.instruction("str x9, [sp, #16]");                                   // save updated total
@@ -174,6 +179,7 @@ pub fn emit_fputcsv(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x3");                                          // field pointer
     emitter.instruction("mov x2, x4");                                          // field length
     emitter.instruction("bl __rt_fd_write");                                    // write this segment (wrapper-aware: stream_write or raw write)
+    emitter.instruction("tbnz x0, #63, __rt_fputcsv_fail");                     // a failed segment write makes the whole fputcsv() false, as in PHP
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload total bytes
     emitter.instruction("add x9, x9, x0");                                      // add bytes written
     emitter.instruction("str x9, [sp, #16]");                                   // save updated total
@@ -192,6 +198,7 @@ pub fn emit_fputcsv(emitter: &mut Emitter) {
     emitter.add_lo12("x1", "x1", "__rt_fputcsv_nl_lit");             // resolve exact address
     emitter.instruction("mov x2, #1");                                          // write 1 byte (newline)
     emitter.instruction("bl __rt_fd_write");                                    // write this segment (wrapper-aware: stream_write or raw write)
+    emitter.instruction("tbnz x0, #63, __rt_fputcsv_fail");                     // a failed segment write makes the whole fputcsv() false, as in PHP
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload total bytes
     emitter.instruction("add x9, x9, x0");                                      // add final bytes written
     emitter.instruction("str x9, [sp, #16]");                                   // save final total
@@ -203,6 +210,13 @@ pub fn emit_fputcsv(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #96");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
+
+    // -- a segment write failed (e.g. a read-only stream): -1, boxed as PHP false --
+    emitter.label("__rt_fputcsv_fail");
+    emitter.instruction("mov x0, #-1");                                         // never report a sum of failed segment writes as a byte count
+    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #96");                                     // deallocate stack frame
+    emitter.instruction("ret");                                                 // return the failure sentinel
 
     // -- literal data for comma, quote, and newline characters --
     emitter.label("__rt_fputcsv_comma_lit");
@@ -254,6 +268,8 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rsi, [rip + __rt_fputcsv_comma_lit]");             // pass the comma literal address as the second __rt_fd_write() argument
     emitter.instruction("mov edx, 1");                                          // write exactly one comma byte between consecutive CSV fields
     emitter.instruction("call __rt_fd_write");                                  // emit the comma separator through __rt_fd_write()
+    emitter.instruction("test rax, rax");                                       // __rt_fd_write() answers -1 for a failed write
+    emitter.instruction("js __rt_fputcsv_fail_x86");                            // a failed segment write makes the whole fputcsv() false, as in PHP
     emitter.instruction("add QWORD PTR [rbp - 24], rax");                       // accumulate the comma byte count into the running CSV write total
 
     emitter.label("__rt_fputcsv_field_x86");
@@ -292,6 +308,8 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rsi, [rip + __rt_fputcsv_quote_lit]");             // pass the quote literal address as the second __rt_fd_write() argument
     emitter.instruction("mov edx, 1");                                          // write exactly one opening quote byte before the field payload
     emitter.instruction("call __rt_fd_write");                                  // emit the opening quote through __rt_fd_write()
+    emitter.instruction("test rax, rax");                                       // __rt_fd_write() answers -1 for a failed write
+    emitter.instruction("js __rt_fputcsv_fail_x86");                            // a failed segment write makes the whole fputcsv() false, as in PHP
     emitter.instruction("add QWORD PTR [rbp - 24], rax");                       // accumulate the opening-quote byte count into the running CSV write total
     emitter.instruction("mov QWORD PTR [rbp - 72], 0");                         // current byte index inside the quoted field starts at zero before the per-byte writer loop
 
@@ -307,6 +325,8 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rsi, [rip + __rt_fputcsv_quote_lit]");             // pass the quote literal address as the second __rt_fd_write() argument for the escaped quote prefix
     emitter.instruction("mov edx, 1");                                          // write the extra quote byte that escapes a literal quote in CSV output
     emitter.instruction("call __rt_fd_write");                                  // emit the escape-prefix quote through __rt_fd_write()
+    emitter.instruction("test rax, rax");                                       // __rt_fd_write() answers -1 for a failed write
+    emitter.instruction("js __rt_fputcsv_fail_x86");                            // a failed segment write makes the whole fputcsv() false, as in PHP
     emitter.instruction("add QWORD PTR [rbp - 24], rax");                       // accumulate the escape-prefix byte count into the running CSV write total
 
     emitter.label("__rt_fputcsv_qchar_x86");
@@ -316,6 +336,8 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rsi, [r8 + rcx]");                                 // point __rt_fd_write() at the current field byte inside the source string payload
     emitter.instruction("mov edx, 1");                                          // write exactly one payload byte from the quoted field
     emitter.instruction("call __rt_fd_write");                                  // emit the current field byte through __rt_fd_write()
+    emitter.instruction("test rax, rax");                                       // __rt_fd_write() answers -1 for a failed write
+    emitter.instruction("js __rt_fputcsv_fail_x86");                            // a failed segment write makes the whole fputcsv() false, as in PHP
     emitter.instruction("add QWORD PTR [rbp - 24], rax");                       // accumulate the current field-byte count into the running CSV write total
     emitter.instruction("add QWORD PTR [rbp - 72], 1");                         // advance to the next byte inside the quoted field payload
     emitter.instruction("jmp __rt_fputcsv_qloop_x86");                          // continue emitting the quoted field payload byte-by-byte
@@ -325,6 +347,8 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rsi, [rip + __rt_fputcsv_quote_lit]");             // pass the quote literal address as the second __rt_fd_write() argument for the closing quote
     emitter.instruction("mov edx, 1");                                          // write exactly one closing quote byte after the quoted field payload
     emitter.instruction("call __rt_fd_write");                                  // emit the closing quote through __rt_fd_write()
+    emitter.instruction("test rax, rax");                                       // __rt_fd_write() answers -1 for a failed write
+    emitter.instruction("js __rt_fputcsv_fail_x86");                            // a failed segment write makes the whole fputcsv() false, as in PHP
     emitter.instruction("add QWORD PTR [rbp - 24], rax");                       // accumulate the closing-quote byte count into the running CSV write total
     emitter.instruction("jmp __rt_fputcsv_next_x86");                           // advance to the next field after finishing the quoted field emission
 
@@ -333,6 +357,8 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");                       // pass the current field string pointer as the second __rt_fd_write() argument for the plain field path
     emitter.instruction("mov rdx, QWORD PTR [rbp - 56]");                       // pass the current field string length as the third __rt_fd_write() argument for the plain field path
     emitter.instruction("call __rt_fd_write");                                  // emit the entire unquoted field payload through one __rt_fd_write() call
+    emitter.instruction("test rax, rax");                                       // __rt_fd_write() answers -1 for a failed write
+    emitter.instruction("js __rt_fputcsv_fail_x86");                            // a failed segment write makes the whole fputcsv() false, as in PHP
     emitter.instruction("add QWORD PTR [rbp - 24], rax");                       // accumulate the plain field byte count into the running CSV write total
 
     emitter.label("__rt_fputcsv_next_x86");
@@ -344,11 +370,19 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rsi, [rip + __rt_fputcsv_nl_lit]");                // pass the newline literal address as the second __rt_fd_write() argument
     emitter.instruction("mov edx, 1");                                          // write exactly one trailing newline byte after the last CSV field
     emitter.instruction("call __rt_fd_write");                                  // emit the trailing newline through __rt_fd_write()
+    emitter.instruction("test rax, rax");                                       // __rt_fd_write() answers -1 for a failed write
+    emitter.instruction("js __rt_fputcsv_fail_x86");                            // a failed segment write makes the whole fputcsv() false, as in PHP
     emitter.instruction("add QWORD PTR [rbp - 24], rax");                       // accumulate the trailing newline byte count into the running CSV write total
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the total number of bytes that fputcsv() emitted through __rt_fd_write()
     emitter.instruction("add rsp, 80");                                         // release the CSV writer spill slots before returning to the caller
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the x86_64 CSV writer completes
     emitter.instruction("ret");                                                 // return the total written byte count in the x86_64 integer result register
+
+    emitter.label("__rt_fputcsv_fail_x86");
+    emitter.instruction("mov rax, -1");                                         // a failed segment write is -1, boxed as PHP false by the lowering
+    emitter.instruction("add rsp, 80");                                         // release the CSV writer spill slots before returning to the caller
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the failure sentinel
 
     emitter.label("__rt_fputcsv_comma_lit");
     emitter.instruction(".ascii \",\"");                                        // comma character literal used as the CSV field separator

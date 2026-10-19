@@ -141,6 +141,19 @@ pub struct Module {
     pub web: bool,
     /// Generated `clone()` property-override applicators, sorted by class id then scope id.
     pub clone_override_applicators: Vec<CloneOverrideApplicator>,
+    /// Method bodies whose declared scalar parameters or return an override family boxed into
+    /// its shared Mixed call ABI, keyed by `(class, method key, is_static)`. The body re-applies
+    /// the declared coercion itself (`crate::ir_lower::program::virtual_abi`).
+    pub family_body_contracts: HashMap<(String, String, bool), FamilyBodyContract>,
+}
+
+/// The declared scalar contracts a method body boxed by its override family enforces itself.
+#[derive(Clone, Debug, Default)]
+pub struct FamilyBodyContract {
+    /// `(index, declared type)` of each declared scalar parameter now passed as Mixed.
+    pub params: Vec<(usize, PhpType)>,
+    /// The declared scalar return now handed back as Mixed.
+    pub declared_return: Option<PhpType>,
 }
 
 impl Module {
@@ -192,6 +205,7 @@ impl Module {
             required_runtime_features: RuntimeFeatures::none(),
             web: false,
             clone_override_applicators: Vec::new(),
+            family_body_contracts: HashMap::new(),
         }
     }
 

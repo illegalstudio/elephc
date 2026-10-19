@@ -138,6 +138,7 @@ fn type_refs_xml(type_expr: &TypeExpr) -> bool {
         | TypeExpr::Float
         | TypeExpr::Bool
         | TypeExpr::False
+        | TypeExpr::True
         | TypeExpr::Str
         | TypeExpr::Void
         | TypeExpr::Never
@@ -458,6 +459,9 @@ fn stmt_refs_xml(stmt: &Stmt) -> bool {
         }
         StmtKind::ArrayAssign { index, value, .. } => {
             expr_refs_xml(index) || expr_refs_xml(value)
+        }
+        StmtKind::RefAssignPlace { target, source } => {
+            expr_refs_xml(target) || expr_refs_xml(source)
         }
         StmtKind::NestedArrayAssign { target, value } => {
             expr_refs_xml(target) || expr_refs_xml(value)

@@ -781,6 +781,9 @@ fn stmt_refs(stmt: &Stmt, target: Symbol<'_>) -> Option<Span> {
         StmtKind::ArrayAssign { index, value, .. } => {
             expr_refs(index, target).or_else(|| expr_refs(value, target))
         }
+        StmtKind::RefAssignPlace { target: t, source } => {
+            expr_refs(t, target).or_else(|| expr_refs(source, target))
+        }
         StmtKind::NestedArrayAssign { target: t, value } => {
             expr_refs(t, target).or_else(|| expr_refs(value, target))
         }

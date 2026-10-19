@@ -15,6 +15,7 @@ mod closure_call_returns;
 mod closures;
 mod property_callable_metadata;
 mod expr_calls;
+mod fcc_variable;
 mod func_args;
 mod language_features;
 mod constants_and_system;

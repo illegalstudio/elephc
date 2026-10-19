@@ -61,8 +61,21 @@ pub(crate) fn inject_builtin_interfaces(
                 .keys()
                 .any(|name| php_symbol_key(name) == builtin_key)
         {
+            // Report it at the user's declaration, not at an unknown location.
+            let span = interface_map
+                .iter()
+                .filter(|(name, _)| php_symbol_key(name) == builtin_key)
+                .map(|(_, info)| info.span)
+                .chain(
+                    class_map
+                        .iter()
+                        .filter(|(name, _)| php_symbol_key(name) == builtin_key)
+                        .map(|(_, class)| class.span),
+                )
+                .next()
+                .unwrap_or_else(crate::span::Span::dummy);
             return Err(CompileError::new(
-                crate::span::Span::dummy(),
+                span,
                 &format!("Cannot redeclare built-in interface: {}", builtin_name),
             ));
         }

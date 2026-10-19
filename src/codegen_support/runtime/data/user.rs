@@ -12,7 +12,9 @@ use std::collections::{HashMap, HashSet};
 
 use crate::codegen_support::data_section::comm_directive;
 use crate::codegen_support::platform::Target;
-use crate::codegen_support::sentinels::{SERPROP_FALSE_ONLY_BIT, TAGGED_SCALAR_PROPERTY_TAG};
+use crate::codegen_support::sentinels::{
+    REFERENCE_PROPERTY_TAG_FLAG, SERPROP_FALSE_ONLY_BIT, TAGGED_SCALAR_PROPERTY_TAG,
+};
 use crate::codegen_support::source_method_adapters::{self, MethodAbiPlan, MethodKind};
 use crate::names::{
     enum_case_symbol, function_variant_active_symbol, interface_method_wrapper_symbol, mangle_fqn,
@@ -1165,9 +1167,12 @@ pub(crate) fn emit_runtime_data_user(
         }
         out.push_str(&format!("    .quad {}\n", public_props.len()));
         for (prop_index, (prop_name, prop_ty)) in &public_props {
-            let tag = if class_info.property_slot_is_reference(*prop_index, prop_name) {
+            let reference_flag = if class_info.property_slot_is_reference(*prop_index, prop_name) {
+                REFERENCE_PROPERTY_TAG_FLAG
+            } else {
                 0
-            } else if prop_ty.codegen_repr() == PhpType::TaggedScalar {
+            };
+            let tag = reference_flag | if prop_ty.codegen_repr() == PhpType::TaggedScalar {
                 TAGGED_SCALAR_PROPERTY_TAG
             } else {
                 match prop_ty {
@@ -3118,8 +3123,9 @@ fn emit_user_wrapper_vtable(
 }
 
 /// Emits the per-class callable-method name table and count for __invoke support.
-/// Only public instance methods are included. Each method name is emitted as an
-/// ASCII label; the table is indexed by class_id at runtime.
+/// Public instance methods and public static methods are included: PHP accepts
+/// `[$object, 'staticMethod']` as a callable. Each method name is emitted as an ASCII
+/// label; the table is indexed by class_id at runtime.
 fn emit_class_callable_methods(out: &mut String, class_info: &ClassInfo) {
     let mut public_methods: Vec<&String> = class_info
         .methods
@@ -3131,7 +3137,14 @@ fn emit_class_callable_methods(out: &mut String, class_info: &ClassInfo) {
                 .is_some_and(|visibility| matches!(visibility, Visibility::Public))
         })
         .collect();
+    public_methods.extend(class_info.static_methods.keys().filter(|method_name| {
+        class_info
+            .static_method_visibilities
+            .get(*method_name)
+            .is_some_and(|visibility| matches!(visibility, Visibility::Public))
+    }));
     public_methods.sort();
+    public_methods.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
     for method_name in &public_methods {
         out.push_str(&format!(
             ".globl _class_callable_method_name_{0}_{1}\n_class_callable_method_name_{0}_{1}:\n    .ascii \"{2}\"\n",
@@ -3567,7 +3580,9 @@ fn var_dump_descriptor_rows(
                 );
                 // Resolve the physical slot before filtering: a user property can shadow an
                 // inherited Reflection backing name without exposing the backing slot itself.
-                if is_reflection_backing_slot(metadata, owner_name, &prop_name) {
+                if is_reflection_backing_slot(metadata, owner_name, &prop_name)
+                    || is_virtual_hooked_property(metadata, &prop_name)
+                {
                     return None;
                 }
                 Some(VarDumpRow {
@@ -3594,7 +3609,9 @@ fn var_dump_descriptor_rows(
             let (metadata, owner_name) = physical_property_slot_metadata(
                 classes, class_info, class_name, layout_index, prop_name,
             );
-            if is_reflection_backing_slot(metadata, owner_name, prop_name) {
+            if is_reflection_backing_slot(metadata, owner_name, prop_name)
+                || is_virtual_hooked_property(metadata, prop_name)
+            {
                 return None;
             }
             Some(VarDumpRow {
@@ -3611,6 +3628,18 @@ fn var_dump_descriptor_rows(
             })
         })
         .collect()
+}
+
+/// Returns whether `prop_name` is a virtual hooked property (hooks that never touch a backing
+/// slot). PHP's object renderers skip virtual properties: they have no storage, so a row would
+/// read whatever the layout fallback offset holds (an unrelated slot, printed as
+/// `uninitialized(...)` or, for a pointer-carrying slot, a garbage string that exhausts the heap).
+/// This also covers the virtual public `name` elephc models on the builtin Reflection owners.
+fn is_virtual_hooked_property(class_info: &ClassInfo, prop_name: &str) -> bool {
+    class_info
+        .property_hooks
+        .get(prop_name)
+        .is_some_and(|hooks| hooks.is_virtual())
 }
 
 /// Returns whether `prop_name` is one of the compiler-only private backing slots elephc
@@ -4013,14 +4042,23 @@ fn serprop_widens_int_to_float(prop_ty: &PhpType) -> bool {
 
 /// Maps a declared property's static type to the runtime value tag consumed by
 /// `__rt_serialize_value` when serializing that property's 16-byte object slot.
-/// Mirrors the gc-descriptor tag mapping; reference and untyped/nullable
-/// properties are stored as boxed `Mixed` cells (tag 7), except `int|null`, whose
-/// inline `{payload, tag}` pair gets `TAGGED_SCALAR_PROPERTY_TAG`. A `Closure`
-/// property holds its callable descriptor directly (tag 10), never a Mixed box.
+/// Mirrors the gc-descriptor tag mapping; untyped/nullable properties are stored as
+/// boxed `Mixed` cells (tag 7), except `int|null`, whose inline `{payload, tag}` pair
+/// gets `TAGGED_SCALAR_PROPERTY_TAG`. A `Closure` property holds its callable
+/// descriptor directly (tag 10), never a Mixed box. A reference property's slot holds
+/// a pointer to storage with that same layout, so its tag is the same one with
+/// `REFERENCE_PROPERTY_TAG_FLAG` set, and every walker dereferences it once.
 fn prop_value_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType) -> u64 {
+    let tag = plain_prop_value_tag(prop_ty);
     if class_info.reference_properties.contains(prop_name) {
-        return 7;
+        // The slot holds a pointer to the aliased storage, which has the property's own layout.
+        return REFERENCE_PROPERTY_TAG_FLAG | tag;
     }
+    tag
+}
+
+/// The value tag of a property slot that stores its value inline.
+fn plain_prop_value_tag(prop_ty: &PhpType) -> u64 {
     if prop_ty.codegen_repr() == PhpType::TaggedScalar {
         return TAGGED_SCALAR_PROPERTY_TAG;
     }

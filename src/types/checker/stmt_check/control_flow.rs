@@ -24,6 +24,7 @@ use crate::parser::ast::{
 };
 use crate::types::{PhpType, TypeEnv};
 
+use super::super::condition_edges::{SwitchMaybeUndefined, TryMaybeUndefined};
 use super::super::{Checker, SavedNarrowingOrigin};
 
 const FS_CURRENT_AS_SELF: i64 = 16;
@@ -42,6 +43,37 @@ fn stabilize_loop_storage(
     loop_span: crate::span::Span,
     body: &[Stmt],
     update: Option<&Stmt>,
+    condition: Option<&Expr>,
+    env: &mut TypeEnv,
+    packed_counter: Option<&str>,
+) {
+    stabilize_loop_storage_contracts(checker, loop_span, body, update, condition, env, packed_counter);
+    // A local the body unsets may be undefined when an iteration starts,
+    // whether or not the walk has bound it yet (a later iteration reads what an earlier one
+    // stored).
+    for name in crate::types::checker::condition_edges::unset_locals_in(body) {
+        checker.mark_maybe_undefined(&name);
+    }
+}
+
+/// Records the loop's fixed-point storage contracts (see [`stabilize_loop_storage`]).
+impl Checker {
+    /// Forgets every loop-storage contract recorded for `scope`, before its body is walked again.
+    pub(crate) fn clear_loop_storage_scope(&mut self, scope: &str) {
+        if let Some(spans) = self.loop_storage_scope_spans.remove(scope) {
+            for span in spans {
+                self.loop_storage_types.remove(&(scope.to_string(), span));
+            }
+        }
+    }
+}
+
+fn stabilize_loop_storage_contracts(
+    checker: &mut Checker,
+    loop_span: crate::span::Span,
+    body: &[Stmt],
+    update: Option<&Stmt>,
+    condition: Option<&Expr>,
     env: &mut TypeEnv,
     packed_counter: Option<&str>,
 ) {
@@ -58,6 +90,7 @@ fn stabilize_loop_storage(
     let contracts = crate::types::checker::loop_carried_storage_types(
         body,
         update,
+        condition,
         &snapshot,
         packed_counter,
         &mut |expr, analysis_env| {
@@ -86,7 +119,15 @@ fn stabilize_loop_storage(
             Some(inferred)
         },
     );
-    let recorded = checker.loop_storage_types.entry(key).or_default();
+    let (scope, span) = key;
+    if !checker.loop_storage_types.contains_key(&(scope.clone(), span)) {
+        checker
+            .loop_storage_scope_spans
+            .entry(scope.clone())
+            .or_default()
+            .push(span);
+    }
+    let recorded = checker.loop_storage_types.entry((scope, span)).or_default();
     for (name, storage_type) in contracts {
         recorded.insert(name.clone(), storage_type.clone());
         env.insert(name, storage_type);
@@ -364,6 +405,12 @@ impl Checker {
                 // one. Require the body to establish any affirmative managed-cell provenance it
                 // consumes within the loop itself.
                 self.boxed_ref_aliased_locals.clear();
+                // The body runs with both binders assigned (see `condition_edges`); the loop's
+                // own join marks them again for the code after it.
+                if let Some(key_var) = key_var {
+                    self.maybe_undefined_locals.remove(key_var);
+                }
+                self.maybe_undefined_locals.remove(value_var);
                 // `foreach ($arr as &$v)` takes a reference into each element, so BOTH names it
                 // touches are reference-aliased for the rest of the body and neither binding can
                 // be killed or re-bound — releasing or abandoning that storage would strand the
@@ -385,6 +432,19 @@ impl Checker {
                 // Recorded before the iterable is inferred so an iterable that fails to type is
                 // still treated as aliased.
                 if *value_by_ref {
+                    // A `static` local's elements live in the function's static symbol, which
+                    // the by-reference loop cannot republish into: the writes were dropped.
+                    if let ExprKind::Variable(name) = &array.kind {
+                        if self.active_statics.contains(name) {
+                            return Err(CompileError::new(
+                                array.span,
+                                &format!(
+                                    "foreach by reference over the static local ${name} is not \
+                                     supported yet; iterate a plain local copy and assign it back"
+                                ),
+                            ));
+                        }
+                    }
                     self.record_reference_alias_root(array);
                     self.ref_aliased_locals.insert(value_var.clone());
                 }
@@ -464,7 +524,10 @@ impl Checker {
                         }
                     }
                 } else if let PhpType::Object(class_name) = &arr_ty {
-                    if !self.object_type_implements_iterable(class_name) {
+                    // An instantiation inferred THIS round is not in the class table yet; the
+                    // next monomorphization round checks the loop against the spliced class.
+                    let pending = self.awaits_generic_instantiation(class_name);
+                    if !pending && !self.object_type_implements_iterable(class_name) {
                         return Err(CompileError::new(
                             stmt.span,
                             &format!(
@@ -537,7 +600,12 @@ impl Checker {
                 }
                 // Widen after the key/value bindings are in the environment so a push of
                 // the foreach value variable joins with its real element type.
-                stabilize_loop_storage(self, stmt.span, body, None, env, None);
+                stabilize_loop_storage(self, stmt.span, body, None, None, env, None);
+                // Every iteration binds both loop variables before the body runs.
+                if let Some(key_var) = key_var {
+                    self.maybe_undefined_locals.remove(key_var);
+                }
+                self.maybe_undefined_locals.remove(value_var);
                 let errors = self.check_break_continue_target_body(body, env);
                 self.callable_array_targets.clear();
                 self.callable_array_target_versions.clear();
@@ -561,6 +629,7 @@ impl Checker {
                     }
                 }
                 self.break_continue_depth += 1;
+                let mut maybe_undefined = SwitchMaybeUndefined::enter(self, env);
                 for (_, body) in cases {
                     let invalidated = self
                         .conditional_boxed_ref_invalidations
@@ -572,7 +641,9 @@ impl Checker {
                         .filter(|name| !invalidated.contains(*name))
                         .cloned()
                         .collect();
+                    maybe_undefined.start_body(self, env);
                     errors.extend(self.check_body(body, env));
+                    maybe_undefined.end_body(self, body, env);
                 }
                 if let Some(body) = default {
                     let invalidated = self
@@ -584,8 +655,11 @@ impl Checker {
                         .into_iter()
                         .filter(|name| !invalidated.contains(name))
                         .collect();
+                    maybe_undefined.start_body(self, env);
                     errors.extend(self.check_body(body, env));
+                    maybe_undefined.end_body(self, body, env);
                 }
+                maybe_undefined.finish(self, default.is_some(), env);
                 self.break_continue_depth -= 1;
                 self.callable_array_targets.clear();
                 self.callable_array_target_versions.clear();
@@ -638,8 +712,38 @@ impl Checker {
                 let mut callable_target_exits = Vec::new();
                 let mut callable_target_version_exits = Vec::new();
 
+                // Locals a condition defines only on one of its edges (`$a && ($r = f())` on the
+                // true edge, `!$x || !($y = g())` on the false one) are defined in the region that
+                // edge reaches and only there. A later clause, the `else` and — when every clause
+                // diverges — the code after the `if` are reached through the false edges.
+                let mut false_edge_inserted: Vec<(String, PhpType)> = Vec::new();
+                // Maybe-undefined join (see `condition_edges`): each arm starts from the marks of
+                // the path reaching it, marks what earlier arms introduced (they did not run on
+                // this path), and the `if` ends with every falling-through arm's marks plus the
+                // locals some falling-through arm never defined.
+                let if_keys_start = env.keys().cloned().collect::<std::collections::HashSet<_>>();
+                let mut path_marks = self.maybe_undefined_locals.clone();
+                let mut body_introduced = std::collections::HashSet::<String>::new();
+                let mut arm_marks: Vec<std::collections::HashSet<String>> = Vec::new();
+                let mut arm_end_keys: Vec<std::collections::HashSet<String>> = Vec::new();
                 for (cond, body) in &clauses {
+                    self.maybe_undefined_locals = path_marks.clone();
                     self.infer_type_with_assignment_effects(cond, env)?;
+                    let marks_after_cond = self.maybe_undefined_locals.clone();
+                    let true_names = super::super::condition_edges::definitely_assigned_on_edge(cond, true);
+                    let false_names = super::super::condition_edges::definitely_assigned_on_edge(cond, false);
+                    self.maybe_undefined_locals = marks_after_cond
+                        .iter()
+                        .filter(|name| !true_names.contains(*name))
+                        .cloned()
+                        .collect();
+                    for name in &body_introduced {
+                        self.mark_maybe_undefined(name);
+                    }
+                    let keys_before_body = env.keys().cloned().collect::<std::collections::HashSet<_>>();
+                    let true_defs = self.condition_edge_definitions(cond, env, true);
+                    let false_defs = self.condition_edge_definitions(cond, env, false);
+                    let true_inserted = Self::insert_edge_definitions(env, &true_defs);
                     let branch_entry_targets = self.callable_array_targets.clone();
                     let branch_entry_target_versions =
                         self.callable_array_target_versions.clone();
@@ -709,6 +813,25 @@ impl Checker {
                         self.callable_array_target_versions = branch_entry_target_versions;
                         self.boxed_ref_aliased_locals = branch_entry_boxed_refs;
                     }
+                    Self::remove_edge_definitions(env, &true_inserted);
+                    if !self.body_cannot_fall_through(body) {
+                        arm_marks.push(self.maybe_undefined_locals.clone());
+                        arm_end_keys.push(env.keys().cloned().collect());
+                    }
+                    for name in env.keys() {
+                        if !keys_before_body.contains(name) {
+                            body_introduced.insert(name.clone());
+                        }
+                    }
+                    path_marks = marks_after_cond
+                        .into_iter()
+                        .filter(|name| !false_names.contains(name))
+                        .collect();
+                    false_edge_inserted.extend(Self::insert_edge_definitions(env, &false_defs));
+                }
+                self.maybe_undefined_locals = path_marks.clone();
+                for name in &body_introduced {
+                    self.mark_maybe_undefined(name);
                 }
 
                 // Final else body (if present) is checked with the accumulated complement.
@@ -729,6 +852,26 @@ impl Checker {
                     callable_target_exits.push(self.callable_array_targets.clone());
                     callable_target_version_exits
                         .push(self.callable_array_target_versions.clone());
+                    arm_marks.push(self.maybe_undefined_locals.clone());
+                    arm_end_keys.push(env.keys().cloned().collect());
+                }
+                if !arm_marks.is_empty() {
+                    let mut joined = arm_marks
+                        .iter()
+                        .flatten()
+                        .cloned()
+                        .collect::<std::collections::HashSet<_>>();
+                    for name in env.keys() {
+                        if !if_keys_start.contains(name)
+                            && arm_end_keys.iter().any(|keys| !keys.contains(name))
+                        {
+                            joined.insert(name.clone());
+                        }
+                    }
+                    self.maybe_undefined_locals.clear();
+                    for name in joined {
+                        self.mark_maybe_undefined(&name);
+                    }
                 }
                 let (joined_targets, joined_target_versions) = joined_callable_array_targets(
                     &callable_target_exits,
@@ -766,6 +909,13 @@ impl Checker {
                     };
                     Some((key.clone(), joined))
                 });
+                let all_clauses_diverge = else_body.is_none()
+                    && clauses
+                        .iter()
+                        .all(|(_, body)| self.body_cannot_fall_through(body));
+                if !all_clauses_diverge {
+                    Self::remove_edge_definitions(env, &false_edge_inserted);
+                }
                 if !keep_complement_after_if {
                     for (var, original) in &saved_vars {
                         restore_narrowed_var(env, var, original);
@@ -791,7 +941,7 @@ impl Checker {
             }
             StmtKind::DoWhile { body, condition } => {
                 self.boxed_ref_aliased_locals.clear();
-                stabilize_loop_storage(self, stmt.span, body, None, env, None);
+                stabilize_loop_storage(self, stmt.span, body, None, Some(condition), env, None);
                 let errors = self.check_break_continue_target_body(body, env);
                 self.infer_type_with_assignment_effects(condition, env)?;
                 self.callable_array_targets.clear();
@@ -804,7 +954,7 @@ impl Checker {
             }
             StmtKind::While { condition, body } => {
                 self.boxed_ref_aliased_locals.clear();
-                stabilize_loop_storage(self, stmt.span, body, None, env, None);
+                stabilize_loop_storage(self, stmt.span, body, None, Some(condition), env, None);
                 self.infer_type_with_assignment_effects(condition, env)?;
                 // The condition is re-evaluated before every iteration, so a guard on it
                 // holds on entry to each one: `while (($row = fgetcsv($h)) !== false)`
@@ -820,7 +970,11 @@ impl Checker {
                 if let Some(g) = &guard {
                     env.insert(g.var.clone(), g.then_ty.clone());
                 }
+                // `while ($ok && ($row = next()))`: the body runs on the condition's true edge.
+                let true_defs = self.condition_edge_definitions(condition, env, true);
+                let true_inserted = Self::insert_edge_definitions(env, &true_defs);
                 let errors = self.check_break_continue_target_body(body, env);
+                Self::remove_edge_definitions(env, &true_inserted);
                 if let Some(saved_origin) = saved_origin {
                     self.exit_flow_narrowing(saved_origin);
                 }
@@ -882,6 +1036,7 @@ impl Checker {
                     stmt.span,
                     body,
                     update.as_deref(),
+                    condition.as_ref(),
                     env,
                     packed_counter_name.as_deref(),
                 );
@@ -896,23 +1051,7 @@ impl Checker {
             }
             StmtKind::Throw(expr) => {
                 let thrown_ty = self.infer_type_with_assignment_effects(expr, env)?;
-                match thrown_ty {
-                    PhpType::Object(type_name)
-                        if self.object_type_implements_throwable(&type_name)
-                            || self.object_type_may_be_eval_declared(&type_name) =>
-                    {
-                        Ok(())
-                    }
-                    PhpType::Mixed if self.eval_barrier_active => Ok(()),
-                    PhpType::Object(_) => Err(CompileError::new(
-                        stmt.span,
-                        "Type error: throw requires an object implementing Throwable",
-                    )),
-                    _ => Err(CompileError::new(
-                        stmt.span,
-                        "Type error: throw requires an object value",
-                    )),
-                }
+                self.check_thrown_type(expr, thrown_ty, env, stmt.span)
             }
             StmtKind::Try {
                 try_body,
@@ -921,13 +1060,20 @@ impl Checker {
             } => {
                 let mut errors = Vec::new();
                 let branch_entry_boxed_refs = self.boxed_ref_aliased_locals.clone();
+                let mut maybe_undefined = TryMaybeUndefined::enter(self, env);
                 for s in try_body {
                     if let Err(error) = self.check_stmt(s, env) {
                         errors.extend(error.flatten());
                     }
                 }
+                maybe_undefined.end_try(self, try_body, env);
                 for catch_clause in catches {
                     self.boxed_ref_aliased_locals = branch_entry_boxed_refs.clone();
+                    maybe_undefined.start_catch(self, env);
+                    // The handler binds its variable (see `condition_edges`).
+                    if let Some(variable) = &catch_clause.variable {
+                        self.maybe_undefined_locals.remove(variable);
+                    }
                     let mut resolved_types = Vec::new();
                     for raw_exception_type in &catch_clause.exception_types {
                         let exception_type =
@@ -962,7 +1108,9 @@ impl Checker {
                             errors.extend(error.flatten());
                         }
                     }
+                    maybe_undefined.end_catch(self, &catch_clause.body, env);
                 }
+                maybe_undefined.join(self, env);
                 if let Some(body) = finally_body {
                     let invalidated = self
                         .conditional_boxed_ref_invalidations
@@ -975,7 +1123,9 @@ impl Checker {
                         .collect();
                     self.finally_break_continue_bases
                         .push(self.break_continue_depth);
+                    let finally_entry = maybe_undefined.start_finally(self);
                     errors.extend(self.check_body(body, env));
+                    maybe_undefined.end_finally(self, finally_entry);
                     self.finally_break_continue_bases.pop();
                 }
                 self.callable_array_targets.clear();
@@ -1138,13 +1288,18 @@ impl Checker {
         body: &[Stmt],
         env: &mut TypeEnv,
     ) -> Result<(), CompileError> {
+        let mut true_inserted = Vec::new();
         if let Some(c) = condition {
             self.infer_type_with_assignment_effects(c, env)?;
+            // The body and the update run on the condition's true edge.
+            let true_defs = self.condition_edge_definitions(c, env, true);
+            true_inserted = Self::insert_edge_definitions(env, &true_defs);
         }
         if let Some(s) = update {
             self.check_stmt(s, env)?;
         }
         let errors = self.check_break_continue_target_body(body, env);
+        Self::remove_edge_definitions(env, &true_inserted);
         if errors.is_empty() {
             Ok(())
         } else {

@@ -116,6 +116,7 @@ fn type_refs_pdo(type_expr: &TypeExpr) -> bool {
         | TypeExpr::Float
         | TypeExpr::Bool
         | TypeExpr::False
+        | TypeExpr::True
         | TypeExpr::Str
         | TypeExpr::Void
         | TypeExpr::Never
@@ -418,6 +419,9 @@ fn stmt_refs_pdo(stmt: &Stmt) -> bool {
         }
         StmtKind::ArrayAssign { index, value, .. } => {
             expr_refs_pdo(index) || expr_refs_pdo(value)
+        }
+        StmtKind::RefAssignPlace { target, source } => {
+            expr_refs_pdo(target) || expr_refs_pdo(source)
         }
         StmtKind::NestedArrayAssign { target, value } => {
             expr_refs_pdo(target) || expr_refs_pdo(value)

@@ -753,12 +753,12 @@ pub(super) fn emit_dynamic_new_mixed_fallback(ctx: &mut FunctionContext<'_>) {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 0);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x2", 8);
             abi::emit_call_label(ctx.emitter, "__rt_new_by_name");
-            ctx.emitter.instruction(&format!("cbz x0, {}", miss_label));        // registry miss is PHP's class-not-found fatal for source-level dynamic construction
+            ctx.emitter.instruction(&format!("cbz x0, {}", miss_label));        // registry miss throws PHP's class-not-found Error for source-level dynamic construction
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object(String::new()));
-            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the fatal path after a registry allocation
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the throw path after a registry allocation
             ctx.emitter.label(&miss_label);
-            emit_dynamic_new_class_not_found_fatal(ctx);
+            emit_dynamic_new_class_not_found_error(ctx);
             ctx.emitter.label(&done_label);
         }
         Arch::X86_64 => {
@@ -766,12 +766,12 @@ pub(super) fn emit_dynamic_new_mixed_fallback(ctx: &mut FunctionContext<'_>) {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdx", 8);
             abi::emit_call_label(ctx.emitter, "__rt_new_by_name");
             ctx.emitter.instruction("test rax, rax");                           // did the runtime class registry produce an object?
-            ctx.emitter.instruction(&format!("jz {}", miss_label));             // registry miss is PHP's class-not-found fatal
+            ctx.emitter.instruction(&format!("jz {}", miss_label));             // registry miss throws PHP's class-not-found Error
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object(String::new()));
-            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the fatal path after a registry allocation
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the throw path after a registry allocation
             ctx.emitter.label(&miss_label);
-            emit_dynamic_new_class_not_found_fatal(ctx);
+            emit_dynamic_new_class_not_found_error(ctx);
             ctx.emitter.label(&done_label);
         }
     }

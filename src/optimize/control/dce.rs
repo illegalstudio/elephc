@@ -719,12 +719,18 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                     variadic,
                     variadic_by_ref,
                     variadic_type,
-                    return_type,
-                    body: with_function_scope(|| {
-                        crate::optimize::generator_bodies::rewrite_preserving_yield(body, |body| {
-                            dce_block_with_guards(body, function_guards)
-                        })
-                    }),
+                    return_type: return_type.clone(),
+                    body: crate::optimize::exception_flow::with_return_annotation(
+                        return_type.as_ref(),
+                        || {
+                            with_function_scope(|| {
+                                crate::optimize::generator_bodies::rewrite_preserving_yield(
+                                    body,
+                                    |body| dce_block_with_guards(body, function_guards),
+                                )
+                            })
+                        },
+                    ),
                 },
                 span,
                 source_mode,

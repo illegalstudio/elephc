@@ -103,7 +103,17 @@ fn parse_ref_assign(
     span: Span,
 ) -> Result<Stmt, CompileError> {
     *pos += 1;
+    if let Some(container) = super::reference_places::parse_new_element_source(tokens, pos)? {
+        // `$r = &$a[];`: the element `[]` creates.
+        expect_semicolon(tokens, pos)?;
+        return super::reference_places::lower_local_ref_assign(
+            target,
+            super::reference_places::RefSource::NewElement(container),
+            span,
+        );
+    }
     let source = parse_expr(tokens, pos)?;
+    crate::parser::expr::reject_dynamic_member_write(&source, span)?;
     if !is_valid_reference_source(&source.kind) {
         return Err(CompileError::new(
             span,
@@ -111,19 +121,25 @@ fn parse_ref_assign(
         ));
     }
     expect_semicolon(tokens, pos)?;
-    Ok(Stmt::new(StmtKind::RefAssign { target, source }, span))
+    super::reference_places::lower_local_ref_assign(
+        target,
+        super::reference_places::RefSource::Expr(source),
+        span,
+    )
 }
 
 /// Returns true when an expression is a legal source for `$x = &<source>`.
 ///
 /// PHP allows aliasing variables, array elements, object properties, and the
 /// results of calls that return by reference. Other expressions are rejected.
-fn is_valid_reference_source(kind: &ExprKind) -> bool {
+pub(super) fn is_valid_reference_source(kind: &ExprKind) -> bool {
     matches!(
         kind,
         ExprKind::Variable(_)
             | ExprKind::ArrayAccess { .. }
             | ExprKind::PropertyAccess { .. }
+            | ExprKind::DynamicPropertyAccess { .. }
+            | ExprKind::StaticPropertyAccess { .. }
             | ExprKind::FunctionCall { .. }
             | ExprKind::MethodCall { .. }
             | ExprKind::StaticMethodCall { .. }

@@ -19,6 +19,22 @@ use super::{
     recover_to_statement_boundary,
 };
 
+/// Returns the spelling of a lone reserved word used as a whole namespace declaration name.
+///
+/// PHP 8 declares `namespace Default;` / `namespace List { ... }` with any semi-reserved word
+/// (the grammar's `identifier`) except `namespace` itself; multi-segment names such as
+/// `A\Default` already arrive as identifiers from the lexer.
+fn bare_keyword_namespace_name(tokens: &[SpannedToken], pos: usize) -> Option<String> {
+    let (token, metadata) = tokens.get(pos)?;
+    if matches!(token, Token::Identifier(_) | Token::Namespace) {
+        return None;
+    }
+    if !matches!(tokens.get(pos + 1), Some((Token::Semicolon | Token::LBrace, _))) {
+        return None;
+    }
+    crate::parser::keyword_name::bareword_name_from_token(token, metadata)
+}
+
 /// Parses a `namespace` declaration or block.
 ///
 /// Consumes the `namespace` keyword, then either:
@@ -36,6 +52,9 @@ pub(super) fn parse_namespace_stmt(
 
     let name = if *pos < tokens.len() && tokens[*pos].0 == Token::LBrace {
         None
+    } else if let Some(word) = bare_keyword_namespace_name(tokens, *pos) {
+        *pos += 1;
+        Some(Name::from_parts(NameKind::Unqualified, vec![word]))
     } else {
         Some(parse_name(
             tokens,

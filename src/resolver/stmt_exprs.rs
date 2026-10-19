@@ -157,6 +157,10 @@ pub(super) fn resolve_stmt_exprs(
             index: resolve_expr(index, base_dir, declared_once, include_chain, state, function_variants)?,
             value: resolve_expr(value, base_dir, declared_once, include_chain, state, function_variants)?,
         },
+        StmtKind::RefAssignPlace { target, source } => StmtKind::RefAssignPlace {
+            target: resolve_expr(target, base_dir, declared_once, include_chain, state, function_variants)?,
+            source: resolve_expr(source, base_dir, declared_once, include_chain, state, function_variants)?,
+        },
         StmtKind::NestedArrayAssign { target, value } => StmtKind::NestedArrayAssign {
             target: resolve_expr(target, base_dir, declared_once, include_chain, state, function_variants)?,
             value: resolve_expr(value, base_dir, declared_once, include_chain, state, function_variants)?,

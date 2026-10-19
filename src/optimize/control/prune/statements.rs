@@ -287,8 +287,11 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
                 variadic,
                 variadic_by_ref,
                 variadic_type,
-                return_type,
-                body: prune_function_body(body, by_ref_return),
+                return_type: return_type.clone(),
+                body: crate::optimize::exception_flow::with_return_annotation(
+                    return_type.as_ref(),
+                    || prune_function_body(body, by_ref_return),
+                ),
             },
             span,
             source_mode,
@@ -453,7 +456,10 @@ pub(crate) fn prune_method(
     let by_ref_return = method.by_ref_return;
     ClassMethod {
         body: with_class_effect_context(Some(context), || {
-            prune_function_body(method.body, by_ref_return)
+            crate::optimize::exception_flow::with_return_annotation(
+                method.return_type.as_ref(),
+                || prune_function_body(method.body, by_ref_return),
+            )
         }),
         ..method
     }
@@ -464,7 +470,12 @@ pub(crate) fn prune_method(
 pub(crate) fn prune_method_without_context(method: ClassMethod) -> ClassMethod {
     let by_ref_return = method.by_ref_return;
     ClassMethod {
-        body: with_class_effect_context(None, || prune_function_body(method.body, by_ref_return)),
+        body: with_class_effect_context(None, || {
+            crate::optimize::exception_flow::with_return_annotation(
+                method.return_type.as_ref(),
+                || prune_function_body(method.body, by_ref_return),
+            )
+        }),
         ..method
     }
 }

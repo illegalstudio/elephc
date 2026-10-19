@@ -69,6 +69,11 @@ pub(super) fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
                 crate::codegen::sentinels::emit_tagged_scalar_null(ctx.emitter);
                 return store_if_result(ctx, inst);
             }
+            PhpType::Mixed | PhpType::Union(_) => {
+                ctx.load_value_to_result(value)?;
+                emit_mixed_to_tagged_scalar(ctx);
+                return store_if_result(ctx, inst);
+            }
             other => {
                 return Err(CodegenIrError::unsupported(format!(
                     "runtime_call from PHP type {:?} to PHP type TaggedScalar",
@@ -516,4 +521,44 @@ fn emit_boxed_element_slots_fatal(ctx: &mut FunctionContext<'_>) {
         b"Fatal error: an array with boxed element slots reached a typed element contract; \
 the value's declared element type does not describe its storage\n",
     );
+}
+
+/// Converts the boxed `Mixed` pointer in the integer result register into a tagged scalar
+/// (`?int` storage): null stays null, an int or bool forwards its payload, and any other runtime
+/// value takes PHP's `(int)` cast.
+///
+/// Reached by a declared `?int` return, whose value the return-coercion helper has already
+/// verified to be null or an int, and by any other `mixed` value narrowed to `?int` storage.
+/// The cast fallback keeps the conversion total, so no tag can reach the slot unconverted.
+fn emit_mixed_to_tagged_scalar(ctx: &mut FunctionContext<'_>) {
+    use crate::codegen::abi;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let first_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let payload_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x1",
+        Arch::X86_64 => "rdi",
+    };
+    let l_null = ctx.next_label("mixed_tagged_null");
+    let l_int = ctx.next_label("mixed_tagged_int");
+    let l_done = ctx.next_label("mixed_tagged_done");
+    // Keep the cell across the unbox: the cast fallback needs the original pointer.
+    abi::emit_push_reg_pair(ctx.emitter, result_reg, result_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    super::enums::emit_mixed_tag_branch(ctx, result_reg, 8, &l_null);
+    super::enums::emit_mixed_tag_branch(ctx, result_reg, 0, &l_int);
+    super::enums::emit_mixed_tag_branch(ctx, result_reg, 3, &l_int);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, first_arg_reg, 0);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+    crate::codegen::sentinels::emit_tagged_scalar_from_int_result(ctx.emitter);
+    abi::emit_jump(ctx.emitter, &l_done);
+    ctx.emitter.label(&l_int);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    super::enums::emit_move_reg(ctx, result_reg, payload_reg);
+    crate::codegen::sentinels::emit_tagged_scalar_from_int_result(ctx.emitter);
+    abi::emit_jump(ctx.emitter, &l_done);
+    ctx.emitter.label(&l_null);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    crate::codegen::sentinels::emit_tagged_scalar_null(ctx.emitter);
+    ctx.emitter.label(&l_done);
 }

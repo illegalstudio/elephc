@@ -21,6 +21,7 @@
 //!   (0), so their elements compare by raw payload bits; heterogeneous arrays box each element
 //!   (value_type 7) and keep full per-element type precision.
 
+use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -68,14 +69,23 @@ fn emit_array_strict_eq_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x19, x0");                                         // x19 = left array/hash pointer
     emitter.instruction("mov x20, x1");                                         // x20 = right array/hash pointer
     emitter.instruction("cmp x0, x1");                                          // identical heap pointers are trivially strictly equal
-    emitter.instruction("b.eq __rt_array_strict_eq_true");                      // short-circuit copy-on-write shared arrays
+    emitter.instruction("b.eq __rt_array_strict_eq_early_true");                // short-circuit copy-on-write shared arrays
     emitter.instruction("ldr x9, [x0]");                                        // x9 = left element count (header word 0)
     emitter.instruction("ldr x10, [x1]");                                       // x10 = right element count (header word 0)
     emitter.instruction("cmp x9, x10");                                         // arrays of different length are never strictly equal
-    emitter.instruction("b.ne __rt_array_strict_eq_false");                     // reject on count mismatch
-    emitter.instruction("cbz x9, __rt_array_strict_eq_true");                   // two empty arrays are strictly equal
+    emitter.instruction("b.ne __rt_array_strict_eq_early_false");               // reject on count mismatch
+    emitter.instruction("cbz x9, __rt_array_strict_eq_early_true");             // two empty arrays are strictly equal
     emitter.instruction("mov x21, #0");                                         // x21 = left cursor (fresh walk)
     emitter.instruction("mov x22, #0");                                         // x22 = right cursor (fresh walk)
+    // -- php's zend_hash_compare protects the LEFT table for the walk: meeting it again (only a
+    //    reference set can make an array contain itself) throws "Nesting level too deep -
+    //    recursive dependency?" instead of recursing until the stack overflows. The early
+    //    exits above never pushed, so they return through the epilogue without popping. --
+    emitter.instruction("mov x0, x19");                                         // the left table is the one php protects
+    emitter.instruction("bl __rt_cmp_seen_find");                               // is the left table already being compared?
+    emitter.instruction("cbnz x0, __rt_array_strict_eq_recursion");             // a revisited table is a recursive dependency
+    emitter.instruction("mov x0, x19");                                         // reload the left table
+    emitter.instruction("bl __rt_cmp_seen_push");                               // protect the left table for this walk
 
     // -- lock-step walk of both operands --
     emitter.label("__rt_array_strict_eq_loop");
@@ -123,6 +133,19 @@ fn emit_array_strict_eq_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #0");                                          // report that the arrays are not strictly equal
 
     emitter.label("__rt_array_strict_eq_done");
+    emitter.instruction("bl __rt_cmp_seen_pop");                                // the left table is no longer protected (x0 survives)
+    emitter.instruction("b __rt_array_strict_eq_epilogue");                     // return the result
+    emitter.label("__rt_array_strict_eq_early_true");
+    emitter.instruction("mov x0, #1");                                          // identical or empty operands are strictly equal
+    emitter.instruction("b __rt_array_strict_eq_epilogue");                     // return without touching the guard stack
+    emitter.label("__rt_array_strict_eq_early_false");
+    emitter.instruction("mov x0, #0");                                          // operands of different length are not strictly equal
+    emitter.instruction("b __rt_array_strict_eq_epilogue");                     // return without touching the guard stack
+    emitter.label("__rt_array_strict_eq_recursion");
+    abi::emit_symbol_address(emitter, "x9", "_cmp_seen_n");                     // resolve the guard depth
+    emitter.instruction("str xzr, [x9]");                                       // the whole comparison is abandoned: clear its guard stack
+    emitter.instruction("bl __rt_nesting_too_deep_error");                      // throw php's catchable Error; never returns
+    emitter.label("__rt_array_strict_eq_epilogue");
     emitter.instruction("ldp x21, x22, [sp, #96]");                             // restore the cursor callee-saved registers
     emitter.instruction("ldp x19, x20, [sp, #80]");                             // restore the array-pointer callee-saved registers
     emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address
@@ -224,14 +247,24 @@ fn emit_array_strict_eq_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r12, rdi");                                        // r12 = left array/hash pointer
     emitter.instruction("mov r13, rsi");                                        // r13 = right array/hash pointer
     emitter.instruction("cmp rdi, rsi");                                        // identical heap pointers are trivially strictly equal
-    emitter.instruction("je __rt_array_strict_eq_true");                        // short-circuit copy-on-write shared arrays
+    emitter.instruction("je __rt_array_strict_eq_early_true");                  // short-circuit copy-on-write shared arrays
     emitter.instruction("mov rax, QWORD PTR [rdi]");                            // rax = left element count (header word 0)
     emitter.instruction("cmp rax, QWORD PTR [rsi]");                            // arrays of different length are never strictly equal
-    emitter.instruction("jne __rt_array_strict_eq_false");                      // reject on count mismatch
+    emitter.instruction("jne __rt_array_strict_eq_early_false");                // reject on count mismatch
     emitter.instruction("test rax, rax");                                       // are both operands empty?
-    emitter.instruction("je __rt_array_strict_eq_true");                        // two empty arrays are strictly equal
+    emitter.instruction("je __rt_array_strict_eq_early_true");                  // two empty arrays are strictly equal
     emitter.instruction("xor r14, r14");                                        // r14 = left cursor (fresh walk)
     emitter.instruction("xor r15, r15");                                        // r15 = right cursor (fresh walk)
+    // -- php's zend_hash_compare protects the LEFT table for the walk: meeting it again (only a
+    //    reference set can make an array contain itself) throws "Nesting level too deep -
+    //    recursive dependency?" instead of recursing until the stack overflows. The early
+    //    exits above never pushed, so they return through the epilogue without popping. --
+    emitter.instruction("mov rdi, r12");                                        // the left table is the one php protects
+    emitter.instruction("call __rt_cmp_seen_find");                             // is the left table already being compared?
+    emitter.instruction("test rax, rax");                                       // did the guard report a revisit?
+    emitter.instruction("jnz __rt_array_strict_eq_recursion");                  // a revisited table is a recursive dependency
+    emitter.instruction("mov rdi, r12");                                        // reload the left table
+    emitter.instruction("call __rt_cmp_seen_push");                             // protect the left table for this walk
 
     // Mixed-cell / spill layout relative to rsp: left cell [rsp+0..23], right cell [rsp+24..47],
     // left key [rsp+48..63], left next cursor [rsp+64], right next cursor [rsp+72].
@@ -285,6 +318,19 @@ fn emit_array_strict_eq_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor eax, eax");                                        // report that the arrays are not strictly equal
 
     emitter.label("__rt_array_strict_eq_done");
+    emitter.instruction("call __rt_cmp_seen_pop");                              // the left table is no longer protected (rax survives)
+    emitter.instruction("jmp __rt_array_strict_eq_epilogue");                   // return the result
+    emitter.label("__rt_array_strict_eq_early_true");
+    emitter.instruction("mov eax, 1");                                          // identical or empty operands are strictly equal
+    emitter.instruction("jmp __rt_array_strict_eq_epilogue");                   // return without touching the guard stack
+    emitter.label("__rt_array_strict_eq_early_false");
+    emitter.instruction("xor eax, eax");                                        // operands of different length are not strictly equal
+    emitter.instruction("jmp __rt_array_strict_eq_epilogue");                   // return without touching the guard stack
+    emitter.label("__rt_array_strict_eq_recursion");
+    abi::emit_symbol_address(emitter, "r9", "_cmp_seen_n");                     // resolve the guard depth
+    emitter.instruction("mov QWORD PTR [r9], 0");                               // the whole comparison is abandoned: clear its guard stack
+    emitter.instruction("call __rt_nesting_too_deep_error");                    // throw php's catchable Error; never returns
+    emitter.label("__rt_array_strict_eq_epilogue");
     emitter.instruction("add rsp, 96");                                         // release the Mixed value cells and spill slots
     emitter.instruction("pop r15");                                             // restore callee-saved r15
     emitter.instruction("pop r14");                                             // restore callee-saved r14

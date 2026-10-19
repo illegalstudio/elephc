@@ -112,6 +112,7 @@ fn prune_statement_children(statement: &mut Stmt, reachability: &Reachability) {
         StmtKind::Echo(_)
         | StmtKind::Assign { .. }
         | StmtKind::RefAssign { .. }
+        | StmtKind::RefAssignPlace { .. }
         | StmtKind::ArrayAssign { .. }
         | StmtKind::NestedArrayAssign { .. }
         | StmtKind::ArrayPush { .. }

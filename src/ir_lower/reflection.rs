@@ -35,6 +35,7 @@ const BUILTIN_REFLECTION_CLASS_NAMES: &[&str] = &[
     "ReflectionNamedType",
     "ReflectionParameter",
     "ReflectionProperty",
+    "ReflectionType",
     "ReflectionUnionType",
     "ReflectionIntersectionType",
 ];

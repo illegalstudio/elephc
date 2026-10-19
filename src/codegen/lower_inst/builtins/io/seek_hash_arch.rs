@@ -226,6 +226,11 @@ pub(super) fn lower_hash_file_aarch64(
     ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the filename string while materializing the binary flag
     super::super::strings::materialize_truthy_flag(ctx, inst, 2, "hash_file")?;
     ctx.emitter.instruction("str x0, [sp, #-16]!");                             // preserve the raw-output flag after all PHP arguments are materialized
+    // A directory opens O_RDONLY and then fails its read; the reader answers "" for that,
+    // which would hash as md5("") where PHP's hash_file() answers false.
+    ctx.emitter.instruction("ldp x1, x2, [sp, #16]");                           // reload the filename string for the directory check
+    abi::emit_call_label(ctx.emitter, "__rt_is_dir");
+    ctx.emitter.instruction(&format!("cbnz x0, {}", fail));                     // a directory is not a hashable file
     ctx.emitter.instruction("ldp x1, x2, [sp, #16]");                           // reload the filename string for the file reader helper
     abi::emit_call_label(ctx.emitter, "__rt_file_get_contents_maybe_url");
     ctx.emitter.instruction(&format!("cbz x1, {}", fail));                      // null file bytes mean the file could not be read
@@ -261,6 +266,13 @@ pub(super) fn lower_hash_file_x86_64(
     abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
     super::super::strings::materialize_truthy_flag(ctx, inst, 2, "hash_file")?;
     abi::emit_push_reg(ctx.emitter, "rax");
+    // A directory opens O_RDONLY and then fails its read; the reader answers "" for that,
+    // which would hash as md5("") where PHP's hash_file() answers false.
+    ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");                   // reload the filename pointer for the directory check
+    ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 24]");                   // reload the filename length for the directory check
+    abi::emit_call_label(ctx.emitter, "__rt_is_dir");
+    ctx.emitter.instruction("test rax, rax");                                   // is the path a directory?
+    ctx.emitter.instruction(&format!("jnz {}", fail));                          // a directory is not a hashable file
     ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");                   // reload the filename pointer for the file reader helper
     ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 24]");                   // reload the filename length for the file reader helper
     abi::emit_call_label(ctx.emitter, "__rt_file_get_contents_maybe_url");

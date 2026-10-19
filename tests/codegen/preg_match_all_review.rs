@@ -330,11 +330,21 @@ echo preg_match_all(subject: 'ab', pattern: '//');
 fn preg_match_all_review_rejects_global_and_static_destinations() {
     for source in [
         r#"<?php $matches = []; function collect(): void { global $matches; echo preg_match_all('/a/', 'a', $matches); } collect();"#,
-        r#"<?php function collect(): void { static $matches = []; echo preg_match_all('/a/', 'a', $matches); } collect();"#,
     ] {
         let error = compile_cli_file_with_flags_expect_failure(source, &[]);
         assert!(error.contains("preg_match_all(): non-local $matches destinations are not supported"), "{error}");
     }
+}
+
+/// A boxed `static` local destination works on a hidden local copy stored back into the static,
+/// and the matches persist across calls.
+#[test]
+fn preg_match_all_review_static_local_destination_is_written_back() {
+    let out = compile_and_run_with_regex(r#"<?php
+function collect(string $s): string { static $matches = []; $prev = json_encode($matches); $n = preg_match_all('/a/', $s, $matches); return $prev . $n . json_encode($matches); }
+echo collect('a'), collect('aa'), "\n";
+"#);
+    assert_eq!(out, "[]1[[\"a\"]][[\"a\"]]2[[\"a\",\"a\"]]\n");
 }
 
 /// Native-backed dynamic eval uses the same terminal-empty and UTF-8 progression rules.

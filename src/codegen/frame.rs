@@ -390,6 +390,20 @@ fn function_uses_nested_call_reg(function: &Function) -> bool {
         {
             return true;
         }
+        // `(string) $object` over an interface type (`Stringable`) dispatches `__toString`
+        // on the runtime class with its receiver in the same register. Over-detected for
+        // every object-to-string cast; that costs one store and one load.
+        if inst.op == Op::Cast
+            && matches!(
+                inst.immediate,
+                Some(crate::ir::Immediate::CastTarget(crate::ir::IrType::Str))
+            )
+            && inst.operands.first().and_then(|operand| function.value(*operand)).is_some_and(
+                |value| matches!(value.php_type.codegen_repr(), PhpType::Object(_)),
+            )
+        {
+            return true;
+        }
         if !matches!(inst.op, Op::MethodCall | Op::NullsafeMethodCall) {
             return false;
         }

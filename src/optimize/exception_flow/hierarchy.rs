@@ -467,6 +467,7 @@ pub(super) fn type_expr_is_non_destructible(type_expr: &TypeExpr) -> bool {
         | TypeExpr::Float
         | TypeExpr::Bool
         | TypeExpr::False
+        | TypeExpr::True
         | TypeExpr::Str
         | TypeExpr::Void
         | TypeExpr::Never => true,

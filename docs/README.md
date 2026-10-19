@@ -33,6 +33,7 @@ Everything about driving the compiler: the command-line flags and the full path 
 - [Output formats and diagnostics](compiling/output-and-diagnostics.md) — `--emit`, `--emit-asm`, `--emit-ir`, `--check`, `--timings`, `--source-map`, `--debug-info`, `--gc-stats`, `--heap-debug`
 - [Source maps](compiling/source-maps.md) — the `--source-map` v2 JSON schema (function ranges, labels, opcode/origin-tagged mappings, inverse line index) and `--debug-info` DWARF lines
 - [Linking, heap, and conditional compilation](compiling/linking-and-conditional-compilation.md) — `--link`/`-l`, `--link-path`/`-L`, `--framework`, `--heap-size`, `--define`
+- [Dynamic includes](compiling/dynamic-includes.md) — `elephc.includes.toml`, `--dynamic-includes=report`, `--include-manifest`: closing include/require sites whose path is only known at run time
 
 ## PHP Syntax
 

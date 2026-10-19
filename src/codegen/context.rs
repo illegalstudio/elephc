@@ -87,6 +87,9 @@ pub(crate) struct FunctionContext<'a> {
     pcntl_signal_handlers: bool,
     pub(super) epilogue_label: Option<String>,
     block_labels: Vec<String>,
+    /// Box a first-class-callable conversion created for its typed input; a rejection releases
+    /// it before throwing (see `callables::emit_callable_rejection`).
+    pub(super) callable_rejection_release: Option<ValueId>,
     /// Block order, compare fusion, and cold-path state for late machine layout.
     pub(super) machine_layout: MachineLayoutState,
 }
@@ -176,6 +179,7 @@ impl<'a> FunctionContext<'a> {
             pcntl_signal_handlers,
             epilogue_label,
             block_labels,
+            callable_rejection_release: None,
             machine_layout: MachineLayoutState::default(),
         }
     }

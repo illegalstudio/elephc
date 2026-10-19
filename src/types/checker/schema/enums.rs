@@ -166,6 +166,8 @@ pub(crate) fn build_enum_info(
         None => None,
     };
 
+    validate_enum_marker_interfaces(name, implements, resolved_backing.is_some(), span, checker)?;
+
     let mut seen_case_names = HashSet::new();
     for interface in implements {
         let key = php_symbol_key(interface.as_str());
@@ -508,23 +510,7 @@ pub(crate) fn insert_enum_metadata(
         constant_attribute_args.insert(case.name.clone(), case.attribute_args.clone());
     }
 
-    let mut interfaces: Vec<String> = implements
-        .iter()
-        .map(|interface| interface.as_str().to_string())
-        .chain(std::iter::once("UnitEnum".to_string()))
-        .chain(backing_type.as_ref().map(|_| "BackedEnum".to_string()))
-        .collect();
-    let mut index = 0;
-    while index < interfaces.len() {
-        if let Some(interface) = checker.interfaces.get(&interfaces[index]) {
-            for parent in &interface.parents {
-                if !interfaces.contains(parent) {
-                    interfaces.push(parent.clone());
-                }
-            }
-        }
-        index += 1;
-    }
+    let interfaces = enum_interface_closure(implements, backing_type.is_some(), checker);
 
     checker.classes.insert(
         name.to_string(),
@@ -649,4 +635,87 @@ fn push_enum_readonly_property(
     property_declared_slots.push(true);
     readonly_properties.insert(property);
     property_reference_slots.push(false);
+}
+
+/// Returns the full interface list an enum's `ClassInfo` records.
+///
+/// PHP makes every enum implement `UnitEnum`, and every backed enum `BackedEnum` as well, without
+/// the declaration spelling either. Interfaces are recorded TRANSITIVELY, like a class's
+/// (`schema::classes::interfaces::collect_interfaces`): `enum E implements B` where
+/// `interface B extends A` must satisfy an `A` parameter, which the checker's
+/// `class_implements_interface` answers from this list alone.
+///
+/// `UnitEnum`/`BackedEnum` are appended whenever `builtin_native_interfaces` registered them
+/// (always, in a normal check); the builtin enums (`SortDirection`, ...) get them too, as in PHP.
+fn enum_interface_closure(
+    implements: &[crate::names::Name],
+    is_backed: bool,
+    checker: &Checker,
+) -> Vec<String> {
+    use crate::types::checker::builtin_native_interfaces::{BACKED_ENUM, UNIT_ENUM};
+    let mut roots: Vec<String> = implements
+        .iter()
+        .map(|interface| interface.as_str().to_string())
+        .collect();
+    for implicit in [Some(UNIT_ENUM), is_backed.then_some(BACKED_ENUM)].into_iter().flatten() {
+        if checker.interfaces.contains_key(implicit) {
+            roots.push(implicit.to_string());
+        }
+    }
+    let mut interfaces = Vec::new();
+    let mut seen = HashSet::new();
+    let mut queue: std::collections::VecDeque<String> = roots.into_iter().collect();
+    while let Some(name) = queue.pop_front() {
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        if let Some(info) = checker.interfaces.get(&name) {
+            queue.extend(info.parents.iter().cloned());
+        }
+        interfaces.push(name);
+    }
+    interfaces
+}
+
+/// Rejects the enum declarations PHP refuses around its implicit marker interfaces.
+///
+/// `UnitEnum` (and, for a backed enum, `BackedEnum`) is already implemented implicitly, so naming
+/// it is `Enum E cannot implement previously implemented interface X`; a pure enum reaching
+/// `BackedEnum` (directly or through a derived interface) is `Non-backed enum E cannot implement
+/// interface BackedEnum`. Messages match PHP 8.5.
+fn validate_enum_marker_interfaces(
+    name: &str,
+    implements: &[crate::names::Name],
+    is_backed: bool,
+    span: crate::span::Span,
+    checker: &Checker,
+) -> Result<(), CompileError> {
+    use crate::types::checker::builtin_native_interfaces::{BACKED_ENUM, UNIT_ENUM};
+    for interface in implements {
+        let interface = interface.as_str().trim_start_matches('\\');
+        let key = php_symbol_key(interface);
+        let implicit = key == php_symbol_key(UNIT_ENUM)
+            || (is_backed && key == php_symbol_key(BACKED_ENUM));
+        if implicit {
+            let spelled = if key == php_symbol_key(UNIT_ENUM) { UNIT_ENUM } else { BACKED_ENUM };
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Enum {} cannot implement previously implemented interface {}",
+                    name, spelled
+                ),
+            ));
+        }
+        if !is_backed
+            && checker.interfaces.contains_key(BACKED_ENUM)
+            && (key == php_symbol_key(BACKED_ENUM)
+                || checker.interface_extends_interface(interface, BACKED_ENUM))
+        {
+            return Err(CompileError::new(
+                span,
+                &format!("Non-backed enum {} cannot implement interface BackedEnum", name),
+            ));
+        }
+    }
+    Ok(())
 }

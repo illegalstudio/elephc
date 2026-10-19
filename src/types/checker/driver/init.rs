@@ -33,7 +33,7 @@ impl Checker {
     ///
     /// # Returns
     /// A `Checker` instance ready for the program to be loaded into.
-    pub(super) fn new(target: Target) -> Self {
+    pub(crate) fn new(target: Target) -> Self {
         // Every unconditionally registered constant comes from the shared catalog; only its
         // TYPE is declared here, the value is baked per compilation by
         // `codegen_support::prescan::collect_constants`.
@@ -62,7 +62,13 @@ impl Checker {
             strict_types: false,
             internal_callback_binding: false,
             param_specialization_seen: HashSet::new(),
+            joined_object_unions: std::cell::RefCell::new(HashSet::new()),
+            class_children_index: None,
+            method_impl_users_index: None,
+            property_sharers_index: None,
             interface_method_boxed_params: HashSet::new(),
+            override_family_returns: HashMap::new(),
+            override_family_groups: None,
             requested_instantiations: Vec::new(),
             generic_call_sites: HashMap::new(),
             class_templates: Vec::new(),
@@ -130,7 +136,11 @@ impl Checker {
             boxed_reference_promotion_sites: HashMap::new(),
             first_class_builtin_call_types: HashMap::new(),
             loop_storage_types: HashMap::new(),
+            loop_storage_scope_spans: HashMap::new(),
             string_incdec_locals: HashSet::new(),
+            static_local_declared_types: HashMap::new(),
+            static_local_seen_types: HashMap::new(),
+            written_static_locals: HashMap::new(),
             strict_locals: false,
             local_conditional_depth: 0,
             local_binding_depth: HashMap::new(),
@@ -142,6 +152,7 @@ impl Checker {
             typed_local_names: HashMap::new(),
             local_bind_kill_sites: HashMap::new(),
             local_ref_detach_sites: HashMap::new(),
+            escaping_ref_params: HashSet::new(),
             retired_ref_detach_sites: HashSet::new(),
             local_retype_sites: HashMap::new(),
             statement_position_expr: None,
@@ -149,6 +160,9 @@ impl Checker {
             program_contains_eval: false,
             mixed_storage_locals: HashSet::new(),
             guarded_union_types: HashMap::new(),
+            maybe_undefined_locals: HashSet::new(),
+            by_ref_argument_locals: HashSet::new(),
+            maybe_undefined_result: Default::default(),
             mixed_storage_store_sites: HashMap::new(),
             buffer_read_observations: HashMap::new(),
             binding_decision_warnings: HashMap::new(),

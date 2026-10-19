@@ -12,10 +12,13 @@ mod compound;
 mod list;
 mod locals;
 mod postfix;
+mod reference_places;
 mod simple;
 
 pub(crate) use list::{
+    parse_destructuring_loop_condition,
     parse_destructuring_pattern_unpack,
+    starts_destructuring_assignment,
     starts_destructuring_pattern,
 };
 pub(super) use list::{
@@ -30,7 +33,10 @@ pub(super) use locals::{
     parse_typed_assign,
 };
 pub(crate) use postfix::{
+    append_to_place_stmt,
+    assignment_target_store_stmt,
     can_replay_assignment_target,
+    lower_nested_append_assignment,
     lower_postfix_incdec_assignment,
     update_dimension_base_is_snapshotted,
     update_index_needs_snapshot,
@@ -42,3 +48,4 @@ pub(super) use postfix::{
     try_parse_scoped_property_assignment,
 };
 pub(super) use simple::parse_variable_stmt;
+pub(crate) use reference_places::{lower_append_ref_assign, lower_place_ref_assign, RefSource};

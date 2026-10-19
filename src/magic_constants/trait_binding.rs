@@ -8,10 +8,10 @@
 //! Key details:
 //! - `__METHOD__` and `__TRAIT__` keep trait identity while only `__CLASS__` is rebound.
 
-use crate::parser::ast::{ClassMethod, ClassProperty, ExprKind, MagicConstant};
+use crate::parser::ast::{ClassConst, ClassMethod, ClassProperty, ExprKind, MagicConstant};
 use crate::span::Span;
 
-use super::walker::{walk_class_method, walk_class_property, Pass};
+use super::walker::{walk_class_const, walk_class_method, walk_class_property, Pass};
 use super::TRAIT_CLASS_PLACEHOLDER;
 
 /// Rebinds `__CLASS__` magic constant placeholders in trait members to the concrete class name.
@@ -39,6 +39,21 @@ pub(super) fn bind_trait_class_constants(
     (properties, methods)
 }
 
+/// Rebinds the `__CLASS__` placeholder inside trait-imported CONSTANT values
+/// (`trait T { const X = __CLASS__; }` is `C` once `C` uses `T`).
+pub(super) fn bind_trait_class_constant_values(
+    constants: Vec<ClassConst>,
+    class_name: &str,
+) -> Vec<ClassConst> {
+    let mut pass = TraitClassPass {
+        class_name: class_name.to_string(),
+    };
+    constants
+        .into_iter()
+        .map(|konst| walk_class_const(konst, &mut pass))
+        .collect()
+}
+
 /// State carried through the trait-member rebinding pass.
 struct TraitClassPass {
     /// The concrete class name to substitute for the placeholder.
@@ -46,6 +61,11 @@ struct TraitClassPass {
 }
 
 impl Pass for TraitClassPass {
+    /// Constant values carry the placeholder too.
+    fn walks_class_const_values(&self) -> bool {
+        true
+    }
+
     /// Passes magic constants through without modification.
     fn transform_magic(&self, _span: Span, mc: MagicConstant) -> ExprKind {
         ExprKind::MagicConstant(mc)

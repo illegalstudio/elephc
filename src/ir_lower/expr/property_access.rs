@@ -35,6 +35,29 @@ pub(crate) fn lower_ref_assign_property(
         return;
     };
     let object = lower_expr(ctx, object);
+    if let Some(message) = readonly_reference_error(ctx, object.value, property) {
+        // php refuses any reference to a readonly property, inside its constructor too. A
+        // readonly property is never promoted to a reference cell (see
+        // `apply_reference_property_promotions`), so nothing may load one: loading would read
+        // its plain payload as a cell pointer. The throw ends this path at run time, but it
+        // does not terminate the block: callers keep lowering the rest linearly (a nested
+        // element place binds through `target`, and its source variable is promoted there), and
+        // the backend's per-slot representation tracking needs those effects on the same path.
+        // So the target is bound to a null cell that no executed code ever dereferences.
+        release_owning_receiver_temporary(ctx, object, span);
+        crate::ir_lower::stmt::lower_throw_access_error_expr(ctx, &message, span);
+        let value_type = property_get_result_type(ctx, object.value, property, Op::PropGet, source);
+        let null_cell = ctx.emit_value(
+            Op::ConstNull,
+            Vec::new(),
+            None,
+            PhpType::Pointer(None),
+            Op::ConstNull.default_effects(),
+            Some(span),
+        );
+        ctx.bind_local_ref_cell_ptr(target, null_cell, value_type, Some(span));
+        return;
+    }
     let value_type = property_get_result_type(ctx, object.value, property, Op::PropGet, source);
     let owns_cell = match ctx.builder.value_php_type(object.value).codegen_repr() {
         PhpType::Object(class) => ctx.classes.get(class.as_str())
@@ -174,7 +197,7 @@ pub(crate) fn lower_ref_assign_array_elem(
         lower_ref_assign_call(ctx, target, &call, span);
         return;
     }
-    let prepared_array = prepare_addressable_ref_array_receiver(ctx, array);
+    let (prepared_array, receiver_aliases) = prepare_transient_addressable_ref_array_receiver(ctx, array);
     let array = prepared_array.as_ref().unwrap_or(array);
     crate::ir_lower::stmt::promote_by_ref_foreach_source(ctx, array, true);
     let array_value = lower_expr(ctx, array);
@@ -201,6 +224,7 @@ pub(crate) fn lower_ref_assign_array_elem(
         Some(span),
     );
     ctx.bind_owned_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
+    release_transient_ref_receiver_aliases(ctx, &receiver_aliases, span);
     // A property read that is not addressable storage (a `mixed` property, so no synthetic
     // alias was reified above) arrives as an OWNING temporary -- `PropGet` acquires -- and
     // nothing else releases it: the binding above retains the entry's managed cell, not the
@@ -218,16 +242,31 @@ pub(crate) fn lower_ref_assign_array_elem(
     }
 }
 
-/// Reifies a static property, stable declared property, or nested element as a local receiver.
+/// Prepares a receiver for ONE reference operation and returns the synthetic aliases it created.
 ///
-/// Element reference lowering can only republish COW or growth through `ReceiverPlace` when its
-/// receiver comes from a local or ref-cell slot. Each synthetic alias names the original storage,
-/// and recursively normalizing element parents to hash storage gives every level a managed cell.
-pub(crate) fn prepare_addressable_ref_array_receiver(
+/// The aliases only make each level addressable while the operation runs. Left alive, each one
+/// stays a second owner of its level's cell until the frame ends, which PHP has no counterpart
+/// for: `var_dump` would mark the intermediate dimension of `$r = &$a['x']['y']` as a shared
+/// reference (`["x"]=> &array`). The caller releases them once the binding is published.
+pub(crate) fn prepare_transient_addressable_ref_array_receiver(
     ctx: &mut LoweringContext<'_, '_>,
     source: &Expr,
-) -> Option<Expr> {
-    prepare_addressable_ref_array_receiver_impl(ctx, source, None)
+) -> (Option<Expr>, Vec<String>) {
+    let mut created = Vec::new();
+    let receiver = prepare_addressable_ref_array_receiver_impl(ctx, source, None, &mut created);
+    (receiver, created)
+}
+
+/// Releases the synthetic receiver aliases `prepare_transient_addressable_ref_array_receiver`
+/// created, innermost first, so each level's cell is owned only by its container again.
+pub(crate) fn release_transient_ref_receiver_aliases(
+    ctx: &mut LoweringContext<'_, '_>,
+    aliases: &[String],
+    span: Span,
+) {
+    for alias in aliases.iter().rev() {
+        ctx.release_ref_cell_owner(alias, Some(span));
+    }
 }
 
 /// Prepares a nested ref-argument receiver and records its managed expression aliases.
@@ -236,7 +275,8 @@ pub(crate) fn prepare_scoped_addressable_ref_array_receiver(
     source: &Expr,
 ) -> Option<(Expr, Vec<String>)> {
     let mut aliases = Vec::new();
-    let receiver = prepare_addressable_ref_array_receiver_impl(ctx, source, Some(&mut aliases))?;
+    let receiver =
+        prepare_addressable_ref_array_receiver_impl(ctx, source, Some(&mut aliases), &mut Vec::new())?;
     Some((receiver, aliases))
 }
 
@@ -245,6 +285,7 @@ fn prepare_addressable_ref_array_receiver_impl(
     ctx: &mut LoweringContext<'_, '_>,
     source: &Expr,
     mut scoped_aliases: Option<&mut Vec<String>>,
+    created: &mut Vec<String>,
 ) -> Option<Expr> {
     match &source.kind {
         ExprKind::Variable(_) => Some(source.clone()),
@@ -252,6 +293,7 @@ fn prepare_addressable_ref_array_receiver_impl(
             if by_ref_foreach_property_source_is_addressable(ctx, object, property) =>
         {
             let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
+            created.push(alias.clone());
             lower_ref_assign_property(ctx, &alias, source, source.span);
             // This alias exists only to make the property's storage addressable for a nested
             // reference. Detach an exact PHP array zval before the child promotion can update it
@@ -266,6 +308,7 @@ fn prepare_addressable_ref_array_receiver_impl(
         }
         ExprKind::StaticPropertyAccess { .. } => {
             let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
+            created.push(alias.clone());
             lower_ref_assign_static_property(ctx, &alias, source, source.span);
             // Static array values are boxed. Clone the zval through the synthetic ref-bound
             // alias so an earlier by-value copy keeps its own cell while nested writes publish
@@ -284,6 +327,7 @@ fn prepare_addressable_ref_array_receiver_impl(
                 ctx,
                 array,
                 scoped_aliases.as_deref_mut(),
+                created,
             )?;
             let element = Expr::new(
                 ExprKind::ArrayAccess {
@@ -293,6 +337,7 @@ fn prepare_addressable_ref_array_receiver_impl(
                 source.span,
             );
             let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
+            created.push(alias.clone());
             lower_ref_assign_array_elem(ctx, &alias, &element, source.span);
             // A persistent `=&` alias must detach a child still shared with a by-value snapshot
             // before a deeper reference binds one of its slots. A call-scoped argument does not:
@@ -357,6 +402,16 @@ pub(super) fn lower_property_get_from_value(
     if op == Op::NullsafePropGet && value_is_definitely_null(ctx, object.value) {
         return lower_boxed_null(ctx, expr);
     }
+    // `UnitEnum`/`BackedEnum` (and interfaces extending them) have no slot layout of their own:
+    // box the receiver so `->name` / `->value` dispatch on the runtime enum class, exactly as a
+    // `mixed` receiver does.
+    let object = if matches!(op, Op::PropGet | Op::NullsafePropGet)
+        && receiver_is_enum_interface(ctx, object.value)
+    {
+        ctx.box_value_as_mixed(object, PhpType::Mixed, Some(expr.span))
+    } else {
+        object
+    };
     // Route a read of a get-hooked property to its synthetic accessor, except inside that property's
     // own accessor, where `$this->prop` must read the raw backing slot to avoid infinite recursion.
     // A nullsafe read (`$obj?->prop`) routes to a nullsafe call so the null short-circuit is kept.
@@ -365,6 +420,9 @@ pub(super) fn lower_property_get_from_value(
         && !ctx.in_own_property_accessor(property)
     {
         let accessor = property_hook_get_method(property);
+        if op == Op::PropGet && value_is_nullable(ctx, object.value) {
+            return lower_hooked_property_get_on_nullable(ctx, object, &accessor, expr);
+        }
         let call_op = if op == Op::NullsafePropGet {
             Op::NullsafeMethodCall
         } else {
@@ -383,6 +441,55 @@ pub(super) fn lower_property_get_from_value(
         Some(expr.span),
     );
     stabilize_borrowed_result_and_release_receiver(ctx, object, result, expr.span)
+}
+
+/// Reads a get-hooked property through a receiver that may be null.
+///
+/// A null receiver reads `null`, like a plain property read does, instead of calling the accessor
+/// on null; that keeps `$maybeNull->hooked ?? $default` answering the default. (PHP's "Attempt to
+/// read property on null" warning is not emitted.) The non-null arm is an ordinary method call,
+/// so the accessor's string result keeps its normal ownership when it is boxed into the merge.
+fn lower_hooked_property_get_on_nullable(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    accessor: &str,
+    expr: &Expr,
+) -> LoweredValue {
+    let result_type = PhpType::Mixed;
+    let temp_name = ctx.declare_hidden_temp(result_type.clone());
+    let null_block = ctx.builder.create_named_block("hooked.prop.null", Vec::new());
+    let call_block = ctx.builder.create_named_block("hooked.prop.call", Vec::new());
+    let merge = ctx.builder.create_named_block("hooked.prop.merge", Vec::new());
+    let is_null = ctx.emit_value(
+        Op::IsNull,
+        vec![object.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        Some(expr.span),
+    );
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_null.value,
+        then_target: null_block,
+        then_args: Vec::new(),
+        else_target: call_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(null_block);
+    release_owning_receiver_temporary(ctx, object, expr.span);
+    let null_value = lower_null(ctx, expr);
+    let null_value = ctx.box_value_as_mixed(null_value, result_type.clone(), Some(expr.span));
+    store_value_into_temp(ctx, &temp_name, result_type.clone(), null_value, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(call_block);
+    let call = lower_method_call_with_receiver(ctx, object, accessor, &[], Op::MethodCall, expr);
+    store_value_into_temp(ctx, &temp_name, result_type, call, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    take_owned_temp(ctx, &temp_name, expr.span)
 }
 
 /// Returns true when value metadata proves the runtime value is PHP null.
@@ -470,6 +577,14 @@ fn property_result_type(
         };
     }
     let Some(class_info) = ctx.classes.get(normalized) else {
+        // `UnitEnum`/`BackedEnum` receivers read through runtime dispatch (see
+        // `receiver_is_enum_interface`), whose answer is a mixed cell.
+        if crate::types::checker::builtin_native_interfaces::is_enum_contract_interface(
+            ctx.interfaces,
+            normalized,
+        ) {
+            return PhpType::Mixed;
+        }
         return fallback_expr_type(expr);
     };
     if let Some(property_ty) = runtime_property_type_override(ctx, normalized, property) {
@@ -1201,4 +1316,74 @@ pub(crate) fn static_property_result_type(
         return PhpType::Mixed;
     };
     normalize_value_php_type(property_ty.codegen_repr())
+}
+
+/// php's `Error` for taking or binding a reference to a readonly property of a statically
+/// known class (`$r = &$o->v`, `$o->v = &$x`, `$o->ro['k'] = &$x`), or `None` when the property
+/// is not readonly.
+pub(crate) fn readonly_reference_error(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &str,
+) -> Option<String> {
+    let PhpType::Object(class) = ctx.builder.value_php_type(object).codegen_repr() else {
+        return None;
+    };
+    readonly_reference_error_for_class(ctx, class, property)
+}
+
+/// The by-reference `foreach` source rooted in a readonly property of a statically known
+/// receiver (`foreach ($o->ro as &$v)`, `foreach ($o->ro['k'] as &$v)`, and an enum's `value`),
+/// as the receiver expression to evaluate plus php's `Error` message. Iterating such a source by
+/// reference would write through the readonly slot, which php refuses before the loop starts.
+pub(crate) fn readonly_by_ref_foreach_source<'e>(
+    ctx: &LoweringContext<'_, '_>,
+    source: &'e Expr,
+) -> Option<(&'e Expr, String)> {
+    let mut root = source;
+    while let ExprKind::ArrayAccess { array, .. } = &root.kind {
+        root = array;
+    }
+    let ExprKind::PropertyAccess { object, property } = &root.kind else {
+        return None;
+    };
+    let (class, _) = instance_callable_object_class_and_nullability(ctx, object)?;
+    let message = readonly_reference_error_for_class(ctx, class, property)?;
+    Some((object, message))
+}
+
+/// php's readonly-reference `Error` for `property` of `class`, or `None` when it is writable.
+fn readonly_reference_error_for_class(
+    ctx: &LoweringContext<'_, '_>,
+    class: String,
+    property: &str,
+) -> Option<String> {
+    let info = ctx.classes.get(class.as_str())?;
+    if !info.readonly_properties.contains(property) {
+        return None;
+    }
+    let declaring = info
+        .property_declaring_classes
+        .get(property)
+        .cloned()
+        .unwrap_or(class);
+    Some(format!(
+        "Cannot indirectly modify readonly property {}::${}",
+        declaring.trim_start_matches('\\'),
+        property
+    ))
+}
+
+/// Whether a receiver is statically typed as `UnitEnum`, `BackedEnum` or an interface extending
+/// them (never a class), so its property reads must go through runtime dispatch.
+fn receiver_is_enum_interface(ctx: &LoweringContext<'_, '_>, object: crate::ir::ValueId) -> bool {
+    let PhpType::Object(name) = ctx.builder.value_php_type(object).codegen_repr() else {
+        return false;
+    };
+    let name = name.trim_start_matches('\\');
+    !ctx.classes.contains_key(name)
+        && crate::types::checker::builtin_native_interfaces::is_enum_contract_interface(
+            ctx.interfaces,
+            name,
+        )
 }

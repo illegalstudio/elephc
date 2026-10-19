@@ -31,6 +31,9 @@
 //!   `codegen_support::runtime::objects::print_r_object`, which owns the whole
 //!   `ClassName Object\n(\n ... )\n` frame (and the enum header) the same way the
 //!   tag-4/5 branches own the array frame.
+//! - `__rt_print_r_indexed` / `__rt_print_r_hash` keep their table on var_dump's `_vd_seen`
+//!   stack while its entries render. A table reached again through a reference renders
+//!   ` *RECURSION*` right after its `Array\n` header, as php does, instead of recursing.
 //! - The AArch64 path is shared by macOS and Linux ARM64 (`emitter.syscall(4)`
 //!   maps to the platform write number); the `_linux_x86_64` paths are SysV.
 
@@ -525,6 +528,13 @@ pub fn emit_print_r_indexed(emitter: &mut Emitter) {
     emitter.instruction("and x11, x11, #0x0f");                                 // isolate the value_type field (low nibble), dropping the COW bit
     emitter.instruction("str x11, [sp, #40]");                                  // save the element value_type stamp
 
+    // -- a table already on the walk stack renders ` *RECURSION*` instead of a body (PHP's
+    //    GC_PROTECT_RECURSION); only a reference set can make an array contain itself --
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the array pointer for the recursion guard
+    emitter.instruction("bl __rt_vd_seen_find");                                // is this table already being walked?
+    emitter.instruction("cbnz x0, __rt_pr_idx_recursion");                      // a revisited table renders *RECURSION*
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the array pointer
+    emitter.instruction("bl __rt_vd_seen_push");                                // mark the table as being walked
     emitter.instruction("ldr x0, [sp, #8]");                                    // base → open helper argument
     emitter.instruction("bl __rt_print_r_open");                                // write `<base>(\n`
 
@@ -588,8 +598,15 @@ pub fn emit_print_r_indexed(emitter: &mut Emitter) {
     emitter.instruction("b __rt_pr_idx_loop");                                  // continue scanning
 
     emitter.label("__rt_pr_idx_done");
+    emitter.instruction("bl __rt_vd_seen_pop");                                 // the table is no longer on the walk stack
     emitter.instruction("ldr x0, [sp, #8]");                                    // base → close helper argument
     emitter.instruction("bl __rt_print_r_close");                               // write `<base>)\n`
+    emitter.instruction("b __rt_pr_idx_exit");                                  // skip the recursion marker
+    emitter.label("__rt_pr_idx_recursion");
+    abi::emit_symbol_address(emitter, "x1", "_pr_recursion");                   // load the ` *RECURSION*` marker
+    emitter.instruction("mov x2, #12");                                         // len(" *RECURSION*") = 12
+    emitter.instruction("bl __rt_pr_write");                                    // write ` *RECURSION*` in place of the body
+    emitter.label("__rt_pr_idx_exit");
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release the indexed-walk frame
     emitter.instruction("ret");                                                 // return to caller
@@ -629,6 +646,14 @@ fn emit_print_r_indexed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("and rax, 0x0f");                                       // isolate the value_type field (low nibble), dropping the COW bit
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the element value_type stamp
 
+    // -- a table already on the walk stack renders ` *RECURSION*` instead of a body (PHP's
+    //    GC_PROTECT_RECURSION); only a reference set can make an array contain itself --
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the array pointer for the recursion guard
+    emitter.instruction("call __rt_vd_seen_find");                              // is this table already being walked?
+    emitter.instruction("test rax, rax");                                       // did the guard report a revisit?
+    emitter.instruction("jnz __rt_pr_idx_recursion_x86");                       // a revisited table renders *RECURSION*
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the array pointer
+    emitter.instruction("call __rt_vd_seen_push");                              // mark the table as being walked
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // base → open helper argument
     emitter.instruction("call __rt_print_r_open");                              // write `<base>(\n`
 
@@ -695,8 +720,15 @@ fn emit_print_r_indexed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_pr_idx_loop_x86");                            // continue scanning
 
     emitter.label("__rt_pr_idx_done_x86");
+    emitter.instruction("call __rt_vd_seen_pop");                               // the table is no longer on the walk stack
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // base → close helper argument
     emitter.instruction("call __rt_print_r_close");                             // write `<base>)\n`
+    emitter.instruction("jmp __rt_pr_idx_exit_x86");                            // skip the recursion marker
+    emitter.label("__rt_pr_idx_recursion_x86");
+    abi::emit_symbol_address(emitter, "rsi", "_pr_recursion");                  // load the ` *RECURSION*` marker
+    emitter.instruction("mov edx, 12");                                         // len(" *RECURSION*") = 12
+    emitter.instruction("call __rt_pr_write");                                  // write ` *RECURSION*` in place of the body
+    emitter.label("__rt_pr_idx_exit_x86");
     emitter.instruction("add rsp, 64");                                         // release the indexed-walk frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return to caller
@@ -724,14 +756,28 @@ pub fn emit_print_r_hash(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #16");                                    // establish the helper frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the hash pointer
     emitter.instruction("str x1, [sp, #8]");                                    // save the paren base indent
+    // -- a table already on the walk stack renders ` *RECURSION*` instead of a body (PHP's
+    //    GC_PROTECT_RECURSION); only a reference set can make an array contain itself --
+    emitter.instruction("bl __rt_vd_seen_find");                                // is this table already being walked? (x0 = hash)
+    emitter.instruction("cbnz x0, __rt_pr_hash_recursion");                     // a revisited table renders *RECURSION*
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the hash pointer
+    emitter.instruction("bl __rt_vd_seen_push");                                // mark the table as being walked
+    emitter.instruction("ldr x1, [sp, #8]");                                    // reload the paren base indent
     emitter.instruction("mov x0, x1");                                          // base → open helper argument
     emitter.instruction("bl __rt_print_r_open");                                // write `<base>(\n`
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the hash pointer
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the paren base indent
     emitter.instruction("add x1, x1, #4");                                      // entry indent = base + 4
     emitter.instruction("bl __rt_print_r_hash_entries");                        // write one `[key] => value` line per entry
+    emitter.instruction("bl __rt_vd_seen_pop");                                 // the table is no longer on the walk stack
     emitter.instruction("ldr x0, [sp, #8]");                                    // base → close helper argument
     emitter.instruction("bl __rt_print_r_close");                               // write `<base>)\n`
+    emitter.instruction("b __rt_pr_hash_frame_exit");                           // skip the recursion marker
+    emitter.label("__rt_pr_hash_recursion");
+    abi::emit_symbol_address(emitter, "x1", "_pr_recursion");                   // load the ` *RECURSION*` marker
+    emitter.instruction("mov x2, #12");                                         // len(" *RECURSION*") = 12
+    emitter.instruction("bl __rt_pr_write");                                    // write ` *RECURSION*` in place of the body
+    emitter.label("__rt_pr_hash_frame_exit");
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release the hash-frame helper frame
     emitter.instruction("ret");                                                 // return to caller
@@ -823,14 +869,29 @@ fn emit_print_r_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 16");                                         // allocate the hash-frame helper frame
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the hash pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the paren base indent
+    // -- a table already on the walk stack renders ` *RECURSION*` instead of a body (PHP's
+    //    GC_PROTECT_RECURSION); only a reference set can make an array contain itself --
+    emitter.instruction("call __rt_vd_seen_find");                              // is this table already being walked? (rdi = hash)
+    emitter.instruction("test rax, rax");                                       // did the guard report a revisit?
+    emitter.instruction("jnz __rt_pr_hash_recursion_x86");                      // a revisited table renders *RECURSION*
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the hash pointer
+    emitter.instruction("call __rt_vd_seen_push");                              // mark the table as being walked
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the paren base indent
     emitter.instruction("mov rdi, rsi");                                        // base → open helper argument
     emitter.instruction("call __rt_print_r_open");                              // write `<base>(\n`
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the hash pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the paren base indent
     emitter.instruction("add rsi, 4");                                          // entry indent = base + 4
     emitter.instruction("call __rt_print_r_hash_entries");                      // write one `[key] => value` line per entry
+    emitter.instruction("call __rt_vd_seen_pop");                               // the table is no longer on the walk stack
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // base → close helper argument
     emitter.instruction("call __rt_print_r_close");                             // write `<base>)\n`
+    emitter.instruction("jmp __rt_pr_hash_frame_exit_x86");                     // skip the recursion marker
+    emitter.label("__rt_pr_hash_recursion_x86");
+    abi::emit_symbol_address(emitter, "rsi", "_pr_recursion");                  // load the ` *RECURSION*` marker
+    emitter.instruction("mov edx, 12");                                         // len(" *RECURSION*") = 12
+    emitter.instruction("call __rt_pr_write");                                  // write ` *RECURSION*` in place of the body
+    emitter.label("__rt_pr_hash_frame_exit_x86");
     emitter.instruction("add rsp, 16");                                         // release the hash-frame helper frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return to caller

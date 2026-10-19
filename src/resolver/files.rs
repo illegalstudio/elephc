@@ -50,6 +50,7 @@ pub(super) fn parse_file(
 
     let mode = SourceMode::from_path(path);
     let source_id = Span::fresh_source_id();
+    Span::register_source_path(source_id, file.clone());
     let tokens = lexer::tokenize_with_mode_and_source_id(&source, mode, source_id)
         .map_err(|e| e.with_file(file.clone()))?;
 

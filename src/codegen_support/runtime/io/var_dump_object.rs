@@ -59,8 +59,8 @@
 //!   Closure. `tests/var_dump_object_tests.rs` pins this against reference PHP.
 //! - RECURSION GUARD: `_vd_seen` is a bounded stack of the object pointers
 //!   currently being walked. `__rt_var_dump_value` consults it before opening an
-//!   object; a hit — or a full stack — renders `*RECURSION*` and returns, so the
-//!   walk always terminates. The stack is pushed/popped around the body only,
+//!   object; a hit renders `*RECURSION*` and returns. A full stack is NOT a hit:
+//!   levels past the capacity are only counted (see `emit_seen_stack_helpers`). The stack is pushed/popped around the body only,
 //!   so two SIBLING references to the same object still both render in full,
 //!   exactly like PHP.
 //! - Every helper here saves and restores the frame pointer and return address
@@ -73,9 +73,11 @@ use crate::codegen_support::abi;
 use crate::codegen_support::sentinels::emit_resolve_tagged_scalar_property_tag;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
-/// Capacity of the `_vd_seen` visited-object stack, in pointers. Kept in sync
-/// with the `.comm _vd_seen` reservation in `runtime::data::fixed`.
-const VD_SEEN_CAPACITY: u64 = 256;
+/// Capacity of the `_vd_seen` visited-container stack, in pointers. Kept in sync
+/// with the `.comm _vd_seen` reservation in `runtime::data::fixed`. The stack holds
+/// every object AND array/hash table on the current var_dump/print_r walk path. Levels past the
+/// capacity are counted but not stored, so a deep acyclic walk is never reported as recursion.
+const VD_SEEN_CAPACITY: u64 = 65536;
 
 /// Byte width of one `_class_vd_desc_*` property row.
 const VD_DESC_ROW_BYTES: u64 = 48;
@@ -92,147 +94,132 @@ fn emit_uninit_sentinel_aarch64(emitter: &mut Emitter, reg: &str) {
     emitter.instruction(&format!("movk {}, #0xffff, lsl #32", reg));            // third halfword of the uninitialized sentinel
     emitter.instruction(&format!("movk {}, #0x7fff, lsl #48", reg));            // top halfword of the uninitialized sentinel
 }
-
-/// `__rt_vd_seen_find`: report whether an object pointer is already being walked.
-///
-/// Input: AArch64 x0 / x86_64 rdi = object pointer.
-/// Output: AArch64 x0 / x86_64 rax = 1 when the pointer is on the visited stack
-/// OR the stack is full, 0 otherwise. Treating a full stack as a hit is what
-/// bounds the walk: the caller renders `*RECURSION*` and stops descending.
+/// `__rt_vd_seen_find` / `_push` / `_pop`: the var_dump/print_r visited-pointer stack (objects
+/// and array/hash tables on the current walk path). See [`emit_seen_stack_helpers`].
 pub fn emit_vd_seen_find(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
-        emit_vd_seen_find_linux_x86_64(emitter);
-        return;
-    }
-
-    emitter.blank();
-    emitter.comment("--- runtime: vd_seen_find ---");
-    emitter.label_global("__rt_vd_seen_find");
-
-    abi::emit_symbol_address(emitter, "x9", "_vd_seen_n");                      // resolve the visited-stack depth counter
-    emitter.instruction("ldr x10, [x9]");                                       // load the current visited-stack depth
-    emitter.instruction(&format!("cmp x10, #{}", VD_SEEN_CAPACITY));            // is the visited stack already full?
-    emitter.instruction("b.ge __rt_vd_seen_find_hit");                          // a full stack reports a hit so the walk terminates
-    abi::emit_symbol_address(emitter, "x11", "_vd_seen");                       // resolve the visited-pointer stack base
-    emitter.instruction("mov x12, #0");                                         // start the scan at the bottom of the stack
-
-    emitter.label("__rt_vd_seen_find_loop");
-    emitter.instruction("cmp x12, x10");                                        // scanned every live entry?
-    emitter.instruction("b.ge __rt_vd_seen_find_miss");                         // the pointer is not currently being walked
-    emitter.instruction("ldr x13, [x11, x12, lsl #3]");                         // load the visited pointer at this depth
-    emitter.instruction("cmp x13, x0");                                         // does it match the candidate object?
-    emitter.instruction("b.eq __rt_vd_seen_find_hit");                          // already on the walk stack → recursion
-    emitter.instruction("add x12, x12, #1");                                    // advance to the next visited entry
-    emitter.instruction("b __rt_vd_seen_find_loop");                            // continue scanning
-
-    emitter.label("__rt_vd_seen_find_hit");
-    emitter.instruction("mov x0, #1");                                          // report recursion (or exhausted guard capacity)
-    emitter.instruction("ret");                                                 // return to caller
-
-    emitter.label("__rt_vd_seen_find_miss");
-    emitter.instruction("mov x0, #0");                                          // the object is safe to descend into
-    emitter.instruction("ret");                                                 // return to caller
+    emit_seen_stack_helpers(emitter, "vd");
 }
 
-/// Emits the Linux x86_64 visited-object lookup helper.
-fn emit_vd_seen_find_linux_x86_64(emitter: &mut Emitter) {
-    emitter.blank();
-    emitter.comment("--- runtime: vd_seen_find ---");
-    emitter.label_global("__rt_vd_seen_find");
+/// Kept for the emitter list: `emit_vd_seen_find` already emits the whole `_vd_seen` family.
+pub fn emit_vd_seen_push(_emitter: &mut Emitter) {}
 
-    abi::emit_symbol_address(emitter, "r9", "_vd_seen_n");                      // resolve the visited-stack depth counter
-    emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current visited-stack depth
-    emitter.instruction(&format!("cmp r10, {}", VD_SEEN_CAPACITY));             // is the visited stack already full?
-    emitter.instruction("jge __rt_vd_seen_find_hit_x86");                       // a full stack reports a hit so the walk terminates
-    abi::emit_symbol_address(emitter, "r11", "_vd_seen");                       // resolve the visited-pointer stack base
-    emitter.instruction("xor rcx, rcx");                                        // start the scan at the bottom of the stack
+/// Kept for the emitter list: `emit_vd_seen_find` already emits the whole `_vd_seen` family.
+pub fn emit_vd_seen_pop(_emitter: &mut Emitter) {}
 
-    emitter.label("__rt_vd_seen_find_loop_x86");
-    emitter.instruction("cmp rcx, r10");                                        // scanned every live entry?
-    emitter.instruction("jge __rt_vd_seen_find_miss_x86");                      // the pointer is not currently being walked
-    emitter.instruction("mov rax, QWORD PTR [r11 + rcx * 8]");                  // load the visited pointer at this depth
-    emitter.instruction("cmp rax, rdi");                                        // does it match the candidate object?
-    emitter.instruction("je __rt_vd_seen_find_hit_x86");                        // already on the walk stack → recursion
-    emitter.instruction("add rcx, 1");                                          // advance to the next visited entry
-    emitter.instruction("jmp __rt_vd_seen_find_loop_x86");                      // continue scanning
-
-    emitter.label("__rt_vd_seen_find_hit_x86");
-    emitter.instruction("mov rax, 1");                                          // report recursion (or exhausted guard capacity)
-    emitter.instruction("ret");                                                 // return to caller
-
-    emitter.label("__rt_vd_seen_find_miss_x86");
-    emitter.instruction("xor rax, rax");                                        // the object is safe to descend into
-    emitter.instruction("ret");                                                 // return to caller
-}
-
-/// `__rt_vd_seen_push`: record an object pointer as being walked.
+/// Emits `__rt_<name>_seen_find` / `_push` / `_pop`: a visited-pointer stack over `_<name>_seen`
+/// (storage for `VD_SEEN_CAPACITY` pointers, reserved in `runtime::data::fixed`) and
+/// `_<name>_seen_n`, the LOGICAL walk depth. A walker that can run user code in the middle
+/// (json_encode calls `jsonSerialize()`) or that user code can reach while another walk is open
+/// (`===`) keeps its own stack, so a table on one walk path is never mistaken for a revisit on
+/// another.
 ///
-/// Silently drops the entry when the stack is full — `__rt_vd_seen_find` already
-/// refuses to descend at that depth, so the pop below can never underflow.
-/// Input: AArch64 x0 / x86_64 rdi = object pointer.
-pub fn emit_vd_seen_push(emitter: &mut Emitter) {
+/// A full stack is NOT a hit: the depth keeps counting past the capacity, `push` stores only
+/// below it and `find` scans `min(depth, capacity)` entries, so an acyclic structure deeper than
+/// the capacity renders (or compares) in full instead of turning into a false `*RECURSION*` /
+/// "Nesting level too deep". The capacity (65536) is far beyond the depth at which the native
+/// stack itself gives out, so a cycle is always closed through a stored entry.
+///
+/// Register contract: AArch64 x0 / x86_64 rdi = pointer; find returns 1 on a hit, 0 otherwise.
+/// All three are leaf helpers clobbering x9-x13 / r9-r11, rcx, rax.
+pub fn emit_seen_stack_helpers(emitter: &mut Emitter, name: &str) {
+    let stack = format!("_{name}_seen");
+    let depth = format!("_{name}_seen_n");
+    let find = format!("__rt_{name}_seen_find");
+    let push = format!("__rt_{name}_seen_push");
+    let pop = format!("__rt_{name}_seen_pop");
+    emitter.blank();
+    emitter.comment(&format!("--- runtime: {name}_seen stack ---"));
     if emitter.target.arch == Arch::X86_64 {
-        emitter.blank();
-        emitter.comment("--- runtime: vd_seen_push ---");
-        emitter.label_global("__rt_vd_seen_push");
-        abi::emit_symbol_address(emitter, "r9", "_vd_seen_n");                  // resolve the visited-stack depth counter
-        emitter.instruction("mov r10, QWORD PTR [r9]");                         // load the current visited-stack depth
-        emitter.instruction(&format!("cmp r10, {}", VD_SEEN_CAPACITY));         // is there room for another entry?
-        emitter.instruction("jge __rt_vd_seen_push_done_x86");                  // a full stack is already refusing to descend
-        abi::emit_symbol_address(emitter, "r11", "_vd_seen");                   // resolve the visited-pointer stack base
-        emitter.instruction("mov QWORD PTR [r11 + r10 * 8], rdi");              // store the object pointer at the top of the stack
-        emitter.instruction("add r10, 1");                                      // grow the visited-stack depth
-        emitter.instruction("mov QWORD PTR [r9], r10");                         // publish the new depth
-        emitter.label("__rt_vd_seen_push_done_x86");
+        emitter.label_global(&find);
+        abi::emit_symbol_address(emitter, "r9", &depth);
+        emitter.instruction("mov r10, QWORD PTR [r9]");                         // load the logical walk depth
+        emitter.instruction(&format!("mov r11, {}", VD_SEEN_CAPACITY));         // storage capacity in entries
+        emitter.instruction("cmp r10, r11");                                    // deeper than the stored entries?
+        emitter.instruction("cmova r10, r11");                                  // scan only the entries that were stored
+        abi::emit_symbol_address(emitter, "r11", &stack);
+        emitter.instruction("xor rcx, rcx");                                    // start the scan at the bottom of the stack
+        emitter.label(&format!("{find}_loop"));
+        emitter.instruction("cmp rcx, r10");                                    // scanned every stored entry?
+        emitter.instruction(&format!("jge {find}_miss"));                       // the pointer is not currently being walked
+        emitter.instruction("cmp QWORD PTR [r11 + rcx * 8], rdi");              // does this entry match the candidate?
+        emitter.instruction(&format!("je {find}_hit"));                         // already on the walk stack → recursion
+        emitter.instruction("add rcx, 1");                                      // advance to the next visited entry
+        emitter.instruction(&format!("jmp {find}_loop"));                       // continue scanning
+        emitter.label(&format!("{find}_hit"));
+        emitter.instruction("mov rax, 1");                                      // report a revisit
         emitter.instruction("ret");                                             // return to caller
-        return;
-    }
+        emitter.label(&format!("{find}_miss"));
+        emitter.instruction("xor rax, rax");                                    // the pointer is safe to descend into
+        emitter.instruction("ret");                                             // return to caller
 
-    emitter.blank();
-    emitter.comment("--- runtime: vd_seen_push ---");
-    emitter.label_global("__rt_vd_seen_push");
-    abi::emit_symbol_address(emitter, "x9", "_vd_seen_n");                      // resolve the visited-stack depth counter
-    emitter.instruction("ldr x10, [x9]");                                       // load the current visited-stack depth
-    emitter.instruction(&format!("cmp x10, #{}", VD_SEEN_CAPACITY));            // is there room for another entry?
-    emitter.instruction("b.ge __rt_vd_seen_push_done");                         // a full stack is already refusing to descend
-    abi::emit_symbol_address(emitter, "x11", "_vd_seen");                       // resolve the visited-pointer stack base
-    emitter.instruction("str x0, [x11, x10, lsl #3]");                          // store the object pointer at the top of the stack
-    emitter.instruction("add x10, x10, #1");                                    // grow the visited-stack depth
-    emitter.instruction("str x10, [x9]");                                       // publish the new depth
-    emitter.label("__rt_vd_seen_push_done");
-    emitter.instruction("ret");                                                 // return to caller
-}
+        emitter.label_global(&push);
+        abi::emit_symbol_address(emitter, "r9", &depth);
+        emitter.instruction("mov r10, QWORD PTR [r9]");                         // load the logical walk depth
+        emitter.instruction(&format!("mov r11, {}", VD_SEEN_CAPACITY));         // storage capacity in entries
+        emitter.instruction("cmp r10, r11");                                    // is there storage for this level?
+        emitter.instruction(&format!("jae {push}_count"));                      // past the capacity: count the level only
+        abi::emit_symbol_address(emitter, "r11", &stack);
+        emitter.instruction("mov QWORD PTR [r11 + r10 * 8], rdi");              // store the pointer at the top of the stack
+        emitter.label(&format!("{push}_count"));
+        emitter.instruction("add r10, 1");                                      // one level deeper
+        emitter.instruction("mov QWORD PTR [r9], r10");                         // publish the new depth
+        emitter.instruction("ret");                                             // return to caller
 
-/// `__rt_vd_seen_pop`: drop the innermost visited-object entry. Takes no arguments.
-///
-/// Clamps at zero so an unbalanced pop can never make the depth negative and turn
-/// the next `__rt_vd_seen_find` scan into an out-of-bounds read.
-pub fn emit_vd_seen_pop(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
-        emitter.blank();
-        emitter.comment("--- runtime: vd_seen_pop ---");
-        emitter.label_global("__rt_vd_seen_pop");
-        abi::emit_symbol_address(emitter, "r9", "_vd_seen_n");                  // resolve the visited-stack depth counter
-        emitter.instruction("mov r10, QWORD PTR [r9]");                         // load the current visited-stack depth
+        emitter.label_global(&pop);
+        abi::emit_symbol_address(emitter, "r9", &depth);
+        emitter.instruction("mov r10, QWORD PTR [r9]");                         // load the logical walk depth
         emitter.instruction("cmp r10, 0");                                      // is the stack already empty?
-        emitter.instruction("jle __rt_vd_seen_pop_done_x86");                   // clamp at zero rather than underflow
-        emitter.instruction("sub r10, 1");                                      // leave the innermost object
+        emitter.instruction(&format!("jle {pop}_done"));                        // clamp at zero rather than underflow
+        emitter.instruction("sub r10, 1");                                      // leave the innermost level
         emitter.instruction("mov QWORD PTR [r9], r10");                         // publish the new depth
-        emitter.label("__rt_vd_seen_pop_done_x86");
+        emitter.label(&format!("{pop}_done"));
         emitter.instruction("ret");                                             // return to caller
         return;
     }
+    emitter.label_global(&find);
+    abi::emit_symbol_address(emitter, "x9", &depth);
+    emitter.instruction("ldr x10, [x9]");                                       // load the logical walk depth
+    emitter.instruction(&format!("mov x11, #{}", VD_SEEN_CAPACITY));            // storage capacity in entries
+    emitter.instruction("cmp x10, x11");                                        // deeper than the stored entries?
+    emitter.instruction("csel x10, x11, x10, hi");                              // scan only the entries that were stored
+    abi::emit_symbol_address(emitter, "x11", &stack);
+    emitter.instruction("mov x12, #0");                                         // start the scan at the bottom of the stack
+    emitter.label(&format!("{find}_loop"));
+    emitter.instruction("cmp x12, x10");                                        // scanned every stored entry?
+    emitter.instruction(&format!("b.ge {find}_miss"));                          // the pointer is not currently being walked
+    emitter.instruction("ldr x13, [x11, x12, lsl #3]");                         // load the visited pointer at this depth
+    emitter.instruction("cmp x13, x0");                                         // does it match the candidate?
+    emitter.instruction(&format!("b.eq {find}_hit"));                           // already on the walk stack → recursion
+    emitter.instruction("add x12, x12, #1");                                    // advance to the next visited entry
+    emitter.instruction(&format!("b {find}_loop"));                             // continue scanning
+    emitter.label(&format!("{find}_hit"));
+    emitter.instruction("mov x0, #1");                                          // report a revisit
+    emitter.instruction("ret");                                                 // return to caller
+    emitter.label(&format!("{find}_miss"));
+    emitter.instruction("mov x0, #0");                                          // the pointer is safe to descend into
+    emitter.instruction("ret");                                                 // return to caller
 
-    emitter.blank();
-    emitter.comment("--- runtime: vd_seen_pop ---");
-    emitter.label_global("__rt_vd_seen_pop");
-    abi::emit_symbol_address(emitter, "x9", "_vd_seen_n");                      // resolve the visited-stack depth counter
-    emitter.instruction("ldr x10, [x9]");                                       // load the current visited-stack depth
-    emitter.instruction("cmp x10, #0");                                         // is the stack already empty?
-    emitter.instruction("b.le __rt_vd_seen_pop_done");                          // clamp at zero rather than underflow
-    emitter.instruction("sub x10, x10, #1");                                    // leave the innermost object
+    emitter.label_global(&push);
+    abi::emit_symbol_address(emitter, "x9", &depth);
+    emitter.instruction("ldr x10, [x9]");                                       // load the logical walk depth
+    emitter.instruction(&format!("mov x11, #{}", VD_SEEN_CAPACITY));            // storage capacity in entries
+    emitter.instruction("cmp x10, x11");                                        // is there storage for this level?
+    emitter.instruction(&format!("b.hs {push}_count"));                         // past the capacity: count the level only
+    abi::emit_symbol_address(emitter, "x11", &stack);
+    emitter.instruction("str x0, [x11, x10, lsl #3]");                          // store the pointer at the top of the stack
+    emitter.label(&format!("{push}_count"));
+    emitter.instruction("add x10, x10, #1");                                    // one level deeper
     emitter.instruction("str x10, [x9]");                                       // publish the new depth
-    emitter.label("__rt_vd_seen_pop_done");
+    emitter.instruction("ret");                                                 // return to caller
+
+    emitter.label_global(&pop);
+    abi::emit_symbol_address(emitter, "x9", &depth);
+    emitter.instruction("ldr x10, [x9]");                                       // load the logical walk depth
+    emitter.instruction("cmp x10, #0");                                         // is the stack already empty?
+    emitter.instruction(&format!("b.le {pop}_done"));                           // clamp at zero rather than underflow
+    emitter.instruction("sub x10, x10, #1");                                    // leave the innermost level
+    emitter.instruction("str x10, [x9]");                                       // publish the new depth
+    emitter.label(&format!("{pop}_done"));
     emitter.instruction("ret");                                                 // return to caller
 }
 
@@ -770,6 +757,15 @@ pub fn emit_var_dump_object(emitter: &mut Emitter) {
     emitter.instruction("b __rt_vd_obj_next");                                  // continue with the next property
 
     emitter.label("__rt_vd_obj_value");
+    // -- a shared reference property prints PHP's `&` marker before its value --
+    emitter.instruction("ldr x11, [sp, #32]");                                  // reload the descriptor row pointer
+    emitter.instruction("ldr x0, [x11, #24]");                                  // load the property value tag
+    emitter.instruction(&format!("tst x0, #{}", crate::codegen_support::sentinels::REFERENCE_PROPERTY_TAG_FLAG)); // does the slot alias a reference?
+    emitter.instruction("b.eq __rt_vd_obj_value_load");                         // plain slots print no marker
+    emitter.instruction("ldr x13, [sp, #40]");                                  // reload the property slot pointer
+    emitter.instruction("ldr x0, [x13]");                                       // the cell (or borrowed address) the slot holds
+    emitter.instruction("bl __rt_vd_mark_reference");                           // arm `&` when the reference is shared
+    emitter.label("__rt_vd_obj_value_load");
     // -- render the value line; __rt_var_dump_value unboxes Mixed cells (tag 7)
     //    and recurses into nested arrays/hashes/objects (tags 4/5/6) on its own --
     emitter.instruction("ldr x11, [sp, #32]");                                  // reload the descriptor row pointer
@@ -777,6 +773,7 @@ pub fn emit_var_dump_object(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [x11, #24]");                                  // property value tag → value renderer
     emitter.instruction("ldr x1, [x13]");                                       // slot low word → value renderer
     emitter.instruction("ldr x2, [x13, #8]");                                   // slot high word → value renderer
+    crate::codegen_support::sentinels::emit_deref_reference_property_slot(emitter, "x0", "x1", "x2");
     emit_resolve_tagged_scalar_property_tag(emitter, "x0", "x2");
     emitter.instruction("bl __rt_var_dump_value");                              // emit `<indent>TYPE(VAL)\n` (recursing when needed)
 
@@ -852,10 +849,18 @@ fn emit_var_dump_object_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_vd_obj_value_x86");
     emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // reload the descriptor row pointer
+    emitter.instruction(&format!("test QWORD PTR [r11 + 24], {}", crate::codegen_support::sentinels::REFERENCE_PROPERTY_TAG_FLAG)); // does the slot alias a reference?
+    emitter.instruction("jz __rt_vd_obj_value_load_x86");                       // plain slots print no marker
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the property slot pointer
+    emitter.instruction("mov rdi, QWORD PTR [r10]");                            // the cell (or borrowed address) the slot holds
+    emitter.instruction("call __rt_vd_mark_reference");                         // arm `&` when the reference is shared
+    emitter.label("__rt_vd_obj_value_load_x86");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // reload the descriptor row pointer
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the property slot pointer
     emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");                       // property value tag → value renderer
     emitter.instruction("mov rsi, QWORD PTR [r10]");                            // slot low word → value renderer
     emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // slot high word → value renderer
+    crate::codegen_support::sentinels::emit_deref_reference_property_slot(emitter, "rdi", "rsi", "rdx");
     emit_resolve_tagged_scalar_property_tag(emitter, "rdi", "rdx");
     emitter.instruction("call __rt_var_dump_value");                            // emit `<indent>TYPE(VAL)\n` (recursing when needed)
 

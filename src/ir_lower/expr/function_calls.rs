@@ -18,6 +18,11 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     if let Some(value) = constants::lower_static_constant_call(ctx, name, args, expr) {
         return value;
     }
+    if let Some(value) =
+        dynamic_class_access::lower_dynamic_class_member_call(ctx, name, args, expr)
+    {
+        return value;
+    }
     // A generic call names its TEMPLATE in the source; the checker already decided which
     // monomorphic instantiation this particular call resolves to, from argument types lowering
     // cannot consult before it has a signature. Swap in that name before anything else looks at

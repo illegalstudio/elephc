@@ -815,33 +815,15 @@ pub(super) fn parse_named_expr(
                 let property = property.clone();
                 *pos += 1;
                 if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
-                    // `C::$method(args)` is a dynamic static method call. Desugar to
-                    // `call_user_func([C::class, $method], ...args)` so it reuses the runtime
-                    // dynamic-dispatch path, exactly like the variable-receiver form `$c::$m()`.
-                    *pos += 1; // consume '('
-                    let dynamic_args = parse_args(tokens, pos, span)?;
-                    let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
-                    crate::parser::expr::pratt::reject_named_args_in_dynamic_call(
-                        &dynamic_args,
+                    // `C::$method(args)` calls the method named by `$method` on `C`.
+                    let method = Expr::new(ExprKind::Variable(property), span);
+                    return super::calls::finish_scoped_dynamic_method_call(
+                        tokens,
+                        pos,
                         span,
-                    )?;
-                    let receiver = Expr::new(
-                        ExprKind::ClassConstant {
-                            receiver: receiver.clone(),
-                        },
-                        span,
+                        receiver.clone(),
+                        method,
                     );
-                    let method_expr = Expr::new(ExprKind::Variable(property), span);
-                    let mut call_args =
-                        vec![Expr::new(ExprKind::ArrayLiteral(vec![receiver, method_expr]), span)];
-                    call_args.extend(dynamic_args);
-                    return Ok(Expr::new(
-                        ExprKind::FunctionCall {
-                            name: crate::names::Name::unqualified("call_user_func"),
-                            args: call_args,
-                        },
-                        span,
-                    ));
                 }
                 return Ok(Expr::new(
                     ExprKind::StaticPropertyAccess {
@@ -859,6 +841,26 @@ pub(super) fn parse_named_expr(
                     },
                     span,
                 ));
+            }
+            // `Foo::$$name` / `Foo::${expr}`: a static property named at run time.
+            Some(Token::Dollar) => {
+                return crate::parser::variable_variables::parse_dynamic_static_property(
+                    tokens,
+                    pos,
+                    span,
+                    receiver.clone(),
+                );
+            }
+            // `C::{'is' . $kind}(args)`: a computed method name.
+            Some(Token::LBrace) => {
+                let method = super::calls::parse_braced_member_name(tokens, pos, span)?;
+                return super::calls::finish_scoped_dynamic_method_call(
+                    tokens,
+                    pos,
+                    span,
+                    receiver.clone(),
+                    method,
+                );
             }
             // PHP 8 allows semi-reserved keywords as static method / class-constant names
             // (e.g. `Foo::self()`, `Foo::print`); `class` and `$var` are handled above.
@@ -945,6 +947,10 @@ pub(super) fn parse_new_object(
     };
     if let Some(receiver) = scoped_receiver {
         *pos += 1;
+        if let Some(name_expr) = parse_new_static_property_reference(tokens, pos, &receiver, span) {
+            let name_expr = extend_new_class_reference(tokens, pos, name_expr)?;
+            return finish_dynamic_new(tokens, pos, name_expr, span);
+        }
         if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
             reject_parenthesis_free_new_postfix(tokens, *pos)?;
             return Ok(Expr::new(
@@ -963,9 +969,26 @@ pub(super) fn parse_new_object(
 
     // `new $variable(args)` — the class name is held in a variable; we'll
     // resolve it through the runtime class table at codegen time.
+    // `new $this->prop(...)`: the class name is a property of `$this`.
+    if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::This)) {
+        let mut probe = *pos + 1;
+        if let Some(name_expr) =
+            parse_new_variable_reference_tail(tokens, &mut probe, Expr::new(ExprKind::This, span))?
+        {
+            *pos = probe;
+            return finish_dynamic_new(tokens, pos, name_expr, span);
+        }
+    }
     if let Some((Token::Variable(name), _)) = tokens.get(*pos) {
         let var_name = name.clone();
         *pos += 1;
+        if let Some(name_expr) = parse_new_variable_reference_tail(
+            tokens,
+            pos,
+            Expr::new(ExprKind::Variable(var_name.clone()), span),
+        )? {
+            return finish_dynamic_new(tokens, pos, name_expr, span);
+        }
         if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
             reject_dynamic_new_class_reference(tokens, *pos)?;
             return Ok(Expr::new(
@@ -988,12 +1011,34 @@ pub(super) fn parse_new_object(
         ));
     }
 
+    // `new (expr)(args)`: PHP 8's `class_name_reference: '(' expr ')'`. The expression yields
+    // the class name at runtime, exactly like `new $var`, so it shares the dynamic `new`.
+    if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::LParen)) {
+        *pos += 1;
+        let name_expr = parse_expr(tokens, pos)?;
+        if !matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::RParen)) {
+            return Err(CompileError::new(
+                span,
+                "Expected ')' after the class-name expression of 'new'",
+            ));
+        }
+        *pos += 1;
+        return finish_dynamic_new(tokens, pos, name_expr, span);
+    }
+
     let (class_name, type_args) = crate::parser::stmt::parse_inherited_name(
         tokens,
         pos,
         span,
         "Expected class name after 'new'",
     )?;
+    if type_args.is_empty() {
+        let receiver = StaticReceiver::Named(class_name.clone());
+        if let Some(name_expr) = parse_new_static_property_reference(tokens, pos, &receiver, span) {
+            let name_expr = extend_new_class_reference(tokens, pos, name_expr)?;
+            return finish_dynamic_new(tokens, pos, name_expr, span);
+        }
+    }
     if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
         reject_parenthesis_free_new_postfix(tokens, *pos)?;
         return Ok(Expr::new(
@@ -1005,6 +1050,128 @@ pub(super) fn parse_new_object(
     let args = parse_args(tokens, pos, span)?;
     let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
     Ok(Expr::new(new_object_kind(class_name, type_args, args), span))
+}
+
+/// Parses PHP's `new C::$prop` / `new static::$prop` class-name reference: the class to build is
+/// the value of a static property. Returns `None` (consuming nothing) for any other shape.
+fn parse_new_static_property_reference(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    receiver: &StaticReceiver,
+    span: Span,
+) -> Option<Expr> {
+    let (Some((Token::DoubleColon, _)), Some((Token::Variable(property), _))) =
+        (tokens.get(*pos), tokens.get(*pos + 1))
+    else {
+        return None;
+    };
+    let property = property.clone();
+    *pos += 2;
+    Some(Expr::new(
+        ExprKind::StaticPropertyAccess { receiver: receiver.clone(), property },
+        span,
+    ))
+}
+
+/// Parses the rest of a `new $var...` class-name reference — `->prop`, `?->prop`, `[dim]` and
+/// `::$prop` links, as PHP's `new_variable` grammar allows — and returns the name expression,
+/// or `None` (consuming nothing) when the variable is used alone.
+fn parse_new_variable_reference_tail(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    base: Expr,
+) -> Result<Option<Expr>, CompileError> {
+    let mut expr = base;
+    let mut extended = false;
+    loop {
+        let span = expr.span;
+        // `->class`, `->list`...: PHP 8's semi-reserved rule makes any keyword a property name
+        // here too (faker's `new $this->class()`).
+        let arrow_member = match (tokens.get(*pos), tokens.get(*pos + 1)) {
+            (Some((Token::Arrow | Token::QuestionArrow, _)), Some((token, metadata))) => {
+                crate::parser::keyword_name::bareword_name_from_token(token, metadata)
+            }
+            _ => None,
+        };
+        match (tokens.get(*pos).map(|(t, _)| t), tokens.get(*pos + 1).map(|(t, _)| t)) {
+            (Some(Token::Arrow | Token::QuestionArrow), Some(_)) if arrow_member.is_some() => {
+                let nullsafe = matches!(tokens[*pos].0, Token::QuestionArrow);
+                let property = arrow_member.expect("guarded by the match arm");
+                *pos += 2;
+                let object = Box::new(expr);
+                expr = Expr::new(
+                    if nullsafe {
+                        ExprKind::NullsafePropertyAccess { object, property }
+                    } else {
+                        ExprKind::PropertyAccess { object, property }
+                    },
+                    span,
+                );
+            }
+            (Some(Token::LBracket), _) => {
+                *pos += 1;
+                let index = parse_expr(tokens, pos)?;
+                if !matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::RBracket)) {
+                    return Err(CompileError::new(span, "Expected ']'"));
+                }
+                *pos += 1;
+                expr = Expr::new(
+                    ExprKind::ArrayAccess { array: Box::new(expr), index: Box::new(index) },
+                    span,
+                );
+            }
+            (Some(Token::DoubleColon), Some(Token::Variable(property))) => {
+                let property = property.clone();
+                *pos += 2;
+                expr = Expr::new(
+                    ExprKind::FunctionCall {
+                        name: Name::unqualified("__elephc_dynamic_static_property"),
+                        args: vec![expr, Expr::new(ExprKind::StringLiteral(property), span)],
+                    },
+                    span,
+                );
+            }
+            _ => break,
+        }
+        extended = true;
+    }
+    Ok(extended.then_some(expr))
+}
+
+/// Extends a `new C::$prop` class-name reference with the `[dim]`, `->prop` and `::$prop` links
+/// PHP's `new_variable` grammar allows after it, as in `new static::$classes[static::class]($m)`
+/// (Eloquent `HasCollection`).
+fn extend_new_class_reference(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    name_expr: Expr,
+) -> Result<Expr, CompileError> {
+    let mut probe = *pos;
+    match parse_new_variable_reference_tail(tokens, &mut probe, name_expr.clone())? {
+        Some(extended) => {
+            *pos = probe;
+            Ok(extended)
+        }
+        None => Ok(name_expr),
+    }
+}
+
+/// Finishes `new <name expression>` with optional constructor arguments as a dynamic `new`.
+fn finish_dynamic_new(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    name_expr: Expr,
+    span: Span,
+) -> Result<Expr, CompileError> {
+    let args = if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::LParen)) {
+        *pos += 1;
+        parse_args(tokens, pos, span)?
+    } else {
+        reject_dynamic_new_class_reference(tokens, *pos)?;
+        Vec::new()
+    };
+    let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
+    Ok(Expr::new(ExprKind::NewDynamic { name_expr: Box::new(name_expr), args }, span))
 }
 
 /// Builds a static receiver, generic or not.

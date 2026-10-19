@@ -14,6 +14,7 @@ mod builtin_interfaces;
 pub(crate) mod core_attributes;
 mod builtin_iterators;
 mod builtin_json;
+pub(crate) mod builtin_native_interfaces;
 mod builtin_spl_classes;
 mod builtin_class_gate;
 mod builtin_spl_exceptions;
@@ -29,19 +30,23 @@ pub(crate) mod clone_override_storage;
 pub(crate) mod scope_dynamic_storage;
 mod driver;
 mod extern_decl;
+mod fixpoint_trace;
 mod functions;
 mod generic_bounds;
 mod generic_method;
 mod generic_new;
 mod generic_variance;
 mod inference;
+mod lattice;
 mod loop_storage;
+pub(crate) mod condition_edges;
 mod method_pass;
+mod override_returns;
 mod mixed_storage_scan;
 mod packed_counter;
 pub(crate) mod null_probe;
 mod schema;
-mod stmt_check;
+pub(crate) mod stmt_check;
 mod type_compat;
 /// yield_validation
 pub(crate) mod yield_validation;
@@ -131,8 +136,41 @@ pub(crate) struct Checker {
     /// widen the parameter to `Mixed` (so e.g. a parameter called with both an int
     /// and a string is `Mixed`, not collapsed to one type).
     pub param_specialization_seen: HashSet<(String, usize)>,
+    /// Object unions the lattice join BUILT from untyped observations
+    /// (`crate::types::checker::lattice`). A method call on one of them accepts a method that
+    /// only some members declare, as PHP's runtime lookup does; a union the program DECLARES
+    /// (`A|B`, `static|Choice`) keeps the strict every-member rule.
+    pub joined_object_unions: std::cell::RefCell<HashSet<String>>,
+    /// Direct subclasses of every class, keyed by parent name, plus the `classes.len()` it was
+    /// built for. Rebuilt whenever a class is registered, so it never answers for a stale table.
+    ///
+    /// `widen_override_untyped_method_params` runs on EVERY instance-method call and used to walk
+    /// the whole class table each time (calls × classes): on a large codebase that was most
+    /// of the checker's time.
+    pub class_children_index: Option<(usize, HashMap<String, Vec<String>>)>,
+    /// The classes whose method table dispatches each `(implementing class, method key,
+    /// is_static)` to that implementation, plus the `classes.len()` it was built for.
+    ///
+    /// Every method body's inferred return is copied to those classes after the body is
+    /// checked. That used to scan the whole class table once per method body (methods ×
+    /// classes per pass). Implementation maps are only written while classes are registered,
+    /// which also changes the table's size, so the length is a sound staleness check.
+    pub method_impl_users_index: Option<(usize, HashMap<(String, String, bool), Vec<String>>)>,
+    /// The classes sharing each `(property, declaring class)` slot, plus the `classes.len()` it
+    /// was built for; the same staleness rule as `method_impl_users_index`. A constructor
+    /// argument retypes that slot in every class sharing it, which used to scan the whole class
+    /// table per argument of every `new`.
+    pub property_sharers_index: Option<(usize, HashMap<(String, String), Vec<String>>)>,
     /// Untyped interface positions whose implementation uses a stable boxed ABI.
     pub interface_method_boxed_params: HashSet<(String, usize)>,
+    /// Inferred method returns an override family widened, keyed by (class, method, is_static).
+    /// A later body pass keeps the widened type instead of narrowing it back mid-pass, so a
+    /// sibling method returning the call never re-infers from the narrower one.
+    /// The value is `(widened type, the body's own latest inferred type)`; the second lets the
+    /// family drop the widening once its bodies agree again.
+    pub override_family_returns: HashMap<(String, String, bool), (PhpType, PhpType)>,
+    /// Override families, computed once the class hierarchy is final.
+    pub override_family_groups: Option<Vec<crate::types::override_families::FamilyGroup>>,
     /// Every generic instantiation a call site asked for, as (template name, type arguments).
     ///
     /// The checker instantiates into `fn_decls`/`functions` so the CALL type-checks, but
@@ -431,6 +469,10 @@ pub(crate) struct Checker {
     pub first_class_builtin_call_types: HashMap<Span, PhpType>,
     /// Fixed-point storage contracts keyed by function-like scope and loop span.
     pub loop_storage_types: crate::types::LoopStorageTypes,
+    /// The loop spans `loop_storage_types` holds for each scope, so a re-walk clears its scope
+    /// in time proportional to that scope's loops. Clearing used to `retain` over the whole map
+    /// once per method, function and closure body, which on a large codebase was quadratic.
+    pub loop_storage_scope_spans: HashMap<String, Vec<crate::span::Span>>,
     /// `(scope, local)` pairs for `string` locals used as a `++`/`--` target.
     ///
     /// PHP's string increment can change the value's type (`"9"++` is `int(10)`), so EIR
@@ -439,6 +481,15 @@ pub(crate) struct Checker {
     /// already visits every expression with a typed environment, so no second AST walk is
     /// needed. See `crate::ir_lower::context::LoweringContext::boxed_incdec_storage_type`.
     pub string_incdec_locals: HashSet<(String, String)>,
+    /// See `CheckResult::static_local_declared_types`. Part of the outer fixpoint's stability test.
+    pub static_local_declared_types: HashMap<(String, String), PhpType>,
+    /// Every type a written array `static` local held after a statement, across all walks of
+    /// its body; it only grows, so the declared-type decision converges.
+    pub static_local_seen_types: HashMap<(String, String), Vec<PhpType>>,
+    /// Names of the `static` locals the function-like body being checked writes after their
+    /// declaration (`crate::ir_lower::static_local_written_in_body`).
+    /// Name -> whether every write is a plain value store (see the ir_lower walk).
+    pub written_static_locals: HashMap<String, bool>,
     /// Mirrors `CheckOptions::strict_locals` for the duration of the check. When set, the
     /// permissive local-retype path in `merge_local_assignment_type` and the branch-divergent
     /// `Mixed`-storage marking in `mixed_storage_scan::run_mixed_storage_scan` both step aside
@@ -514,6 +565,10 @@ pub(crate) struct Checker {
     /// Unconditional reference unsets that may retire a promoted ordinary local's binding.
     /// These do not relax escaped-reference type checking or ordinary kill eligibility.
     pub local_ref_detach_sites: HashMap<Span, HashSet<String>>,
+    /// By-reference parameters a body binds into a property or array element
+    /// (`$this->p = &$param`), as (parameter name, position). See
+    /// `CheckResult::escaping_ref_params`.
+    pub escaping_ref_params: HashSet<(String, usize)>,
     /// Removed detach keys still participate in cross-file ambiguity checks.
     pub retired_ref_detach_sites: HashSet<(Span, String)>,
     /// Statement-form assignments the checker re-bound to a fresh binding of an incompatible
@@ -563,6 +618,13 @@ pub(crate) struct Checker {
     pub mixed_storage_locals: HashSet<String>,
     /// Union storage contracts retained while guards narrow reads of a local in the current body.
     pub guarded_union_types: HashMap<String, PhpType>,
+    /// Locals the current body may have left undefined at this point of the walk (flow state;
+    /// see `condition_edges` for how join points maintain it).
+    pub maybe_undefined_locals: HashSet<String>,
+    /// Locals of the current body passed to a call that may bind them by reference (pre-scan).
+    pub by_ref_argument_locals: HashSet<String>,
+    /// Accumulated maybe-undefined reads and flagged locals for EIR lowering.
+    pub maybe_undefined_result: crate::types::MaybeUndefinedLocals,
     /// Every statement-form assignment to a mixed-storage local, as span -> the SET of local names
     /// boxed at that position, so EIR lowering can declare the slot boxed BEFORE the first store
     /// instead of inferring it from the first stored value. Cumulative across bodies, and keyed
@@ -634,6 +696,8 @@ pub(crate) struct SavedLocalBindingScope {
     typed: HashMap<String, PhpType>,
     mixed_storage: HashSet<String>,
     guarded_unions: HashMap<String, PhpType>,
+    maybe_undefined: HashSet<String>,
+    by_ref_arguments: HashSet<String>,
     contains_eval: bool,
 }
 
@@ -833,6 +897,8 @@ impl Checker {
             // box a callee local the pre-scan never marked.
             mixed_storage: std::mem::take(&mut self.mixed_storage_locals),
             guarded_unions: std::mem::take(&mut self.guarded_union_types),
+            maybe_undefined: std::mem::take(&mut self.maybe_undefined_locals),
+            by_ref_arguments: std::mem::take(&mut self.by_ref_argument_locals),
             contains_eval: self.body_contains_eval,
         };
         self.local_conditional_depth = 0;
@@ -859,6 +925,8 @@ impl Checker {
         self.typed_local_names = saved.typed;
         self.mixed_storage_locals = saved.mixed_storage;
         self.guarded_union_types = saved.guarded_unions;
+        self.maybe_undefined_locals = saved.maybe_undefined;
+        self.by_ref_argument_locals = saved.by_ref_arguments;
         self.body_contains_eval = saved.contains_eval;
     }
 
@@ -1222,6 +1290,9 @@ fn check_types_on_compiler_stack(
     checker.verify_class_type_argument_bounds(&generics.class_type_argument_bounds)?;
 
     propagate_abstract_return_types(&mut checker);
+    // The last-writer propagation above is kept for families that reach a builtin body; source
+    // families get the agreed (or boxed) return every override can share.
+    checker.unify_override_family_returns();
     apply_reference_property_promotions(&mut checker);
     clone_override_storage::widen_clone_override_property_storage(&mut checker);
     clone_override_storage::widen_property_unset_storage(&mut checker);
@@ -1272,6 +1343,26 @@ fn check_types_on_compiler_stack(
         &checker.retired_mixed_storage_store_sites,
     )?;
 
+    // A callable signature recorded for an UNTYPED free-function parameter describes the
+    // parameter only while every call site passed that callable. Once the joined parameter type
+    // is no longer `callable` (`value(fn () => 5); value('x')` makes it `mixed`), the one
+    // recorded signature is just the last closure seen, and lowering must not type the body's
+    // invocation (or preserve the parameter's ABI) through it.
+    let mut callable_param_sigs = checker.callable_param_sigs;
+    callable_param_sigs.retain(|(owner, param), _| {
+        let Some(sig) = checker.functions.get(owner) else {
+            return true;
+        };
+        let Some(index) = sig.params.iter().position(|(name, _)| name == param) else {
+            return true;
+        };
+        let declared = sig.declared_params.get(index).copied().unwrap_or(false);
+        let ty = &sig.params[index].1;
+        declared
+            || *ty == PhpType::Callable
+            || matches!(ty, PhpType::Array(elem) if **elem == PhpType::Callable)
+            || matches!(ty, PhpType::AssocArray { value, .. } if **value == PhpType::Callable)
+    });
     Ok(CheckResult {
         requested_instantiations: checker.requested_instantiations,
         generic_call_sites: checker.generic_call_sites,
@@ -1283,7 +1374,7 @@ fn check_types_on_compiler_stack(
         functions: checker.functions,
         function_attribute_names,
         function_attribute_args,
-        callable_param_sigs: checker.callable_param_sigs,
+        callable_param_sigs,
         return_alias_summaries,
         callable_return_sigs: checker.callable_return_sigs,
         callable_array_return_sigs: checker.callable_array_return_sigs,
@@ -1303,9 +1394,12 @@ fn check_types_on_compiler_stack(
             .filter_map(|(span, buffer)| buffer.then_some(span)).collect(),
         first_class_builtin_call_types: checker.first_class_builtin_call_types,
         loop_storage_types: checker.loop_storage_types,
+        maybe_undefined: checker.maybe_undefined_result,
         string_incdec_locals: checker.string_incdec_locals,
+        static_local_declared_types: checker.static_local_declared_types,
         local_bind_kill_sites: checker.local_bind_kill_sites,
         local_ref_detach_sites: checker.local_ref_detach_sites,
+        escaping_ref_params: checker.escaping_ref_params,
         local_retype_sites: checker.local_retype_sites,
         mixed_storage_store_sites: checker.mixed_storage_store_sites,
     })
@@ -1383,6 +1477,14 @@ fn apply_reference_property_promotions(checker: &mut Checker) {
                 continue;
             }
             if info.reference_properties.contains(&prop) {
+                continue;
+            }
+            // Every reference to a readonly property (an enum's `name`/`value` included) throws
+            // "Cannot indirectly modify readonly property" in PHP, so lowering raises that Error
+            // instead of binding and the storage never needs a cell. Promoting it anyway would
+            // re-layout the slot as a cell while enum singletons and constructors still write
+            // the plain value, and the next read would dereference the payload as a pointer.
+            if info.readonly_properties.contains(&prop) {
                 continue;
             }
             info.reference_properties.insert(prop.clone());

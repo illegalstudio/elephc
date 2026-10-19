@@ -475,6 +475,7 @@ pub(super) fn reflection_named_type_metadata_from_type_expr(
         TypeExpr::Float => Some(reflection_builtin_named_type("float", false)),
         TypeExpr::Bool => Some(reflection_builtin_named_type("bool", false)),
         TypeExpr::False => Some(reflection_builtin_named_type("false", false)),
+        TypeExpr::True => Some(reflection_builtin_named_type("true", false)),
         TypeExpr::Str => Some(reflection_builtin_named_type("string", false)),
         TypeExpr::Iterable => Some(reflection_builtin_named_type("iterable", false)),
         TypeExpr::Array(_) => Some(reflection_builtin_named_type("array", false)),

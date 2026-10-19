@@ -23,6 +23,7 @@ mod mixed_cell_autovivify;
 mod new_by_name;
 mod object_vars;
 mod print_r_object;
+mod property_hash_reference;
 mod stdclass;
 mod weak_reference;
 mod weak_map;
@@ -54,6 +55,7 @@ pub(crate) use mixed_array_set::emit_mixed_array_set;
 pub(crate) use mixed_cell_autovivify::emit_mixed_cell_autovivify_array;
 pub(crate) use new_by_name::emit_new_by_name;
 pub(crate) use object_vars::emit_object_to_hash;
+pub(crate) use property_hash_reference::emit_property_hash_reference;
 pub(crate) use stdclass::{
     emit_json_encode_stdclass, emit_mixed_property_get, emit_mixed_property_set,
     emit_stdclass_from_hash, emit_stdclass_get, emit_stdclass_new, emit_stdclass_set,

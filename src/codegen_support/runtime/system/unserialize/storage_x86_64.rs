@@ -99,6 +99,7 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rax + 24]");                        // property value tag
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // object pointer
     emitter.instruction("add r10, r8");                                         // address of the property slot
+    crate::codegen_support::sentinels::emit_deref_reference_property_address(emitter, "r9", "r10");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // value box
     emitter.instruction("cmp r9, 7");                                           // is this a Mixed/untyped slot?
     emitter.instruction("je __rt_obj_store_prop_mixed");                        // store the boxed cell directly

@@ -399,16 +399,9 @@ fn test_error_assignment_expression_rejects_non_lvalue() {
     expect_error("<?php echo 1 = 2;", "Invalid assignment target");
 }
 
-/// Verifies that a variable assigned inside a short-circuit `&&` is flagged as possibly undefined
-/// when referenced after the `&&` expression that did not execute.
-/// Input: `echo false && ($x = 1); echo $x;` — `$x` may not be defined.
-#[test]
-fn test_error_short_circuit_assignment_effect_is_not_definite() {
-    expect_error(
-        "<?php echo false && ($x = 1); echo $x;",
-        "Undefined variable: $x",
-    );
-}
+// `echo false && ($x = 1); echo $x;` used to be a compile error here. A local a lazy edge may
+// leave undefined now reads as PHP null with the `Undefined variable` warning, as in PHP; see
+// `tests/codegen/assign_expr.rs` (`test_maybe_undefined_local_reads_answer_php_null`).
 
 /// Verifies that the short ternary (`?:`) with no default expression produces an error.
 #[test]
@@ -1053,13 +1046,13 @@ fn test_error_static_type_outside_class() {
     );
 }
 
-/// Verifies that variable variables (`$$name`) are rejected with an explanatory message, since
-/// elephc allocates locals to fixed compile-time slots with no runtime variable-name table.
+/// Verifies that a variable variable with a runtime name is rejected in top-level code, where
+/// main's locals cannot be dispatched by name (functions and methods support it).
 #[test]
 fn test_error_variable_variables_unsupported() {
     expect_error(
         "<?php $x = \"y\"; $$x = 1;",
-        "Variable variables (`$$name`) are not supported",
+        "Variable variables with a non-literal name are only supported inside functions and methods",
     );
 }
 
@@ -1687,7 +1680,7 @@ fn test_ref_aliased_local_can_detach_and_rebind() {
 /// Static locals are never killable.
 #[test]
 fn test_static_local_not_killable() {
-    expect_error("<?php function f() { static $a = 1; unset($a); $a = \"x\"; } f();", "cannot reassign");
+    expect_error("<?php function f() { static $a = 1; unset($a); $a = \"x\"; } f();", "unset() of the static local $a");
 }
 
 /// Global-bound locals are never killable.

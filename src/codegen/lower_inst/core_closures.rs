@@ -43,7 +43,8 @@ pub(super) fn lower_closure_new(ctx: &mut FunctionContext<'_>, inst: &Instructio
         &captures,
         callable_descriptor::CallableDescriptorInvocation::new(
             callable_descriptor::CallableDescriptorShape::Closure,
-        ),
+        )
+        .with_scope_class(closure.lexical_class.clone()),
         Some(&invoker_label),
     );
     // Every closure gets HEAP storage, capture-free ones included. In PHP a Closure

@@ -15,6 +15,16 @@ pub(super) fn lower_unset_locals(
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
+    if let Some(arg) = args
+        .iter()
+        .find(|arg| crate::parser::expr::reject_dynamic_member_write(arg, arg.span).is_err())
+    {
+        crate::ir_lower::diagnostics::refuse(
+            arg.span,
+            "Unsetting through a dynamic class (`unset($class::$prop[...])`) is not supported; use the class name",
+        );
+        return Some(lower_null(ctx, expr));
+    }
     if !args.iter().all(|arg| unset_target_supported(ctx, arg)) {
         return None;
     }
@@ -23,6 +33,10 @@ pub(super) fn lower_unset_locals(
         match &arg.kind {
             ExprKind::Variable(name) => {
                 ctx.unset_local(name, null, Some(arg.span));
+                crate::ir_lower::maybe_undefined::set_flag(ctx, name, false, Some(arg.span));
+            }
+            ExprKind::ArrayAccess { array, index } if static_property_element_root(array).is_some() => {
+                lower_unset_static_property_element(ctx, array, index, arg);
             }
             ExprKind::ArrayAccess { array, index } => {
                 lower_unset_array_access(ctx, array, index, arg);
@@ -45,9 +59,13 @@ pub(super) fn lower_unset_locals(
 pub(super) fn unset_target_supported(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> bool {
     match &arg.kind {
         ExprKind::Variable(_) => true,
+        ExprKind::ArrayAccess { array, .. } if static_property_element_root(array).is_some() => {
+            static_property_element_unset_supported(ctx, array)
+        }
         ExprKind::ArrayAccess { array, .. } => {
             unset_array_access_has_object_receiver(ctx, array)
                 || unset_array_access_has_local_array_receiver(ctx, array)
+                || unset_through_parent_cell_is_supported(ctx, array)
         }
         ExprKind::PropertyAccess { object, property }
         | ExprKind::NullsafePropertyAccess { object, property } => {
@@ -62,6 +80,119 @@ pub(super) fn unset_target_supported(ctx: &LoweringContext<'_, '_>, arg: &Expr) 
         }
         _ => false,
     }
+}
+
+/// Returns the static property an element chain (`C::$p[..]`, `C::$p[..][..]`) starts from.
+fn static_property_element_root(container: &Expr) -> Option<&Expr> {
+    match &container.kind {
+        ExprKind::StaticPropertyAccess { .. } => Some(container),
+        ExprKind::ArrayAccess { array, .. } => static_property_element_root(array),
+        _ => None,
+    }
+}
+
+/// Returns true when the static property at the root of an element unset stores a PHP array or
+/// a boxed value, whose element the boxed `OffsetUnset` path can remove.
+fn static_property_element_unset_supported(ctx: &LoweringContext<'_, '_>, container: &Expr) -> bool {
+    let Some(root) = static_property_element_root(container) else {
+        return false;
+    };
+    let ExprKind::StaticPropertyAccess { receiver, property } = &root.kind else {
+        return false;
+    };
+    let ty = static_property_result_type(ctx, receiver, property, root);
+    ty.is_php_array()
+        || matches!(
+            ty.codegen_repr(),
+            PhpType::Mixed | PhpType::Array(_) | PhpType::AssocArray { .. }
+        )
+}
+
+/// Lowers `unset(C::$p[$k])` and `unset(C::$p[$a][$b])`.
+///
+/// The static slot owns its payload, so the container chain is made addressable exactly as for
+/// `$r = &C::$p[$a][$b]`: a transient alias bound to the static property's cell (and one per
+/// nested level), through which the boxed sparse removal publishes its copy-on-write split back
+/// into the process-lifetime slot. The aliases are released once the element is gone.
+fn lower_unset_static_property_element(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &Expr,
+    index: &Expr,
+    expr: &Expr,
+) {
+    // `unset(C::$p[$a][$b])` with `$a` absent (or null) is a silent no-op in PHP and creates no
+    // key. The addressable path below would bind `C::$p[$a]` as a cell first, which inserts it,
+    // so a nested target only runs when its container is set: `if (isset(C::$p[$a])) unset(...)`.
+    // Every non-trivial index is evaluated once, into a hidden local, before the guard.
+    if matches!(array.kind, ExprKind::ArrayAccess { .. }) && !GUARDED_STATIC_UNSET.with(|flag| flag.get()) {
+        let array = stabilize_unset_place(ctx, array);
+        let index = stabilize_unset_index(ctx, index);
+        let span = expr.span;
+        let target = Expr::new(
+            ExprKind::ArrayAccess { array: Box::new(array.clone()), index: Box::new(index) },
+            span,
+        );
+        let call = |name: &str, arg: Expr| {
+            Expr::new(ExprKind::FunctionCall { name: name.into(), args: vec![arg] }, span)
+        };
+        let guarded = Stmt::new(
+            StmtKind::If {
+                condition: call("isset", array),
+                then_body: vec![Stmt::new(StmtKind::ExprStmt(call("unset", target)), span)],
+                elseif_clauses: Vec::new(),
+                else_body: None,
+            },
+            span,
+        );
+        GUARDED_STATIC_UNSET.with(|flag| flag.set(true));
+        crate::ir_lower::stmt::lower_stmt(ctx, &guarded);
+        GUARDED_STATIC_UNSET.with(|flag| flag.set(false));
+        return;
+    }
+    let (prepared, aliases) = prepare_transient_addressable_ref_array_receiver(ctx, array);
+    match prepared.as_ref().map(|receiver| &receiver.kind) {
+        Some(ExprKind::Variable(name)) => {
+            let name = name.clone();
+            lower_unset_boxed_array_element(ctx, &name, array.span, index, expr);
+        }
+        _ => crate::ir_lower::diagnostics::refuse(
+            expr.span,
+            "Unsupported unset of a static property element: its container is not addressable",
+        ),
+    }
+    release_transient_ref_receiver_aliases(ctx, &aliases, expr.span);
+}
+
+thread_local! {
+    /// Set while the guarded inner `unset` of a nested static-property element is lowered.
+    static GUARDED_STATIC_UNSET: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Rebuilds a static-property element chain with every index evaluated once into a hidden local.
+fn stabilize_unset_place(ctx: &mut LoweringContext<'_, '_>, place: &Expr) -> Expr {
+    match &place.kind {
+        ExprKind::ArrayAccess { array, index } => {
+            let array = stabilize_unset_place(ctx, array);
+            let index = stabilize_unset_index(ctx, index);
+            Expr::new(ExprKind::ArrayAccess { array: Box::new(array), index: Box::new(index) }, place.span)
+        }
+        _ => place.clone(),
+    }
+}
+
+/// Evaluates an index into a hidden local unless it is a literal or a plain variable.
+fn stabilize_unset_index(ctx: &mut LoweringContext<'_, '_>, index: &Expr) -> Expr {
+    if matches!(
+        index.kind,
+        ExprKind::IntLiteral(_) | ExprKind::StringLiteral(_) | ExprKind::Variable(_)
+    ) {
+        return index.clone();
+    }
+    let value = lower_expr(ctx, index);
+    let php_type = normalize_value_php_type(ctx.builder.value_php_type(value.value));
+    let temp = ctx.declare_synthetic_php_local(php_type.clone());
+    ctx.store_local(&temp, value, php_type, Some(index.span));
+    Expr::new(ExprKind::Variable(temp), index.span)
 }
 
 /// Returns true when an array-access unset receiver is a plain array/hash local whose element the
@@ -158,6 +289,12 @@ pub(super) fn lower_unset_array_access(
             _ => {}
         }
     }
+    if !unset_array_access_has_object_receiver(ctx, array)
+        && unset_through_parent_cell_is_supported(ctx, array)
+    {
+        lower_unset_through_parent_cell(ctx, array, index, expr);
+        return;
+    }
     let synthetic = Expr::new(
         ExprKind::MethodCall {
             object: Box::new(array.clone()),
@@ -167,6 +304,92 @@ pub(super) fn lower_unset_array_access(
         expr.span,
     );
     lower_expr(ctx, &synthetic);
+}
+
+/// Returns whether `unset($parent[$key])` can remove the key through `$parent`'s stored cell.
+///
+/// Covers the receivers that are not a plain local: a nested element (`unset($c[$e]['k'])`) and
+/// a boxed property or static property (`unset($this->listeners[$e])`, `unset(self::$map[$k])`),
+/// as long as the nested-write parent fetch reaches the stored cell
+/// (`nested_parent_is_write_through`). The receiver is probed with `isset()` first and then
+/// fetched again, so every part of it must be replayable without side effects.
+pub(super) fn unset_through_parent_cell_is_supported(ctx: &LoweringContext<'_, '_>, parent: &Expr) -> bool {
+    if matches!(parent.kind, ExprKind::Variable(_)) {
+        return false;
+    }
+    unset_parent_is_replayable(parent)
+        && crate::ir_lower::stmt::nested_parent_is_write_through(ctx, parent)
+}
+
+/// Returns whether evaluating `expr` twice is unobservable (no calls, assignments or increments).
+fn unset_parent_is_replayable(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(_)
+        | ExprKind::This
+        | ExprKind::StringLiteral(_)
+        | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null
+        | ExprKind::ConstRef(_) => true,
+        ExprKind::PropertyAccess { object, .. } => unset_parent_is_replayable(object),
+        ExprKind::StaticPropertyAccess { .. } => true,
+        ExprKind::ArrayAccess { array, index } => {
+            unset_parent_is_replayable(array) && unset_parent_is_replayable(index)
+        }
+        _ => false,
+    }
+}
+
+/// Lowers `unset($parent[$key])` through the parent's stored cell.
+///
+/// PHP's `unset()` never autovivifies: a missing or null parent is a silent no-op. The parent is
+/// therefore probed with `isset()` first, and only an existing, non-null parent is fetched for
+/// write (which then creates nothing) and has the key removed in place by `Op::OffsetUnset`, the
+/// same removal a boxed local uses. A scalar parent reaches the helper's
+/// "Cannot unset offset in a non-array variable" Error, as in PHP.
+fn lower_unset_through_parent_cell(
+    ctx: &mut LoweringContext<'_, '_>,
+    parent: &Expr,
+    index: &Expr,
+    expr: &Expr,
+) {
+    let probe = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified("isset"),
+            args: vec![parent.clone()],
+        },
+        parent.span,
+    );
+    let present = lower_expr(ctx, &probe);
+    let remove_block = ctx.builder.create_named_block("unset.nested.remove", Vec::new());
+    let merge = ctx.builder.create_named_block("unset.nested.merge", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: present.value,
+        then_target: remove_block,
+        then_args: Vec::new(),
+        else_target: merge,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(remove_block);
+    let cell = crate::ir_lower::stmt::lower_nested_assign_parent(ctx, parent, expr.span);
+    let index_value = lower_expr(ctx, index);
+    let (index_value, key_owner) = root_owned_call_operand(ctx, index_value, index.span);
+    ctx.emit_void(
+        Op::OffsetUnset,
+        vec![cell.value, index_value.value],
+        None,
+        Op::OffsetUnset.default_effects(),
+        Some(expr.span),
+    );
+    if let Some(slot) = key_owner {
+        retire_owned_call_operand(ctx, slot, expr.span);
+    }
+    if ctx.value_is_owning_temporary(cell) {
+        crate::ir_lower::ownership::release_if_owned(ctx, cell, Some(expr.span));
+    }
+    branch_to(ctx, merge);
+    ctx.builder.position_at_end(merge);
 }
 
 /// Detaches the declared array cell before sparse removal and roots an owned key across callbacks.

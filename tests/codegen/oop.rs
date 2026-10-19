@@ -15,6 +15,8 @@ mod instanceof;
 mod traits;
 #[path = "oop/inheritance.rs"]
 mod inheritance;
+#[path = "oop/override_compatibility.rs"]
+mod override_compatibility;
 #[path = "oop/interfaces.rs"]
 mod interfaces;
 #[path = "oop/modifiers_and_properties.rs"]
@@ -33,6 +35,8 @@ mod anonymous_classes;
 mod intersection_types;
 #[path = "oop/dynamic_dispatch.rs"]
 mod dynamic_dispatch;
+#[path = "oop/dynamic_class_members.rs"]
+mod dynamic_class_members;
 #[path = "oop/misc.rs"]
 mod misc;
 #[path = "oop/attributes.rs"]
@@ -41,6 +45,8 @@ mod attributes;
 mod constants;
 #[path = "oop/abstract_properties.rs"]
 mod abstract_properties;
+#[path = "oop/override_family_abi.rs"]
+mod override_family_abi;
 #[path = "oop/property_hooks.rs"]
 mod property_hooks;
 #[path = "oop/datetime.rs"]
@@ -49,6 +55,8 @@ mod datetime;
 mod reflection_properties;
 #[path = "oop/reflection_functions.rs"]
 mod reflection_functions;
+#[path = "oop/reflection_builtin_subclass.rs"]
+mod reflection_builtin_subclass;
 #[path = "oop/reflection_materialized_slots.rs"]
 mod reflection_materialized_slots;
 #[path = "oop/reflection_methods.rs"]

@@ -199,12 +199,22 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
                 .trim_start_matches('\\')
                 .eq_ignore_ascii_case("function_exists")
             {
+                if let [Expr { kind: ExprKind::StringLiteral(candidate), .. }] = args.as_slice() {
+                    if let Some(exists) =
+                        crate::optimize::user_guards::user_function_exists_value(candidate)
+                    {
+                        return Expr::new(ExprKind::BoolLiteral(exists), span);
+                    }
+                }
                 if let ([Expr { kind: ExprKind::StringLiteral(candidate), .. }], Some(target)) =
                     (args.as_slice(), active_fold_target())
                 {
                     let candidate = candidate.trim_start_matches('\\');
                     let date_alias = crate::name_resolver::is_global_date_procedural_alias(candidate);
-                    if crate::builtins::registry::lookup(candidate).is_some() || date_alias {
+                    if crate::builtins::registry::lookup(candidate).is_some()
+                        || date_alias
+                        || crate::stdlib_prelude::provides(candidate)
+                    {
                         let user_function = active_fold_user_function_exists(candidate);
                         let profile_builtin = crate::types::checker::builtins::is_php_visible_builtin_function_for_profile(
                             candidate,

@@ -469,6 +469,166 @@ fn test_comment_scan_follows_the_php_lexer() {
     }
 }
 
+/// An interface method's PHPDoc `@template` is erased: the interface keeps its native signature,
+/// so `TInstance` is not an unknown type and the implementing class still conforms.
+#[test]
+fn test_docblock_template_on_interface_method_is_erased() {
+    let out = compile_and_run(
+        r#"<?php
+interface Container {
+    /**
+     * @template TInstance of object
+     * @param TInstance $instance
+     * @return TInstance
+     */
+    public function instance(string $abstract, $instance);
+}
+class Box { public int $v = 7; }
+class C implements Container {
+    public function instance(string $abstract, $instance) { return $instance; }
+}
+function viaContract(Container $c) { return $c->instance("a", new Box())->v; }
+echo (new C())->instance("a", new Box())->v, "|", viaContract(new C());
+"#,
+    );
+    assert_eq!(out, "7|7");
+}
+
+/// A class method that declares `@template` while implementing a plain interface method keeps
+/// a vtable slot, so the class still implements the interface and dispatch reaches it.
+#[test]
+fn test_docblock_template_on_interface_implementation_keeps_conformance() {
+    let out = compile_and_run(
+        r#"<?php
+interface Repo { public function get(string $key, $default = null); }
+class ArrayRepo implements Repo {
+    /**
+     * @template TDefault
+     * @param TDefault $default
+     * @return mixed|TDefault
+     */
+    public function get(string $key, $default = null) { return $default; }
+}
+function read(Repo $r) { return $r->get("k", "contract"); }
+echo (new ArrayRepo())->get("k", "direct"), "|", read(new ArrayRepo());
+"#,
+    );
+    assert_eq!(out, "direct|contract");
+}
+
+/// A generic method that a subclass overrides is dispatched dynamically: calling it through the
+/// parent type runs the child's body, as php-src does.
+#[test]
+fn test_docblock_template_method_override_dispatches_to_the_child() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public function pick($v) { echo "Base "; return $v; }
+}
+class Child extends Base {
+    public function pick($v) { echo "Child "; return $v; }
+}
+function run(Base $b) { echo $b->pick(5); }
+run(new Child());
+"#,
+    );
+    assert_eq!(out, "Child 5");
+}
+
+/// `@template T of Model` documenting a native `Model` parameter and return refines both, so
+/// the call returns the argument's own class.
+#[test]
+fn test_docblock_bounded_template_refines_the_native_bound() {
+    let out = compile_and_run(
+        r#"<?php
+class Model { public string $n = "m"; }
+class User extends Model { public function hi() { return "hi"; } }
+class Repo {
+    /**
+     * @template T of Model
+     * @param T $m
+     * @return T
+     */
+    public function keep(Model $m): Model { return $m; }
+    /**
+     * @template T of Model
+     * @param T $m
+     * @return T
+     */
+    public function keepUntyped($m): Model { return $m; }
+}
+$r = new Repo();
+echo $r->keep(new User())->hi(), "|", $r->keepUntyped(new User())->hi();
+"#,
+    );
+    assert_eq!(out, "hi|hi");
+}
+
+/// A method template that no position adopts (every annotation lost to a native hint) is
+/// dropped, so the method compiles with its native signature.
+#[test]
+fn test_docblock_template_no_position_adopts_is_dropped() {
+    let out = compile_and_run(
+        r#"<?php
+class Repo {
+    /**
+     * @template T of object
+     * @param T $m
+     * @return T
+     */
+    public function keep(int $m): int { return $m + 1; }
+}
+echo (new Repo())->keep(4);
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// A method template on a method implementing a built-in interface (`ArrayAccess::offsetGet`,
+/// `ArrayAccess::offsetSet`, `JsonSerializable::jsonSerialize`) is dispatched dynamically and
+/// erased, so the class still implements the interface.
+#[test]
+fn test_docblock_template_on_builtin_interface_method_is_erased() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag implements ArrayAccess, JsonSerializable, Countable {
+    private array $items = ["x" => 1];
+    public function offsetExists(mixed $k): bool { return isset($this->items[$k]); }
+    /**
+     * @template TK
+     * @param TK $k
+     * @return mixed
+     */
+    public function offsetGet($k): mixed { return $this->items[$k]; }
+    /**
+     * @template TK
+     * @template TV
+     * @param TK $k
+     * @param TV $v
+     */
+    public function offsetSet($k, $v): void { $this->items[$k] = $v; }
+    public function offsetUnset(mixed $k): void {}
+    /**
+     * @template T
+     * @return T
+     */
+    public function jsonSerialize(): mixed { return $this->items; }
+    public function count(): int { return count($this->items); }
+}
+function rd(ArrayAccess $a) { return $a["x"]; }
+function js(JsonSerializable $j) { return count($j->jsonSerialize()); }
+$b = new Bag(); $b["y"] = 2;
+echo $b["x"], " ", rd($b), " ", $b->offsetGet("y"), " ", json_encode($b), " ", count($b), " ", js($b);
+"#,
+    );
+    assert_eq!(out, "1 1 2 {\"x\":1,\"y\":2} 2 2");
+}
+
 /// A one-line block parses its OPENING tag only — the tags after it are that tag's description
 /// (phpDocumentor semantics, review finding: a tag MENTIONED in a description must not bind).
 /// The violating argument is still refused, by a different route: with `@param` unread, `T`
@@ -477,8 +637,17 @@ fn test_comment_scan_follows_the_php_lexer() {
 #[test]
 fn test_one_line_block_reads_its_opening_tag() {
     let bound = "/** @template T of int @param T $v @return T */\n";
-    let cases = [
-        format!("<?php\n{bound}function id($v) {{ return $v; }}\necho id(\"seven\");\n"),
+    let function_case =
+        format!("<?php\n{bound}function id($v) {{ return $v; }}\necho id(\"seven\");\n");
+    let error = compile_cli_file_with_flags_expect_failure(&function_case, &[]);
+    assert!(
+        error.contains("does not determine type parameter <T>"),
+        "{function_case}: {error}"
+    );
+    // `docblock/members.rs`: a METHOD template that no parameter
+    // or return position adopts binds nothing at a call, so it is dropped and the method compiles
+    // untyped, as php-src runs it, instead of failing as an undetermined call.
+    let method_cases = [
         format!(
             "<?php\nclass R {{\n{bound}public static function id($v) {{ return $v; }}\n}}\n\
              echo R::id(\"seven\");\n"
@@ -492,12 +661,8 @@ fn test_one_line_block_reads_its_opening_tag() {
              echo Id::A->id(\"seven\");\n"
         ),
     ];
-    for source in &cases {
-        let error = compile_cli_file_with_flags_expect_failure(source, &[]);
-        assert!(
-            error.contains("does not determine type parameter <T>"),
-            "{source}: {error}"
-        );
+    for source in &method_cases {
+        assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "seven", "{source}");
     }
     let multiline = "<?php\n/** @template T of int\n * @param T $v\n * @return T\n */\n\
                      function id($v) { return $v; }\necho id(\"seven\");\n";

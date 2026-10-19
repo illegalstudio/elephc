@@ -167,6 +167,7 @@ pub(super) fn eval_native_type_expr_spec(type_expr: &TypeExpr) -> Option<String>
         TypeExpr::Float => Some("float".to_string()),
         TypeExpr::Bool => Some("bool".to_string()),
         TypeExpr::False => Some("false".to_string()),
+        TypeExpr::True => Some("true".to_string()),
         TypeExpr::Str => Some("string".to_string()),
         TypeExpr::Void => Some("null".to_string()),
         TypeExpr::Never => None,

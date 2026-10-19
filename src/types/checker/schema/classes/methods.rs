@@ -15,7 +15,7 @@ use crate::types::traits::FlattenedClass;
 
 use super::super::super::Checker;
 use super::super::validation::{
-    build_method_sig, declaration_is_source, matches_global_builtin_attribute,
+    build_method_sig_in_class, declaration_is_source, matches_global_builtin_attribute,
     validate_override_signature, visibility_rank,
 };
 use super::state::ClassBuildState;
@@ -104,7 +104,7 @@ fn apply_static_method(
     method: &ClassMethod,
 ) -> Result<(), CompileError> {
     let method_key = php_symbol_key(&method.name);
-    let mut sig = build_method_sig(checker, method, &class.name)?;
+    let mut sig = build_method_sig_in_class(checker, method, &class.name, class.extends.as_deref())?;
     if class.name == "WeakReference" && method_key == "create" && method.span == crate::span::Span::dummy() {
         // Box the generic object boundary so native Closure descriptors keep their runtime tag.
         sig.params[0].1 = crate::types::PhpType::Mixed;
@@ -158,6 +158,10 @@ fn apply_static_method(
                 .get(&method_key),
             true,
             parent_is_source,
+            state
+                .static_method_declaring_classes
+                .get(&method_key)
+                .map(String::as_str),
         )?;
     } else if has_override_attribute(method)
         && !interface_declares_method(checker, state, class, &method_key, true)
@@ -240,7 +244,7 @@ fn apply_instance_method(
     let method_key = php_symbol_key(&method.name);
     let internal_exception_override = injected_exception_final_override(class, method, &method_key);
     let inherited_declaring_class = state.method_declaring_classes.get(&method_key).cloned();
-    let mut sig = build_method_sig(checker, method, &class.name)?;
+    let mut sig = build_method_sig_in_class(checker, method, &class.name, class.extends.as_deref())?;
     let serializable = state.interfaces.iter().chain(class.implements.iter()).any(|name|
         name.eq_ignore_ascii_case("Serializable") || checker.interface_extends_interface(name, "Serializable"));
     if serializable && method_key == "unserialize"
@@ -302,6 +306,7 @@ fn apply_instance_method(
                 state.late_static_method_returns.get(&method_key),
                 false,
                 parent_is_source,
+                inherited_declaring_class.as_deref(),
             )?;
         }
     } else if has_override_attribute(method)

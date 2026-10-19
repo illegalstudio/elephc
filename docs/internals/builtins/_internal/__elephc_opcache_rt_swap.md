@@ -2,7 +2,7 @@
 title: "__elephc_opcache_rt_swap() - internals"
 description: "Compiler internals for __elephc_opcache_rt_swap(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1153
+  order: 1162
 ---
 
 ## `__elephc_opcache_rt_swap()` - internals

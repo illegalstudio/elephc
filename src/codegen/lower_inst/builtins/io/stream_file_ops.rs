@@ -337,6 +337,8 @@ pub(crate) fn lower_fputcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_fputcsv");
+    // A failed segment write returns -1; PHP's result is `false`, never a negative count.
+    box_negative_int_or_false_result(ctx, "fputcsv");
     store_if_result(ctx, inst)
 }
 

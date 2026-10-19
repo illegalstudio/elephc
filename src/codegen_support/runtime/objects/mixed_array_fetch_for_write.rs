@@ -24,6 +24,8 @@
 //!   slots, fixing write-through for 3+ level chains (#553 residual).
 //! - A string key on an indexed payload promotes the payload to hash storage
 //!   via `__rt_mixed_cell_promote_to_hash` (PHP arrays accept mixed keys);
+//!   An integer key past the logical end (a gap) promotes the same way: PHP never
+//!   materializes the missing keys, so null-padding the dense storage invented them.
 //!   incompatible scalar parents are NOT converted: the stored cell is
 //!   returned unchanged and the following set drops the write.
 //! - `__rt_array_ensure_elem_for_write(container, tag, key_lo, key_hi)` wraps
@@ -236,7 +238,8 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload the requested integer index
     emitter.instruction("str x9, [sp, #32]");                                   // preserve the target index across helper calls
     emitter.instruction("cmp x9, x11");                                         // is the requested index beyond the logical length?
-    emitter.instruction("b.hs __rt_mixed_array_gfw_extend");                    // missing elements extend the array and autovivify
+    emitter.instruction("b.hi __rt_mixed_array_gfw_promote");                   // a key past the end leaves a gap: PHP keeps only real keys, so use hash storage
+    emitter.instruction("b.eq __rt_mixed_array_gfw_extend");                    // the next index appends one autovivified element
     emitter.instruction("add x13, x0, #24");                                    // compute the indexed-array data base
     emitter.instruction("ldr x0, [x13, x9, lsl #3]");                           // load the stored boxed cell from the slot
     emitter.instruction("cbz x0, __rt_mixed_array_gfw_fill_slot");              // null gap slots autovivify in place
@@ -395,6 +398,7 @@ fn emit_array_ensure_elem_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #16]");                                   // install the payload tag into the transient cell
     emitter.instruction("str x0, [sp, #24]");                                   // install the container pointer into the transient cell payload
     emitter.instruction("str xzr, [sp, #32]");                                  // clear the transient cell's high payload word
+    emit_runtime_container_tag_aarch64(emitter);
     emitter.instruction("add x0, sp, #16");                                     // pass the transient cell as the fetch-for-write receiver
     emitter.instruction("mov x1, x2");                                          // forward key_lo into the fetch-for-write key register
     emitter.instruction("mov x2, x3");                                          // forward key_hi into the fetch-for-write key register
@@ -565,7 +569,8 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // reload the requested integer index
     emitter.instruction("mov QWORD PTR [rbp - 40], r9");                        // preserve the target index across helper calls
     emitter.instruction("cmp r9, r11");                                         // is the requested index beyond the logical length?
-    emitter.instruction("jae __rt_mixed_array_gfw_extend");                     // missing elements extend the array and autovivify
+    emitter.instruction("ja __rt_mixed_array_gfw_promote");                     // a key past the end leaves a gap: PHP keeps only real keys, so use hash storage
+    emitter.instruction("je __rt_mixed_array_gfw_extend");                      // the next index appends one autovivified element
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the unique array pointer
     emitter.instruction("mov rax, QWORD PTR [r10 + 24 + r9 * 8]");              // load the stored boxed cell from the slot
     emitter.instruction("test rax, rax");                                       // null gap slots autovivify in place
@@ -722,6 +727,7 @@ fn emit_array_ensure_elem_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], rsi");                       // install the payload tag into the transient cell
     emitter.instruction("mov QWORD PTR [rbp - 32], rdi");                       // install the container pointer into the transient cell payload
     emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // clear the transient cell's high payload word
+    emit_runtime_container_tag_x86_64(emitter);
     emitter.instruction("lea rdi, [rbp - 40]");                                 // pass the transient cell as the fetch-for-write receiver
     emitter.instruction("mov rsi, rdx");                                        // forward key_lo into the fetch-for-write key register
     emitter.instruction("mov rdx, rcx");                                        // forward key_hi into the fetch-for-write key register
@@ -731,6 +737,62 @@ fn emit_array_ensure_elem_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return the container pointer for the local storeback
+}
+
+/// Re-derives the transient cell's payload tag from the container's runtime storage kind.
+///
+/// A statically indexed `Array(Mixed)` local may already hold hash storage: a string or gap key
+/// promoted it at runtime (`Op::ArraySetMixedKey`, or an earlier nested write through this very
+/// helper). Trusting the static tag then walked a hash as dense slots. Null containers keep the
+/// caller's tag so the receiver still autovivifies. Expects the container in `x0` and the cell
+/// tag at `[sp, #16]`; clobbers `x9`/`x10`.
+fn emit_runtime_container_tag_aarch64(emitter: &mut Emitter) {
+    emitter.instruction("cbz x0, __rt_array_ensure_elem_tag_done");             // a null container keeps the caller's static tag
+    crate::codegen_support::abi::emit_load_int_immediate(
+        emitter,
+        "x9",
+        crate::codegen_support::sentinels::NULL_SENTINEL,
+    );
+    emitter.instruction("cmp x0, x9");                                          // is the container the in-band null sentinel?
+    emitter.instruction("b.eq __rt_array_ensure_elem_tag_done");                // sentinel containers keep the caller's static tag
+    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the container's packed kind metadata
+    emitter.instruction("and x9, x9, #0xff");                                   // isolate the storage kind byte
+    emitter.instruction("cmp x9, #3");                                          // runtime hash storage?
+    emitter.instruction("b.ne __rt_array_ensure_elem_tag_indexed");             // otherwise check for dense storage
+    emitter.instruction("mov x10, #5");                                         // runtime value tag 5 = associative payload
+    emitter.instruction("str x10, [sp, #16]");                                  // retag the transient cell as a hash receiver
+    emitter.instruction("b __rt_array_ensure_elem_tag_done");                   // the tag now matches the storage
+    emitter.label("__rt_array_ensure_elem_tag_indexed");
+    emitter.instruction("cmp x9, #2");                                          // runtime indexed storage?
+    emitter.instruction("b.ne __rt_array_ensure_elem_tag_done");                // unknown kinds keep the caller's tag
+    emitter.instruction("mov x10, #4");                                         // runtime value tag 4 = indexed payload
+    emitter.instruction("str x10, [sp, #16]");                                  // retag the transient cell as an indexed receiver
+    emitter.label("__rt_array_ensure_elem_tag_done");
+}
+
+/// x86_64 twin of [`emit_runtime_container_tag_aarch64`]: container in `rdi`, cell tag at
+/// `[rbp - 40]`; clobbers `r10`/`r11`.
+fn emit_runtime_container_tag_x86_64(emitter: &mut Emitter) {
+    emitter.instruction("test rdi, rdi");                                       // a null container keeps the caller's static tag
+    emitter.instruction("jz __rt_array_ensure_elem_tag_done");                  // skip retagging for a null container
+    crate::codegen_support::abi::emit_load_int_immediate(
+        emitter,
+        "r10",
+        crate::codegen_support::sentinels::NULL_SENTINEL,
+    );
+    emitter.instruction("cmp rdi, r10");                                        // is the container the in-band null sentinel?
+    emitter.instruction("je __rt_array_ensure_elem_tag_done");                  // sentinel containers keep the caller's static tag
+    emitter.instruction("mov r10, QWORD PTR [rdi - 8]");                        // load the container's packed kind metadata
+    emitter.instruction("and r10, 0xff");                                       // isolate the storage kind byte
+    emitter.instruction("cmp r10, 3");                                          // runtime hash storage?
+    emitter.instruction("jne __rt_array_ensure_elem_tag_indexed");              // otherwise check for dense storage
+    emitter.instruction("mov QWORD PTR [rbp - 40], 5");                         // retag the transient cell as a hash receiver
+    emitter.instruction("jmp __rt_array_ensure_elem_tag_done");                 // the tag now matches the storage
+    emitter.label("__rt_array_ensure_elem_tag_indexed");
+    emitter.instruction("cmp r10, 2");                                          // runtime indexed storage?
+    emitter.instruction("jne __rt_array_ensure_elem_tag_done");                 // unknown kinds keep the caller's tag
+    emitter.instruction("mov QWORD PTR [rbp - 40], 4");                         // retag the transient cell as an indexed receiver
+    emitter.label("__rt_array_ensure_elem_tag_done");
 }
 
 #[cfg(test)]

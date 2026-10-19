@@ -163,8 +163,25 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
 pub(super) fn lower_throw_value(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
     let ty = ctx.load_value_to_result(value)?;
     if matches!(ty.codegen_repr(), PhpType::Object(_)) {
-        abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), "_exc_value", 0);
+        // An Object-typed value can still be null at runtime (a zero pointer or the in-band
+        // null sentinel), e.g. a closure whose EIR return type dropped a `null` arm. PHP raises
+        // `Error("Can only throw objects")` there; a null holds no reference to release.
+        let null_label = ctx.next_label("throw_object_null");
+        let done_label = ctx.next_label("throw_object_done");
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+        crate::codegen::sentinels::emit_branch_if_null_container(
+            ctx.emitter,
+            result_reg,
+            scratch_reg,
+            &null_label,
+        );
+        abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, "_exc_value", 0);
         abi::emit_call_label(ctx.emitter, "__rt_throw_current");
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&null_label);
+        super::lower_inst::exceptions::emit_error(ctx, "Can only throw objects");
+        ctx.emitter.label(&done_label);
         return Ok(());
     }
     if matches!(ty.codegen_repr(), PhpType::Mixed) {

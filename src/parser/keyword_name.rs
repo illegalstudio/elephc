@@ -6,6 +6,7 @@
 //! Called from:
 //! - `crate::parser::expr` (named arguments, `->`/`?->` members, `::` scoped access)
 //! - `crate::parser::stmt::oop` (method and class-constant declaration names)
+//! - `crate::parser::stmt::namespace_use` (a lone keyword as a `namespace` declaration name)
 //!
 //! Key details:
 //! - Returns the exact source lexeme so the resulting name matches what PHP would record.

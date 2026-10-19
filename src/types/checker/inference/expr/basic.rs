@@ -192,12 +192,30 @@ impl Checker {
                 default,
             } => {
                 self.infer_type(subject, env)?;
+                let subject_is_true = matches!(subject.kind, ExprKind::BoolLiteral(true));
                 let mut result_ty: Option<PhpType> = None;
                 for (conditions, result) in arms {
                     for c in conditions {
                         self.infer_type(c, env)?;
                     }
-                    let ty = self.match_arm_result_type(result, env)?;
+                    // `match (true) { $x instanceof X => <arm>, ... }`: the arm only runs when its
+                    // single condition is `=== true`, so it gets the same then-branch narrowing a
+                    // ternary gives (`$x->prop` on a joined `A|B` union is read from `A`). The
+                    // else narrowing is not chained into later arms: a non-bool condition that is
+                    // not `=== true` need not be falsy. An arm that writes the variable keeps the
+                    // un-narrowed type, as before.
+                    let narrowed = match conditions.as_slice() {
+                        [condition] if subject_is_true => self
+                            .guard_narrowing(condition, env)?
+                            .filter(|guard| !crate::ir_lower::expr_writes_local(result, &guard.var))
+                            .map(|guard| {
+                                let mut arm_env = env.clone();
+                                arm_env.insert(guard.var, guard.then_ty);
+                                arm_env
+                            }),
+                        _ => None,
+                    };
+                    let ty = self.match_arm_result_type(result, narrowed.as_ref().unwrap_or(env))?;
                     result_ty = Some(match result_ty {
                         Some(acc) => merge_match_arm_result_type(self, acc, ty),
                         None => ty,
@@ -280,6 +298,10 @@ impl Checker {
                     PhpType::Object(class_name) => {
                         if self.object_type_implements_interface(class_name, "ArrayAccess") {
                             Ok(self.array_access_offset_get_type(class_name))
+                        } else if self.awaits_generic_instantiation(class_name) {
+                            // `new Bag([...])` inferred `Bag<string, int>` this round; the class
+                            // is spliced by the next one, which checks this read properly.
+                            Ok(PhpType::Mixed)
                         } else {
                             Err(CompileError::new(expr.span, "Cannot index non-array"))
                         }
@@ -422,23 +444,8 @@ impl Checker {
             }
             ExprKind::Throw(inner) => {
                 let thrown_ty = self.infer_type(inner, env)?;
-                match thrown_ty {
-                    PhpType::Object(type_name)
-                        if self.object_type_implements_throwable(&type_name)
-                            || self.object_type_may_be_eval_declared(&type_name) =>
-                    {
-                        Ok(PhpType::Void)
-                    }
-                    PhpType::Mixed if self.eval_barrier_active => Ok(PhpType::Void),
-                    PhpType::Object(_) => Err(CompileError::new(
-                        expr.span,
-                        "Type error: throw requires an object implementing Throwable",
-                    )),
-                    _ => Err(CompileError::new(
-                        expr.span,
-                        "Type error: throw requires an object value",
-                    )),
-                }
+                self.check_thrown_type(inner, thrown_ty, env, expr.span)?;
+                Ok(PhpType::Void)
             }
             ExprKind::Cast { target, expr } => {
                 let source_ty = self.infer_type(expr, env)?;

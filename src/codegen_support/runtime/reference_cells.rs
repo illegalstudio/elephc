@@ -23,6 +23,14 @@ const UNMANAGED_REFERENCE_ESCAPE_MSG_LEN: i64 = 73;
 /// Byte length of `_borrowed_reference_return_msg`, kept beside the data that defines it.
 const BORROWED_REFERENCE_RETURN_MSG_LEN: i64 = 75;
 
+/// Byte length of `_unmanaged_reference_bind_msg`, kept beside the data that defines it.
+const UNMANAGED_REFERENCE_BIND_MSG_LEN: i64 = 73;
+
+/// Byte length of `_reference_bind_scalar_container_msg`, kept beside the data that defines it.
+const REFERENCE_BIND_SCALAR_CONTAINER_MSG_LEN: i64 = 37;
+/// Byte length of `_nesting_too_deep_msg`, kept beside the data that defines it.
+const NESTING_TOO_DEEP_MSG_LEN: i64 = 46;
+
 /// Returns the descriptor tag for the actual stored property representation.
 pub(crate) fn payload_tag(php_type: &PhpType) -> i64 {
     match php_type.codegen_repr() {
@@ -46,6 +54,8 @@ pub(super) fn emit_reference_cells(emitter: &mut Emitter) {
     emit_unmanaged_borrow_lookup(emitter);
     emit_unmanaged_borrow_escape_error(emitter);
     emit_borrowed_reference_return_error(emitter);
+    emit_reference_bind_errors(emitter);
+    emit_nesting_too_deep_error(emitter);
 }
 
 /// Allocates a zeroed two-word cell; C argument zero supplies its payload descriptor tag.
@@ -389,6 +399,39 @@ fn emit_borrowed_reference_return_error(emitter: &mut Emitter) {
         "__rt_borrowed_reference_return_error",
         "_borrowed_reference_return_msg",
         BORROWED_REFERENCE_RETURN_MSG_LEN,
+    );
+}
+
+/// Allocates the catchable `Error`s a reference binding into a property or element raises.
+///
+/// `__rt_unmanaged_reference_bind_error` is raised when the source of `$o->p = &$x` /
+/// `$a[$k] = &$x` is a borrowed address (a by-reference parameter handed a caller's frame slot
+/// or an array interior) rather than a managed cell the place could co-own: publishing that
+/// address into storage that outlives the call would dangle. The scalar-container error mirrors
+/// PHP's own message for a nested element place whose parent holds a non-array value.
+fn emit_reference_bind_errors(emitter: &mut Emitter) {
+    emit_reference_escape_error(
+        emitter,
+        "__rt_unmanaged_reference_bind_error",
+        "_unmanaged_reference_bind_msg",
+        UNMANAGED_REFERENCE_BIND_MSG_LEN,
+    );
+    emit_reference_escape_error(
+        emitter,
+        "__rt_reference_bind_scalar_container_error",
+        "_reference_bind_scalar_container_msg",
+        REFERENCE_BIND_SCALAR_CONTAINER_MSG_LEN,
+    );
+}
+
+/// Allocates php's catchable `Error` for `===` on an array that contains itself through a
+/// reference (`__rt_array_strict_eq` protects the left table, as `zend_hash_compare` does).
+fn emit_nesting_too_deep_error(emitter: &mut Emitter) {
+    emit_reference_escape_error(
+        emitter,
+        "__rt_nesting_too_deep_error",
+        "_nesting_too_deep_msg",
+        NESTING_TOO_DEEP_MSG_LEN,
     );
 }
 

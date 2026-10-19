@@ -290,6 +290,7 @@ pub(crate) fn parse_type_param_list(
             bound,
             default,
             variance,
+            from_docblock: false,
         });
         if *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
             *pos += 1;
@@ -312,6 +313,16 @@ pub(crate) fn parse_type_param_list(
 /// Checks for nullable/union types, pointer/buffer generics, and that the token sequence
 /// ultimately resolves to a variable token (possibly after `&` or `...` markers).
 pub(crate) fn looks_like_typed_param(tokens: &[SpannedToken], pos: usize) -> bool {
+    // `\self` / `\parent` / `\static` is meant as a type; claim it so `parse_type_expr`
+    // reports PHP's "invalid class name" instead of a generic parameter error.
+    if matches!(tokens.get(pos), Some((Token::Backslash, _)))
+        && matches!(
+            tokens.get(pos + 1),
+            Some((Token::Self_ | Token::Parent | Token::Static, _))
+        )
+    {
+        return true;
+    }
     let mut probe = pos;
     match parse_type_expr(tokens, &mut probe, tokens[pos].1.span) {
         Ok(_) => {
@@ -603,14 +614,16 @@ fn parse_atomic_type_expr(
         }
         // Preserve `false` as a literal subtype so `$x === false` can remove only the false
         // member from `T|false` without incorrectly removing a full `bool` member. Its runtime
-        // representation remains identical to bool. `true` is conservatively widened to bool.
+        // representation remains identical to bool. `true` is likewise kept as its own literal type
+        // (`TypeExpr::True`), which every type position treats as `bool` except the declared-return
+        // check, where `: true` must reject a `false` value.
         Some(Token::False) => {
             *pos += 1;
             Ok(TypeExpr::False)
         }
         Some(Token::True) => {
             *pos += 1;
-            Ok(TypeExpr::Bool)
+            Ok(TypeExpr::True)
         }
         // `self`, `static`, and `parent` are relative class types. They are kept symbolic here
         // (their concrete class is not known until inheritance/trait flattening) and resolved to

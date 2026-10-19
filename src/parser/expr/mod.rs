@@ -9,10 +9,19 @@
 //! - Assignment-value parsing intentionally permits assignment expressions where PHP syntax allows them.
 
 mod assignment_targets;
+pub(crate) use assignment_targets::{
+    append_assignment_expr, call_dimension_assignment_expr, is_call_dimension_place,
+    is_dynamic_class_member_read, reject_dynamic_member_write, reject_nullsafe_write,
+    DYNAMIC_STATIC_PROPERTY_WRITE_ERROR,
+};
 mod calls;
+mod dynamic_calls;
 mod prefix;
+pub(crate) use prefix::REFERENCE_LITERAL_VALUE_STEM;
 mod prefix_complex;
 mod pratt;
+
+pub(crate) use prefix::parse_include_value;
 
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};

@@ -310,6 +310,9 @@ fn stmt_refs_ve(stmt: &Stmt) -> bool {
                 || body.iter().any(stmt_refs_ve)
         }
         StmtKind::ArrayAssign { index, value, .. } => expr_refs_ve(index) || expr_refs_ve(value),
+        StmtKind::RefAssignPlace { target, source } => {
+            expr_refs_ve(target) || expr_refs_ve(source)
+        }
         StmtKind::NestedArrayAssign { target, value } => {
             expr_refs_ve(target) || expr_refs_ve(value)
         }

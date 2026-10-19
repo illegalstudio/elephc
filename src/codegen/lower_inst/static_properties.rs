@@ -810,6 +810,9 @@ fn ensure_static_property_value_supported(
     if is_empty_array_for_array_static_property(value_ty, &slot.php_type) {
         return Ok(());
     }
+    if is_null_for_pointer_static_property(value_ty, &slot.php_type) {
+        return Ok(());
+    }
     if can_coerce_mixed_to_scalar_static_property(value_ty, &slot.php_type) {
         return Ok(());
     }
@@ -824,6 +827,21 @@ fn ensure_static_property_value_supported(
         slot.property,
         slot.php_type
     )))
+}
+
+/// Returns true when `null` resets an untyped static property whose inferred storage is a pointer.
+///
+/// An untyped null-defaulted slot that later held an array or an object rebinds to that pointer
+/// type (its null pointer already reads as PHP null), so `static::$instance = null` has to store
+/// the null pointer back, exactly as the instance-property path does. It was a backend error
+/// (`store_static_property assigning PHP type Void`), on the common
+/// singleton-reset pattern.
+fn is_null_for_pointer_static_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
+    matches!(value_ty, PhpType::Void | PhpType::Never)
+        && matches!(
+            slot_ty.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)
+        )
 }
 
 /// Returns true when an empty array literal initializes a typed static array property.
@@ -921,6 +939,12 @@ fn load_static_property_store_value_to_result(
             }
             _ => {}
         }
+        return Ok(());
+    }
+    if is_null_for_pointer_static_property(&value_ty, slot_ty) {
+        // The null pointer is the slot's PHP null; the store releases what it overwrites.
+        let result = abi::int_result_reg(ctx.emitter);
+        abi::emit_load_int_immediate(ctx.emitter, result, 0);
         return Ok(());
     }
     ctx.load_value_to_result(value)?;

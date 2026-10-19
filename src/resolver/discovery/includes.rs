@@ -60,6 +60,18 @@ pub(super) fn discover_include(
             "maximum include depth exceeded",
         ));
     }
+    // A dynamic site closed by the manifest: discover the dispatch, whose branches are static
+    // includes of every candidate (mutually exclusive alternatives, like an `if` chain).
+    if let Some(lowered) = super::super::dynamic_includes::lower_dynamic_include(
+        span,
+        path,
+        once,
+        required,
+        super::super::dynamic_includes::SiteCapture::Stmt,
+        state,
+    )? {
+        return discover_stmts(&lowered, base_dir, loaded_paths, include_chain, state, output);
+    }
     let path_str = fold_include_path(path, state).map_err(|msg| CompileError::new(span, &msg))?;
     let resolved = resolve_path(&path_str, base_dir);
     let canonical = resolved.canonicalize().unwrap_or_else(|_| resolved.clone());

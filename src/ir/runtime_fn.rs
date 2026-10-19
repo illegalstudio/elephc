@@ -501,6 +501,8 @@ pub enum RuntimeFnId {
     CurlVersion,
     /// Raises PHP's warning for a `curl_setopt()` option this build cannot apply.
     CurlSetoptUnsupportedWarning,
+    /// Raises PHP's `E_WARNING` with a message, for a dynamic include of a missing file.
+    IncludeWarning,
     /// Reads a `long`-typed `CURLINFO_*` field from an easy handle's most recent transfer
     /// (`CURLINFO_HTTP_CODE` only, for `curl_getinfo()`).
     CurlEasyGetinfoLong,
@@ -2361,6 +2363,7 @@ impl RuntimeFnId {
                 // storage for the caller to keep an argument temporary alive for.
                 | RuntimeFnId::CurlSetoptUnsupportedWarning
                 | RuntimeFnId::CurlMultiSetoptUnsupportedWarning
+                | RuntimeFnId::IncludeWarning
                 // Every multi operation below hands back a raw machine integer — a
                 // `CURLMcode`, a ready-descriptor count, a packed (running, code) pair, or
                 // one completion-queue field — never storage. `CurlEasyId` merely unboxes
@@ -2623,6 +2626,12 @@ impl RuntimeFnId {
                 // leaked the literal replacement array on every call.
                 | RuntimeFnId::ArraySplice
                 | RuntimeFnId::ZvalUnpack
+                // `file_put_contents()` and `fputcsv()` answer `int|false`, boxed by the
+                // lowering into a Mixed cell `__rt_mixed_from_value` just allocated; neither
+                // hands back an argument. Without an explicit owner the callable wrapper
+                // (`file_put_contents(...)`, `call_user_func`) refused the Mixed result.
+                | RuntimeFnId::FilePutContents
+                | RuntimeFnId::Fputcsv
                 // Parsed values own their storage independently of the wire input and options.
                 | RuntimeFnId::Unserialize
         ) {
@@ -3089,6 +3098,7 @@ impl RuntimeFnId {
             RuntimeFnId::CurlSetoptUnsupportedWarning => {
                 "__elephc_curl_setopt_unsupported_warning"
             }
+            RuntimeFnId::IncludeWarning => "__elephc_include_warning",
             RuntimeFnId::CurlShareInit => "__elephc_curl_share_init",
             RuntimeFnId::CurlShareSetopt => "__elephc_curl_share_setopt",
             RuntimeFnId::CurlShareErrno => "__elephc_curl_share_errno",

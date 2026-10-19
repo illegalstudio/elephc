@@ -88,6 +88,12 @@ fn collect_rebound_locals(body: &[Stmt], out: &mut HashSet<String>) {
             | StmtKind::StaticVar { name, .. } => {
                 out.insert(name.clone());
             }
+            // `$a[k] = &$name` puts `$name` in a reference set the place can write through.
+            StmtKind::RefAssignPlace { source, .. } => {
+                if let ExprKind::Variable(name) = &source.kind {
+                    out.insert(name.clone());
+                }
+            }
             StmtKind::ListUnpack { vars, .. } | StmtKind::Global { vars } => {
                 out.extend(vars.iter().cloned());
             }
@@ -212,6 +218,10 @@ fn stmt_expressions_preserve_counter(stmt: &Stmt, counter: &str) -> bool {
             target: index,
             value,
         }
+        | StmtKind::RefAssignPlace {
+            target: index,
+            source: value,
+        }
         | StmtKind::StaticPropertyArrayAssign { index, value, .. }
         | StmtKind::PropertyArrayAssign { index, value, .. } => {
             preserved(index) && preserved(value)
@@ -262,6 +272,9 @@ fn stmt_preserves_counter(stmt: &Stmt, counter: &str, loop_depth: usize) -> bool
         | StmtKind::StaticVar { name, .. } => name != counter,
         StmtKind::RefAssign { target, source } => {
             target != counter && !argument_names_counter(source, counter)
+        }
+        StmtKind::RefAssignPlace { target, source } => {
+            preserved_place_root(target) != Some(counter) && !argument_names_counter(source, counter)
         }
         StmtKind::ListUnpack { vars, .. } | StmtKind::Global { vars } => {
             !vars.iter().any(|var| var == counter)
@@ -375,6 +388,15 @@ fn call_may_alias_counter(expr: &Expr, counter: &str) -> bool {
 }
 
 /// Unwraps a named argument before checking whether it names the counter local.
+/// Returns the local an array-element reference place is rooted at (`$a` in `$a[k][j]`).
+fn preserved_place_root(expr: &Expr) -> Option<&str> {
+    match &expr.kind {
+        ExprKind::Variable(name) => Some(name),
+        ExprKind::ArrayAccess { array, .. } => preserved_place_root(array),
+        _ => None,
+    }
+}
+
 fn argument_names_counter(arg: &Expr, counter: &str) -> bool {
     match &arg.kind {
         ExprKind::NamedArg { value, .. } => argument_names_counter(value, counter),

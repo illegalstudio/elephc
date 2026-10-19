@@ -25,7 +25,7 @@ sidebar:
 - **Target strategy**: `runtime_call`
 - **Validation**: `checker_hook`
 - **Result type source**: `checked`
-- **Result ownership**: `may_alias_arguments`
+- **Result ownership**: `fresh`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `shared`
 - **Callable policy**: `static_only`
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function file_put_contents(string $filename, string $data, int $flags = 0): int
+function file_put_contents(string $filename, string $data, int $flags = 0): mixed
 ```
 
 ## What the type checker enforces

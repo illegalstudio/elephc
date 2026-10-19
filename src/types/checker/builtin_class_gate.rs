@@ -45,12 +45,11 @@ pub(crate) const ALWAYS_REGISTERED_THROWABLES: &[&str] = &[
     "JsonException",
 ];
 
-/// Throwables `inject_builtin_throwables` registers that nothing in elephc can raise.
+/// Throwables `inject_builtin_throwables` registers only when the program can reach them.
 ///
 /// Neither has a `_*_class_id` symbol: `assert()` is not implemented, so `AssertionError` has no
-/// producer; and an unmatched `match` ends in `Terminator::Fatal` rather than throwing
-/// `UnhandledMatchError` — a real gap against reference PHP, and closing it will give the class
-/// the EIR reference that makes it survive this gate on its own.
+/// producer; an unmatched `match` without `default` throws `UnhandledMatchError` through an
+/// ordinary EIR `new`, and the usage walk records that class for every such `match`.
 const UNRAISED_THROWABLES: &[&str] = &[
     "AssertionError",
     "UnhandledMatchError",

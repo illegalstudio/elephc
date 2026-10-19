@@ -449,6 +449,15 @@ fn finalize_user_asm(
     let user_functions = runtime_user_function_sigs(module);
     let function_variant_groups = runtime_function_variant_groups(module);
     let mut allowed_class_names = runtime_referenced_class_names(module);
+    let runtime_static_dispatch_classes = shared
+        .runtime_static_dispatch_class_names()
+        .into_iter()
+        .filter(|class_name| module.class_infos.contains_key(class_name))
+        .collect::<Vec<_>>();
+    if !runtime_static_dispatch_classes.is_empty() {
+        allowed_class_names.extend(runtime_static_dispatch_classes);
+        expand_class_dependencies(&mut allowed_class_names, &module.class_infos);
+    }
     if module_uses_dynamic_callable_lookup(module)
         || module_uses_unserialize(module)
         || module.required_runtime_features.eval_bridge

@@ -114,11 +114,10 @@ foreach ($animals as $animal) {
     assert_eq!(out, "Rex Mia ");
 }
 
-/// Tests that a match expression without a default case produces a fatal error
-/// ("unhandled match case") when the matched value has no corresponding arm.
+/// Tests that a match expression without a default case throws PHP's `UnhandledMatchError`
+/// when the matched value has no corresponding arm, which ends the program uncaught.
 ///
-/// Fixture: `$value = 3` matched against arms 1 and 2 only. Verifies fatal error
-/// message is produced.
+/// Fixture: `$value = 3` matched against arms 1 and 2 only.
 #[test]
 fn test_match_without_default_is_fatal() {
     let err = compile_and_run_expect_failure(
@@ -130,7 +129,7 @@ echo match($value) {
 };
 "#,
     );
-    assert!(err.contains("unhandled match case"), "{err}");
+    assert!(err.contains("Uncaught UnhandledMatchError: Unhandled match case 3"), "{err}");
 }
 
 /// Verifies the v017-trio example PHP fixture compiles and runs, asserting the

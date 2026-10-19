@@ -315,6 +315,11 @@ impl Checker {
         if class_name == "ReflectionMethod" && args.len() == 1 {
             return self.validate_reflection_method_constructor_from_method_name(args, expr, env);
         }
+        if class_name == "ReflectionFunction" && self.reflection_function_closure_arg(args, env)? {
+            // `new ReflectionFunction($closure)`: the reflected target is the Closure's runtime
+            // descriptor, read when the reflector is built.
+            return Ok(());
+        }
         let sig = self
             .classes
             .get(class_name)
@@ -403,6 +408,24 @@ impl Checker {
             }
             _ => Ok(()),
         }
+    }
+
+    /// Returns true for `new ReflectionFunction($closure)` with one positional Closure argument.
+    ///
+    /// The Closure may come from a literal, a first-class callable (`f(...)`, `$cb(...)`), or
+    /// `Closure::fromCallable()`; its reflected target is only known at run time.
+    fn reflection_function_closure_arg(
+        &mut self,
+        args: &[Expr],
+        env: &TypeEnv,
+    ) -> Result<bool, CompileError> {
+        let [arg] = args else {
+            return Ok(false);
+        };
+        if matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_)) {
+            return Ok(false);
+        }
+        Ok(self.infer_type(arg, env)? == PhpType::Callable)
     }
 
     /// Validates deprecated `new ReflectionMethod("Class::method")` calls.

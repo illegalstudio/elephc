@@ -19,7 +19,8 @@ fn test_core_symbols_serializable_user_return_contract() {
 #[test]
 fn test_core_symbols_enum_interface_misuse() {
     expect_error("<?php class Bad implements UnitEnum { public static function cases(): array { return []; } }", "Non-enum class Bad cannot implement interface UnitEnum");
-    expect_error("<?php enum Bad implements UnitEnum { case One; }", "cannot explicitly implement");
+    // PHP 8.5: "Enum Bad cannot implement previously implemented interface UnitEnum".
+    expect_error("<?php enum Bad implements UnitEnum { case One; }", "Enum Bad cannot implement previously implemented interface UnitEnum");
 }
 
 /// Core internal attributes validate declaration targets and repeatability.

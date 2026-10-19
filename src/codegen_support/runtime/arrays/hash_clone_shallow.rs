@@ -133,8 +133,33 @@ pub fn emit_hash_clone_shallow(emitter: &mut Emitter) {
     emitter.instruction("b __rt_hash_clone_shallow_insert");                    // insert the retained child into the cloned hash
 
     emitter.label("__rt_hash_clone_shallow_value_reference_cell");
+    // -- php's zend_array_dup keeps a singleton reference SHARED when it points back at the very
+    //    table being copied (`$a[] = &$a; $b = $a; $b[0] = 1` writes through to `$a`), so only
+    //    other singleton cells separate. The cell holds the table directly (payload 5) or in a
+    //    boxed Mixed (payload 7, box tag 5). --
+    emitter.instruction("ldr x0, [sp, #24]");                                   // load the source managed cell
+    emitter.instruction("ldr x9, [x0, #-8]");                                   // read the cell's payload descriptor
+    emitter.instruction("ubfx x9, x9, #8, #7");                                 // isolate the stored payload tag
+    emitter.instruction("ldr x10, [x0]");                                       // load the cell payload word
+    emitter.instruction("cmp x9, #5");                                          // does the cell hold a hash directly?
+    emitter.instruction("b.eq __rt_hash_clone_shallow_cell_self_check");        // compare it against the source table
+    emitter.instruction("cmp x9, #7");                                          // does the cell hold a boxed Mixed?
+    emitter.instruction("b.ne __rt_hash_clone_shallow_cell_separate");          // other payloads cannot point back at the source
+    emitter.instruction("cbz x10, __rt_hash_clone_shallow_cell_separate");      // an empty box holds no table
+    emitter.instruction("ldr x11, [x10]");                                      // load the boxed value tag
+    emitter.instruction("cmp x11, #5");                                         // is the boxed value a hash?
+    emitter.instruction("b.ne __rt_hash_clone_shallow_cell_separate");          // only a hash can be the source table
+    emitter.instruction("ldr x10, [x10, #8]");                                  // load the boxed hash pointer
+    emitter.label("__rt_hash_clone_shallow_cell_self_check");
+    emitter.instruction("cmp x10, x19");                                        // does the reference point back at the table being copied?
+    emitter.instruction("b.ne __rt_hash_clone_shallow_cell_separate");          // an ordinary singleton separates
+    emitter.instruction("bl __rt_incref");                                      // share the self-reference with the cloned table (x0 = cell)
+    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the shared cell
+    emitter.instruction("b __rt_hash_clone_shallow_cell_ready");                // insert the shared cell
+    emitter.label("__rt_hash_clone_shallow_cell_separate");
     emitter.instruction("ldr x0, [sp, #24]");                                   // pass the source managed cell to reference-aware cloning
     emitter.instruction("bl __rt_reference_cell_clone");                        // copy a singleton cell or retain an externally aliased reference set
+    emitter.label("__rt_hash_clone_shallow_cell_ready");
     emitter.instruction("mov x3, x0");                                          // pass the owned cloned or retained cell to hash insertion
     emitter.instruction("mov x4, xzr");                                         // managed reference cells store only value_lo
     emitter.instruction("ldr x5, [sp, #40]");                                   // preserve runtime tag 11 on the cloned entry
@@ -257,8 +282,34 @@ fn emit_hash_clone_shallow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_hash_clone_shallow_insert");                  // insert the retained child into the cloned associative array
 
     emitter.label("__rt_hash_clone_shallow_value_reference_cell");
+    // -- php's zend_array_dup keeps a singleton reference SHARED when it points back at the very
+    //    table being copied (`$a[] = &$a; $b = $a; $b[0] = 1` writes through to `$a`), so only
+    //    other singleton cells separate. The cell holds the table directly (payload 5) or in a
+    //    boxed Mixed (payload 7, box tag 5). --
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // load the source managed cell
+    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // read the cell's payload descriptor
+    emitter.instruction("shr r10, 8");                                          // position the stored payload tag
+    emitter.instruction("and r10d, 0x7f");                                      // isolate the stored payload tag
+    emitter.instruction("mov r11, QWORD PTR [rax]");                            // load the cell payload word
+    emitter.instruction("cmp r10, 5");                                          // does the cell hold a hash directly?
+    emitter.instruction("je __rt_hash_clone_shallow_cell_self_check");          // compare it against the source table
+    emitter.instruction("cmp r10, 7");                                          // does the cell hold a boxed Mixed?
+    emitter.instruction("jne __rt_hash_clone_shallow_cell_separate");           // other payloads cannot point back at the source
+    emitter.instruction("test r11, r11");                                       // is the box empty?
+    emitter.instruction("jz __rt_hash_clone_shallow_cell_separate");            // an empty box holds no table
+    emitter.instruction("cmp QWORD PTR [r11], 5");                              // is the boxed value a hash?
+    emitter.instruction("jne __rt_hash_clone_shallow_cell_separate");           // only a hash can be the source table
+    emitter.instruction("mov r11, QWORD PTR [r11 + 8]");                        // load the boxed hash pointer
+    emitter.label("__rt_hash_clone_shallow_cell_self_check");
+    emitter.instruction("cmp r11, r12");                                        // does the reference point back at the table being copied?
+    emitter.instruction("jne __rt_hash_clone_shallow_cell_separate");           // an ordinary singleton separates
+    emitter.instruction("call __rt_incref");                                    // share the self-reference with the cloned table (rax = cell)
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the shared cell
+    emitter.instruction("jmp __rt_hash_clone_shallow_cell_ready");              // insert the shared cell
+    emitter.label("__rt_hash_clone_shallow_cell_separate");
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // pass the source managed cell to reference-aware cloning
     emitter.instruction("call __rt_reference_cell_clone");                      // copy a singleton cell or retain an externally aliased reference set
+    emitter.label("__rt_hash_clone_shallow_cell_ready");
     emitter.instruction("mov rcx, rax");                                        // pass the owned cloned or retained cell to hash insertion
     emitter.instruction("xor r8d, r8d");                                        // managed reference cells store only value_lo
     emitter.instruction("mov r9, QWORD PTR [rbp - 64]");                        // preserve runtime tag 11 on the cloned entry
@@ -318,9 +369,19 @@ mod tests {
                 .split("__rt_hash_clone_shallow_insert:")
                 .next()
                 .expect("reference path precedes insertion");
+            // Only a cell pointing back at the table being copied is retained directly (php's
+            // zend_array_dup rule); every other cell goes through singleton separation.
+            let (self_check, separate) = reference_path
+                .split_once("__rt_hash_clone_shallow_cell_separate:")
+                .unwrap_or_else(|| panic!("{name}: missing singleton-separation path"));
             assert!(
-                !reference_path.contains("__rt_incref"),
-                "{name}: reference entries must not bypass singleton separation",
+                self_check.contains("__rt_hash_clone_shallow_cell_self_check:")
+                    && self_check.contains("__rt_incref"),
+                "{name}: a self-reference must stay shared with the clone",
+            );
+            assert!(
+                separate.contains("__rt_reference_cell_clone") && !separate.contains("__rt_incref"),
+                "{name}: other reference entries must not bypass singleton separation",
             );
         }
     }

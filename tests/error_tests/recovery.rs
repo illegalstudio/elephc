@@ -349,3 +349,190 @@ fn test_method_global_declaration_uses_final_top_level_environment() {
         "explicit global declarations must resolve final top-level bindings",
     );
 }
+
+/// Parses `src` with recovery and returns every parse error message.
+fn parse_error_messages(src: &str) -> Vec<String> {
+    let tokens = tokenize(src).unwrap();
+    parse_with_recovery(&tokens)
+        .unwrap_err()
+        .iter()
+        .flat_map(|error| error.flatten())
+        .map(|error| error.message.clone())
+        .collect()
+}
+
+/// Verifies an error inside a nested block of a `try` body reports exactly once: the failed
+/// `if` already consumed its `}`, so recovery must not eat the `try` body's `}` and then trip
+/// over `catch`, `finally` and the function's closing brace (the psysh functions.php cascade).
+#[test]
+fn test_parser_recovery_nested_block_error_does_not_cascade() {
+    let messages = parse_error_messages(
+        "<?php
+        function bump(string $class) {
+            try {
+                if (true) {
+                    $class::$n = 2;
+                }
+                echo 1;
+            } catch (\\Exception $e) {
+                echo 2;
+            } finally {
+                echo 3;
+            }
+            return 1;
+        }
+        echo bump('A');",
+    );
+    assert_eq!(messages.len(), 1, "expected one parse error, got {:?}", messages);
+    assert!(messages[0].contains("dynamic class"), "{:?}", messages);
+}
+
+/// Verifies an error raised mid array literal resumes after the literal's `;` instead of at
+/// the next `$variable` inside it (which reported a bogus "Expected '=' after variable name").
+#[test]
+fn test_parser_recovery_mid_array_literal_error_skips_rest_of_literal() {
+    let messages = parse_error_messages(
+        "<?php
+        function info($shell, $c) {
+            $info = ['v' => $shell::{$c}, 'k' => $c];
+            return $info;
+        }",
+    );
+    assert_eq!(messages.len(), 1, "expected one parse error, got {:?}", messages);
+    assert!(messages[0].contains("computed name"), "{:?}", messages);
+}
+
+/// Verifies dynamic static-property writes are rejected with a targeted message.
+#[test]
+fn test_error_dynamic_static_property_write_is_rejected() {
+    expect_error(
+        "<?php class C { public static $n = 0; } $c = 'C'; $c::$n = 5;",
+        "Writing a static property through a dynamic class",
+    );
+}
+
+/// Verifies a statement rejected after its parser consumed the `;` resumes at the next
+/// statement instead of force-skipping its first token (`echo`), which used to report a bogus
+/// "Expected ';'" on the following correct line.
+#[test]
+fn test_parser_recovery_after_consumed_semicolon_keeps_next_statement() {
+    let messages = parse_error_messages(
+        "<?php
+        class C { public static $tags = []; }
+        $c = 'C';
+        $c::$tags[] = 'a';
+        echo count(C::$tags), \"\\n\";",
+    );
+    assert_eq!(messages.len(), 1, "expected one parse error, got {:?}", messages);
+}
+
+/// Verifies an expression-position append through a dynamic property name is rejected with a
+/// targeted message (an append to a variable or property is now supported).
+#[test]
+fn test_error_expression_append_to_dynamic_property_is_rejected_clearly() {
+    expect_error(
+        "<?php $o = new stdClass; $p = 'q'; $x = ($o->$p[] = 5);",
+        "only supported on a variable, property, static property or call result",
+    );
+}
+
+/// Verifies appends through `$class::$prop` are rejected clearly in statement and expression
+/// position (the read desugar is a value: the write would silently land in a temporary).
+#[test]
+fn test_error_dynamic_static_property_append_is_rejected() {
+    for src in [
+        "<?php class C { public static $t = []; } $c = 'C'; $c::$t[] = 'a';",
+        "<?php class C { public static $t = []; } $c = 'C'; $x = ($c::$t[] = 'b');",
+        "<?php class C { public static $t = []; } $c = 'C'; $f = fn($v) => $c::$t[] = $v;",
+        "<?php class C { public static $t = []; } $c = 'C'; $c::$t['k'] = 'a';",
+        "<?php class C { public static $t = []; } $c = 'C'; $x = ($c::$t['k'] = 'a');",
+    ] {
+        expect_error(src, "Writing a static property through a dynamic class");
+    }
+}
+
+/// Verifies an error inside a class's last method reports once, without a bogus `RBrace`
+/// for the class's own closing brace.
+#[test]
+fn test_parser_recovery_error_in_last_method_does_not_cascade() {
+    let messages = parse_error_messages(
+        "<?php
+        class M { public $o;
+          public function a() { return 1; } public function inst() { return 1 +; } }
+        echo 'after';",
+    );
+    assert_eq!(messages.len(), 1, "expected one parse error, got {:?}", messages);
+}
+
+/// Verifies recovery after a statement that consumed its `;` resumes at a following
+/// statement that starts with `[`, `(`, `@`, `new` or a literal instead of swallowing it.
+#[test]
+fn test_parser_recovery_keeps_expression_statement_starts() {
+    // Each `$c::$t[] = ...;` is rejected after its parser consumed the `;`; the next statement
+    // carries its own error, which is lost if recovery swallows that statement.
+    let messages = parse_error_messages(
+        "<?php
+        $c = 'C';
+        $c::$t[] = 'a';
+        [$a, $b] = [1, 2 +];
+        $c::$t[] = 'b';
+        (function () { echo 1 +; })();
+        $c::$t[] = 'c';
+        @foo(1 +);
+        $c::$t[] = 'd';
+        new Foo(1 +);
+        $c::$t[] = 'e';
+        'lit' . (1 +);",
+    );
+    assert_eq!(messages.len(), 10, "expected two errors per pair, got {:?}", messages);
+}
+
+/// Verifies every other write context rooted in `$class::$prop` is rejected clearly.
+#[test]
+fn test_error_dynamic_static_property_write_contexts_are_rejected() {
+    let head = "<?php class C { public static $p = ['n' => 1, 0 => [1]]; } $c = 'C';";
+    for body in [
+        "$c::$p['n']++;",
+        "$c::$p['n']--;",
+        "$c::$p[0][0]++;",
+        "++$c::$p['n'];",
+        "$x = $c::$p['n']++;",
+        "$r = &$c::$p['n'];",
+        "foreach ($c::$p as &$v) { $v = 9; }",
+        "[$c::$p['n']] = [5];",
+        "class D { public static $p = []; public function m() { $this::$p['n']++; } }",
+    ] {
+        expect_error(&format!("{head} {body}"), "Writing a static property through a dynamic class");
+    }
+}
+
+/// Verifies an unclosed `[` or `(` in a statement stops recovery at that statement's `;`
+/// instead of skipping to EOF (which lost later diagnostics and reported a bogus "Expected '}'").
+#[test]
+fn test_parser_recovery_unclosed_delimiter_stops_at_statement_end() {
+    for src in [
+        "<?php class K { public function a() { return [1, ; } public function b() { return 2; } }\n$x = 1;\necho $x 3;",
+        "<?php function f() { return g(1, ; }\necho $x 3;",
+        "<?php if (true) { g(1, ; }\necho $x 3;",
+        "<?php g(1, ;\necho $x 3;",
+    ] {
+        let messages = parse_error_messages(src);
+        assert_eq!(messages.len(), 2, "{src}: {:?}", messages);
+        assert!(messages.iter().all(|m| !m.contains("Expected '}'") && !m.contains("RBrace")), "{:?}", messages);
+    }
+}
+
+/// Verifies a builtin by-reference parameter rejects a `$class::$prop[k]` / `$class::K[k]`
+/// argument (it would write into a temporary), like a call-result argument.
+#[test]
+fn test_error_dynamic_member_to_builtin_by_ref_parameter_is_rejected() {
+    let head = "<?php class C { public static $p = ['n' => 1, 'a' => [1, 2, 3]]; const K = ['a' => [1]]; } $c = 'C';";
+    for body in [
+        "settype($c::$p['n'], 'string');",
+        "array_splice($c::$p['a'], 0, 1);",
+        "array_splice($c::K['a'], 0, 1);",
+        "$o = new C; settype($o::$p['n'], 'string');",
+    ] {
+        expect_error(&format!("{head} {body}"), "Writing a static property through a dynamic class");
+    }
+}

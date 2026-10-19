@@ -45,7 +45,10 @@ pub(crate) fn build_class_info_recursive(
 
     if !building.insert(class_name.to_string()) {
         return Err(CompileError::new(
-            crate::span::Span::dummy(),
+            class_map
+                .get(class_name)
+                .map(|class| class.span)
+                .unwrap_or_else(crate::span::Span::dummy),
             &format!(
                 "Circular inheritance detected involving class {}",
                 class_name
@@ -54,6 +57,51 @@ pub(crate) fn build_class_info_recursive(
     }
 
     let class = load_class(class_name, class_map)?;
+    build_loaded_class_info(class_name, class, class_map, checker, next_class_id, building)
+        .map_err(|error| locate_at_declaration(error, class_span_of(class_name, class_map)))
+}
+
+/// The declaration span of `class_name`, when the program declares it.
+fn class_span_of(
+    class_name: &str,
+    class_map: &HashMap<String, FlattenedClass>,
+) -> crate::span::Span {
+    class_map
+        .get(class_name)
+        .map(|class| class.span)
+        .unwrap_or_else(crate::span::Span::dummy)
+}
+
+/// Points every location-less error of one class's schema build at the class declaration.
+///
+/// The schema checks report against `Span::dummy()`, so on a program of thousands of classes
+/// `error: Class A cannot extend final class B` named neither a file nor a line. The class
+/// being built is the declaration the error is about; an error a parent's build already
+/// located keeps its own position.
+fn locate_at_declaration(mut error: CompileError, span: crate::span::Span) -> CompileError {
+    if span.line == 0 {
+        return error;
+    }
+    if error.span.line == 0 && error.file.is_none() {
+        error.span = span;
+    }
+    error.related = error
+        .related
+        .into_iter()
+        .map(|related| locate_at_declaration(related, span))
+        .collect();
+    error
+}
+
+/// [`build_class_info_recursive`] for a class whose declaration is loaded and not yet building.
+fn build_loaded_class_info(
+    class_name: &str,
+    class: FlattenedClass,
+    class_map: &HashMap<String, FlattenedClass>,
+    checker: &mut Checker,
+    next_class_id: &mut u64,
+    building: &mut HashSet<String>,
+) -> Result<(), CompileError> {
     validate_class_modifiers(&class)?;
     let parent_info = resolve_parent_info(
         class_name,
@@ -65,6 +113,7 @@ pub(crate) fn build_class_info_recursive(
     )?;
     validate_parent_constraints(&class, parent_info.as_ref())?;
 
+    prebuild_default_constant_owners(&class, class_map, checker, next_class_id, building)?;
     let mut state = ClassBuildState::from_parent(parent_info.as_ref());
     properties::apply_properties(&mut state, &class, checker)?;
     methods::apply_methods(&mut state, &class, checker)?;
@@ -261,5 +310,69 @@ fn constructor_param_to_prop_for(
         parent.constructor_param_to_prop.clone()
     } else {
         Vec::new()
+    }
+}
+
+/// Registers the classes whose constants this class's method defaults name (`Other::X`), so the
+/// override check can resolve them instead of treating the default as changed.
+///
+/// Only a class whose whole parent chain is outside the current build stack is built here: one
+/// that inherits from a class still under construction would be reported as circular, so it
+/// stays unregistered and the default keeps the conservative "changed" answer.
+fn prebuild_default_constant_owners(
+    class: &FlattenedClass,
+    class_map: &HashMap<String, FlattenedClass>,
+    checker: &mut Checker,
+    next_class_id: &mut u64,
+    building: &mut HashSet<String>,
+) -> Result<(), CompileError> {
+    let mut owners = Vec::new();
+    for method in &class.methods {
+        for (_, _, default, _) in &method.params {
+            if let Some(default) = default {
+                collect_named_constant_owners(default, &mut owners);
+            }
+        }
+    }
+    for owner in owners {
+        if owner == class.name || checker.classes.contains_key(&owner) {
+            continue;
+        }
+        let mut chain_free = true;
+        let mut cursor = Some(owner.as_str());
+        let mut seen = HashSet::new();
+        while let Some(name) = cursor {
+            if building.contains(name) || !seen.insert(name.to_string()) {
+                chain_free = false;
+                break;
+            }
+            cursor = class_map.get(name).and_then(|flat| flat.extends.as_deref());
+        }
+        if chain_free && class_map.contains_key(&owner) {
+            build_class_info_recursive(&owner, class_map, checker, next_class_id, building)?;
+        }
+    }
+    Ok(())
+}
+
+/// Collects the class names of `Name::CONST` fetches in a default expression.
+fn collect_named_constant_owners(expr: &crate::parser::ast::Expr, owners: &mut Vec<String>) {
+    use crate::parser::ast::{ExprKind, StaticReceiver};
+    match &expr.kind {
+        ExprKind::ScopedConstantAccess {
+            receiver: StaticReceiver::Named(name),
+            ..
+        } => owners.push(name.as_str().trim_start_matches('\\').to_string()),
+        ExprKind::BinaryOp { left, right, .. } => {
+            collect_named_constant_owners(left, owners);
+            collect_named_constant_owners(right, owners);
+        }
+        ExprKind::Negate(inner) | ExprKind::Not(inner) => collect_named_constant_owners(inner, owners),
+        ExprKind::ArrayLiteral(items) => {
+            for item in items {
+                collect_named_constant_owners(item, owners);
+            }
+        }
+        _ => {}
     }
 }

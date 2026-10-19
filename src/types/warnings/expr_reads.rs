@@ -273,6 +273,13 @@ fn collect_assignment_prelude_reads(
         StmtKind::IncludeOnceMark { .. } => {}
         StmtKind::Assign { value, .. } => collect_expr_reads(value, scope, warnings),
         StmtKind::RefAssign { source, .. } => collect_expr_reads(source, scope, warnings),
+        StmtKind::RefAssignPlace { target, source } => {
+            collect_expr_reads(target, scope, warnings);
+            match &source.kind {
+                ExprKind::Variable(name) => scope.declare(name, stmt.span),
+                _ => collect_expr_reads(source, scope, warnings),
+            }
+        }
         _ => {}
     }
 }
@@ -323,6 +330,13 @@ pub(super) fn collect_closure_warnings_in_stmt(stmt: &Stmt, warnings: &mut Vec<C
         StmtKind::RefAssign { source, .. } => {
             let mut scope = ScopeUsage::default();
             collect_expr_reads(source, &mut scope, warnings);
+        }
+        StmtKind::RefAssignPlace { target, source } => {
+            let mut scope = ScopeUsage::default();
+            collect_expr_reads(target, &mut scope, warnings);
+            if !matches!(source.kind, ExprKind::Variable(_)) {
+                collect_expr_reads(source, &mut scope, warnings);
+            }
         }
         StmtKind::ArrayAssign { index, value, .. }
         | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {

@@ -113,6 +113,7 @@ fn type_refs_hash(type_expr: &TypeExpr) -> bool {
         | TypeExpr::Float
         | TypeExpr::Bool
         | TypeExpr::False
+        | TypeExpr::True
         | TypeExpr::Str
         | TypeExpr::Void
         | TypeExpr::Never
@@ -429,6 +430,9 @@ fn stmt_refs_hash(stmt: &Stmt) -> bool {
         }
         StmtKind::ArrayAssign { index, value, .. } => {
             expr_refs_hash(index) || expr_refs_hash(value)
+        }
+        StmtKind::RefAssignPlace { target, source } => {
+            expr_refs_hash(target) || expr_refs_hash(source)
         }
         StmtKind::NestedArrayAssign { target, value } => {
             expr_refs_hash(target) || expr_refs_hash(value)

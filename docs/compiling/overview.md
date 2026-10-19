@@ -81,6 +81,7 @@ run. See [The Runtime](../internals/the-runtime.md) for what those routines are.
 | [Optimization and codegen controls](optimization.md) | `--regalloc`, `--ir-opt`, `--null-repr`, and what they do |
 | [Output formats and diagnostics](output-and-diagnostics.md) | `--emit`, `--emit-asm`, `--emit-ir`, `--check`, `--timings`, `--source-map`, `--gc-stats`, `--heap-debug` |
 | [Linking, heap, and conditional compilation](linking-and-conditional-compilation.md) | `--link`, `--link-path`, `--framework`, `--heap-size`, `--define` |
+| [Dynamic includes](dynamic-includes.md) | `elephc.includes.toml`, `--dynamic-includes`, `--include-manifest` |
 
 For the internals behind these phases, see
 [The Pipeline](../internals/how-elephc-works.md),

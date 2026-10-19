@@ -216,6 +216,7 @@ pub fn emit_print_r_object(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [x11, #24]");                                  // property value tag → value renderer
     emitter.instruction("ldr x1, [x13]");                                       // slot low word → value renderer
     emitter.instruction("ldr x2, [x13, #8]");                                   // slot high word → value renderer
+    crate::codegen_support::sentinels::emit_deref_reference_property_slot(emitter, "x0", "x1", "x2");
     emit_resolve_tagged_scalar_property_tag(emitter, "x0", "x2");
     emitter.instruction("cmp x0, #4");                                          // only pointer-shaped tags (4-7) can carry a null payload
     emitter.instruction("b.lt __rt_pr_obj_value");                              // scalar payloads keep their exact bit pattern
@@ -387,6 +388,7 @@ fn emit_print_r_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");                       // property value tag → value renderer
     emitter.instruction("mov rsi, QWORD PTR [r10]");                            // slot low word → value renderer
     emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // slot high word → value renderer
+    crate::codegen_support::sentinels::emit_deref_reference_property_slot(emitter, "rdi", "rsi", "rdx");
     emit_resolve_tagged_scalar_property_tag(emitter, "rdi", "rdx");
     emitter.instruction("cmp rdi, 4");                                          // only pointer-shaped tags (4-7) can carry a null payload
     emitter.instruction("jl __rt_pr_obj_value_x86");                            // scalar payloads keep their exact bit pattern

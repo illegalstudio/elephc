@@ -423,7 +423,9 @@ pub(super) fn prepend_internal_names<'a>(
         .cloned()
         .collect();
     names.sort();
-    names.extend(user_names.iter().cloned());
+    // Prelude declarations (`__ElephcWeakMapIterator`) arrive as program statements, so the
+    // source-order list is filtered too.
+    names.extend(user_names.iter().filter(|name| !is_internal_synthetic_class_name(name)).cloned());
     names
 }
 

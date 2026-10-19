@@ -278,6 +278,56 @@ pub(super) fn check_property_array_assign(
     }
 }
 
+/// Widens an UNTYPED instance property that is the root of a nested write (`$o->p[$k1][$k2] = v`).
+///
+/// The write autovivifies `$o->p[$k1]` as an array, so the slot must be able to hold Mixed
+/// elements under any key. A concrete inferred array type (`public $listeners = []` infers
+/// `array<never>`) cannot: the nested-write lowering only has a write-through path for boxed
+/// slots, and the copy it fell back to silently dropped the write — Symfony's
+/// `EventDispatcher::addListener` (`$this->listeners[$eventName][$priority][] = $listener`) left
+/// the property empty. The slot is widened to the general PHP array representation that a
+/// declared `array` property already uses; a null-defaulted slot widens to `mixed`, which keeps
+/// the null observable. Declared, hooked or scope-dynamic slots are left alone.
+pub(super) fn widen_property_root_for_nested_write(
+    checker: &mut Checker,
+    object: &Expr,
+    property: &str,
+    env: &TypeEnv,
+) -> Result<(), CompileError> {
+    let obj_ty = checker.infer_type(object, env)?;
+    let class_name = match &obj_ty {
+        PhpType::Object(class_name) => class_name.clone(),
+        other => match checker.union_single_object_class(other) {
+            Some(class_name) => class_name,
+            None => return Ok(()),
+        },
+    };
+    if scope_dynamic_storage::mutation_targets_scope_dynamic_name(checker, &class_name, property) {
+        return Ok(());
+    }
+    let widened = {
+        let Some(class_info) = checker.classes.get(&class_name) else {
+            return Ok(());
+        };
+        if class_info.visible_property_is_declared(property) {
+            return Ok(());
+        }
+        let Some((_, (_, current))) = class_info.visible_property(property) else {
+            return Ok(());
+        };
+        if current.is_php_array() || current.codegen_repr() == PhpType::Mixed {
+            return Ok(());
+        }
+        match current {
+            PhpType::Array(_) | PhpType::AssocArray { .. } => PhpType::php_array(),
+            PhpType::Void | PhpType::Never => PhpType::Mixed,
+            _ => return Ok(()),
+        }
+    };
+    update_inherited_property_slot_type(checker, &class_name, property, widened);
+    Ok(())
+}
+
 /// Validates a write to a named property of a class instance.
 ///
 /// Checks: property existence, `__set` magic method fallback, dynamic properties (`#[\AllowDynamicProperties]`),
@@ -559,6 +609,52 @@ pub(super) fn refined_untyped_property_assignment_type(
     }
 }
 
+/// Widens an UNTYPED property's storage to `Mixed` because a PHP reference now shares it.
+///
+/// A reference can carry any value into the property from another holder, so no narrower
+/// inferred representation stays sound once the property's cell is shared with a local, another
+/// property or an array element. A declared property keeps its declared storage.
+pub(super) fn widen_referenced_untyped_property(
+    checker: &mut Checker,
+    class_name: &str,
+    property: &str,
+    source_ty: &PhpType,
+) {
+    if scope_dynamic_storage::mutation_targets_scope_dynamic_name(checker, class_name, property) {
+        return;
+    }
+    let needs_widening: Option<PhpType> = {
+        let Some(class_info) = checker.classes.get(class_name) else {
+            return;
+        };
+        if class_info.visible_property_is_declared(property) {
+            return;
+        }
+        let Some(slot) = class_info.visible_property_index(property) else {
+            return;
+        };
+        let current = &class_info.properties[slot].1;
+        // Arrays on both sides keep PHP's `array` contract (boxed, so still one Mixed-shaped
+        // cell), which keeps `$this->p['k'] = ...` writes legal; anything else becomes `mixed`.
+        let widened = if is_array_like(current) && is_array_like(source_ty) {
+            PhpType::php_array()
+        } else {
+            PhpType::Mixed
+        };
+        (current.codegen_repr() != PhpType::Mixed || (*current != widened && widened.is_php_array()))
+            .then_some(widened)
+    };
+    if let Some(widened) = needs_widening {
+        update_inherited_property_slot_type(checker, class_name, property, widened);
+    }
+}
+
+/// Whether a property or source type is an array, PHP's declared `array`, or still unset.
+fn is_array_like(ty: &PhpType) -> bool {
+    ty.is_php_array()
+        || matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Void | PhpType::Never)
+}
+
 /// Refines the inferred type of an object property after a write, for properties without declared types.
 ///
 /// Delegates the type decision to `refined_untyped_property_assignment_type`; see its
@@ -604,6 +700,152 @@ fn refine_object_property_type(
         refined_ty
     };
     update_inherited_property_slot_type(checker, class_name, property, refined_ty);
+}
+
+/// Refines the array slots a runtime-named push (`$obj->{$name}[] = v`) can reach.
+///
+/// `__elephc_dynamic_property_push` lowers to one arm per visible property of the receiver's
+/// class, each pushing onto that slot with its own static type. The checker never sees those
+/// arms, so every array slot here is refined exactly as `$obj->slot[] = v` would refine it: an
+/// untyped list widens its element type, an untyped associative slot widens its key to include
+/// integers and its value type. Non-array slots keep their type (their arm throws PHP's Error or
+/// goes through boxed storage), so a class without such a push compiles exactly as before.
+pub(crate) fn refine_array_slots_for_dynamic_push(
+    checker: &mut Checker,
+    class_name: &str,
+    val_ty: &PhpType,
+    span: Span,
+) {
+    // The lowering also has arms for slots only a subclass declares.
+    let mut classes: Vec<String> = checker
+        .classes
+        .keys()
+        .filter(|other| other.as_str() == class_name || checker.is_subclass_of(other, class_name))
+        .cloned()
+        .collect();
+    classes.sort();
+    for class in classes {
+        refine_array_slots_of_class_for_dynamic_push(checker, &class, val_ty, span);
+    }
+}
+
+/// Refines the array slots a runtime-named array write (`$obj->{$name} = [...]`) can reach.
+///
+/// An untyped list slot merges a list value's element type, an untyped associative slot merges
+/// an associative value's key and value types. A slot of the other array kind, a typed slot or
+/// a non-array slot keeps its type: the lowering stores there only through the boxed runtime
+/// write, exactly as before.
+pub(crate) fn refine_array_slots_for_dynamic_array_write(
+    checker: &mut Checker,
+    class_name: &str,
+    val_ty: &PhpType,
+) {
+    let mut classes: Vec<String> = checker
+        .classes
+        .keys()
+        .filter(|other| other.as_str() == class_name || checker.is_subclass_of(other, class_name))
+        .cloned()
+        .collect();
+    classes.sort();
+    for class in classes {
+        let names: Vec<String> = match checker.classes.get(&class) {
+            Some(info) => {
+                let mut names: Vec<String> =
+                    info.properties.iter().map(|(name, _)| name.clone()).collect();
+                names.sort();
+                names.dedup();
+                names
+            }
+            None => continue,
+        };
+        for name in names {
+            if scope_dynamic_storage::mutation_targets_scope_dynamic_name(checker, &class, &name) {
+                continue;
+            }
+            let Some(info) = checker.classes.get(&class) else { break };
+            if info.visible_property_is_declared(&name) {
+                continue;
+            }
+            let Some((_, (_, prop_ty))) = info.visible_property(&name) else { continue };
+            let prop_ty = prop_ty.clone();
+            let merge = |checker: &Checker, current: &PhpType, incoming: &PhpType| {
+                if current == incoming || matches!(incoming, PhpType::Never) {
+                    current.clone()
+                } else if matches!(current, PhpType::Never) {
+                    incoming.clone()
+                } else {
+                    checker.merge_array_element_type(current, incoming).unwrap_or(PhpType::Mixed)
+                }
+            };
+            let updated = match (&prop_ty, val_ty) {
+                (PhpType::Array(current), PhpType::Array(incoming)) => {
+                    PhpType::Array(Box::new(merge(checker, current, incoming)))
+                }
+                (
+                    PhpType::AssocArray { key, value },
+                    PhpType::AssocArray { key: incoming_key, value: incoming_value },
+                ) => PhpType::AssocArray {
+                    key: Box::new(merge_array_key_types(*key.clone(), *incoming_key.clone())),
+                    value: Box::new(merge(checker, value, incoming_value)),
+                },
+                _ => continue,
+            };
+            if updated != prop_ty {
+                update_object_property_type(checker, &class, &name, false, updated);
+            }
+        }
+    }
+}
+
+/// Refines one class's array slots for `refine_array_slots_for_dynamic_push`.
+fn refine_array_slots_of_class_for_dynamic_push(
+    checker: &mut Checker,
+    class_name: &str,
+    val_ty: &PhpType,
+    span: Span,
+) {
+    let names: Vec<String> = match checker.classes.get(class_name) {
+        Some(info) => {
+            let mut names: Vec<String> = info.properties.iter().map(|(name, _)| name.clone()).collect();
+            names.sort();
+            names.dedup();
+            names
+        }
+        None => return,
+    };
+    for name in names {
+        if scope_dynamic_storage::mutation_targets_scope_dynamic_name(checker, class_name, &name) {
+            continue;
+        }
+        let Some(info) = checker.classes.get(class_name) else { return };
+        let declared = info.visible_property_is_declared(&name);
+        let Some((_, (_, prop_ty))) = info.visible_property(&name) else { continue };
+        let prop_ty = prop_ty.clone();
+        let updated = match &prop_ty {
+            PhpType::Array(_) => match updated_array_property_push_type(
+                checker, &prop_ty, declared, class_name, &name, val_ty, span,
+            ) {
+                Ok(updated) => updated,
+                // The arm throws an explicit Error for a value the declared element type refuses.
+                Err(_) => continue,
+            },
+            PhpType::AssocArray { key, value } if !declared => {
+                let merged_value = if value.as_ref() == val_ty {
+                    *value.clone()
+                } else {
+                    checker.merge_array_element_type(value, val_ty).unwrap_or(PhpType::Mixed)
+                };
+                PhpType::AssocArray {
+                    key: Box::new(merge_array_key_types(*key.clone(), PhpType::Int)),
+                    value: Box::new(merged_value),
+                }
+            }
+            _ => continue,
+        };
+        if updated != prop_ty {
+            update_object_property_type(checker, class_name, &name, declared, updated);
+        }
+    }
 }
 
 /// Keeps copies of one inherited property slot in the same storage shape.

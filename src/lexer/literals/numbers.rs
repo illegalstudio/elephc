@@ -162,9 +162,34 @@ pub(in crate::lexer) fn scan_number(cursor: &mut Cursor) -> Result<Token, Compil
 
     let mut num_str = scan_radix_digits(cursor, |c| c.is_ascii_digit());
 
+    // `1.5`, and PHP's trailing-dot form `0.` when a delimiter or operator that cannot start a
+    // concatenation operand follows (`?float $avg = 0.)` in fidry/cpu-core-counter). `1.'x'` keeps lexing as a
+    // concatenation, as it always has here.
+    // Operators that cannot begin a concatenation operand count too (`$x < 0. || $x > 1.`).
+    let trailing_dot_float = |next: u8| {
+        matches!(
+            next,
+            b')' | b',' | b';' | b']' | b'}' | b'|' | b'&' | b'?' | b':' | b'<' | b'>' | b'='
+                | b'!' | b'*' | b'/' | b'%' | b'^'
+        )
+    };
+    let mut trailing_dot = false;
     let is_float = if cursor.peek() == Some('.') {
-        let remaining = cursor.remaining();
-        remaining.len() > 1 && (remaining.as_bytes()[1] as char).is_ascii_digit()
+        let remaining = cursor.remaining().as_bytes();
+        // The delimiter may sit on the next line: `$avg = 0.\n    )`.
+        let after_blanks = remaining
+            .iter()
+            .skip(1)
+            .find(|byte| !byte.is_ascii_whitespace())
+            .copied();
+        match remaining.get(1) {
+            Some(next) if next.is_ascii_digit() => true,
+            _ if after_blanks.is_some_and(trailing_dot_float) => {
+                trailing_dot = true;
+                true
+            }
+            _ => false,
+        }
     } else {
         false
     };
@@ -175,7 +200,11 @@ pub(in crate::lexer) fn scan_number(cursor: &mut Cursor) -> Result<Token, Compil
         if is_float {
             num_str.push('.');
             cursor.advance();
-            num_str.push_str(&scan_radix_digits(cursor, |c| c.is_ascii_digit()));
+            if trailing_dot {
+                num_str.push('0');
+            } else {
+                num_str.push_str(&scan_radix_digits(cursor, |c| c.is_ascii_digit()));
+            }
         }
         if matches!(cursor.peek(), Some('e') | Some('E')) {
             num_str.push('e');

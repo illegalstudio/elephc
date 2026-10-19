@@ -10,6 +10,9 @@
 //! - A hash entry that joins a PHP reference set stores runtime value tag 11 with `value_lo`
 //!   pointing at a managed reference cell (`REFERENCE_CELL_HEAP_KIND`) whose single payload word owns exactly
 //!   one boxed Mixed value. `value_hi` is cleared; no interior table address ever escapes.
+//! - `__rt_hash_entry_bind_reference` makes an entry join an EXISTING reference set
+//!   (`$a[$k] = &$v`): it retains the given cell, stamps the entry tag 11 over it and releases
+//!   the boxed value or cell the entry held before.
 //! - `__rt_hash_entry_deref` is the borrowed value view of that layout and never allocates.
 //! - `__rt_hash_iter_resync` re-derives an insertion-order cursor after the table was
 //!   reallocated by growth or copy-on-write, using the last yielded key as the anchor.
@@ -191,6 +194,80 @@ fn emit_make_reference(emitter: &mut Emitter) {
             emitter.label("__rt_hash_entry_make_reference_existing");
             emitter.instruction("mov rax, QWORD PTR [rdi]");                    // return the reference cell the entry already owns
             emitter.instruction("ret");                                         // idempotent promotion keeps the existing reference set intact
+        }
+    }
+}
+
+/// Emits `__rt_hash_entry_bind_reference`, which makes a hash entry hold an existing managed
+/// reference cell (`$a[$k] = &$v`).
+///
+/// The caller has normalized the table to boxed-Mixed entries (`__rt_hash_to_mixed`) and
+/// inserted a missing key as boxed null, so the entry's previous payload is a boxed Mixed value
+/// (tag 7) or another reference cell (tag 11). The new cell is retained BEFORE the old payload is
+/// released, so rebinding an entry to the cell it already holds is a net no-op, and the entry is
+/// fully republished before that release runs, because releasing can run a PHP destructor that
+/// observes the array.
+///
+/// Input: argument 0 = address of `entry.value_lo`, argument 1 = managed reference cell.
+/// Output: none.
+///
+/// Emitted on its own (not with the iterator family) because it calls the uniform retain and
+/// release helpers, which the iterator's standalone harnesses do not link.
+pub fn emit_hash_entry_bind_reference(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: hash_entry_bind_reference ---");
+    emitter.label_global("__rt_hash_entry_bind_reference");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("stp x29, x30, [sp, #-32]!");                   // save frame pointer and return address across the retain and release
+            emitter.instruction("mov x29, sp");                                 // establish the binding frame
+            emitter.instruction("stp x0, x1, [sp, #16]");                       // save the entry value address and the cell being bound
+            emitter.instruction("mov x0, x1");                                  // retain the cell for the entry that is about to own it
+            emitter.instruction("bl __rt_incref");                              // the entry becomes one more owner of the reference set
+            emitter.instruction("ldp x9, x12, [sp, #16]");                      // reload the entry value address and the retained cell
+            emitter.instruction("ldr x10, [x9]");                               // take the previous payload word out of the entry
+            emitter.instruction("ldr x11, [x9, #16]");                          // take the previous runtime value tag out of the entry
+            emitter.instruction("str x12, [x9]");                               // publish the shared cell as the entry payload
+            emitter.instruction("str xzr, [x9, #8]");                           // reference entries carry no high payload word
+            emitter.instruction(&format!("mov x13, #{REFERENCE_CELL_VALUE_TAG}")); // runtime value tag 11 = managed reference cell
+            emitter.instruction("str x13, [x9, #16]");                          // stamp the entry as a member of the bound reference set
+            emitter.instruction(&format!("cmp x11, #{REFERENCE_CELL_PAYLOAD_TAG}")); // did the entry own a boxed Mixed value?
+            emitter.instruction("b.eq __rt_hash_entry_bind_reference_release"); // release the value the binding replaced
+            emitter.instruction(&format!("cmp x11, #{REFERENCE_CELL_VALUE_TAG}")); // did the entry belong to another reference set?
+            emitter.instruction("b.ne __rt_hash_entry_bind_reference_done");    // normalized entries own nothing else
+            emitter.label("__rt_hash_entry_bind_reference_release");
+            emitter.instruction("mov x0, x10");                                 // pass the replaced box or cell to the uniform release
+            emitter.instruction("bl __rt_decref_any");                          // drop the entry's share of its previous payload
+            emitter.label("__rt_hash_entry_bind_reference_done");
+            emitter.instruction("ldp x29, x30, [sp], #32");                     // restore frame pointer and return address
+            emitter.instruction("ret");                                         // the entry now aliases the bound reference set
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rbp");                                    // preserve the caller frame pointer across the retain and release
+            emitter.instruction("mov rbp, rsp");                                // establish the binding frame
+            emitter.instruction("sub rsp, 16");                                 // reserve aligned spill slots for both arguments
+            emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                // save the entry value address across the retain
+            emitter.instruction("mov QWORD PTR [rbp - 16], rsi");               // save the cell being bound across the retain
+            emitter.instruction("mov rax, rsi");                                // retain the cell for the entry that is about to own it
+            emitter.instruction("call __rt_incref");                            // the entry becomes one more owner of the reference set
+            emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                 // reload the entry value address
+            emitter.instruction("mov r10, QWORD PTR [r9]");                     // take the previous payload word out of the entry
+            emitter.instruction("mov r11, QWORD PTR [r9 + 16]");                // take the previous runtime value tag out of the entry
+            emitter.instruction("mov rax, QWORD PTR [rbp - 16]");               // reload the retained cell
+            emitter.instruction("mov QWORD PTR [r9], rax");                     // publish the shared cell as the entry payload
+            emitter.instruction("mov QWORD PTR [r9 + 8], 0");                   // reference entries carry no high payload word
+            emitter.instruction(&format!("mov QWORD PTR [r9 + 16], {REFERENCE_CELL_VALUE_TAG}")); // stamp the entry as a member of the bound reference set
+            emitter.instruction(&format!("cmp r11, {REFERENCE_CELL_PAYLOAD_TAG}")); // did the entry own a boxed Mixed value?
+            emitter.instruction("je __rt_hash_entry_bind_reference_release");   // release the value the binding replaced
+            emitter.instruction(&format!("cmp r11, {REFERENCE_CELL_VALUE_TAG}")); // did the entry belong to another reference set?
+            emitter.instruction("jne __rt_hash_entry_bind_reference_done");     // normalized entries own nothing else
+            emitter.label("__rt_hash_entry_bind_reference_release");
+            emitter.instruction("mov rax, r10");                                // pass the replaced box or cell to the uniform release
+            emitter.instruction("call __rt_decref_any");                        // drop the entry's share of its previous payload
+            emitter.label("__rt_hash_entry_bind_reference_done");
+            emitter.instruction("mov rsp, rbp");                                // release the spill slots
+            emitter.instruction("pop rbp");                                     // restore the caller frame pointer
+            emitter.instruction("ret");                                         // the entry now aliases the bound reference set
         }
     }
 }

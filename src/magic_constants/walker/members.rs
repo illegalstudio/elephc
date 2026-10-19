@@ -33,20 +33,19 @@ pub(in crate::magic_constants) fn walk_class_property<P: Pass>(
     }
 }
 
-/// Walks a class constant, applying `pass` to its declared type.
-///
-/// The VALUE is deliberately left alone: this walker's other users substitute magic constants,
-/// and routing constant initializers through them would change what `const A = __LINE__;`
-/// compiles to in programs that have nothing to do with types.
+/// Walks a class constant, applying `pass` to its declared type, and to its value when the
+/// pass opts in through [`Pass::walks_class_const_values`] (the magic-constant substitution
+/// passes do: `__CLASS__`, `__DIR__`... in a constant initializer are lowered in the scope of
+/// the declaring class). `__LINE__` is already a literal from the parser.
 pub(in crate::magic_constants) fn walk_class_const<P: Pass>(
     konst: ClassConst,
     pass: &mut P,
 ) -> ClassConst {
     let span = konst.span;
-    ClassConst {
-        type_expr: konst.type_expr.map(|ty| pass.transform_type(ty, span)),
-        ..konst
-    }
+    let walk_value = pass.walks_class_const_values();
+    let type_expr = konst.type_expr.map(|ty| pass.transform_type(ty, span));
+    let value = if walk_value { walk_expr(konst.value, pass) } else { konst.value };
+    ClassConst { type_expr, value, ..konst }
 }
 
 /// Walks a class method, applying `pass` to parameter defaults and the method body.
@@ -85,7 +84,7 @@ pub(in crate::magic_constants) fn walk_class_method<P: Pass>(
     // functions; it could not show here until a method could carry type parameters.
     let type_params = super::stmts::walk_type_params(method.type_params, pass, span);
     let variadic_type = method.variadic_type.map(|ty| pass.transform_type(ty, span));
-    let return_type = method.return_type.map(|ty| pass.transform_type(ty, span));
+    let return_type = method.return_type.map(|ty| pass.transform_return_type(ty, span));
     pass.leave_method();
     ClassMethod {
         type_params,

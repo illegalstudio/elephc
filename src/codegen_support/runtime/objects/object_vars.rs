@@ -172,6 +172,8 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x17, x17, x15");                                   // derive the current descriptor/property offset with `add x17, x17, x15`
     emitter.instruction("ldr x1, [x17]");                                       // load the current object/descriptor operand for `ldr x1, [x17]`
     emitter.instruction("ldr x2, [x17, #8]");                                   // load the current object/descriptor operand for `ldr x2, [x17, #8]`
+    crate::codegen_support::sentinels::emit_deref_reference_property_slot(emitter, "x16", "x1", "x2");
+    emitter.instruction("str x16, [sp, #80]");                                  // keep the aliased value's tag for the projection below
     emitter.instruction("str x1, [sp, #88]");                                   // save the property low-word slot across nested runtime calls
     emitter.instruction("str x2, [sp, #96]");                                   // save the property high-word slot across nested runtime calls
     abi::emit_load_int_immediate(emitter, "x10", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
@@ -390,6 +392,8 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r10, r14");                                        // derive the current descriptor/property offset with `add r10, r14`
     emitter.instruction("mov rdi, QWORD PTR [r10]");                            // load the current object/descriptor operand for `mov rdi, QWORD PTR [r10]`
     emitter.instruction("mov rsi, QWORD PTR [r10 + 8]");                        // load the current object/descriptor operand for `mov rsi, QWORD PTR [r10 + 8]`
+    crate::codegen_support::sentinels::emit_deref_reference_property_slot(emitter, "r15", "rdi", "rsi");
+    emitter.instruction("mov QWORD PTR [rbp - 88], r15");                       // keep the aliased value's tag for the projection below
     abi::emit_load_int_immediate(emitter, "r11", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     emitter.instruction("cmp rsi, r11");                                        // evaluate `cmp rsi, r11` before selecting the projection branch
     emitter.instruction("je __rt_object_to_hash_next_x");                       // skip or advance the current property via `__rt_object_to_hash_next_x`

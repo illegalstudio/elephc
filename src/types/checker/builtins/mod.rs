@@ -106,9 +106,11 @@ impl Checker {
         // eagerly inferred by argument normalization. Their handlers inspect the
         // raw operands directly.
         let builtin_key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
-        if self.has_function_decl_folded(name)
-            && crate::builtins::registry::lookup(name).is_some()
+        // The declaration lookup scans every declared function, so it runs last: almost every
+        // builtin is available on the target, which settles the condition without it.
+        if crate::builtins::registry::lookup(name).is_some()
             && !catalog::builtin_is_available_for_target(name, self.target)
+            && self.has_function_decl_folded(name)
         {
             return Ok(None);
         }
@@ -243,6 +245,9 @@ impl Checker {
                 if matches!(arg.kind, ExprKind::Spread(_)) {
                     continue;
                 }
+                // `$c::$p[k]` / `$c::K[k]` is a value desugar, not a place: passing it by
+                // reference would write into a temporary and silently do nothing.
+                crate::parser::expr::reject_dynamic_member_write(arg, arg.span)?;
                 if self.is_builtin_by_ref_argument_lvalue(arg) {
                     continue;
                 }

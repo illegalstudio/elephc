@@ -27,7 +27,8 @@ use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::runtime::data::{
     NAMED_PARAMETER_OVERWRITE_PREFIX, NAMED_PARAMETER_OVERWRITE_SUFFIX,
-    POSITIONAL_AFTER_NAMED_MSG, UNKNOWN_NAMED_PARAMETER_PREFIX,
+    POSITIONAL_AFTER_NAMED_MSG, SCALAR_AS_ARRAY_MSG, STRING_APPEND_MSG,
+    UNKNOWN_NAMED_PARAMETER_PREFIX,
 };
 use crate::codegen_support::sentinels::{
     emit_throwable_creation_line_unknown, x86_64_heap_kind_word,
@@ -102,6 +103,34 @@ pub fn emit_throw_positional_after_named(emitter: &mut Emitter) {
         NamedParameterMessage::Fixed {
             symbol: "_positional_after_named_msg",
             len: POSITIONAL_AFTER_NAMED_MSG.len(),
+        },
+    );
+}
+
+/// Emits `__rt_throw_string_append`: PHP's `Error: [] operator not supported for strings`.
+///
+/// Takes no input and never returns. Shares the fixed-message thrower with the named-argument
+/// refusals because it is the same `Error` construction over constant bytes.
+pub fn emit_throw_string_append(emitter: &mut Emitter) {
+    emit_named_parameter_error(
+        emitter,
+        "__rt_throw_string_append",
+        "string_append",
+        NamedParameterMessage::Fixed { symbol: "_string_append_msg", len: STRING_APPEND_MSG.len() },
+    );
+}
+
+/// Emits `__rt_throw_scalar_as_array`: PHP's `Error: Cannot use a scalar value as an array`.
+///
+/// Takes no input and never returns.
+pub fn emit_throw_scalar_as_array(emitter: &mut Emitter) {
+    emit_named_parameter_error(
+        emitter,
+        "__rt_throw_scalar_as_array",
+        "scalar_as_array",
+        NamedParameterMessage::Fixed {
+            symbol: "_scalar_as_array_msg",
+            len: SCALAR_AS_ARRAY_MSG.len(),
         },
     );
 }

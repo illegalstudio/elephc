@@ -37,14 +37,20 @@ pub(crate) use params::{
     type_arguments_end,
 };
 pub(crate) use assign::{
-    can_replay_assignment_target, lower_postfix_incdec_assignment,
+    append_to_place_stmt, assignment_target_store_stmt,
+    can_replay_assignment_target, lower_append_ref_assign, lower_place_ref_assign,
+    lower_nested_append_assignment, RefSource,
+    lower_postfix_incdec_assignment,
     update_dimension_base_is_snapshotted, update_index_needs_snapshot,
 };
 pub(crate) use blocks::{expect_semicolon, expect_token};
 pub(crate) use names::{name_part_from_token, name_starts_at, parse_name, parse_unqualified_name};
-pub(crate) use assign::{parse_destructuring_pattern_unpack, starts_destructuring_pattern};
+pub(crate) use assign::{
+    parse_destructuring_loop_condition, parse_destructuring_pattern_unpack,
+    starts_destructuring_assignment, starts_destructuring_pattern,
+};
 pub(crate) use namespace_use::token_as_import_name;
-pub(crate) use recovery::recover_to_statement_boundary;
+pub(crate) use recovery::{recover_after_failed_stmt, recover_to_statement_boundary};
 
 /// Appends one parsed statement to a file- or namespace-scope statement list.
 ///
@@ -54,12 +60,7 @@ pub(crate) use recovery::recover_to_statement_boundary;
 /// produce: the passes that collect top-level declarations, namespace symbol collection among
 /// them, only look at that level. Every other statement is appended unchanged.
 pub(crate) fn push_parsed_stmt(stmts: &mut Vec<Stmt>, stmt: Stmt) {
-    let is_const_list = matches!(
-        &stmt.kind,
-        StmtKind::Synthetic(body)
-            if !body.is_empty()
-                && body.iter().all(|inner| matches!(inner.kind, StmtKind::ConstDecl { .. }))
-    );
+    let is_const_list = is_const_declaration_list(&stmt.kind);
     match stmt.kind {
         StmtKind::Synthetic(body) if is_const_list => stmts.extend(body),
         kind => stmts.push(Stmt { kind, ..stmt }),
@@ -101,28 +102,46 @@ fn attach_attributes_to_stmt(
     if stmt_kind_supports_attributes(&stmt.kind) {
         stmt.attributes = attributes;
         Ok(stmt)
+    } else if is_const_declaration_list(&stmt.kind) {
+        // PHP 8.5 accepts `#[A] const X = 1;` but rejects attributes on a list, at compile
+        // time, with this exact message.
+        Err(CompileError::new(
+            span,
+            "Cannot apply attributes to multiple constants at once",
+        ))
     } else {
         Err(CompileError::new(
             span,
             "Attributes are only allowed before declarations \
-             (class, interface, trait, enum, function)",
+             (class, interface, trait, enum, function, const)",
         ))
     }
 }
 
 /// Returns true if the given statement kind supports PHP 8 attribute groups.
 ///
-/// Only class-like declarations (class, interface, trait, enum, function, packed class)
-/// accept attribute groups per PHP syntax rules.
+/// Class-like declarations (class, interface, trait, enum, packed class), functions and —
+/// since PHP 8.5 — a single global `const` declaration accept attribute groups.
 fn stmt_kind_supports_attributes(kind: &StmtKind) -> bool {
     matches!(
         kind,
-        StmtKind::ClassDecl { .. }
+        StmtKind::ConstDecl { .. }
+            | StmtKind::ClassDecl { .. }
             | StmtKind::InterfaceDecl { .. }
             | StmtKind::TraitDecl { .. }
             | StmtKind::EnumDecl { .. }
             | StmtKind::FunctionDecl { .. }
             | StmtKind::PackedClassDecl { .. }
+    )
+}
+
+/// Returns true for the `Synthetic` group `const A = 1, B = 2;` parses to.
+fn is_const_declaration_list(kind: &StmtKind) -> bool {
+    matches!(
+        kind,
+        StmtKind::Synthetic(body)
+            if !body.is_empty()
+                && body.iter().all(|inner| matches!(inner.kind, StmtKind::ConstDecl { .. }))
     )
 }
 
@@ -184,6 +203,49 @@ fn parse_stmt_dispatch(
         Token::Function => params::parse_function_decl(tokens, pos, span),
         // `fn (…) => …` is always an arrow-function expression; it has no declaration form.
         Token::Fn => simple::parse_expr_stmt(tokens, pos, span),
+        // `$$name = v;`, `$$name[k] = v;`, `${expr}->m();`: a variable variable starts an
+        // ordinary expression statement over the frame-access shape.
+        Token::Dollar => simple::parse_expr_stmt(tokens, pos, span),
+        // Any expression is a statement in PHP, including one that opens with a literal, a
+        // predefined constant, a magic constant or a prefix operator: `0 > $T && $T += 0x40;`
+        // (symfony/polyfill-intl-normalizer) or `! $x && f();`. None of these tokens can begin
+        // a declaration, a label or an assignment target, so they go straight to the
+        // expression parser.
+        Token::IntLiteral(_)
+        | Token::FloatLiteral(_)
+        | Token::StringLiteral(_)
+        | Token::True
+        | Token::False
+        | Token::Null
+        | Token::Inf
+        | Token::Nan
+        | Token::PhpIntMax
+        | Token::PhpIntMin
+        | Token::PhpFloatMax
+        | Token::PhpFloatMin
+        | Token::PhpFloatEpsilon
+        | Token::MPi
+        | Token::ME
+        | Token::MSqrt2
+        | Token::MPi2
+        | Token::MPi4
+        | Token::MLog2e
+        | Token::MLog10e
+        | Token::PhpEol
+        | Token::PhpOs
+        | Token::DirectorySeparator
+        | Token::DunderDir
+        | Token::DunderFile
+        | Token::DunderLine
+        | Token::DunderFunction
+        | Token::DunderClass
+        | Token::DunderMethod
+        | Token::DunderNamespace
+        | Token::DunderTrait
+        | Token::Bang
+        | Token::Minus
+        | Token::Plus
+        | Token::Tilde => simple::parse_expr_stmt(tokens, pos, span),
         Token::Namespace => namespace_use::parse_namespace_stmt(tokens, pos, span),
         Token::Use => namespace_use::parse_use_stmt(tokens, pos, span),
         Token::Declare => declare::parse_declare(tokens, pos, span),
@@ -294,6 +356,12 @@ fn parse_stmt_dispatch(
             let levels = parse_loop_exit_level("continue", tokens, pos)?;
             expect_semicolon(tokens, pos)?;
             Ok(Stmt::new(StmtKind::Continue(levels), span))
+        }
+        // PHP's empty statement. The lexer emits it for every `?>` close tag (an implicit `;`),
+        // so `if (...): ?>HTML<?php endif;` and `<?php } ?>` parse like any other `;`.
+        Token::Semicolon => {
+            *pos += 1;
+            Ok(Stmt::new(StmtKind::Synthetic(Vec::new()), span))
         }
         other => Err(CompileError::new(
             span,

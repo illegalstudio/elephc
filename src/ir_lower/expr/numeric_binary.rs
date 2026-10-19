@@ -161,6 +161,19 @@ fn lower_numeric_binary_values(
             }
             return result;
         }
+        // An array on one side and a boxed `mixed` value on the other is an array union PHP
+        // decides at run time, which has no lowering here; the numeric fallback below silently
+        // produced an integer (`$s += $x` with `$x` boxed by a loop contract printed `int(3)`).
+        let is_array = |ty: &PhpType| matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. });
+        let is_boxed = |ty: &PhpType| matches!(ty, PhpType::Mixed | PhpType::Union(_));
+        let lhs_ty = ctx.builder.value_php_type(lhs.value).codegen_repr();
+        let rhs_ty = ctx.builder.value_php_type(rhs.value).codegen_repr();
+        if (is_array(&lhs_ty) && is_boxed(&rhs_ty)) || (is_boxed(&lhs_ty) && is_array(&rhs_ty)) {
+            crate::ir_lower::diagnostics::refuse(
+                expr.span,
+                "Array union (`+`) between an array and a value of dynamic type is not supported; make both operands arrays of a known type",
+            );
+        }
     }
     let numeric_ty = numeric_binary_result_type(
         op,

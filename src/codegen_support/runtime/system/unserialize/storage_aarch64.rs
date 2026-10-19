@@ -81,6 +81,7 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("ldr x6, [x14, #16]");                                  // property byte offset
     emitter.instruction("ldr x7, [x14, #24]");                                  // property value tag
     emitter.instruction("add x8, x0, x6");                                      // address of the property slot
+    crate::codegen_support::sentinels::emit_deref_reference_property_address(emitter, "x7", "x8");
     emitter.instruction("cmp x7, #7");                                          // is this a Mixed/untyped slot?
     emitter.instruction("b.eq __rt_obj_store_prop_mixed");                      // store the boxed cell directly
     emitter.instruction("cmp x7, #1");                                          // is this a string slot?

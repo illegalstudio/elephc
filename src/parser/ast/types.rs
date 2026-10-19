@@ -10,7 +10,7 @@
 
 use crate::names::Name;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 /// One declared type parameter (`T`, `T : Entity`, `K = string`).
 ///
 /// The name is a plain `String` rather than a `Name`: a type parameter resolves against its own
@@ -36,7 +36,28 @@ pub struct TypeParam {
     /// WRITE: two instantiations are then simply different types, which is also what
     /// monomorphization makes them.
     pub variance: Variance,
+    /// Whether the parameter was declared by a PHPDoc `@template*` tag rather than native syntax.
+    ///
+    /// Read by the variance check, which demotes a PHPDoc variance marker the declaration
+    /// breaks to invariant (php-src never enforces one) instead of rejecting the file, and by
+    /// `crate::generics::dispatch`, which erases a PHPDoc template's class parameters from its
+    /// dynamically dispatched methods. Native parameters keep both checks strict.
+    /// Excluded from equality, so an annotated declaration and its native spelling stay the
+    /// same AST.
+    pub from_docblock: bool,
 }
+
+impl PartialEq for TypeParam {
+    /// Compares the declaration, ignoring where it was spelled ([`TypeParam::from_docblock`]).
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.bound == other.bound
+            && self.default == other.default
+            && self.variance == other.variance
+    }
+}
+
+impl Eq for TypeParam {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 /// The subtyping a type parameter permits between two instantiations of its template.
@@ -128,6 +149,9 @@ pub enum TypeExpr {
     Bool,
     /// PHP's literal `false` type, kept distinct from `bool` for flow narrowing.
     False,
+    /// PHP's literal `true` type. Its storage and checker type are `bool`; it is kept distinct
+    /// only so a declared `: true` return verifies the VALUE (`return 0;` throws `TypeError`).
+    True,
     Str,
     Void,
     Never,
@@ -244,6 +268,7 @@ impl TypeExpr {
             | TypeExpr::Float
             | TypeExpr::Bool
             | TypeExpr::False
+            | TypeExpr::True
             | TypeExpr::Str
             | TypeExpr::Void
             | TypeExpr::Never

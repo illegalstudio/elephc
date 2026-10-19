@@ -151,3 +151,33 @@ fn test_object_cast_keeps_its_source_casing_in_the_identifier() {
 }
 
 // --- Hex integer literals ---
+
+/// Verifies PHP 8 T_NAME_QUALIFIED tokenization: a reserved word touched by `\` inside a
+/// qualified name becomes an identifier segment, while a lone keyword stays reserved.
+#[test]
+fn test_keyword_segments_in_qualified_names() {
+    let id = |s: &str| Token::Identifier(s.to_string());
+    let t = tokens("<?php A\\Default\\X \\List Match\\Y");
+    assert_eq!(
+        &t[1..10],
+        &[
+            id("A"), Token::Backslash, id("Default"), Token::Backslash, id("X"),
+            Token::Backslash, id("List"), id("Match"), Token::Backslash,
+        ]
+    );
+    // Lone keywords, a separator followed by whitespace, and `namespace\X` stay keywords.
+    let t = tokens("<?php new Default; A\\ Default; Default\\ X; namespace\\f");
+    assert!(t.contains(&Token::New));
+    assert_eq!(t.iter().filter(|t| **t == Token::Default).count(), 3);
+    assert!(t.contains(&Token::Namespace));
+    // Fully qualified literal and predefined constants keep their dedicated tokens.
+    let t = tokens("<?php \\true; \\PHP_EOL; A\\PHP_EOL");
+    assert!(t.contains(&Token::True));
+    assert_eq!(t.iter().filter(|t| **t == Token::PhpEol).count(), 2);
+    // A sole `\self` / `\parent` / `\static` segment keeps its keyword token (PHP resolves
+    // `\static::class` like `static::class`); inside a longer name it is a segment.
+    let t = tokens(r"<?php \static; \self; \parent; A\static; \static\X");
+    assert_eq!(t.iter().filter(|t| **t == Token::Static).count(), 1);
+    assert!(t.contains(&Token::Self_) && t.contains(&Token::Parent));
+    assert_eq!(t.iter().filter(|t| **t == Token::Identifier("static".into())).count(), 2);
+}

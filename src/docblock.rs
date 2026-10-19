@@ -392,6 +392,7 @@ fn parse_template(rest: &str, variance: Variance) -> Option<TypeParam> {
         bound,
         default,
         variance,
+        from_docblock: true,
     })
 }
 
@@ -904,10 +905,10 @@ mod tests {
             generics.interface_args,
             vec![vec![TypeExpr::Named(Name::unqualified("T"))]]
         );
-        assert_eq!(
-            methods[0].return_type,
-            Some(TypeExpr::Named(Name::unqualified("T")))
-        );
+        // A bodiless method keeps its native signature: its PHPDoc only describes what an
+        // implementation returns, and adopting it would make an untyped implementation
+        // incompatible with a type php-src never declared.
+        assert_eq!(methods[0].return_type, None);
     }
 
     /// Written syntax wins over an annotation, so a file can migrate one class at a time — and
@@ -981,6 +982,25 @@ mod tests {
         assert_eq!(*variadic_type, Some(TypeExpr::Named(Name::unqualified("T"))));
     }
 
+    /// A docblock still binds after inline HTML and a close tag: the open tag and `?>` that
+    /// frame the HTML are transparent to the gap scan.
+    #[test]
+    fn binds_a_docblock_after_inline_html_and_close_tags() {
+        let source = "<p>html</p>\n<?php // c ?>\nmore\n<?php\n/** @template T */\nclass Box {}\n";
+        let StmtKind::ClassDecl { generics, .. } = &program_of(source)
+            .into_iter()
+            .find(|stmt| matches!(stmt.kind, StmtKind::ClassDecl { .. }))
+            .expect("class")
+            .kind
+        else {
+            panic!("expected a class declaration");
+        };
+        assert_eq!(
+            generics.as_ref().expect("class became a template").type_params[0].name,
+            "T"
+        );
+    }
+
     /// Tagless files retain generic annotations across attributes with nonstructural brackets.
     #[test]
     fn applies_generic_docblocks_after_attributes_in_lfc_sources() {
@@ -1017,7 +1037,8 @@ mod tests {
         assert_eq!(method.type_params[1].default, Some(TypeExpr::Str));
         assert_eq!(method.params[0].1, Some(TypeExpr::Named(Name::unqualified("T"))));
         assert_eq!(method.variadic_type, Some(TypeExpr::Named(Name::unqualified("U"))));
-        assert_eq!(method.return_type, Some(TypeExpr::Int));
+        // `@return int` names no type parameter, so it does not narrow the native signature.
+        assert_eq!(method.return_type, None);
     }
 
     /// Native method declarations retain their written types even when PHPDoc disagrees.

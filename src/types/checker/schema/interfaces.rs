@@ -533,6 +533,7 @@ pub(crate) fn build_interface_info_recursive(
             constant_types,
             constant_declaring_interfaces,
             final_constants,
+            reflection_hidden: checker.names_generic_class_template(&interface.name),
         },
     );
     *next_interface_id += 1;

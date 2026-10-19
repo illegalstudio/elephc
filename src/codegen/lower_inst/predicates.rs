@@ -34,6 +34,12 @@ pub(in crate::codegen::lower_inst) fn emit_value_truthiness(
     value: ValueId,
     op_name: &str,
 ) -> Result<()> {
+    // A nullable int (`?int`, PHP type `int|null`) is a tagged scalar PAIR, not a boxed cell:
+    // dispatching on its union PHP type sent the pair to `__rt_mixed_cast_bool`, which read the
+    // payload as a cell pointer and crashed (`if ($p)`, `$p ?: 5`, `(bool) $p`).
+    if ctx.value_ir_type(value)? == crate::ir::IrType::TaggedScalar {
+        return emit_tagged_scalar_truthiness(ctx, value);
+    }
     match ctx.raw_value_php_type(value)? {
         PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Pointer(_) => {
             ctx.load_value_to_result(value)?;

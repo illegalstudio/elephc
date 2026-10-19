@@ -106,6 +106,7 @@ pub(super) fn lower(
         RuntimeFnId::CurlOptionKind => Some({
             crate::codegen::lower_inst::builtins::curl::lower_curl_option_kind(ctx, inst)
         }),
+        RuntimeFnId::IncludeWarning => Some(lower_include_warning(ctx, inst)),
         RuntimeFnId::CurlSetoptUnsupportedWarning => Some({
             crate::codegen::lower_inst::builtins::curl::lower_curl_setopt_unsupported_warning(
                 ctx, inst,
@@ -186,4 +187,18 @@ pub(super) fn lower(
         }),
         _ => None,
     }
+}
+
+/// Lowers `__elephc_include_warning($message)`: `Warning: <message>` through the suppressible
+/// diagnostic channel, which derives `E_WARNING` from the prefix and honours handlers,
+/// `error_reporting` and `@` (see `codegen_support::runtime::warning_dispatch`).
+fn lower_include_warning(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    use crate::codegen::lower_inst::runtime_class_messages::{diagnostic_fragment_regs, emit_static_diagnostic};
+    let message = crate::codegen::lower_inst::expect_operand(inst, 0)?;
+    emit_static_diagnostic(ctx, "Warning: ", false);
+    let (ptr_reg, len_reg) = diagnostic_fragment_regs(ctx.emitter);
+    ctx.load_string_value_to_regs(message, ptr_reg, len_reg)?;
+    crate::codegen::abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+    emit_static_diagnostic(ctx, "\n", true);
+    crate::codegen::lower_inst::store_if_result(ctx, inst)
 }

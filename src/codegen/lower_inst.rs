@@ -41,6 +41,7 @@ mod runtime_functions;
 mod strength_reduction;
 pub(crate) mod builtins;
 pub(in crate::codegen) mod callables;
+mod callable_reflection;
 mod callable_guards;
 mod callable_argument_normalizer;
 pub(super) use callable_argument_normalizer::emit_callable_argument_normalizer;
@@ -348,6 +349,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         }
         Op::CallablePtr => builtins::pointers::lower_elephc_callable_ptr(ctx, &inst),
         Op::NormalizeCallable => builtins::pointers::lower_elephc_normalize_callable(ctx, &inst),
+        Op::CallableReflectionMeta => callable_reflection::lower_callable_reflection_meta(ctx, &inst),
         Op::PdoAdapterAddr => builtins::pointers::lower_elephc_pdo_adapter_addr(ctx, &inst),
         Op::DynamicClassHasConstructor => {
             builtins::system::lower_elephc_class_has_constructor(ctx, &inst)
@@ -370,6 +372,12 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::LoadPropRefCell => objects::lower_load_prop_ref_cell(ctx, &inst),
         Op::LoadPropRefCellChecked => objects::lower_load_prop_ref_cell_checked(ctx, &inst),
         Op::LoadArrayElemRefCell => arrays::lower_load_array_elem_ref_cell(ctx, &inst),
+        Op::BindArrayElemRefCell => arrays::lower_bind_array_elem_ref_cell(ctx, &inst),
+        Op::BindPropRefCell => objects::lower_bind_prop_ref_cell(ctx, &inst),
+        Op::LoadDynamicPropRefCell | Op::BindDynamicPropRefCell => {
+            objects::lower_dynamic_prop_ref_cell(ctx, &inst)
+        }
+        Op::LoadLocalRefCellPtr => lower_load_local_ref_cell_ptr(ctx, &inst),
         Op::LoadArrayElemRefCellExisting => arrays::lower_load_array_elem_ref_cell(ctx, &inst),
         Op::BindRefCellPtr | Op::AdoptRefCellPtr => lower_bind_ref_cell_ptr(ctx, &inst),
         Op::AcquireRefCell => lower_acquire_ref_cell(ctx, &inst),

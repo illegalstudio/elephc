@@ -188,6 +188,7 @@ pub(super) fn lower_closure_with_context(
     let mut captured_values = Vec::with_capacity(captures.len());
     let mut capture_params = Vec::with_capacity(captures.len());
     let mut by_value_capture_views = Vec::with_capacity(captures.len());
+    let mut arrow_flag_captures: Vec<String> = Vec::new();
     for capture in captures {
         let by_ref = capture_refs.iter().any(|name| name == capture);
         let (captured, php_type) = if capture == "this" && !ctx.local_slots.contains_key("this") {
@@ -209,10 +210,26 @@ pub(super) fn lower_closure_with_context(
                 ctx.box_value_as_mixed(enclosing, PhpType::Mixed, Some(expr.span)),
                 PhpType::Mixed,
             )
+        } else if !by_ref && capture_may_be_undefined(ctx, capture, expr) {
+            // A possibly undefined by-value capture: `use ($x)` warns and
+            // captures null, an arrow function captures silently and hands the defined-flag
+            // to its body (appended below).
+            let read = Expr::new(ExprKind::Variable(capture.clone()), expr.span);
+            let captured = super::maybe_undefined_read::lower_flagged_read(ctx, capture, &read)
+                .expect("a recorded capture of a flagged local lowers through its flag");
+            if is_arrow_closure(expr) {
+                arrow_flag_captures.push(capture.clone());
+            }
+            (captured, PhpType::Mixed)
         } else {
+            // `use (&$x)` creates an undefined `$x` as null.
+            let defines_null = by_ref && capture_may_be_undefined(ctx, capture, expr);
+            if defines_null {
+                super::maybe_undefined_read::define_null_if_undefined(ctx, capture, expr.span);
+            }
             let widens_by_ref_capture = by_ref
                 && self_ref_callable_capture != Some(capture.as_str())
-                && (body_contains_eval || body_writes_local(body, capture));
+                && (defines_null || body_contains_eval || body_writes_local(body, capture));
             let php_type_override = if by_ref && self_ref_callable_capture == Some(capture.as_str()) {
                 Some(PhpType::Callable)
             } else if widens_by_ref_capture {
@@ -253,6 +270,26 @@ pub(super) fn lower_closure_with_context(
             by_ref_local: by_ref.then(|| capture.clone()),
         });
         capture_params.push((capture.clone(), php_type, by_ref));
+    }
+    // The defined-flag of each possibly undefined arrow-function capture travels with it, so
+    // the body's own reads answer `Undefined variable` exactly as the enclosing frame would.
+    for capture in arrow_flag_captures {
+        let Some(flag) = ctx.maybe_undefined_flags.get(&capture).cloned() else {
+            continue;
+        };
+        let flag_value = ctx.load_local(&flag, Some(expr.span));
+        ctx.emit_void(
+            Op::ClosureCapture,
+            vec![flag_value.value],
+            None,
+            Op::ClosureCapture.default_effects(),
+            Some(expr.span),
+        );
+        captured_values.push(ClosureCapture {
+            value: flag_value.value,
+            by_ref_local: None,
+        });
+        capture_params.push((flag, PhpType::Bool, false));
     }
     if ctx.current_class.is_some()
         && (ctx.local_slots.contains_key(CALLED_CLASS_ID_CAPTURE)
@@ -391,6 +428,223 @@ pub(super) fn body_writes_local(body: &[Stmt], name: &str) -> bool {
     body.iter().any(|stmt| stmt_writes_local(stmt, name))
 }
 
+/// How a function-like body writes each `static` local it declares (at any block depth), for
+/// the locals it writes after their declaration: `true` when every write is a plain value store
+/// (`$s = v`, `$s[k] = v`, `$s[] = v`, `$s[a][b] = v`, and the nested-append desugar), `false`
+/// when any write is something else (an increment, a reference, a by-reference call, a closure
+/// capture...). The declaration's own binding is not a write. Anything this walk cannot rule out
+/// is a write, exactly as for `body_writes_local`.
+pub(crate) fn written_static_locals(body: &[Stmt]) -> std::collections::HashMap<String, bool> {
+    let mut names = Vec::new();
+    collect_static_var_names(body, &mut names);
+    let mut result = std::collections::HashMap::new();
+    for name in names {
+        let mut usage = StaticWrites::default();
+        classify_static_writes(body, &name, &mut usage);
+        if usage.written || usage.other {
+            result.insert(name, !usage.other);
+        }
+    }
+    result
+}
+
+#[derive(Default)]
+struct StaticWrites {
+    written: bool,
+    other: bool,
+}
+
+fn classify_static_writes(body: &[Stmt], name: &str, usage: &mut StaticWrites) {
+    for stmt in body {
+        classify_static_write(stmt, name, usage);
+    }
+}
+
+fn classify_static_write(stmt: &Stmt, name: &str, usage: &mut StaticWrites) {
+    let expr_other = |expr: &Expr, usage: &mut StaticWrites| {
+        if expr_writes_local(expr, name) {
+            usage.other = true;
+        }
+    };
+    match &stmt.kind {
+        StmtKind::StaticVar { init, .. } => expr_other(init, usage),
+        StmtKind::Assign { name: target, value } => {
+            usage.written |= target == name;
+            expr_other(value, usage);
+        }
+        StmtKind::ArrayAssign { array, index, value } => {
+            usage.written |= array == name;
+            expr_other(index, usage);
+            expr_other(value, usage);
+        }
+        StmtKind::ArrayPush { array, value } => {
+            usage.written |= array == name;
+            expr_other(value, usage);
+        }
+        // A direct nested store (`$s[a][b] = v`, `$s[a][b]++`) needs a boxed container: on a
+        // concretely typed static the checker refuses it ("Nested array assignment requires a
+        // Mixed or ArrayAccess target"), so it is not a plain value store here.
+        StmtKind::NestedArrayAssign { target, value } => {
+            if element_root_is(target, name) {
+                usage.other = true;
+            }
+            expr_other(target, usage);
+            expr_other(value, usage);
+        }
+        // `$r = &$s[k]` binds an element cell, which widens the container in lowering.
+        StmtKind::RefAssign { target, source } => {
+            if target == name || element_root_is(source, name) {
+                usage.other = true;
+            }
+            expr_other(source, usage);
+        }
+        StmtKind::RefAssignPlace { target, source } => {
+            if element_root_is(target, name) || element_root_is(source, name) {
+                usage.other = true;
+            }
+            expr_other(target, usage);
+            expr_other(source, usage);
+        }
+        StmtKind::Synthetic(body) => classify_static_writes(body, name, usage),
+        StmtKind::If { condition, then_body, elseif_clauses, else_body } => {
+            expr_other(condition, usage);
+            classify_static_writes(then_body, name, usage);
+            for (condition, clause) in elseif_clauses {
+                expr_other(condition, usage);
+                classify_static_writes(clause, name, usage);
+            }
+            if let Some(else_body) = else_body {
+                classify_static_writes(else_body, name, usage);
+            }
+        }
+        StmtKind::While { condition, body } | StmtKind::DoWhile { body, condition } => {
+            expr_other(condition, usage);
+            classify_static_writes(body, name, usage);
+        }
+        StmtKind::For { init, condition, update, body } => {
+            if let Some(init) = init {
+                classify_static_write(init, name, usage);
+            }
+            if let Some(condition) = condition {
+                expr_other(condition, usage);
+            }
+            if let Some(update) = update {
+                classify_static_write(update, name, usage);
+            }
+            classify_static_writes(body, name, usage);
+        }
+        StmtKind::Foreach { array, key_var, value_var, value_by_ref, body } => {
+            if value_var == name
+                || key_var.as_deref() == Some(name)
+                || (*value_by_ref && element_root_is(array, name))
+            {
+                usage.other = true;
+            }
+            expr_other(array, usage);
+            classify_static_writes(body, name, usage);
+        }
+        StmtKind::Switch { subject, cases, default } => {
+            expr_other(subject, usage);
+            for (labels, case_body) in cases {
+                for label in labels {
+                    expr_other(label, usage);
+                }
+                classify_static_writes(case_body, name, usage);
+            }
+            if let Some(default) = default {
+                classify_static_writes(default, name, usage);
+            }
+        }
+        StmtKind::Try { try_body, catches, finally_body } => {
+            classify_static_writes(try_body, name, usage);
+            for catch in catches {
+                if catch.variable.as_deref() == Some(name) {
+                    usage.other = true;
+                }
+                classify_static_writes(&catch.body, name, usage);
+            }
+            if let Some(finally_body) = finally_body {
+                classify_static_writes(finally_body, name, usage);
+            }
+        }
+        _ => {
+            if stmt_writes_local(stmt, name) || stmt_mentions_nested_write(stmt, name) {
+                usage.other = true;
+            }
+        }
+    }
+}
+
+/// Whether an element chain (`$name[a][b]`) or the bare variable is rooted at `name`.
+fn element_root_is(expr: &Expr, name: &str) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(variable) => variable == name,
+        ExprKind::ArrayAccess { array, .. } => element_root_is(array, name),
+        _ => false,
+    }
+}
+
+/// Conservative catch-all for statement kinds the classifier does not model: any nested element
+/// store rooted at `name` inside them counts as a write `stmt_writes_local` might not report.
+fn stmt_mentions_nested_write(stmt: &Stmt, name: &str) -> bool {
+    match &stmt.kind {
+        StmtKind::IfDef { then_body, else_body, .. } => {
+            then_body.iter().chain(else_body.iter().flatten()).any(|stmt| {
+                let mut usage = StaticWrites::default();
+                classify_static_write(stmt, name, &mut usage);
+                usage.written || usage.other
+            })
+        }
+        StmtKind::IncludeOnceGuard { body, .. } => body.iter().any(|stmt| {
+            let mut usage = StaticWrites::default();
+            classify_static_write(stmt, name, &mut usage);
+            usage.written || usage.other
+        }),
+        _ => false,
+    }
+}
+
+/// Collects `static $x` names through the ordinary block statements of a body.
+fn collect_static_var_names(body: &[Stmt], out: &mut Vec<String>) {
+    for stmt in body {
+        match &stmt.kind {
+            StmtKind::StaticVar { name, .. } => out.push(name.clone()),
+            StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
+                collect_static_var_names(then_body, out);
+                for (_, clause) in elseif_clauses {
+                    collect_static_var_names(clause, out);
+                }
+                if let Some(else_body) = else_body {
+                    collect_static_var_names(else_body, out);
+                }
+            }
+            StmtKind::While { body, .. }
+            | StmtKind::DoWhile { body, .. }
+            | StmtKind::For { body, .. }
+            | StmtKind::Foreach { body, .. }
+            | StmtKind::Synthetic(body) => collect_static_var_names(body, out),
+            StmtKind::Try { try_body, catches, finally_body } => {
+                collect_static_var_names(try_body, out);
+                for catch in catches {
+                    collect_static_var_names(&catch.body, out);
+                }
+                if let Some(finally_body) = finally_body {
+                    collect_static_var_names(finally_body, out);
+                }
+            }
+            StmtKind::Switch { cases, default, .. } => {
+                for (_, case_body) in cases {
+                    collect_static_var_names(case_body, out);
+                }
+                if let Some(default) = default {
+                    collect_static_var_names(default, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Returns true when a statement can store into the local named `name`.
 fn stmt_writes_local(stmt: &Stmt, name: &str) -> bool {
     match &stmt.kind {
@@ -410,6 +664,14 @@ fn stmt_writes_local(stmt: &Stmt, name: &str) -> bool {
         // `$name = &$x` rebinds the name; `$x = &$name` aliases it, and the alias can be stored
         // through afterwards, so either side counts.
         StmtKind::RefAssign { target, source } => target == name || expr_writes_local(source, name),
+        // `$name[k] = &$x` stores into `$name`; `$o->p = &$name` puts `$name` in a reference set
+        // the place can write through later. Either side counts.
+        StmtKind::RefAssignPlace { target, source } => {
+            reference_place_root_is(target, name)
+                || expr_writes_local(target, name)
+                || expr_is_variable(source, name)
+                || expr_writes_local(source, name)
+        }
         StmtKind::Foreach { array, key_var, value_var, body, .. } => {
             value_var == name
                 || key_var.as_deref() == Some(name)
@@ -497,7 +759,7 @@ fn stmt_writes_local(stmt: &Stmt, name: &str) -> bool {
 }
 
 /// Returns true when an expression can store into the local named `name`.
-fn expr_writes_local(expr: &Expr, name: &str) -> bool {
+pub(crate) fn expr_writes_local(expr: &Expr, name: &str) -> bool {
     match &expr.kind {
         ExprKind::Assignment { target, value, result_target, prelude, .. } => {
             expr_is_variable(target, name)
@@ -666,6 +928,15 @@ fn expr_is_variable(expr: &Expr, name: &str) -> bool {
     matches!(&expr.kind, ExprKind::Variable(variable) if variable == name)
 }
 
+/// Returns true when an array-element reference place (`$name[a][b]`) is rooted at `name`.
+fn reference_place_root_is(expr: &Expr, name: &str) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(variable) => variable == name,
+        ExprKind::ArrayAccess { array, .. } => reference_place_root_is(array, name),
+        _ => false,
+    }
+}
+
 /// Returns true when an `instanceof` target can store into the local named `name`.
 fn instance_of_target_writes_local(target: &InstanceOfTarget, name: &str) -> bool {
     match target {
@@ -707,6 +978,9 @@ pub(super) fn stmt_contains_eval_call(stmt: &Stmt) -> bool {
         | StmtKind::StaticPropertyArrayAssign { index, value, .. }
         | StmtKind::PropertyArrayAssign { index, value, .. } => {
             expr_contains_eval_call(index) || expr_contains_eval_call(value)
+        }
+        StmtKind::RefAssignPlace { target, source } => {
+            expr_contains_eval_call(target) || expr_contains_eval_call(source)
         }
         StmtKind::NestedArrayAssign { target, value } => {
             expr_contains_eval_call(target) || expr_contains_eval_call(value)
@@ -941,4 +1215,16 @@ pub(super) fn callable_target_contains_eval_call(target: &CallableTarget) -> boo
 /// Returns true when a function call name resolves to PHP's `eval` construct.
 pub(super) fn is_eval_call_name(name: &Name) -> bool {
     php_symbol_key(name.as_str().trim_start_matches('\\')) == "eval"
+}
+
+/// Whether the checker recorded the capture of `name` by the closure `expr` as possibly
+/// undefined (see `crate::ir_lower::maybe_undefined`).
+fn capture_may_be_undefined(ctx: &LoweringContext<'_, '_>, name: &str, expr: &Expr) -> bool {
+    crate::ir_lower::maybe_undefined::read_decision(expr.span, name).is_some()
+        && ctx.maybe_undefined_flags.contains_key(name)
+}
+
+/// Whether `expr` is an arrow function (`fn () => ...`).
+fn is_arrow_closure(expr: &Expr) -> bool {
+    matches!(&expr.kind, ExprKind::Closure { is_arrow: true, .. })
 }

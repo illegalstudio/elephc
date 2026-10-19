@@ -591,6 +591,15 @@ pub(crate) fn stmt_invalidation(stmt: &Stmt) -> Invalidation {
             }
             inv
         }
+        StmtKind::RefAssignPlace { target, source } => {
+            // Both roots join one reference set: neither may carry a fact past this point.
+            let mut inv = assignment_target_invalidation(target).union(expr_invalidation(source));
+            for root in [lvalue_root(target), lvalue_root(source)].into_iter().flatten() {
+                mark_guard_reference(root);
+                inv.add(root);
+            }
+            inv
+        }
         StmtKind::ListUnpack { vars, value } => {
             let mut inv = expr_invalidation(value);
             for var in vars {

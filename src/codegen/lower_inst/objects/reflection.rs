@@ -59,6 +59,7 @@ mod member_object_emit;
 mod parameter_property_emit;
 mod type_object_emit;
 mod flags_offsets;
+mod closure_reflection;
 
 use owner_emission::*;
 use class_metadata::*;
@@ -82,6 +83,7 @@ use member_object_emit::*;
 use parameter_property_emit::*;
 use type_object_emit::*;
 use flags_offsets::*;
+use closure_reflection::*;
 
 pub(super) use owner_dispatch::{is_reflection_owner_class, lower_reflection_owner_new};
 

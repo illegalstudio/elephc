@@ -42,6 +42,9 @@ fn stmt_has_includes(stmt: &Stmt) -> bool {
         | StmtKind::PropertyArrayAssign { index, value, .. } => {
             expr_has_includes(index) || expr_has_includes(value)
         }
+        StmtKind::RefAssignPlace { target, source } => {
+            expr_has_includes(target) || expr_has_includes(source)
+        }
         StmtKind::NestedArrayAssign { target, value } => {
             expr_has_includes(target) || expr_has_includes(value)
         }
@@ -130,7 +133,7 @@ fn methods_have_includes(methods: &[ClassMethod]) -> bool {
 /// Returns true if the expression recursively contains an `Include`, checking
 /// binary operands, function arguments, array literals, closures, match arms,
 /// and all other expression variants.
-fn expr_has_includes(expr: &Expr) -> bool {
+pub(super) fn expr_has_includes(expr: &Expr) -> bool {
     match &expr.kind {
         // A value-position include is itself an include.
         ExprKind::IncludeValue { .. } => true,
@@ -259,9 +262,12 @@ fn expr_has_includes(expr: &Expr) -> bool {
         | ExprKind::This
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. }
-        | ExprKind::Yield { .. }
-        | ExprKind::YieldFrom(_)
         | ExprKind::MagicConstant(_) => false,
+        ExprKind::Yield { key, value } => {
+            key.as_deref().is_some_and(expr_has_includes)
+                || value.as_deref().is_some_and(expr_has_includes)
+        }
+        ExprKind::YieldFrom(value) => expr_has_includes(value),
     }
 }
 

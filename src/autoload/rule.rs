@@ -35,7 +35,10 @@ impl PartialEq for AutoloadRule {
     /// Used by `spl_autoload_unregister` to find and remove a previously
     /// registered rule from the chain.
     fn eq(&self, other: &Self) -> bool {
-        self.param_name == other.param_name && self.body == other.body
+        // Site markers (`resolver::dynamic_includes::mark`) name each include's position; two
+        // textually equal closures differ there, so they are compared without them.
+        let strip = |body: &[Stmt]| crate::resolver::dynamic_includes::mark::strip_include_sites(body.to_vec());
+        self.param_name == other.param_name && strip(&self.body) == strip(&other.body)
     }
 }
 

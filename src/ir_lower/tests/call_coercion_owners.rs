@@ -233,7 +233,7 @@ echo get_class($object), ":", get_parent_class($object);
             source, std::path::Path::new("main.php"), std::path::Path::new("."),
             crate::codegen::platform::Target::parse(target).unwrap(),
         );
-        let mut lookups = 0;
+        let mut main_lookups = 0;
         for function in &module.functions {
             for call in &function.instructions {
                 if !matches!(call.immediate, Some(Immediate::RuntimeCall(
@@ -242,13 +242,18 @@ echo get_class($object), ":", get_parent_class($object);
                         target: RuntimeFnId::GetClass | RuntimeFnId::GetParentClass, ..
                     }
                 ))) { continue; }
-                lookups += 1;
+                if function.name == "main" {
+                    main_lookups += 1;
+                }
                 assert!(function.instructions.iter().any(|inst| {
                     inst.op == Op::Release && inst.operands == [call.result.unwrap()]
                 }), "{target}: each native class-name result has a release");
             }
         }
-        assert_eq!(lookups, 2, "{target}");
+        // The declared-return coercion helper, retained here with the Core class declarations,
+        // names classes with its own `get_class()` in its TypeError messages; only `main`'s
+        // two lookups read eval-bridged Mixed operands.
+        assert_eq!(main_lookups, 2, "{target}");
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         let calls: Vec<_> = asm.match_indices("__elephc_eval_object_class_name").collect();
         assert_eq!(calls.len(), 2, "{target}: both Mixed operands must use the eval bridge");

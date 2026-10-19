@@ -19,7 +19,7 @@ pub mod docs;
 mod convert;
 mod requirements;
 mod array;
-mod callables;
+pub(crate) mod callables;
 mod curl;
 mod io;
 pub(crate) mod mbstring;

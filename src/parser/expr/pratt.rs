@@ -83,6 +83,7 @@ fn parse_expr_bp_inner(
             Token::PlusPlus | Token::MinusMinus => {
                 let span = tokens[*pos].1.span;
                 let increment = tokens[*pos].0 == Token::PlusPlus;
+                super::assignment_targets::reject_dynamic_member_write(&lhs, span)?;
                 match crate::parser::expr::assignment_targets::desugar_lvalue_incdec(
                     lhs.clone(),
                     increment,
@@ -103,6 +104,30 @@ fn parse_expr_bp_inner(
             Token::LBracket => {
                 let span = tokens[*pos].1.span;
                 *pos += 1;
+                if matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::RBracket)) {
+                    // `$base[] = value` in expression position (e.g. an arrow fn body). PHP only
+                    // allows `[]` as a plain assignment target.
+                    *pos += 1;
+                    if matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Comma | Token::RParen)) {
+                        // `f($a[])`: valid PHP only for a by-reference parameter, which then
+                        // receives a new null element. elephc does not lower that argument form.
+                        return Err(CompileError::new(
+                            span,
+                            "Cannot use [] for reading: elephc does not support a new array element \
+                             (`$a[]`) as a by-reference argument; append first and pass the element \
+                             (`$a[] = null; f($a[array_key_last($a)]);`)",
+                        ));
+                    }
+                    if !matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Assign)) {
+                        return Err(CompileError::new(span, "Cannot use [] for reading"));
+                    }
+                    *pos += 1;
+                    let (_, _, r_bp) = assignment_bp(&Token::Assign).expect("`=` is an assignment");
+                    let value = parse_expr_bp(tokens, pos, r_bp)?;
+                    let span = span.merge(value.span);
+                    lhs = super::assignment_targets::append_assignment_expr(lhs, value, span)?;
+                    continue;
+                }
                 let index = parse_expr(tokens, pos)?;
                 if *pos >= tokens.len() || tokens[*pos].0 != Token::RBracket {
                     return Err(CompileError::new(span, "Expected ']'"));
@@ -134,17 +159,33 @@ fn parse_expr_bp_inner(
                     );
                     continue;
                 }
+                let computed_member =
+                    matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::LBrace));
                 let member = match tokens
                     .get(*pos)
                     .map(|(token, metadata)| (token.clone(), metadata.span))
                 {
-                    Some((Token::Identifier(name), name_span)) => {
-                        *pos += 1;
-                        Expr::new(ExprKind::StringLiteral(name), name_span)
-                    }
                     Some((Token::Variable(name), var_span)) => {
                         *pos += 1;
                         Expr::new(ExprKind::Variable(name), var_span)
+                    }
+                    // PHP 8 semi-reserved keywords as method / constant names after a dynamic
+                    // receiver too: `$factory::new()` (Eloquent Factory), `$cls::list()`.
+                    Some((ref token, name_span))
+                        if !matches!(token, Token::LBrace)
+                            && crate::parser::keyword_name::bareword_name_from_token(
+                                token,
+                                &tokens[*pos].1,
+                            )
+                            .is_some() =>
+                    {
+                        let name = crate::parser::keyword_name::bareword_name_from_token(
+                            token,
+                            &tokens[*pos].1,
+                        )
+                        .expect("matched above");
+                        *pos += 1;
+                        Expr::new(ExprKind::StringLiteral(name), name_span)
                     }
                     Some((Token::LBrace, _)) => {
                         *pos += 1;
@@ -155,7 +196,20 @@ fn parse_expr_bp_inner(
                         *pos += 1;
                         member
                     }
-                    _ => {
+                    // PHP 8's semi-reserved rule: any keyword is a method or constant name after
+                    // `::` (`$factory::new()`, `$option::match($x)`, `$cls::DEFAULT`); `class`
+                    // is the class-name fetch handled above.
+                    Some((token, name_span)) => {
+                        let Some(name) = crate::parser::keyword_name::bareword_name_from_token(
+                            &token,
+                            &tokens[*pos].1,
+                        ) else {
+                            return Err(CompileError::new(span, "Expected method name after '::'"));
+                        };
+                        *pos += 1;
+                        Expr::new(ExprKind::StringLiteral(name), name_span)
+                    }
+                    None => {
                         return Err(CompileError::new(span, "Expected method name after '::'"));
                     }
                 };
@@ -164,21 +218,39 @@ fn parse_expr_bp_inner(
                     let dynamic_args = crate::parser::expr::parse_args(tokens, pos, span)?;
                     let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
                     reject_named_args_in_dynamic_call(&dynamic_args, span)?;
-                    let mut call_args =
-                        vec![Expr::new(ExprKind::ArrayLiteral(vec![lhs, member]), span)];
+                    // A literal method name dispatches on the receiver's runtime class like
+                    // `$cls::NAME` (`__elephc_dynamic_static_call`, expanded in ir_lower), so
+                    // `$obj::staticMethod()` resolves statics and late static binding. A
+                    // variable method name keeps the generic callable-array path.
+                    let primitive = if matches!(member.kind, ExprKind::StringLiteral(_)) {
+                        "__elephc_dynamic_static_call"
+                    } else {
+                        "call_user_func"
+                    };
+                    let mut call_args = if primitive == "call_user_func" {
+                        vec![Expr::new(ExprKind::ArrayLiteral(vec![lhs, member]), span)]
+                    } else {
+                        vec![lhs, member]
+                    };
                     call_args.extend(dynamic_args);
                     lhs = Expr::new(
                         ExprKind::FunctionCall {
-                            name: crate::names::Name::unqualified("call_user_func"),
+                            name: crate::names::Name::unqualified(primitive),
                             args: call_args,
                         },
                         span,
                     );
                 } else {
-                    return Err(CompileError::new(
-                        span,
-                        "Dynamic class access (`$class::X`) is only supported for method calls",
-                    ));
+                    let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
+                    if computed_member {
+                        // `$cls::{$expr}` is PHP 8.3's dynamic CONSTANT fetch; reading the braced
+                        // expression as a member name would turn `{$c}` into static property `$c`.
+                        return Err(CompileError::new(
+                            span,
+                            "Dynamic class constant fetch with a computed name (`$class::{expr}`) is not supported",
+                        ));
+                    }
+                    lhs = parse_dynamic_class_member_read(tokens, *pos, lhs, member, span)?;
                 }
             }
             Token::Arrow | Token::QuestionArrow => {
@@ -190,9 +262,34 @@ fn parse_expr_bp_inner(
                     ObjectMember::Dynamic(property) => {
                         if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
                             *pos += 1; // consume '('
+                            if parse_first_class_callable_parens(tokens, pos)? {
+                                if nullsafe {
+                                    return Err(CompileError::new(
+                                        arrow_span,
+                                        "Cannot combine nullsafe operator with Closure creation",
+                                    ));
+                                }
+                                let arrow_span = crate::parser::expr::span_through_prev_token(
+                                    tokens, *pos, arrow_span,
+                                );
+                                lhs = super::dynamic_calls::dynamic_method_first_class_callable(
+                                    lhs, property, arrow_span,
+                                );
+                                continue;
+                            }
                             let dynamic_args =
                                 crate::parser::expr::parse_args(tokens, pos, arrow_span)?;
                             let arrow_span = crate::parser::expr::span_through_prev_token(tokens, *pos, arrow_span);
+                            if !nullsafe && super::dynamic_calls::has_named_args(&dynamic_args) {
+                                // The method is only named at run time: bind the names there.
+                                lhs = super::dynamic_calls::dynamic_method_call_with_named_args(
+                                    lhs,
+                                    property,
+                                    dynamic_args,
+                                    arrow_span,
+                                )?;
+                                continue;
+                            }
                             reject_named_args_in_dynamic_call(&dynamic_args, arrow_span)?;
                             if nullsafe {
                                 lhs = Expr::new(
@@ -324,9 +421,19 @@ fn parse_expr_bp_inner(
                         | ExprKind::FunctionCall { .. }
                         | ExprKind::MethodCall { .. }
                         | ExprKind::StaticMethodCall { .. }
+                        // `[$class, 'method']()` calls the callable array literal.
+                        | ExprKind::ArrayLiteral(_)
                 ) {
                     let call_span = tokens[*pos].1.span;
                     *pos += 1;
+                    if parse_first_class_callable_parens(tokens, pos)? {
+                        // `call()(...)`, `$a['k'](...)`, `[$o, 'm'](...)`: the callee is a runtime
+                        // value, converted like `$var(...)` (`Closure::fromCallable` semantics).
+                        let call_span =
+                            crate::parser::expr::span_through_prev_token(tokens, *pos, call_span);
+                        lhs = super::prefix::expr_first_class_callable(lhs, call_span);
+                        continue;
+                    }
                     let args = parse_args(tokens, pos, call_span)?;
                     let call_span = crate::parser::expr::span_through_prev_token(tokens, *pos, call_span);
                     lhs = Expr::new(
@@ -407,17 +514,50 @@ fn parse_expr_bp_inner(
         }
 
         if let Some((op, l_bp, r_bp)) = assignment_bp(&tokens[*pos].0) {
-            if l_bp < min_bp && !is_assignment_expression_target(&lhs) {
+            // A place directly before an assignment operator is always its target, whatever
+            // operator encloses it: PHP reads `a ?: $o->p = v`, `a || $x[k] = v`, `!$x = f()`
+            // and `$a + $b = 3` as `a ?: ($o->p = v)` and so on. `call()[k]` is a place too,
+            // written on a temporary, and a `?->` chain is one PHP refuses to write.
+            let is_place = is_assignment_expression_target(&lhs)
+                || super::assignment_targets::is_call_dimension_place(&lhs)
+                || is_nullsafe_place(&lhs);
+            if l_bp < min_bp && !is_place {
                 break;
             }
 
-            if !is_assignment_expression_target(&lhs) {
+            if !is_place {
+                if super::assignment_targets::is_dynamic_class_member_read(&lhs) {
+                    return Err(CompileError::new(
+                        lhs.span,
+                        super::assignment_targets::DYNAMIC_STATIC_PROPERTY_WRITE_ERROR,
+                    ));
+                }
                 return Err(CompileError::new(lhs.span, "Invalid assignment target"));
             }
+            super::assignment_targets::reject_nullsafe_write(&lhs, lhs.span)?;
 
             let span = tokens[*pos].1.span;
             *pos += 1;
+            if matches!(op, AssignmentOperator::Assign)
+                && matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Ampersand))
+            {
+                // `$x = &$y` as an operand (`$ok || $ref = &$items[0]`). The source is a
+                // variable chain, so it binds tighter than any operator that may follow it.
+                *pos += 1;
+                let source = parse_expr_bp(tokens, pos, REFERENCE_SOURCE_BP)?;
+                let span = span.merge(source.span);
+                lhs = super::assignment_targets::reference_assignment_expr(lhs, source, span)?;
+                continue;
+            }
             let rhs = parse_expr_bp(tokens, pos, r_bp)?;
+            if super::assignment_targets::is_call_dimension_place(&lhs) {
+                let span = span.merge(rhs.span);
+                if !matches!(op, AssignmentOperator::Assign) {
+                    return Err(CompileError::new(span, CALL_DIMENSION_UPDATE_ERROR));
+                }
+                lhs = super::assignment_targets::call_dimension_assignment_expr(lhs, rhs, span)?;
+                continue;
+            }
             // Widen only the END so the span covers through the value expression;
             // the start stays on the operator token, keeping diagnostics anchored.
             let span = span.merge(rhs.span);
@@ -638,6 +778,27 @@ fn parse_object_member(
     ))
 }
 
+/// Binding power for the source of `= &source`: above every binary operator, so only the
+/// variable chain (`$a`, `$o->p`, `$a[k]`, `f()`) is taken.
+const REFERENCE_SOURCE_BP: u8 = 40;
+
+/// Diagnostic for a compound or `??=` update of one dimension of a call result.
+pub(crate) const CALL_DIMENSION_UPDATE_ERROR: &str =
+    "Compound assignment to a dimension of a call result (`f()[k] += v`) is not supported; assign the result to a variable first";
+
+/// True for a write place that goes through `?->`, which is reported with PHP's diagnostic
+/// instead of the generic invalid-target one.
+fn is_nullsafe_place(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::NullsafePropertyAccess { .. } | ExprKind::NullsafeDynamicPropertyAccess { .. } => true,
+        ExprKind::PropertyAccess { object, .. } | ExprKind::DynamicPropertyAccess { object, .. } => {
+            is_nullsafe_place(object)
+        }
+        ExprKind::ArrayAccess { array, .. } => is_nullsafe_place(array),
+        _ => false,
+    }
+}
+
 /// Represents the specific assignment operator encountered during parsing.
 #[derive(Debug, Clone, PartialEq)]
 enum AssignmentOperator {
@@ -665,6 +826,59 @@ pub(in crate::parser) fn reject_named_args_in_dynamic_call(
         ));
     }
     Ok(())
+}
+
+/// Builds the read of a dynamic-receiver class member: `$cls::NAME` or `$cls::$prop`.
+///
+/// `member` is what followed `::`: a `StringLiteral` for a constant name or a `Variable` for a
+/// static property (the computed `{expr}` form is rejected by the caller). `$this::NAME` / `$this::$prop`
+/// are exactly `static::NAME` / `static::$prop` in PHP (the runtime class of `$this` IS the
+/// called class inside an instance method), so they reuse the late-static-binding nodes.
+/// Every other receiver becomes a call to an internal compiler primitive
+/// (`__elephc_dynamic_class_constant` / `__elephc_dynamic_static_property`) that
+/// `crate::ir_lower::expr::dynamic_class_access` expands into a runtime class-name dispatch over
+/// the AOT class table. Writes (`$cls::$prop = ...`, `++`, compound assignment) stay rejected:
+/// the primitive is a value, not a place.
+fn parse_dynamic_class_member_read(
+    tokens: &[SpannedToken],
+    pos: usize,
+    receiver: Expr,
+    member: Expr,
+    span: Span,
+) -> Result<Expr, CompileError> {
+    let is_write = tokens.get(pos).is_some_and(|(token, _)| {
+        matches!(token, Token::PlusPlus | Token::MinusMinus) || assignment_bp(token).is_some()
+    });
+    let (primitive, name) = match member.kind {
+        ExprKind::StringLiteral(name) => ("__elephc_dynamic_class_constant", name),
+        ExprKind::Variable(name) => ("__elephc_dynamic_static_property", name),
+        _ => unreachable!("computed `::{{expr}}` members are rejected before this point"),
+    };
+    if is_write && primitive == "__elephc_dynamic_static_property" {
+        return Err(CompileError::new(
+            span,
+            "Writing a static property through a dynamic class (`$class::$prop = ...`) is not supported; use the class name",
+        ));
+    }
+    // `$this::NAME` is exactly `static::NAME`. `$this::$prop` deliberately is NOT rewritten to
+    // `static::$prop`: that node reads the declaring class's storage from an instance method
+    // when a subclass redeclares the property, so it goes through the runtime-class dispatch.
+    if matches!(receiver.kind, ExprKind::This) && primitive == "__elephc_dynamic_class_constant" {
+        return Ok(Expr::new(
+            ExprKind::ScopedConstantAccess {
+                receiver: crate::parser::ast::StaticReceiver::Static,
+                name,
+            },
+            span,
+        ));
+    }
+    Ok(Expr::new(
+        ExprKind::FunctionCall {
+            name: crate::names::Name::unqualified(primitive),
+            args: vec![receiver, Expr::new(ExprKind::StringLiteral(name), span)],
+        },
+        span,
+    ))
 }
 
 /// Looks up assignment operator binding power.

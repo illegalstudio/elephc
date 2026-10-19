@@ -164,6 +164,9 @@ pub(super) fn is_assignment_expression_target(expr: &Expr) -> bool {
 /// Recursively walks into array accesses to find the underlying base.
 fn is_array_assignment_base(expr: &Expr) -> bool {
     match &expr.kind {
+        // `$this['env'] = v` (Laravel's `Application::detectEnvironment`) writes through the
+        // object's `ArrayAccess` implementation, exactly like `$app['env'] = v`.
+        ExprKind::This => true,
         ExprKind::Variable(_)
         | ExprKind::PropertyAccess { .. }
         | ExprKind::DynamicPropertyAccess { .. }
@@ -997,5 +1000,387 @@ fn instanceof_target_contains_equivalent(target: &InstanceOfTarget, needle: &Exp
         InstanceOfTarget::Name(_) => false,
         InstanceOfTarget::Generic(_) => false,
         InstanceOfTarget::Expr(expr) => expr_contains_equivalent(expr, needle),
+    }
+}
+
+/// Builds the expression form of an append, `$base[] = $value`, whose value is `$value`.
+///
+/// A call-result base (`app(X::class)[] = $v`, Laravel's `defer()` arrow fn) writes to a
+/// temporary: see `temporary_append_expr`. A place rooted in a local, a property or a static
+/// property (`$ok || $list[] = $v`, `$c && $this->items[] = $v`) becomes an assignment whose
+/// prelude runs the append statement and whose value is the appended value; the prelude is
+/// lowered where the assignment is evaluated, so a short-circuiting operator skips it.
+pub(crate) fn append_assignment_expr(base: Expr, value: Expr, span: Span) -> Result<Expr, crate::errors::CompileError> {
+    if is_dynamic_class_member_read(&base) {
+        return Err(crate::errors::CompileError::new(span, DYNAMIC_STATIC_PROPERTY_WRITE_ERROR));
+    }
+    reject_nullsafe_write(&base, span)?;
+    if is_call_like_append_base(&base) {
+        return Ok(temporary_append_expr(base, value, span));
+    }
+    if matches!(
+        base.kind,
+        ExprKind::Variable(_)
+            | ExprKind::PropertyAccess { .. }
+            | ExprKind::StaticPropertyAccess { .. }
+    ) || matches!(&base.kind, ExprKind::ArrayAccess { array, .. } if is_array_assignment_base(array))
+    {
+        return place_append_expr(base, value, span);
+    }
+    Err(crate::errors::CompileError::new(
+        span,
+        "Appending (`$x[] = ...`) inside an expression is only supported on a variable, property, static property or call result",
+    ))
+}
+
+/// Lowers `$place[] = $value` in expression position to an `Assignment` carrying the append as
+/// its prelude: the place's effectful parts are stabilized first (PHP evaluates the receiver and
+/// the indexes before the value), the value is bound to a temporary, the append statement pushes
+/// that temporary, and the expression yields it.
+fn place_append_expr(base: Expr, value: Expr, span: Span) -> Result<Expr, crate::errors::CompileError> {
+    let mut lowerer = AssignmentExpressionLowerer::new(span);
+    let base = if is_non_local_assignment_target(&base) {
+        lowerer.stabilize_non_local_target(base, &value)
+    } else {
+        base
+    };
+    let pushed = lowerer.bind_result_value(value);
+    let append = match base.kind {
+        ExprKind::Variable(array) => Stmt::new(StmtKind::ArrayPush { array, value: pushed.clone() }, span),
+        ExprKind::PropertyAccess { object, property } => Stmt::new(
+            StmtKind::PropertyArrayPush { object, property, value: pushed.clone() },
+            span,
+        ),
+        ExprKind::StaticPropertyAccess { receiver, property } => Stmt::new(
+            StmtKind::StaticPropertyArrayPush { receiver, property, value: pushed.clone() },
+            span,
+        ),
+        kind @ ExprKind::ArrayAccess { .. } => crate::parser::stmt::lower_nested_append_assignment(
+            Expr::new(kind, base.span),
+            pushed.clone(),
+            span,
+        )?,
+        _ => unreachable!("append_assignment_expr only forwards local-rooted places"),
+    };
+    let mut prelude = lowerer.finish();
+    prelude.push(append);
+    let result = crate::names::generated_local_name(&format!(
+        "__elephc_append_expr_{}_{}",
+        span.line, span.col
+    ));
+    Ok(Expr::new(
+        ExprKind::Assignment {
+            target: Box::new(Expr::new(ExprKind::Variable(result), span)),
+            value: Box::new(pushed),
+            result_target: None,
+            prelude,
+            conditional_value_temp: None,
+        },
+        span,
+    ))
+}
+
+/// Lowers `$target = &$source` in expression position (`$ok || $ref = &$items[0]`): the
+/// reference binding is the prelude of an assignment whose value is the bound variable, so it
+/// only happens when the expression is evaluated. Only a plain-variable target is supported,
+/// exactly like the statement form.
+pub(super) fn reference_assignment_expr(
+    target: Expr,
+    source: Expr,
+    span: Span,
+) -> Result<Expr, crate::errors::CompileError> {
+    reject_nullsafe_write(&target, span)?;
+    reject_nullsafe_write(&source, span)?;
+    reject_dynamic_member_write(&source, span)?;
+    let ExprKind::Variable(name) = target.kind else {
+        return Err(crate::errors::CompileError::new(
+            span,
+            "Reference assignment inside an expression is only supported for a plain variable target (`$x = &$y`)",
+        ));
+    };
+    if !matches!(
+        source.kind,
+        ExprKind::Variable(_)
+            | ExprKind::ArrayAccess { .. }
+            | ExprKind::PropertyAccess { .. }
+            | ExprKind::StaticPropertyAccess { .. }
+            | ExprKind::FunctionCall { .. }
+            | ExprKind::MethodCall { .. }
+            | ExprKind::StaticMethodCall { .. }
+            | ExprKind::ClosureCall { .. }
+            | ExprKind::ExprCall { .. }
+    ) {
+        return Err(crate::errors::CompileError::new(
+            span,
+            "Reference assignment source must be a variable, array/property element, or a by-reference call",
+        ));
+    }
+    let result = crate::names::generated_local_name(&format!(
+        "__elephc_ref_assign_expr_{}_{}",
+        span.line, span.col
+    ));
+    Ok(Expr::new(
+        ExprKind::Assignment {
+            target: Box::new(Expr::new(ExprKind::Variable(result), span)),
+            value: Box::new(Expr::new(ExprKind::Variable(name.clone()), span)),
+            result_target: None,
+            prelude: vec![Stmt::new(StmtKind::RefAssign { target: name, source }, span)],
+            conditional_value_temp: None,
+        },
+        span,
+    ))
+}
+
+/// PHP's compile-time diagnostic for a write through `?->`.
+pub(crate) const NULLSAFE_WRITE_ERROR: &str = "Can't use nullsafe operator in write context";
+
+/// Rejects a write place whose chain goes through `?->` (`$o?->p = 1`, `$o?->a[] = 1`,
+/// `$o?->a->b = 1`), which PHP refuses at compile time.
+pub(crate) fn reject_nullsafe_write(expr: &Expr, span: Span) -> Result<(), crate::errors::CompileError> {
+    if place_chain_is_nullsafe(expr) {
+        return Err(crate::errors::CompileError::new(span, NULLSAFE_WRITE_ERROR));
+    }
+    Ok(())
+}
+
+/// True when a place's receiver chain contains a nullsafe property fetch.
+fn place_chain_is_nullsafe(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::NullsafePropertyAccess { .. } | ExprKind::NullsafeDynamicPropertyAccess { .. } => true,
+        ExprKind::PropertyAccess { object, .. } | ExprKind::DynamicPropertyAccess { object, .. } => {
+            place_chain_is_nullsafe(object)
+        }
+        ExprKind::ArrayAccess { array, .. } => place_chain_is_nullsafe(array),
+        _ => false,
+    }
+}
+
+/// True for `call()[k]`: one dimension of a call result, which PHP writes on a temporary.
+pub(crate) fn is_call_dimension_place(expr: &Expr) -> bool {
+    matches!(&expr.kind, ExprKind::ArrayAccess { array, .. } if is_call_like_append_base(array))
+}
+
+/// Builds `call()[$key] = $value` (expression or statement), PHP's write on a temporary.
+///
+/// An `ArrayAccess` result gets `offsetSet($key, $value)` (the handle is shared, so the write is
+/// visible); another object throws `Cannot use object of type X as array`; an int, float or
+/// `true` throws `Cannot use a scalar value as an array`; a string throws an explicit Error (elephc
+/// has no string-offset write); `false` raises PHP's deprecation; an
+/// array or null is a discarded temporary. Otherwise the expression yields `$value`. The base,
+/// the key and the value are evaluated in that order, as arguments of an immediately invoked
+/// static closure (see `temporary_append_expr`). Only a plain `=` is supported: a compound or
+/// `??=` update would need `offsetGet` and is rejected at compile time by the caller.
+pub(crate) fn call_dimension_assignment_expr(
+    target: Expr,
+    value: Expr,
+    span: Span,
+) -> Result<Expr, crate::errors::CompileError> {
+    let ExprKind::ArrayAccess { array, index } = target.kind else {
+        unreachable!("callers check is_call_dimension_place");
+    };
+    if is_dynamic_class_member_read(&array) {
+        return Err(crate::errors::CompileError::new(span, DYNAMIC_STATIC_PROPERTY_WRITE_ERROR));
+    }
+    let e = |kind: ExprKind| Expr::new(kind, span);
+    let s = |kind: StmtKind| Stmt::new(kind, span);
+    let var = |name: &str| e(ExprKind::Variable(name.to_string()));
+    let lit = |text: &str| e(ExprKind::StringLiteral(text.to_string()));
+    let call = |function: &str, args: Vec<Expr>| {
+        e(ExprKind::FunctionCall { name: crate::names::Name::unqualified(function), args })
+    };
+    let throw = |message: Expr| {
+        s(StmtKind::Throw(e(ExprKind::NewObject {
+            class_name: crate::names::Name::from("Error".to_string()),
+            args: vec![message],
+        })))
+    };
+    let concat = |left: Expr, right: Expr| {
+        e(ExprKind::BinaryOp { left: Box::new(left), op: BinOp::Concat, right: Box::new(right) })
+    };
+    let or = |left: Expr, right: Expr| {
+        e(ExprKind::BinaryOp { left: Box::new(left), op: BinOp::Or, right: Box::new(right) })
+    };
+    let strict_eq = |left: Expr, right: Expr| {
+        e(ExprKind::BinaryOp { left: Box::new(left), op: BinOp::StrictEq, right: Box::new(right) })
+    };
+    let offset_set = s(StmtKind::ExprStmt(e(ExprKind::MethodCall {
+        object: Box::new(var("base")),
+        method: "offsetSet".to_string(),
+        args: vec![var("key"), var("value")],
+    })));
+    let object_error = throw(concat(
+        concat(lit("Cannot use object of type "), call("get_class", vec![var("base")])),
+        lit(" as array"),
+    ));
+    let scalar = or(
+        or(call("is_int", vec![var("base")]), call("is_float", vec![var("base")])),
+        strict_eq(var("base"), e(ExprKind::BoolLiteral(true))),
+    );
+    // elephc has no string-offset write, so the string case (which PHP performs on a copy,
+    // yielding the stored character) is an explicit runtime Error rather than a silent no-op.
+    let string_write = vec![throw(lit(
+        "Writing a string offset of a call result (`f()[k] = v`) is not supported by elephc",
+    ))];
+    let deprecation = s(StmtKind::ExprStmt(call(
+        "trigger_error",
+        vec![
+            lit("Automatic conversion of false to array is deprecated"),
+            e(ExprKind::ConstRef(crate::names::Name::unqualified("E_USER_DEPRECATED"))),
+        ],
+    )));
+    let dispatch = s(StmtKind::If {
+        condition: e(ExprKind::InstanceOf {
+            value: Box::new(var("base")),
+            target: InstanceOfTarget::Name(crate::names::Name::from("ArrayAccess".to_string())),
+        }),
+        then_body: vec![offset_set],
+        elseif_clauses: vec![
+            (call("is_object", vec![var("base")]), vec![object_error]),
+            (call("is_string", vec![var("base")]), string_write),
+            (scalar, vec![throw(lit("Cannot use a scalar value as an array"))]),
+            (strict_eq(var("base"), e(ExprKind::BoolLiteral(false))), vec![deprecation]),
+        ],
+        else_body: None,
+    });
+    let closure = e(ExprKind::Closure {
+        params: vec![
+            ("base".to_string(), None, None, false),
+            ("key".to_string(), None, None, false),
+            ("value".to_string(), None, None, false),
+        ],
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: None,
+        body: vec![dispatch, s(StmtKind::Return(Some(var("value"))))],
+        is_arrow: false,
+        is_static: true,
+        by_ref_return: false,
+        captures: Vec::new(),
+        capture_refs: Vec::new(),
+    });
+    Ok(e(ExprKind::ExprCall { callee: Box::new(closure), args: vec![*array, *index, value] }))
+}
+
+/// Appends to a call result, as PHP does for a temporary: an `ArrayAccess` object gets
+/// `offsetSet(null, $value)` (the handle is shared, so the write is visible), another object or
+/// a string throws PHP's `Error`, and anything else (an array, null) is a discarded temporary,
+/// so nothing observable happens. The expression yields `$value`.
+///
+/// Built as an immediately invoked static closure, `(static function ($base, $value) {...})(
+/// call(), value)`: the arguments run in PHP's order (base, then value), the body may branch
+/// and throw, and nothing leaks into (or must be captured from) the enclosing scope, so it also
+/// works inside an arrow function. The method is called explicitly because an append through a
+/// boxed (`mixed`) receiver does not reach `offsetSet` with a `null` offset in the generic
+/// subscript-write path.
+fn temporary_append_expr(base: Expr, value: Expr, span: Span) -> Expr {
+    let e = |kind: ExprKind| Expr::new(kind, span);
+    let s = |kind: StmtKind| Stmt::new(kind, span);
+    let var = |name: &str| e(ExprKind::Variable(name.to_string()));
+    let lit = |text: &str| e(ExprKind::StringLiteral(text.to_string()));
+    let call = |function: &str, args: Vec<Expr>| {
+        e(ExprKind::FunctionCall { name: crate::names::Name::unqualified(function), args })
+    };
+    let throw = |message: Expr| {
+        s(StmtKind::Throw(e(ExprKind::NewObject {
+            class_name: crate::names::Name::from("Error".to_string()),
+            args: vec![message],
+        })))
+    };
+    let concat = |left: Expr, right: Expr| {
+        e(ExprKind::BinaryOp { left: Box::new(left), op: BinOp::Concat, right: Box::new(right) })
+    };
+    let offset_set = s(StmtKind::ExprStmt(e(ExprKind::MethodCall {
+        object: Box::new(var("base")),
+        method: "offsetSet".to_string(),
+        args: vec![e(ExprKind::Null), var("value")],
+    })));
+    let object_error = throw(concat(
+        concat(lit("Cannot use object of type "), call("get_class", vec![var("base")])),
+        lit(" as array"),
+    ));
+    let dispatch = s(StmtKind::If {
+        condition: e(ExprKind::InstanceOf {
+            value: Box::new(var("base")),
+            target: InstanceOfTarget::Name(crate::names::Name::from("ArrayAccess".to_string())),
+        }),
+        then_body: vec![offset_set],
+        elseif_clauses: vec![
+            (call("is_object", vec![var("base")]), vec![object_error]),
+            (
+                call("is_string", vec![var("base")]),
+                vec![throw(lit("[] operator not supported for strings"))],
+            ),
+        ],
+        else_body: None,
+    });
+    let closure = e(ExprKind::Closure {
+        params: vec![
+            ("base".to_string(), None, None, false),
+            ("value".to_string(), None, None, false),
+        ],
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: None,
+        body: vec![dispatch, s(StmtKind::Return(Some(var("value"))))],
+        is_arrow: false,
+        is_static: true,
+        by_ref_return: false,
+        captures: Vec::new(),
+        capture_refs: Vec::new(),
+    });
+    e(ExprKind::ExprCall { callee: Box::new(closure), args: vec![base, value] })
+}
+
+/// Returns true for a call-shaped append base, which PHP evaluates once into a temporary.
+fn is_call_like_append_base(expr: &Expr) -> bool {
+    matches!(
+        expr.kind,
+        ExprKind::FunctionCall { .. }
+            | ExprKind::MethodCall { .. }
+            | ExprKind::NullsafeMethodCall { .. }
+            | ExprKind::StaticMethodCall { .. }
+            | ExprKind::ClosureCall { .. }
+            | ExprKind::ExprCall { .. }
+    )
+}
+
+/// Diagnostic for a write through `$class::$prop`, shared by every write shape.
+pub(crate) const DYNAMIC_STATIC_PROPERTY_WRITE_ERROR: &str =
+    "Writing a static property through a dynamic class (`$class::$prop = ...`) is not supported; use the class name";
+
+/// Returns true for the parser's `$class::X` / `$class::$prop` read desugars, which are values,
+/// not places: a write through them would silently land in a temporary.
+pub(crate) fn is_dynamic_class_member_read(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::FunctionCall { name, .. } => matches!(
+            name.as_str().trim_start_matches('\\'),
+            "__elephc_dynamic_class_constant" | "__elephc_dynamic_static_property"
+        ),
+        ExprKind::ArrayAccess { array, .. } => is_dynamic_class_member_read(array),
+        _ => false,
+    }
+}
+
+/// Rejects a write context (`++`, `--`, `=&`, `foreach (... as &$v)`, `unset`, destructuring)
+/// whose place is rooted in a `$class::$prop` read desugar: that desugar is a value, so the
+/// write would land in a temporary and silently do nothing.
+pub(crate) fn reject_dynamic_member_write(expr: &Expr, span: Span) -> Result<(), crate::errors::CompileError> {
+    if is_dynamic_class_member_place(expr) {
+        return Err(crate::errors::CompileError::new(span, DYNAMIC_STATIC_PROPERTY_WRITE_ERROR));
+    }
+    Ok(())
+}
+
+/// Like `is_dynamic_class_member_read`, also looking through property links
+/// (`$c::$o->x`), which reach the same temporary.
+fn is_dynamic_class_member_place(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::PropertyAccess { object, .. } | ExprKind::NullsafePropertyAccess { object, .. } => {
+            is_dynamic_class_member_place(object)
+        }
+        ExprKind::ArrayAccess { array, .. } => is_dynamic_class_member_place(array),
+        _ => is_dynamic_class_member_read(expr),
     }
 }

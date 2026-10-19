@@ -304,6 +304,33 @@ pub(super) fn resolve_expr(
             class_type,
             args: resolve_exprs(args, base_dir, declared_once, include_chain, state, function_variants)?,
         },
+        // The nodes below were left to the fallback arm, so an include (or a closure holding
+        // one) inside them was never seen; they matter now that `include` is an expression.
+        ExprKind::NewDynamic { name_expr, args } => ExprKind::NewDynamic {
+            name_expr: Box::new(resolve_expr(*name_expr, base_dir, declared_once, include_chain, state, function_variants)?),
+            args: resolve_exprs(args, base_dir, declared_once, include_chain, state, function_variants)?,
+        },
+        ExprKind::NewDynamicObject { class_name, fallback_class, required_parent, args } => {
+            ExprKind::NewDynamicObject {
+                class_name: Box::new(resolve_expr(*class_name, base_dir, declared_once, include_chain, state, function_variants)?),
+                fallback_class,
+                required_parent,
+                args: resolve_exprs(args, base_dir, declared_once, include_chain, state, function_variants)?,
+            }
+        }
+        ExprKind::Pipe { value, callable } => ExprKind::Pipe {
+            value: Box::new(resolve_expr(*value, base_dir, declared_once, include_chain, state, function_variants)?),
+            callable: Box::new(resolve_expr(*callable, base_dir, declared_once, include_chain, state, function_variants)?),
+        },
+        ExprKind::Clone(inner) => ExprKind::Clone(Box::new(resolve_expr(*inner, base_dir, declared_once, include_chain, state, function_variants)?)),
+        ExprKind::ObjectClassName { object } => ExprKind::ObjectClassName {
+            object: Box::new(resolve_expr(*object, base_dir, declared_once, include_chain, state, function_variants)?),
+        },
+        ExprKind::Yield { key, value } => ExprKind::Yield {
+            key: key.map(|key| resolve_expr(*key, base_dir, declared_once, include_chain, state, function_variants).map(Box::new)).transpose()?,
+            value: value.map(|value| resolve_expr(*value, base_dir, declared_once, include_chain, state, function_variants).map(Box::new)).transpose()?,
+        },
+        ExprKind::YieldFrom(inner) => ExprKind::YieldFrom(Box::new(resolve_expr(*inner, base_dir, declared_once, include_chain, state, function_variants)?)),
         ExprKind::PropertyAccess { object, property } => ExprKind::PropertyAccess {
             object: Box::new(resolve_expr(
                 *object,
@@ -450,6 +477,17 @@ pub(super) fn resolve_expr(
             receiver,
             args: resolve_exprs(args, base_dir, declared_once, include_chain, state, function_variants)?,
         },
+        // Every position `value_include_hoist` can lower has been rewritten by now, so an include
+        // still here sits where its statements cannot be expanded (a loop condition, an
+        // `elseif`, a `for` clause, a `case` value, a property default...). Refusing it here is
+        // what keeps the transient node away from the checker, which treats it as unreachable.
+        ExprKind::IncludeValue { .. } => {
+            return Err(CompileError::new(
+                span,
+                "include/require is not supported in this position yet; \
+                 assign it to a local variable in a statement of its own first",
+            ));
+        }
         other => other,
     };
     Ok(Expr::new(kind, span))

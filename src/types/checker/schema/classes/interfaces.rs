@@ -19,9 +19,11 @@ use crate::types::{PhpType, PropertyHookContract};
 
 use super::super::super::Checker;
 use super::super::validation::{
-    declaration_is_source, declared_return_type_compatible,
+    attribute_names_include_return_type_will_change, declaration_is_source,
+    declared_return_type_compatible,
     is_pdo_exception_get_code_contract, late_static_return_compatible,
-    validate_signature_compatibility,
+    relative_defaults_name_same_value, validate_signature_compatibility_with_defaults,
+    DefaultScope,
 };
 use super::state::ClassBuildState;
 
@@ -125,6 +127,26 @@ fn interface_self_return_conforms(
     required_return: &PhpType,
     actual_return: &PhpType,
 ) -> bool {
+    // Unions are covariant member by member (`Node|bool` implemented as `Leaf|false`), and a
+    // member naming the class itself may match any member of a required union.
+    if let PhpType::Union(required_members) = required_return {
+        let actual_members: Vec<&PhpType> = match actual_return {
+            PhpType::Union(members) => members.iter().collect(),
+            other => vec![other],
+        };
+        return actual_members.into_iter().all(|member| {
+            declared_return_type_compatible(checker, required_return, member)
+                || required_members.iter().any(|required| {
+                    interface_self_return_conforms(
+                        checker,
+                        class,
+                        interface_name,
+                        required,
+                        member,
+                    )
+                })
+        });
+    }
     match (required_return, actual_return) {
         (PhpType::Object(expected_name), PhpType::Object(actual_name)) => {
             actual_name == &class.name
@@ -285,7 +307,27 @@ fn validate_static_interface_method(
         .methods
         .iter()
         .find(|m| m.is_static && php_symbol_key(&m.name) == method_name);
-    validate_signature_compatibility(
+    let contract_scope = interface_info
+        .static_method_declaring_interfaces
+        .get(method_name)
+        .map(String::as_str)
+        .unwrap_or(interface_name);
+    let implementation_owner = state.static_method_declaring_classes.get(method_name).cloned();
+    let same_relative_default = |parent_default: &crate::parser::ast::Expr,
+                                 child_default: &crate::parser::ast::Expr| {
+        let child_scope = match implementation_owner.as_deref() {
+            Some(owner) if owner != class.name => DefaultScope::Registered(owner),
+            _ => DefaultScope::Flattened(class),
+        };
+        relative_defaults_name_same_value(
+            checker,
+            parent_default,
+            &DefaultScope::Registered(contract_scope),
+            child_default,
+            &child_scope,
+        )
+    };
+    validate_signature_compatibility_with_defaults(
         actual_method.map(|m| m.span).unwrap_or(class.span),
         &class.name,
         method_name,
@@ -304,8 +346,19 @@ fn validate_static_interface_method(
                     || declaration_is_source(checker, interface_name),
                     |owner| declaration_is_source(checker, owner),
                 ),
+        &same_relative_default
     )?;
-    if required_sig.declared_return && !actual_sig.declared_return {
+    let return_type_will_change = !interface_info
+        .static_method_declaring_interfaces
+        .get(method_name)
+        .map_or_else(
+            || declaration_is_source(checker, interface_name),
+            |owner| declaration_is_source(checker, owner),
+        )
+        && attribute_names_include_return_type_will_change(
+            state.method_attribute_names.get(method_name),
+        );
+    if required_sig.declared_return && !actual_sig.declared_return && !return_type_will_change {
         return Err(CompileError::new(
             actual_method
                 .map(|m| m.span)
@@ -354,19 +407,44 @@ fn validate_static_interface_method(
         method_name,
         &actual_sig.return_type,
     ) || late_static_compatible.unwrap_or_else(|| {
-        interface_self_return_conforms(
+        // Static dispatch has no return-boxing adapter: a union match through the class's own
+        // name must also keep the contract's physical return representation.
+        (interface_self_return_conforms(
             checker,
             class,
             interface_name,
             &required_sig.return_type,
             &actual_sig.return_type,
-        ) || declared_return_type_compatible(
+        ) && (!matches!(required_sig.return_type, PhpType::Union(_))
+            || actual_sig
+                .return_type
+                .reference_payload_compatible(&required_sig.return_type)))
+            || declared_return_type_compatible(
             checker,
             &required_sig.return_type,
             &actual_sig.return_type,
         )
     });
-    if required_sig.declared_return && !return_compatible {
+    // Static dispatch has no return-boxing adapter, so a relaxed static return must keep the
+    // contract's physical representation.
+    let relaxed_return_bridgeable = return_type_will_change
+        && actual_sig
+            .return_type
+            .reference_payload_compatible(&required_sig.return_type);
+    if required_sig.declared_return && !return_compatible && return_type_will_change
+        && !relaxed_return_bridgeable
+    {
+        return Err(CompileError::new(
+            actual_method
+                .map(|m| m.span)
+                .unwrap_or_else(crate::span::Span::dummy),
+            &format!(
+                "Cannot implement interface static method {}::{} with #[\\ReturnTypeWillChange] return type {}: elephc cannot dispatch it through the interface's native return type {}",
+                class.name, method_name, actual_sig.return_type, required_sig.return_type
+            ),
+        ));
+    }
+    if required_sig.declared_return && !return_compatible && !relaxed_return_bridgeable {
         return Err(CompileError::new(
             actual_method
                 .map(|m| m.span)
@@ -523,10 +601,30 @@ fn validate_interface_method(
         .methods
         .iter()
         .find(|m| php_symbol_key(&m.name) == method_name);
-    let required_owner = interface_info.method_declaring_interfaces
-        .get(method_name).map(String::as_str).unwrap_or(interface_name);
+    let contract_scope = interface_info
+        .method_declaring_interfaces
+        .get(method_name)
+        .map(String::as_str)
+        .unwrap_or(interface_name);
+    let implementation_owner = state.method_declaring_classes.get(method_name).cloned();
+    let same_relative_default = |parent_default: &crate::parser::ast::Expr,
+                                 child_default: &crate::parser::ast::Expr| {
+        let child_scope = match implementation_owner.as_deref() {
+            Some(owner) if owner != class.name => DefaultScope::Registered(owner),
+            _ => DefaultScope::Flattened(class),
+        };
+        relative_defaults_name_same_value(
+            checker,
+            parent_default,
+            &DefaultScope::Registered(contract_scope),
+            child_default,
+            &child_scope,
+        )
+    };
+    // `Serializable`'s methods carry only tentative return types in PHP.
+    let required_owner = contract_scope;
     let tentative_return = php_symbol_key(required_owner) == "serializable";
-    validate_signature_compatibility(
+    validate_signature_compatibility_with_defaults(
         actual_method.map(|m| m.span).unwrap_or(class.span),
         &class.name,
         method_name,
@@ -545,8 +643,22 @@ fn validate_interface_method(
                     || declaration_is_source(checker, interface_name),
                     |owner| declaration_is_source(checker, owner),
                 ),
+        &same_relative_default
     )?;
-    if required_sig.declared_return && !actual_sig.declared_return && !tentative_return {
+    // `#[\ReturnTypeWillChange]` relaxes only an internal interface's tentative return type.
+    let return_type_will_change = !interface_info
+        .method_declaring_interfaces
+        .get(method_name)
+        .map_or_else(
+            || declaration_is_source(checker, interface_name),
+            |owner| declaration_is_source(checker, owner),
+        )
+        && attribute_names_include_return_type_will_change(
+            state.method_attribute_names.get(method_name),
+        );
+    if required_sig.declared_return && !actual_sig.declared_return && !return_type_will_change
+        && !tentative_return
+    {
         return Err(CompileError::new(
             actual_method
                 .map(|m| m.span)
@@ -613,7 +725,30 @@ fn validate_interface_method(
                 &actual_sig.return_type,
             )
         });
-    if required_sig.declared_return && !return_compatible && !tentative_return {
+    // Interface dispatch boxes a concrete implementation result when the interface returns a
+    // boxed `Mixed`, so a relaxed return is sound there or when it keeps the physical
+    // representation; any other relaxed return is refused rather than miscompiled.
+    let relaxed_return_bridgeable = return_type_will_change
+        && (matches!(required_sig.return_type.codegen_repr(), PhpType::Mixed)
+            || actual_sig
+                .return_type
+                .reference_payload_compatible(&required_sig.return_type));
+    if required_sig.declared_return && !return_compatible && return_type_will_change
+        && !relaxed_return_bridgeable && !tentative_return
+    {
+        return Err(CompileError::new(
+            actual_method
+                .map(|m| m.span)
+                .unwrap_or_else(crate::span::Span::dummy),
+            &format!(
+                "Cannot implement interface method {}::{} with #[\\ReturnTypeWillChange] return type {}: elephc cannot dispatch it through the interface's native return type {}",
+                class.name, method_name, actual_sig.return_type, required_sig.return_type
+            ),
+        ));
+    }
+    if required_sig.declared_return && !return_compatible && !relaxed_return_bridgeable
+        && !tentative_return
+    {
         return Err(CompileError::new(
             actual_method
                 .map(|m| m.span)

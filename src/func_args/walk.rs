@@ -126,6 +126,10 @@ impl Rewriter {
                 self.walk_expr(index);
                 self.walk_expr(value);
             }
+            StmtKind::RefAssignPlace { target, source } => {
+                self.walk_expr(target);
+                self.walk_expr(source);
+            }
             StmtKind::NestedArrayAssign { target, value } => {
                 self.walk_expr(target);
                 self.walk_expr(value);

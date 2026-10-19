@@ -129,6 +129,11 @@ Modes:
   --web                   Compile as a prefork HTTP server
   --web-isolation MODE    worker (default) | pool | request; requires --web
   --strict-php            Reject elephc extensions in tagged PHP source; .lfc remains extension-enabled
+  --dynamic-includes=report
+                          List every include/require site whose path is not foldable (with its
+                          elephc.includes.toml site id) and stop; default `strict` refuses unlisted sites
+  --include-manifest <path>
+                          Use this elephc.includes.toml instead of searching upward from each site
   --strict-locals         Make an incompatible local retype (e.g. int then string) a compile error instead of a warning
 
 Output modes:
@@ -511,6 +516,33 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
                 i,
                 "Missing framework name after --framework",
             ));
+        } else if let Some(value) = arg.strip_prefix("--dynamic-includes=") {
+            match value {
+                "report" => crate::resolver::set_dynamic_include_report_mode(true),
+                "strict" => crate::resolver::set_dynamic_include_report_mode(false),
+                other => fail(&format!(
+                    "Invalid --dynamic-includes value '{}': expected `report` or `strict`",
+                    other
+                )),
+            }
+        } else if arg == "--include-manifest" || arg.starts_with("--include-manifest=") {
+            let value = match arg.strip_prefix("--include-manifest=") {
+                Some(value) => value.to_string(),
+                None => {
+                    i += 1;
+                    required_value(args, i, "Missing path after --include-manifest")
+                }
+            };
+            let path = std::path::PathBuf::from(&value);
+            let path = if path.is_absolute() {
+                path
+            } else {
+                std::env::current_dir().map(|cwd| cwd.join(&path)).unwrap_or(path)
+            };
+            if !path.is_file() {
+                fail(&format!("--include-manifest: '{}' is not a file", value));
+            }
+            crate::resolver::set_include_manifest(Some(path));
         } else if arg == "--strict-php" {
             strict_php = true;
         } else if arg == "--strict-locals" {

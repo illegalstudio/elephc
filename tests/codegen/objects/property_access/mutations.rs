@@ -868,26 +868,8 @@ echo implode(",", $shared->a);
     assert_eq!(out, "1,2,5,owned");
 }
 
-/// The bound on that accept set: an element write through a call result the compiler cannot
-/// place is refused, where PHP accepts it and prints 5. An over-rejection, not a wrong answer —
-/// but it is the reason the shapes above are the whole of what the borrowed-write scope sees.
-#[test]
-fn test_coalesce_assign_on_a_returned_array_is_refused() {
-    let error = compile_expect_type_error(
-        r#"<?php
-function mkArr(): array {
-    return [1, 2];
-}
-mkArr()[2] ??= 5;
-echo "unreachable";
-"#,
-    );
-    assert!(
-        error.contains("Nested array assignment requires a Mixed or ArrayAccess target"),
-        "expected the nested-assignment refusal, got: {}",
-        error
-    );
-}
+// The bound on that accept set, `mkArr()[2] ??= 5;` (an update of a call-result dimension), is
+// now refused by the parser and covered in `tests/error_tests/assign_expr.rs`.
 
 /// A declared property written through a `mixed`-typed receiver actually reaches the object.
 ///

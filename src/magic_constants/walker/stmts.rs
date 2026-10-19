@@ -32,9 +32,16 @@ fn walk_class_heritage<P: Pass>(
     pass: &P,
     span: Span,
 ) -> (Option<Box<GenericDecl>>, Option<Name>, Vec<Name>) {
-    let Some(generics) = generics else {
-        return (None, extends, implements);
-    };
+    // A declaration with no generic half still NAMES its parents, and a bare generic parent
+    // (`class Model implements Arrayable` where `Arrayable` is a PHPDoc template) must reach the
+    // pass like any other mention, or it survives as the stripped template's name.
+    let generics = generics.unwrap_or_else(|| {
+        Box::new(GenericDecl {
+            type_params: Vec::new(),
+            extends_args: Vec::new(),
+            interface_args: Vec::new(),
+        })
+    });
     let GenericDecl {
         type_params,
         extends_args,
@@ -63,9 +70,14 @@ fn walk_interface_heritage<P: Pass>(
     pass: &P,
     span: Span,
 ) -> (Option<Box<GenericDecl>>, Vec<Name>) {
-    let Some(generics) = generics else {
-        return (None, extends);
-    };
+    // See `walk_class_heritage`: a bare generic parent must reach the pass too.
+    let generics = generics.unwrap_or_else(|| {
+        Box::new(GenericDecl {
+            type_params: Vec::new(),
+            extends_args: Vec::new(),
+            interface_args: Vec::new(),
+        })
+    });
     let GenericDecl {
         type_params,
         extends_args: _,
@@ -168,6 +180,10 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             array,
             index: walk_expr(index, pass),
             value: walk_expr(value, pass),
+        },
+        StmtKind::RefAssignPlace { target, source } => StmtKind::RefAssignPlace {
+            target: walk_expr(target, pass),
+            source: walk_expr(source, pass),
         },
         StmtKind::NestedArrayAssign { target, value } => StmtKind::NestedArrayAssign {
             target: walk_expr(target, pass),
@@ -361,7 +377,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             // handed them to the pass with the ENCLOSING scope active — the one type position
             // in a function that is not covered by its own declaration.
             let new_variadic_type = variadic_type.map(|ty| pass.transform_type(ty, span));
-            let new_return_type = return_type.map(|ty| pass.transform_type(ty, span));
+            let new_return_type = return_type.map(|ty| pass.transform_return_type(ty, span));
             pass.leave_function();
             StmtKind::FunctionDecl {
                 by_ref_return,
@@ -390,8 +406,10 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
         constants,
         } => {
             pass.enter_class(&name);
+            pass.enter_heritage();
             let (generics, extends, implements) =
                 walk_class_heritage(generics, extends, implements, pass, span);
+            pass.leave_heritage();
             let trait_uses = walk_trait_uses(trait_uses, pass, span);
             let new_properties = properties
                 .into_iter()
@@ -472,7 +490,9 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             pass.enter_class(&name);
             // An interface has no single parent, so every inherited name — and every type
             // argument on one — lives in the `extends` list.
+            pass.enter_heritage();
             let (generics, extends) = walk_interface_heritage(generics, extends, pass, span);
+            pass.leave_heritage();
             let stmt = StmtKind::InterfaceDecl {
                 name,
                 generics,
@@ -563,7 +583,10 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             once,
             required,
         } => StmtKind::Include {
-            path: walk_expr(path, pass),
+            path: {
+                let walked = walk_expr(path, pass);
+                pass.transform_include_path(walked, span)
+            },
             once,
             required,
         },

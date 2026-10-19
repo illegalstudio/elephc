@@ -202,6 +202,50 @@ pub(super) fn lower_promote_local_ref_cell(ctx: &mut FunctionContext<'_>, inst: 
     promote_local_slot_for_ref_capture(ctx, slot, Some(owner_slot), &inst.result_php_type, true)
 }
 
+/// Lowers `LoadLocalRefCellPtr`: publishes the cell a ref-bound local aliases as a `Pointer`, so
+/// a property or array element can co-own it.
+///
+/// An alias/owner pair names a cell this frame owns, so the pointer is used as is. A bare alias
+/// slot is a borrowed address (a by-reference parameter), which may be the caller's frame slot or
+/// an array interior rather than a managed cell; publishing that into a longer-lived place would
+/// dangle, so it is accepted only when it is a live managed cell and otherwise raises a catchable
+/// `Error` before anything is published.
+pub(super) fn lower_load_local_ref_cell_ptr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let (slot, owned) = match inst.immediate {
+        Some(Immediate::LocalSlot(slot)) => (slot, false),
+        Some(Immediate::LocalSlotPair { first, .. }) => (first, true),
+        _ => {
+            return Err(CodegenIrError::invalid_module(
+                "load_local_ref_cell_ptr requires an alias slot or alias/owner pair",
+            ))
+        }
+    };
+    if !local_slot_stores_ref_cell_pointer(ctx, slot) {
+        return Err(CodegenIrError::invalid_module(
+            "load_local_ref_cell_ptr source slot does not store a ref-cell pointer",
+        ));
+    }
+    let offset = ctx.local_offset(slot)?;
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, result, offset);                         // load the cell pointer the alias slot holds
+    if owned {
+        let present = ctx.next_label("local_ref_cell_ptr_present");
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &present);
+        abi::emit_call_label(ctx.emitter, "__rt_unmanaged_reference_bind_error"); // an unset alias has no cell to share
+        ctx.emitter.label(&present);
+    } else {
+        let managed = ctx.next_label("local_ref_cell_ptr_managed");
+        abi::emit_call_label(ctx.emitter, "__rt_reference_cell_owner");         // accept only an exact live managed cell allocation
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &managed);
+        abi::emit_call_label(ctx.emitter, "__rt_unmanaged_reference_bind_error"); // a frame or interior address cannot outlive its owner
+        ctx.emitter.label(&managed);
+    }
+    if let Some(result_value) = inst.result {
+        ctx.store_int_result_value(result_value)?;
+    }
+    Ok(())
+}
+
 /// Binds a target local slot to the source local's existing ref-cell pointer.
 pub(super) fn lower_alias_local_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let (target_slot, source_slot) = expect_local_slot_pair(inst)?;

@@ -16,7 +16,7 @@ use crate::names::Name;
 use crate::parser::ast::{ExprKind, MagicConstant};
 use crate::span::Span;
 
-pub(super) use members::{walk_class_method, walk_class_property};
+pub(super) use members::{walk_class_const, walk_class_method, walk_class_property};
 pub(crate) use stmts::walk_program;
 
 use crate::parser::ast::TypeExpr;
@@ -179,6 +179,16 @@ pub(crate) trait Pass {
     /// Transforms a magic constant node (e.g., `__FILE__`, `__LINE__`) into its
     /// substituted expression. Called for every `MagicConstant` encountered during the walk.
     fn transform_magic(&self, span: Span, mc: MagicConstant) -> ExprKind;
+    /// Whether the walk descends into class/interface/trait/enum CONSTANT VALUES.
+    ///
+    /// Only the magic-constant substitution passes opt in: a constant initializer such as
+    /// `const A = ['Closure' => __CLASS__.'::f'];` (symfony ReflectionCaster) holds magic
+    /// constants that must be lowered like any other, or type inference meets a raw
+    /// `MagicConstant` and panics. The walker's other users (generic instantiation, renames,
+    /// detectors) keep their historical behavior of leaving constant values alone.
+    fn walks_class_const_values(&self) -> bool {
+        false
+    }
     /// Transforms a string literal encountered in a position where a magic constant
     /// might appear (e.g., as the argument to `define`). Default returns the string unchanged.
     fn transform_string(&self, value: String) -> ExprKind {
@@ -205,6 +215,17 @@ pub(crate) trait Pass {
         ty
     }
 
+    /// Transforms the RETURN annotation of a function, method or closure. Every other pass treats
+    /// it like any type position, which is the default; `return_coerce_prelude` overrides it to
+    /// tell a return annotation from a parameter one.
+    fn transform_return_type(
+        &self,
+        ty: crate::parser::ast::TypeExpr,
+        span: Span,
+    ) -> crate::parser::ast::TypeExpr {
+        self.transform_type(ty, span)
+    }
+
     /// Transforms a class NAMED at a use site — a construction or a static receiver.
     ///
     /// Exists for one caller: `generics::classes` renaming `new Box(5)` and `Box::of(5)` to the
@@ -225,6 +246,23 @@ pub(crate) trait Pass {
         method
     }
 
+    /// Transforms the PATH of an `include`/`require` (statement or expression position), after
+    /// its own children were walked. `span` is the include's span.
+    ///
+    /// Exists for one caller: `resolver::dynamic_includes::mark`, which tags a path that is not
+    /// literal-shaped with its site identity (file, `Class::method`, ordinal) while the lexical
+    /// scope is still known. The default makes every other pass ignore it entirely.
+    fn transform_include_path(&mut self, path: crate::parser::ast::Expr, _span: Span) -> crate::parser::ast::Expr {
+        path
+    }
+
+    /// Transforms a whole expression-position include, after its path went through
+    /// [`Pass::transform_include_path`]. Same single caller and default as that hook: a site the
+    /// manifest denies becomes a `throw` expression in place.
+    fn transform_include_value(&mut self, include: crate::parser::ast::Expr) -> crate::parser::ast::Expr {
+        include
+    }
+
     /// Called when entering a `namespace` declaration (the `namespace Foo;` statement).
     fn enter_namespace_decl(&mut self, _name: &Option<Name>) {}
     /// Called when entering a namespace block scope.
@@ -239,6 +277,11 @@ pub(crate) trait Pass {
     fn enter_class(&mut self, _name: &str) {}
     /// Called when leaving a class or interface declaration.
     fn leave_class(&mut self) {}
+    /// Called around the inheritance clauses (`extends`/`implements`) of the class or
+    /// interface just entered, so a pass can tell an inherited name from a member type.
+    fn enter_heritage(&mut self) {}
+    /// Called after the inheritance clauses of the class or interface just entered.
+    fn leave_heritage(&mut self) {}
     /// Called when entering a trait declaration.
     fn enter_trait(&mut self, _name: &str) {}
     /// Called when leaving a trait declaration.

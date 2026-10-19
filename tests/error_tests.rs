@@ -71,15 +71,20 @@ fn check_source_with_defines_and_options(
     let ast = elephc::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::name_resolver::resolve(ast).map_err(|e| e.message.clone())?;
+    let ast = elephc::stdlib_prelude::inject_if_used(ast, &mut prelude_inventory)
+        .map_err(|e| e.message.clone())?;
     // Mirrors `pipeline::compile`: the object-cast prelude is injected past name resolution,
     // so a `(object)` cast has the helper it is lowered to and a program that declares that
     // helper's own name is rejected here rather than reaching the checker as a duplicate.
     let ast = elephc::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory)
         .map_err(|e| e.message.clone())?;
+    let ast = elephc::return_coerce_prelude::inject(ast, &mut prelude_inventory)
+        .map_err(|e| e.message.clone())?;
     // Mirrors `pipeline::compile`: `func_num_args`/`func_get_args`/`func_get_arg` are
     // desugared into a hidden variadic parameter plus plain PHP before the checker runs, so
     // their own diagnostics reach this harness instead of a bare `Undefined function`.
     let ast = elephc::func_args::desugar(ast).map_err(|e| e.message.clone())?;
+    let ast = elephc::variable_variables::desugar(ast).map_err(|e| e.message.clone())?;
     let ast = elephc::optimize::fold_constants(ast);
     // Mirrors `pipeline::compile`: checking runs to a generic-instantiation fixpoint. A generic
     // CLASS is instantiated by that driver, not by the checker, so a plain `check_with_options`
@@ -104,8 +109,11 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     let ast = elephc::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::name_resolver::resolve(ast)?;
+    let ast = elephc::stdlib_prelude::inject_if_used(ast, &mut prelude_inventory)?;
     let ast = elephc::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory)?;
+    let ast = elephc::return_coerce_prelude::inject(ast, &mut prelude_inventory)?;
     let ast = elephc::func_args::desugar(ast)?;
+    let ast = elephc::variable_variables::desugar(ast)?;
     let ast = elephc::optimize::fold_constants(ast);
     let (_, result) = elephc::generics::monomorphize(ast, |program, bounds| {
         types::check_with_options_and_bounds(program, types::CheckOptions::default(), bounds)
@@ -280,6 +288,14 @@ fn resolver_error(src: &str) -> elephc::errors::CompileError {
 mod locals_retype_fixtures;
 #[path = "error_tests/syntax.rs"]
 mod syntax;
+#[path = "error_tests/assign_expr.rs"]
+mod assign_expr;
+#[path = "error_tests/static_member.rs"]
+mod static_member;
+#[path = "error_tests/static_ref.rs"]
+mod static_ref;
+#[path = "error_tests/inline_html.rs"]
+mod inline_html;
 #[path = "error_tests/recovery.rs"]
 mod recovery;
 #[path = "error_tests/warnings.rs"]
@@ -290,8 +306,12 @@ mod core_symbols;
 mod type_system;
 #[path = "error_tests/reference_detach.rs"]
 mod reference_detach;
+#[path = "error_tests/variable_variables.rs"]
+mod variable_variables;
 #[path = "error_tests/exceptions_enums_magic.rs"]
 mod exceptions_enums_magic;
+#[path = "error_tests/native_classes.rs"]
+mod native_classes;
 #[path = "error_tests/classes_traits.rs"]
 mod classes_traits;
 #[path = "error_tests/generics_review.rs"]
@@ -318,6 +338,8 @@ mod registry_arity;
 mod callables;
 #[path = "error_tests/never.rs"]
 mod never;
+#[path = "error_tests/override_compatibility.rs"]
+mod override_compatibility;
 #[path = "error_tests/spl_builtins.rs"]
 mod spl_builtins;
 #[path = "error_tests/misc.rs"]

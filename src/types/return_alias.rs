@@ -302,6 +302,15 @@ fn analyze_stmt(
             // writes are not represented by ordinary assignment statements.
             invalidate_all_aliases(state);
         }
+        StmtKind::RefAssignPlace { target, source } => {
+            apply_expr_effects(target, state);
+            apply_expr_effects(source, state);
+            if let ExprKind::Variable(name) = &source.kind {
+                state.locals.insert(name.clone(), ReturnArgAlias::Unknown);
+                state.str_slot_locals.remove(name);
+            }
+            invalidate_all_aliases(state);
+        }
         StmtKind::Return(Some(value)) => {
             *returned = returned.merge(&expr_alias(value, state));
         }

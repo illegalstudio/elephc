@@ -36,7 +36,7 @@
 use crate::ir::{Immediate, Op};
 use crate::ir_lower::context::{LoweredValue, LoweringContext};
 use crate::names::Name;
-use crate::parser::ast::{Expr, ExprKind};
+use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 use crate::types::{FunctionSig, PhpType};
 
 mod key_sort;
@@ -104,6 +104,14 @@ pub(super) fn lower_builtin_ref_place_call(
     {
         return Some(result);
     }
+    // `end`/`reset`/`next`/`prev` only move the internal pointer and hand back an element the
+    // container still owns, so a boxed static local stays on their direct lowering: a hidden
+    // copy would be released under the borrowed result.
+    let internal_pointer = matches!(
+        crate::builtins::registry::lookup(&crate::names::php_symbol_key(canonical.trim_start_matches('\\')))
+            .map(|def| def.spec.semantics.argument_lowering),
+        Some(crate::builtins::semantics::BuiltinArgumentLowering::ArrayInternalPointer(_))
+    );
     let rewrite_indices: Vec<usize> = args
         .iter()
         .enumerate()
@@ -119,6 +127,7 @@ pub(super) fn lower_builtin_ref_place_call(
             } else {
                 ref_param_binding(&sig, *index, arg).is_some_and(|(param_index, place)| {
                     is_array_place(ctx, place, &sig.params[param_index].1)
+                        || (!internal_pointer && is_boxed_static_local(ctx, place))
                 })
             }
         })
@@ -137,7 +146,11 @@ pub(super) fn lower_builtin_ref_place_call(
                 _ => arg,
             }
         } else { ref_param_place(&sig, index, arg)? };
-        let place = stabilize_place(ctx, place_arg);
+        let place = if matches!(place_arg.kind, ExprKind::Variable(_)) {
+            place_arg.clone()
+        } else {
+            stabilize_place(ctx, place_arg)
+        };
         let read = lower_expr(ctx, &place);
         let value_type = normalize_value_php_type(ctx.builder.value_php_type(read.value));
         let temp = ctx.declare_synthetic_php_local(value_type.clone());
@@ -174,7 +187,16 @@ pub(super) fn lower_builtin_ref_place_call(
     let result = lower_function_call(ctx, name, &call_args, expr);
     for plan in plans {
         let value = Expr::new(ExprKind::Variable(plan.temp.clone()), plan.place.span);
-        lower_non_local_assignment_write(ctx, &plan.place, &value, plan.place.span);
+        if let ExprKind::Variable(name) = &plan.place.kind {
+            // A boxed `static` local: its storage is the function's static symbol, which the
+            // by-reference builtin cannot write through, so the copy is stored back like `$s = $tmp`.
+            crate::ir_lower::stmt::lower_stmt(
+                ctx,
+                &Stmt::new(StmtKind::Assign { name: name.clone(), value }, plan.place.span),
+            );
+        } else {
+            lower_non_local_assignment_write(ctx, &plan.place, &value, plan.place.span);
+        }
         // The write-back retains into the place, so the temporary's own reference has to
         // retire here. Holding it to the end of the enclosing scope would keep the replaced
         // array alive past the statement that replaced it, and a destructor PHP runs at the
@@ -345,6 +367,18 @@ fn stable_untyped_receiver_property(
 }
 
 /// Returns whether an argument has one of the place shapes this rewrite can read and write.
+/// Returns whether a by-reference argument is a `static` local with boxed (`Mixed`) storage
+/// (`static $c = [];`, `static $m;`). Its value lives in the function's static symbol, not in a
+/// frame slot a by-reference builtin can republish into, so it takes the same hidden-local copy
+/// and write-back as a property place. A scalar static keeps its pre-existing lowering.
+fn is_boxed_static_local(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> bool {
+    let ExprKind::Variable(name) = &arg.kind else {
+        return false;
+    };
+    ctx.local_kinds.get(name) == Some(&crate::ir::LocalKind::StaticLocal)
+        && ctx.local_type(name).codegen_repr() == PhpType::Mixed
+}
+
 fn is_candidate_place_shape(arg: &Expr) -> bool {
     matches!(
         arg.kind,

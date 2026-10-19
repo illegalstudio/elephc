@@ -120,6 +120,35 @@ fn test_error_throw_expression_requires_object() {
     );
 }
 
+/// Verifies that a declared union throw operand mixing a Throwable with a plain object reports
+/// "throw requires an object implementing Throwable".
+#[test]
+fn test_error_throw_union_with_non_throwable_member() {
+    expect_error(
+        "<?php class PlainObject {} function f(Exception|PlainObject|null $e) { throw $e; } f(null);",
+        "throw requires an object implementing Throwable",
+    );
+}
+
+/// Verifies that a declared union throw operand with a scalar member reports
+/// "throw requires an object value".
+#[test]
+fn test_error_throw_union_with_scalar_member() {
+    expect_error(
+        "<?php function f(Exception|int $e) { throw $e; } f(7);",
+        "throw requires an object value",
+    );
+}
+
+/// Verifies that a maybe-undefined local whose own type is not Throwable is still rejected.
+#[test]
+fn test_error_throw_maybe_undefined_scalar_local() {
+    expect_error(
+        "<?php function f(bool $c) { if ($c) { $e = 7; } throw $e; } f(true);",
+        "throw requires an object value",
+    );
+}
+
 /// Verifies that `clone` rejects scalar operands during type checking.
 #[test]
 fn test_error_clone_requires_object() {

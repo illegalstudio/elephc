@@ -70,3 +70,14 @@ fn test_identity_div_one_into_float_op_is_exact() {
     let out = compile_and_run("<?php echo ($argc / 1) + 0.5;");
     assert_eq!(out, "1.5");
 }
+
+/// An identity on a `null`/`bool` operand still yields PHP's integer, so the
+/// fold must not hand back the operand itself (`+true` printed `bool(true)`).
+#[test]
+fn test_identity_on_null_or_bool_operand_yields_int() {
+    let out = compile_and_run(
+        "<?php $n = $argc > 5 ? 1 : null; $t = $argc === 1; $f = $argc !== 1;
+var_dump($n * 1, $t * 1, $f + 0, 1 * $t, $t - 0, +$n, +$t, +$f);",
+    );
+    assert_eq!(out, "int(0)\nint(1)\nint(0)\nint(1)\nint(1)\nint(0)\nint(1)\nint(0)\n");
+}

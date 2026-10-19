@@ -205,6 +205,10 @@ fn count_stmt(stmt: &Stmt, tally: &mut Tally) {
             count_expr(index, tally);
             count_expr(value, tally);
         }
+        StmtKind::RefAssignPlace { target, source } => {
+            count_expr(target, tally);
+            count_expr(source, tally);
+        }
         StmtKind::NestedArrayAssign { target, value } => {
             count_expr(target, tally);
             count_expr(value, tally);

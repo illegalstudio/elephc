@@ -318,6 +318,9 @@ fn stmt_refs_tz(stmt: &Stmt) -> bool {
                 || body.iter().any(stmt_refs_tz)
         }
         StmtKind::ArrayAssign { index, value, .. } => expr_refs_tz(index) || expr_refs_tz(value),
+        StmtKind::RefAssignPlace { target, source } => {
+            expr_refs_tz(target) || expr_refs_tz(source)
+        }
         StmtKind::NestedArrayAssign { target, value } => {
             expr_refs_tz(target) || expr_refs_tz(value)
         }

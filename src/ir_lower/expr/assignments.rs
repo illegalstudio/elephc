@@ -19,6 +19,11 @@ pub(super) fn lower_assignment_expr(
     conditional_value_temp: Option<&str>,
     expr: &Expr,
 ) -> LoweredValue {
+    if let (ExprKind::Variable(marker), ExprKind::Variable(table)) = (&target.kind, &value.kind) {
+        if marker.starts_with(crate::parser::expr::REFERENCE_LITERAL_VALUE_STEM) {
+            return lower_reference_literal(ctx, table, prelude, expr);
+        }
+    }
     if let Some(result) = lower_weak_map_incdec_expression(ctx, target, value, result_target, prelude, expr) {
         return result;
     }
@@ -428,6 +433,11 @@ pub(super) fn lower_dynamic_property_assign(
         ctx, property, span,
     );
     let value = lower_expr(ctx, value);
+    // A name that selects a declared slot taking the value's exact representation is stored
+    // with that slot's static name, so a refined raw slot keeps its representation (the boxed
+    // runtime write below refuses it). Every other name keeps the runtime write.
+    let (object, property, value, merge) =
+        super::dynamic_property_push::lower_dynamic_assign_static_arms(ctx, object, property, value, span);
     // The NAME is only known at run time, so a statically known receiver can still land this
     // value on any slot in its runtime-class subtree. Typed or representation-incompatible
     // slots need the boxed runtime guard. An all-untyped subtree whose refined slots already
@@ -462,6 +472,10 @@ pub(super) fn lower_dynamic_property_assign(
     crate::ir_lower::stmt::release_property_assignment_source_after_retaining_store(
         ctx, &PhpType::Mixed, value, span,
     );
+    if let Some(merge) = merge {
+        branch_to(ctx, merge);
+        ctx.builder.position_at_end(merge);
+    }
 }
 
 /// Returns whether a runtime-name write needs a boxed value for a reachable fixed slot.
@@ -577,4 +591,25 @@ pub(super) fn lower_inc_dec(
     } else {
         ctx.load_local(name, Some(expr.span))
     }
+}
+
+/// Lowers a by-reference array literal (`parser::expr::prefix::build_reference_literal`): runs
+/// its ordered writes into the hidden table local, then MOVES the table out of that local into
+/// the expression's value. Copying it instead would leave the hidden local as a second holder
+/// for the rest of the frame, delaying destructors of the elements and keeping every element's
+/// reference shared after the user's last alias is gone.
+fn lower_reference_literal(
+    ctx: &mut LoweringContext<'_, '_>,
+    table: &str,
+    prelude: &[crate::parser::ast::Stmt],
+    expr: &Expr,
+) -> LoweredValue {
+    for stmt in prelude {
+        crate::ir_lower::stmt::lower_stmt(ctx, stmt);
+    }
+    let loaded = ctx.load_local(table, Some(expr.span));
+    let owned = crate::ir_lower::ownership::acquire_if_refcounted(ctx, loaded, Some(expr.span));
+    let null = lower_null(ctx, expr);
+    ctx.unset_local(table, null, Some(expr.span));
+    owned
 }

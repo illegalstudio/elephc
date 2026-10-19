@@ -17,6 +17,9 @@ mod array_keys;
 /// Whether an un-hinted declaration returns one of its untyped parameters; shared so the
 /// checker and EIR lowering cannot disagree about the recorded return type (issue #576).
 pub mod dynamic_params;
+/// Override families of dispatched methods; shared so the checker's return types and the EIR
+/// virtual call ABI cannot disagree about one family.
+pub(crate) mod override_families;
 /// Array storage-representation conversions shared by checking and lowering.
 mod array_storage;
 /// `(array)` cast classification shared by checking and lowering.
@@ -72,6 +75,7 @@ pub(crate) use return_alias::{
     ReturnArgAlias,
 };
 pub(crate) use result::LoopStorageTypes;
+pub use result::MaybeUndefinedLocals;
 pub use checker::CheckOptions;
 // `check_with_target` is superseded by `check_with_target_and_options` on the
 // production compile path; it stays public for tests that don't need `CheckOptions`.

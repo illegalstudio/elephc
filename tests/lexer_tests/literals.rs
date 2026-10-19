@@ -246,6 +246,27 @@ fn test_float_literal() {
     assert_eq!(t[1], Token::FloatLiteral(3.14));
 }
 
+/// Verifies PHP's trailing-dot float `0.` before a closing delimiter (`?float $x = 0.)`),
+/// while `1.'x'` keeps lexing as an integer concatenation.
+#[test]
+fn test_trailing_dot_float_before_delimiter() {
+    let t = tokens("<?php f(0.);");
+    assert_eq!(t[3], Token::FloatLiteral(0.0));
+    assert_eq!(t[4], Token::RParen);
+    let t = tokens("<?php [2., 3];");
+    assert_eq!(t[2], Token::FloatLiteral(2.0));
+    let t = tokens("<?php f(0.\n    );");
+    assert_eq!(t[3], Token::FloatLiteral(0.0));
+    let t = tokens("<?php $l < 0. || $l > 1.;");
+    assert_eq!(t[3], Token::FloatLiteral(0.0));
+    assert_eq!(t[4], Token::OrOr);
+    let t = tokens("<?php 1. 'x';");
+    assert_eq!(t[1], Token::IntLiteral(1));
+    let t = tokens("<?php 1.'x';");
+    assert_eq!(t[1], Token::IntLiteral(1));
+    assert_eq!(t[2], Token::Dot);
+}
+
 /// Verifies `.5` (dot-prefix float without leading zero) tokenizes as
 /// `FloatLiteral(0.5)`.
 #[test]
@@ -524,4 +545,20 @@ fn test_float_separator_exponent() {
 fn test_float_separator_signed_exp() {
     let t = tokens("<?php 1e+1_0;");
     assert_eq!(t[1], Token::FloatLiteral(1e10));
+}
+
+/// Verifies `$$name` tokenizes as a variable-variable `Dollar` followed by the inner variable.
+#[test]
+fn test_variable_variable_tokens() {
+    let t = tokens("<?php $$name;");
+    assert_eq!(t[1], Token::Dollar);
+    assert_eq!(t[2], Token::Variable("name".into()));
+}
+
+/// Verifies `$$$name` and `${expr}` produce one `Dollar` per extra `$` and keep the brace.
+#[test]
+fn test_variable_variable_nested_and_braced_tokens() {
+    let t = tokens("<?php $$$n; ${'a'};");
+    assert_eq!(&t[1..4], &[Token::Dollar, Token::Dollar, Token::Variable("n".into())]);
+    assert_eq!(&t[5..7], &[Token::Dollar, Token::LBrace]);
 }

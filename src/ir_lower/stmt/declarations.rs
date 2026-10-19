@@ -143,11 +143,19 @@ pub(super) fn lower_static_var(ctx: &mut LoweringContext<'_, '_>, name: &str, in
 
     ctx.builder.position_at_end(init_block);
     let value = lower_expr(ctx, init);
-    let slot = ctx.declare_local_with_kind(
-        name,
-        ctx.builder.value_php_type(value.value),
-        LocalKind::StaticLocal,
-    );
+    // Same declared type as the checker: an initializer that says nothing about the value a
+    // previous call left (`static $x;`, `= null`, `= []`) gives boxed `Mixed` storage read at
+    // run time, and `init_static_local` boxes the initializer into it.
+    let declared_type =
+        crate::ir_lower::expr::static_local_declared_type_for(&ctx.loop_storage_scope, name)
+            .unwrap_or_else(|| {
+                crate::types::checker::stmt_check::assignments::static_local_declared_type(
+                    ctx.builder.value_php_type(value.value),
+                    false,
+                )
+            });
+    let boxed = declared_type != ctx.builder.value_php_type(value.value);
+    let slot = ctx.declare_local_with_kind(name, declared_type.clone(), LocalKind::StaticLocal);
     ctx.builder.emit_with_effects(
         Op::InitStaticLocal,
         vec![value.value],
@@ -182,5 +190,8 @@ pub(super) fn lower_static_var(ctx: &mut LoweringContext<'_, '_>, name: &str, in
         else_args: Vec::new(),
     });
     ctx.builder.position_at_end(after_block);
+    if boxed {
+        ctx.set_local_type(name, declared_type);
+    }
     ctx.clear_static_callable_locals();
 }
