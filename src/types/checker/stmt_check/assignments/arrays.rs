@@ -13,7 +13,7 @@ use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
 use crate::types::{
     array_key_contiguity_is_unproven, merge_array_key_types, normalized_array_key_type,
-    static_array_key_forces_hash_storage, PhpType, TypeEnv,
+    static_array_key_forces_hash_storage, static_array_key_is_negative, PhpType, TypeEnv,
 };
 
 use super::super::super::Checker;
@@ -74,7 +74,9 @@ pub(super) fn check_array_assign(
         // tag-dispatch, and pinning them to an `Int` hash key here would be a lie. The counter of
         // the `for` loop this write runs directly in IS bounded — it starts at 0 and advances one
         // slot per iteration — so `for ($i = 0; …; $i++) { $a[$i] = … }` keeps packed storage.
+        // A negative key cannot name a packed slot even after element types have stabilized.
         let forces_hash = matches!(normalized_idx_ty, PhpType::Str)
+            || static_array_key_is_negative(index)
             || (matches!(idx_ty, PhpType::Str) && !index_is_foreach_key)
             || (matches!(elem_ty.as_ref(), PhpType::Never)
                 && (static_array_key_forces_hash_storage(index)
