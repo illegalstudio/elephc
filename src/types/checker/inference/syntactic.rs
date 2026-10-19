@@ -158,9 +158,10 @@ pub(crate) fn wider_type_syntactic(a: &PhpType, b: &PhpType) -> PhpType {
 /// *coercion* order, in which `Str` absorbs the other arm. Under it `["a" => true]["a"] ?? "M"`
 /// typed as `string`, so the boolean hit came back stringified as `"1"`; the same collapse hit
 /// `int`, `float`, `array` and `mixed` element reads. When the two arms are not the same type
-/// the only honest static answer is `Mixed`, which is exactly what the IR-level merge
-/// (`wider_type_for_merge` in `src/ir_lower/expr/mod.rs`) already materializes — this makes the
-/// checker agree with the code that is actually emitted instead of relabelling one arm.
+/// the static answer is `Mixed`, including a null fallback. Storage reads can be absent even
+/// when their declared type excludes null, so dropping that fallback would coerce inferred
+/// returns back into the non-null value type. `Mixed` preserves both possible runtime values
+/// and lets a declared return type apply its ordinary runtime narrowing.
 ///
 /// Containers merge element-wise rather than collapsing to `Mixed` so the pervasive
 /// `$arr ?? []` idiom keeps its element type (an empty literal is `Array(Never)`).
@@ -175,7 +176,7 @@ pub(crate) fn null_coalesce_merge_type(value_ty: &PhpType, default_ty: &PhpType)
     if matches!(value_ty, PhpType::Never | PhpType::Void) {
         return default_ty.clone();
     }
-    if matches!(default_ty, PhpType::Never | PhpType::Void) {
+    if matches!(default_ty, PhpType::Never) {
         return value_ty.clone();
     }
     if matches!(

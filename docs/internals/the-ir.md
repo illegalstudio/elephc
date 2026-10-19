@@ -2040,6 +2040,30 @@ instructions, but they must be represented in metadata or consumed by lowering.
 
 ### Expression Variants
 
+Lazy merges keep PHP nullability until their storage representation is selected. `??` removes
+null only from its kept value arm; a nullable fallback remains part of the result, including
+inferred function returns. `?:` can select null even when its value operand is a non-null falsy
+scalar. Nullable integers use a payload/tag pair, so truthiness dispatches through the tagged
+scalar helper instead of treating the payload as a boxed `Mixed` pointer.
+
+Initialized-aware instance and static property probes store their result in an owned merge
+temporary, reconcile initialization state across both branches, then transfer the value and
+clear the backing slot. A later `??=` store or scalar assignment must not leave a second owner
+in that probe slot, which could otherwise release a reused allocation.
+When a `??=` write borrows its result temporary, its EIR load is also marked borrowed so a
+property store retains an independent reference for the property and the expression consumer.
+
+Lazy return merges can detach an owned string even when an arm comes from a parameter. Alias
+analysis keeps possible payload aliasing conservative and leaves cleanup to the call's ownership
+marker. In bodies containing lazy value merges, declared non-null scalar returns reject null before
+storage coercion; inferred returns keep null as a value. Array coalescing assignments also widen inferred element storage when the
+fallback needs another representation, so the stored element agrees with the expression result.
+Implicit return validation contributes to callable effects and exception summaries, including
+direct, aliased and arrow closures plus first-class named function invocations, keeping
+discarded calls and their matching `TypeError` handlers observable during AST optimization.
+Both lowering and effect discovery use the shared syntactic detector for lazy merges, so
+ordinary pure typed getters and forwarding methods retain their existing effect summaries.
+
 | `ExprKind` | Lowering contract |
 |---|---|
 | `StringLiteral` | `ConstStr`; ownership `Persistent`; source span retained. |

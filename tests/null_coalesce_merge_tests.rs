@@ -1,7 +1,6 @@
 //! Purpose:
-//! End-to-end tests for two null-coalescing defects, both of which handed the caller a value
-//! reference PHP never produces. They are pinned together because a single `$m[$k] ?? "MISS"`
-//! tripped both at once.
+//! End-to-end tests for null-coalescing array misses and type-preserving merges.
+//! Hit and miss controls distinguish the selected branch and its PHP runtime value type.
 //!
 //! - BUG A — `??` on a `float`-element array took the VALUE branch on a MISS. A float slot had
 //!   no miss marker at all: `emit_hash_get_miss` / `emit_array_get_null_fallback` materialized
@@ -103,7 +102,10 @@ fn compile(dir: &Path, source: &str, stem: &str) -> PathBuf {
     let diagnostics = elephc_diagnostics(&String::from_utf8_lossy(&output.stderr));
     assert!(
         output.status.success(),
-        "elephc compile failed:\n{diagnostics}"
+        "elephc compile failed ({}):\nstdout: {}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
     );
     assert!(
         diagnostics.is_empty(),
@@ -476,11 +478,8 @@ echo total(["a" => [1, 2]], "zz"), "\n";
 /// type instead of becoming `mixed`, and a HIT renders exactly as the stored element.
 /// Reference PHP 8.5.6 prints `float(1.5)`.
 ///
-/// NOT pinned here, deliberately: the MISS half of `$m[$k] ?? null`. elephc returns the value
-/// arm's zero (`float(0)`, `int(0)`, `""`) where reference PHP returns `NULL`, for EVERY
-/// element type. That is a third, pre-existing defect — a hint-less function whose `??` merge
-/// resolves to a concrete scalar has nowhere to put PHP null — and it is untouched by this
-/// change. Asserting the miss here would pin the wrong answer.
+/// A hint-less function also returns PHP null on a miss: its merge and return boundary must
+/// preserve the nullable result instead of coercing the default into the hit's scalar type.
 #[test]
 fn coalescing_with_a_null_default_preserves_the_value_arm_type() {
     assert_program_output(
@@ -488,8 +487,9 @@ fn coalescing_with_a_null_default_preserves_the_value_arm_type() {
         r#"<?php
 function pick(string $k) { $m = ["a" => 1.5]; return $m[$k] ?? null; }
 var_dump(pick("a"));
+var_dump(pick("missing"));
 "#,
-        "float(1.5)\n",
+        "float(1.5)\nNULL\n",
     );
 }
 

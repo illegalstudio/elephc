@@ -109,9 +109,14 @@ fn semantic_optimizer_arg_types(
         .collect()
 }
 
-/// Computes the effect for a closure body by delegating to `block_effect`.
-pub(super) fn closure_body_call_effect(body: &[Stmt]) -> Effect {
-    block_effect(body)
+/// Includes implicit return-boundary validation in a closure's body effects.
+pub(super) fn closure_body_call_effect(return_type: &Option<TypeExpr>, body: &[Stmt]) -> Effect {
+    let effect = block_effect(body);
+    if crate::optimize::effect_analysis::scalar_return_boundary_may_throw(return_type, body) {
+        effect.with_may_throw()
+    } else {
+        effect
+    }
 }
 
 /// Computes the effect for an expression that may be called at runtime.
@@ -123,7 +128,7 @@ pub(super) fn closure_body_call_effect(body: &[Stmt]) -> Effect {
 pub(in crate::optimize) fn expr_call_effect(callee: &Expr) -> Effect {
     match &callee.kind {
         ExprKind::FirstClassCallable(target) => callable_target_call_effect(target),
-        ExprKind::Closure { body, .. } => closure_body_call_effect(body),
+        ExprKind::Closure { return_type, body, .. } => closure_body_call_effect(return_type, body),
         ExprKind::Variable(name) => callable_alias_effect(name),
         _ => conservative_call_effect(),
     }
@@ -160,11 +165,11 @@ pub(super) fn callable_target_call_effect(target: &CallableTarget) -> Effect {
 
 /// Returns the effect for a closure alias expression, if the expression is a closure.
 ///
-/// For `ExprKind::Closure`, returns `Some(closure_body_call_effect(body))`. For all other
+/// For `ExprKind::Closure`, returns the body and return-boundary effects. For all other
 /// variants, returns `None`.
 pub(super) fn closure_alias_effect(expr: &Expr) -> Option<Effect> {
     match &expr.kind {
-        ExprKind::Closure { body, .. } => Some(closure_body_call_effect(body)),
+        ExprKind::Closure { return_type, body, .. } => Some(closure_body_call_effect(return_type, body)),
         _ => None,
     }
 }

@@ -391,6 +391,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// from the body. Only a declared boundary carries PHP's coercive-mode verification
     /// (TypeError on a non-coercible runtime value); an inferred return must never throw.
     pub return_type_is_declared: bool,
+    /// Whether this body contains lazy value merges whose null result needs a scalar return guard.
+    pub has_lazy_value_merge: bool,
     /// `true` when the function/closure being lowered returns by reference (`function &f()`),
     /// so a `return $obj->prop` yields the property's ref-cell pointer instead of a value copy.
     pub by_ref_return: bool,
@@ -562,6 +564,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             return_type,
             return_php_type,
             return_type_is_declared: false,
+            has_lazy_value_merge: false,
             by_ref_return: false,
             in_main,
             all_global_var_names,
@@ -1805,7 +1808,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // A normal ref-cell read borrows a lifetime-tracked pointee. Scalar payloads remain
         // `NonHeap`. Only `load_local_storage`, used when retiring the slot's stored owner, may
         // claim ownership of the same refcounted payload.
-        let ownership = if op == Op::LoadRefCell
+        // A `??=` write borrows its owned result slot. Preserve that fact in EIR as well as
+        // lowering's cleanup decisions: property stores otherwise adopt this load's owner,
+        // leaving the expression consumer and the property sharing one reference.
+        let ownership = if ((self.write_operand_is_borrowed && kind == LocalKind::OwnedTemp)
+            || op == Op::LoadRefCell)
             && Ownership::php_type_needs_lifetime_tracking(&php_type)
         {
             Ownership::Borrowed

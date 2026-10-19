@@ -108,6 +108,9 @@ pub(crate) enum SymbolKind {
     /// summary conservative. Riding on this traversal is what makes that question answerable
     /// without a second walk that could quietly miss a new `ExprKind`/`StmtKind`.
     DestructorDeclaration,
+    /// A `??` or `?:` value merge, including merges nested inside statement bodies.
+    /// Shared lowering/optimizer discovery uses this to keep nullable scalar return guards scoped.
+    LazyValueMerge,
 }
 
 /// How a call's first argument narrows a FUNCTION match.
@@ -415,7 +418,8 @@ fn name_is(name: &Name, target: Symbol<'_>) -> bool {
         | SymbolKind::AsymmetricVisibility
         | SymbolKind::TypedClassConst
         | SymbolKind::ObjectCast
-        | SymbolKind::DestructorDeclaration => false,
+        | SymbolKind::DestructorDeclaration
+        | SymbolKind::LazyValueMerge => false,
     }
 }
 
@@ -438,7 +442,8 @@ fn const_name_is(name: &Name, target: Symbol<'_>) -> bool {
         | SymbolKind::AsymmetricVisibility
         | SymbolKind::TypedClassConst
         | SymbolKind::ObjectCast
-        | SymbolKind::DestructorDeclaration => false,
+        | SymbolKind::DestructorDeclaration
+        | SymbolKind::LazyValueMerge => false,
     }
 }
 
@@ -549,6 +554,11 @@ fn instanceof_target_refs(target_ref: &InstanceOfTarget, target: Symbol<'_>) -> 
 /// position or as a matching string literal, recursing into every child. The `match` is
 /// exhaustive so a new `ExprKind` cannot silently bypass detection.
 fn expr_refs(expr: &Expr, target: Symbol<'_>) -> Option<Span> {
+    if target.kind == SymbolKind::LazyValueMerge
+        && matches!(expr.kind, ExprKind::NullCoalesce { .. } | ExprKind::ShortTernary { .. })
+    {
+        return Some(expr.span);
+    }
     match &expr.kind {
         // `require`/`include` in expression position: recurse into the path expression.
         ExprKind::IncludeValue { path, .. } => expr_refs(path, target),
@@ -1237,4 +1247,24 @@ enum DeclarationOwner {
         )
         .is_none());
     }
+
+    /// Finds both lazy merge forms inside nested callable/control-flow bodies.
+    #[test]
+    fn detects_lazy_value_merges_in_nested_bodies() {
+        for source in [
+            "<?php function keep($x, $flag) { if ($flag) { return $x ?? null; } }",
+            "<?php class Keep { function value($x) { return $x ?: null; } }",
+        ] {
+            let program = parse(source);
+            assert!(first_reference(&program, Symbol::syntactic(SymbolKind::LazyValueMerge)).is_some());
+        }
+    }
+
+    /// Text mentioning either operator does not introduce a lazy merge.
+    #[test]
+    fn lazy_value_merge_search_ignores_operator_text() {
+        let program = parse("<?php function text(): string { return '?? and ?:'; }");
+        assert!(first_reference(&program, Symbol::syntactic(SymbolKind::LazyValueMerge)).is_none());
+    }
+
 }

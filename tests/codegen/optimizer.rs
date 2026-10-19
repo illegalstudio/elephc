@@ -20,6 +20,8 @@ mod bcmath_number;
 mod boxed_array_snapshots;
 mod implode_effects;
 mod spread_effects;
+#[path = "optimizer/nullable_return_coalesce.rs"]
+mod nullable_return_coalesce;
 
 #[path = "optimizer/branch_simplification.rs"]
 mod branch_simplification;

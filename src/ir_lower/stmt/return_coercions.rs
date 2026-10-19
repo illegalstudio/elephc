@@ -15,6 +15,7 @@ pub(super) fn coerce_to_return_type(
     value: LoweredValue,
     span: Option<Span>,
 ) -> LoweredValue {
+    guard_nullable_scalar_return(ctx, value, span);
     if let Some(value) = coerce_container_to_return_type(ctx, value, span) {
         return value;
     }
@@ -46,6 +47,48 @@ pub(super) fn coerce_to_return_type(
         ),
         IrType::Void => value,
     }
+}
+
+/// Rejects PHP null before a declared scalar return can coerce it into a falsy value.
+fn guard_nullable_scalar_return(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Option<Span>,
+) {
+    if !ctx.return_type_is_declared
+        || !ctx.has_lazy_value_merge
+        || !matches!(ctx.return_php_type, PhpType::Int | PhpType::Str | PhpType::Float | PhpType::Bool)
+        || !matches!(ctx.builder.value_php_type(value.value).codegen_repr(),
+            PhpType::Mixed | PhpType::TaggedScalar | PhpType::Void)
+    {
+        return;
+    }
+    let span = span.unwrap_or_else(|| Span::new(0, 0));
+    let is_null = ctx.emit_value(
+        Op::IsNull, vec![value.value], None, PhpType::Bool,
+        Op::IsNull.default_effects(), Some(span),
+    );
+    let rejected = ctx.builder.create_named_block("return.null", Vec::new());
+    let accepted = ctx.builder.create_named_block("return.non_null", Vec::new());
+    let initialized = ctx.initialized_slots_snapshot();
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_null.value,
+        then_target: rejected,
+        then_args: Vec::new(),
+        else_target: accepted,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(rejected);
+    crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    let message = format!("{}(): Return value must be of type {}, null returned",
+        ctx.owner_name(), ctx.return_php_type);
+    let error = lower_expr(ctx, &Expr::new(ExprKind::NewObject {
+        class_name: crate::names::Name::unqualified("TypeError"),
+        args: vec![Expr::new(ExprKind::StringLiteral(message), span)],
+    }, span));
+    terminate_throw(ctx, error.value);
+    ctx.builder.position_at_end(accepted);
+    ctx.restore_initialized_slots(initialized);
 }
 
 /// Verifies a dynamically-typed value against a DECLARED `int` return boundary.
