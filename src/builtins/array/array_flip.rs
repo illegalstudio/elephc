@@ -11,7 +11,8 @@
 //!   `AssocArray<key-from-elem, Int>`; an associative array flips to
 //!   `AssocArray<key-from-value, old-key>`. A check hook is required because the
 //!   return type depends on the inferred argument type.
-//! - Declared PHP arrays keep their boxed shape and dispatch on runtime value tags.
+//! - Declared PHP arrays keep their boxed shape and dispatch on runtime value tags, and so do
+//!   arrays whose elements the typed helpers cannot read (boxed values, floats, objects).
 //! - A `mixed` argument or a union with an array member takes the same boxed path: the result
 //!   is the boxed PHP array type, and a non-array payload raises PHP's `TypeError` at run time.
 //! - Arity (exactly 1 argument) is validated by the registry's `check_arity` before
@@ -44,6 +45,22 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         return Ok(ty);
     }
     if boxed_value_may_hold_array(&ty) {
+        return Ok(PhpType::php_array());
+    }
+    // The typed flip helpers read int, bool and string slots, and int or string hash values;
+    // every other element (a boxed value, a float, an object) is flipped by the boxed helper,
+    // which reads each entry's runtime tag and builds the boxed PHP array type.
+    let typed_flip = match &ty {
+        PhpType::Array(elem) => matches!(
+            elem.codegen_repr(),
+            PhpType::Int | PhpType::Bool | PhpType::Str | PhpType::Void | PhpType::Never
+        ),
+        PhpType::AssocArray { value, .. } => {
+            matches!(value.codegen_repr(), PhpType::Int | PhpType::Str)
+        }
+        _ => true,
+    };
+    if !typed_flip {
         return Ok(PhpType::php_array());
     }
     match ty {

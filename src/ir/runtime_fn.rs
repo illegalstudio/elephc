@@ -1232,7 +1232,12 @@ impl RuntimeFnId {
             // arbitrary PHP. Discarded calls must retain these observable effects.
             // I/O inside those callbacks is monitored at its own runtime boundary;
             // the join itself does not perform a network or blocking operation.
-            RuntimeFnId::Implode | RuntimeFnId::ArrayFlip => crate::ir::Effects::from_bits_retain(
+            // `array_combine` and `array_fill_keys` render a non-integer key as `(string)`
+            // does, which runs `__toString` or warns, and reject a non-array operand.
+            RuntimeFnId::Implode
+            | RuntimeFnId::ArrayFlip
+            | RuntimeFnId::ArrayCombine
+            | RuntimeFnId::ArrayFillKeys => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::all().bits()
                     & !crate::ir::Effects::BLOCKING_IO.bits()
                     & !crate::ir::Effects::NETWORK_IO.bits(),
@@ -1240,11 +1245,9 @@ impl RuntimeFnId {
             RuntimeFnId::Abs |
             RuntimeFnId::Acos |
             RuntimeFnId::ArrayColumn |
-            RuntimeFnId::ArrayCombine |
             RuntimeFnId::ArrayDiff |
             RuntimeFnId::ArrayDiffAssoc |
             RuntimeFnId::ArrayDiffKey |
-            RuntimeFnId::ArrayFillKeys |
             RuntimeFnId::ArrayIntersect |
             RuntimeFnId::ArrayIntersectAssoc |
             RuntimeFnId::ArrayIntersectKey |

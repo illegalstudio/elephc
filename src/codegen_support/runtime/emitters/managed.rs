@@ -108,6 +108,8 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_fill_refcounted(emitter);
     arrays::emit_array_fill_str(emitter);
     arrays::emit_array_pad(emitter);
+    arrays::emit_array_pad_boxed(emitter);
+    arrays::emit_array_chunk_boxed(emitter);
     arrays::emit_array_pad_refcounted(emitter);
     arrays::emit_array_diff(emitter);
     arrays::emit_array_diff_refcounted(emitter);
@@ -120,6 +122,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_intersect_refcounted(emitter);
     arrays::emit_array_flip(emitter);
     arrays::emit_array_flip_boxed(emitter);
+    arrays::emit_array_combine_boxed(emitter);
     arrays::emit_array_count_values(emitter);
     arrays::emit_array_flip_string(emitter);
     arrays::emit_hash_flip(emitter);
@@ -142,6 +145,12 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_splice_insert_boxed(emitter);
     arrays::emit_array_splice_insert_unboxed(emitter);
     arrays::emit_array_slice_str(emitter);
+    arrays::emit_array_chunk_str(emitter);
+    arrays::emit_array_diff_str(emitter);
+    arrays::emit_array_merge_str(emitter);
+    arrays::emit_array_pad_str(emitter);
+    arrays::emit_array_reverse_str(emitter);
+    arrays::emit_shuffle_str(emitter);
     arrays::emit_array_splice_str(emitter);
     arrays::emit_array_splice_insert_str(emitter);
     arrays::emit_array_diff_key(emitter);

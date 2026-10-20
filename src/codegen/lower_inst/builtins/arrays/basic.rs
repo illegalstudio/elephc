@@ -118,6 +118,9 @@ fn load_array_push_length_to_result(
 /// disagree.
 pub(crate) fn lower_array_chunk(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "array_chunk", 2, 3)?;
+    if super::boxed_combine::uses_boxed_builder(inst) {
+        return super::boxed_pad_chunk::lower_boxed_array_chunk(ctx, inst);
+    }
     let array = expect_operand(inst, 0)?;
     let length = expect_operand(inst, 1)?;
     let preserve_keys = match inst.operands.get(2).copied() {
@@ -145,6 +148,13 @@ pub(crate) fn lower_array_chunk(ctx: &mut FunctionContext<'_>, inst: &Instructio
         return store_if_result(ctx, inst);
     }
     let source_elem_ty = array_chunk_source_element_type(ctx.value_php_type(array)?)?;
+    if preserve_keys && source_elem_ty == PhpType::Str {
+        // `__rt_array_chunk_to_hash` copies 8-byte slots; only the renumbering form has a
+        // string twin (`__rt_array_chunk_str`).
+        return Err(CodegenIrError::unsupported(
+            "array_chunk preserve_keys for indexed-array element PHP type Str".to_string(),
+        ));
+    }
     let result_inner_elem_ty = if preserve_keys {
         array_chunk_result_inner_hash_value_type(&result_elem_ty)?
     } else {
@@ -168,16 +178,33 @@ pub(crate) fn lower_array_chunk(ctx: &mut FunctionContext<'_>, inst: &Instructio
 /// Lowers `array_pad()` by copying an indexed array and filling missing slots.
 pub(crate) fn lower_array_pad(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "array_pad", 3)?;
+    if super::boxed_combine::uses_boxed_builder(inst) {
+        return super::boxed_pad_chunk::lower_boxed_array_pad(ctx, inst);
+    }
     let array = expect_operand(inst, 0)?;
     let target_size = expect_operand(inst, 1)?;
     let pad_value = expect_operand(inst, 2)?;
-    let source_elem_ty = array_pad_source_element_type(ctx.value_php_type(array)?)?;
+    let mut source_elem_ty = array_pad_source_element_type(ctx.value_php_type(array)?)?;
     let pad_value_ty = ctx.value_php_type(pad_value)?.codegen_repr();
     let result_elem_ty =
         result_array_element_type("array_pad", &inst.result_php_type.codegen_repr())?;
+    // The empty `[]` placeholder holds no elements of its own, so the pad value decides the
+    // layout; the checker types that result by the pad value too.
+    let empty_source = matches!(source_elem_ty, PhpType::Void | PhpType::Never);
+    if empty_source && require_array_pad_element_layout(&pad_value_ty).is_ok() {
+        source_elem_ty = pad_value_ty.clone();
+    }
     require_array_pad_value_type(&source_elem_ty, &pad_value_ty)?;
     require_array_pad_result_type(&source_elem_ty, &result_elem_ty)?;
     lower_array_pad_call(ctx, array, target_size, pad_value, &source_elem_ty)?;
+    if empty_source {
+        // The helpers inherit the element shape from the source, which the placeholder lacks.
+        crate::codegen::emit_array_value_type_stamp(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            &source_elem_ty,
+        );
+    }
     normalize_indexed_array_result(ctx, "array_pad", &source_elem_ty, &result_elem_ty)?;
     store_if_result(ctx, inst)
 }
@@ -211,6 +238,9 @@ pub(crate) fn lower_array_fill_keys(
     inst: &Instruction,
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, "array_fill_keys", 2)?;
+    if super::boxed_combine::uses_boxed_builder(inst) {
+        return super::boxed_combine::lower_boxed_array_fill_keys(ctx, inst);
+    }
     let keys = expect_operand(inst, 0)?;
     let value = expect_operand(inst, 1)?;
     let key_elem_ty = array_fill_keys_key_element_type(ctx.value_php_type(keys)?)?;
@@ -229,6 +259,9 @@ pub(crate) fn lower_array_fill_keys(
 /// Lowers `array_combine()` through the hash-building runtime helpers.
 pub(crate) fn lower_array_combine(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "array_combine", 2)?;
+    if super::boxed_combine::uses_boxed_builder(inst) {
+        return super::boxed_combine::lower_boxed_array_combine(ctx, inst);
+    }
     let keys = expect_operand(inst, 0)?;
     let values = expect_operand(inst, 1)?;
     let key_elem_ty = array_combine_key_element_type(ctx.value_php_type(keys)?)?;
@@ -253,14 +286,30 @@ pub(crate) fn lower_array_column(ctx: &mut FunctionContext<'_>, inst: &Instructi
 pub(crate) fn lower_array_flip(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "array_flip", 1)?;
     let array = expect_operand(inst, 0)?;
-    if ctx.value_php_type(array)?.codegen_repr() == PhpType::Mixed {
-        if inst.result_php_type.codegen_repr() != PhpType::Mixed {
+    let source_boxed = ctx.value_php_type(array)?.codegen_repr() == PhpType::Mixed;
+    // A concrete array whose elements the typed helpers cannot read is typed by the checker as
+    // the boxed PHP array; the boxed helper reads it through a borrowed stack cell.
+    let boxed_result = inst.result_php_type.codegen_repr() == PhpType::Mixed;
+    if source_boxed || boxed_result {
+        if !boxed_result {
             return Err(CodegenIrError::unsupported(
                 "boxed array_flip requires a boxed array result".to_string(),
             ));
         }
-        ctx.load_value_to_reg(array, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
-        abi::emit_call_label(ctx.emitter, "__rt_array_flip_boxed");
+        if source_boxed {
+            ctx.load_value_to_reg(array, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+            abi::emit_call_label(ctx.emitter, "__rt_array_flip_boxed");
+        } else {
+            abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+            super::boxed_membership::store_borrowed_cell(ctx, array, 0)?;
+            abi::emit_temporary_stack_address(
+                ctx.emitter,
+                abi::int_arg_reg_name(ctx.emitter.target, 0),
+                0,
+            );
+            abi::emit_call_label(ctx.emitter, "__rt_array_flip_boxed");
+            abi::emit_release_temporary_stack(ctx.emitter, 32);
+        }
         let valid = ctx.next_label("array_flip_boxed_valid");
         abi::emit_branch_if_int_result_nonzero(ctx.emitter, &valid);
         crate::codegen::lower_inst::exceptions::emit_type_error(
@@ -386,7 +435,7 @@ pub(crate) fn lower_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruct
         return lower_array_reverse_preserve_keys(ctx, inst, array);
     }
     let elem_ty =
-        eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "array_reverse")?;
+        str_or_eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "array_reverse")?;
     ctx.load_value_to_result(array)?;
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the source indexed-array pointer as the reverse helper argument

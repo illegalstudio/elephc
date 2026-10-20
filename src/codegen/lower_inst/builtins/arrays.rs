@@ -38,6 +38,8 @@ pub(in crate::codegen::lower_inst::builtins) mod values;
 mod basic;
 mod boxed_map_callback;
 mod boxed_merge;
+mod boxed_combine;
+mod boxed_pad_chunk;
 mod boxed_membership;
 mod boxed_aggregate;
 mod boxed_reduce;

@@ -15,13 +15,15 @@
 //! - An ASSOCIATIVE receiver chunks into `Array<AssocArray { … }>` in both modes: with the flag
 //!   each window keeps the source's own keys, and without it the keys restart at 0 inside every
 //!   chunk — which is where chunk's `preserve_keys` rule parts company with `array_slice()`'s,
-//!   since chunk drops STRING keys too. Non-array inputs are still rejected. A check hook is
+//!   since chunk drops STRING keys too. A declared `array` or a boxed value answers the boxed
+//!   PHP array type. Non-array inputs are still rejected. A check hook is
 //!   required because the return type depends on the inferred argument type and on that literal
 //!   flag.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
+use crate::types::checker::builtins::arrays::boxed_value_may_hold_array;
 use crate::types::PhpType;
 
 builtin! {
@@ -98,6 +100,9 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             key: Box::new(PhpType::Int),
             value,
         }))),
+        // A declared `array`, or a boxed value that may hold one, is chunked by the boxed builder,
+        // which reads any layout and answers the boxed PHP array type.
+        _ if ty.is_php_array() || boxed_value_may_hold_array(&ty) => Ok(PhpType::php_array()),
         _ => Err(CompileError::new(
             cx.span,
             "array_chunk() first argument must be array",
