@@ -79,6 +79,7 @@ pub mod fileperms;
 pub mod filesize;
 pub mod filetype;
 pub mod flock;
+pub mod flush;
 pub mod fnmatch;
 pub mod fopen;
 pub mod fpassthru;

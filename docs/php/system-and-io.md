@@ -604,6 +604,7 @@ matching PHP.
 | `ob_end_flush()` | `ob_end_flush(): bool` | Flush the active buffer's contents to the parent sink (enclosing buffer or stdout) and pop the buffer |
 | `ob_flush()` | `ob_flush(): bool` | Flush the active buffer's contents to the parent sink while keeping the buffer active |
 | `ob_get_status()` | `ob_get_status(bool $full_status = false): array` | Status of the active buffer (or an empty array without one): `name`, `type`, `flags`, `level`, `chunk_size`, `buffer_size`, `buffer_used`. With `$full_status = true`, one entry per nesting level |
+| `flush()` | `flush(): void` | A no-op: elephc's writes are unbuffered, and `--web`'s `pool` and `request` models stream each write as it is made, so no system write buffer is left to flush. Like PHP's, it leaves the `ob_*` buffers alone |
 | `ob_implicit_flush()` | `ob_implicit_flush(bool $enable = true): bool` | Stores the flag and returns `true`. Semantically inert: elephc terminal writes are unbuffered syscalls, so implicit flushing is always effectively on |
 | `ob_list_handlers()` | `ob_list_handlers(): array` | One `"default output handler"` entry per active buffer level |
 

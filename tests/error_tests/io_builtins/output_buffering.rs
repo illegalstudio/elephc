@@ -105,6 +105,12 @@ fn test_error_ob_start_array_callback_unsupported() {
     );
 }
 
+/// Verifies `flush()` takes no arguments.
+#[test]
+fn test_error_flush_takes_no_args() {
+    expect_error("<?php flush(1);", "flush() takes no arguments");
+}
+
 /// Verifies `ob_implicit_flush()` caps its arity at one argument.
 #[test]
 fn test_error_ob_implicit_flush_too_many_args() {

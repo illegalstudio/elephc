@@ -406,6 +406,25 @@ echo count($handlers), "|", $handlers[0], "|", $handlers[1];
     assert_eq!(out, "0|2|default output handler|default output handler");
 }
 
+/// Verifies `flush()` returns null, leaves an active output buffer untouched, and resolves
+/// case-insensitively, as PHP's `flush()` flushes only the system write buffer.
+#[test]
+fn test_flush_returns_null_and_leaves_output_buffers_alone() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(flush());
+ob_start();
+echo "a";
+flush();
+$buffered = ob_get_clean();
+echo "[$buffered]\n";
+FLUSH();
+echo "done\n";
+"#,
+    );
+    assert_eq!(out, "NULL\n[a]\ndone\n");
+}
+
 /// Verifies ob_implicit_flush accepts a flag and returns true like PHP 8.
 #[test]
 fn test_ob_implicit_flush_returns_true() {

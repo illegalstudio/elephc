@@ -23,6 +23,7 @@ mod debug_print_backtrace;
 mod die;
 mod error_reporting;
 mod exit;
+mod flush;
 mod func_args;
 mod func_get_arg;
 mod func_get_args;
@@ -76,6 +77,7 @@ pub(in crate::interpreter) use defined::*;
 pub(in crate::interpreter) use runtime_introspection::*;
 pub(in crate::interpreter) use die::*;
 pub(in crate::interpreter) use exit::*;
+pub(in crate::interpreter) use flush::*;
 pub(in crate::interpreter) use func_get_arg::*;
 pub(in crate::interpreter) use func_get_args::*;
 pub(in crate::interpreter) use func_num_args::*;
@@ -121,6 +123,7 @@ pub(in crate::interpreter) fn eval_builtin_core_call(
         }
         "die" => eval_builtin_die(args, context, scope, values),
         "exit" => eval_builtin_exit(args, context, scope, values),
+        "flush" => eval_builtin_flush(args, values),
         "func_get_arg" => eval_builtin_func_get_arg(args, context, scope, values),
         "func_get_args" => eval_builtin_func_get_args(args, context, scope, values),
         "func_num_args" => eval_builtin_func_num_args(args, context, values),
@@ -188,6 +191,7 @@ pub(in crate::interpreter) fn eval_core_values_result(
         "func_get_arg" => {
             eval_func_get_arg_values_result(evaluated_args, context, values)
         }
+        "flush" => eval_flush_values_result(evaluated_args, values),
         "func_get_args" => {
             eval_func_get_args_values_result(evaluated_args, context, values)
         }
