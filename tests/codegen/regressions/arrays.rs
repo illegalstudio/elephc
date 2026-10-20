@@ -2282,6 +2282,96 @@ echo count($grow->b["k"]), ":", $grow->b["k"][11], "\n";
     assert_eq!(out.stdout, "2:2:1\n12:11\n");
 }
 
+/// Verifies a nested append that falls open to the read/push/write-back desugar (a property the
+/// lowering sees as `Mixed`) vivifies its bucket silently, as PHP does: no "Undefined array key"
+/// warning for the first write into a bucket.
+#[test]
+fn test_nested_append_fallback_vivifies_without_a_warning() {
+    let out = compile_and_run_capture(
+        r#"<?php
+final class Tags {
+    private array $tags = [];
+
+    public function tag(string $type, string $id): void {
+        $this->tags[$type][] = $id;
+    }
+
+    public function names(string $type): string {
+        return implode(",", $this->tags[$type] ?? []);
+    }
+}
+$tags = new Tags();
+$tags->tag("greeter", "english");
+$tags->tag("greeter", "spanish");
+$tags->tag("logger", "stderr");
+echo $tags->names("greeter"), "|", $tags->names("logger"), "|", $tags->names("none"), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "english,spanish|stderr|\n");
+    assert!(!out.stderr.contains("Undefined array key"), "unexpected warning: {}", out.stderr);
+}
+
+/// Verifies the fallen-open nested append silences only its bucket fetch: an undefined key read
+/// inside the bucket's key still warns, and before the right-hand side runs, as in PHP.
+#[test]
+fn test_nested_append_fallback_warns_for_a_read_in_its_key() {
+    let out = compile_and_run_capture(
+        r#"<?php
+final class Tags {
+    private array $tags = [];
+
+    public function tag(array $keys, int $i): void {
+        $this->tags[$keys[$i] . "k"][] = $this->value();
+    }
+
+    private function value(): string {
+        echo "rhs\n";
+        return "v";
+    }
+
+    public function count(): int {
+        return count($this->tags["k"] ?? []);
+    }
+}
+set_error_handler(function (int $no, string $message): bool {
+    echo "warn: ", $message, "\n";
+    return true;
+});
+$tags = new Tags();
+$tags->tag(["a"], 5);
+echo $tags->count(), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "warn: Undefined array key 5\nrhs\n1\n");
+}
+
+/// Verifies a nested append on a local evaluates a key that reads an element once: one warning
+/// for the missing key, before the right-hand side, where the key's replay warned five times.
+#[test]
+fn test_nested_append_on_a_local_evaluates_an_element_read_key_once() {
+    let out = compile_and_run_capture(
+        r#"<?php
+set_error_handler(function (int $no, string $message): bool {
+    echo "warn: ", $message, "\n";
+    return true;
+});
+function rhs(): int {
+    echo "rhs\n";
+    return 1;
+}
+$keys = ["a"];
+$t = [];
+$t[$keys[5] . "k"][] = rhs();
+$t[$keys[5] . "k"][] = rhs();
+echo count($t["k"]), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "warn: Undefined array key 5\nrhs\nwarn: Undefined array key 5\nrhs\n2\n");
+}
+
 /// Verifies nested append auto-vivifies on a STATIC-property base.
 ///
 /// This shape needed two separate fixes. The parser was dropping the append outright —

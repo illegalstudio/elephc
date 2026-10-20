@@ -216,6 +216,9 @@ pub(crate) fn lower_nested_append_assignment(
     span: Span,
 ) -> Result<Stmt, CompileError> {
     let mut lowerer = EffectfulTargetLowerer::new(span);
+    // The bucket is read and written back through the same target, so a key that reads an
+    // element would warn twice for a missing key where PHP warns once.
+    lowerer.hoist_element_read_keys = true;
     let delayed_receiver = has_delayed_static_receiver(&target);
     let target = lowerer.stabilize_array_target(target);
     let value = if delayed_receiver {
@@ -686,6 +689,42 @@ pub(crate) fn can_replay_assignment_target(expr: &Expr) -> bool {
     }
 }
 
+/// Returns whether a replay-safe expression reads an array element anywhere, a read that warns
+/// on a missing key each time it is evaluated.
+fn reads_array_element(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::ArrayAccess { .. } => true,
+        ExprKind::PropertyAccess { object, .. } => reads_array_element(object),
+        ExprKind::DynamicPropertyAccess { object, property } => {
+            reads_array_element(object) || reads_array_element(property)
+        }
+        ExprKind::BinaryOp { left, right, .. } => {
+            reads_array_element(left) || reads_array_element(right)
+        }
+        ExprKind::InstanceOf { value, .. }
+        | ExprKind::Negate(value)
+        | ExprKind::Not(value)
+        | ExprKind::BitNot(value)
+        | ExprKind::Cast { expr: value, .. }
+        | ExprKind::PtrCast { expr: value, .. }
+        | ExprKind::NamedArg { value, .. }
+        | ExprKind::Spread(value) => reads_array_element(value),
+        ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
+            reads_array_element(value) || reads_array_element(default)
+        }
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            reads_array_element(condition)
+                || reads_array_element(then_expr)
+                || reads_array_element(else_expr)
+        }
+        _ => false,
+    }
+}
+
 /// Returns whether an update's array base is one whose single dimension gets an index snapshot.
 ///
 /// A local, a property, or a static property is written by the statement itself, so its key
@@ -944,6 +983,9 @@ struct EffectfulTargetLowerer {
     span: Span,
     next_temp: usize,
     stmts: Vec<Stmt>,
+    /// Whether a subscript key that reads an array element is moved into a temporary although
+    /// it is replay-safe as a value: its missing-key warning is not.
+    hoist_element_read_keys: bool,
 }
 
 impl EffectfulTargetLowerer {
@@ -954,6 +996,7 @@ impl EffectfulTargetLowerer {
             span,
             next_temp: 0,
             stmts: Vec::new(),
+            hoist_element_read_keys: false,
         }
     }
 
@@ -1028,6 +1071,15 @@ impl EffectfulTargetLowerer {
         name
     }
 
+    /// Stabilizes a subscript key: as `stabilize` does, and also unconditionally when the lowerer
+    /// hoists element-read keys and this key reads an array element.
+    fn stabilize_key(&mut self, index: Expr) -> Expr {
+        if self.hoist_element_read_keys && reads_array_element(&index) {
+            return self.stabilize_unconditionally(index);
+        }
+        self.stabilize(index)
+    }
+
     /// Stabilizes an array-access target, recursively stabilizing both the array base
     /// and the index. For simple array bases (Variable, This, StaticPropertyAccess),
     /// the array base is kept as-is; deeper bases are stabilized via `stabilize_array_base`.
@@ -1037,7 +1089,7 @@ impl EffectfulTargetLowerer {
             ExprKind::ArrayAccess { array, index } => Expr::new(
                 ExprKind::ArrayAccess {
                     array: Box::new(self.stabilize_array_base(*array)),
-                    index: Box::new(self.stabilize(*index)),
+                    index: Box::new(self.stabilize_key(*index)),
                 },
                 span,
             ),
@@ -1054,7 +1106,7 @@ impl EffectfulTargetLowerer {
             ExprKind::ArrayAccess { array, index } => Expr::new(
                 ExprKind::ArrayAccess {
                     array: Box::new(self.stabilize_array_base(*array)),
-                    index: Box::new(self.stabilize(*index)),
+                    index: Box::new(self.stabilize_key(*index)),
                 },
                 span,
             ),
