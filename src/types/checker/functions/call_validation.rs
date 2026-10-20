@@ -281,6 +281,55 @@ impl Checker {
         }
     }
 
+    /// Makes a declared array property independently referenceable by a mutating builtin.
+    /// The object expression is evaluated by EIR once; the resulting cell can outlive it.
+    pub(crate) fn promote_builtin_array_property_reference(
+        &mut self,
+        arg: &Expr,
+        env: &TypeEnv,
+    ) -> Result<(), CompileError> {
+        self.promote_array_property_reference_slot(arg, env, true)
+    }
+
+    /// Gives a potentially by-reference runtime callable an addressable array property slot.
+    /// Readonly properties remain value-only until the actual callee requires a reference.
+    pub(crate) fn promote_runtime_callable_array_property_reference(
+        &mut self,
+        arg: &Expr,
+        env: &TypeEnv,
+    ) -> Result<(), CompileError> {
+        self.promote_array_property_reference_slot(arg, env, false)
+    }
+
+    /// Promotes native array storage without guessing an unresolved callable's passing mode.
+    fn promote_array_property_reference_slot(
+        &mut self,
+        arg: &Expr,
+        env: &TypeEnv,
+        require_writable: bool,
+    ) -> Result<(), CompileError> {
+        let ExprKind::PropertyAccess { object, property } = &arg.kind else {
+            return Ok(());
+        };
+        let ty = self.infer_type(arg, env)?;
+        if !ty.is_php_array()
+            && !matches!(ty.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed)
+        {
+            return Ok(());
+        }
+        if let Some((class, true)) = self.ref_property_slot_addressability(object, property, env)? {
+            if self.classes.get(&class).is_some_and(|info| info.readonly_properties.contains(property)) {
+                if !require_writable {
+                    return Ok(());
+                }
+                return Err(CompileError::new(arg.span,
+                    &format!("Cannot modify readonly property {}::${} by reference", class, property)));
+            }
+            self.reference_property_promotions.insert((class, property.clone()));
+        }
+        Ok(())
+    }
+
     /// Returns whether a named property is a declared slot under a stable object root.
     fn is_addressable_ref_property(
         &mut self,

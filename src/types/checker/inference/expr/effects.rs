@@ -8,6 +8,8 @@
 //! Key details:
 //! - Expression inference shares environments with statement checking, so variable and effect updates must stay synchronized.
 
+mod callable_properties;
+
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind};
@@ -286,11 +288,12 @@ impl Checker {
                         crate::types::checker::builtins::contextual_callback_arg_positions(
                             builtin_name,
                         );
+                    let captures_array_property = callable_properties::builtin_captures_live_array_property(builtin_name);
                     // The table is in parameter positions; a named argument fills the
                     // parameter it names, wherever it sits in the call, so
                     // `xml_set_character_data_handler(handler: fn(...) => ..., parser: $p)`
                     // skips the closure at source index 0 too.
-                    let contextual_sig = if contextual_callbacks.is_empty() {
+                    let contextual_sig = if contextual_callbacks.is_empty() && !captures_array_property {
                         None
                     } else {
                         crate::types::signatures::builtin_call_sig(builtin_name)
@@ -309,6 +312,15 @@ impl Checker {
                         };
                         if contextual_callbacks.contains(&param_idx) {
                             continue;
+                        }
+                        if captures_array_property && param_idx == 0 {
+                            // Form the reference at this source position, before a later
+                            // by-reference argument can widen or rebind its object variable.
+                            let place = match &arg.kind {
+                                ExprKind::NamedArg { value, .. } => value.as_ref(),
+                                _ => arg,
+                            };
+                            self.promote_builtin_array_property_reference(place, env)?;
                         }
                         if crate::builtins::mbstring::is_capture_output_argument(builtin_name, arg, idx) {
                             // Forming the output reference requires dynamic storage before later
@@ -498,6 +510,8 @@ impl Checker {
                 Ok(ty)
             }
             ExprKind::ClosureCall { var, args } => {
+                let callee = Expr::new(ExprKind::Variable(var.clone()), expr.span);
+                let property_mode = self.callable_property_reference_mode(&callee, env)?;
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
                 let skip_contextual_callback =
                     self.variable_targets_preg_replace_callback(var.as_str());
@@ -507,6 +521,7 @@ impl Checker {
                     if skip_contextual_callback && idx == 1 {
                         continue;
                     }
+                    self.promote_callable_array_property_argument(property_mode, idx, arg, env)?;
                     if descriptor_args && matches!(arg.kind, ExprKind::Spread(_)) {
                         self.infer_spread_source_assignment_effects(arg, env)?;
                     } else {
@@ -519,6 +534,7 @@ impl Checker {
             }
             ExprKind::ExprCall { callee, args } => {
                 self.infer_type_with_assignment_effects(callee, env)?;
+                let property_mode = self.callable_property_reference_mode(callee, env)?;
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
                 let skip_contextual_callback = self
                     .expr_targets_preg_replace_callback(callee);
@@ -526,6 +542,7 @@ impl Checker {
                     if skip_contextual_callback && idx == 1 {
                         continue;
                     }
+                    self.promote_callable_array_property_argument(property_mode, idx, arg, env)?;
                     if matches!(arg.kind, ExprKind::Spread(_)) {
                         self.infer_spread_source_assignment_effects(arg, env)?;
                     } else {

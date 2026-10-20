@@ -2354,3 +2354,36 @@ This specification closes the first EIR roadmap item because it defines:
 - textual format requirements and examples
 - an exhaustive current `ExprKind`, `BinOp`, and `StmtKind` lowering catalogue
 - validator requirements sufficient for Phase 02
+
+## Property receivers during array_unshift arguments
+
+`array_unshift($object->items, ...$values)` binds the property's managed reference
+cell before evaluating its value arguments. The cell owns its current array
+independently of the object. A temporary object can therefore run its destructor
+before the next argument, while argument side effects still update the same
+property cell used by the outer call. Rebinding the object variable must not
+redirect the call to the replacement object.
+
+The checker records this reference at its source evaluation point, before a later
+by-reference argument can widen the object's local storage. EIR binds a hidden
+reference alias and publishes its cell owner in the in-flight cleanup chain.
+After argument evaluation, the backend reloads the cell's current value before
+copy-on-write separation. The alias publishes replacements directly; no separate
+property-value snapshot is written back after the call.
+
+The owner record is detached before normal cell retirement. If an argument throws,
+the in-flight record retires that lease before a same-frame catch observes the
+program. Packed arrays of `Mixed` retain or box each prepended value into one
+independent cell owner, transferred to the new slot without an additional release.
+
+Known first-class builtin targets use the same capture path. When the signature is
+unresolved during checking, array property storage becomes addressable without
+selecting a passing mode. A callable resolved during lowering then uses its actual
+parameter modes; by-value calls still snapshot their argument at its evaluation
+point. Readonly properties remain value-only unless a known by-reference target
+requires a diagnostic.
+
+Passing a property by reference through a runtime callable parameter remains an
+explicitly diagnosed unsupported case. It needs a separate extension of boxed
+reference argument storage; direct and statically resolved builtin calls do not
+use that ABI path.

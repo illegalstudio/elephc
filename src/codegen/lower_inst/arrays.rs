@@ -3189,7 +3189,7 @@ fn emit_mixed_array_set_ref_marker_writeback_x86_64(ctx: &mut FunctionContext<'_
 }
 
 /// Boxes a value for a Mixed array, consuming owned producers when possible.
-fn box_value_for_mixed_container(
+pub(super) fn box_value_for_mixed_container(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     value_ty: &PhpType,

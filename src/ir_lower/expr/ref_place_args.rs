@@ -40,6 +40,9 @@ use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{FunctionSig, PhpType};
 
 mod key_sort;
+mod live_property;
+
+pub(super) use live_property::lower_unshift_property_reference;
 
 use super::{
     call_signature, is_spread_arg, lower_expr, lower_function_call,
@@ -83,6 +86,9 @@ pub(super) fn lower_builtin_ref_place_call(
     let mb_variables = canonical.eq_ignore_ascii_case("mb_convert_variables");
     if !sig.ref_params.iter().any(|is_ref| *is_ref) {
         return None;
+    }
+    if let Some(result) = lower_unshift_property_reference(ctx, name, &sig, args, expr) {
+        return Some(result);
     }
     if args.iter().any(is_spread_arg) {
         // A spread cannot be split into per-parameter places here; PHP also rejects spreading

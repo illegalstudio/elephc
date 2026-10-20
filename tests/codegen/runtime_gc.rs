@@ -192,3 +192,7 @@ mod reflection_attribute_filter;
 mod tagged_scalar_boxing;
 #[path = "runtime_gc/gc_incoming_cache.rs"]
 mod gc_incoming_cache;
+#[path = "runtime_gc/property_receiver_arguments.rs"]
+mod property_receiver_arguments;
+#[path = "runtime_gc/unshift_reference_cow.rs"]
+mod unshift_reference_cow;
