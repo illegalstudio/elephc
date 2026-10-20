@@ -350,7 +350,7 @@ ptr_cast<T>($ptr: Pointer) → Pointer(Some(T))
 Most entries in the table above come from the builtin signature registry, while pointer-tag casts like `ptr_cast<T>()` are checked directly when the type checker visits `ExprKind::PtrCast`. `instanceof` is also checked as a dedicated expression: it always returns `Bool`, validates named `self` / `parent` / `static` targets against the current class context, checks dynamic target expressions for ordinary expression validity, and deliberately allows unknown named targets so runtime behavior can return `false` like PHP. For some built-ins the checker also enforces container shape, not just raw argument count:
 
 - `array_push($arr, $val)` requires the first argument to be an indexed `Array`, not an `AssocArray`
-- `array_column($rows, $column_key)` requires the first argument to be an indexed array whose element type is `AssocArray`
+- `array_column($rows, $column_key, $index_key = null)` requires an array first argument and rejects statically array- or object-typed keys; an indexed array of `AssocArray` rows with a string column and no index key keeps its row value type, every other shape returns `Mixed` elements, and a non-null index key returns the boxed PHP array type
 - `wordwrap()` accepts 1 to 4 arguments, matching the builtin checker
 
 The type checker validates:

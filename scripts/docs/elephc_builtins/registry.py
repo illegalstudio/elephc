@@ -322,7 +322,7 @@ PARAM_TYPES: Dict[str, List[Optional[ParamSpec]]] = {
     'acos': ['float'],
     'addslashes': ['string'],
     'array_chunk': ['array', 'int', 'bool'],
-    'array_column': ['array', 'string'],
+    'array_column': ['array', 'int|string|null', 'int|string|null'],
     'array_combine': ['array', 'array'],
     'array_count_values': ['array'],
     'array_diff': ['array'],

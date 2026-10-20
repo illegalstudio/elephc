@@ -94,7 +94,6 @@ impl EvalBuiltinArity {
 
 /// Builtins whose eval signature does not state PHP 8.5's arity (see the module docs).
 pub(super) const PHP_ARITY_OVERRIDES: &[(&str, EvalBuiltinArity)] = &[
-    ("array_column", EvalBuiltinArity::ranged(2, Some(3))),
     ("array_keys", EvalBuiltinArity::ranged(1, Some(3))),
     ("array_rand", EvalBuiltinArity::ranged(1, Some(2))),
     ("array_unique", EvalBuiltinArity::ranged(1, Some(2))),

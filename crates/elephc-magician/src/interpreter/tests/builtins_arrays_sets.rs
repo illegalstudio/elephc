@@ -63,6 +63,37 @@ return function_exists("array_column");"#,
     assert_eq!(values.output, "2:Ada:Lin:3:1030:2:one:uno:20:6:2:9:");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+/// Verifies eval `array_column()` re-keys by `$index_key`, keeps whole rows for a null
+/// column, appends rows lacking the index key, and raises PHP's illegal-offset TypeError.
+#[test]
+fn execute_program_array_column_index_key_and_whole_rows() {
+    let program = parse_fragment(
+            br#"$rows = [["id" => 3, "n" => "a"], ["id" => "x", "n" => "b"], ["n" => "c"], ["id" => "3", "n" => "d"], 7];
+$byId = array_column($rows, "n", "id");
+echo count($byId) . ":" . $byId[3] . $byId["x"] . $byId[4] . ":";
+$whole = array_column($rows, null, "id");
+echo count($whole) . ":" . $whole["x"]["n"] . $whole[5] . ":";
+$values = array_column($rows, null);
+echo count($values) . ":" . $values[4] . ":";
+$ints = array_column([[1, 2], [3, 4], [5]], 1, 0);
+echo count($ints) . ":" . $ints[1] . $ints[3] . ":";
+try { array_column([["id" => [1], "n" => "e"]], "n", "id"); } catch (TypeError $e) { echo $e->getMessage(); }
+echo ":";
+try { array_column($rows, []); } catch (TypeError $e) { echo $e->getMessage(); }
+return array_column(index_key: "id", column_key: "n", array: $rows)[3];"#,
+        )
+        .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "3:dbc:4:b7:5:7:2:24:Cannot access offset of type array on array:\
+array_column(): Argument #2 ($column_key) must be of type string|int|null, array given"
+    );
+    assert_eq!(values.get(result), FakeValue::String("d".into()));
+}
 /// Verifies eval `array_pad()` and `array_chunk()` build reindexed array shapes.
 #[test]
 fn execute_program_dispatches_array_shape_builtins() {
