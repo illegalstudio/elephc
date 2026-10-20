@@ -399,6 +399,13 @@ pub(crate) fn lower_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruct
 pub(crate) fn lower_array_unique(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "array_unique", 1)?;
     let array = expect_operand(inst, 0)?;
+    // The typed dedup helpers key their seen table by the RAW slot, which is a pointer for a boxed
+    // element: two separately boxed `1`s never matched, so `array_unique([1,"b",1,4])` answered
+    // `1,b,1,4` where php answers `1,b,4`. php compares by string rendering, which the shared
+    // set-operation scan does for any layout, including a declared `array` or a `mixed` value.
+    if unique_needs_rendering_scan(&ctx.value_php_type(array)?.codegen_repr()) {
+        return super::boxed_set_ops::lower_array_unique_values(ctx, inst);
+    }
     // Verified rather than assumed: the checker widens an indexed input to a hash because PHP
     // keeps each survivor's ORIGINAL key, so the result of `[1,2,2,3,1]` has no key 2. A
     // lowering that still built a dense array would disagree with its own declared type,
@@ -413,15 +420,7 @@ pub(crate) fn lower_array_unique(ctx: &mut FunctionContext<'_>, inst: &Instructi
     // an associative array is ordinary code — and the indexed builder cannot serve it, because it
     // walks fixed-size slots and a hash has none.
     if let PhpType::AssocArray { value, .. } = ctx.value_php_type(array)?.codegen_repr() {
-        let value_ty = value.codegen_repr();
-        // Boxed values would be keyed by their POINTER in the seen table, deduplicating by
-        // identity instead of by value; refused for the same reason as the indexed path.
-        if !matches!(value_ty, PhpType::Int | PhpType::Str) {
-            return Err(CodegenIrError::unsupported(format!(
-                "array_unique for hash values of PHP type {:?}",
-                value_ty
-            )));
-        }
+        debug_assert!(matches!(value.codegen_repr(), PhpType::Int | PhpType::Str));
         ctx.load_value_to_result(array)?;
         if ctx.emitter.target.arch == Arch::X86_64 {
             ctx.emitter.instruction("mov rdi, rax");                            // pass the source hash as the dedup helper argument
@@ -451,23 +450,9 @@ pub(crate) fn lower_array_unique(ctx: &mut FunctionContext<'_>, inst: &Instructi
             | PhpType::Callable
             | PhpType::Void
             | PhpType::Never
-    ) && !elem_ty.is_refcounted()
-    {
+    ) {
         return Err(CodegenIrError::unsupported(format!(
             "array_unique for indexed-array element PHP type {:?}",
-            elem_ty
-        )));
-    }
-    // The dedup scan compares slots as RAW words, which is a POINTER for a boxed element, so
-    // two separately boxed `1`s never matched: `array_unique([1,"b",1,4])` answered `1,b,1,4`
-    // where PHP answers `1,b,4`. PHP compares these elements by their STRING rendering.
-    // Refused rather than answered wrongly, like the set operations that share the defect; the
-    // gate itself cannot carry this, because `array_reverse`, `shuffle` and `array_merge` use
-    // it too and never compare their elements.
-    if matches!(elem_ty, PhpType::Mixed | PhpType::Union(_)) {
-        return Err(CodegenIrError::unsupported(format!(
-            "array_unique compares boxed elements by identity, not by value, for indexed-array \
-             element PHP type {:?}",
             elem_ty
         )));
     }
@@ -480,6 +465,19 @@ pub(crate) fn lower_array_unique(ctx: &mut FunctionContext<'_>, inst: &Instructi
 }
 
 
+/// Whether `array_unique` must compare this operand's elements by their string rendering: the
+/// typed helpers only compare scalar indexed slots and int or string hash values by value. A
+/// boxed, object or array slot holds a pointer, so two objects rendering the same `__toString`
+/// text were both kept.
+fn unique_needs_rendering_scan(array_ty: &PhpType) -> bool {
+    match array_ty {
+        PhpType::Array(elem) => elem.codegen_repr().is_refcounted(),
+        PhpType::AssocArray { value, .. } => {
+            !matches!(value.codegen_repr(), PhpType::Int | PhpType::Str)
+        }
+        _ => true,
+    }
+}
 
 /// Lowers `array_reverse($array, true)` into an owned integer-keyed hash.
 ///

@@ -43,6 +43,11 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             value: elem,
         }),
         PhpType::AssocArray { .. } => Ok(ty),
+        _ if ty.is_php_array()
+            || crate::types::checker::builtins::arrays::boxed_value_may_hold_array(&ty) =>
+        {
+            Ok(PhpType::php_array())
+        }
         _ => Err(CompileError::new(
             cx.span,
             "array_unique() argument must be array",

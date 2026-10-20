@@ -884,8 +884,10 @@ RETURN_TYPE_OVERRIDES: Dict[str, str] = {
     "str_repeat": "string",
     # Array functions with a concrete array return type.
     "array_combine": "array",
+    "array_diff": "array",
     "array_diff_key": "array",
     "array_fill_keys": "array",
+    "array_intersect": "array",
     "array_intersect_key": "array",
     "array_merge": "array",
     "array_reverse": "array",
