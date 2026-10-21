@@ -345,10 +345,29 @@ fn skip_serialized_value(data: &[u8], pos: usize) -> usize {
     }
 }
 
+/// Returns true when `data` is exactly one complete serialized value.
+///
+/// A `php_serialize` session file is a single serialized array, while a `php`
+/// file is a sequence of `key|value` pairs. Refusing a whole-buffer serialized
+/// value stops a file written with one serializer from being reinterpreted as
+/// entries by a reader configured for another (the php2shell handler-mismatch
+/// chain), even when an application stored serialized-looking data.
+fn whole_buffer_is_serialized_value(data: &[u8]) -> bool {
+    !data.is_empty()
+        && matches!(
+            data[0],
+            b'N' | b'b' | b'i' | b'd' | b's' | b'a' | b'O' | b'C'
+        )
+        && skip_serialized_value(data, 0) == data.len()
+}
+
 /// Parses the session data format (`key|serialized_value` pairs) and returns a
 /// list of `(key_bytes, value_bytes)` slices. The key is everything before the
 /// first `|`; the value is one complete serialized value after the `|`.
 fn parse_session_entries(data: &[u8]) -> Vec<(&[u8], &[u8])> {
+    if whole_buffer_is_serialized_value(data) {
+        return Vec::new();
+    }
     let mut entries = Vec::new();
     let mut pos = 0;
     while pos < data.len() {
@@ -383,6 +402,9 @@ fn parse_session_entries(data: &[u8]) -> Vec<(&[u8], &[u8])> {
 /// `skip_serialized_value` for the value grammar (identical to the `php`
 /// handler).
 fn parse_session_entries_binary(data: &[u8]) -> Vec<(&[u8], &[u8])> {
+    if whole_buffer_is_serialized_value(data) {
+        return Vec::new();
+    }
     let mut entries = Vec::new();
     let mut pos = 0;
     while pos < data.len() {
@@ -608,6 +630,32 @@ mod tests {
         // a:1:{i:0;a:1:{i:0;i:1;}}
         let nested = b"a:1:{i:0;a:1:{i:0;i:1;}}";
         assert_eq!(skip_serialized_value(nested, 0), nested.len());
+    }
+
+    /// A `php_serialize` file is one serialized array, not `key|value` pairs.
+    /// Reinterpreting it with the `php` (or `php_binary`) handler is the
+    /// handler-mismatch half of php2shell, so the whole-buffer shape is refused.
+    #[test]
+    fn a_php_serialize_file_is_not_reinterpreted_as_entries() {
+        let value = b"x|O:4:\"Evil\":1:{s:3:\"cmd\";s:1:\"x\";}";
+        let mut data = format!("a:1:{{s:17:\"upload_progress_k\";s:{}:\"", value.len()).into_bytes();
+        data.extend_from_slice(value);
+        data.extend_from_slice(b"\";}");
+        assert!(
+            whole_buffer_is_serialized_value(&data),
+            "fixture must be one complete serialized array"
+        );
+        assert!(
+            parse_session_entries(&data).is_empty(),
+            "the php handler must not turn a php_serialize file into entries"
+        );
+        assert!(
+            parse_session_entries_binary(&data).is_empty(),
+            "the php_binary handler must not turn a php_serialize file into entries"
+        );
+
+        // A real php-format file still parses normally.
+        assert_eq!(parse_session_entries(b"a|i:1;b|s:3:\"xyz\";").len(), 2);
     }
 
     /// Regression: a truncated collection with an attacker-controlled element

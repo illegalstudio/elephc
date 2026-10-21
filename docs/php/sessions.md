@@ -352,6 +352,20 @@ Notes and limitations specific to elephc:
   upload request cannot observe its **own** intermediate progress; a separate
   concurrent request must poll the session to read live progress.
 
+### Session security boundaries
+
+- `session_start()` deserializes stored values and runs `__wakeup()` /
+  `__unserialize()` on stored objects. As in PHP, do not put untrusted data into
+  `$_SESSION` in a shape that could hydrate an object, and never share a
+  `save_path` with a deployment whose `ELEPHC_SESSION_SERIALIZE_HANDLER` differs.
+- The `php` and `php_binary` readers refuse a file that is exactly one complete
+  serialized value (the `php_serialize` layout) instead of splitting it into
+  `key|value` entries. A file written by the wrong handler therefore cannot
+  inject an object even when application data happens to contain `|`.
+- Prefer `session.use_strict_mode=1`, keep `save_path` outside the document root
+  and private to the server user, and leave `session.upload_progress.enabled=0`
+  when progress reporting is not used.
+
 ## URL rewriting (`session.use_trans_sid`)
 
 When cookies are unavailable, PHP can propagate the session id through the page

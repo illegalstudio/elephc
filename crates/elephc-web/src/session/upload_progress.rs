@@ -40,6 +40,7 @@ use std::time::Instant;
 use super::file_io::{
     configured_session_file_path, lock_exclusive, open_session_file, parse_save_path,
 };
+use crate::multipart::extract_quoted;
 
 /// Longest multipart boundary this tracker will follow, in bytes.
 ///
@@ -868,15 +869,6 @@ fn parse_part(seg: &[u8]) -> Option<(Vec<u8>, Option<Vec<u8>>, &[u8])> {
         }
     }
     Some((name?, filename, content))
-}
-
-/// Extracts a quoted attribute value (`key="value"`) from a header line.
-fn extract_quoted(line: &str, key: &str) -> Option<String> {
-    let start = line.find(key)? + key.len();
-    let rest = &line[start..];
-    let rest = rest.strip_prefix('"')?;
-    let end = rest.find('"')?;
-    Some(rest[..end].to_string())
 }
 
 // ── PHP serialize scalar emitters ──
@@ -1957,6 +1949,37 @@ mod tests {
         assert!(
             String::from_utf8_lossy(&out).contains("%7C") && String::from_utf8_lossy(&out).contains("%00"),
             "separator and NUL must be percent-encoded: {}",
+            String::from_utf8_lossy(&out)
+        );
+    }
+
+    /// PHP's multipart rules accept escaped quotes and unquoted values. Now that
+    /// the header parser extracts the full client filename, the progress writer
+    /// must still neutralize its `|` (this is the php2shell filename chain).
+    #[test]
+    fn an_escaped_quote_filename_is_still_sanitized() {
+        let segment = b"Content-Disposition: form-data; name=\"f\"; filename=\"x|O:4:\\\"Evil\\\":1:{s:3:\\\"cmd\\\";s:1:\\\"x\\\";}\"\r\n\r\nBODY";
+        let (name, filename, content) = parse_part(segment).expect("part parses");
+        let filename = filename.expect("filename is present");
+        assert_eq!(
+            filename, b"x|O:4:\"Evil\":1:{s:3:\"cmd\";s:1:\"x\";}".to_vec(),
+            "the escaped quotes must be unescaped exactly as PHP does"
+        );
+        let files = vec![FileProgress {
+            field_name: name,
+            name: filename,
+            bytes_processed: content.len(),
+            done: true,
+        }];
+        let out = incremental_tracker().serialize_progress(&files, content.len(), true);
+        assert!(
+            !out.contains(&b'|'),
+            "the filename separator must be encoded: {}",
+            String::from_utf8_lossy(&out)
+        );
+        assert!(
+            String::from_utf8_lossy(&out).contains("%7C"),
+            "the filename separator must be visible as %7C: {}",
             String::from_utf8_lossy(&out)
         );
     }

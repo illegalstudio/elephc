@@ -218,6 +218,11 @@ filenames and field names have those same bytes percent-encoded (`%7C`, `%00`),
 which keeps a file produced by one serializer from injecting an entry when a
 differently configured `php` handler reads it.
 
+The `php` and `php_binary` decoders also reject a buffer that is exactly one
+complete serialized value, which is the `php_serialize` file layout. A
+cross-format file is therefore not reinterpreted as `key|value` entries, even
+when application data contains the separator.
+
 `tmp_name` remains empty because the web server buffers multipart bodies rather
 than exposing a PHP temporary upload path. A concurrent polling request observes
 progress; the upload handler itself runs only after the body drain completes.

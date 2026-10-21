@@ -90,13 +90,69 @@ fn parse_part(seg: &[u8]) -> Option<Part> {
     })
 }
 
-/// Extracts a quoted attribute value (`key="value"`) from a header line.
-fn extract_quoted(line: &str, key: &str) -> Option<String> {
-    let start = line.find(key)? + key.len();
-    let rest = &line[start..];
-    let rest = rest.strip_prefix('"')?;
-    let end = rest.find('"')?;
-    Some(rest[..end].to_string())
+/// Extracts a `key=value` attribute from a `Content-Disposition` line using
+/// php-src's `php_ap_getword_conf` rules: the value may be double-quoted,
+/// single-quoted, or unquoted; `\\` and `\<quote>` are unescaped; an unquoted
+/// value ends at the next `;`.
+///
+/// This is shared by the request parser and the upload-progress tracker so a
+/// filename cannot mean different things to `$_FILES` and to the progress
+/// snapshot written into the session file.
+pub(crate) fn extract_quoted(line: &str, key: &str) -> Option<String> {
+    let at = find_attribute(line, key)?;
+    let rest = line[at + key.len()..].trim_start_matches([' ', '\t']);
+    let quote = match rest.as_bytes().first() {
+        Some(&b'"') => Some('"'),
+        Some(&b'\'') => Some('\''),
+        _ => None,
+    };
+    let body = match quote {
+        Some(q) => &rest[q.len_utf8()..],
+        None => {
+            let end = rest.find(';').unwrap_or(rest.len());
+            &rest[..end]
+        }
+    };
+    let mut out = String::with_capacity(body.len());
+    let mut chars = body.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if Some(ch) == quote {
+            return Some(out);
+        }
+        if ch == '\\' {
+            if let Some(&next) = chars.peek() {
+                if next == '\\' || Some(next) == quote {
+                    out.push(next);
+                    chars.next();
+                    continue;
+                }
+            }
+        }
+        out.push(ch);
+    }
+    // A quoted value without a closing quote is malformed; an unquoted value
+    // simply consumed the rest of the line.
+    if quote.is_none() {
+        Some(out)
+    } else {
+        None
+    }
+}
+
+/// Finds `key` in a header line only at an attribute boundary, so `name=` does
+/// not match inside `filename=`.
+fn find_attribute(line: &str, key: &str) -> Option<usize> {
+    let bytes = line.as_bytes();
+    let mut from = 0;
+    while let Some(relative) = line[from..].find(key) {
+        let at = from + relative;
+        let boundary = at == 0 || matches!(bytes[at - 1], b';' | b' ' | b'\t');
+        if boundary {
+            return Some(at);
+        }
+        from = at + 1;
+    }
+    None
 }
 
 /// Returns the byte offsets of every occurrence of `needle` in `haystack`.
@@ -149,6 +205,25 @@ mod tests {
     #[test]
     fn non_multipart_is_empty() {
         assert!(parse(b"x=1", "application/x-www-form-urlencoded").is_empty());
+    }
+
+    /// Matches php-src's `php_ap_getword_conf`: quoted values unescape `\\` and
+    /// `\<quote>`, unquoted values run to the next `;`, and `name=` must not
+    /// match inside `filename=`.
+    #[test]
+    fn parses_escaped_and_unquoted_attribute_values() {
+        let ct = "multipart/form-data; boundary=X";
+        let body = b"--X\r\nContent-Disposition: form-data; name=\"f\"; filename=\"a\\\"b\\\\c.txt\"\r\n\r\nDATA\r\n--X\r\nContent-Disposition: form-data; filename=x.txt; name=f2\r\n\r\nDATA2\r\n--X--\r\n";
+        let parts = parse(body, ct);
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0].name, "f");
+        assert_eq!(
+            parts[0].filename.as_deref(),
+            Some("a\"b\\c.txt"),
+            "escaped quote and backslash must be unescaped"
+        );
+        assert_eq!(parts[1].name, "f2", "name= must not match inside filename=");
+        assert_eq!(parts[1].filename.as_deref(), Some("x.txt"));
     }
 
     /// Guards against reintroducing the adversarial `O(body × boundary)` scan
