@@ -1707,6 +1707,102 @@ fn upload_progress_end_state_persists_with_cleanup_off() {
     );
 }
 
+/// Regression for the php2shell class of session-file injection: the upload-progress
+/// trigger field is client-controlled and becomes a `$_SESSION` key, so a value
+/// containing the `php` handler's `|` separator must never be written. Before the
+/// guard, a default-configuration server (no LFI, no handler mismatch, no
+/// application `unserialize()`) wrote `upload_progress_k|O:...` into the session
+/// file, and the next `session_start()` hydrated the attacker's object and ran
+/// `__wakeup()`.
+#[test]
+fn upload_progress_key_cannot_inject_a_serialized_session_entry() {
+    let dir = make_test_dir("sess_upload_inject");
+    let session_store = dir.join("sessions");
+    fs::create_dir_all(&session_store).unwrap();
+    let session_store_env = session_store.to_string_lossy().into_owned();
+    let marker = dir.join("wakeup_marker");
+    let marker_env = marker.to_string_lossy().into_owned();
+    let src = "<?php \
+        class EvilInject { \
+            public string $cmd = ''; \
+            public function __wakeup(): void { \
+                file_put_contents(getenv('ELEPHC_TEST_MARKER'), $this->cmd); \
+            } \
+            public function __destruct() { \
+                file_put_contents(getenv('ELEPHC_TEST_MARKER'), 'destruct:' . $this->cmd); \
+            } \
+        } \
+        if (isset($_GET['keep-class'])) { new EvilInject(); } \
+        if ($_SERVER['REQUEST_URI'] === '/upload') { echo 'received'; } \
+        else { session_start(); echo 'ok'; }";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server_with_env(
+        &bin,
+        &addr,
+        "1",
+        &[
+            ("ELEPHC_SESSION_UPLOAD_PROGRESS_CLEANUP", "0"),
+            ("ELEPHC_SESSION_NAME", "PHPSESSID"),
+            ("ELEPHC_SESSION_SAVE_PATH", &session_store_env),
+            ("ELEPHC_TEST_MARKER", &marker_env),
+        ],
+    );
+
+    let sid = "a".repeat(32);
+    let cookie_hdr = format!("PHPSESSID={}", sid);
+    let boundary = "elephcINJECTBOUND";
+    let key = "k|O:4:\"EvilInject\":1:{s:3:\"cmd\";s:5:\"pwned\";}";
+    let body = format!(
+        "--{b}\r\n\
+         Content-Disposition: form-data; name=\"PHP_SESSION_UPLOAD_PROGRESS\"\r\n\
+         \r\n\
+         {key}\r\n\
+         --{b}\r\n\
+         Content-Disposition: form-data; name=\"f\"; filename=\"x.bin\"\r\n\
+         Content-Type: application/octet-stream\r\n\
+         \r\n\
+         HELLO\r\n\
+         --{b}--\r\n",
+        b = boundary,
+        key = key
+    );
+    let ctype = format!("multipart/form-data; boundary={}", boundary);
+    let r2 = http_request(
+        &addr,
+        "POST",
+        "/upload",
+        &[("Cookie", &cookie_hdr), ("Content-Type", &ctype)],
+        &body,
+    );
+    assert!(r2.contains("received"), "upload endpoint should respond: {:?}", r2);
+
+    // No handler has run yet: the body drain alone must not have written the
+    // injected object into the session file.
+    let session_file = session_store.join(format!("sess_{sid}"));
+    if session_file.exists() {
+        let raw = fs::read(&session_file).unwrap();
+        assert!(
+            !raw.windows(3).any(|w| w == b"O:4"),
+            "upload progress must not write a serialized object entry: {:?}",
+            String::from_utf8_lossy(&raw)
+        );
+    }
+
+    // A later `session_start()` on the same id must not hydrate an object.
+    let r3 = http_request(&addr, "GET", "/", &[("Cookie", &cookie_hdr)], "");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(r3.contains("ok"), "session request should respond: {:?}", r3);
+    assert!(
+        !marker.exists(),
+        "a client-controlled progress key must never reach unserialize(): {:?}",
+        fs::read_to_string(&marker).unwrap_or_default()
+    );
+}
+
 /// Verifies `session.use_trans_sid=1` (with `use_only_cookies=0`) URL-rewrites
 /// the response for a cookie-less request: same-origin `<a href>` links gain the
 /// `PHPSESSID` query parameter and `<form>` tags get a hidden SID input carrying

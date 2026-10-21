@@ -315,6 +315,16 @@ every file and the whole entry are marked `done => true`. If
 so the upload request's own handler never sees it — matching PHP, where only a
 concurrent poll request observes the intermediate states.
 
+The trigger-field value becomes part of a `$_SESSION` key, so it is written with
+the same structural rules as a session key: a value containing the `php`
+serializer's `|` entry separator (or a NUL) is not tracked, and `php_binary` keys
+above 127 bytes are skipped. The upload itself still completes; only its progress
+report is unavailable. Client filenames and field names in the progress snapshot
+have `|` and NUL percent-encoded as `%7C` and `%00`, so a session file written
+with one serializer can never smuggle an extra serialized entry into a `php`
+reader configured with a different serializer. `$_FILES['name']` still carries
+the exact client filename.
+
 Because elephc has no `php.ini`, the `enabled` and `cleanup` directives can be
 seeded before the worker/broker/handler process tree is created from the
 `ELEPHC_SESSION_UPLOAD_PROGRESS_ENABLED` /
@@ -333,6 +343,11 @@ Notes and limitations specific to elephc:
   serialization.
 - `tmp_name` is always the empty string: uploads are buffered in memory rather
   than spooled to a temporary file, so there is no temp path to report.
+- `ELEPHC_SESSION_SERIALIZE_HANDLER` must be identical for every server that
+  shares a `save_path`. Mixing serializers over one session store is not a
+  supported deployment: a file written by one format can be ambiguous to a
+  reader configured for another (the same guidance applies to PHP's
+  `session.serialize_handler`).
 - The web worker buffers a request's body before its handler runs, so an
   upload request cannot observe its **own** intermediate progress; a separate
   concurrent request must poll the session to read live progress.

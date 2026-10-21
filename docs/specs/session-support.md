@@ -210,6 +210,14 @@ upload never holds the session lock for its full duration. The progress trigger
 field must precede file parts. Frequency and minimum-time throttles match the
 session directives. Cleanup removes the completed entry when enabled.
 
+The client-controlled trigger value is assembled into a session key, so it is
+never written when it cannot be represented structurally: a `|` (the `php`
+serializer's entry separator) or NUL disables tracking for that request, and
+`php_binary` keys above its one-byte length limit are skipped. Progress
+filenames and field names have those same bytes percent-encoded (`%7C`, `%00`),
+which keeps a file produced by one serializer from injecting an entry when a
+differently configured `php` handler reads it.
+
 `tmp_name` remains empty because the web server buffers multipart bodies rather
 than exposing a PHP temporary upload path. A concurrent polling request observes
 progress; the upload handler itself runs only after the body drain completes.
