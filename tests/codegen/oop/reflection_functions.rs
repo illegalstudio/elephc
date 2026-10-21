@@ -676,3 +676,22 @@ echo get_class($f), "|", gettype((string) $f);
 
     assert_eq!(out, "ReflectionFunction|string");
 }
+
+/// The Reflection type objects share PHP's abstract `ReflectionType` parent, so
+/// `?ReflectionType` hints and `instanceof ReflectionType` accept every `getType()` result.
+#[test]
+fn test_reflection_type_is_the_common_parent() {
+    let out = compile_and_run(
+        r#"<?php
+function f(?int $x, string|int $y): string { return "" . $x . $y; }
+function d(?ReflectionType $t): string { return $t === null ? "none" : get_class($t); }
+function name(?ReflectionType $t): string { return (string) $t; }
+foreach ((new ReflectionFunction('f'))->getParameters() as $p) {
+    $t = $p->getType();
+    echo ($t instanceof ReflectionType ? 1 : 0), d($t), ":", name($t), ",";
+}
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "1ReflectionNamedType:?int,1ReflectionUnionType:string|int,\n");
+}

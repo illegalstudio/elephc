@@ -104,12 +104,26 @@ pub(super) fn reflection_class_property_names_for_filter(
     filter: Option<i64>,
 ) -> Option<Vec<String>> {
     let class_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
+    // Same listing rule as the codegen metadata (`ClassInfo::reflection_lists_property`):
+    // no inherited privates and no builtin Reflection `__*` storage slots. A shadowed private
+    // slot keeps one row, as in the codegen path.
+    let mut seen = std::collections::HashSet::new();
+    let instance = class_info
+        .properties
+        .iter()
+        .map(|(name, _)| (name, false));
+    let statics = class_info
+        .static_properties
+        .iter()
+        .map(|(name, _)| (name, true));
     Some(
-        class_info
-            .properties
-            .iter()
-            .chain(class_info.static_properties.iter())
+        instance
+            .chain(statics)
+            .filter(|(name, is_static)| {
+                class_info.reflection_lists_property(class_name, name, *is_static)
+            })
             .map(|(name, _)| name)
+            .filter(|name| seen.insert((*name).clone()))
             .filter(|name| reflection_property_matches_filter(class_info, name, filter))
             .cloned()
             .collect(),
@@ -130,6 +144,16 @@ pub(super) fn reflection_class_method_names_for_filter(
         .keys()
         .chain(class_info.static_methods.keys())
     {
+        // Property-hook accessors (`__propget_*` / `__propset_*`) are compiler-generated, not
+        // PHP methods; PHP's getMethods() never lists them.
+        let declaring = class_info
+            .method_declaring_classes
+            .get(name)
+            .and_then(|class| ctx.classes.get(class))
+            .unwrap_or(class_info);
+        if declaring.is_property_hook_method(name) {
+            continue;
+        }
         if seen.insert(php_symbol_key(name))
             && reflection_method_matches_filter(class_info, name, filter)
         {

@@ -152,7 +152,9 @@ from corrupting each other's data.
 
 Register a custom storage backend (database, Redis, etc.) with
 `session_set_save_handler()` using the object form — a class implementing
-`SessionHandlerInterface`:
+`SessionHandlerInterface`. The interface itself is declared in every compilation
+mode, so handler classes and code typed against it also compile without `--web`;
+only the session functions need the web lifecycle:
 
 ```php
 <?php

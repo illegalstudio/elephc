@@ -3401,6 +3401,24 @@
       "internal": false,
       "kind": "class",
       "module": "reflection",
+      "name": "ReflectionType",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "checker-injected",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "reflection",
       "name": "ReflectionUnionType",
       "php_manual": null,
       "since": null
@@ -3587,12 +3605,12 @@
     },
     {
       "aot": {
-        "kind": "prelude",
+        "kind": "checker-injected",
         "supported": true
       },
       "bundled": true,
       "eval": {
-        "kind": "prelude",
+        "kind": "interpreter",
         "supported": true
       },
       "extension": false,

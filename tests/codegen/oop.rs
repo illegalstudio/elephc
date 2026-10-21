@@ -59,6 +59,8 @@ mod datetime;
 mod reflection_properties;
 #[path = "oop/reflection_functions.rs"]
 mod reflection_functions;
+#[path = "oop/reflection_builtin_subclass.rs"]
+mod reflection_builtin_subclass;
 #[path = "oop/reflection_materialized_slots.rs"]
 mod reflection_materialized_slots;
 #[path = "oop/reflection_methods.rs"]

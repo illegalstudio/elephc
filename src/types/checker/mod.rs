@@ -14,6 +14,7 @@ mod builtin_interfaces;
 pub(crate) mod core_attributes;
 mod builtin_iterators;
 mod builtin_json;
+mod builtin_session_interfaces;
 mod builtin_spl_classes;
 mod builtin_class_gate;
 mod builtin_spl_exceptions;

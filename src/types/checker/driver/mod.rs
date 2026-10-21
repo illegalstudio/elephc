@@ -32,6 +32,7 @@ use super::builtin_enums::inject_builtin_enums;
 use super::builtin_interfaces::{apply_implicit_stringable_interfaces, inject_builtin_interfaces};
 use super::builtin_iterators::{inject_builtin_iterators, patch_builtin_generator_signatures};
 use super::builtin_json::{inject_builtin_json_interfaces, patch_builtin_json_signatures};
+use super::builtin_session_interfaces::inject_builtin_session_interfaces;
 use super::builtin_spl_classes::{
     inject_builtin_spl_classes, patch_builtin_spl_storage_signatures,
 };
@@ -251,6 +252,16 @@ pub(super) fn check_types_impl(
         errors.extend(error.flatten());
     }
     if let Err(error) = inject_builtin_json_interfaces(&mut interface_map, &mut class_map) {
+        errors.extend(error.flatten());
+    }
+    if let Err(error) =
+        inject_builtin_session_interfaces(
+            program,
+            &mut interface_map,
+            &mut class_map,
+            &declared_traits,
+        )
+    {
         errors.extend(error.flatten());
     }
     // Pay-for-use, because the checker's walk over these 41 classes is 27 ms — 54% of the

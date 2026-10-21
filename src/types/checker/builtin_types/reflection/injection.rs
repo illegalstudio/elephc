@@ -36,6 +36,7 @@ pub(crate) fn inject_builtin_reflection(
         "ReflectionMethod",
         "ReflectionProperty",
         "ReflectionParameter",
+        "ReflectionType",
         "ReflectionNamedType",
         "ReflectionUnionType",
         "ReflectionIntersectionType",
@@ -162,6 +163,7 @@ pub(crate) fn inject_builtin_reflection(
         "ReflectionParameter".to_string(),
         builtin_reflection_parameter(),
     );
+    class_map.insert("ReflectionType".to_string(), builtin_reflection_type());
     class_map.insert("ReflectionNamedType".to_string(), builtin_reflection_named_type());
     class_map.insert(
         "ReflectionUnionType".to_string(),

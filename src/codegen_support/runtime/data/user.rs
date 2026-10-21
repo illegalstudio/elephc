@@ -3607,7 +3607,9 @@ fn var_dump_descriptor_rows(
                 );
                 // Resolve the physical slot before filtering: a user property can shadow an
                 // inherited Reflection backing name without exposing the backing slot itself.
-                if is_reflection_backing_slot(metadata, owner_name, &prop_name) {
+                if is_reflection_backing_slot(metadata, owner_name, &prop_name)
+                    || is_virtual_hooked_property(metadata, &prop_name)
+                {
                     return None;
                 }
                 Some(VarDumpRow {
@@ -3634,7 +3636,9 @@ fn var_dump_descriptor_rows(
             let (metadata, owner_name) = physical_property_slot_metadata(
                 classes, class_info, class_name, layout_index, prop_name,
             );
-            if is_reflection_backing_slot(metadata, owner_name, prop_name) {
+            if is_reflection_backing_slot(metadata, owner_name, prop_name)
+                || is_virtual_hooked_property(metadata, prop_name)
+            {
                 return None;
             }
             Some(VarDumpRow {
@@ -3651,6 +3655,18 @@ fn var_dump_descriptor_rows(
             })
         })
         .collect()
+}
+
+/// Returns whether `prop_name` is a virtual hooked property (hooks that never touch a backing
+/// slot). PHP's object renderers skip virtual properties: they have no storage, so a row would
+/// read whatever the layout fallback offset holds (an unrelated slot, printed as
+/// `uninitialized(...)` or, for a pointer-carrying slot, a garbage string that exhausts the heap).
+/// This also covers the virtual public `name` elephc models on the builtin Reflection owners.
+fn is_virtual_hooked_property(class_info: &ClassInfo, prop_name: &str) -> bool {
+    class_info
+        .property_hooks
+        .get(prop_name)
+        .is_some_and(|hooks| hooks.is_virtual())
 }
 
 /// Returns whether `prop_name` is one of the compiler-only private backing slots elephc

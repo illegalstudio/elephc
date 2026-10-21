@@ -9,6 +9,31 @@
 
 use super::*;
 
+/// Builds the abstract `ReflectionType` base shared by the three concrete type classes.
+///
+/// PHP declares `allowsNull()` and `__toString()` on it; this shell declares no members, so a
+/// call through a `ReflectionType`-typed receiver is still an `Undefined method` compile error
+/// rather than a dispatch the Reflection reachability scan (`ir_lower::reflection`) cannot see.
+/// What it does provide is the nominal parent: `?ReflectionType` hints and `instanceof
+/// ReflectionType` accept every type object `getType()` / `getReturnType()` build.
+pub(super) fn builtin_reflection_type() -> FlattenedClass {
+    FlattenedClass {
+        name: "ReflectionType".to_string(),
+        span: dummy(),
+        extends: None,
+        implements: Vec::new(),
+        is_abstract: true,
+        is_final: false,
+        is_readonly_class: false,
+        properties: Vec::new(),
+        methods: Vec::new(),
+        attributes: Vec::new(),
+        constants: Vec::new(),
+        used_traits: Vec::new(),
+        trait_aliases: Vec::new(),
+    }
+}
+
 /// Builds the `ReflectionNamedType` shell: a parameter/return type rendered as a
 /// runtime object with a name, nullability flag, and builtin flag. Populated at
 /// codegen from the declared type.
@@ -16,7 +41,7 @@ pub(super) fn builtin_reflection_named_type() -> FlattenedClass {
     FlattenedClass {
         name: "ReflectionNamedType".to_string(),
         span: dummy(),
-        extends: None,
+        extends: Some("ReflectionType".to_string()),
         implements: Vec::new(),
         is_abstract: false,
         is_final: true,
@@ -56,7 +81,7 @@ pub(super) fn builtin_reflection_union_type() -> FlattenedClass {
     FlattenedClass {
         name: "ReflectionUnionType".to_string(),
         span: dummy(),
-        extends: None,
+        extends: Some("ReflectionType".to_string()),
         implements: Vec::new(),
         is_abstract: false,
         is_final: true,
@@ -106,7 +131,7 @@ pub(super) fn builtin_reflection_intersection_type() -> FlattenedClass {
     FlattenedClass {
         name: "ReflectionIntersectionType".to_string(),
         span: dummy(),
-        extends: None,
+        extends: Some("ReflectionType".to_string()),
         implements: Vec::new(),
         is_abstract: false,
         is_final: true,

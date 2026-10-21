@@ -429,8 +429,17 @@ pub(super) fn prepend_internal_names<'a>(
         .cloned()
         .collect();
     names.sort();
-    names.extend(user_names.iter().cloned());
+    // Prelude declarations (`__ElephcWeakMapIterator`) arrive as program statements, so the
+    // source-order list is filtered too, but only by the exact names the builtin contract marks
+    // `internal`: PHP does not reserve the `__elephc` prefix, so a user class may carry it.
+    names.extend(user_names.iter().filter(|name| !is_internal_prelude_class_name(name)).cloned());
     names
+}
+
+/// Returns whether `name` is a compiler-owned prelude class-like registered as `internal` in the
+/// builtin class contract, so it must stay out of `get_declared_classes()`-style listings.
+fn is_internal_prelude_class_name(name: &str) -> bool {
+    elephc_builtin_contract::lookup_class(name).is_some_and(|contract| contract.internal)
 }
 
 /// Returns true for compiler-internal helper classes hidden from PHP introspection.

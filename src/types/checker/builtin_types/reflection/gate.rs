@@ -24,6 +24,7 @@ pub(crate) const REFLECTION_CLASS_NAMES: &[&str] = &[
     "ReflectionMethod",
     "ReflectionProperty",
     "ReflectionParameter",
+    "ReflectionType",
     "ReflectionNamedType",
     "ReflectionUnionType",
     "ReflectionIntersectionType",

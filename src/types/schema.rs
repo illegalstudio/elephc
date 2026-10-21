@@ -748,6 +748,45 @@ impl ClassInfo {
         self.property_hooks.iter().any(|(property, hooks)| hooks.matches_accessor(property, method))
     }
 
+    /// Returns whether `ReflectionClass(<reflected_class>)` lists this property.
+    ///
+    /// Shared by the static EIR lowering of `getProperties()` and the codegen metadata behind
+    /// `getProperties()` / `hasProperty()` / `getDefaultProperties()`, so both paths agree.
+    /// Non-private properties are always listed. A private property is listed only when the
+    /// reflected class declares it (PHP never lists a parent's privates), and never when it is
+    /// one of the private `__*` storage slots elephc declares on a builtin Reflection class:
+    /// PHP's Reflection classes declare no private properties.
+    pub fn reflection_lists_property(
+        &self,
+        reflected_class: &str,
+        property: &str,
+        is_static: bool,
+    ) -> bool {
+        let visibility = if is_static {
+            self.static_property_visibilities.get(property)
+        } else {
+            self.property_visibilities.get(property)
+        };
+        if visibility != Some(&Visibility::Private) {
+            return true;
+        }
+        let declaring_class = if is_static {
+            self.static_property_declaring_classes.get(property)
+        } else {
+            self.property_declaring_classes.get(property)
+        };
+        let Some(declaring_class) = declaring_class else {
+            return false;
+        };
+        if property.starts_with("__")
+            && crate::types::checker::REFLECTION_CLASS_NAMES.contains(&declaring_class.as_str())
+        {
+            return false;
+        }
+        crate::names::php_symbol_key(declaring_class)
+            == crate::names::php_symbol_key(reflected_class.trim_start_matches('\\'))
+    }
+
     /// Returns whether the visible property has hooks but no backing value anywhere in its ancestry.
     pub fn property_is_virtual(&self, property: &str) -> bool {
         self.property_hooks.get(property).is_some_and(|hooks| hooks.is_virtual())

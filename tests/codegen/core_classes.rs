@@ -491,3 +491,62 @@ eval($source);
     assert_eq!(out.stdout, "same:closure:1:1:0:dead:eval:0:dead");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Internal Core prelude classes (`__ElephcWeakMapIterator`) stay out of
+/// `get_declared_classes()`, so instantiating every listed class does not reach them.
+#[test]
+fn test_declared_classes_hide_internal_core_prelude_classes() {
+    let out = compile_and_run(
+        r#"<?php
+$map = new WeakMap();
+foreach (get_declared_classes() as $class) {
+    if (stripos($class, '__elephc') === 0) {
+        echo "internal: ", $class, "\n";
+    }
+}
+echo in_array('WeakMap', get_declared_classes(), true) ? "WeakMap listed\n" : "WeakMap missing\n";
+"#,
+    );
+    assert_eq!(out, "WeakMap listed\n");
+}
+
+/// User classes and interfaces whose names merely start with `__elephc` stay listed: only the
+/// exact compiler-owned prelude names registered as internal are hidden.
+#[test]
+fn test_declared_classes_keep_user_names_with_the_internal_prefix() {
+    let out = compile_and_run(
+        r#"<?php
+class __ElephcUser {}
+interface __ElephcIface {}
+$o = new __ElephcUser();
+$map = new WeakMap();
+var_dump(in_array("__ElephcUser", get_declared_classes(), true));
+var_dump(in_array("__ElephcIface", get_declared_interfaces(), true));
+var_dump(in_array("__ElephcWeakMapIterator", get_declared_classes(), true));
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(true)\nbool(false)\n");
+}
+
+/// `SessionHandlerInterface` is a builtin contract outside `--web` too: a user handler can
+/// implement it and be passed through a parameter typed with it.
+#[test]
+fn test_session_handler_interface_is_implementable_without_web() {
+    let out = compile_and_run(
+        r#"<?php
+class H implements SessionHandlerInterface {
+    public function open(string $path, string $name): bool { return true; }
+    public function close(): bool { return true; }
+    public function read(string $id): string|false { return "r" . $id; }
+    public function write(string $id, string $data): bool { return true; }
+    public function destroy(string $id): bool { return true; }
+    public function gc(int $max_lifetime): int|false { return 0; }
+}
+function useHandler(SessionHandlerInterface $h): string|false { return $h->read("1"); }
+$h = new H();
+echo ($h instanceof SessionHandlerInterface ? 1 : 0), useHandler($h), "\n";
+echo interface_exists('SessionHandlerInterface') ? "exists\n" : "missing\n";
+"#,
+    );
+    assert_eq!(out, "1r1\nexists\n");
+}

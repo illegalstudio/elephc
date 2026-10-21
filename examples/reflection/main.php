@@ -38,3 +38,21 @@ foreach ($fn->getParameters() as $param) {
 
     echo "\n";
 }
+
+// Every getType() result shares the abstract ReflectionType parent, so one
+// helper typed against it describes named and union types alike.
+function describeType(?ReflectionType $type): string
+{
+    if ($type === null) {
+        return "untyped";
+    }
+    return get_class($type) . " " . (string) $type;
+}
+
+function pick(string|int $key, ?Mailer $mailer)
+{
+}
+
+foreach ((new ReflectionFunction('pick'))->getParameters() as $param) {
+    echo "  \$", $param->getName(), " -> ", describeType($param->getType()), "\n";
+}

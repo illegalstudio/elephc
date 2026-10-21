@@ -10,28 +10,16 @@
 use super::*;
 
 /// Returns true when a property should be visible for `ReflectionClass::hasProperty()`.
+///
+/// Delegates to `ClassInfo::reflection_lists_property`, the rule the static EIR lowering of
+/// `getProperties()` also uses, so the two paths cannot diverge.
 pub(super) fn reflection_property_visible_from_class(
     info: &crate::types::ClassInfo,
     reflected_class: &str,
     property_name: &str,
     is_static: bool,
 ) -> bool {
-    let visibility = if is_static {
-        info.static_property_visibilities.get(property_name)
-    } else {
-        info.property_visibilities.get(property_name)
-    };
-    if visibility != Some(&Visibility::Private) {
-        return true;
-    }
-    let declaring_class = if is_static {
-        info.static_property_declaring_classes.get(property_name)
-    } else {
-        info.property_declaring_classes.get(property_name)
-    };
-    declaring_class
-        .map(|declaring_class| php_symbol_key(declaring_class) == php_symbol_key(reflected_class))
-        .unwrap_or(false)
+    info.reflection_lists_property(reflected_class, property_name, is_static)
 }
 
 /// Returns the class that declares one reflected instance or static method.
