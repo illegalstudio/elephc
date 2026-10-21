@@ -79,6 +79,7 @@ pub(crate) use return_alias::{
     ReturnArgAlias,
 };
 pub(crate) use result::LoopStorageTypes;
+pub use result::MaybeUndefinedLocals;
 pub use checker::CheckOptions;
 // `check_with_target` is superseded by `check_with_target_and_options` on the
 // production compile path; it stays public for tests that don't need `CheckOptions`.

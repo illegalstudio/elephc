@@ -188,6 +188,7 @@ pub(super) fn lower_closure_with_context(
     let mut captured_values = Vec::with_capacity(captures.len());
     let mut capture_params = Vec::with_capacity(captures.len());
     let mut by_value_capture_views = Vec::with_capacity(captures.len());
+    let mut arrow_flag_captures: Vec<String> = Vec::new();
     for capture in captures {
         let by_ref = capture_refs.iter().any(|name| name == capture);
         let (captured, php_type) = if capture == "this" && !ctx.local_slots.contains_key("this") {
@@ -209,10 +210,26 @@ pub(super) fn lower_closure_with_context(
                 ctx.box_value_as_mixed(enclosing, PhpType::Mixed, Some(expr.span)),
                 PhpType::Mixed,
             )
+        } else if !by_ref && capture_may_be_undefined(ctx, capture, expr) {
+            // A possibly undefined by-value capture: `use ($x)` warns and
+            // captures null, an arrow function captures silently and hands the defined-flag
+            // to its body (appended below).
+            let read = Expr::new(ExprKind::Variable(capture.clone()), expr.span);
+            let captured = super::maybe_undefined_read::lower_flagged_read(ctx, capture, &read)
+                .expect("a recorded capture of a flagged local lowers through its flag");
+            if is_arrow_closure(expr) {
+                arrow_flag_captures.push(capture.clone());
+            }
+            (captured, PhpType::Mixed)
         } else {
+            // `use (&$x)` creates an undefined `$x` as null.
+            let defines_null = by_ref && capture_may_be_undefined(ctx, capture, expr);
+            if defines_null {
+                super::maybe_undefined_read::define_null_if_undefined(ctx, capture, expr.span);
+            }
             let widens_by_ref_capture = by_ref
                 && self_ref_callable_capture != Some(capture.as_str())
-                && (body_contains_eval || body_writes_local(body, capture));
+                && (defines_null || body_contains_eval || body_writes_local(body, capture));
             let php_type_override = if by_ref && self_ref_callable_capture == Some(capture.as_str()) {
                 Some(PhpType::Callable)
             } else if widens_by_ref_capture {
@@ -253,6 +270,26 @@ pub(super) fn lower_closure_with_context(
             by_ref_local: by_ref.then(|| capture.clone()),
         });
         capture_params.push((capture.clone(), php_type, by_ref));
+    }
+    // The defined-flag of each possibly undefined arrow-function capture travels with it, so
+    // the body's own reads answer `Undefined variable` exactly as the enclosing frame would.
+    for capture in arrow_flag_captures {
+        let Some(flag) = ctx.maybe_undefined_flags.get(&capture).cloned() else {
+            continue;
+        };
+        let flag_value = ctx.load_local(&flag, Some(expr.span));
+        ctx.emit_void(
+            Op::ClosureCapture,
+            vec![flag_value.value],
+            None,
+            Op::ClosureCapture.default_effects(),
+            Some(expr.span),
+        );
+        captured_values.push(ClosureCapture {
+            value: flag_value.value,
+            by_ref_local: None,
+        });
+        capture_params.push((flag, PhpType::Bool, false));
     }
     if ctx.current_class.is_some()
         && (ctx.local_slots.contains_key(CALLED_CLASS_ID_CAPTURE)
@@ -941,4 +978,16 @@ pub(super) fn callable_target_contains_eval_call(target: &CallableTarget) -> boo
 /// Returns true when a function call name resolves to PHP's `eval` construct.
 pub(super) fn is_eval_call_name(name: &Name) -> bool {
     php_symbol_key(name.as_str().trim_start_matches('\\')) == "eval"
+}
+
+/// Whether the checker recorded the capture of `name` by the closure `expr` as possibly
+/// undefined (see `crate::ir_lower::maybe_undefined`).
+fn capture_may_be_undefined(ctx: &LoweringContext<'_, '_>, name: &str, expr: &Expr) -> bool {
+    crate::ir_lower::maybe_undefined::read_decision(expr.span, name).is_some()
+        && ctx.maybe_undefined_flags.contains_key(name)
+}
+
+/// Whether `expr` is an arrow function (`fn () => ...`).
+fn is_arrow_closure(expr: &Expr) -> bool {
+    matches!(&expr.kind, ExprKind::Closure { is_arrow: true, .. })
 }

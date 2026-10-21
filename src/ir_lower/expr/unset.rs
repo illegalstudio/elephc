@@ -23,6 +23,7 @@ pub(super) fn lower_unset_locals(
         match &arg.kind {
             ExprKind::Variable(name) => {
                 ctx.unset_local(name, null, Some(arg.span));
+                crate::ir_lower::maybe_undefined::set_flag(ctx, name, false, Some(arg.span));
             }
             ExprKind::ArrayAccess { array, index } => {
                 lower_unset_array_access(ctx, array, index, arg);

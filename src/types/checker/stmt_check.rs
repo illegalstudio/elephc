@@ -40,9 +40,55 @@ impl Checker {
         // must not leave the includer's setting behind, and vice versa.
         let outer_strict_types = self.strict_types;
         self.strict_types = stmt.strict_types;
+        // Constructs whose body may not run, or that the walk cannot split into arms, join their
+        // maybe-undefined locals here (see `condition_edges`); `if` joins its arms itself.
+        let optional_region = match &stmt.kind {
+            StmtKind::While { .. } | StmtKind::For { .. } | StmtKind::Foreach { .. } => Some(true),
+            StmtKind::DoWhile { .. } | StmtKind::IncludeOnceGuard { .. } => Some(false),
+            // `switch` and `try` join their own exits (`control_flow`).
+            _ => None,
+        };
+        let unset_region = optional_region.is_some()
+            || matches!(&stmt.kind, StmtKind::Switch { .. } | StmtKind::Try { .. });
+        let region_before = optional_region.map(|_| {
+            (
+                self.maybe_undefined_locals.clone(),
+                env.keys().cloned().collect::<std::collections::HashSet<_>>(),
+            )
+        });
         let result = crate::strict_php::with_source_mode(stmt.source_mode, || {
             self.check_stmt_in_current_source_mode(stmt, env)
         });
+        // Binders that do not go through an assignment merge define their names too.
+        match &stmt.kind {
+            StmtKind::ListUnpack { vars, .. } | StmtKind::Global { vars } => {
+                for var in vars {
+                    self.maybe_undefined_locals.remove(var);
+                }
+            }
+            StmtKind::StaticVar { name, .. } => {
+                self.maybe_undefined_locals.remove(name);
+            }
+            _ => {}
+        }
+        if let (Some(mark_new), Some((marks_before, keys_before))) = (optional_region, region_before) {
+            let definite = super::condition_edges::loop_head_definite_assignments(stmt);
+            self.join_maybe_undefined_after_optional_region(
+                &marks_before,
+                &keys_before,
+                &definite,
+                mark_new,
+                env,
+            );
+        }
+        // A `break` or `continue` can leave right after an `unset` the joins above never saw.
+        if unset_region {
+            for name in super::condition_edges::unset_locals_in(std::slice::from_ref(stmt)) {
+                if env.contains_key(&name) {
+                    self.mark_maybe_undefined(&name);
+                }
+            }
+        }
         self.strict_types = outer_strict_types;
         result
     }

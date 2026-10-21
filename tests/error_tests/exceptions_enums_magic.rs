@@ -312,6 +312,17 @@ fn test_error_throw_expression_requires_object() {
     );
 }
 
+/// Verifies that `throw` on a possibly undefined local is checked against the local's own type:
+/// a scalar one is still rejected, although the read itself is typed `mixed` (also rejected on
+/// main; guards the maybe-undefined path).
+#[test]
+fn test_error_throw_maybe_undefined_scalar_local() {
+    expect_error(
+        "<?php function f($c) { if ($c) { $e = 5; } throw $e; } f(true);",
+        "throw requires an object value",
+    );
+}
+
 /// Verifies that `clone` rejects scalar operands during type checking.
 #[test]
 fn test_error_clone_requires_object() {

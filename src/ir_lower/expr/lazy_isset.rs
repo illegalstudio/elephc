@@ -181,8 +181,12 @@ pub(super) fn lower_lazy_empty(
         {
             let receiver = lower_subscript_receiver_silently(ctx, array);
             let receiver_type = ctx.builder.value_php_type(receiver.value);
-            if type_satisfies_array_access_for_ir(ctx, &receiver_type) {
-                let nullable = value_is_nullable(ctx, receiver.value);
+            // A possibly undefined `ArrayAccess` local reads as boxed `mixed` holding the object
+            // or null (`crate::ir_lower::maybe_undefined`); it keeps the object route.
+            let flagged_object_read = receiver_type.codegen_repr() == PhpType::Mixed
+                && array_access_expr_satisfies_array_access(ctx, array);
+            if flagged_object_read || type_satisfies_array_access_for_ir(ctx, &receiver_type) {
+                let nullable = flagged_object_read || value_is_nullable(ctx, receiver.value);
                 let temp_name = ctx.declare_hidden_temp(receiver_type.clone());
                 store_value_into_temp(ctx, &temp_name, receiver_type, receiver, args[0].span);
                 let object = Expr::new(ExprKind::Variable(temp_name.clone()), args[0].span);

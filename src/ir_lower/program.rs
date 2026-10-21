@@ -101,6 +101,7 @@ fn lower_on_compiler_stack(
     web: bool,
 ) -> Result<Module, LoweringError> {
     super::diagnostics::begin_collection();
+    super::maybe_undefined::install(&check_result.maybe_undefined);
     let mut module = Module::new(target);
     module.source_path = source_path.map(canonical_source_path);
     module.web = web;

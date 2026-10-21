@@ -166,6 +166,16 @@ pub(super) fn check_assign(
     let reflection_class_target = reflection_class_assignment_target(checker, callable_source, env);
     let ty_result: Result<PhpType, CompileError> = (|| {
         if let Some(default) = null_coalesce_default {
+            // `$r = $r ?? $d` never infers its own `$r` read, so a maybe-undefined `$r` is
+            // recorded here, as the silent probe it is (see `condition_edges`).
+            if let ExprKind::NullCoalesce { value: probed, .. } = &value.kind {
+                checker.null_probe_depth += 1;
+                let flagged = checker.record_maybe_undefined_read(name, probed.span);
+                checker.null_probe_depth -= 1;
+                if flagged {
+                    return checker.infer_type_with_assignment_effects(value, env);
+                }
+            }
             if let Some(existing) = env.get(name).cloned() {
                 let default_ty = if existing == PhpType::Void {
                     checker.infer_type_with_assignment_effects(default, env)?
@@ -873,6 +883,8 @@ fn merge_local_assignment_type(
     env: &mut TypeEnv,
     stmt_form: bool,
 ) -> Result<(), CompileError> {
+    // The store defines the local on this path (see `condition_edges`).
+    checker.maybe_undefined_locals.remove(name);
     // This visit RE-DECIDES the site, so any decision a superseded walk recorded for it is
     // dropped first. The checker walks a body more than once (top level twice, method bodies
     // to stability, a function body once per call-site re-specialization) and only the LAST

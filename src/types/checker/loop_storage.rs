@@ -863,7 +863,7 @@ fn collect_foreach_key_names<'a>(statements: &'a [Stmt], out: &mut HashSet<&'a s
 }
 
 /// Returns the statement lists nested directly inside one statement.
-fn nested_statement_bodies(statement: &Stmt) -> Vec<&[Stmt]> {
+pub(super) fn nested_statement_bodies(statement: &Stmt) -> Vec<&[Stmt]> {
     match &statement.kind {
         StmtKind::If {
             then_body,

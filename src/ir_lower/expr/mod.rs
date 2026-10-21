@@ -33,6 +33,7 @@ use crate::types::{
 use std::collections::HashSet;
 
 mod constants;
+mod maybe_undefined_read;
 mod nullsafe_chain;
 mod ref_place_args;
 mod boxed_user_sort;
@@ -280,7 +281,8 @@ fn lower_expr_inner(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredVa
         ExprKind::FloatLiteral(value) => lower_float_literal(ctx, *value, expr),
         ExprKind::BoolLiteral(value) => lower_bool_literal(ctx, *value, expr),
         ExprKind::Null => lower_null(ctx, expr),
-        ExprKind::Variable(name) => ctx.load_local(name, Some(expr.span)),
+        ExprKind::Variable(name) => maybe_undefined_read::lower_flagged_read(ctx, name, expr)
+            .unwrap_or_else(|| ctx.load_local(name, Some(expr.span))),
         ExprKind::BinaryOp { left, op, right } => lower_binary(ctx, left, op, right, expr),
         ExprKind::InstanceOf { value, target } => lower_instanceof(ctx, value, target, expr),
         ExprKind::Negate(inner) => lower_numeric_unary(ctx, inner, Op::INeg, Op::FNeg, expr),

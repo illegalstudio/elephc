@@ -282,7 +282,7 @@ impl Checker {
             }
             ExprKind::Throw(inner) => {
                 let thrown_ty = self.infer_type(inner, env)?;
-                match thrown_ty {
+                match self.thrown_operand_type(inner, thrown_ty, env) {
                     PhpType::Object(type_name)
                         if self.object_type_implements_throwable(&type_name)
                             || self.object_type_may_be_eval_declared(&type_name) =>

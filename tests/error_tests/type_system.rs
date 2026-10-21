@@ -399,16 +399,9 @@ fn test_error_assignment_expression_rejects_non_lvalue() {
     expect_error("<?php echo 1 = 2;", "Invalid assignment target");
 }
 
-/// Verifies that a variable assigned inside a short-circuit `&&` is flagged as possibly undefined
-/// when referenced after the `&&` expression that did not execute.
-/// Input: `echo false && ($x = 1); echo $x;` — `$x` may not be defined.
-#[test]
-fn test_error_short_circuit_assignment_effect_is_not_definite() {
-    expect_error(
-        "<?php echo false && ($x = 1); echo $x;",
-        "Undefined variable: $x",
-    );
-}
+// `echo false && ($x = 1); echo $x;` used to be a compile error here. A local a lazy edge may
+// leave undefined now reads as PHP null with the `Undefined variable` warning, as in PHP; see
+// `tests/codegen/possibly_undefined_locals.rs` (`test_maybe_undefined_local_reads_answer_php_null`).
 
 /// Verifies that the short ternary (`?:`) with no default expression produces an error.
 #[test]

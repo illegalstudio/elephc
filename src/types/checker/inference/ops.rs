@@ -472,6 +472,9 @@ impl Checker {
         env: &TypeEnv,
         param_hints: &[PhpType],
     ) -> Result<PhpType, CompileError> {
+        let is_arrow = matches!(&expr.kind, ExprKind::Closure { is_arrow: true, .. });
+        let arrow_undefined_captures =
+            self.record_maybe_undefined_captures(captures, capture_refs, is_arrow, expr.span);
         let mut closure_sig = self.prepare_closure_signature_context_with_param_hints(
             params,
             variadic,
@@ -535,7 +538,16 @@ impl Checker {
         let pre_bound_own_storage: std::collections::HashMap<String, PhpType> = captures
             .iter()
             .chain(params.iter().map(|(name, _, _, _)| name))
-            .filter_map(|name| env.get(name).map(|ty| (name.clone(), ty.clone())))
+            .filter_map(|name| {
+                env.get(name).map(|ty| {
+                    let ty = if self.capture_may_be_undefined(name, expr.span) {
+                        PhpType::Mixed
+                    } else {
+                        ty.clone()
+                    };
+                    (name.clone(), ty)
+                })
+            })
             .collect();
         let body_result = self.with_local_storage_context(
             closure_ref_params,
@@ -543,6 +555,10 @@ impl Checker {
             pre_bound_own_storage,
             body,
             |checker| {
+                // An arrow function's silently captured undefined local stays undefined.
+                for name in &arrow_undefined_captures {
+                    checker.mark_maybe_undefined(name);
+                }
                 for stmt in body {
                     checker.check_stmt(stmt, &mut closure_sig.env)?;
                 }

@@ -316,6 +316,9 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// target. Those locals get boxed `Mixed` frame storage from their first store, so
     /// every read of the slot is already a boxed load instead of an owned string detach.
     pub string_incdec_locals: &'m HashSet<(String, String)>,
+    /// Maybe-undefined locals of this frame -> their hidden defined-flag local
+    /// (`crate::ir_lower::maybe_undefined`).
+    pub maybe_undefined_flags: HashMap<String, String>,
     /// Spans of the `unset()` ARGUMENTS whose local binding the CHECKER decided to kill
     /// (`CheckResult::local_bind_kill_sites`), each mapped to the SET of locals killed at that
     /// position. At one of these spans `unset_local` abandons the frame slot after releasing its
@@ -537,6 +540,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             generic_call_sites,
             loop_storage_types,
             string_incdec_locals,
+            maybe_undefined_flags: HashMap::new(),
             bind_kill_sites,
             ref_detach_sites,
             retype_sites,
@@ -4437,6 +4441,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             span,
         );
         self.initialized_slots.insert(slot);
+        // Any store defines a maybe-undefined local (see `crate::ir_lower::maybe_undefined`).
+        if !self.maybe_undefined_flags.is_empty() {
+            let defined = self
+                .maybe_undefined_flags
+                .iter()
+                .find(|(name, _)| self.local_slots.get(name.as_str()) == Some(&slot))
+                .map(|(name, _)| name.clone());
+            if let Some(name) = defined {
+                crate::ir_lower::maybe_undefined::set_flag(self, &name, true, span);
+            }
+        }
     }
 
     /// Emits a ref-cell store that carries the alias target type for backend dereference.

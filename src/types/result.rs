@@ -121,6 +121,8 @@ pub struct CheckResult {
     /// `(function-like scope, local name)` pairs for `string` locals that are a `++`/`--`
     /// target, so EIR lowering can give them boxed `Mixed` storage from their first store.
     pub string_incdec_locals: HashSet<(String, String)>,
+    /// Locals that may be undefined where they are read (see [`MaybeUndefinedLocals`]).
+    pub maybe_undefined: MaybeUndefinedLocals,
     /// The `unset()` arguments whose local binding the checker killed, as span -> the SET of local
     /// NAMES killed at that position, so EIR lowering abandons the old frame slot (after releasing
     /// its value) instead of null-storing into it.
@@ -378,4 +380,20 @@ enum EnumMetaTarget {
             )]
         );
     }
+}
+
+/// Locals that a join point (`if`, a lazy `&&`/`||`/`?:`/`??`/`? :` edge, a loop body) may leave
+/// undefined, and the reads that observe them in that state.
+///
+/// EIR lowering gives each named local a hidden "defined" flag, cleared at frame entry and set by
+/// every store, and lowers each recorded read as `flag ? value : null`, warning `Undefined
+/// variable` first when the read is a plain one (`isset`, `??` and `empty` probe silently; `@`
+/// silences the warning through the ordinary suppression scope). Every other local keeps its
+/// native storage and its ordinary reads.
+#[derive(Debug, Clone, Default)]
+pub struct MaybeUndefinedLocals {
+    /// Function-like scope (`main`, a function or method name) -> the locals needing a flag.
+    pub by_scope: HashMap<String, HashSet<String>>,
+    /// `(read span, local name)` -> whether the read warns when the local is undefined.
+    pub reads: HashMap<(Span, String), bool>,
 }
