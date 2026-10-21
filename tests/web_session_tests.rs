@@ -1753,7 +1753,7 @@ fn upload_progress_key_cannot_inject_a_serialized_session_entry() {
     let sid = "a".repeat(32);
     let cookie_hdr = format!("PHPSESSID={}", sid);
     let boundary = "elephcINJECTBOUND";
-    let key = "k|O:4:\"EvilInject\":1:{s:3:\"cmd\";s:5:\"pwned\";}";
+    let key = "k|O:10:\"EvilInject\":1:{s:3:\"cmd\";s:5:\"pwned\";}";
     let body = format!(
         "--{b}\r\n\
          Content-Disposition: form-data; name=\"PHP_SESSION_UPLOAD_PROGRESS\"\r\n\
@@ -1784,8 +1784,8 @@ fn upload_progress_key_cannot_inject_a_serialized_session_entry() {
     if session_file.exists() {
         let raw = fs::read(&session_file).unwrap();
         assert!(
-            !raw.windows(3).any(|w| w == b"O:4"),
-            "upload progress must not write a serialized object entry: {:?}",
+            !raw.windows(10).any(|w| w == b"EvilInject"),
+            "upload progress must not write the injected object payload: {:?}",
             String::from_utf8_lossy(&raw)
         );
     }
@@ -1835,7 +1835,7 @@ fn handler_mismatch_filename_cannot_inject_a_serialized_entry() {
     let cookie_hdr = format!("PHPSESSID={}", sid);
     let boundary = "elephcMISMATCHBOUND";
     // Quoted with escaped quotes, as PHP's `php_ap_getword_conf` accepts.
-    let filename = "x|O:4:\\\"EvilName\\\":1:{s:3:\\\"cmd\\\";s:5:\\\"pwned\\\";}";
+    let filename = "x|O:8:\\\"EvilName\\\":1:{s:3:\\\"cmd\\\";s:5:\\\"pwned\\\";}";
     let body = format!(
         "--{b}\r\n\
          Content-Disposition: form-data; name=\"PHP_SESSION_UPLOAD_PROGRESS\"\r\n\
