@@ -28,6 +28,9 @@
 //!   degrades gracefully on a truncated or adversarial body.
 //! - The RMW preserves unrelated entries under all three registered session
 //!   serializers and accepts Cookie, GET, or multipart POST session IDs.
+//! - Tracker state owns its names and counters; body positions are offsets, never
+//!   pointers into a body buffer or a decoded session. Each RMW builds fresh bytes,
+//!   so reloading a session cannot invalidate a cached progress bucket pointer.
 
 use std::ffi::CStr;
 use std::io::Read;
@@ -1333,6 +1336,8 @@ fn strip_suffix<'a>(data: &'a [u8], suffix: &[u8]) -> &'a [u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod reload_tests;
 
     /// The `php`-handler serializer must match PHP `serialize()` byte-for-byte
     /// for the progress array shape (verified against `php -r`).
