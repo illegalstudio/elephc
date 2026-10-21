@@ -25,6 +25,14 @@
 //!   version surface makes the PROGRAM profile-dependent even though nothing in the AST names
 //!   a watched symbol. It is matched on what its argument CONTAINS, and an argument the
 //!   compiler cannot read counts — over-reporting a note is the cheap direction.
+//! - The implicit array key is the one VALUE rule no symbol names. A non-empty literal and a
+//!   fresh hash continue from a negative key on every profile (`[-5 => "a", "b"]` stores
+//!   `"b"` at -4). The empty-array constant is the exception: before PHP 8.3 its next index
+//!   is 0, so a negative key written into it does not move the cursor, and from 8.3 the
+//!   constant starts unset. The scan reports a program that spells an empty array literal, a
+//!   negative integer literal key, and an implicit-key insertion anywhere. A negative key
+//!   reached only through a variable, or an append nested under another index
+//!   (`$a[1][] = ...`), is a documented blind spot.
 //! - An empty scan is the answer for the overwhelming majority of programs, and that silence
 //!   is the feature: the compiler speaks only when the profile is a choice with consequences.
 
@@ -268,7 +276,10 @@ pub fn scan(program: &[Stmt], web: bool) -> Vec<Sensitivity> {
                 | SymbolKind::AsymmetricVisibility
                 | SymbolKind::TypedClassConst
                 | SymbolKind::ObjectCast
-                | SymbolKind::DestructorDeclaration => Symbol::syntactic(watched.symbol_kind),
+                | SymbolKind::DestructorDeclaration
+                | SymbolKind::NegativeIntKey
+                | SymbolKind::ArrayAppend
+                | SymbolKind::EmptyArray => Symbol::syntactic(watched.symbol_kind),
             };
             detect::first_reference(program, symbol).map(|span| Sensitivity {
                 symbol: watched.symbol,
@@ -278,8 +289,24 @@ pub fn scan(program: &[Stmt], web: bool) -> Vec<Sensitivity> {
             })
         })
         .collect();
+    found.extend(negative_key_append(program));
     found.sort_by_key(|sensitivity| (sensitivity.span.line, sensitivity.span.col));
     found
+}
+
+/// Reports the empty-array constant when a negative key and an implicit insertion are also
+/// present. See the module docs for why the three are matched program-wide rather than per array.
+fn negative_key_append(program: &[Stmt]) -> Option<Sensitivity> {
+    let empty = detect::first_reference(program, Symbol::syntactic(SymbolKind::EmptyArray))?;
+    detect::first_reference(program, Symbol::syntactic(SymbolKind::NegativeIntKey))?;
+    detect::first_reference(program, Symbol::syntactic(SymbolKind::ArrayAppend))?;
+    Some(Sensitivity {
+        symbol: "empty array",
+        span: empty,
+        detail: "is the empty-array constant: before 8.3 its next index is 0, so a negative key \
+                 does not move it; from 8.3 it starts unset and a negative key does",
+        is_function: false,
+    })
 }
 
 #[cfg(test)]
@@ -456,6 +483,43 @@ mod tests {
         let found = scan(&program, false);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].symbol, "eval");
+    }
+
+    /// An empty array, a negative key, and an implicit append together depend on the profile.
+    ///
+    /// Before PHP 8.3 the empty-array constant's next index is 0, so the append lands at 0.
+    /// From 8.3 the constant starts unset and the append continues from the negative key.
+    /// A property default of `[]` is the same constant.
+    #[test]
+    fn negative_key_with_an_append_is_dependent() {
+        for source in [
+            r#"<?php $a = []; $a[-3] = 1; $a[] = 2;"#,
+            r#"<?php $a = array(); $a[-5] = "a"; $a[] = "b";"#,
+            r#"<?php class C { public array $p = []; } $c = new C(); $c->p[-1] = 0; $c->p[] = 1;"#,
+        ] {
+            let found = scan(&parse(source), false);
+            assert_eq!(found.len(), 1, "{source}");
+            assert_eq!(found[0].symbol, "empty array", "{source}");
+        }
+    }
+
+    /// A negative key, an append, or an empty array on its own does not depend on the profile.
+    ///
+    /// A non-empty literal continues from a negative key on every version, and an empty
+    /// array with no later append has nothing profile-dependent to print.
+    #[test]
+    fn negative_key_or_append_alone_is_independent() {
+        for source in [
+            r#"<?php $a = [-5 => "a"]; echo $a[-5];"#,
+            r#"<?php $a = [-5 => "a", "b"];"#,
+            r#"<?php $a = [-5 => "a"]; $a[] = "b";"#,
+            r#"<?php $a = []; $a[-5] = 1;"#,
+            r#"<?php $a = [1, 2]; $a[] = 3;"#,
+            r#"<?php $a = ["k" => 1, "b"]; $s = "abc"; echo $s[-1];"#,
+            r#"<?php $a = [5 => "a", "b"]; $a[] = "c";"#,
+        ] {
+            assert!(scan(&parse(source), false).is_empty(), "{source}");
+        }
     }
 
     /// Every table entry names a distinct symbol, so a dependence is never reported twice.

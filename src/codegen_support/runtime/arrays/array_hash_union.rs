@@ -47,6 +47,9 @@ pub fn emit_array_hash_union(emitter: &mut Emitter) {
     emitter.instruction("csel x0, x11, x0, hi");                                // choose max(estimated_capacity, 16)
     emitter.instruction("mov x1, #7");                                          // value_type 7 = mixed because cross-representation unions may merge heterogeneous values
     emitter.instruction("bl __rt_hash_new");                                    // allocate the result associative-array hash table
+    if crate::codegen_support::empty_array_next_index_starts_at_zero() {
+        emitter.instruction(&format!("str xzr, [x0, #{}]", super::hash_layout::NEXT_INDEX_OFFSET)); // before PHP 8.3 an indexed array's next index starts at 0
+    }
     emitter.instruction("str x0, [sp, #16]");                                   // save the evolving result hash pointer
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the left indexed-array pointer
     emitter.instruction("ldr x10, [x9, #-8]");                                  // load the packed left indexed-array kind word
@@ -195,6 +198,9 @@ fn emit_array_hash_union_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_array_hash_union_x86_capacity_ready");
     emitter.instruction("mov rsi, 7");                                          // value_type 7 = mixed because cross-representation unions may merge heterogeneous values
     emitter.instruction("call __rt_hash_new");                                  // allocate the result associative-array hash table
+    if crate::codegen_support::empty_array_next_index_starts_at_zero() {
+        emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", super::hash_layout::NEXT_INDEX_OFFSET)); // before PHP 8.3 an indexed array's next index starts at 0
+    }
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the evolving result hash pointer
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the left indexed-array pointer
     emitter.instruction("mov r11, QWORD PTR [r10 - 8]");                        // load the packed left indexed-array kind word

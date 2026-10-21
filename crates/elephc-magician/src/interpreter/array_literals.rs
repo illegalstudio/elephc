@@ -7,6 +7,8 @@
 //! Key details:
 //! - Explicit keys are normalized through runtime string conversion to match PHP array-key rules.
 //! - Unkeyed elements continue from the next PHP integer key after explicit keys.
+//! - A literal is a fresh hash, so its first integer key seeds that cursor on every
+//!   profile, including a negative key. The empty-array constant is a separate runtime fact.
 //! - Construction owns operand leases until insertion finishes, including failure paths.
 
 use super::*;
@@ -83,7 +85,7 @@ pub(super) fn eval_assoc_array(
                         source_key
                     } else {
                         let key = take_next_array_key(&mut next_key, &mut operands, values)?;
-                        validate_array_append_key(key, context, values)?;
+                        validate_array_append_key(key, array, &mut operands, context, values)?;
                         key
                     };
                     array = values.array_set(array, key, value)?;
@@ -110,7 +112,11 @@ pub(super) fn eval_assoc_array(
                 (eval_owned_expr(value, context, scope, values)?, None)
             };
             operands.push(value);
-            if explicit_key.is_none() { validate_array_append_key(key, context, values)?; }
+            // Evaluate and retain the value before checking append exhaustion, including
+            // failure cleanup; the final free PHP_INT_MAX key must still be insertable.
+            if explicit_key.is_none() {
+                validate_array_append_key(key, array, &mut operands, context, values)?;
+            }
             array = values.array_set(array, key, value)?;
             if let Some(target) = target {
                 bind_array_element_reference(context, array, key, target, values)?;
@@ -131,9 +137,8 @@ fn take_next_array_key(
         operands.push(key);
         key
     };
-    let one = values.int(1)?;
-    operands.push(one);
-    let next = values.add(key, one)?;
+    let key_int = eval_int_value(key, values)?;
+    let next = values.int(key_int.saturating_add(1))?;
     operands.push(next);
     *next_key = Some(next);
     Ok(key)
@@ -141,11 +146,24 @@ fn take_next_array_key(
 
 /// Raises PHP's catchable append overflow after the element's source evaluation.
 fn validate_array_append_key(
-    key: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+    key: RuntimeCellHandle,
+    array: RuntimeCellHandle,
+    operands: &mut Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    if values.type_tag(key)? != EVAL_TAG_INT {
+    let occupied = if values.type_tag(key)? != EVAL_TAG_INT {
+        true
+    } else if eval_int_value(key, values)? == i64::MAX {
+        let exists = values.array_key_exists(key, array)?;
+        operands.push(exists);
+        values.truthy(exists)?
+    } else {
+        false
+    };
+    if occupied {
         return throwables::eval_throw_error(
-            "Cannot add element to the array as the next element is already occupied", context, values,
+            crate::interpreter::builtins::ARRAY_NEXT_ELEMENT_OCCUPIED, context, values,
         );
     }
     Ok(())
@@ -221,12 +239,18 @@ pub(in crate::interpreter) fn eval_array_reference_key(
             }
         }
         EVAL_TAG_NULL => EvalArrayReferenceKey::String(Vec::new()),
-        EVAL_TAG_BOOL | EVAL_TAG_FLOAT => EvalArrayReferenceKey::Int(eval_int_value(key, values)?),
+        EVAL_TAG_BOOL | EVAL_TAG_FLOAT | EVAL_TAG_RESOURCE => {
+            EvalArrayReferenceKey::Int(eval_int_value(key, values)?)
+        }
         _ => return Ok(None),
     }))
 }
 
 /// Advances an array literal's automatic key after an integer-normalized explicit key.
+///
+/// The first integer key seeds the cursor, including a negative one, on every PHP
+/// version. Later keys raise it and never rewind it. `[-5 => "a", "b"]` stores
+/// `"b"` at `-4`. `PHP_INT_MAX` saturates the cursor instead of wrapping.
 fn eval_array_next_key_after_explicit_key(
     key: RuntimeCellHandle,
     current_next_key: Option<RuntimeCellHandle>,
@@ -251,9 +275,8 @@ fn eval_array_next_key_after_explicit_key(
             key
         }
     };
-    let one = values.int(1)?;
-    operands.push(one);
-    let candidate = values.add(key, one)?;
+    let key_int = eval_int_value(key, values)?;
+    let candidate = values.int(key_int.saturating_add(1))?;
     operands.push(candidate);
     let replace = if let Some(current_next_key) = current_next_key {
         let is_greater = values.compare(EvalBinOp::Gt, candidate, current_next_key)?;

@@ -10,6 +10,28 @@
 use super::super::*;
 use super::support::*;
 
+/// A single push may fill the final two integer keys before a further value is rejected.
+#[test]
+fn execute_program_array_max_key_push_fills_last_two_keys() {
+    let program = parse_fragment(br#"
+$source = [PHP_INT_MAX - 2 => 1];
+$a = $source;
+echo array_push($a, 2, 3), ":", $a[PHP_INT_MAX - 1], ":", $a[PHP_INT_MAX], ":", count($source), ":";
+$b = [PHP_INT_MAX - 2 => 1];
+$push = "array_push";
+echo $push($b, 2, 3), ":", $b[PHP_INT_MAX], ":";
+$c = [PHP_INT_MAX - 2 => 1];
+try { array_push($c, 2, 3, 4); }
+catch (Error $error) { echo $error->getMessage(), ":"; }
+echo count($c), ":", $c[PHP_INT_MAX - 1], ":", $c[PHP_INT_MAX];
+"#).expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+    assert_eq!(values.output, "3:2:3:1:3:3:Cannot add element to the array as the next element is already occupied:3:2:3");
+    assert_eq!(values.get(result), FakeValue::Null);
+}
+
 /// Verifies eval `ord()` returns the first byte and supports callable dispatch.
 #[test]
 fn execute_program_dispatches_ord_builtin() {
@@ -256,6 +278,68 @@ return function_exists("array_push") && function_exists("array_unshift");"#,
         ]
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+/// Verifies eval `array_push()` continues from a negative literal key.
+///
+/// `[-5 => "a"]` is a fresh hash whose next index is -4, so the pushed value
+/// lands at -4. A later explicit key 3 places the pushed value at 4.
+#[test]
+fn execute_program_array_push_after_negative_key_continues_from_it() {
+    let program = parse_fragment(
+        br#"$a = [-5 => "a"];
+array_push($a, "b");
+echo $a[-4];
+$b = [-5 => "a", 3 => "b"];
+array_push($b, "c");
+echo $b[4];"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "bc");
+    assert_eq!(values.get(result), FakeValue::Null);
+}
+/// Verifies a freed `PHP_INT_MAX` key can be appended once, and the next append throws.
+///
+/// Covers `$a[]` and `array_push` after `unset`, the occupied-key rejection, a
+/// two-value push that inserts the free maximum and then throws, and a literal
+/// whose implicit element would reuse an occupied maximum. Measured against
+/// PHP 8.2.33 through 8.5.9.
+#[test]
+fn execute_program_array_push_reuses_freed_php_int_max_then_rejects_the_next() {
+    let program = parse_fragment(
+        br#"$a = [PHP_INT_MAX => 1];
+unset($a[PHP_INT_MAX]);
+$a[] = 2;
+echo $a[PHP_INT_MAX], ":";
+try { $a[] = 3; echo "bad"; } catch (Error $e) { echo "append:", $e->getMessage(), ":"; }
+echo $a[PHP_INT_MAX], ":";
+$b = [PHP_INT_MAX => 1];
+try { array_push($b, 9); echo "bad"; } catch (Error $e) { echo "push:", $e->getMessage(), ":"; }
+echo $b[PHP_INT_MAX], ":";
+$c = [PHP_INT_MAX => 1];
+unset($c[PHP_INT_MAX]);
+echo array_push($c, 2), ":", $c[PHP_INT_MAX], ":";
+$d = [PHP_INT_MAX => 1];
+unset($d[PHP_INT_MAX]);
+try { array_push($d, 2, 3); echo "bad"; } catch (Error $e) { echo "two:", $e->getMessage(), ":"; }
+echo $d[PHP_INT_MAX], ":", count($d), ":";
+try { $lit = [PHP_INT_MAX => 1, 2]; echo "lit-ok"; } catch (Error $e) { echo "lit:", $e->getMessage(); }"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "2:append:Cannot add element to the array as the next element is already occupied:2:push:Cannot add element to the array as the next element is already occupied:1:1:2:two:Cannot add element to the array as the next element is already occupied:2:1:lit:Cannot add element to the array as the next element is already occupied"
+    );
+    assert_eq!(values.get(result), FakeValue::Null);
 }
 /// Verifies eval array mutators write aliases and preserve copied array sources.
 #[test]

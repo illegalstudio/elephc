@@ -199,3 +199,54 @@ echo count($b), "\n";
     );
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A freed `PHP_INT_MAX` key can be appended once; the next append still throws.
+///
+/// `unset` does not rewind the cursor, so the key stays `PHP_INT_MAX` and is free.
+/// PHP 8.2.33 through 8.5.9 insert that one value, leave the cursor saturated, and
+/// raise `Error` for a second `$a[]` or for the extra value in `array_push`. An
+/// occupied maximum is rejected without changing the array.
+#[test]
+fn test_append_reuses_freed_php_int_max_then_rejects_the_next() {
+    let out = compile_and_run(
+        r#"<?php
+function push1(array &$m, $v): int { return array_push($m, $v); }
+function push2(array &$m, $a, $b): int { return array_push($m, $a, $b); }
+$a = [PHP_INT_MAX => 1];
+unset($a[PHP_INT_MAX]);
+$a[] = 2;
+echo $a[PHP_INT_MAX], "\n";
+try { $a[] = 3; echo "second-ok\n"; }
+catch (Error $e) { echo "second ", $e->getMessage(), " ", $a[PHP_INT_MAX], "\n"; }
+$b = [PHP_INT_MAX => 1];
+try { $b[] = 9; echo "occupied-ok\n"; }
+catch (Error $e) { echo "occupied ", $e->getMessage(), " ", count($b), " ", $b[PHP_INT_MAX], "\n"; }
+$c = [PHP_INT_MAX => 1];
+unset($c[PHP_INT_MAX]);
+echo push1($c, 2), " ", $c[PHP_INT_MAX], "\n";
+$d = [PHP_INT_MAX => 1];
+try { push1($d, 9); echo "push-occupied-ok\n"; }
+catch (Error $e) { echo "push-occupied ", $e->getMessage(), " ", $d[PHP_INT_MAX], "\n"; }
+$pair = [PHP_INT_MAX => 1];
+unset($pair[PHP_INT_MAX]);
+try { push2($pair, 2, 3); echo "two-ok\n"; }
+catch (Error $e2) { echo "two ", $e2->getMessage(), " ", $pair[PHP_INT_MAX], " ", count($pair), "\n"; }
+$g = ["x" => 1, PHP_INT_MAX => "max"];
+unset($g[PHP_INT_MAX]);
+$g[] = "next";
+echo $g["x"], " ", $g[PHP_INT_MAX], "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "2\n",
+            "second Cannot add element to the array as the next element is already occupied 2\n",
+            "occupied Cannot add element to the array as the next element is already occupied 1 1\n",
+            "1 2\n",
+            "push-occupied Cannot add element to the array as the next element is already occupied 1\n",
+            "two Cannot add element to the array as the next element is already occupied 2 1\n",
+            "1 next\n",
+        )
+    );
+}

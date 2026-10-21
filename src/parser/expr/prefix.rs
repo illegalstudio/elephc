@@ -684,6 +684,8 @@ fn parse_array_literal_with_terminator(
             }
         } else if is_assoc {
             if mixed_elems.is_empty() {
+                // The synthesized key keeps the element's span: the profile scan tells an
+                // implicit entry from a written key by it (`detect::assoc_pair_matches`).
                 let key = Expr::new(ExprKind::IntLiteral(next_auto_key), expr.span);
                 assoc_elems.push((key, expr));
             } else {
@@ -816,9 +818,9 @@ fn promote_indexed_array_items_to_assoc(
 
 /// Advances the automatic integer key cursor after a statically known integer key.
 ///
-/// The first integer-like key seeds the cursor unconditionally so a leading
-/// negative key continues from there (PHP 8.3 semantics); later keys only
-/// raise it.
+/// A non-empty literal is a freshly initialized hash. Its first integer key seeds
+/// the cursor on every PHP version, including a negative key, and later keys only
+/// raise it. `[-5 => "a", "b"]` stores `"b"` at `-4` on 8.2 and on 8.3+.
 fn update_next_auto_key_from_explicit_key(
     key: &Expr,
     next_auto_key: &mut i64,

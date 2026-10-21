@@ -12,6 +12,8 @@
 
 #[path = "runtime_gc/borrowed_numeric.rs"]
 mod borrowed_numeric;
+#[path = "runtime_gc/hash_destruction_order.rs"]
+mod hash_destruction_order;
 #[path = "runtime_gc/json_decode_owners.rs"]
 mod json_decode_owners;
 #[path = "runtime_gc/string_append.rs"]

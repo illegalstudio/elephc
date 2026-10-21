@@ -29,7 +29,8 @@ restore_error_handler();
     let expected = "2:mb_send_mail(): Unsupported charset \"X-NOPE\" - will be regarded as ascii\n\
 2:mb_send_mail(): Unsupported transfer encoding \"X-NOPE\" - will be regarded as 8bit\n\
 sent\n";
-    let settings = ["sendmail_path=/usr/bin/true"];
+    // Consume stdin before exiting: an early-closing transport races the message write.
+    let settings = ["sendmail_path=/bin/cat"];
     assert_eq!(run(&format!("<?php {body}"), &settings, None).0, expected);
     assert_eq!(run("<?php eval((string)getenv('MB_STARTUP_CODE'));", &settings, Some(body)).0, expected);
 }
@@ -217,7 +218,7 @@ fn run(source: &str, settings: &[&str], eval: Option<&str>) -> (String, String) 
     let output = binary.output().unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(output.status.success(), "{}: {stdout}\n{stderr}", directory.display());
+    assert!(output.status.success(), "{}: {}: {stdout}\n{stderr}", directory.display(), output.status);
     assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "{}: {stdout}\n{stderr}", directory.display());
     fs::remove_dir_all(directory).unwrap();
     (stdout, stderr)

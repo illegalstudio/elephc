@@ -369,7 +369,18 @@ has to go out of its way to notice which profile it was built for: by asking
 the runtime about its own version (`PHP_VERSION`, `PHP_VERSION_ID`,
 `PHP_MINOR_VERSION`, `phpversion()`, `zend_version()`), by querying OPcache
 (`opcache_get_configuration()`, `opcache_get_status()`, `ini_get('opcache.*')`,
-`ini_get_all()`), or — under `--web` — by driving sessions.
+`ini_get_all()`), by appending to an array that is still the empty-array
+constant after a negative key was written into it (before 8.3 that constant's
+next index is 0, so the append lands at 0; from 8.3 the constant starts unset
+and the append continues from the negative key), or — under `--web` — by
+driving sessions. A negative key in a non-empty literal, and an append onto
+that literal, are the same on every profile.
+
+The empty-array case is reported when a program spells an empty array literal
+(`[]`, `array()`), a negative integer literal key (`[-5 => …]`, `$a[-5] = …`),
+and an implicit-key insertion (`$a[] = …`, or a bare element after a key in a
+literal), even if the three never touch the same array. A negative key that
+arrives through a variable is not detected.
 
 When a program *does* depend on the profile, the compiler says so and points at
 the construct responsible:

@@ -107,6 +107,13 @@ pub fn emit_array_to_hash(emitter: &mut Emitter) {
     emitter.instruction("str x10, [sp, #16]");                                  // save the advanced index
     emitter.instruction("b __rt_array_to_hash_loop");                           // continue converting elements
     emitter.label("__rt_array_to_hash_done");
+    if crate::codegen_support::empty_array_next_index_starts_at_zero() {
+        emitter.instruction("ldr x9, [sp, #24]");                               // reload the source length
+        emitter.instruction("cbnz x9, __rt_array_to_hash_publish");             // a populated indexed array already seeded its next index
+        emitter.instruction("ldr x9, [sp, #8]");                                // reload the empty result hash
+        emitter.instruction(&format!("str xzr, [x9, #{}]", super::hash_layout::NEXT_INDEX_OFFSET)); // before PHP 8.3 an empty array's next index is 0
+    }
+    emitter.label("__rt_array_to_hash_publish");
     emitter.instruction("ldr x0, [sp, #8]");                                    // x0 = result hash pointer
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #80");                                     // deallocate the stack frame
@@ -196,6 +203,14 @@ fn emit_array_to_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the advanced index
     emitter.instruction("jmp __rt_array_to_hash_loop");                         // continue converting elements
     emitter.label("__rt_array_to_hash_done");
+    if crate::codegen_support::empty_array_next_index_starts_at_zero() {
+        emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                   // reload the source length
+        emitter.instruction("test rax, rax");                                   // is the indexed array still empty?
+        emitter.instruction("jnz __rt_array_to_hash_publish");                  // a populated indexed array already seeded its next index
+        emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                   // reload the empty result hash
+        emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", super::hash_layout::NEXT_INDEX_OFFSET)); // before PHP 8.3 an empty array's next index is 0
+    }
+    emitter.label("__rt_array_to_hash_publish");
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // rax = result hash pointer
     emitter.instruction("add rsp, 64");                                         // release the local slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

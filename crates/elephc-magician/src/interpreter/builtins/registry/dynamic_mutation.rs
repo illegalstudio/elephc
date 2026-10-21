@@ -206,10 +206,17 @@ fn eval_dynamic_array_push_unshift_call(
         return Err(EvalStatus::RuntimeFatal);
     }
     let inserted_values = inserted.iter().map(|arg| arg.value).collect::<Vec<_>>();
-    let replacement =
-        eval_array_push_unshift_replacement(name, array.value, &inserted_values, values)?;
+    let update = eval_array_push_unshift_replacement(name, array.value, &inserted_values, context, values)?;
+    if update.overflow {
+        if let Some(replacement) = update.replacement {
+            eval_write_direct_ref_target(target, replacement, context, values, None)?;
+        }
+        return eval_throw_error(ARRAY_NEXT_ELEMENT_OCCUPIED, context, values);
+    }
     let result = eval_array_push_unshift_count_result(array.value, inserted_values.len(), values)?;
-    eval_write_direct_ref_target(target, replacement, context, values, None)?;
+    if let Some(replacement) = update.replacement {
+        eval_write_direct_ref_target(target, replacement, context, values, None)?;
+    }
     Ok(Some(result))
 }
 
