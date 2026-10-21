@@ -798,6 +798,80 @@ fn web_reset_clears_static_property() {
     assert!(r2.ends_with("1"), "second response body: {:?}", r2);
 }
 
+/// Verifies an output buffer left open by one request is discarded before the next
+/// request runs. `_ob_level` gates every `ob_*` operation and every terminal write's
+/// capture branch, so a stale level would route the next request's output into heap
+/// storage that `__rt_web_reset` already reclaimed.
+#[test]
+fn web_reset_discards_output_buffers_between_requests() {
+    let dir = make_test_dir("web_reset_output_buffer");
+    let src = r#"<?php
+if (($_SERVER["REQUEST_URI"] ?? "") === "/leave") {
+    ob_start();
+    echo "LEFTOVER";
+} else {
+    $level = ob_get_level();
+    $stale = $level > 0 ? ob_get_clean() : "";
+    echo "level=", $level, ";stale=", $stale;
+}
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let _ = http_get(&addr, "/leave");
+    let r2 = http_get(&addr, "/check");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        r2.ends_with("level=0;stale="),
+        "second request inherited the previous output buffer: {:?}",
+        r2
+    );
+    assert!(
+        !r2.contains("LEFTOVER"),
+        "second request read stale buffered bytes: {:?}",
+        r2
+    );
+}
+
+/// Verifies the request-scoped stream context options are cleared between requests.
+/// `stream_context_create()` stores its options hash in a process-global slot; the
+/// hash is request memory, so leaving it published would let a later request read or
+/// free a reclaimed pointer. The pre-fix sequence crashed the worker with SIGSEGV.
+#[test]
+fn web_reset_clears_stream_context_between_requests() {
+    let dir = make_test_dir("web_reset_stream_context");
+    let src = r#"<?php
+if (($_SERVER["REQUEST_URI"] ?? "") === "/set") {
+    stream_context_create(["http" => ["header" => "X-Leak: req1"]]);
+    echo "set";
+} else {
+    $opts = stream_context_get_options(stream_context_get_default());
+    echo "opts=", json_encode($opts);
+}
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let r1 = http_get(&addr, "/set");
+    let r2 = http_get(&addr, "/get");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(r1.ends_with("set"), "first response body: {:?}", r1);
+    assert!(
+        r2.ends_with("opts=[]") || r2.ends_with("opts={}"),
+        "second request inherited stream context options: {:?}",
+        r2
+    );
+    assert!(
+        !r2.contains("X-Leak"),
+        "second request leaked the previous stream context: {:?}",
+        r2
+    );
+}
+
 /// Verifies that "Hello World" is served as the response body.
 #[test]
 fn web_server_serves_echo_body() {
