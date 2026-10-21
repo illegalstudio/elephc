@@ -16,7 +16,7 @@ use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
 use crate::parser::ast::Stmt;
 use crate::parser::stmt::{
-    expect_semicolon, expect_token, parse_body, parse_stmt, recover_to_statement_boundary,
+    expect_semicolon, expect_token, parse_body, parse_stmt, recover_after_failed_stmt,
 };
 
 /// Tokens that end one segment of an alternative-syntax `if` (`then` and `elseif` bodies).
@@ -43,11 +43,12 @@ pub(crate) fn parse_alternative_stmts(
         && tokens[*pos].0 != Token::Eof
         && !stop.contains(&tokens[*pos].0)
     {
+        let stmt_start = *pos;
         match parse_stmt(tokens, pos) {
             Ok(stmt) => body.push(stmt),
             Err(error) => {
                 errors.extend(error.flatten());
-                recover_to_statement_boundary(tokens, pos);
+                recover_after_failed_stmt(tokens, pos, stmt_start);
             }
         }
     }

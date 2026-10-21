@@ -18,7 +18,7 @@ use super::super::{expect_semicolon, expect_token};
 
 mod lower;
 
-use lower::lower_list_unpack;
+use lower::{lower_list_unpack, lower_loop_condition_unpack};
 
 /// Parses a `list([]) = $x;` destructuring assignment statement.
 /// Consumes the opening `[`, parses the bracket-enclosed pattern, expects `=`, parses the
@@ -91,6 +91,81 @@ pub(crate) fn parse_destructuring_pattern_unpack(
         _ => return Err(CompileError::new(span, "Expected destructuring pattern")),
     };
     Ok(lower_list_unpack(pattern, source, span))
+}
+
+/// Returns true when the token at `pos` opens a destructuring pattern whose matching close is
+/// immediately followed by a plain `=`: `[$a, $b] = …` or `list($a, $b) = …`.
+pub(crate) fn starts_destructuring_assignment(tokens: &[SpannedToken], pos: usize) -> bool {
+    let close = match tokens.get(pos).map(|(token, _)| token) {
+        Some(Token::LBracket) => {
+            find_matching_delimiter(tokens, pos, &Token::LBracket, &Token::RBracket)
+        }
+        Some(Token::Identifier(name))
+            if name.eq_ignore_ascii_case("list")
+                && matches!(tokens.get(pos + 1).map(|(token, _)| token), Some(Token::LParen)) =>
+        {
+            find_matching_delimiter(tokens, pos + 1, &Token::LParen, &Token::RParen)
+        }
+        _ => None,
+    };
+    close.is_some_and(|close| {
+        matches!(tokens.get(close + 1).map(|(token, _)| token), Some(Token::Assign))
+    })
+}
+
+/// Parses a destructuring assignment used as a whole loop condition, `while ([$a, $b] = f())`,
+/// and returns the statements that replace the condition at the head of every iteration.
+///
+/// PHP evaluates the assignment, unpacks into the targets EVEN when the value is falsy (a
+/// final `null` from `array_shift()` sets every target to `null`), and only then tests the
+/// value. The caller turns the loop into `while (true) { <head>; <body> }`; the head is:
+///
+/// ```text
+/// $tmp = <value>;
+/// if (is_array($tmp) || is_object($tmp)) { [$a, $b] = $tmp; } else { $a = null; $b = null; }
+/// if (!$tmp) { break; }
+/// ```
+///
+/// The `else` arm mirrors PHP, which silently assigns `null` to every target when the value
+/// is not an array or object. `continue` in the body re-runs the head exactly as it re-runs
+/// PHP's condition, and `break N` / `continue N` keep their level because the loop count is
+/// unchanged. `*pos` is left on the token after the value (the condition's closing `)`).
+pub(crate) fn parse_destructuring_loop_condition(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+    loop_keyword: &str,
+) -> Result<Vec<Stmt>, CompileError> {
+    let pattern_span = tokens
+        .get(*pos)
+        .map(|(_, metadata)| metadata.span)
+        .unwrap_or(span);
+    let pattern = match tokens.get(*pos).map(|(token, _)| token) {
+        Some(Token::LBracket) => parse_bracket_list_pattern(tokens, pos, pattern_span)?,
+        _ => parse_list_construct_pattern(tokens, pos, pattern_span)?,
+    };
+    expect_token(
+        tokens,
+        pos,
+        &Token::Assign,
+        "Expected '=' after list pattern",
+    )?;
+    let value = parse_assignment_value_expr(tokens, pos)?;
+    if !matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::RParen)) {
+        let at = tokens
+            .get(*pos)
+            .map(|(_, metadata)| metadata.span)
+            .unwrap_or(pattern_span);
+        return Err(CompileError::new(
+            at,
+            &format!(
+                "A destructuring assignment in a '{}' condition must be the whole condition; \
+                 assign it to a variable first",
+                loop_keyword
+            ),
+        ));
+    }
+    Ok(lower_loop_condition_unpack(pattern, value, pattern_span))
 }
 
 /// Returns true when the token at `pos` opens a destructuring pattern (`[` or `list(`).

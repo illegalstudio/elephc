@@ -15,7 +15,9 @@ mod postfix;
 mod simple;
 
 pub(crate) use list::{
+    parse_destructuring_loop_condition,
     parse_destructuring_pattern_unpack,
+    starts_destructuring_assignment,
     starts_destructuring_pattern,
 };
 pub(super) use list::{

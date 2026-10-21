@@ -130,21 +130,102 @@ pub(in crate::parser::stmt) fn parse_trait_decl(
 /// promoted constructor properties, and member attributes.
 /// `owner_kind` is used only for error messages (e.g., "class", "trait").
 /// `enclosing_is_abstract` controls whether abstract property declarations are permitted.
+///
+/// A method that fails to parse does not stop the member list when its end can be found (see
+/// [`failed_member_end`]; usually the body's own statement recovery already consumed its `}`): its
+/// errors are kept and parsing continues with the next member, so every malformed method of a
+/// class is reported in one compile. The kept errors are returned, ahead of any later fatal
+/// member error, once the body ends.
 pub(in crate::parser::stmt) fn parse_class_like_body(
     tokens: &[SpannedToken],
     pos: &mut usize,
     owner_kind: &str,
     enclosing_is_abstract: bool,
-) -> Result<
-    (
-        Vec<TraitUse>,
-        Vec<ClassProperty>,
-        Vec<ClassMethod>,
-        Vec<ClassConst>,
-        Vec<EnumCaseDecl>,
-    ),
-    CompileError,
-> {
+) -> Result<ClassLikeBody, CompileError> {
+    let mut member_errors = Vec::new();
+    let result = parse_class_like_members(
+        tokens,
+        pos,
+        owner_kind,
+        enclosing_is_abstract,
+        &mut member_errors,
+    );
+    match result {
+        Ok(_) if !member_errors.is_empty() => Err(CompileError::from_many(member_errors)),
+        Ok(body) => Ok(body),
+        Err(error) => {
+            member_errors.push(error);
+            Err(CompileError::from_many(member_errors))
+        }
+    }
+}
+
+/// The members of a class-like body: trait uses, properties, methods, constants, enum cases.
+type ClassLikeBody = (
+    Vec<TraitUse>,
+    Vec<ClassProperty>,
+    Vec<ClassMethod>,
+    Vec<ClassConst>,
+    Vec<EnumCaseDecl>,
+);
+
+/// Returns the end (one past the closing `}`) of the method that began at `start` and failed
+/// with the parser stopped at `stopped`, or `None` when that end cannot be found safely.
+///
+/// The end is the first `}` at or after `stopped - 1` that closes every `{` and every `(`
+/// opened since `start`. When the method's own body recovery already consumed its `}`, that is
+/// `stopped` itself. Counting parentheses too keeps a closure in a parameter default
+/// (`function a($x = function() { echo 1 +; }) {}`) from passing for the method: its `}`
+/// balances the braces while the parameter list is still open, so the walk goes on to the
+/// method's real body. The walk gives up at a `}` that would close the enclosing class and at
+/// a `;` or `function` outside every brace and parenthesis.
+fn failed_member_end(tokens: &[SpannedToken], start: usize, stopped: usize) -> Option<usize> {
+    if stopped <= start {
+        return None;
+    }
+    let mut braces = 0isize;
+    let mut parens = 0isize;
+    for (index, (token, _)) in tokens.iter().enumerate().skip(start) {
+        match token {
+            Token::LBrace => braces += 1,
+            Token::RBrace => braces -= 1,
+            Token::LParen => parens += 1,
+            Token::RParen => parens -= 1,
+            Token::Eof => return None,
+            _ => {}
+        }
+        // A `}` closing the class, or a `;` / `function` outside every brace and parenthesis
+        // (the end of a bodiless method, the start of the next member), means this method has
+        // no body left to find.
+        if braces < 0
+            || (braces == 0
+                && parens == 0
+                && matches!(token, Token::Semicolon | Token::Function)
+                && index > start)
+        {
+            return None;
+        }
+        if index + 1 >= stopped
+            && matches!(token, Token::RBrace)
+            && braces == 0
+            && parens == 0
+        {
+            return Some(index + 1);
+        }
+    }
+    None
+}
+
+/// Parses the members of a class-like body up to (not including) its closing `}`; see
+/// [`parse_class_like_body`]. Errors of a method whose body was consumed completely are pushed
+/// onto `member_errors` instead of ending the walk.
+fn parse_class_like_members(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    owner_kind: &str,
+    enclosing_is_abstract: bool,
+    member_errors: &mut Vec<CompileError>,
+) -> Result<ClassLikeBody, CompileError> {
     let mut trait_uses = Vec::new();
     let mut properties = Vec::new();
     let mut methods = Vec::new();
@@ -266,7 +347,8 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                     "Readonly methods are not supported",
                 ));
             }
-            let (mut method, promoted_properties) = parse_class_like_method(
+            let method_start = *pos;
+            let parsed = parse_class_like_method(
                 tokens,
                 pos,
                 member_span,
@@ -274,7 +356,20 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                 modifiers.is_static,
                 modifiers.is_abstract,
                 modifiers.is_final,
-            )?;
+            );
+            let (mut method, promoted_properties) = match parsed {
+                Ok(parsed) => parsed,
+                // The body's own recovery already reported its errors and consumed its `}`:
+                // keep them and go on with the next member.
+                Err(error) => match failed_member_end(tokens, method_start, *pos) {
+                    Some(end) => {
+                        member_errors.extend(error.flatten());
+                        *pos = end;
+                        continue;
+                    }
+                    None => return Err(error),
+                },
+            };
             method.attributes = member_attributes;
             append_promoted_properties(&mut properties, promoted_properties)?;
             methods.push(method);

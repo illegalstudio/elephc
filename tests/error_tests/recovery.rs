@@ -349,3 +349,97 @@ fn test_method_global_declaration_uses_final_top_level_environment() {
         "explicit global declarations must resolve final top-level bindings",
     );
 }
+
+/// Parses `src` with recovery and returns every parse error message.
+fn parse_error_messages(src: &str) -> Vec<String> {
+    let tokens = tokenize(src).unwrap();
+    parse_with_recovery(&tokens)
+        .unwrap_err()
+        .iter()
+        .flat_map(|error| error.flatten())
+        .map(|error| error.message.clone())
+        .collect()
+}
+
+/// Verifies an error inside a nested block of a `try` body reports exactly once: the failed
+/// `if` already consumed its `}`, so recovery must not eat the `try` body's `}` and then trip
+/// over `catch`, `finally` and the function's closing brace.
+#[test]
+fn test_parser_recovery_nested_block_error_does_not_cascade() {
+    let messages = parse_error_messages(
+        "<?php
+        function bump(string $class) {
+            try {
+                if (true) {
+                    echo 1 +;
+                }
+                echo 1;
+            } catch (\\Exception $e) {
+                echo 2;
+            } finally {
+                echo 3;
+            }
+            return 1;
+        }
+        echo bump('A');",
+    );
+    assert_eq!(messages.len(), 1, "expected one parse error, got {:?}", messages);
+}
+
+/// Verifies an error raised mid array literal resumes after the literal's `;` instead of at
+/// the next `$variable` inside it (which reported a bogus "Expected '=' after variable name").
+#[test]
+fn test_parser_recovery_mid_array_literal_error_skips_rest_of_literal() {
+    let messages = parse_error_messages(
+        "<?php
+        function info($c) {
+            $info = ['v' => 1 +, 'k' => $c];
+            return $info;
+        }",
+    );
+    assert_eq!(messages.len(), 1, "expected one parse error, got {:?}", messages);
+}
+
+/// Verifies an unclosed `[` or `(` in a statement stops recovery at that statement's `;`
+/// instead of skipping past it (which lost later diagnostics or reported bogus ones).
+#[test]
+fn test_parser_recovery_unclosed_delimiter_stops_at_statement_end() {
+    for src in [
+        "<?php class K { public function a() { return [1, ; } public function b() { return 2; } }\n$x = 1;\necho $x 3;",
+        "<?php function f() { return g(1, ; }\necho $x 3;",
+        "<?php if (true) { g(1, ; }\necho $x 3;",
+    ] {
+        let messages = parse_error_messages(src);
+        assert_eq!(messages.len(), 2, "{src}: {:?}", messages);
+        assert!(messages[1].contains("Expected ';'"), "{src}: {:?}", messages);
+    }
+}
+
+/// Verifies that each malformed method of a class reports its own error in one compile: after
+/// the first method's body fails (and its `}` is consumed), recovery continues with the next
+/// member instead of skipping the rest of the class, and the trailing statement still parses.
+#[test]
+fn test_parser_recovery_reports_every_malformed_method_of_a_class() {
+    let messages = parse_error_messages(
+        "<?php class K { function a() { echo 1 +; } function ok() { return 1; } function b() { echo 2 +; } }\necho $x 3;",
+    );
+    assert_eq!(messages.len(), 3, "expected one error per broken method plus the echo, got {:?}", messages);
+    assert!(messages[2].contains("Expected ';'"), "{:?}", messages);
+}
+
+/// Verifies that a closure in a parameter default does not pass for the end of its method when
+/// the closure's body fails: the parameter list is still open, so the member walk must not
+/// resume at the method's `)` with a spurious member-declaration error; it skips to the
+/// method's own body and the next method's error is still reported.
+#[test]
+fn test_parser_recovery_closure_in_parameter_default_is_not_the_method_end() {
+    let messages = parse_error_messages(
+        "<?php class K { function a($x = function() { echo 1 +; }) {} function b() { echo 2 +; } }",
+    );
+    assert!(
+        messages.iter().all(|message| !message.contains("Expected trait use, property, or method")),
+        "{:?}",
+        messages
+    );
+    assert_eq!(messages.len(), 2, "expected the closure's and b()'s errors, got {:?}", messages);
+}

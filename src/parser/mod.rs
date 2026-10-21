@@ -166,11 +166,12 @@ fn parse_checked_tokens(tokens: &[SpannedToken]) -> Result<Program, Vec<CompileE
                 }
             }
         } else {
+            let stmt_start = pos;
             match stmt::parse_stmt(tokens, &mut pos) {
                 Ok(stmt) => stmt::push_parsed_stmt(&mut stmts, stmt),
                 Err(error) => {
                     errors.extend(error.flatten());
-                    stmt::recover_to_statement_boundary(tokens, &mut pos);
+                    stmt::recover_after_failed_stmt(tokens, &mut pos, stmt_start);
                 }
             }
         }
