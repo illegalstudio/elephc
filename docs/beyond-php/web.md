@@ -186,7 +186,9 @@ request N+1 sees the same PHP environment request N did:
 - **Request-scoped extension state** — stream context options and notification
   callbacks, user wrapper/filter registrations and instances, per-descriptor
   stream tables, and abandoned JSON/serialize/exception parser state are cleared
-  before the request heap is reclaimed.
+  before the request heap is reclaimed. The clears are repeated after the
+  cleanup destructors run, so a destructor cannot republish request memory into
+  the next request.
 
 This matches PHP-FPM for PHP globals and statics in all three models. Native
 bridge state that intentionally lives outside the PHP heap follows the selected

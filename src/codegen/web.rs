@@ -124,9 +124,6 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     emit_concat_offset_reset(emitter);
     emit_core_handler_reset(emitter);
     abi::emit_call_label(emitter, "__rt_resource_inventory_reset");
-    // Resource inventory cleanup closes the previous request's still-open handles first; the
-    // fd-keyed tables below are only safe to clear once those closes have consumed them.
-    emit_extension_request_state_reset(emitter);
     abi::emit_call_label(emitter, "__rt_diag_reset");
     emit_gc_state_reset(emitter);
 
@@ -139,6 +136,16 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     if module.required_runtime_features.mbstring || module.required_runtime_features.eval_bridge {
         abi::emit_call_label(emitter, "__rt_mbstring_release_catalog");
     }
+    // Every cleanup above can run PHP: destructors may call `ob_start()`,
+    // `stream_context_create()`, `json_decode()`, or reopen a stream. The early clears
+    // kept those destructors from observing the previous request's state; these final
+    // clears keep the state they create from surviving into the arena reset. Ordering
+    // matters: the fd-keyed tables are cleared only after `__rt_resource_inventory_reset`
+    // and all later cleanup has finished consuming them.
+    emit_output_buffer_reset(emitter);
+    emit_print_r_capture_reset(emitter);
+    emit_transient_pointer_reset(emitter);
+    emit_extension_request_state_reset(emitter);
     emit_heap_arena_reset(emitter);
     abi::emit_call_label(emitter, "__rt_gc_request_start");
 
@@ -400,6 +407,9 @@ mod handler_reset_tests {
             let output_level = asm.find("_ob_level").unwrap();
             let print_r_mode = asm.find("_print_r_mode").unwrap();
             let stream_context = asm.find("_stream_context_options").unwrap();
+            let final_output_level = asm.rfind("_ob_level").unwrap();
+            let final_print_r_mode = asm.rfind("_print_r_mode").unwrap();
+            let final_stream_context = asm.rfind("_stream_context_options").unwrap();
             let inventory = asm.find("__rt_resource_inventory_reset").unwrap();
             let wrapper_table = asm.find("_user_wrappers").unwrap();
             let heap = asm.find("_heap_off").unwrap();
@@ -429,6 +439,16 @@ mod handler_reset_tests {
                 inventory < wrapper_table && wrapper_table < heap,
                 "{target:?}: fd-keyed tables must clear after inventory cleanup and before the heap reset"
             );
+            for (label, position) in [
+                ("_ob_level", final_output_level),
+                ("_print_r_mode", final_print_r_mode),
+                ("_stream_context_options", final_stream_context),
+            ] {
+                assert!(
+                    inventory < position && position < heap,
+                    "{target:?}: {label} must clear again after cleanup and before the heap reset"
+                );
+            }
             assert!(
                 asm.matches("memset").count() >= 15,
                 "{target:?}: request-scoped tables must be cleared with memset"

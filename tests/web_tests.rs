@@ -872,6 +872,56 @@ if (($_SERVER["REQUEST_URI"] ?? "") === "/set") {
     );
 }
 
+/// Verifies state created by a destructor during the request reset cannot survive into
+/// the next handler. Static-property release runs PHP destructors inside `__rt_web_reset`;
+/// this destructor re-opens an output buffer and publishes a fresh stream context after
+/// the early clears, so only the final clear before `emit_heap_arena_reset` prevents the
+/// next request from observing pointers into the arena it is about to reclaim.
+#[test]
+fn web_reset_clears_state_created_by_destructors_during_reset() {
+    let dir = make_test_dir("web_reset_destructor_residue");
+    let src = r#"<?php
+class ResetResidue {
+    public function __destruct() {
+        stream_context_create(["http" => ["header" => "X-Residue: 1"]]);
+        ob_start();
+        echo "RESIDUE";
+    }
+}
+class ResetResidueHolder {
+    public static $value = null;
+}
+ResetResidueHolder::$value = new ResetResidue();
+if (($_SERVER["REQUEST_URI"] ?? "") === "/first") {
+    echo "first";
+} else {
+    $level = ob_get_level();
+    $stale = $level > 0 ? ob_get_clean() : "";
+    $opts = stream_context_get_options(stream_context_get_default());
+    echo "level=", $level, ";stale=", $stale, ";opts=", json_encode($opts);
+}
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let r1 = http_get(&addr, "/first");
+    let r2 = http_get(&addr, "/check");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(r1.ends_with("first"), "first response body: {:?}", r1);
+    assert!(
+        r2.ends_with("level=0;stale=;opts=[]") || r2.ends_with("level=0;stale=;opts={}"),
+        "second request inherited state created by the reset destructor: {:?}",
+        r2
+    );
+    assert!(
+        !r2.contains("RESIDUE") && !r2.contains("X-Residue"),
+        "second request leaked reset-destructor state: {:?}",
+        r2
+    );
+}
+
 /// Verifies that "Hello World" is served as the response body.
 #[test]
 fn web_server_serves_echo_body() {
