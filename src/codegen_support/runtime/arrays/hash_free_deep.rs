@@ -58,7 +58,7 @@ pub fn emit_hash_free_deep(emitter: &mut Emitter) {
     // -- set up stack frame --
     // Stack layout:
     //   [sp, #0]  = hash table pointer
-    //   [sp, #8]  = capacity
+    //   [sp, #8]  = next insertion-order slot, captured before child cleanup
     //   [sp, #16] = scratch
     //   [sp, #24] = loop index
     //   [sp, #32] = owned pending Throwable
@@ -68,20 +68,20 @@ pub fn emit_hash_free_deep(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_frame_prologue(emitter, 64);
     emitter.instruction("str x0, [sp, #0]");                                    // save hash table pointer
     super::deep_cleanup::begin(emitter);
-    emitter.instruction("ldr x9, [x0, #8]");                                    // load table capacity
-    emitter.instruction("str x9, [sp, #8]");                                    // save capacity for the loop
-    emitter.instruction("str xzr, [sp, #24]");                                  // loop index = 0
+    emitter.instruction(&format!("ldr x9, [x0, #{}]", hash_layout::HEAD_OFFSET)); // begin at the first PHP entry
+    emitter.instruction("str x9, [sp, #24]");                                   // save the insertion-order cursor
 
-    // -- iterate all slots and free occupied entries --
+    // -- release entries in PHP insertion order, preserving the successor across callbacks --
     emitter.label("__rt_hash_free_deep_loop");
-    emitter.instruction("ldr x11, [sp, #24]");                                  // reload loop index
-    emitter.instruction("ldr x10, [sp, #8]");                                   // reload capacity
-    emitter.instruction("cmp x11, x10");                                        // are we done scanning all slots?
-    emitter.instruction("b.ge __rt_hash_free_deep_struct");                     // finish once index reaches capacity
-
+    emitter.instruction("ldr x11, [sp, #24]");                                  // reload the current logical slot
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload hash table pointer
+    emitter.instruction("ldr x10, [x9, #8]");                                   // load the capacity for a defensive cursor bound
+    emitter.instruction("cmp x11, x10");                                        // does the cursor name a valid physical slot?
+    emitter.instruction("b.hs __rt_hash_free_deep_struct");                     // stop at -1 or an out-of-range cursor
     emitter.instruction("mov x12, #64");                                        // entry size = 64 bytes with per-entry tags and insertion-order links
     hash_layout::emit_entry_address(emitter, "x13", "x9", "x11");
+    emitter.instruction(&format!("ldr x10, [x13, #{}]", hash_layout::ENTRY_NEXT_OFFSET)); // snapshot the next logical entry before PHP cleanup
+    emitter.instruction("str x10, [sp, #8]");                                   // keep the successor independent of helper clobbers
     emitter.instruction("ldr x14, [x13]");                                      // load occupied flag
     emitter.instruction("cmp x14, #1");                                         // is this slot occupied?
     emitter.instruction("b.ne __rt_hash_free_deep_next");                       // skip empty or tombstone slots
@@ -137,9 +137,9 @@ pub fn emit_hash_free_deep(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [sp, #24]");                                  // restore loop index after descriptor release
 
     emitter.label("__rt_hash_free_deep_next");
-    emitter.instruction("add x11, x11, #1");                                    // advance to the next slot
+    emitter.instruction("ldr x11, [sp, #8]");                                   // follow the saved insertion-order successor
     emitter.instruction("str x11, [sp, #24]");                                  // save updated loop index
-    emitter.instruction("b __rt_hash_free_deep_loop");                          // continue scanning entries
+    emitter.instruction("b __rt_hash_free_deep_loop");                          // continue in PHP insertion order
 
     // -- free the hash table struct itself --
     emitter.label("__rt_hash_free_deep_struct");
@@ -186,16 +186,18 @@ fn emit_hash_free_deep_linux_x86_64(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_frame_prologue(emitter, 64);
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the hash-table pointer across nested helper calls while freeing entries
     super::deep_cleanup::begin(emitter);
-    emitter.instruction("mov r10, QWORD PTR [rax + 8]");                        // load the table capacity before entering the entry-scan loop
-    emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // save the table capacity so the entry-scan loop can survive nested helper calls
-    emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // initialize the entry-scan loop index to zero
+    emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // recover the stable header after cleanup setup
+    emitter.instruction(&format!("mov r10, QWORD PTR [r11 + {}]", hash_layout::HEAD_OFFSET)); // begin at the first PHP entry
+    emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save the insertion-order cursor
 
     emitter.label("__rt_hash_free_deep_loop");
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the current entry-scan index at the top of every loop iteration
-    emitter.instruction("cmp r10, QWORD PTR [rbp - 16]");                       // stop once every slot up to the stored capacity has been inspected
-    emitter.instruction("jae __rt_hash_free_deep_struct");                      // exit the loop when the entry-scan index reaches the table capacity
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer after any nested helper call
+    emitter.instruction("cmp r10, QWORD PTR [r11 + 8]");                        // check the logical cursor against the current capacity
+    emitter.instruction("jae __rt_hash_free_deep_struct");                      // stop at -1 or an out-of-range cursor
     hash_layout::emit_entry_address(emitter, "rcx", "r11", "r10");
+    emitter.instruction(&format!("mov r8, QWORD PTR [rcx + {}]", hash_layout::ENTRY_NEXT_OFFSET)); // snapshot the next logical entry before PHP cleanup
+    emitter.instruction("mov QWORD PTR [rbp - 16], r8");                        // preserve the successor across child release calls
     emitter.instruction("mov r8, QWORD PTR [rcx]");                             // load the occupied marker for the current hash-entry slot
     emitter.instruction("cmp r8, 1");                                           // only fully occupied hash-entry slots own key/value payloads that need cleanup
     emitter.instruction("jne __rt_hash_free_deep_next");                        // skip empty or tombstone slots during the deep-free scan
@@ -280,8 +282,9 @@ fn emit_hash_free_deep_linux_x86_64(emitter: &mut Emitter) {
     super::deep_cleanup::invoke(emitter, "__rt_callable_descriptor_release", "rax");
 
     emitter.label("__rt_hash_free_deep_next");
-    emitter.instruction("add QWORD PTR [rbp - 24], 1");                         // advance the entry-scan index to the next hash slot
-    emitter.instruction("jmp __rt_hash_free_deep_loop");                        // continue scanning occupied entries until the whole table has been released
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // follow the saved insertion-order successor
+    emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // publish the next logical slot
+    emitter.instruction("jmp __rt_hash_free_deep_loop");                        // continue in PHP insertion order
 
     emitter.label("__rt_hash_free_deep_struct");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer after finishing the deep-free scan
