@@ -7918,6 +7918,140 @@
         {
           "by_ref": false,
           "default": null,
+          "name": "message",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "error_level",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "__elephc_emit_diagnostic",
+    "description": "Internal prelude diagnostic with PHP error-handler dispatch.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 704,
+      "notes": [
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/__elephc_emit_diagnostic.rs",
+      "sig_line": null
+    },
+    "module": "elephc",
+    "name": "__elephc_emit_diagnostic",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "writes_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "refcount_op",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt",
+          "blocking_io",
+          "network_io"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "non_heap"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "message",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "error_level",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_emit_diagnostic",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
           "name": "hour",
           "optional": false,
           "type": "int"
@@ -44030,7 +44164,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "error_log",
-      "codegen_line": 1761,
+      "codegen_line": 1764,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -71687,7 +71821,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "ini_get",
-      "codegen_line": 4398,
+      "codegen_line": 4239,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -71900,7 +72034,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "ini_set",
-      "codegen_line": 4905,
+      "codegen_line": 4746,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -118597,7 +118731,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_abort",
-      "codegen_line": 3415,
+      "codegen_line": 3342,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -118653,7 +118787,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_cache_expire",
-      "codegen_line": 3522,
+      "codegen_line": 3403,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -118717,7 +118851,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_cache_limiter",
-      "codegen_line": 3494,
+      "codegen_line": 3375,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -118773,7 +118907,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_commit",
-      "codegen_line": 3729,
+      "codegen_line": 3610,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -118829,7 +118963,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_create_id",
-      "codegen_line": 3340,
+      "codegen_line": 3267,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -118891,9 +119025,9 @@
     "lowering": {
       "checker_file": null,
       "checker_line": null,
-      "codegen_file": "src/web_prelude/build.rs",
+      "codegen_file": "src/web_prelude/session_decode.rs",
       "codegen_function": "session_decode",
-      "codegen_line": 3106,
+      "codegen_line": 43,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -118949,7 +119083,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_destroy",
-      "codegen_line": 2956,
+      "codegen_line": 2898,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -118997,7 +119131,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_encode",
-      "codegen_line": 3088,
+      "codegen_line": 3034,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -119045,7 +119179,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_gc",
-      "codegen_line": 3385,
+      "codegen_line": 3312,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -119093,7 +119227,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_get_cookie_params",
-      "codegen_line": 3550,
+      "codegen_line": 3431,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -119149,7 +119283,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_id",
-      "codegen_line": 2992,
+      "codegen_line": 2934,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -119213,7 +119347,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_module_name",
-      "codegen_line": 3749,
+      "codegen_line": 3630,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -119277,7 +119411,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_name",
-      "codegen_line": 3021,
+      "codegen_line": 2967,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -119341,7 +119475,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_regenerate_id",
-      "codegen_line": 3155,
+      "codegen_line": 3082,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -119397,7 +119531,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_register_shutdown",
-      "codegen_line": 3739,
+      "codegen_line": 3620,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -119443,9 +119577,9 @@
     "lowering": {
       "checker_file": null,
       "checker_line": null,
-      "codegen_file": "src/web_prelude/build.rs",
+      "codegen_file": "src/web_prelude/session_reset.rs",
       "codegen_function": "session_reset",
-      "codegen_line": 3447,
+      "codegen_line": 37,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -119501,7 +119635,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_save_path",
-      "codegen_line": 3126,
+      "codegen_line": 3053,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -119557,7 +119691,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_set_cookie_params",
-      "codegen_line": 3569,
+      "codegen_line": 3450,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -119669,7 +119803,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_set_save_handler",
-      "codegen_line": 3786,
+      "codegen_line": 3667,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -119789,7 +119923,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_start",
-      "codegen_line": 1928,
+      "codegen_line": 1870,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -119845,7 +119979,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_status",
-      "codegen_line": 3059,
+      "codegen_line": 3005,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -119893,7 +120027,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_unset",
-      "codegen_line": 3069,
+      "codegen_line": 3015,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -119941,7 +120075,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_write_close",
-      "codegen_line": 2868,
+      "codegen_line": 2810,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -120316,7 +120450,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "setcookie",
-      "codegen_line": 1280,
+      "codegen_line": 1283,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -120464,7 +120598,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "setrawcookie",
-      "codegen_line": 1296,
+      "codegen_line": 1299,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],

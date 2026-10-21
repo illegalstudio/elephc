@@ -148,7 +148,7 @@ pub fn lower_core_builtin(
         }
         CoreBuiltinOp::SetErrorHandler => lower_handler_operands(ctx, call, true)?,
         CoreBuiltinOp::SetExceptionHandler => lower_handler_operands(ctx, call, false)?,
-        CoreBuiltinOp::TriggerError => lower_trigger_operands(ctx, call)?,
+        CoreBuiltinOp::TriggerError | CoreBuiltinOp::EmitDiagnostic => lower_trigger_operands(ctx, call)?,
         CoreBuiltinOp::GetDefinedConstants => {
             vec![operand_or_const_bool(ctx, call, 0, false)]
         }

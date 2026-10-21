@@ -46,10 +46,63 @@ pub(super) fn emit_register_array(emitter: &mut Emitter) {
     abi::emit_return(emitter);
 }
 
+/// Promotes a published Mixed box in place so every uppercase-R owner shares writable identity.
+pub(super) fn emit_reference_alias(emitter: &mut Emitter) {
+    let result = abi::int_result_reg(emitter);
+    let base = abi::secondary_scratch_reg(emitter);
+    let marker = abi::symbol_scratch_reg(emitter);
+    let (low, high) = match emitter.target.arch {
+        Arch::AArch64 => ("x1", "x2"),
+        Arch::X86_64 => ("rdi", "rsi"),
+    };
+    emitter.blank();
+    emitter.label_global("__rt_unserialize_reference_alias");
+    abi::emit_frame_prologue(emitter, 32);
+    abi::store_at_offset(emitter, result, 8);
+    abi::emit_call_label(emitter, "__rt_reference_is");
+    abi::emit_branch_if_int_result_nonzero(emitter, "__rt_unserialize_reference_retain");
+    abi::load_at_offset(emitter, base, 8);
+    abi::emit_load_from_address(emitter, low, base, 8);
+    abi::emit_load_from_address(emitter, high, base, 16);
+    abi::emit_load_from_address(emitter, result, base, 0);
+    // Transfer the old payload owner into a child box; a retain here would leak its payload.
+    abi::emit_call_label(emitter, match emitter.target.arch {
+        Arch::AArch64 => "__rt_hash_to_mixed_box_owned",
+        Arch::X86_64 => "__rt_hash_to_mixed_x86_box_owned",
+    });
+    abi::load_at_offset(emitter, base, 8);
+    abi::emit_store_to_address(emitter, result, base, 8);
+    abi::emit_load_int_immediate(emitter, marker, 7);
+    abi::emit_store_to_address(emitter, marker, base, 0);
+    abi::emit_load_int_immediate(emitter, marker, 1);
+    abi::emit_store_to_address(emitter, marker, base, 16);
+    emitter.label("__rt_unserialize_reference_retain");
+    abi::load_at_offset(emitter, result, 8);
+    abi::emit_call_label(emitter, "__rt_incref");
+    abi::load_at_offset(emitter, result, 8);
+    abi::emit_frame_restore(emitter, 32);
+    abi::emit_return(emitter);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
+
+    /// Runtime alias helpers must not clobber callee-saved registers owned by EIR callers.
+    #[test]
+    fn reference_promotion_preserves_callee_saved_registers_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_reference_alias(&mut emitter);
+            let asm = emitter.output();
+            assert!(!asm.contains("mov x19") && !asm.contains("ldur x19"), "{name}: {asm}");
+            assert!(!asm.contains("mov r12"), "{name}: {asm}");
+            assert!(asm.contains(if name == "linux-x86_64" {
+                "__rt_hash_to_mixed_x86_box_owned"
+            } else { "__rt_hash_to_mixed_box_owned" }), "{name}: {asm}");
+        }
+    }
 
     /// Recursive decoders publish completed arrays and use the shared payload-owning clone path.
     #[test]

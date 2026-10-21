@@ -765,7 +765,7 @@ fn emit_main_global_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
             continue;
         }
         let ty = if ctx.module.web && crate::superglobals::is_superglobal(&name) {
-            crate::superglobals::superglobal_type().codegen_repr()
+            crate::superglobals::superglobal_type_for(&name).codegen_repr()
         } else {
             PhpType::Mixed
         };

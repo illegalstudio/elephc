@@ -210,6 +210,12 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("ldr x14, [x12, #24]");                                 // load the existing boxed Mixed payload
     emitter.instruction("cbz x14, __rt_hash_set_check_reference");              // a null Mixed handle is an ordinary overwrite
     emitter.instruction("ldr x15, [x14]");                                      // inspect the boxed Mixed runtime tag
+    emitter.instruction("cmp x15, #7");                                         // persistent references use a nested Mixed wrapper
+    emitter.instruction("b.ne __rt_hash_set_invoker_marker_check");             // inspect descriptor markers when this is not a nested wrapper
+    emitter.instruction("ldr x16, [x14, #16]");                                 // inspect the persistent-reference marker
+    emitter.instruction("cmp x16, #1");                                         // ordinary nested values are not writable reference sets
+    emitter.instruction("b.eq __rt_hash_set_persistent_reference_write");       // preserve the wrapper shared by every R alias
+    emitter.label("__rt_hash_set_invoker_marker_check");
     emitter.instruction(&format!("cmp x15, #{}", INVOKER_ARG_REF_CELL_TAG));    // does this box alias caller storage for a ref argument?
     emitter.instruction("b.eq __rt_hash_set_invoker_reference_write");          // preserve the marker and write through to its caller local
     emitter.label("__rt_hash_set_check_reference");
@@ -242,6 +248,14 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("b __rt_hash_set_write_value");                         // ordinary released payloads must not fall into reference-cell write-through
 
     // -- write through a boxed descriptor-invoker marker stored in a Mixed hash entry --
+    emitter.label("__rt_hash_set_persistent_reference_write");
+    emitter.instruction("mov x0, x14");                                         // pass the shared persistent reference wrapper
+    emitter.instruction("ldr x1, [sp, #24]");                                   // forward the owned replacement low word
+    emitter.instruction("ldr x2, [sp, #32]");                                   // forward the owned replacement high word
+    emitter.instruction("ldr x3, [sp, #40]");                                   // forward the replacement runtime type
+    emitter.instruction("bl __rt_reference_assign_owned");                      // publish through the wrapper before releasing the old child
+    emitter.instruction("b __rt_hash_set_done");                                // leave this entry attached to its reference set
+
     emitter.label("__rt_hash_set_invoker_reference_write");
     emitter.instruction("ldr x15, [x14, #16]");                                 // load the caller storage's runtime representation tag
     emitter.instruction("cmp x15, #7");                                         // does the caller local hold a boxed Mixed handle?
@@ -359,7 +373,18 @@ fn emit_hash_set_value_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_hash_set_value_forward");                 // a missing key is an ordinary insert
     emitter.instruction("ldr x9, [x4, #40]");                                   // load the existing entry's runtime value tag
     emitter.instruction("cmp x9, #11");                                         // does this entry belong to a PHP reference set?
-    emitter.instruction("b.ne __rt_hash_set_value_forward");                    // ordinary entries need no detach
+    emitter.instruction("b.eq __rt_hash_set_value_detach");                     // managed cells detach before their old owner is released
+    emitter.instruction("cmp x9, #7");                                          // a boxed Mixed payload may carry a persistent reference
+    emitter.instruction("b.ne __rt_hash_set_value_forward");                    // ordinary scalar entries need no detach
+    emitter.instruction("ldr x10, [x4, #24]");                                  // inspect the existing boxed value
+    emitter.instruction("cbz x10, __rt_hash_set_value_forward");                // a null handle owns no reference set
+    emitter.instruction("ldr x11, [x10]");                                      // inspect the inner Mixed tag
+    emitter.instruction("cmp x11, #7");                                         // persistent references are nested Mixed values
+    emitter.instruction("b.ne __rt_hash_set_value_forward");                    // ordinary boxes can use the assignment path
+    emitter.instruction("ldr x11, [x10, #16]");                                 // inspect the persistent-reference marker
+    emitter.instruction("cmp x11, #1");                                         // require shared writable reference identity
+    emitter.instruction("b.ne __rt_hash_set_value_forward");                    // unmarked wrappers are ordinary PHP values
+    emitter.label("__rt_hash_set_value_detach");
     emitter.instruction("ldr x0, [x4, #24]");                                   // load the managed reference cell this entry owns
     emitter.instruction("str xzr, [x4, #24]");                                  // retire the detached payload before releasing it
     emitter.instruction("str xzr, [x4, #32]");                                  // reference entries carry no high payload word
@@ -411,7 +436,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the candidate hash-table pointer so the copy-on-write helper sees the current mutation target
     emitter.instruction("mov rax, rdi");                                        // selected mode returns the original table without a COW helper call
     emitter.instruction("test r10, r10");                                       // was this table selected before a callback retained its payload?
-    emitter.instruction("jnz __rt_hash_set_x86_ready");                         // yes, preserve that exact payload identity
+    emitter.instruction("jnz __rt_hash_set_x86_ready");                         // preserve the selected payload identity
     emitter.instruction("call __rt_hash_ensure_unique");                        // split ordinary shared associative arrays before mutation
     emitter.label("__rt_hash_set_x86_ready");
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the unique hash-table pointer that subsequent probe logic must mutate
@@ -530,6 +555,11 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r14, QWORD PTR [r12 + 24]");                       // load the existing boxed Mixed payload
     emitter.instruction("test r14, r14");                                       // guard the boxed marker dereference
     emitter.instruction("jz __rt_hash_set_check_reference_x");                  // a null Mixed handle is an ordinary overwrite
+    emitter.instruction("cmp QWORD PTR [r14], 7");                              // persistent references use a nested Mixed wrapper
+    emitter.instruction("jne __rt_hash_set_invoker_marker_check_x");            // inspect descriptor markers for ordinary values
+    emitter.instruction("cmp QWORD PTR [r14 + 16], 1");                         // require the persistent-reference marker
+    emitter.instruction("je __rt_hash_set_persistent_reference_write_x");       // preserve the wrapper shared by every R alias
+    emitter.label("__rt_hash_set_invoker_marker_check_x");
     let boxed_marker_compare = format!("cmp QWORD PTR [r14], {}", INVOKER_ARG_REF_CELL_TAG);
     emitter.instruction(&boxed_marker_compare);                                 // does this box alias caller storage for a ref argument?
     emitter.instruction("je __rt_hash_set_invoker_reference_write_x");          // preserve the marker and write through to its caller local
@@ -560,6 +590,14 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the current probe index for entry-address reconstruction
     hash_layout::emit_entry_address(emitter, "r12", "r10", "r11");
     emitter.instruction("jmp __rt_hash_set_write_value_x");                     // ordinary released payloads must not fall into reference-cell write-through
+
+    emitter.label("__rt_hash_set_persistent_reference_write_x");
+    emitter.instruction("mov rax, r14");                                        // pass the shared persistent reference wrapper
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // forward the owned replacement low word
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // forward the owned replacement high word
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // forward the replacement runtime type
+    emitter.instruction("call __rt_reference_assign_owned");                    // publish through the wrapper before releasing the old child
+    emitter.instruction("jmp __rt_hash_set_reference_done_x");                  // leave this entry attached to its reference set
 
     emitter.label("__rt_hash_set_invoker_reference_write_x");
     emitter.instruction("mov r13, QWORD PTR [r14 + 16]");                       // load the caller storage's runtime representation tag
@@ -676,7 +714,17 @@ fn emit_hash_set_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // did the destination already contain this key?
     emitter.instruction("jz __rt_hash_set_value_forward_x");                    // a missing key is an ordinary insert
     emitter.instruction("cmp QWORD PTR [r8 + 40], 11");                         // does this entry belong to a PHP reference set?
-    emitter.instruction("jne __rt_hash_set_value_forward_x");                   // ordinary entries need no detach
+    emitter.instruction("je __rt_hash_set_value_detach_x");                     // managed cells detach before their old owner is released
+    emitter.instruction("cmp QWORD PTR [r8 + 40], 7");                          // a boxed Mixed payload may carry a persistent reference
+    emitter.instruction("jne __rt_hash_set_value_forward_x");                   // ordinary scalar entries need no detach
+    emitter.instruction("mov r10, QWORD PTR [r8 + 24]");                        // inspect the existing boxed value
+    emitter.instruction("test r10, r10");                                       // a null handle owns no reference set
+    emitter.instruction("jz __rt_hash_set_value_forward_x");                    // guard the inner tag and marker reads
+    emitter.instruction("cmp QWORD PTR [r10], 7");                              // persistent references are nested Mixed values
+    emitter.instruction("jne __rt_hash_set_value_forward_x");                   // ordinary boxes can use the assignment path
+    emitter.instruction("cmp QWORD PTR [r10 + 16], 1");                         // require shared writable reference identity
+    emitter.instruction("jne __rt_hash_set_value_forward_x");                   // unmarked wrappers are ordinary PHP values
+    emitter.label("__rt_hash_set_value_detach_x");
     emitter.instruction("mov rax, QWORD PTR [r8 + 24]");                        // load the managed reference cell this entry owns
     emitter.instruction("mov QWORD PTR [r8 + 24], 0");                          // retire the detached payload before releasing it
     emitter.instruction("mov QWORD PTR [r8 + 32], 0");                          // reference entries carry no high payload word
@@ -698,6 +746,24 @@ fn emit_hash_set_value_linux_x86_64(emitter: &mut Emitter) {
 mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
+
+    /// Constructor replacement retires persistent reference slots before releasing their old owners.
+    #[test]
+    fn persistent_reference_writes_and_bucket_replacement_are_distinct_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_hash_set(&mut emitter);
+            let asm = emitter.output();
+            assert!(asm.contains("__rt_reference_assign_owned"), "{name}");
+            let constructor = asm.split_once("__rt_hash_set_value:\n").unwrap().1;
+            let retire = constructor.find(if name == "linux-x86_64" {
+                "mov QWORD PTR [r8 + 24], 0"
+            } else { "str xzr, [x4, #24]" }).unwrap();
+            assert!(constructor.contains("__rt_hash_set_value_detach"), "{name}");
+            assert!(retire < constructor.find("__rt_decref_any").unwrap(), "{name}");
+            assert!(constructor.find("__rt_hash_ensure_unique").unwrap() < retire, "{name}");
+        }
+    }
 
     /// Mixed variadic hashes preserve boxed invoker markers and update caller storage on every ABI.
     #[test]

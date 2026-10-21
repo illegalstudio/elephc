@@ -194,3 +194,5 @@ mod tagged_scalar_boxing;
 mod gc_incoming_cache;
 #[path = "runtime_gc/unshift_reference_cow.rs"]
 mod unshift_reference_cow;
+#[path = "runtime_gc/unserialize_reference_identity.rs"]
+mod unserialize_reference_identity;

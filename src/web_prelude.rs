@@ -66,6 +66,8 @@ pub const fn sapi_name(web: bool) -> &'static str {
 /// The declaration SHAPES, built as AST. This module decides what a `--web` binary KEEPS;
 /// `build` spells out what there is to keep.
 pub(crate) mod build;
+mod session_decode;
+mod session_reset;
 
 
 /// The catch-all wrapper: the whole handler body goes inside its `try` so an uncaught exception

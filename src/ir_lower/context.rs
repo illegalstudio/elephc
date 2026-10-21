@@ -854,7 +854,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// because a function declaring `global $x` may replace its runtime type.
     pub(crate) fn global_alias_type(&self, name: &str) -> PhpType {
         if self.web && crate::superglobals::is_superglobal(name) {
-            return crate::superglobals::superglobal_type();
+            return crate::superglobals::superglobal_type_for(name);
         }
         PhpType::Mixed
     }

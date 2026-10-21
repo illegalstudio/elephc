@@ -565,7 +565,7 @@ PRELUDE_SOURCES: dict[str, tuple[str | tuple[str, ...], str, str]] = {
     # catalog_data.rs; each area maps to the prelude (or preludes) declaring it.
     "image": ("image_prelude.rs", "image", "crates/elephc-builtin-contract/src/catalog_data.rs"),
     "web": (
-        ("web_prelude/build.rs", "shared_ini_prelude.rs"),
+        ("web_prelude/build.rs", "web_prelude/session_decode.rs", "web_prelude/session_reset.rs", "shared_ini_prelude.rs"),
         "web",
         "crates/elephc-builtin-contract/src/catalog_data.rs",
     ),

@@ -143,7 +143,8 @@ pub(super) fn push_eval_process_superglobal(
 
 /// Returns one unambiguous codegen type used for a program global, if available.
 pub(super) fn eval_sync_global_type(ctx: &FunctionContext<'_>, name: &str) -> Option<PhpType> {
-    let is_typed_superglobal = ctx.module.web && crate::superglobals::is_superglobal(name);
+    let is_typed_superglobal = ctx.module.web && crate::superglobals::is_superglobal(name)
+        && crate::superglobals::superglobal_type_for(name).codegen_repr() != PhpType::Mixed;
     let mut inferred = None;
     for function in ctx
         .module

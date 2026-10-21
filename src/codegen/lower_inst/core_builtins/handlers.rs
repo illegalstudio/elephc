@@ -189,6 +189,23 @@ pub(super) fn lower_trigger_error(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
+    lower_diagnostic(ctx, inst, true)
+}
+
+/// Dispatches trusted prelude warnings/notices without PHP trigger_error's user-level restriction.
+pub(super) fn lower_internal_diagnostic(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_diagnostic(ctx, inst, false)
+}
+
+/// Shares handler ownership, masking and default diagnostics for both typed operations.
+fn lower_diagnostic(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    user_level: bool,
+) -> Result<()> {
     let message = expect_operand(inst, 0)?;
     let level = expect_operand(inst, 1)?;
     let file = expect_operand(inst, 2)?;
@@ -196,7 +213,9 @@ pub(super) fn lower_trigger_error(
     let default_label = ctx.next_label("trigger_error_default");
     let done_label = ctx.next_label("trigger_error_done");
     let descriptor_reg = abi::nested_call_reg(ctx.emitter);
-    emit_validate_trigger_error_level(ctx, level)?;
+    if user_level {
+        emit_validate_trigger_error_level(ctx, level)?;
+    }
     abi::emit_load_symbol_to_reg(
         ctx.emitter,
         descriptor_reg,
@@ -477,6 +496,22 @@ fn emit_user_error_category(ctx: &mut FunctionContext<'_>, level_reg: &str) {
     let deprecated = ctx.next_label("trigger_error_category_deprecated");
     let notice = ctx.next_label("trigger_error_category_notice");
     let done = ctx.next_label("trigger_error_category_done");
+    let warning_body = ctx.next_label("diagnostic_warning_body");
+    let deprecated_body = ctx.next_label("diagnostic_deprecated_body");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {level_reg}, #2"));           // recognize engine E_WARNING without changing its handler mask
+            ctx.emitter.instruction(&format!("b.eq {warning_body}"));           // select the shared warning prefix
+            ctx.emitter.instruction(&format!("cmp {level_reg}, #8192"));        // recognize engine E_DEPRECATED with its original severity
+            ctx.emitter.instruction(&format!("b.eq {deprecated_body}"));        // select the shared deprecation prefix
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {level_reg}, 2"));            // recognize engine E_WARNING without changing its handler mask
+            ctx.emitter.instruction(&format!("je {warning_body}"));             // select the shared warning prefix
+            ctx.emitter.instruction(&format!("cmp {level_reg}, 8192"));         // recognize engine E_DEPRECATED with its original severity
+            ctx.emitter.instruction(&format!("je {deprecated_body}"));          // select the shared deprecation prefix
+        }
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
@@ -504,6 +539,7 @@ fn emit_user_error_category(ctx: &mut FunctionContext<'_>, level_reg: &str) {
             ctx.emitter.instruction(&format!("jne {deprecated}"));              // inspect deprecation and notice categories next
         }
     }
+    ctx.emitter.label(&warning_body);
     emit_user_error_fragment(ctx, b"Warning: ");
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&deprecated);
@@ -519,6 +555,7 @@ fn emit_user_error_category(ctx: &mut FunctionContext<'_>, level_reg: &str) {
             ctx.emitter.instruction(&format!("jne {notice}"));                  // the only remaining validated level is E_USER_NOTICE
         }
     }
+    ctx.emitter.label(&deprecated_body);
     emit_user_error_fragment(ctx, b"Deprecated: ");
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&notice);

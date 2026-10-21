@@ -76,7 +76,7 @@ Important observable rules:
 - A new `read_and_close` session still sends its cookie.
 - `session_abort()` closes without writing and leaves current in-memory values
   untouched.
-- `session_reset()` reloads the read-time state.
+- `session_reset()` rereads the held file descriptor or custom handler and refreshes the lazy-write baseline. An initially active reset returns `true` even when a read failure deactivates the session, matching PHP.
 - `session_destroy()` removes storage and clears status/ID, but does not clear
   `$_SESSION` or delete the browser cookie.
 - `session_gc()` warns and returns `false` unless a session is active.
@@ -147,8 +147,10 @@ the active session path.
 | `php_binary` | Repeated one-byte key length, key, serialized value. |
 | `php_serialize` | One serialized top-level session array. |
 
+The `php` and `php_binary` decoders validate complete framing and decode one shared serialization graph, preserving cross-entry reference IDs. Malformed data destroys the session, clears its values and ID, emits a warning, and returns `false` from `session_decode()`.
+
 All formats preserve embedded NUL bytes. `php` rejects keys containing `|`;
-`php_binary` enforces its key-length limit.
+`php_binary` enforces its key-length limit. Both formats skip integer keys with a warning; `php_serialize` preserves them.
 
 With `session.lazy_write=1`, unchanged files are timestamped rather than
 rewritten. A custom handler that returned the same serialized data receives
@@ -220,8 +222,7 @@ Within elephc's supported static PHP subset, parity covers PHP-visible return
 values, persistence, headers, callback order, file layout, locking, serializer
 bytes, and supported configuration. Elephc does not load a host `php.ini` or
 dynamically-loadable session modules. The only built-in module is `files`;
-custom PHP handlers provide other storage backends. Diagnostics omit Zend
-source-file/line suffixes, consistently with the compiler's web-SAPI channel.
+custom PHP handlers provide other storage backends. Prelude diagnostics now use the typed Core dispatcher, including user-handler masks and exact-false fallback. Source-location fidelity, full upstream replay, shared-reference encoding, and the supported target/profile matrix remain acceptance gates in `.plans/session-php-src-compliance.md`; this document is not a claim of 100% compliance.
 
 ## Verification
 

@@ -298,7 +298,7 @@ impl Checker {
     fn seed_method_env() -> TypeEnv {
         crate::superglobals::SUPERGLOBALS
             .iter()
-            .map(|name| ((*name).to_string(), crate::superglobals::superglobal_type()))
+            .map(|name| ((*name).to_string(), crate::superglobals::superglobal_type_for(name)))
             .collect()
     }
 

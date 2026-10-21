@@ -30,10 +30,12 @@ use crate::synthetic_class::{class, e_array, e_array_assoc, e_binop, e_bool, e_c
     e_const, e_index, e_instance_of, e_int, e_method_call, e_neg, e_new, e_not, e_null,
     e_post_inc, e_static_prop, e_str, e_ternary, e_this, e_this_prop, e_var, extern_fn,
     function, interface, internal_declarations, method, s_array_assign, s_assign, s_continue,
-    s_do_while, s_expr, s_for, s_foreach, s_if, s_prop_assign, s_return, s_return_void,
+    s_do_while, s_expr, s_for, s_foreach, s_if, s_prop_assign, s_return,
     s_static_prop_assign, s_throw, t_array, t_class, t_mixed, t_nullable, t_ptr, t_union
 };
 use crate::web_prelude::PhpVersion;
+use super::session_decode::{decl_fn_session_decode, decl_fn_elephc_session_decode};
+use super::session_reset::decl_fn_session_reset;
 
 /// `elephc_web_method` — transcribed from the PHP form.
 fn decl_extern_elephc_web_method() -> Stmt {
@@ -884,7 +886,8 @@ fn decl_stmt_bootstrap_2() -> Stmt {
 
 /// `bootstrap 3` — transcribed from the PHP form.
 fn decl_stmt_bootstrap_3() -> Stmt {
-    s_assign("_SESSION", e_array(vec![]))
+    // A session root may become scalar under php_serialize; declare boxed storage up front.
+    s_assign("_SESSION", e_call("__elephc_session_empty_root", vec![]))
 }
 
 /// `bootstrap 4` — transcribed from the PHP form.
@@ -1829,68 +1832,7 @@ fn decl_fn_elephc_web_trigger_error() -> Stmt {
         .param("message", TypeExpr::Str)
         .param_default("error_level", TypeExpr::Int, e_const("E_USER_NOTICE"))
         .returns(TypeExpr::Bool)
-        .body(vec![
-            s_assign("__elephc_te_prefix", e_str("Notice")),
-            s_if(
-                e_binop(e_var("error_level"), BinOp::StrictEq, e_const("E_USER_ERROR")),
-                vec![s_assign("__elephc_te_prefix", e_str("Fatal error"))],
-                vec![
-                    (
-                        e_binop(
-                            e_binop(
-                                e_var("error_level"),
-                                BinOp::StrictEq,
-                                e_const("E_USER_WARNING"),
-                            ),
-                            BinOp::Or,
-                            e_binop(
-                                e_var("error_level"),
-                                BinOp::StrictEq,
-                                e_const("E_WARNING"),
-                            ),
-                        ),
-                        vec![s_assign("__elephc_te_prefix", e_str("Warning"))],
-                    ),
-                    (
-                        e_binop(
-                            e_binop(
-                                e_var("error_level"),
-                                BinOp::StrictEq,
-                                e_const("E_USER_DEPRECATED"),
-                            ),
-                            BinOp::Or,
-                            e_binop(
-                                e_var("error_level"),
-                                BinOp::StrictEq,
-                                e_const("E_DEPRECATED"),
-                            ),
-                        ),
-                        vec![s_assign("__elephc_te_prefix", e_str("Deprecated"))],
-                    ),
-                ],
-                None,
-            ),
-            s_expr(e_call(
-                "fwrite",
-                vec![
-                    e_const("STDERR"),
-                    e_binop(
-                        e_binop(
-                            e_binop(
-                                e_var("__elephc_te_prefix"),
-                                BinOp::Concat,
-                                e_str(": "),
-                            ),
-                            BinOp::Concat,
-                            e_var("message"),
-                        ),
-                        BinOp::Concat,
-                        e_str("\n"),
-                    ),
-                ],
-            )),
-            s_return(e_bool(true)),
-        ])
+        .body(vec![s_return(e_call("__elephc_emit_diagnostic", vec![e_var("message"), e_var("error_level")]))])
         .build()
 }
 
@@ -2789,7 +2731,7 @@ fn decl_fn_elephc_session_start_core() -> Stmt {
                     s_if(
                         e_binop(e_var("__elephc_hraw"), BinOp::StrictNotEq, e_str("")),
                         vec![
-                            s_expr(e_call("__elephc_session_decode", vec![e_cast(CastType::String, e_var("__elephc_hraw"))])),
+                            s_if(e_not(e_call("__elephc_session_decode", vec![e_cast(CastType::String, e_var("__elephc_hraw"))])), vec![s_return(e_bool(false))], vec![], None),
                         ],
                         vec![],
                         None,
@@ -2818,7 +2760,7 @@ fn decl_fn_elephc_session_start_core() -> Stmt {
                 s_if(
                     e_binop(e_var("__elephc_fraw"), BinOp::StrictNotEq, e_str("")),
                     vec![
-                        s_expr(e_call("__elephc_session_decode", vec![e_var("__elephc_fraw")])),
+                        s_if(e_not(e_call("__elephc_session_decode", vec![e_var("__elephc_fraw")])), vec![s_return(e_bool(false))], vec![], None),
                     ],
                     vec![],
                     None,
@@ -2981,7 +2923,7 @@ fn decl_fn_session_destroy() -> Stmt {
             ]),
             ),
             s_expr(e_call("elephc_web_session_set_status", vec![e_const("PHP_SESSION_NONE")])),
-            s_expr(e_call("elephc_web_session_set_id", vec![e_str("")])),
+            s_expr(e_call("elephc_web_session_clear_id", vec![])),
             s_return(e_var("__elephc_destroyed")),
         ])
         .build()
@@ -3006,7 +2948,11 @@ fn decl_fn_session_id() -> Stmt {
             s_if(
                 e_binop(e_var("id"), BinOp::StrictNotEq, e_null()),
                 vec![
-                    s_expr(e_call("elephc_web_session_set_id", vec![e_cast(CastType::String, e_var("id"))])),
+                    s_if(e_binop(e_var("id"), BinOp::StrictEq, e_str("")), vec![
+                        s_expr(e_call("elephc_web_session_clear_id", vec![])),
+                    ], vec![], Some(vec![
+                        s_expr(e_call("elephc_web_session_set_id", vec![e_cast(CastType::String, e_var("id"))])),
+                    ])),
                 ],
                 vec![],
                 None,
@@ -3101,25 +3047,6 @@ fn decl_fn_session_encode() -> Stmt {
         .build()
 }
 
-/// `session_decode` — transcribed from the PHP form.
-fn decl_fn_session_decode() -> Stmt {
-    function("session_decode")
-        .param("data", TypeExpr::Str)
-        .returns(TypeExpr::Bool)
-        .body(vec![
-            s_if(
-                e_binop(e_call("elephc_web_session_get_status", vec![]), BinOp::StrictNotEq, e_const("PHP_SESSION_ACTIVE")),
-                vec![
-                    s_return(e_bool(false)),
-                ],
-                vec![],
-                None,
-            ),
-            s_expr(e_call("__elephc_session_decode", vec![e_var("data")])),
-            s_return(e_bool(true)),
-        ])
-        .build()
-}
 
 /// `session_save_path` — transcribed from the PHP form.
 fn decl_fn_session_save_path() -> Stmt {
@@ -3442,52 +3369,6 @@ fn decl_fn_session_abort() -> Stmt {
         .build()
 }
 
-/// `session_reset` — transcribed from the PHP form.
-fn decl_fn_session_reset() -> Stmt {
-    function("session_reset")
-        .returns(TypeExpr::Bool)
-        .body(vec![
-            s_if(
-                e_binop(e_call("elephc_web_session_get_status", vec![]), BinOp::StrictNotEq, e_const("PHP_SESSION_ACTIVE")),
-                vec![
-                    s_return(e_bool(false)),
-                ],
-                vec![],
-                None,
-            ),
-            s_assign("__elephc_h", e_static_prop("__ElephcSessionState", "handler")),
-            s_assign("_SESSION", e_array(vec![])),
-            s_if(
-                e_instance_of(e_var("__elephc_h"), "SessionHandlerInterface"),
-                vec![
-                    s_assign("id", e_call("elephc_web_session_get_id", vec![])),
-                    s_assign("raw", e_cast(CastType::String, e_method_call(e_var("__elephc_h"), "read", vec![e_var("id")]))),
-                    s_if(
-                        e_binop(e_var("raw"), BinOp::StrictNotEq, e_str("")),
-                        vec![
-                            s_expr(e_call("__elephc_session_decode", vec![e_var("raw")])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                ],
-                vec![],
-                Some(vec![
-                s_assign("raw", e_call("__elephc_session_snapshot_bytes", vec![])),
-                s_if(
-                    e_binop(e_var("raw"), BinOp::StrictNotEq, e_str("")),
-                    vec![
-                        s_expr(e_call("__elephc_session_decode", vec![e_var("raw")])),
-                    ],
-                    vec![],
-                    None,
-                ),
-            ]),
-            ),
-            s_return(e_bool(true)),
-        ])
-        .build()
-}
 
 /// `session_cache_limiter` — transcribed from the PHP form.
 fn decl_fn_session_cache_limiter() -> Stmt {
@@ -3850,109 +3731,69 @@ fn decl_fn_elephc_session_encode() -> Stmt {
                 vec![],
                 None,
             ),
-            s_if(
-                e_binop(e_var("__elephc_sh"), BinOp::StrictEq, e_str("php_binary")),
-                vec![
-                    s_assign("out", e_str("")),
-                    s_foreach(e_var("_SESSION"), Some("k"), "v", vec![
-                        s_assign("ks", e_cast(CastType::String, e_var("k"))),
-                        s_if(
-                            e_binop(e_call("strlen", vec![e_var("ks")]), BinOp::Gt, e_int(127)),
-                            vec![
-                                s_continue(1),
-                            ],
-                            vec![],
-                            None,
-                        ),
-                        s_assign("out", e_binop(e_var("out"), BinOp::Concat, e_binop(e_binop(e_call("chr", vec![e_call("strlen", vec![e_var("ks")])]), BinOp::Concat, e_var("ks")), BinOp::Concat, e_call("serialize", vec![e_var("v")])))),
-                    ]),
-                    s_return(e_var("out")),
-                ],
-                vec![],
-                None,
-            ),
-            s_assign("out", e_str("")),
-            s_foreach(e_var("_SESSION"), Some("k"), "v", vec![
-                s_assign("ks", e_cast(CastType::String, e_var("k"))),
+            s_if(e_call("is_array", vec![e_var("_SESSION")]), vec![
                 s_if(
-                    e_binop(e_call("strpos", vec![e_var("ks"), e_str("|")]), BinOp::StrictNotEq, e_bool(false)),
+                    e_binop(e_var("__elephc_sh"), BinOp::StrictEq, e_str("php_binary")),
                     vec![
-                        s_if(
-                            e_binop(e_call("__elephc_php_version_id", vec![]), BinOp::GtEq, e_int(80500)),
-                            vec![
-                                s_expr(e_call("__elephc_web_trigger_error", vec![e_binop(e_binop(e_str("session_encode(): Failed to write session data. Data contains invalid key \""), BinOp::Concat, e_var("ks")), BinOp::Concat, e_str("\"")), e_const("E_WARNING")])),
-                            ],
-                            vec![],
-                            None,
-                        ),
-                        s_return(e_bool(false)),
+                        s_assign("out", e_str("")),
+                        s_foreach(e_var("_SESSION"), Some("k"), "v", vec![
+                            s_if(e_call("is_int", vec![e_var("k")]), vec![
+                                s_expr(e_call("__elephc_web_trigger_error", vec![
+                                    e_binop(e_str("session_encode(): Skipping numeric key "), BinOp::Concat, e_var("k")),
+                                    e_const("E_WARNING"),
+                                ])),
+                                s_continue(1),
+                            ], vec![], None),
+                            s_assign("ks", e_cast(CastType::String, e_var("k"))),
+                            s_if(
+                                e_binop(e_call("strlen", vec![e_var("ks")]), BinOp::Gt, e_int(127)),
+                                vec![
+                                    s_continue(1),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                            s_assign("out", e_binop(e_var("out"), BinOp::Concat, e_binop(e_binop(e_call("chr", vec![e_call("strlen", vec![e_var("ks")])]), BinOp::Concat, e_var("ks")), BinOp::Concat, e_call("serialize", vec![e_var("v")])))),
+                        ]),
+                        s_return(e_var("out")),
                     ],
                     vec![],
                     None,
                 ),
-                s_assign("out", e_binop(e_var("out"), BinOp::Concat, e_binop(e_binop(e_var("ks"), BinOp::Concat, e_str("|")), BinOp::Concat, e_call("serialize", vec![e_var("v")])))),
-            ]),
-            s_return(e_var("out")),
-        ])
-        .build()
-}
-
-/// `__elephc_session_decode` — transcribed from the PHP form.
-fn decl_fn_elephc_session_decode() -> Stmt {
-    function("__elephc_session_decode")
-        .param("raw", TypeExpr::Str)
-        .returns(TypeExpr::Void)
-        .body(vec![
-            s_assign("__elephc_sh", e_call("elephc_web_session_get_serialize_handler", vec![])),
-            s_if(
-                e_binop(e_var("__elephc_sh"), BinOp::StrictEq, e_str("php_serialize")),
-                vec![
-                    s_assign("__elephc_decoded", e_call("unserialize", vec![e_var("raw")])),
+                s_assign("out", e_str("")),
+                s_foreach(e_var("_SESSION"), Some("k"), "v", vec![
+                            s_if(e_call("is_int", vec![e_var("k")]), vec![
+                                s_expr(e_call("__elephc_web_trigger_error", vec![
+                                    e_binop(e_str("session_encode(): Skipping numeric key "), BinOp::Concat, e_var("k")),
+                                    e_const("E_WARNING"),
+                                ])),
+                                s_continue(1),
+                            ], vec![], None),
+                    s_assign("ks", e_cast(CastType::String, e_var("k"))),
                     s_if(
-                        e_call("is_array", vec![e_var("__elephc_decoded")]),
+                        e_binop(e_call("strpos", vec![e_var("ks"), e_str("|")]), BinOp::StrictNotEq, e_bool(false)),
                         vec![
-                            s_assign("_SESSION", e_array(vec![])),
-                            s_foreach(e_var("__elephc_decoded"), Some("__elephc_key"), "__elephc_value", vec![
-                                s_array_assign("_SESSION", e_var("__elephc_key"), e_var("__elephc_value")),
-                            ]),
+                            s_if(
+                                e_binop(e_call("__elephc_php_version_id", vec![]), BinOp::GtEq, e_int(80500)),
+                                vec![
+                                    s_expr(e_call("__elephc_web_trigger_error", vec![e_binop(e_binop(e_str("session_encode(): Failed to write session data. Data contains invalid key \""), BinOp::Concat, e_var("ks")), BinOp::Concat, e_str("\"")), e_const("E_WARNING")])),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                            s_return(e_bool(false)),
                         ],
                         vec![],
                         None,
                     ),
-                    s_return_void(),
-                ],
-                vec![],
-                None,
-            ),
-            s_assign("__elephc_dec_len", e_call("strlen", vec![e_var("raw")])),
-            s_assign("__elephc_dec_ptr", e_call("__elephc_session_stage_bytes", vec![e_var("raw")])),
-            s_if(
-                e_binop(e_var("__elephc_sh"), BinOp::StrictEq, e_str("php_binary")),
-                vec![
-                    s_assign("count", e_call("elephc_web_session_count_entries_bin_bytes", vec![e_var("__elephc_dec_ptr"), e_var("__elephc_dec_len")])),
-                    s_for(Some(s_assign("i", e_int(0))), Some(e_binop(e_var("i"), BinOp::Lt, e_var("count"))), Some(s_expr(e_post_inc("i"))), vec![
-                        s_assign("__elephc_key_ptr", e_call("elephc_web_session_entry_key_bin_bytes", vec![e_var("__elephc_dec_ptr"), e_var("__elephc_dec_len"), e_var("i")])),
-                        s_assign("key", e_call("__elephc_session_copy_bytes", vec![e_var("__elephc_key_ptr"), e_call("elephc_web_session_data_len", vec![])])),
-                        s_assign("__elephc_val_ptr", e_call("elephc_web_session_entry_value_bin_bytes", vec![e_var("__elephc_dec_ptr"), e_var("__elephc_dec_len"), e_var("i")])),
-                        s_assign("val", e_call("__elephc_session_copy_bytes", vec![e_var("__elephc_val_ptr"), e_call("elephc_web_session_data_len", vec![])])),
-                        s_array_assign("_SESSION", e_var("key"), e_call("unserialize", vec![e_var("val")])),
-                    ]),
-                    s_return_void(),
-                ],
-                vec![],
-                None,
-            ),
-            s_assign("count", e_call("elephc_web_session_count_entries_bytes", vec![e_var("__elephc_dec_ptr"), e_var("__elephc_dec_len")])),
-            s_for(Some(s_assign("i", e_int(0))), Some(e_binop(e_var("i"), BinOp::Lt, e_var("count"))), Some(s_expr(e_post_inc("i"))), vec![
-                s_assign("__elephc_key_ptr", e_call("elephc_web_session_entry_key_bytes", vec![e_var("__elephc_dec_ptr"), e_var("__elephc_dec_len"), e_var("i")])),
-                s_assign("key", e_call("__elephc_session_copy_bytes", vec![e_var("__elephc_key_ptr"), e_call("elephc_web_session_data_len", vec![])])),
-                s_assign("__elephc_val_ptr", e_call("elephc_web_session_entry_value_bytes", vec![e_var("__elephc_dec_ptr"), e_var("__elephc_dec_len"), e_var("i")])),
-                s_assign("val", e_call("__elephc_session_copy_bytes", vec![e_var("__elephc_val_ptr"), e_call("elephc_web_session_data_len", vec![])])),
-                s_array_assign("_SESSION", e_var("key"), e_call("unserialize", vec![e_var("val")])),
-            ]),
+                    s_assign("out", e_binop(e_var("out"), BinOp::Concat, e_binop(e_binop(e_var("ks"), BinOp::Concat, e_str("|")), BinOp::Concat, e_call("serialize", vec![e_var("v")])))),
+                ]),
+                s_return(e_var("out")),
+            ], vec![], Some(vec![s_return(e_bool(false))])),
         ])
         .build()
 }
+
 
 /// `__elephc_session_send_cookie` — transcribed from the PHP form.
 fn decl_fn_elephc_session_send_cookie() -> Stmt {
@@ -5197,6 +5038,7 @@ pub(crate) fn web_declarations(
             decl_extern_elephc_web_session_entry_key_bytes(),
             decl_extern_elephc_web_session_entry_value_bytes(),
             decl_extern_elephc_web_session_snapshot_bytes(),
+            super::session_reset::reread_declaration(),
             decl_extern_elephc_web_session_file_exists(),
             decl_extern_elephc_web_session_touch(),
             decl_extern_elephc_web_session_should_gc(),
@@ -5332,6 +5174,8 @@ pub(crate) fn web_declarations(
             decl_fn_elephc_is_session_ini(),
             decl_fn_elephc_ini_get_raw(),
         ];
+
+        declarations.extend(super::session_decode::declarations());
 
         // The shared `opcache.*` INI helpers (`__elephc_opcache_ini_string` / `_access` / `_keys`
         // / `_all_details` / `_all_plain`), baked for the compile target so `ini_get`/`ini_set`/

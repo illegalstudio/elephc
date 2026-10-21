@@ -1,0 +1,1718 @@
+{
+  "scope": "PHP 8.5.11 original-source session PHPT replay; full compliance remains false",
+  "source_tag": "php-8.5.11",
+  "source_pin": "678778973bb4d4185c06ef1320de50f1a975d3c8",
+  "elephc_base": "d283bc134998f5fa1184d260ce947455ea26a587",
+  "dirty_implementation": true,
+  "source_diff_sha256_at_replay": "f06c74df54edecaf911089612c311d009cc981bf4b47d8ce4d632c8d23faf90c",
+  "php_sha256": "a85cce8e98d0cdefc453f922d96b9c8626333491c4db03a21391450c70d6f3fc",
+  "compiler_sha256": "ef259375075e981581f09c101e72aef1db4c7b098b1bcd919afd7c04b18767c7",
+  "runner_sha256": "8883b022b63a70e6c86a3a8b84f958656e529957c8889b3a2345294b3e6929bb",
+  "bridge_hashes": {
+    "libelephc_web.a_sha256": "c71aa67e59ec6b2207a09336eae167b50ba7b54d5523fdd7ff36771dad0490c3",
+    "libelephc_magician.a_sha256": "d4c617ca0db54a596132794b84c4af5db520e2ac77e80f54d31cdc0041fe0b58"
+  },
+  "oracle_full_upstream_runner": {
+    "pass": 242,
+    "skip": 20,
+    "xfail": 1,
+    "fail": 0
+  },
+  "replay": {
+    "complete": true,
+    "artifacts_stable": true,
+    "artifact_end_sha256": {
+      "php_sha256": "a85cce8e98d0cdefc453f922d96b9c8626333491c4db03a21391450c70d6f3fc",
+      "elephc_sha256": "ef259375075e981581f09c101e72aef1db4c7b098b1bcd919afd7c04b18767c7",
+      "libelephc_web.a_sha256": "c71aa67e59ec6b2207a09336eae167b50ba7b54d5523fdd7ff36771dad0490c3",
+      "libelephc_magician.a_sha256": "d4c617ca0db54a596132794b84c4af5db520e2ac77e80f54d31cdc0041fe0b58"
+    },
+    "corpus_count": 263,
+    "selected_count": 263,
+    "unselected_count": 0,
+    "counts": {
+      "compile_error": 242,
+      "adapter_error": 20,
+      "oracle_xfail": 1
+    },
+    "acceptance": "open: request adapters, SAPI, profiles and target matrix"
+  },
+  "native_phpt_executions": 0,
+  "compiler_failure_groups": {
+    "Unexpected token: Question": 229,
+    "Unexpected token: Ampersand": 6,
+    "Unexpected token: Greater": 1,
+    "Unexpected token at statement position: Semicolon": 5,
+    "Reference elements in array literals (`[&$x]`) are not supported: an array element cannot alias a variable's storage. Assign the value instead, or use `$b =& $a[0]` to alias an existing array element": 1
+  },
+  "bounded_reference_targets": [
+    {
+      "target": "linux-aarch64",
+      "gate": "native-heap",
+      "passed": true,
+      "program_asm_sha256": "e4b77ade3607f7a7c81615815dece28577b5e066f772967c894d718382390a5d",
+      "runtime_asm_sha256": "21d87be2edaaffbc3c7b9e9d788a031d7bedd970f4bfd18e9116418da5ee4800",
+      "output_tail": "99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\nHEAP DEBUG: allocs=1160 frees=1160 live_blocks=0 live_bytes=0 peak_live_bytes=1312\nHEAP DEBUG: leak summary: clean\n"
+    },
+    {
+      "target": "linux-x86_64",
+      "gate": "native-heap",
+      "passed": true,
+      "program_asm_sha256": "e1487022a2690e1ab6f660ce4e8589951f6c38e3f1ff4ad9624deef8c2d37557",
+      "runtime_asm_sha256": "e83af1d6ffe4958d12d9ada175dd88f437fcde5742052d65a8682537c6d15513",
+      "output_tail": "99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\n99:8:7|1\nHEAP DEBUG: allocs=1160 frees=1160 live_blocks=0 live_bytes=0 peak_live_bytes=1312\nHEAP DEBUG: leak summary: clean\n"
+    },
+    {
+      "target": "ios-arm64",
+      "gate": "program-and-runtime-assembly",
+      "passed": true,
+      "program_asm_sha256": "f86e68a40954e36f3b38a56fba3c590b21466634935ad1e1df28f30687dfed7c",
+      "runtime_asm_sha256": "626b01cae0b408cd9209dd14db9d5750ed1d772c3522e03d81b80fe3d3cd8cd9",
+      "output_tail": "clang: warning: using sysroot for 'macOS 27.0' but targeting 'arm64-apple-ios16.0.0' [-Wincompatible-sysroot]\nclang: warning: using sysroot for 'macOS 27.0' but targeting 'arm64-apple-ios16.0.0' [-Wincompatible-sysroot]\nclang: warning: using sysroot for 'macOS 27.0' but targeting 'arm64-apple-ios16.0.0' [-Wincompatible-sysroot]\nclang: warning: using sysroot for 'macOS 27.0' but targeting 'arm64-apple-ios16.0.0' [-Wincompatible-sysroot]\n"
+    },
+    {
+      "target": "ios-sim-arm64",
+      "gate": "program-and-runtime-assembly",
+      "passed": true,
+      "program_asm_sha256": "61e57026bde1f5508f0b7fb622805f573a0fbb296e61a9369489b43e2278c78e",
+      "runtime_asm_sha256": "626b01cae0b408cd9209dd14db9d5750ed1d772c3522e03d81b80fe3d3cd8cd9",
+      "output_tail": "clang: warning: using sysroot for 'macOS 27.0' but targeting 'arm64-apple-ios16.0.0-simulator' [-Wincompatible-sysroot]\nclang: warning: using sysroot for 'macOS 27.0' but targeting 'arm64-apple-ios16.0.0-simulator' [-Wincompatible-sysroot]\nclang: warning: using sysroot for 'macOS 27.0' but targeting 'arm64-apple-ios16.0.0-simulator' [-Wincompatible-sysroot]\nclang: warning: using sysroot for 'macOS 27.0' but targeting 'arm64-apple-ios16.0.0-simulator' [-Wincompatible-sysroot]\n"
+    }
+  ],
+  "open_gates": [
+    "unchanged-source syntax blockers",
+    "CGI and request/header adapters",
+    "cross-entry encoding",
+    "scalar and unfinished-array references",
+    "reference merge into existing sessions",
+    "PHP signatures and named arguments",
+    "diagnostic fidelity",
+    "secondary PHP profile oracle replay",
+    "native iOS host execution and web bridge build"
+  ],
+  "cases": [
+    {
+      "test": "ext/session/tests/001.phpt",
+      "sha256": "278763f9ae31d824d25604f3dc5a20d09b985676ad2663af87d2e0b750ff6033",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/002.phpt",
+      "sha256": "fb98efac542250cd5dc00df644b5831161432d38a79d9272e340e6abc63e9cd1",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/003.phpt",
+      "sha256": "310316db67f07023032ec0aae33460c37b31d9c5a1c75e397c6387a13e4f414c",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/006.phpt",
+      "sha256": "2037eaefa3fd5d70aec087a83ab8df95407e7fb8abe0836fce451c99bfc90096",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Ampersand"
+    },
+    {
+      "test": "ext/session/tests/009.phpt",
+      "sha256": "e54d667fe96fa7c69707ef13a6e35ea08d3477a2e996aa05e4a99cd105b60e52",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/010.phpt",
+      "sha256": "a084ed19b6d79e3ce4d9b7c179d35f9a6c9046f0054be69a1b1c678a7caec2e2",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/011.phpt",
+      "sha256": "2acb8dfe96c2372ded83b1202d54c3c44ec3e67feeee6b5e964f068f552abf3b",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/012.phpt",
+      "sha256": "fa4cb426076f3ad7ee95c2b6dd74f418cfe1bc67dc01da94c164dc9b6c81f492",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/013.phpt",
+      "sha256": "4ea3e874361368b46ba128dc6885dd96029fa1cf033c10eecc5cdf5d92a39550",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/014.phpt",
+      "sha256": "f46bafabe2c9c69efae2b61efc2a035f3512711722f86ea8a08f2b791f9e4c4f",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/015.phpt",
+      "sha256": "34d852e378a75d0e4b2d3fce2a8aa042c34a12e18c63f6b7b18aef8860c28f99",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/016.phpt",
+      "sha256": "78f80e2be8488eb53dff6bd5d815671ce0cdab1cac204a0aa1f314f9082325b8",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/017.phpt",
+      "sha256": "6e11352120e72cc7faa8343fa2e0b9ba9fa2aa3bf26e58359cd320989bf0c193",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/018.phpt",
+      "sha256": "e7723a2127f3516a6705eb12ed59907d6e22f4e43b248f1f1e3e07031546dae7",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/019.phpt",
+      "sha256": "3a9c289827017a776b085874d351ff77f17ce844798dc8ec99400a7ddf5386f5",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Ampersand"
+    },
+    {
+      "test": "ext/session/tests/020.phpt",
+      "sha256": "f8acf26993dd97f7be1b9e6b942f305646827b755cf59b57985b8d7b2af993b0",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/021.phpt",
+      "sha256": "4005edb94d80a62187739251d99493245ac9b3b81e7920825ac94d9e348c6964",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/023.phpt",
+      "sha256": "50f448d9be298df6d2b362dd625617ed62081ffec0838bb193b2029065d32209",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/026.phpt",
+      "sha256": "6a9cb2450aa9cf989d0858c500473748dd47b6383fa24bc0f72d1c4e0b4a3ecc",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Ampersand"
+    },
+    {
+      "test": "ext/session/tests/027.phpt",
+      "sha256": "10de11bcd0da82248e293337c663f133a8b71d8e1c45edf38b2c6df210963225",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/029.phpt",
+      "sha256": "8eb10ece9e4f1ce1d80246b1bb8d0915c0b6c72e5eaae7dbd9026044d400e63c",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/SID_type_confusion.phpt",
+      "sha256": "55ad76d1b86ead6599791497bc7243ee0b7bcc67ebe26cd018aaef4a754a3ddf",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/bug24592.phpt",
+      "sha256": "0fbc5dd17aabfb9787871101d3108621611370601e19394b6829a409be4ffb4e",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/bug26862.phpt",
+      "sha256": "c961fb9b992abb88e294be25d5c94626f120a8bdb804633a353eb684d464a6e0",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/bug36459.phpt",
+      "sha256": "190ded6ca83ca403c82ccdf4dacb3219413f6ee044ac47ad911eedf6981a34f7",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/bug38377.phpt",
+      "sha256": "eec053f9df23e23c5adcf58af10ecda6a885c0b3739fc9c1fa3d5c0c1c90f19f",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/bug41600.phpt",
+      "sha256": "e2de21a192e3a8ab6048759aaaf04315b8062f1984b29427fb554975fee4ea7c",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/bug42596.phpt",
+      "sha256": "2dc417bbd397b31b29135971f273d990ce4b325444dbed7689c6ede34945e47c",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/bug50308.phpt",
+      "sha256": "4243d4a193d538b9a6c425e082cbe52a06ba38dbcd421ab37bcbca347f583920",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/bug51338.phpt",
+      "sha256": "e311656c66d18326f911d7b8125a9304c2a86d03968f7fdc8a3c151aa5ad5f93",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/bug53141.phpt",
+      "sha256": "751fda672e886237c82cebd571ac5272868ca05f47170054f565fa2afb90e11d",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/bug61470.phpt",
+      "sha256": "cea401a3e5b3d1793ce1bf85ddc7edd21e7b6764f3550f9bee03e9adfbd56ca5",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/bug65475.phpt",
+      "sha256": "d7adeb7484cfaa48086190bc776d12a7dd38cf10f907c7d28e3d222a27431b5e",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/bug66481.phpt",
+      "sha256": "2efc0d907ae95c16f4caee87c532492ef417271bee7546395a239a1c111ce031",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/bug66827.phpt",
+      "sha256": "f59e2807c177e640ca856439d7209c8bd2f3e5565cd30969ae41b903f4f352a5",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/bug67694.phpt",
+      "sha256": "ad693644780628ecc2202acc1a0d127b8b44da5b4b1d8e0087a1e6adde78edcc",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/bug68063.phpt",
+      "sha256": "a1ef5f73c24ba5c6ee58c1bb823fd43f0727a982aa28f9fd3e94b5e11e8edac1",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/bug70013.phpt",
+      "sha256": "eab822700f152ae6f171c4371d40a2d9bf3f536b59d35bf114a112da223ecdd5",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/bug70876.phpt",
+      "sha256": "5ab61a814d4da807907af207aa8d1e4e8c52059ae81a13436f933bf2246eac31",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/bug71683.phpt",
+      "sha256": "d5e4ee1e7d66e092ebebd8b9e68fe5e1db57c0ec48579ffe89b47c66c7bd648b",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/bug71972.phpt",
+      "sha256": "0fc162ee07e14207667ee8337f24b613dc125c4c10a312441b881d54a921319a",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/bug71974.phpt",
+      "sha256": "c8075a47eb00330da00f1f9adc6547c6d2fb8c2f3d81138bef5f2810e4a7349e",
+      "status": "adapter_error",
+      "reason": "unsupported sections: COOKIE"
+    },
+    {
+      "test": "ext/session/tests/bug72562.phpt",
+      "sha256": "52170a889e73b5a0529539d6c7768b5261431f9ec4341602a1364e06cfc2ab0d",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/bug72681.phpt",
+      "sha256": "d0ee27d095c772830dd66819d25ab64cbadd33b56994e87258f6519e38681f38",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/bug72940.phpt",
+      "sha256": "a4b60e8ab5a7fc07accb106196de40bf6baf5a7d2ea616b9fb8418800116fb18",
+      "status": "adapter_error",
+      "reason": "unsupported sections: COOKIE, GET"
+    },
+    {
+      "test": "ext/session/tests/bug73100.phpt",
+      "sha256": "e38a675864730c6447dc970ebd107db898c0c6d77abaaeabc6cbe4f5fde5b66d",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/bug73273.phpt",
+      "sha256": "a7d649c75358c9501b1ea6a4559311958726e9136db0d1934d6bfc55e3a4b003",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/bug73529.phpt",
+      "sha256": "7e272bceecd534ecb82617458eeb337135c6d60464cc20295e3a6c208352f51c",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/bug74514.phpt",
+      "sha256": "8420221dd48514b550a0c77a632e213eac009fa02639f0967952b36b95697fa9",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/bug74541.phpt",
+      "sha256": "7eab56831fd934a64ea45ce917572b3c8c8f9e44c6352fb438d3801018bed3fa",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/bug74833.phpt",
+      "sha256": "a70b69418c8f69df5619a620c3737f9dbd8303416a270f1a2232df06ec907b5d",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/bug74892.phpt",
+      "sha256": "fdc28fc09e2142b0c28de2eb7705a3344d399c821e75002a05c4c8e4f0658219",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/bug74936.phpt",
+      "sha256": "4fe666b742aebf7f2ec58675b8055ea12005e7576fc9ecd63a180652a6a15e6b",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/bug74941.phpt",
+      "sha256": "1eadd9d54f36546a6f46c1ad9c0086383a3a1a8935388040d6f759af00561b0a",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/bug79031.phpt",
+      "sha256": "b4d52325964650e8f4e98d1da24a5d53d9536f8eb5d77c92c2f16c89522a4dfd",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/bug79221.phpt",
+      "sha256": "532acf25e60c512454644dc137909befa4da9d6580b75c1ec9598eb5acd4dc58",
+      "status": "adapter_error",
+      "reason": "unsupported sections: COOKIE, POST_RAW"
+    },
+    {
+      "test": "ext/session/tests/bug79413.phpt",
+      "sha256": "9fc11f945d72b4acba319f0843f2bd79fb02a69cd61d155953fe53081ad4b806",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/bug80774.phpt",
+      "sha256": "d2e5f13bf06230dc0fdbcb87ae327cbba74cf53f95a3dcb4eac4b5892d589dca",
+      "status": "adapter_error",
+      "reason": "unsupported sections: EXPECTHEADERS"
+    },
+    {
+      "test": "ext/session/tests/deprecations.phpt",
+      "sha256": "395bb54e07a6337130ba8faf7643e278d71d0e108f283bec5727e6bd1877635e",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/gh-16372.phpt",
+      "sha256": "ad2b8238b7cfdadef808c7fcf80915115f6f1d0f060c5e36ba215b80c9722553",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/gh12504.phpt",
+      "sha256": "e6b19eba708e182ca609304125dcd96cca58133cefe5042bf1806ebc6a885eec",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/gh13680.phpt",
+      "sha256": "5581e26686cbe6268f7457125d13b44d4cc015bf72b7fc9d6ebaf647dcadcdf9",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/gh13856.phpt",
+      "sha256": "5b4be75b8a26ebbc6838197a3eae65c0cd95019ed6ccb1090e66df65844fccee",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/gh13891.phpt",
+      "sha256": "96f3126762ee0503addf90f0857fefc8587dda8b409a17dafa296e76d3703047",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/gh16290.phpt",
+      "sha256": "17dacd7cd1ec89b3530dae8d7a481fefd8ff5be6fcefb3d46ecd110c251d77e9",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/gh16385.phpt",
+      "sha256": "3826d65985bfac5647f9fb58fb0f5d3d87ff8f580b5cbcf49460529951f18358",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/gh16590.phpt",
+      "sha256": "c558617a2979e1ccf9437f855153c1644a3e21f240dd6efc5f2cd1d9f072beab",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/gh17541.phpt",
+      "sha256": "d36d5402c79df974a0df641f8da831bd588eac10bd0690f2bcbaee103e7ca9f5",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/gh18634.phpt",
+      "sha256": "771735b6a49f8a3122fc5f8349f8446ad9391c3d8a6d1363ff1459275419528a",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/gh18634_2.phpt",
+      "sha256": "b51b258a07355211da037ee6b8a1582cae70f5d18a6fd02fe6976803847de1dd",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Greater"
+    },
+    {
+      "test": "ext/session/tests/gh9200.phpt",
+      "sha256": "40938c7383495240c8efca05c55d97123506b2c7d0373f67587345682e22723f",
+      "status": "adapter_error",
+      "reason": "unsupported sections: CGI"
+    },
+    {
+      "test": "ext/session/tests/rfc1867.phpt",
+      "sha256": "ad2ba005f30d6e1c41659eb703166ec3c21b8da4af688862bd5dcd624651087e",
+      "status": "adapter_error",
+      "reason": "unsupported sections: COOKIE, GET, POST_RAW"
+    },
+    {
+      "test": "ext/session/tests/rfc1867_cleanup.phpt",
+      "sha256": "c37353b2a5955f8a7b78a72c19ffb7f565db36304a63740d9815b69750c8cf55",
+      "status": "adapter_error",
+      "reason": "unsupported sections: COOKIE, GET, POST_RAW"
+    },
+    {
+      "test": "ext/session/tests/rfc1867_disabled.phpt",
+      "sha256": "0c245c552091908941ae527c006cee5f0f1bb1ba88a17dbc65f64e635c2f8086",
+      "status": "adapter_error",
+      "reason": "unsupported sections: COOKIE, GET, POST_RAW"
+    },
+    {
+      "test": "ext/session/tests/rfc1867_disabled_2.phpt",
+      "sha256": "747d6422c899a9d828054346c1e547b6f053f32fb71adbcf511165ab9703bb0f",
+      "status": "adapter_error",
+      "reason": "unsupported sections: COOKIE, GET, POST_RAW"
+    },
+    {
+      "test": "ext/session/tests/rfc1867_inter.phpt",
+      "sha256": "b378b610359d5907064b5353cd0eaf1dea2f18d7cbf097e6122783ab8ab7184d",
+      "status": "adapter_error",
+      "reason": "unsupported sections: COOKIE, GET, POST_RAW"
+    },
+    {
+      "test": "ext/session/tests/rfc1867_invalid_settings.phpt",
+      "sha256": "523e493d1418774b4a788828861523e1f3e0012d17a548c9a9a2a0346fb42dcc",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/rfc1867_invalid_settings_2.phpt",
+      "sha256": "aed815786935ff0ffa30cff52d6a5051ae704ecdbd0abd3b1a92c158e2f87e9b",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/rfc1867_no_name.phpt",
+      "sha256": "8d0e7168b58c8b7336e3faef00149be56b0aea10d6be2879febfd1c895da226d",
+      "status": "adapter_error",
+      "reason": "unsupported sections: COOKIE, GET, POST_RAW"
+    },
+    {
+      "test": "ext/session/tests/rfc1867_sid_cookie.phpt",
+      "sha256": "97106db0757e0e8d51149db7a62b0ed8b92df7ad7ba59c1487c6216e9538b3bd",
+      "status": "adapter_error",
+      "reason": "unsupported sections: COOKIE, GET, POST_RAW"
+    },
+    {
+      "test": "ext/session/tests/rfc1867_sid_get.phpt",
+      "sha256": "31b5c1119be70dc50111a5ae7dd62d5c8644aa46b6069daa4657cff03374e029",
+      "status": "adapter_error",
+      "reason": "unsupported sections: GET, POST_RAW"
+    },
+    {
+      "test": "ext/session/tests/rfc1867_sid_get_2.phpt",
+      "sha256": "e80aac727cea66d69775e9e8e2d6cd839c0ff315c7965c7fd9ee9c3742e53965",
+      "status": "adapter_error",
+      "reason": "unsupported sections: COOKIE, GET, POST_RAW"
+    },
+    {
+      "test": "ext/session/tests/rfc1867_sid_invalid.phpt",
+      "sha256": "2976ed75bc647f70fe5772de871e81f51d7864e52b150f01d83f075c170c602b",
+      "status": "adapter_error",
+      "reason": "unsupported sections: COOKIE, POST_RAW"
+    },
+    {
+      "test": "ext/session/tests/rfc1867_sid_only_cookie.phpt",
+      "sha256": "0bff6f7816695eb93048ab493b446356aa1fd8ad1c0d365453aea75fa68558fc",
+      "status": "adapter_error",
+      "reason": "unsupported sections: COOKIE, GET, POST_RAW"
+    },
+    {
+      "test": "ext/session/tests/rfc1867_sid_only_cookie_2.phpt",
+      "sha256": "6eb07f7171c3caea9f0e4996ca166ffbb4dedc19a682a79a529f0739934be2e3",
+      "status": "adapter_error",
+      "reason": "unsupported sections: GET, POST_RAW"
+    },
+    {
+      "test": "ext/session/tests/rfc1867_sid_post.phpt",
+      "sha256": "157fcfbdc0d7a6c0da83f53c3696e4b2d0695811ffbb2bd19c768ce55e7dc0cc",
+      "status": "adapter_error",
+      "reason": "unsupported sections: POST_RAW"
+    },
+    {
+      "test": "ext/session/tests/session_abort_basic.phpt",
+      "sha256": "29a45b41efb5ffdf0f0947851a7c1bff5462545eb739ab363e88d29bdb9458b6",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_basic1.phpt",
+      "sha256": "9d49f2e400ebb943febdb8b68cab75def1d12afbd1c6145ae11b845a8940c8c8",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_basic2.phpt",
+      "sha256": "ff86ac56437d237c7ff623c1197e87cff34011e6cf95b5737e6caba2f0584c52",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_basic3.phpt",
+      "sha256": "da1f4a70720d70ed402a451a10b32f6e834a09d3a3f58871f70e2626ab545e21",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_basic4.phpt",
+      "sha256": "3cabf2f09926aafe1f2d01c0723a2cd5e091e701a32ff2655a416bd603adc3e0",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_basic5.phpt",
+      "sha256": "a0287e9798763d0cac7fd39abe705e4f6869a204385eaa809cd33f8ac0ad308f",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_cache_expire_basic.phpt",
+      "sha256": "cb3f32ee78393a5cce19a6ccdf5f7608e362d63ddfc18c2f84b22e68a24dbe2d",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_cache_expire_variation1.phpt",
+      "sha256": "bef29128c180a443cbc2958b79095a73a3c360e72dcf02a14792e02b8f97e3fe",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_cache_expire_variation2.phpt",
+      "sha256": "10bb0365af5819f2f91a92772cda449d2c84c334b5b4ebb0ec4e5026c4e21aab",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_cache_expire_variation3.phpt",
+      "sha256": "b8a0483e03905d155307d737ea36b6ca129ddc04cbddc0c4f196526103774a3d",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_cache_limiter_basic.phpt",
+      "sha256": "15ca5b87db95c370079175df2cfbb6761cc945b6ecae5557717888f48da71c69",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_cache_limiter_variation1.phpt",
+      "sha256": "4ed8d48b719d38305927d69381fece4f58a6ef83600cab1c833c7cc2bb43dc46",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_cache_limiter_variation2.phpt",
+      "sha256": "2ce7c4763558f2a248e64f7e9c695ff88ab758c563634a83963d3203d97b2d2b",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_cache_limiter_variation3.phpt",
+      "sha256": "c5504aebaf5e986f99171a175bfc27041784248b5ba788a11916b07c34f3e025",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_commit_basic.phpt",
+      "sha256": "9cd413055651565d1be26d2b100352b6f91fc600058eb784795e2568ffbe0214",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_commit_variation1.phpt",
+      "sha256": "ad7474b1be8fbe3d51cc8801c4713255ea7c498ef885a4a8a8d76667866c2a0a",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_commit_variation2.phpt",
+      "sha256": "8eefc2695cc1eda9ea9f2283f77d477a4755968c26e3144651b68e37e803c084",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_commit_variation3.phpt",
+      "sha256": "6a0cd2943492cfce63bcf0414cf0fe018f929e85fb0df58c1c2e1c2a190463f3",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_commit_variation4.phpt",
+      "sha256": "0b38b3280000664ab0066ddb144dd56bb5b7f7e198c9600bea438874c4e74bb8",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_commit_variation5.phpt",
+      "sha256": "ceb95e061e85e49b0c0cad4203f7fcd36f5457bb29cc79ac0fa14e504b889f6f",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_create_id_basic.phpt",
+      "sha256": "17aba95d57ef290d771824d05bf4bc477d7f1c408582c27a2e0317824b357b5e",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_create_id_invalid_prefix.phpt",
+      "sha256": "a083c0c940e8017649669e6d844de394375778881ca460f350ca1fcfbf8485b3",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_decode_basic.phpt",
+      "sha256": "b07665488a63127be42ab1515c918318ddd3dee87ca9850d63c95d714f54762d",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token at statement position: Semicolon"
+    },
+    {
+      "test": "ext/session/tests/session_decode_basic_serialize.phpt",
+      "sha256": "be08a65ec4f40d73d22e832ca76efa1414fe11de6029ac95f3d4f0bde8cba5a4",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token at statement position: Semicolon"
+    },
+    {
+      "test": "ext/session/tests/session_decode_error2.phpt",
+      "sha256": "848a9ff3f57592b90f4053b074188bc333e42b4205d12afb8a8ee77491708ea5",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token at statement position: Semicolon"
+    },
+    {
+      "test": "ext/session/tests/session_decode_error3.phpt",
+      "sha256": "ae3ec9d9e02605876979e0ac0ea62a7637a062e59188149774014bc49790ceeb",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_decode_variation1.phpt",
+      "sha256": "3c0e35636971e465fd29cae6e8eb868a2f129b336612c2279ebbd314a20a1e44",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_decode_variation2.phpt",
+      "sha256": "baab0fc2e8cfeec5e8abc019e8f983e3e1e723354650c466dd6f2566f0e27d99",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_decode_variation3.phpt",
+      "sha256": "1457f7fc29d7874fd0019df926a8ff59328e56b24cbc059d3815f618f0bd618b",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_decode_variation4.phpt",
+      "sha256": "6f3b3fe74136d6ed941126c8ad7f11fb01512d5194130d683b848792bf5eeaf9",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_destroy_variation1.phpt",
+      "sha256": "077dd27d0e3e0876897b0466cb56611a5a910c68570ddce7d0f4b201b717068b",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_destroy_variation2.phpt",
+      "sha256": "d65957cc8d074219609f46c51d22c234552ebda45dffe5dfa61fe261c7852f7c",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_destroy_variation3.phpt",
+      "sha256": "065a50bb4987ed67c373deea753470ead7e297a9b6270c34f898b3d76681d923",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_encode_basic.phpt",
+      "sha256": "b08ca662fdc7bdda22d079d415fc675a5e07ac2c9fdd4b68ec57e853a630bbee",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token at statement position: Semicolon"
+    },
+    {
+      "test": "ext/session/tests/session_encode_error2.phpt",
+      "sha256": "7049f51a40479fe9e4fa12af2d8a05c8a4572ef7b152ef4179de044ded1a5842",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token at statement position: Semicolon"
+    },
+    {
+      "test": "ext/session/tests/session_encode_serialize.phpt",
+      "sha256": "8cfcf2494848e51753f1eadef9ff0b87d11f4f266eb8d0c7c66d8ac536b871e7",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_encode_variation1.phpt",
+      "sha256": "992cfb13bdce851fab26cca428c168e354c271be5da07745e0139150d0b8777c",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_encode_variation2.phpt",
+      "sha256": "55986de902896bcf7299504eaabb0b56fc5db5cb2e54c6fdf7c36243ee1ee600",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_encode_variation3.phpt",
+      "sha256": "e4a4c5179891d900f55d8c9fb5a8a6d24df75152cd4907f62819da2d1ad7f55f",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Ampersand"
+    },
+    {
+      "test": "ext/session/tests/session_encode_variation4.phpt",
+      "sha256": "fd6bae69d5a6fbe2819aac3f7002f3ee0ea77dca37ee31f57a19cd2d83242dc5",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Ampersand"
+    },
+    {
+      "test": "ext/session/tests/session_encode_variation5.phpt",
+      "sha256": "ea1d4be978d3e15a2cf9c00beeadc67e04249653aa7643753bad783512725674",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Ampersand"
+    },
+    {
+      "test": "ext/session/tests/session_encode_variation6.phpt",
+      "sha256": "caf404bcbe1041c88f127794e0a466115f897c4a432c7ce5cf15f57a021904ad",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_encode_variation7.phpt",
+      "sha256": "54f9c0fe903e19f64cdb0de83f8a822fe8c5d29c6c48a37c1929f1bf1d24af3f",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_encode_variation8.phpt",
+      "sha256": "11f9bf54a3122ed2f00c63a179f79c5f387bb7868818b95a7418364aff345c5f",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_gc_basic.phpt",
+      "sha256": "845d25e2b153081d47a4cba2a3c3d75ad12b473d93436ad6f3c145b1448fd7f2",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_gc_probability_ini.phpt",
+      "sha256": "369f98be7be828b89b39111478d19108a1f07d4e3c68f85044e6e8a5ef7b3e60",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_get_cookie_params_basic.phpt",
+      "sha256": "dce4c4f758bc779ba94c3daeacb36df30709444ff0b41f18ba2b7337d5052acb",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_get_cookie_params_variation1.phpt",
+      "sha256": "60b3ce672106a499ac5999ae0b6bfca76344609ef82ef80d663507a03aa421c5",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_id_basic.phpt",
+      "sha256": "faf8ac462a841ed2be39dacc7a4881f3a26231c1f5cbca52d78a861213f08453",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_id_basic2.phpt",
+      "sha256": "458a03f782729c7abb9921b11292b2654c58b24deeb265dca2c0dde4a11a50fa",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_id_error2.phpt",
+      "sha256": "3659d693bcf3236e021d52dcf42d73e221054ad804439460af0ef869bfab5d86",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_id_error3.phpt",
+      "sha256": "5797cd0d879e2fa6b65752327f24c15912b6ed1fea4583f36574b1c4f5c6bc58",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_ini_set.phpt",
+      "sha256": "025d406f365a3ac69acb93483275c92d2990b25987df4d80415852241ad47895",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_module_name_basic.phpt",
+      "sha256": "52beeb8908f05ad01c57d9d5a1fb44446d4a5a9769113ec77e3d96a8599e50fa",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_module_name_variation1.phpt",
+      "sha256": "5178bf37f829aa452689e4b6a8c307be5301e5db19b9bc5a41d4ce1df9df7dd4",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_module_name_variation2.phpt",
+      "sha256": "f09fdfc081690ef89169a5a486635f28f70faa0e788ab32423ccfc2b00c6f995",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_module_name_variation3.phpt",
+      "sha256": "92170f5095c5aecbffb23c4f0c0da7b7c4aaced297c824a98d1a720420922069",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_name_basic.phpt",
+      "sha256": "80952ed6bd9e32842c84c1e0d221d1f6e8c3541ed5f9e27f0e9170198ae308da",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_name_variation1.phpt",
+      "sha256": "877e1082e299d8b5cd42241a60e258608936f30b31da5bd388d61c830c2e1ce3",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_name_variation2.phpt",
+      "sha256": "c15199ead1d36e4b92e6ae9210d785e505fc28955c0626695fc09b0970f3a836",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_name_variation_null_byte.phpt",
+      "sha256": "5d89fa5bfe4a953704de89716b336d29f38d0e9e04c40f5509a6eaf07a9fe158",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_regenerate_id_basic.phpt",
+      "sha256": "b45751c881e4fec0140c9a02f9a7af926af14b03a93da31dc4b7482597f8ff9b",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_regenerate_id_cookie.phpt",
+      "sha256": "5ec85fb9c1c2325f0138ffbde2fefa1b6096fd823e64f4200399568170e7827c",
+      "status": "adapter_error",
+      "reason": "upstream CGI fixture/SAPI adapter required"
+    },
+    {
+      "test": "ext/session/tests/session_regenerate_id_fastshutdown.phpt",
+      "sha256": "bccbeafbd846580c63118e5f3d27f7835afe6aa192e76075dab62f80d98f4f3e",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_regenerate_id_variation1.phpt",
+      "sha256": "52bf879bd8478e6b3d6073f57d268bece45d8f74ecc1a17a05701d12d53a6f3a",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_reset_basic.phpt",
+      "sha256": "1beea596916ee11d2e63deb1c97b91075330600d1bdb5d7db794e0f4cf14713f",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_save_path_basic.phpt",
+      "sha256": "297de5a7681148555bd89f9af75fc465b7a7cc521c54757f655ab44621620b12",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_save_path_variation1.phpt",
+      "sha256": "3fc02213e1904c4277d83736fd3bfb93f718fb68ab32a572d4b8b5206aa39191",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_save_path_variation2.phpt",
+      "sha256": "d369f1833754efd3d4e9129d8ba08b9eb2557ab5b58353c7cd6966b4d8701086",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_save_path_variation3.phpt",
+      "sha256": "9ec14a1dc790de52df67e1396e9d6c3702938826c85e5ae82f6c2fca90645725",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_save_path_variation4.phpt",
+      "sha256": "055ee94e9ffc3ead209c5a345bd32639a6323ee16bbf638228f49a8cc82892c8",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_save_path_variation5.phpt",
+      "sha256": "78226c004ac84947a15bf2dc0fc52e72646c93ccf3339a7c5b5ed1feacf37404",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_set_cookie_params_basic.phpt",
+      "sha256": "3529c94ae322714615c66c68861cd6ef0aa9e6887ed75156f7bfba7056793d38",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_set_cookie_params_variation1.phpt",
+      "sha256": "d238ce18d6db6392baf75909e835508999c562046b5d7b0a06716c3d6d2e5384",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_set_cookie_params_variation2.phpt",
+      "sha256": "dfb471b443349b4b559db0f908768e6d13e40b7228b32f5bf3460de1a2dafb1f",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_set_cookie_params_variation3.phpt",
+      "sha256": "ced4459f5214afb6d44fce0b23e50c9671dc68883af1717796a1f1b29941aa99",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_set_cookie_params_variation4.phpt",
+      "sha256": "9aaf8e1615e3714dd4f89c1e8815226bd1efd51af69483629ea52bcdaf35fe8e",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_set_cookie_params_variation5.phpt",
+      "sha256": "e05e508dbe75ac769ae154bacb804c0cdab2fd12736387398a290db476fbf087",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_set_cookie_params_variation6.phpt",
+      "sha256": "0594e361123dc1ceb618b1c9ac3c418db7aeaf42655c411190103700ea603342",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_set_cookie_params_variation7.phpt",
+      "sha256": "7f0d26164a5ea74415625b352d986b7ee95a201e3dc873a88de8854b96257f85",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_set_cookie_params_variation8.phpt",
+      "sha256": "d4456d8df956aef845212dac4b24fe1c68519ba3a6be4fecb98164ce40219581",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_start_cookie_header_rejected.phpt",
+      "sha256": "8adb7e0286278bb81cd4baba9c313229d5f5703e18c2bedb1a188f9bb03a3989",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_start_error.phpt",
+      "sha256": "a634938014947be61c983ae7147f8c8b1f7617eea932a5215954b0c38b6fe998",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_start_partitioned.phpt",
+      "sha256": "0474a7af8d336aca7ffa7951e5664aab25b3febc803ab0b12ca5c6089e3e0a8b",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_start_partitioned_headers.phpt",
+      "sha256": "377de6f269d7c461eeb08d3a7ea610c617aa5a530f53b190965b99414dff6831",
+      "status": "adapter_error",
+      "reason": "unsupported sections: EXPECTHEADERS"
+    },
+    {
+      "test": "ext/session/tests/session_start_read_and_close.phpt",
+      "sha256": "620a5ee9d632c1eceb2082e842b50440d812911da72ae3a5bd54a70a494594d9",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_start_variation1.phpt",
+      "sha256": "9111a444ea1d9fd66c02bdaada3e3c01d024aaac80e812a7ba619b43016d55df",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_start_variation2.phpt",
+      "sha256": "708f1d730a0e5492b610c7cdedebc4c0d712ce9d795878d4d8ddf1097eff0a90",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_start_variation3.phpt",
+      "sha256": "ec7e4d2b4fcaf4bf584433035808784a446cbb728b0f34847c4168d33d4be74d",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_start_variation4.phpt",
+      "sha256": "37adc2acea75157d679bb5aa8abe9d7ec9d610cf5a94a66b98c9b2bd68cb22cc",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_start_variation5.phpt",
+      "sha256": "cace5880c10f52df409eb906ebcf0c8fccc947f0c60f08c1f9980295ea2896fc",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_start_variation6.phpt",
+      "sha256": "43884dc3ca93a690067e7ff9973025182061196354553438482ead7aeb1b3f52",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_start_variation7.phpt",
+      "sha256": "7ff40295dc77c0b999811c2e128cb6acc00a2248dcb51465a49c937273975041",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_start_variation8.phpt",
+      "sha256": "93996b73b0d01f2615f12ec6ccf9316deae7aedb54b022b5ee045539d416befc",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_start_variation9.phpt",
+      "sha256": "6806bdffe05da5e2b05c3c5cf8dffd555fb27e6f909980eb6e12e93cb4795653",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_status.phpt",
+      "sha256": "7617341fe3ee44b717517aa0c109bc9b810c522ad4daf5be949275f11e2c0459",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_status_disabled.phpt",
+      "sha256": "3a856f3140955442cc19c54b7581736b1e62d11f1f057b308ee8ce61720d8629",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_unset_basic.phpt",
+      "sha256": "c6404ca4e30bd7f4c39f3d3d1e7cbdd0f9c03935c2360665d896ebd2b334e2f8",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_unset_variation1.phpt",
+      "sha256": "1de2b344cec7f8d8a67f7b73ca8b376b33aa81f5700860945ff950908b8f72b1",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_write_close_basic.phpt",
+      "sha256": "a1b9ab4db7ae60d627ea45036436dd81d036d12c10503c5da1f4d0c14481c985",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_write_close_variation1.phpt",
+      "sha256": "56e158e5820f475e26aa6ca260270facab508cc6f1e703b0e7e7e2be5ea868bd",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_write_close_variation2.phpt",
+      "sha256": "9e834b99b70bcf733bf428c54ffcafb9f32ec13670a550de1868a3683d5ceff7",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_write_close_variation3.phpt",
+      "sha256": "95f81757c9c70b146787a5d555610f86311510c58ee3726d31644a979211a714",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/session_write_close_variation4.phpt",
+      "sha256": "699444fba03cc8b6c83d7524aa1d02c5775083ce97ad0cf4b3de9167ec648e37",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/basic_set_save_handler_test.phpt",
+      "sha256": "ea27ef11e4b8e721be1dfd51b081e8f737493bb57e94631748fcc2d81389270d",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/basic_set_save_handler_test02.phpt",
+      "sha256": "20971d5b65c065e681f5a794726780e29fd3bf48c2210e0b0286110d48879fc4",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/bug31454.phpt",
+      "sha256": "282ef06d5788d6db738b1463c194ade2bcdc85c7d18a741b7895f0f78f5448b8",
+      "status": "compile_error",
+      "compiler_diagnostic": "Reference elements in array literals (`[&$x]`) are not supported: an array element cannot alias a variable's storage. Assign the value instead, or use `$b =& $a[0]` to alias an existing array element"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/bug32330.phpt",
+      "sha256": "7008d497cf11da5797f62b89183b5514a5e0f020cc0c7e0fbb9d95b03db913d9",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/bug55688.phpt",
+      "sha256": "c49536ef48687ecf8b754bdc6719b47373e25f9d2d08cde0ef3f80c98badefd4",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/bug60634.phpt",
+      "sha256": "e43ec1a527286c86429dd3f9356a1e8fa15d07647c600ae5812048c207204881",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/bug60634_error_1.phpt",
+      "sha256": "cead20647d6f513afa6f55543f06a951578205ebc0c1fdb29ea6021f9a29b01b",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/bug60634_error_2.phpt",
+      "sha256": "138a63c38d9f55319ff5372eb72a6c4ec367c94ae90cc89cd0d3fc0f570a14c7",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/bug60634_error_3.phpt",
+      "sha256": "163725edc1f8c9829adb1df62de4749a6536ec9ca2571e47674ea64e12d2d2af",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/bug60634_error_4.phpt",
+      "sha256": "4e21cf826d78aabdc52f35294ad8f769018cae2f22d353123c1f789068be7436",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/bug60634_error_5.phpt",
+      "sha256": "cedf69c18558990aea38491840f0d0a69e70b508667dc75a4c4710ed23012194",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/bug60860.phpt",
+      "sha256": "4dc7e18c55e919de263349f11c6fedf3b9175f2f8a61e0816e81d1fcf780d5bb",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/bug61728.phpt",
+      "sha256": "83ecdb1512656b767fe697f6d186ad533325b7c4dcfbf90d69cccecfc3ddd4f6",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/bug63379.phpt",
+      "sha256": "0dc1879c7ebeac4858b08ec644e5ba718b1e3bf17839dc1ed4d1fabd8b750311",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/bug63379_nodestroy.phpt",
+      "sha256": "d122ad480f78da3c9441d325915df3f381d5a8d65f9059c4dc82757e16b811cf",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/bug67972.phpt",
+      "sha256": "ebc46ca66cc08718d741f2bd1c7f565bd218221b088632a09708b18eae233f9c",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/bug69111.phpt",
+      "sha256": "b6c7a8c173245b01a98039a50f90ae001f829d75ce4062981656538dc6a75fbb",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/bug70133.phpt",
+      "sha256": "3efc3ebb5e9abf8ee6a7448d81e4e5b374aec311026bb32f62864fbdac2ce841",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/bug71162.phpt",
+      "sha256": "217970f918d09966b3bbb262a241dc74c8e28b400bba2f57e52561a521d0267d",
+      "status": "oracle_xfail",
+      "reason": "Current session module is designed to write empty session always."
+    },
+    {
+      "test": "ext/session/tests/user_session_module/bug78624.phpt",
+      "sha256": "ad004952b83bfde0f5e03ba8d5339552b1d3b4c64659fd21843d0c67e7917d61",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/bug79091.phpt",
+      "sha256": "0c056454394eff1609c6533576639d45c2d4d024a961ce4fe1c046c09cffb6f5",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/bug80889.phpt",
+      "sha256": "c8534f1905718d24840e52e25b8ee4d44af0e9682be096b3014dc13d355bb84a",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/bug80889a.phpt",
+      "sha256": "f8cc555697b236d3253bed3a32090ce8294fb9a7dd671ec62df6564935ee7521",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/error_when_setting_save_handler_ini_setting_in_runtime.phpt",
+      "sha256": "83723b74001023557265b5a7551f217b9e5b699e0b4c5802b4f5073dfd67ec9e",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/gh23043.phpt",
+      "sha256": "f3f2f9dceca2afe0e9e21a5329a5f0c3d5c093458386d80cfc5289145d3b4c5d",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/gh7787.phpt",
+      "sha256": "cf3b21d89cab9cdf3183346778f949534b67a8270d786491c7e80a85edcb8b8a",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/gh9583-extra.phpt",
+      "sha256": "7ef08f4959bbd9827091fb44480803800f0114a51eba655df8c4e746ebefcacc",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/gh9583.phpt",
+      "sha256": "ac89f67ddbd4530ed0b96a7d2e3593770e314a61491e77e036c62046874692df",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/gh9584.phpt",
+      "sha256": "00f12c8b1ae7f4d4c8d0cfba1474328dcdc4ab80ea695a864d4507a9438837a2",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/gh_gc_retval_leak.phpt",
+      "sha256": "1cf14ed46b61ea0f01f91c869063aa7e69a3845e07223f14874ff8c7935a0993",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/recursive_handler_argv_leak.phpt",
+      "sha256": "6618b4b87c07717a400e93d1b67254b7ea7764dd86e0113f6d95c22ccb516259",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_create_id_create_sid_throws.phpt",
+      "sha256": "d2f747ed6e588ccb59681e1f5a50b0b470430aee58300ef5f0c5aefc4f426fc4",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_module_name_variation4.phpt",
+      "sha256": "f099824d02df44d0385f4ca570e991324b4c4122c9f5a882a7da97f4ecf9e09a",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_basic.phpt",
+      "sha256": "e92291eafeaa45cb6345c68d311707f8d90aa6963e1fdf54480aa6d6f2a1fb04",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_class_001.phpt",
+      "sha256": "2eee3cde722097f6b6167bee6a034252bfa5d6a4c4f70f9b5ad64c4763631ed7",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_class_002.phpt",
+      "sha256": "f757e7cfe7dc2457882fc471806a8fef720e44f166e5ceeaca26ce7ac67110fd",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_class_003.phpt",
+      "sha256": "7d4b2656117b06cab9f45bb5eec10f358000919b0108129a880b1238e85a9150",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_class_004.phpt",
+      "sha256": "c68650763137c5cfe0ab1073d912141e740df2bf735245001986b0466595ee1b",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_class_005.phpt",
+      "sha256": "1b926ae44ca29917b2360ca700c4383fe953ef5f109f3e45961cbafca1140dc0",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_class_006.phpt",
+      "sha256": "a6766165cd8df4c4510daf029b758c37a241f75ec2be3f30e4e39b7e0d05a3ba",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_class_007.phpt",
+      "sha256": "11f1879b93e3f9063d6559662fd29ff68be022143567830ced73b8686534bd95",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_class_008.phpt",
+      "sha256": "355ad027a35ca6b5a54c7ba28c6c9251d5a5b005f45134ac2cedf8d1da3720dd",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_class_009.phpt",
+      "sha256": "71ef7c3eaceef2b1e87d9e0b1e39907986d72a1d7b87957abb8e04c85c613d26",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_class_010.phpt",
+      "sha256": "eb541c8eaa5e27b8b77e1cedc30c4835f93284877c1e467d206b11de17df5189",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_class_011.phpt",
+      "sha256": "596a9514dc128534c7de0d2d37badbe32f3124949a2de84e3a6f2bf1d55b3ca3",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_class_012.phpt",
+      "sha256": "f3ef95adcc1cfdf3a72ae68135e22cbe60f9909932dcaaa7f346c5c895d644ea",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_class_013.phpt",
+      "sha256": "589d4706da77c9b00347afe7a76f3876dcac7090721d4f0f2bbf1c641688b2f0",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_class_014.phpt",
+      "sha256": "72ef31474b5e41f1b4035b0db2e90b0f04c8a4baa3e1b70e2c01d366a415e333",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_class_015.phpt",
+      "sha256": "dbce6ee7c767107621c77b784852b8af43ffc49a06c5d865f97328347c14de05",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_class_016.phpt",
+      "sha256": "a8f5a6236193d854856a1b7df3dff96030b8d28e52932a48291b8c8b5e31b997",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_class_017.phpt",
+      "sha256": "72fccd2202f8120e9c9403e554a46c427347b831433134e879f695341a5fafac",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_class_018.phpt",
+      "sha256": "846a925fcf8da17d07c5ea10ad29c1d7abc2f912e8e09bbf860610f19b2e4469",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_closures.phpt",
+      "sha256": "7db4c2c45870f841dafe46fdb266e56cd9abfb633c81d55efaf7c5e82179e52b",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_error2.phpt",
+      "sha256": "70774cc7c248ac538cbe13fb5f223e3babc6b139590f5800da68911082ed54ef",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_error3.phpt",
+      "sha256": "3b877d765fc72c64cf48b3f0b4c49cf09019cb6fbd08d4f8ec422bce2d51b2cb",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_error4.phpt",
+      "sha256": "13948f22a746e1a04a600648d03225120bbe8a014b701399c83300ee94d09d63",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_error5.phpt",
+      "sha256": "ebe1bf891d0352f977430389265b3f4a78e3aa12a81d025d4f98ee2e5bd07d9f",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_error6.phpt",
+      "sha256": "73990d9746d8736bf19c101aab9fef7352c1990483ee613a9a5908fa0b308017",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_iface_001.phpt",
+      "sha256": "3e6f11195e6e928a5f1197b4c796681e2ca195f5af29e82b5b4d140d095d1c18",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_iface_002.phpt",
+      "sha256": "d7166a233efe4da8b2738aa0f34c551a0a7a4106dad2b6f3c30a12909718944b",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_iface_003.phpt",
+      "sha256": "e4174c59ec0caca1e5c12ba9dc7d8568407896a52ffdf029114e3ab724ffc42e",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_multiple.phpt",
+      "sha256": "81682bc7ac967c0e878894d5c1b93f9585e9143c139da99ac1a60329208440b5",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_sid_001.phpt",
+      "sha256": "61837afa7e57461f479c56d239f37d6eea4e8b434d16d12e4f0a544315f01211",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_sid_002.phpt",
+      "sha256": "de00b7d8cc2d9becd5b34a9cdc0d7295bd2ffb702dae0111c7b9c22b8f86b3de",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_type_error.phpt",
+      "sha256": "c069a7fb8e588d3a7f4ec4020c296bb10b9395a9d9666e9368155b8b8277b26a",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_type_error2.phpt",
+      "sha256": "3acaaf64565ccc1237def5bac1599377dd4093dd3efa58d6cc8a031e0078b036",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_variation1.phpt",
+      "sha256": "c036344ac8534cff6ec4571bb929c55bc13f6f7a189f41c653dabe3b585e11ec",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_variation2.phpt",
+      "sha256": "8a03a61d04b09fd5fa056fa467fd3cf6bf6f56b68c8824cb5d2a9719704f6a2b",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_variation3.phpt",
+      "sha256": "35f2259a9f01cc155f46ee2249b4a0c16d4588e055ef7f26f308be20a5a8a74d",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_variation4.phpt",
+      "sha256": "a6b5fa0f43c4ba903e8c410c57cab2480baff9e11221a1989ed7166041f31ea5",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_variation5.phpt",
+      "sha256": "64e01ea601e73949142288fadafafd41e21b167873aea40d426c3fb893aa489b",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/session_set_save_handler_variation6.phpt",
+      "sha256": "504f5106d61695e8ce202249d698d12747d517d3fe318b4646d38a941b0a5769",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    },
+    {
+      "test": "ext/session/tests/user_session_module/sessionhandler_open_001.phpt",
+      "sha256": "5038cb9790f7a171ef3ec9cb1f0676dfbaef681b53d37d88fb91dbab3f68f1ca",
+      "status": "compile_error",
+      "compiler_diagnostic": "Unexpected token: Question"
+    }
+  ],
+  "tested_source_hashes": {
+    "crates/elephc-builtin-contract/src/catalog_data.rs": "17b61a425adbd59692812ad8073fad1ee62dc293908e4ca5d267ebe715548991",
+    "crates/elephc-builtin-contract/src/support.rs": "6030e9c0675c38860f5a36cf16eaa5135853a523effcf9e97c0c7084e121b4bc",
+    "crates/elephc-web/src/lib.rs": "61af1d429bc7b0f5ddd105637cc739f261b4e550a0dc8488d519b7d4d85ed1a5",
+    "crates/elephc-web/src/session/file_io.rs": "a915aa14e5b832ac64b8c755d938164279c5ac9c7c8ecd7f434aa1ebe7cf53d4",
+    "crates/elephc-web/src/session/mod.rs": "962da6cbb913c6dec4c1f32a5f376168df6bea849dde45ecafc950b72edfcf8b",
+    "crates/elephc-web/src/session/state.rs": "0ebcc251e90ebe227a34e97bd6ac764df074081849765c49246e3f0fb0310478",
+    "crates/elephc-web/src/session/wire_format.rs": "398552bda0da5d3ec89d85f19759179572cad75919c624580bbcd9d83f8ccda9",
+    "crates/elephc-web/src/session/wire_format/decode_array.rs": "b07e85b1b337ab8be2249aba33590619a9e43a2c93acf0404296cb4f1f6e20ed",
+    "scripts/session/replay.py": "8883b022b63a70e6c86a3a8b84f958656e529957c8889b3a2345294b3e6929bb",
+    "scripts/session/test_replay.py": "e917061b6d8f315ba4012874d70af7dfc222e478b95c7fdf6e467ea31a2c15f6",
+    "src/builtins/system/__elephc_emit_diagnostic.rs": "88b2b99f02b100064fa95a329ddf5b2a3bb57ce2f67896e1bdc038f27af58204",
+    "src/builtins/system/core_support.rs": "d506f8ccd799dabb7f4bde319cf5535f80c042186e25c22f23e500e35c5e0ac0",
+    "src/builtins/system/mod.rs": "f6b1da19c2422f70f42e5f16ca39c5169930c1af49fff1d17372258e4cc19f26",
+    "src/codegen/block_emit.rs": "45dacfa2c5071e444050dd518d16ffa879882eeddd4a3557a04b15b65b0f02d7",
+    "src/codegen/frame.rs": "31c44262c06dc1869eaaec0b817aa43cda60c4c4b546bd33856f593d57af0da1",
+    "src/codegen/lower_inst/builtins/eval/sync_inventory.rs": "72f176983c7121e8018d8d6ecce066a79bd8cb0addebff9b16d96b833cbe3c13",
+    "src/codegen/lower_inst/core_builtins.rs": "28ab9c78a28821809fdd52039f3af7a191b2a35ae9cd744760e3ea30ba8a80a0",
+    "src/codegen/lower_inst/core_builtins/handlers.rs": "927732db8274646a63c27006675518ec8742f590757552ceb1c8bea46a411f7e",
+    "src/codegen/lower_inst/globals_constants.rs": "1a7b7c2d85b5873fcc85461e5ddaffcced69283984a1284b2f73f8eb8ece4526",
+    "src/codegen/web.rs": "339fe75380ad3d76a399b435bbd288f434cd4d0f525218890924b23901db4f13",
+    "src/codegen_support/runtime/arrays/hash_set.rs": "fe8c1cc731270d2f2590dbe57a2c351ccf05a944ae24c0798c3e4dd97539e8b6",
+    "src/codegen_support/runtime/arrays/mixed_reference.rs": "b1e4dddb2034c8c2d6d822d56f15abc228d85af06a042d8dd518cf477fdffc32",
+    "src/codegen_support/runtime/arrays/mixed_reference/assign_owned.rs": "686ac47ace3ae5e3cdbccaf46ae6eee1f27b03ac5df6bcb7c833d3fe6595bc79",
+    "src/codegen_support/runtime/system/unserialize/decoder_aarch64.rs": "cf1b57daa29a5e1b9478e36ff9b0ae764539ad6a8254871984b83a58c107c123",
+    "src/codegen_support/runtime/system/unserialize/decoder_x86_64.rs": "e82d29febe17011758915154d46c794cf8de0d46e3a1fdc6a3ebc94fc3f76f71",
+    "src/codegen_support/runtime/system/unserialize/mod.rs": "f62d2cf5449f10f5ae9932fb4275c622688c17327a8eaa317c68c39bc5f7bedb",
+    "src/codegen_support/runtime/system/unserialize/reference_registry.rs": "cea2e1cc641aa06a1691398afbbaa5ceabb895cf8b771a060900465711dfe3c8",
+    "src/ir/instr.rs": "ea198a7e0142c49c13aff75a600f97a008c981cbe4cbc074b9ed9b91e1ad88d0",
+    "src/ir_lower/context.rs": "b73c3b7b184fe664bf90d9ba67693b2c94f38f178247ce633ffe6c6169f4c803",
+    "src/ir_lower/function.rs": "9f77f2c96d95f51e2026b875c7dddf2126a8fc1da5de8f510a42e1be3fcc2d61",
+    "src/ir_lower/stmt/local_assignments.rs": "080d92fb9355c50b173a9c738f68f62d83a81e6327edb0832d73f2a3727f4b16",
+    "src/superglobals.rs": "b8b6ed2464e17ab7cdd78b38dafcc23e3d7e72e67d481c8343d5183390e88818",
+    "src/types/checker/driver/top_level.rs": "9feedbb2524740f2b2041589e0e95357c5be9349241b2c13329dca82e1876a82",
+    "src/types/checker/functions/resolution/signature.rs": "4b90725e989951a562842b26ba849d61b7fa96b7c6bdcee336d68510d646b4ef",
+    "src/types/checker/method_pass.rs": "d801d1ae29ac2c54c6fb4a9119d3ea7ef44584caf677b86a4a8d79e188c8de3e",
+    "src/web_prelude.rs": "ed1a7bacfee5d254f25c9ccf3216c4669515fdb9ae3a02a846ed61e5691b3ff9",
+    "src/web_prelude/build.rs": "5c379e93477e2ec4ec30d3b585ec5acea86f9e89e7174e78df412d4d57146747",
+    "src/web_prelude/session_decode.rs": "3ddbc0a10f7fe2f32dadb424c2ed27afa2191c1fd5f552cdd6f0f2d9d523939a",
+    "src/web_prelude/session_reset.rs": "0b250887a90e2045520baa5a39ec399b38f2e26673fffc84fcbdd1206710bfc2",
+    "tests/codegen/runtime_gc.rs": "98ce61267597956272c300729375c9363f042d6fc720da6957ae61d719de931d",
+    "tests/codegen/runtime_gc/unserialize_reference_identity.rs": "faf56b013719134872d60fc6fe6405debe873d8b904929bb65ac0fe5d9706998",
+    "tests/web_session/compliance.rs": "0d340aefbf455c663d3851ec7dff4e30b0a2567163e1569439e118b255aac537",
+    "tests/web_session_tests.rs": "346df49df904bf1ab4c735e505285dafc786ee99fe0cfe26e4a03c6c93cd0342"
+  }
+}

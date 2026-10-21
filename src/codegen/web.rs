@@ -101,7 +101,7 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     // storage and are reassigned by the web prelude every request. Reset them here
     // so stale request arrays are gone before the next prelude builds replacements.
     for name in superglobals::SUPERGLOBALS {
-        emit_superglobal_reset(emitter, &ir_global_symbol(name), &mut labels);
+        emit_superglobal_reset(emitter, name, &ir_global_symbol(name), &mut labels);
     }
 
     // Clear every lazy enum case slot so request N+1 re-materializes its cases on
@@ -319,8 +319,8 @@ fn emit_static_property_release(
 /// symbol (the very first request, before the prelude's first assignment) so a
 /// null is never released. Zeroing is safe because the prelude reassigns the
 /// symbol right after the reset, and `StoreGlobal` does not read the old value.
-fn emit_superglobal_reset(emitter: &mut Emitter, symbol: &str, labels: &mut LabelGen) {
-    let ty = superglobals::superglobal_type().codegen_repr();
+fn emit_superglobal_reset(emitter: &mut Emitter, name: &str, symbol: &str, labels: &mut LabelGen) {
+    let ty = superglobals::superglobal_type_for(name).codegen_repr();
     let skip_label = labels.next("skip_superglobal");
     emitter.comment(&format!("reset request superglobal {}", symbol));
     abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), symbol, 0);

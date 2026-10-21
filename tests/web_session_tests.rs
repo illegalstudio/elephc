@@ -21,6 +21,9 @@ use elephc_builtin_contract::mbstring_abi::ini::{catalog as mbstring_ini, core a
 
 static TEST_ID: AtomicUsize = AtomicUsize::new(0);
 
+#[path = "web_session/compliance.rs"]
+mod compliance;
+
 /// Creates an isolated temp dir unique across parallel test threads/processes.
 fn make_test_dir(prefix: &str) -> PathBuf {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);

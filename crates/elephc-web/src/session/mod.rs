@@ -69,7 +69,7 @@ pub use state::{
 pub use file_io::{
     elephc_web_session_abort, elephc_web_session_destroy, elephc_web_session_file_exists,
     elephc_web_session_gc, elephc_web_session_last_read_ok, elephc_web_session_read,
-    elephc_web_session_read_bytes,
+    elephc_web_session_read_bytes, elephc_web_session_reread_bytes,
     elephc_web_session_should_gc, elephc_web_session_snapshot, elephc_web_session_snapshot_bytes,
     elephc_web_session_touch, elephc_web_session_write, elephc_web_session_write_bytes,
 };
@@ -87,3 +87,9 @@ pub use wire_format::{
     elephc_web_session_entry_value, elephc_web_session_entry_value_bin,
     elephc_web_session_entry_value_bin_bytes, elephc_web_session_entry_value_bytes,
 };
+
+// Complete-buffer decoder used by the generated session prelude.
+pub use wire_format::elephc_web_session_decode_array_bytes;
+
+// Explicit lifecycle clear keeps generated-ID validation fail-closed.
+pub use state::elephc_web_session_clear_id;

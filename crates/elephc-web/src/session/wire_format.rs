@@ -18,7 +18,7 @@
 //! - One process per prefork worker, single-threaded, so the `RET_STRING`
 //!   return buffer (owned by `state`) is race-free across calls.
 //! - `skip_serialized_value` understands all PHP serialize types (`N`, `b`,
-//!   `i`, `d`, `s`, `a`, `O`, `C`) and recurses for arrays/objects; it never
+//!   `i`, `d`, `s`, `a`, `O`, `C`, `R`, `r`) and recurses for arrays/objects; it never
 //!   panics on malformed input, returning the original position instead. Both
 //!   the `php` and `php_binary` parsers reuse it for the value grammar — the
 //!   two formats only differ in how each entry's key is framed.
@@ -38,7 +38,7 @@ fn parse_digits(data: &[u8], start: usize, end: usize) -> Option<usize> {
 
 /// Skips one complete PHP serialized value starting at byte position `pos` in
 /// `data`, returning the byte position immediately after the value. Understands
-/// all PHP serialize types: `N`, `b`, `i`, `d`, `s`, `a`, `O`, `C`. Returns the
+/// PHP scalar, collection, object and R/r reference records. Returns the
 /// original `pos` (no advancement) on invalid or truncated input.
 fn skip_serialized_value(data: &[u8], pos: usize) -> usize {
     if pos >= data.len() {
@@ -71,7 +71,7 @@ fn skip_serialized_value(data: &[u8], pos: usize) -> usize {
                 pos
             }
         }
-        b'i' => {
+        b'i' | b'R' | b'r' => {
             // i:<number>;
             let mut p = pos + 1;
             if p < data.len() && data[p] == b':' {
@@ -344,6 +344,9 @@ fn skip_serialized_value(data: &[u8], pos: usize) -> usize {
         _ => pos, // Unknown type: no advancement.
     }
 }
+
+mod decode_array;
+pub use decode_array::elephc_web_session_decode_array_bytes;
 
 /// Parses the session data format (`key|serialized_value` pairs) and returns a
 /// list of `(key_bytes, value_bytes)` slices. The key is everything before the

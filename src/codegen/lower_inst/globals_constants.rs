@@ -31,7 +31,9 @@ pub(super) fn lower_store_global(ctx: &mut FunctionContext<'_>, inst: &Instructi
     let symbol = ir_global_symbol(&name);
     let value = expect_operand(inst, 0)?;
     let ty = ctx.load_value_to_result(value)?;
-    let store_ty = if ctx.module.web && crate::superglobals::is_superglobal(&name) {
+    let store_ty = if ctx.module.web && crate::superglobals::is_superglobal(&name)
+        && crate::superglobals::superglobal_type_for(&name).codegen_repr() != PhpType::Mixed
+    {
         ty.codegen_repr()
     } else {
         let source_ty = ty.codegen_repr();

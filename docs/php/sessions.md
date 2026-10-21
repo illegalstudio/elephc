@@ -43,9 +43,10 @@ echo "Hello, " . $_SESSION['user'] . "!\n";
 
 ## The `$_SESSION` superglobal
 
-`$_SESSION` is a superglobal associative array, readable in any function scope
-without a `global` declaration. It is populated by `session_start()` and flushed
-by `session_write_close()`.
+`$_SESSION` is a superglobal, readable in any function scope without a `global`
+declaration. Normally it contains an associative array populated by
+`session_start()` and flushed by `session_write_close()`. The `php_serialize`
+handler can also restore scalar roots; the global therefore uses boxed storage.
 
 ```php
 <?php
@@ -147,6 +148,19 @@ depth recursively.
 File locking (`flock`) is used during `session_start()` and
 `session_write_close()` to prevent concurrent requests on the same session ID
 from corrupting each other's data.
+
+### Reloading and decoding
+
+`session_reset()` discards in-memory changes and rereads persisted data through the
+already locked file descriptor, or the custom handler's `read()` method. It does
+not reopen the file or restore a stale cached snapshot.
+
+`session_decode()` returns `false` with a warning when no session is active.
+Malformed data cancels the session and clears its ID and values. The `php` and
+`php_binary` formats decode the buffer as one graph and preserve references to
+completed arrays when replacing an empty session. Reference kinds and merging
+into an existing session remain open compatibility gates. When encoding, these
+two formats skip integer keys with warnings; `php_serialize` preserves them.
 
 ## Custom save handlers
 
@@ -398,16 +412,15 @@ standalone server binary.
 
 - **`--web` only** — sessions require the HTTP request lifecycle. A CLI-compiled
   binary has no session context.
-- **Warning surface** — session misuse now emits the real PHP `E_WARNING`/`E_NOTICE`
-  text (e.g. `session_start(): Ignoring session_start() because a session is already
-  active`, `session_id(): Session ID cannot be changed when a session is active`) to
-  the worker's stderr via `trigger_error()`. `error_log()` and `trigger_error()` are
-  available under `--web`: `trigger_error()` renders `"<Prefix>: <message>"` to stderr,
-  and `error_log()` supports the stderr channel (`message_type` 0) and file appends
-  (`message_type` 3); the mail channel (`message_type` 1) is unsupported and returns
-  `false`. There is no `error_reporting`/`display_errors` layer, so these messages are
-  always written. PHP's "headers already sent" warning genuinely cannot occur because
-  output is buffered until the request completes.
+- **Warning surface** — session diagnostics use engine levels such as `E_WARNING`
+  and `E_DEPRECATED`, pass through `set_error_handler()` with its registered mask,
+  and fall back to the worker's stderr when unhandled. User-facing `trigger_error()`
+  retains its user-level validation. Exact diagnostic rendering and source locations
+  remain part of the open php-src compliance campaign.
+- **Compliance status** — the complete PHP 8.5.11 session PHPT corpus is retained
+  in the campaign inventory. Syntax, HTTP/SAPI adapters, reference encoding and
+  merging, and target validation still have open gates. Focused regression results
+  do not establish complete session compatibility.
 
 <!-- elephc:generated:symbols:begin -->
 

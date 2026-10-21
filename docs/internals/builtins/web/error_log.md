@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:1761](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L1761) (`error_log`)
+- **Lowering**: [`src/web_prelude/build.rs`:1764](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L1764) (`error_log`)
 - **Function symbol**: `error_log()`
 
 

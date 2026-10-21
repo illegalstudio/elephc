@@ -45,7 +45,7 @@ impl Checker {
         for name in crate::superglobals::SUPERGLOBALS {
             local_env
                 .entry((*name).to_string())
-                .or_insert_with(crate::superglobals::superglobal_type);
+                .or_insert_with(|| crate::superglobals::superglobal_type_for(name));
         }
         let function_key = name.to_string();
         let callable_param_names: Vec<String> = param_types

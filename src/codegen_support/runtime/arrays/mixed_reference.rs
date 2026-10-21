@@ -12,10 +12,13 @@
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
+mod assign_owned;
+
 /// Emits persistent references and the shared nested-cell dereference helper for both architectures.
 pub fn emit_mixed_reference(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::AArch64 { aarch64(emitter); } else { x86_64(emitter); }
     emit_array_reference_copy(emitter);
+    assign_owned::emit(emitter);
 }
 
 /// Implements reference storage and borrowed dereferencing with the AArch64 value convention.

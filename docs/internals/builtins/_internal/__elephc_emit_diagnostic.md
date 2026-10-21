@@ -1,0 +1,53 @@
+---
+title: "__elephc_emit_diagnostic() - internals"
+description: "Compiler internals for __elephc_emit_diagnostic(): lowering path, type checks, and runtime helpers."
+sidebar:
+  order: 1134
+---
+
+## `__elephc_emit_diagnostic()` - internals
+
+## Where it lives
+
+- **Signature**: [`src/builtins/system/__elephc_emit_diagnostic.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_emit_diagnostic.rs)
+- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
+
+
+### Lowering notes
+
+- Uses the `eir_primitive` strategy from the single-source builtin descriptor.
+- Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`.
+
+## Semantic descriptor
+
+- **Target strategy**: `eir_primitive`
+- **Validation**: `signature`
+- **Result type source**: `declared`
+- **Result ownership**: `non_heap`
+- **Effects**: `static (20 declared effects)`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `dynamic`
+- **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: descriptor-emitted EIR primitives or graph; no opaque builtin call remains.
+
+## Signature summary
+
+```php
+function __elephc_emit_diagnostic(string $message, int $error_level): bool
+```
+
+## What the type checker enforces
+
+- **Arity**: takes exactly 2 arguments.
+
+## Eval interpreter (magician)
+
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
+
+## Cross-references
+
+- _No user-facing reference - this is a compiler internal helper._

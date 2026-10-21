@@ -319,7 +319,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 64]");                       // key_hi (-1 for int keys)
     emitter.instruction("mov r8, 0");                                           // value_hi unused
     emitter.instruction("mov r9, 7");                                           // value tag = boxed Mixed (transfer the box)
-    emitter.instruction("call __rt_hash_set");                                  // insert the entry -> rax = (possibly new) hash
+    emitter.instruction("call __rt_hash_set_value");                            // insert the entry -> rax = (possibly new) hash
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the updated hash pointer
     emitter.instruction("mov QWORD PTR [rbp - 104], rax");                      // keep the unfinished array reachable by exception cleanup
     emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // reload the entry index
@@ -496,7 +496,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 64]");                       // key_hi (-1 for int keys)
     emitter.instruction("mov r8, 0");                                           // value_hi unused
     emitter.instruction("mov r9, 7");                                           // value tag = boxed Mixed (transfer the box)
-    emitter.instruction("call __rt_hash_set");                                  // insert the entry -> rax = (possibly new) hash
+    emitter.instruction("call __rt_hash_set_value");                            // insert the entry -> rax = (possibly new) hash
     emitter.instruction("mov QWORD PTR [rbp - 80], rax");                       // save the updated $data hash pointer
     emitter.instruction("mov QWORD PTR [rbp - 112], rax");                      // keep unfinished hydration data reachable by exception cleanup
     emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // reload the entry index
@@ -549,7 +549,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 64]");                       // serialized property key length
     emitter.instruction("mov r8, 0");                                           // boxed Mixed values have no high payload word
     emitter.instruction("mov r9, 7");                                           // transfer the parsed box as a Mixed hash value
-    emitter.instruction("call __rt_hash_set");                                  // insert property, preserving key/value ownership and order
+    emitter.instruction("call __rt_hash_set_value");                            // insert property, preserving key/value ownership and order
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // incomplete-object payload after a possible hash grow
     emitter.instruction("mov QWORD PTR [r10 + 24], rax");                       // retain updated property hash pointer
     emitter.label("__rt_unser_obj_skip_prop_store_x");
@@ -659,7 +659,17 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("test r9, r9");                                         // was this reserved registry slot left unpublished?
     emitter.instruction("jz __rt_unser_at_ref_fail");                           // → null
     emitter.instruction("cmp QWORD PTR [rbp - 72], 114");                       // lowercase r denotes object identity, not an array reference
-    emitter.instruction("jne __rt_unser_at_ref_clone");                         // uppercase R accepts any published value shape
+    emitter.instruction("je __rt_unser_at_ref_object");                         // lowercase r retains object identity without aliasing its variable
+    emitter.instruction("mov rax, r9");                                         // uppercase R promotes the already published value box in place
+    emitter.instruction("call __rt_unserialize_reference_alias");               // return an owned alias of the shared writable reference cell
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // recover the cursor after reference promotion
+    emitter.instruction("jmp __rt_unser_at_ret");                               // return the reference without detaching its value
+    emitter.label("__rt_unser_at_ref_object");
+    emitter.instruction("mov rax, r9");                                         // an earlier uppercase R may have promoted this object into a reference
+    emitter.instruction("call __rt_mixed_deref");                               // inspect the concrete object behind any persistent wrapper
+    emitter.instruction("test rax, rax");                                       // a null target cannot satisfy lowercase object identity
+    emitter.instruction("jz __rt_unser_at_ref_fail");                           // reject the absent concrete box before reading its tag
+    emitter.instruction("mov r9, rax");                                         // keep the borrowed concrete object box for cloning
     emitter.instruction("cmp QWORD PTR [r9], 6");                               // require an object for lowercase r
     emitter.instruction("jne __rt_unser_at_ref_fail");                          // reject a non-object identity target
     emitter.label("__rt_unser_at_ref_clone");

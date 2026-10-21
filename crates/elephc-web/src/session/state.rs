@@ -287,6 +287,12 @@ pub unsafe extern "C" fn elephc_web_session_set_id(ptr: *const c_char) -> i64 {
     1
 }
 
+/// Clears a destroyed or explicitly reset ID without accepting empty generated identifiers.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_web_session_clear_id() {
+    *core::ptr::addr_of_mut!(SESSION_ID) = None;
+}
+
 /// Returns the current session status: 0=disabled, 1=none, 2=active.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_web_session_get_status() -> i64 {

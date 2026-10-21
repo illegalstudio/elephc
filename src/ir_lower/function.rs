@@ -2208,7 +2208,7 @@ fn env_from_signature(signature: &FunctionSig, web: bool) -> TypeEnv {
     if web {
         for name in crate::superglobals::SUPERGLOBALS {
             env.entry((*name).to_string())
-                .or_insert_with(crate::superglobals::superglobal_type);
+                .or_insert_with(|| crate::superglobals::superglobal_type_for(name));
         }
     }
     env

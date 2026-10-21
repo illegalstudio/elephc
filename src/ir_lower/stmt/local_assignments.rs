@@ -183,7 +183,7 @@ pub(super) fn contextualize_local_assignment(
     let lowered = crate::ir_lower::ownership::copy_assignment_value(ctx, lowered, Some(span));
 
     let contextual_ty = if crate::superglobals::is_superglobal(name) {
-        crate::superglobals::superglobal_type()
+        crate::superglobals::superglobal_type_for(name)
     } else {
         ctx.local_type(name)
     };

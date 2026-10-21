@@ -1,6 +1,6 @@
 //! Purpose:
 //! The canonical set of HTTP-request superglobals exposed under `--web`, the shared
-//! PhpType for them, and the pass that creates the ones PHP's CLI SAPI would already
+//! per-name PhpType for them, and the pass that creates the ones PHP's CLI SAPI would already
 //! have created. Single source of truth consumed by the type checker, the IR lowering
 //! global-storage path, and `__rt_web_reset`.
 //!
@@ -15,6 +15,7 @@
 //! - `SUPERGLOBALS` (what `--web` exposes) and `CLI_POPULATED_SUPERGLOBALS` (what a
 //!   CLI program finds already there) are DIFFERENT sets, both measured against
 //!   reference PHP rather than derived from each other.
+//! - `$_SESSION` uses boxed Mixed storage because php_serialize accepts scalar roots.
 
 use crate::types::PhpType;
 
@@ -89,6 +90,12 @@ pub fn superglobal_type() -> PhpType {
         key: Box::new(PhpType::Str),
         value: Box::new(PhpType::Mixed),
     }
+}
+
+/// Returns the authoritative storage representation for one request superglobal.
+/// Session deserialization may replace its root with any PHP value; request maps stay hashes.
+pub fn superglobal_type_for(name: &str) -> PhpType {
+    if name == "_SESSION" { PhpType::Mixed } else { superglobal_type() }
 }
 
 /// Gives a CLI program the superglobals PHP's CLI SAPI would already have created,

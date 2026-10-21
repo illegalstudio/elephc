@@ -419,6 +419,34 @@ pub unsafe extern "C" fn elephc_web_session_snapshot_bytes() -> i64 {
     publish_bytes(&snapshot)
 }
 
+/// Rereads the held descriptor for session_reset without reopening or reacquiring its lock.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_web_session_reread_bytes() -> i64 {
+    core::ptr::write(core::ptr::addr_of_mut!(LAST_READ_OK), 0);
+    let fd = *core::ptr::addr_of!(SESSION_FD);
+    if fd < 0 {
+        return publish_bytes(&[]);
+    }
+    let mut data = Vec::new();
+    let mut buffer = [0u8; 8192];
+    loop {
+        let received = libc::pread(fd, buffer.as_mut_ptr().cast(), buffer.len(), data.len() as libc::off_t);
+        if received == 0 {
+            break;
+        }
+        if received < 0 {
+            if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return publish_bytes(&[]);
+        }
+        data.extend_from_slice(&buffer[..received as usize]);
+    }
+    (*core::ptr::addr_of_mut!(SESSION_SNAPSHOT)).clone_from(&data);
+    core::ptr::write(core::ptr::addr_of_mut!(LAST_READ_OK), 1);
+    publish_bytes(&data)
+}
+
 /// Backward-compatible textual snapshot getter used by existing Rust tests.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_web_session_snapshot() -> *const c_char {
@@ -610,6 +638,34 @@ mod tests {
     use super::super::state::elephc_web_session_reset;
     use super::super::state::test_lock as lock;
     use super::*;
+
+    /// Reset rereads binary bytes through the same locked descriptor and refreshes lazy-write data.
+    #[test]
+    fn session_reread_keeps_lock_and_refreshes_snapshot() {
+        let _guard = lock();
+        unsafe {
+            elephc_web_session_reset();
+            let directory = std::env::temp_dir().join(format!("elephc_reread_{}", std::process::id()));
+            fs::create_dir_all(&directory).unwrap();
+            let save_path = std::ffi::CString::new(directory.to_str().unwrap()).unwrap();
+            let id = std::ffi::CString::new("reread123").unwrap();
+            let path = directory.join("sess_reread123");
+            fs::write(&path, b"initial").unwrap();
+            elephc_web_session_read_bytes(id.as_ptr(), save_path.as_ptr(), 0);
+            let fd = *core::ptr::addr_of!(SESSION_FD);
+            let mut changed = vec![b'x'; 16384];
+            changed.extend_from_slice(b"\0tail");
+            fs::write(&path, &changed).unwrap();
+            let pointer = elephc_web_session_reread_bytes();
+            assert_eq!(elephc_web_session_last_read_ok(), 1);
+            assert_eq!(input_bytes(pointer as *const u8, changed.len() as i64), changed);
+            assert_eq!(*core::ptr::addr_of!(SESSION_FD), fd);
+            assert_eq!(*core::ptr::addr_of!(SESSION_SNAPSHOT), changed);
+            elephc_web_session_abort(id.as_ptr(), save_path.as_ptr());
+            fs::remove_dir_all(&directory).unwrap();
+            elephc_web_session_reset();
+        }
+    }
 
     /// Verifies files save-path parsing and PHP's ID-derived directory layout.
     #[test]

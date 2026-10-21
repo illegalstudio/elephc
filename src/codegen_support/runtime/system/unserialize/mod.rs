@@ -61,6 +61,7 @@ pub(crate) fn emit_unserialize(emitter: &mut Emitter) {
     temporaries::emit_unserialize_temporaries(emitter);
     legacy_context::emit(emitter);
     reference_registry::emit_register_array(emitter);
+    reference_registry::emit_reference_alias(emitter);
     match emitter.target.arch {
         Arch::AArch64 => allowed_classes_aarch64::emit(emitter),
         Arch::X86_64 => allowed_classes_x86_64::emit(emitter),
