@@ -76,8 +76,8 @@ fn parse_part(seg: &[u8]) -> Option<Part> {
     for line in headers.split("\r\n") {
         let lower = line.to_ascii_lowercase();
         if lower.starts_with("content-disposition:") {
-            name = extract_quoted(line, "name=");
-            filename = extract_quoted(line, "filename=");
+            name = extract_quoted(line, "name");
+            filename = extract_quoted(line, "filename");
         } else if lower.starts_with("content-type:") {
             content_type = line[line.find(':').map(|i| i + 1).unwrap_or(0)..].trim().to_string();
         }
@@ -91,37 +91,80 @@ fn parse_part(seg: &[u8]) -> Option<Part> {
 }
 
 /// Extracts a `key=value` attribute from a `Content-Disposition` line using
-/// php-src's `php_ap_getword_conf` rules: the value may be double-quoted,
-/// single-quoted, or unquoted; `\\` and `\<quote>` are unescaped; an unquoted
-/// value ends at the next `;`.
+/// php-src's `php_ap_getword_conf` rules: parameters are separated by `;`
+/// outside quoted values, a value may be double-quoted, single-quoted, or
+/// unquoted, and `\\` / `\<quote>` are unescaped inside quotes.
 ///
 /// This is shared by the request parser and the upload-progress tracker so a
 /// filename cannot mean different things to `$_FILES` and to the progress
 /// snapshot written into the session file.
 pub(crate) fn extract_quoted(line: &str, key: &str) -> Option<String> {
-    let at = find_attribute(line, key)?;
-    let rest = line[at + key.len()..].trim_start_matches([' ', '\t']);
-    let quote = match rest.as_bytes().first() {
-        Some(&b'"') => Some('"'),
-        Some(&b'\'') => Some('\''),
-        _ => None,
-    };
-    let body = match quote {
-        Some(q) => &rest[q.len_utf8()..],
-        None => {
-            let end = rest.find(';').unwrap_or(rest.len());
-            &rest[..end]
+    let body = line.split_once(':').map(|(_, rest)| rest).unwrap_or(line);
+    for segment in split_quoted(body, ';') {
+        let Some((name, value)) = segment.split_once('=') else {
+            continue;
+        };
+        if name.trim().eq_ignore_ascii_case(key) {
+            return parse_attribute_value(value);
         }
-    };
-    let mut out = String::with_capacity(body.len());
-    let mut chars = body.chars().peekable();
+    }
+    None
+}
+
+/// Splits `data` on `delimiter` only outside single- or double-quoted runs, so
+/// a `;` or `filename=` inside a quoted parameter value stays part of it.
+fn split_quoted(data: &str, delimiter: char) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut quote: Option<char> = None;
+    let mut chars = data.char_indices();
+    while let Some((index, ch)) = chars.next() {
+        match quote {
+            Some(active) => {
+                if ch == '\\' {
+                    let _ = chars.next();
+                } else if ch == active {
+                    quote = None;
+                }
+            }
+            None => {
+                if ch == '"' || ch == '\'' {
+                    quote = Some(ch);
+                } else if ch == delimiter {
+                    parts.push(&data[start..index]);
+                    start = index + ch.len_utf8();
+                }
+            }
+        }
+    }
+    parts.push(&data[start..]);
+    parts
+}
+
+/// Decodes one attribute value: trims leading spaces, unquotes it with PHP's
+/// `\\` / `\<quote>` rules, or takes the first whitespace-delimited token when
+/// it is not quoted.
+fn parse_attribute_value(raw: &str) -> Option<String> {
+    let value = raw.trim_start_matches(|c| c == ' ' || c == '\t');
+    let first = value.chars().next()?;
+    if first != '"' && first != '\'' {
+        return Some(
+            value
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .to_string(),
+        );
+    }
+    let mut out = String::new();
+    let mut chars = value[first.len_utf8()..].chars().peekable();
     while let Some(ch) = chars.next() {
-        if Some(ch) == quote {
+        if ch == first {
             return Some(out);
         }
         if ch == '\\' {
             if let Some(&next) = chars.peek() {
-                if next == '\\' || Some(next) == quote {
+                if next == '\\' || next == first {
                     out.push(next);
                     chars.next();
                     continue;
@@ -130,28 +173,7 @@ pub(crate) fn extract_quoted(line: &str, key: &str) -> Option<String> {
         }
         out.push(ch);
     }
-    // A quoted value without a closing quote is malformed; an unquoted value
-    // simply consumed the rest of the line.
-    if quote.is_none() {
-        Some(out)
-    } else {
-        None
-    }
-}
-
-/// Finds `key` in a header line only at an attribute boundary, so `name=` does
-/// not match inside `filename=`.
-fn find_attribute(line: &str, key: &str) -> Option<usize> {
-    let bytes = line.as_bytes();
-    let mut from = 0;
-    while let Some(relative) = line[from..].find(key) {
-        let at = from + relative;
-        let boundary = at == 0 || matches!(bytes[at - 1], b';' | b' ' | b'\t');
-        if boundary {
-            return Some(at);
-        }
-        from = at + 1;
-    }
+    // A quoted value without a closing quote is malformed.
     None
 }
 
@@ -208,14 +230,15 @@ mod tests {
     }
 
     /// Matches php-src's `php_ap_getword_conf`: quoted values unescape `\\` and
-    /// `\<quote>`, unquoted values run to the next `;`, and `name=` must not
-    /// match inside `filename=`.
+    /// `\<quote>`, unquoted values run to the next `;`, parameters are split
+    /// only outside quotes, and `filename=` inside a quoted name is not an
+    /// attribute.
     #[test]
     fn parses_escaped_and_unquoted_attribute_values() {
         let ct = "multipart/form-data; boundary=X";
-        let body = b"--X\r\nContent-Disposition: form-data; name=\"f\"; filename=\"a\\\"b\\\\c.txt\"\r\n\r\nDATA\r\n--X\r\nContent-Disposition: form-data; filename=x.txt; name=f2\r\n\r\nDATA2\r\n--X--\r\n";
+        let body = b"--X\r\nContent-Disposition: form-data; name=\"f\"; filename=\"a\\\"b\\\\c.txt\"\r\n\r\nDATA\r\n--X\r\nContent-Disposition: form-data; filename=x.txt; name=f2\r\n\r\nDATA2\r\n--X\r\nContent-Disposition: form-data; name=\"description filename=notes\"\r\n\r\nTEXT\r\n--X\r\nContent-Disposition: form-data; name=\"a; filename=b\"\r\n\r\nTEXT2\r\n--X--\r\n";
         let parts = parse(body, ct);
-        assert_eq!(parts.len(), 2);
+        assert_eq!(parts.len(), 4);
         assert_eq!(parts[0].name, "f");
         assert_eq!(
             parts[0].filename.as_deref(),
@@ -224,6 +247,16 @@ mod tests {
         );
         assert_eq!(parts[1].name, "f2", "name= must not match inside filename=");
         assert_eq!(parts[1].filename.as_deref(), Some("x.txt"));
+        assert_eq!(parts[2].name, "description filename=notes");
+        assert_eq!(
+            parts[2].filename, None,
+            "filename= inside a quoted name is not an attribute"
+        );
+        assert_eq!(parts[3].name, "a; filename=b");
+        assert_eq!(
+            parts[3].filename, None,
+            "a semicolon inside a quoted name is not a separator"
+        );
     }
 
     /// Guards against reintroducing the adversarial `O(body × boundary)` scan

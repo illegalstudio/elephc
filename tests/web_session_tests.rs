@@ -1917,6 +1917,54 @@ fn handler_mismatch_filename_cannot_inject_a_serialized_entry() {
     );
 }
 
+/// Regression for the cross-format guard: a legitimate `php` session key may
+/// start with `d:` (or look like a float). The whole-buffer detection must use
+/// the real float grammar, not "everything up to the first `;`", or saved
+/// values disappear on the next request.
+#[test]
+fn session_key_that_looks_like_a_serialized_float_round_trips() {
+    let dir = make_test_dir("sess_float_key");
+    let session_store = dir.join("sessions");
+    fs::create_dir_all(&session_store).unwrap();
+    let session_store_env = session_store.to_string_lossy().into_owned();
+    let src = "<?php \
+        session_start(); \
+        if (isset($_GET['set'])) { $_SESSION['d:cart'] = 1; echo 'set'; } \
+        else { echo $_SESSION['d:cart'] ?? 'missing'; }";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server_with_env(
+        &bin,
+        &addr,
+        "1",
+        &[
+            ("ELEPHC_SESSION_NAME", "PHPSESSID"),
+            ("ELEPHC_SESSION_SAVE_PATH", &session_store_env),
+        ],
+    );
+
+    let r1 = http_request(&addr, "GET", "/?set=1", &[], "");
+    let cookie = extract_phpsessid(&r1).expect("first response should set a PHPSESSID cookie");
+    let r2 = http_request(
+        &addr,
+        "GET",
+        "/",
+        &[("Cookie", &format!("PHPSESSID={}", cookie))],
+        "",
+    );
+
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(r1.contains("set"), "set request should respond: {:?}", r1);
+    assert!(
+        r2.ends_with("1"),
+        "a session key starting with d: must survive the next request, got: {:?}",
+        r2
+    );
+}
+
 /// Verifies `session.use_trans_sid=1` (with `use_only_cookies=0`) URL-rewrites
 /// the response for a cookie-less request: same-origin `<a href>` links gain the
 /// `PHPSESSID` query parameter and `<form>` tags get a hidden SID input carrying

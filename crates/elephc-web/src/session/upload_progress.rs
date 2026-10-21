@@ -864,8 +864,8 @@ fn parse_part(seg: &[u8]) -> Option<(Vec<u8>, Option<Vec<u8>>, &[u8])> {
             .to_ascii_lowercase()
             .starts_with("content-disposition:")
         {
-            name = extract_quoted(line, "name=").map(|s| s.into_bytes());
-            filename = extract_quoted(line, "filename=").map(|s| s.into_bytes());
+            name = extract_quoted(line, "name").map(|s| s.into_bytes());
+            filename = extract_quoted(line, "filename").map(|s| s.into_bytes());
         }
     }
     Some((name?, filename, content))
