@@ -57,6 +57,38 @@ pub(crate) fn contains_deferred_error(expr: &Expr) -> bool {
     }
 }
 
+/// Finds array unpacking that needs native evaluation instead of compact default metadata.
+pub(crate) fn contains_array_spread(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Spread(_) => true,
+        ExprKind::ArrayLiteral(values) | ExprKind::NewObject { args: values, .. }
+        | ExprKind::NewScopedObject { args: values, .. } =>
+            values.iter().any(contains_array_spread),
+        ExprKind::ArrayLiteralAssoc(entries) => entries.iter()
+            .any(|(key, value)| contains_array_spread(key) || contains_array_spread(value)),
+        ExprKind::ArrayLiteralMixed(entries) => entries.iter()
+            .any(|entry| entry.exprs().any(contains_array_spread)),
+        ExprKind::BinaryOp { left, right, .. } =>
+            contains_array_spread(left) || contains_array_spread(right),
+        ExprKind::ArrayAccess { array, index } =>
+            contains_array_spread(array) || contains_array_spread(index),
+        ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } =>
+            contains_array_spread(value) || contains_array_spread(default),
+        ExprKind::Ternary { condition, then_expr, else_expr } =>
+            contains_array_spread(condition) || contains_array_spread(then_expr)
+                || contains_array_spread(else_expr),
+        ExprKind::Match { subject, arms, default } => contains_array_spread(subject)
+            || arms.iter().any(|(conditions, result)|
+                conditions.iter().any(contains_array_spread) || contains_array_spread(result))
+            || default.as_deref().is_some_and(contains_array_spread),
+        ExprKind::Negate(inner) | ExprKind::Not(inner) | ExprKind::BitNot(inner)
+        | ExprKind::NamedArg { value: inner, .. }
+        | ExprKind::Cast { expr: inner, .. } =>
+            contains_array_spread(inner),
+        _ => false,
+    }
+}
+
 /// Extracts a compiler-generated lazy Error message without evaluating its expression.
 pub(crate) fn deferred_error_message(default: &Expr) -> Option<&str> {
     let ExprKind::Throw(exception) = &default.kind else { return None; };

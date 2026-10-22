@@ -10,7 +10,7 @@
 
 use super::*;
 
-/// Registers an Error-valued default, returning false for ordinary default trees.
+/// Registers deferred Errors or runtime array spreads as owned expression metadata.
 pub(super) fn register_eval_native_param_default_error(
     ctx: &mut FunctionContext<'_>, context_offset: usize, key: (&str, usize),
     index: usize, default: Option<&Expr>, default_context: &EvalNativeDefaultContext<'_>, symbol: &str,
@@ -20,7 +20,8 @@ pub(super) fn register_eval_native_param_default_error(
         crate::types::deferred_defaults::deferred_error_message(default)
     {
         (message.to_string(), symbol.to_string())
-    } else if crate::types::deferred_defaults::contains_deferred_error(default) {
+    } else if crate::types::deferred_defaults::contains_deferred_error(default)
+        || crate::types::deferred_defaults::contains_array_spread(default) {
         let Some(source) = super::default_source::default_expression_source(default, default_context)
             else { return false; };
         (source, format!("{}_expression", symbol.strip_suffix("_error").unwrap_or(symbol)))

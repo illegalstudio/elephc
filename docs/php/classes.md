@@ -302,6 +302,8 @@ For method and constructor parameters, an omitted nested default keeps its
 Callback calls and native `ReflectionParameter` use the same lazy default tree;
 reflection reports its presence before `getDefaultValue()` evaluates it.
 
+Parameter defaults containing array unpacking (`...`) are also evaluated lazily for native calls, callable adapters and `ReflectionParameter::getDefaultValue()`, including calls made through `eval()`. An explicit argument bypasses the default. Integer spread entries use the next available array index; when `PHP_INT_MAX` is already occupied, evaluation raises a catchable `Error` before entering the function body. Empty and string-key-only spreads remain valid at that boundary.
+
 `ReflectionProperty::hasDefaultValue()` preserves the presence of a deferred default. `getDefaultValue()` raises its catchable `Error` only when that particular default is materialized, without evaluating other properties in the class. This also applies to native property metadata accessed through `eval()`.
 
 Interface method parameters may also declare a lazy `parent::CONST` default:

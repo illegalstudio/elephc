@@ -419,6 +419,12 @@ pub(super) fn lower_hash_spread_into_hash_from_value(
             ir_type: IrType::Heap(IrHeapKind::Hash),
         }
     };
+    // Hash spread can raise a catchable Error at PHP_INT_MAX. Keep the partially built
+    // destination, promoted source, and original owning source visible to the unwinder.
+    // These pins acquire nothing; ordinary source releases remain authoritative on success.
+    let owners = super::call_operand_owners::pin_in_flight_owners(
+        ctx, &[hash.value, spread_source.value, source.value], span,
+    );
     ctx.emit_void(
         Op::HashSpread,
         vec![hash.value, spread_source.value],
@@ -426,6 +432,7 @@ pub(super) fn lower_hash_spread_into_hash_from_value(
         Op::HashSpread.default_effects(),
         Some(span),
     );
+    super::call_operand_owners::unpin_in_flight_owners(ctx, owners, span);
     if ctx.value_is_owning_temporary(spread_source) {
         crate::ir_lower::ownership::release_if_owned(ctx, spread_source, Some(span));
     }

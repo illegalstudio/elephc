@@ -388,12 +388,8 @@ pub(super) fn eval_throw_reflection_exception(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    let exception = values.new_object("ReflectionException")?;
-    let message = values.string(message)?;
-    let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
+    crate::interpreter::throwables::eval_throw_builtin_exception("ReflectionException", message, context, values)
+
 }
 
 /// Schedules the Throwable category required by one ReflectionClass instantiation error.

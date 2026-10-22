@@ -7,23 +7,22 @@
 //!
 //! Key details:
 //! - PHP spread reindexes integer-keyed source entries to fresh sequential keys
-//!   (continuing from the destination's current max integer key + 1), preserves
+//!   (using the destination's checked next-index history), preserves
 //!   string keys, and lets later operands overwrite earlier ones on key collision.
 //! - The destination hash takes its own owned copy of each value: strings are
 //!   persisted, refcounted payloads are retained, and scalars are copied as-is.
 //! - `__rt_hash_project_spread` preserves integer keys and normalizes numeric
 //!   string property names to the integer keys produced by PHP array casts.
 
-use crate::codegen_support::runtime::arrays::hash_layout;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
 /// Emits `__rt_hash_spread` and `__rt_hash_project_spread` for the active target.
 ///
 /// Iterates `source` in insertion order and inserts each entry into `dest`:
-/// integer keys are replaced with the next automatic integer key (derived from
-/// the destination's current largest integer key + 1, then incremented per
-/// entry), and string keys are preserved. Each value is retained/persisted so
+/// integer keys use the destination's checked next automatic integer key,
+/// and string keys are preserved. Exhaustion is checked before retaining the
+/// source value, and only integer source entries require an available index. Each value is retained/persisted so
 /// the destination owns an independent reference. Duplicate keys overwrite the
 /// existing destination entry (later spread operand wins).
 /// The companion projection entry preserves existing integer keys and normalizes
@@ -73,40 +72,6 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #8]");                                    // save the source hash pointer
     emitter.instruction("str x2, [sp, #72]");                                   // save the selected key transformation mode
 
-    // -- derive the starting next integer key by scanning the destination for its largest integer key --
-    emitter.instruction("ldr x5, [x0, #8]");                                    // load the destination hash capacity as the scan bound
-    emitter.instruction("mov x6, #0");                                          // initialize the slot cursor
-    emitter.instruction("mov x7, #0");                                          // track whether any integer key has been observed
-    emitter.instruction("mov x8, #0");                                          // initialize the maximum integer key placeholder
-    emitter.label("__rt_hash_spread_key_scan");
-    emitter.instruction("cmp x6, x5");                                          // has every destination slot been inspected?
-    emitter.instruction("b.ge __rt_hash_spread_key_scan_done");                 // finish scanning once the cursor reaches capacity
-    emitter.instruction("mov x9, #64");                                         // x9 = hash entry size in bytes
-    hash_layout::emit_entry_address(emitter, "x10", "x0", "x6");
-    emitter.instruction("ldr x11, [x10]");                                      // load the occupied marker for this slot
-    emitter.instruction("cmp x11, #1");                                         // is this slot a live entry?
-    emitter.instruction("b.ne __rt_hash_spread_key_scan_next");                 // ignore empty or tombstone slots while deriving the next key
-    emitter.instruction("ldr x11, [x10, #16]");                                 // load the normalized key length or integer sentinel
-    emitter.instruction("cmn x11, #1");                                         // check whether the key length is the integer-key sentinel
-    emitter.instruction("b.ne __rt_hash_spread_key_scan_next");                 // string keys do not affect PHP's next automatic integer key
-    emitter.instruction("ldr x12, [x10, #8]");                                  // load the stored integer key payload
-    emitter.instruction("cbz x7, __rt_hash_spread_key_scan_take");              // the first integer key seeds the maximum tracker
-    emitter.instruction("cmp x12, x8");                                         // compare the candidate key against the current maximum
-    emitter.instruction("b.le __rt_hash_spread_key_scan_next");                 // keep scanning if the candidate key is not larger
-    emitter.label("__rt_hash_spread_key_scan_take");
-    emitter.instruction("mov x8, x12");                                         // record the largest integer key seen so far
-    emitter.instruction("mov x7, #1");                                          // remember that at least one integer key exists
-    emitter.label("__rt_hash_spread_key_scan_next");
-    emitter.instruction("add x6, x6, #1");                                      // advance to the next destination slot
-    emitter.instruction("b __rt_hash_spread_key_scan");                         // continue scanning for integer keys
-    emitter.label("__rt_hash_spread_key_scan_done");
-    emitter.instruction("cbz x7, __rt_hash_spread_key_zero");                   // destinations with no integer keys start reindexing at zero
-    emitter.instruction("add x8, x8, #1");                                      // start reindexing after the largest observed integer key
-    emitter.instruction("b __rt_hash_spread_key_init");                         // continue with the initialized automatic integer key
-    emitter.label("__rt_hash_spread_key_zero");
-    emitter.instruction("mov x8, #0");                                          // first automatic integer key is zero
-    emitter.label("__rt_hash_spread_key_init");
-    emitter.instruction("str x8, [sp, #16]");                                   // save the running next integer key
     emitter.instruction("str xzr, [sp, #24]");                                  // initialize the insertion-order iterator cursor
 
     // -- walk source entries in insertion order and flatten them into the destination --
@@ -122,6 +87,18 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     emitter.instruction("str x3, [sp, #48]");                                   // save the borrowed source value low word
     emitter.instruction("str x4, [sp, #56]");                                   // save the borrowed source value high word
     emitter.instruction("str x5, [sp, #64]");                                   // save the borrowed source value runtime tag
+
+    // Check append availability before acquiring a value that an Error would strand.
+    emitter.instruction("ldr x9, [sp, #72]");                                   // read the key transformation mode
+    emitter.instruction("cbnz x9, __rt_hash_spread_key_ready");                 // object projection preserves keys without appending
+    emitter.instruction("ldr x9, [sp, #40]");                                   // inspect the borrowed source key kind
+    emitter.instruction("cmn x9, #1");                                          // only integer keys require a new automatic index
+    emitter.instruction("b.ne __rt_hash_spread_key_ready");                     // empty and string-only spreads remain valid after saturation
+    emitter.instruction("ldr x0, [sp, #0]");                                    // probe the current destination insertion history
+    emitter.instruction("bl __rt_hash_try_next_index");                         // test saturation without throwing inside this runtime frame
+    emitter.instruction("cbz x1, __rt_hash_spread_exhausted");                  // raise Error before retaining the rejected source value
+    emitter.instruction("str x0, [sp, #16]");                                   // save the available index for the insertion
+    emitter.label("__rt_hash_spread_key_ready");
 
     // -- retain the source value so the destination owns an independent copy --
     emitter.instruction("ldr x5, [sp, #64]");                                   // reload the source value runtime tag
@@ -189,16 +166,7 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_hash_set");                                    // insert or overwrite the destination entry
     emitter.instruction("str x0, [sp, #0]");                                    // save the possibly reallocated destination hash pointer
 
-    // -- advance the running integer key only when an integer source key was reindexed --
-    emitter.instruction("ldr x9, [sp, #72]");                                   // reload the key transformation mode
-    emitter.instruction("cbnz x9, __rt_hash_spread_loop");                      // object projection never advances a reindex counter
-    emitter.instruction("ldr x9, [sp, #40]");                                   // reload the source key length / integer sentinel
-    emitter.instruction("cmn x9, #1");                                          // was the just-inserted source key an integer key?
-    emitter.instruction("b.ne __rt_hash_spread_loop");                          // string keys do not advance the running integer counter
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the running next integer key
-    emitter.instruction("add x9, x9, #1");                                      // advance the reindex counter past the inserted entry
-    emitter.instruction("str x9, [sp, #16]");                                   // save the updated running integer key
-    emitter.instruction("b __rt_hash_spread_loop");                             // continue flattening source entries
+    emitter.instruction("b __rt_hash_spread_loop");                             // let hash insertion history choose the next integer key
 
     // -- return the updated destination hash --
     emitter.label("__rt_hash_spread_done");
@@ -206,6 +174,11 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #96");                                     // release the spread walk spill slots
     emitter.instruction("ret");                                                 // return to generated code
+
+    emitter.label("__rt_hash_spread_exhausted");
+    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore caller linkage before entering the PHP unwinder
+    emitter.instruction("add sp, sp, #96");                                     // retire the runtime spread frame with no new value owner
+    emitter.instruction("b __rt_hash_append_error");                            // raise the shared catchable automatic-index Error
 }
 
 /// Emits `__rt_hash_spread` for the x86_64 Linux ABI.
@@ -242,40 +215,6 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the source hash pointer
     emitter.instruction("mov QWORD PTR [rbp - 80], rdx");                       // save the selected key transformation mode
 
-    // -- derive the starting next integer key by scanning the destination for its largest integer key --
-    emitter.instruction("mov r10, rdi");                                        // keep the destination hash pointer stable across the scan
-    emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // load the destination hash capacity as the scan bound
-    emitter.instruction("xor r8d, r8d");                                        // initialize the slot cursor
-    emitter.instruction("xor r9d, r9d");                                        // track whether any integer key has been observed
-    emitter.instruction("xor eax, eax");                                        // initialize the maximum integer key placeholder
-    emitter.label("__rt_hash_spread_x86_key_scan");
-    emitter.instruction("cmp r8, r11");                                         // has every destination slot been inspected?
-    emitter.instruction("jge __rt_hash_spread_x86_key_scan_done");              // finish scanning once the cursor reaches capacity
-    hash_layout::emit_entry_address(emitter, "rcx", "r10", "r8");
-    emitter.instruction("cmp QWORD PTR [rcx], 1");                              // is this slot a live entry?
-    emitter.instruction("jne __rt_hash_spread_x86_key_scan_next");              // ignore empty or tombstone slots while deriving the next key
-    emitter.instruction("cmp QWORD PTR [rcx + 16], -1");                        // is the normalized key an integer key?
-    emitter.instruction("jne __rt_hash_spread_x86_key_scan_next");              // string keys do not affect PHP's next automatic integer key
-    emitter.instruction("mov rdx, QWORD PTR [rcx + 8]");                        // load the stored integer key payload
-    emitter.instruction("test r9, r9");                                         // has any integer key seeded the maximum tracker?
-    emitter.instruction("je __rt_hash_spread_x86_key_scan_take");               // the first integer key becomes the current maximum
-    emitter.instruction("cmp rdx, rax");                                        // compare the candidate key against the current maximum
-    emitter.instruction("jle __rt_hash_spread_x86_key_scan_next");              // keep scanning if the candidate key is not larger
-    emitter.label("__rt_hash_spread_x86_key_scan_take");
-    emitter.instruction("mov rax, rdx");                                        // record the largest integer key seen so far
-    emitter.instruction("mov r9, 1");                                           // remember that at least one integer key exists
-    emitter.label("__rt_hash_spread_x86_key_scan_next");
-    emitter.instruction("add r8, 1");                                           // advance to the next destination slot
-    emitter.instruction("jmp __rt_hash_spread_x86_key_scan");                   // continue scanning for integer keys
-    emitter.label("__rt_hash_spread_x86_key_scan_done");
-    emitter.instruction("test r9, r9");                                         // did the scan observe any integer keys?
-    emitter.instruction("je __rt_hash_spread_x86_key_zero");                    // destinations with no integer keys start reindexing at zero
-    emitter.instruction("add rax, 1");                                          // start reindexing after the largest observed integer key
-    emitter.instruction("jmp __rt_hash_spread_x86_key_init");                   // continue with the initialized automatic integer key
-    emitter.label("__rt_hash_spread_x86_key_zero");
-    emitter.instruction("xor eax, eax");                                        // first automatic integer key is zero
-    emitter.label("__rt_hash_spread_x86_key_init");
-    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the running next integer key
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // initialize the insertion-order iterator cursor
 
     emitter.label("__rt_hash_spread_x86_loop");
@@ -290,6 +229,18 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 56], rcx");                       // save the borrowed source value low word
     emitter.instruction("mov QWORD PTR [rbp - 64], r8");                        // save the borrowed source value high word
     emitter.instruction("mov QWORD PTR [rbp - 72], r9");                        // save the borrowed source value runtime tag
+
+    // Match the AArch64 borrowed-value check before acquiring an insertion owner.
+    emitter.instruction("cmp QWORD PTR [rbp - 80], 0");                         // inspect the key transformation mode
+    emitter.instruction("jne __rt_hash_spread_x86_key_ready");                  // object projection preserves integer keys
+    emitter.instruction("cmp QWORD PTR [rbp - 48], -1");                        // only integer source keys consume an automatic index
+    emitter.instruction("jne __rt_hash_spread_x86_key_ready");                  // string keys remain valid after numeric exhaustion
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // probe the current destination insertion history
+    emitter.instruction("call __rt_hash_try_next_index");                       // check availability without unwinding this runtime frame
+    emitter.instruction("test edx, edx");                                       // inspect the nonthrowing availability result
+    emitter.instruction("jz __rt_hash_spread_x86_exhausted");                   // reject the integer before retaining its value
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the checked insertion index
+    emitter.label("__rt_hash_spread_x86_key_ready");
 
     // -- retain the source value so the destination owns an independent copy --
     emitter.instruction("mov r9, QWORD PTR [rbp - 72]");                        // reload the source value runtime tag
@@ -359,16 +310,7 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_hash_set");                                  // insert or overwrite the destination entry
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the possibly reallocated destination hash pointer
 
-    // -- advance the running integer key only when an integer source key was reindexed --
-    emitter.instruction("cmp QWORD PTR [rbp - 80], 0");                         // check whether object-projection key semantics are active
-    emitter.instruction("jne __rt_hash_spread_x86_loop");                       // object projection never advances a reindex counter
-    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the source key length / integer sentinel
-    emitter.instruction("cmp r10, -1");                                         // was the just-inserted source key an integer key?
-    emitter.instruction("jne __rt_hash_spread_x86_loop");                       // string keys do not advance the running integer counter
-    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the running next integer key
-    emitter.instruction("add r10, 1");                                          // advance the reindex counter past the inserted entry
-    emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save the updated running integer key
-    emitter.instruction("jmp __rt_hash_spread_x86_loop");                       // continue flattening source entries
+    emitter.instruction("jmp __rt_hash_spread_x86_loop");                       // let hash insertion history choose the next integer key
 
     // -- return the updated destination hash --
     emitter.label("__rt_hash_spread_x86_done");
@@ -376,4 +318,9 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 96");                                         // release the spread walk spill slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning
     emitter.instruction("ret");                                                 // return to generated code
+
+    emitter.label("__rt_hash_spread_x86_exhausted");
+    emitter.instruction("add rsp, 96");                                         // retire spread spills before entering the PHP unwinder
+    emitter.instruction("pop rbp");                                             // restore caller linkage with no newly retained value
+    emitter.instruction("jmp __rt_hash_append_error");                          // raise the shared catchable automatic-index Error
 }

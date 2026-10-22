@@ -39,8 +39,7 @@ pub(super) fn parameter_default_is_deferred(expression: &EvalExpr) -> bool {
             || default.as_deref().is_some_and(parameter_default_is_deferred),
         EvalExpr::NewObject { args, .. } =>
             args.iter().any(|arg| parameter_default_is_deferred(arg.value())),
-        EvalExpr::Call { name, args } if name == "\0elephc_native_default_array_spread" =>
-            args.iter().any(|arg| parameter_default_is_deferred(arg.value())),
+        EvalExpr::Call { name, .. } if name == "\0elephc_native_default_array_spread" => true,
         _ => false,
     }
 }

@@ -1471,7 +1471,8 @@ impl Op {
             ArrayUnion | HashUnion | ArrayHashUnion | HashArrayUnion | ArrayToHash => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
             }
-            HashSpread => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
+            // Integer-key reindexing can exhaust PHP_INT_MAX and raise a catchable Error.
+            HashSpread => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_THROW | E::REFCOUNT_OP,
             MethodCall | NullsafeMethodCall => {
                 E::READS_HEAP | E::MAY_THROW | E::MAY_DEOPT
             }

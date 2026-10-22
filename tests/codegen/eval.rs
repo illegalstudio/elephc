@@ -30568,3 +30568,7 @@ if ($w instanceof Wide) { echo readwide($w); }
     );
     assert_eq!(out, "2|7s");
 }
+
+
+#[path = "eval/native_default_array_overflow.rs"]
+mod native_default_array_overflow;

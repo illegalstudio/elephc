@@ -1312,7 +1312,8 @@ pub(crate) fn lower_eval_native_default_helpers(
             for (method_name, signature) in methods {
                 for (param_index, default) in signature.defaults.iter().enumerate() {
                     let Some(default) = default else { continue };
-                    if contains_deferred_error(default)
+                    if (contains_deferred_error(default)
+                        || crate::types::deferred_defaults::contains_array_spread(default))
                         && !matches!(default.kind, ExprKind::Throw(_))
                         || (uses_eval && eval_native_default_helper_literal(&default.kind)
                             && crate::types::signatures::literal_default_exceeds_compact_depth(default))
@@ -1334,7 +1335,9 @@ pub(crate) fn lower_eval_native_default_helpers(
     for (name, signature) in functions {
         for (index, default) in signature.defaults.iter().enumerate() {
             let Some(default) = default else { continue; };
-            if contains_deferred_error(default) && !matches!(default.kind, ExprKind::Throw(_)) {
+            if (contains_deferred_error(default)
+                || crate::types::deferred_defaults::contains_array_spread(default))
+                && !matches!(default.kind, ExprKind::Throw(_)) {
                 specs.push((format!("__elephc_eval_default\\function\\{name}\\{index}"),
                     None, default.clone()));
             }

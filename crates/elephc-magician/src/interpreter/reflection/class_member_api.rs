@@ -358,7 +358,7 @@ pub(super) fn eval_reflection_class_constant_object_result(
         flags |= EVAL_REFLECTION_MEMBER_FLAG_ENUM_CASE;
     }
     let modifiers = eval_reflection_class_constant_modifiers(visibility, is_final);
-    eval_reflection_owner_object(
+    let result = eval_reflection_owner_object(
         EVAL_REFLECTION_OWNER_CLASS_CONSTANT,
         constant_name,
         &attributes,
@@ -379,7 +379,8 @@ pub(super) fn eval_reflection_class_constant_object_result(
         None,
         context,
         values,
-    )
+    );
+    finish_eval_argument_values(result, [constant_value], context, values)
 }
 
 /// Returns whether one class constant passes an optional `ReflectionClassConstant` filter.

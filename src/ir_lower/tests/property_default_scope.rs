@@ -376,3 +376,56 @@ catch (Error $error) {{ echo 'default'; }}
             "{update}: retain the RHS exception handler: {optimized:?}");
     }
 }
+
+/// Spread defaults must have executable helpers even when they contain no lexical Error node.
+fn native_spread_defaults_on_target(target_name: &str) {
+    let source = r#"<?php
+function spreadDefault(array $items = [PHP_INT_MAX - 1 => "a", ...["b"]]): array { return $items; }
+class SpreadDefaults {
+    public static function valid(array $items = [PHP_INT_MAX - 1 => "a", ...["b"]]): array { return $items; }
+    public function invalid(array $items = [PHP_INT_MAX => "a", ...["b"]]): array { return $items; }
+    public function __construct(array $items = [PHP_INT_MAX => "a", ...["b"]]) {}
+}
+eval($argv[1]);
+"#;
+    let module = super::lower_source_at_for_target(source, Path::new("main.php"), Path::new("."),
+        Target::parse(target_name).unwrap());
+    let helpers = module.functions.iter().chain(module.closures.iter())
+        .filter(|function| function.callable_default.is_some()).collect::<Vec<_>>();
+    assert_eq!(helpers.len(), 4, "{target_name}: free, instance, static and constructor defaults");
+    assert_eq!(helpers.iter().filter(|function| function.lexical_class.as_deref() == Some("SpreadDefaults")).count(), 3,
+        "{target_name}: default helpers preserve their declaration scope");
+    for helper in &helpers {
+        assert!(helper.instructions.iter().any(|instruction|
+            instruction.op == crate::ir::Op::HashSpread
+                && instruction.effects.contains(crate::ir::Effects::MAY_THROW)),
+            "{target_name}: spread exhaustion participates in ordinary EIR exception cleanup");
+    }
+    let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+        .unwrap_or_else(|error| panic!("{target_name}: {error:?}"));
+    for symbol in ["__elephc_eval_register_native_method_param_default_expression",
+        "__elephc_eval_register_native_static_method_param_default_expression",
+        "__elephc_eval_register_native_constructor_param_default_expression",
+        "__elephc_eval_register_native_function_param_default_expression"] {
+        assert!(assembly.contains(symbol), "{target_name}: missing spread expression metadata {symbol}");
+    }
+    for helper in helpers {
+        assert!(assembly.contains(&crate::names::function_symbol(&helper.name)),
+            "{target_name}: helper must be emitted for native callable and Reflection factories");
+    }
+}
+
+/// Keeps each target within the normal unit-test timeout budget.
+macro_rules! native_spread_default_target_case {
+    ($name:ident, $target:literal) => {
+        /// Verifies executable spread defaults and their exception effects on one supported target.
+        #[test]
+        fn $name() { native_spread_defaults_on_target($target); }
+    };
+}
+
+native_spread_default_target_case!(native_spread_defaults_macos_aarch64, "macos-aarch64");
+native_spread_default_target_case!(native_spread_defaults_ios_arm64, "ios-arm64");
+native_spread_default_target_case!(native_spread_defaults_ios_sim_arm64, "ios-sim-arm64");
+native_spread_default_target_case!(native_spread_defaults_linux_aarch64, "linux-aarch64");
+native_spread_default_target_case!(native_spread_defaults_linux_x86_64, "linux-x86_64");

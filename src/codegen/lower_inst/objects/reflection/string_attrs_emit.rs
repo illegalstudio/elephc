@@ -5,6 +5,7 @@
 //! - `crate::codegen::lower_inst::objects::reflection`.
 //!
 //! Key details:
+//! - Fresh reflected objects and collections transfer their initial reference into boxed slots.
 //! - Preserves compile-time metadata, target-aware object layout, and ownership.
 
 use super::*;
@@ -20,6 +21,13 @@ pub(super) fn emit_reflection_string_property(
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
+    // Some metadata stages replace an earlier name. Clear the old owner before allocating its
+    // replacement so GC never sees a retired string in an otherwise live reflector.
+    abi::emit_reg_move(ctx.emitter, object_reg, result_reg);
+    abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
+    abi::emit_store_zero_to_address(ctx.emitter, object_reg, low_offset);
+    abi::emit_store_zero_to_address(ctx.emitter, object_reg, high_offset);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_any");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_symbol_address(ctx.emitter, "x1", &label);
@@ -213,7 +221,7 @@ pub(super) fn emit_reflection_constant_array_property_by_name(
         key: Box::new(PhpType::Str),
         value: Box::new(PhpType::Mixed),
     };
-    emit_box_current_value_as_mixed(ctx.emitter, &assoc_type);
+    emit_box_current_owned_value_as_mixed(ctx.emitter, &assoc_type);
     abi::emit_pop_reg(ctx.emitter, object_reg);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_store_zero_to_address(ctx.emitter, object_reg, high_offset);
@@ -247,7 +255,7 @@ pub(super) fn emit_reflection_default_property_array_property_by_name(
         key: Box::new(PhpType::Str),
         value: Box::new(PhpType::Mixed),
     };
-    emit_box_current_value_as_mixed(ctx.emitter, &assoc_type);
+    emit_box_current_owned_value_as_mixed(ctx.emitter, &assoc_type);
     abi::emit_pop_reg(ctx.emitter, object_reg);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_store_zero_to_address(ctx.emitter, object_reg, high_offset);
