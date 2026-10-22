@@ -264,6 +264,8 @@ pub(crate) const NAMED_PARAMETER_OVERWRITE_SUFFIX: &str = " overwrites previous 
 ///
 /// Only a non-variadic callee raises it: a variadic one collects every unmatched name instead.
 pub(crate) const UNKNOWN_NAMED_PARAMETER_PREFIX: &str = "Unknown named parameter $";
+/// Callee name PHP prints for an anonymous function in `{closure}(): Argument #1 ($x) not passed`.
+pub(crate) const CLOSURE_CALLEE_DISPLAY_NAME: &str = "{closure}";
 /// PHP's catchable Error when a positional entry follows a named one in a container.
 ///
 /// Nothing runtime-dependent appears in it, so the Throwable points straight at these bytes.

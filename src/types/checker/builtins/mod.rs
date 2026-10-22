@@ -243,6 +243,9 @@ impl Checker {
                 if matches!(arg.kind, ExprKind::Spread(_)) {
                     continue;
                 }
+                // `$c::$p[k]` / `$c::K[k]` is a value desugar, not a place: passing it by
+                // reference would write into a temporary and silently do nothing.
+                crate::parser::expr::reject_dynamic_member_write(arg, arg.span)?;
                 if self.is_builtin_by_ref_argument_lvalue(arg) {
                     continue;
                 }

@@ -193,6 +193,45 @@ pub(crate) fn validate_no_spread_after_named(args: &[Expr]) -> Result<(), CallAr
     Ok(())
 }
 
+/// Validates the argument-list rules PHP enforces while compiling ANY call, for a call surface
+/// whose callee is only known at run time (so there is no signature to plan against): no
+/// duplicate `name:`, no positional argument after a named one, no unpacking after a named
+/// argument, and no positional argument after an unpacking. Returns the first violation in
+/// source order.
+///
+/// A `Duplicate` from here carries the source position of the FIRST occurrence of the name in
+/// `param_idx`, since no parameter index is known.
+pub(crate) fn validate_unknown_callee_arg_order(args: &[Expr]) -> Result<(), CallArgPlanError> {
+    let mut seen_named: Vec<(&str, usize)> = Vec::new();
+    let mut seen_spread = false;
+    for (position, arg) in args.iter().enumerate() {
+        match &arg.kind {
+            ExprKind::NamedArg { name, .. } => {
+                if let Some((_, first)) = seen_named.iter().find(|(seen, _)| *seen == name.as_str()) {
+                    return Err(CallArgPlanError::Duplicate {
+                        span: arg.span,
+                        param_idx: *first,
+                        name: name.clone(),
+                    });
+                }
+                seen_named.push((name, position));
+            }
+            ExprKind::Spread(_) if !seen_named.is_empty() => {
+                return Err(CallArgPlanError::SpreadAfterNamed { span: arg.span });
+            }
+            ExprKind::Spread(_) => seen_spread = true,
+            _ if !seen_named.is_empty() => {
+                return Err(CallArgPlanError::PositionalAfterNamed { span: arg.span });
+            }
+            _ if seen_spread => {
+                return Err(CallArgPlanError::PositionalAfterSpread { span: arg.span });
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// Returns `Ok` if no positional argument appears after a spread expression,
 /// otherwise returns `PositionalAfterSpread` for the offending argument.
 fn validate_positional_spread_order(args: &[Expr]) -> Result<(), CallArgPlanError> {

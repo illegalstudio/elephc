@@ -20,7 +20,7 @@ use super::{
     NAMED_PARAMETER_OVERWRITE_PREFIX, NAMED_PARAMETER_OVERWRITE_SUFFIX,
     OB_NTC_NO_FLUSH, OB_NTC_NO_GET_FLUSH, OBJECT_NOT_ARRAY_PREFIX, OBJECT_NOT_ARRAY_SUFFIX,
     SERIALIZATION_DENIED_PREFIX, SERIALIZATION_DENIED_SUFFIX, SERIALIZABLE_RESULT_SUFFIX, UNSERIALIZATION_DENIED_PREFIX,
-    CLOSURE_CLASS_NAME, POSITIONAL_AFTER_NAMED_MSG, UNKNOWN_NAMED_PARAMETER_PREFIX,
+    CLOSURE_CALLEE_DISPLAY_NAME, CLOSURE_CLASS_NAME, POSITIONAL_AFTER_NAMED_MSG, UNKNOWN_NAMED_PARAMETER_PREFIX,
     OB_WARN_BAD_CALLBACK_GENERIC,
     OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX,
     PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, SPRINTF_ARGCOUNT_MSG,
@@ -134,6 +134,9 @@ pub(crate) fn emit_runtime_data_fixed(
     ));
     out.push_str(&format!(
         ".globl _unknown_named_parameter_prefix\n_unknown_named_parameter_prefix:\n    .ascii {UNKNOWN_NAMED_PARAMETER_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _closure_callee_display_name\n_closure_callee_display_name:\n    .ascii {CLOSURE_CALLEE_DISPLAY_NAME:?}\n"
     ));
     out.push_str(&format!(
         ".globl _positional_after_named_msg\n_positional_after_named_msg:\n    .ascii {POSITIONAL_AFTER_NAMED_MSG:?}\n"

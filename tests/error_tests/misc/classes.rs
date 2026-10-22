@@ -310,12 +310,10 @@ fn test_error_parenthesis_free_new_rejects_immediate_postfix_access() {
 /// Verifies unsupported dynamic class-name references after `new` fail instead of miscompiling.
 #[test]
 fn test_error_dynamic_new_rejects_unsupported_class_name_references() {
+    // `new $box->className` / `new $classes[0]` are PHP class-name references and compile;
+    // a constant fetch after the reference is not part of PHP's `new` grammar.
     expect_error(
-        "<?php class Box { public $className = \"stdClass\"; } $box = new Box(); $object = new $box->className;",
-        "Dynamic class-name expressions after 'new' are not supported",
-    );
-    expect_error(
-        "<?php $classes = [\"stdClass\"]; $object = new $classes[0];",
+        "<?php class Box { public $className = \"stdClass\"; } $box = new Box(); $object = new $box->className::FOO;",
         "Dynamic class-name expressions after 'new' are not supported",
     );
 }

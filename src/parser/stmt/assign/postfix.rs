@@ -66,6 +66,14 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     if lhs_pos != lhs_expr_tokens.len() {
         return Err(CompileError::new(span, "Invalid assignment target"));
     }
+    if crate::parser::expr::is_dynamic_class_member_read(&lhs_expr) {
+        // `$class::$prop[] = v` / `$class::$prop[k] = v`: the read desugar is a value, so the
+        // write would land in a temporary.
+        return Err(CompileError::new(
+            span,
+            crate::parser::expr::DYNAMIC_STATIC_PROPERTY_WRITE_ERROR,
+        ));
+    }
 
     // Runtime-name writes need the expression lowerer's captured RHS and lazy ??= plan.
     // A handcrafted assignment without its result target evaluated the value twice.
@@ -265,6 +273,19 @@ pub(crate) fn assignment_target_store_stmt(
                 value,
             })
         }
+        ExprKind::DynamicPropertyAccess { object, property } => Ok(StmtKind::ExprStmt(Expr::new(
+            ExprKind::Assignment {
+                target: Box::new(Expr::new(
+                    ExprKind::DynamicPropertyAccess { object, property },
+                    target.span,
+                )),
+                value: Box::new(value),
+                result_target: None,
+                prelude: Vec::new(),
+                conditional_value_temp: None,
+            },
+            span,
+        ))),
         ExprKind::ArrayAccess { array, index } => match array.kind {
             ExprKind::Variable(array) => Ok(StmtKind::ArrayAssign {
                 array,
@@ -545,6 +566,32 @@ fn has_delayed_static_receiver(target: &Expr) -> bool {
     }
 }
 
+/// Builds the statement for `$place[] = value` from an already-parsed place: a `foreach`
+/// value target such as `foreach ($rows as $list[])`.
+pub(crate) fn append_to_place_stmt(place: Expr, element: Expr, span: Span) -> Result<Stmt, CompileError> {
+    crate::parser::expr::reject_dynamic_member_write(&place, span)?;
+    let place_span = place.span;
+    let stmt = match place.kind {
+        ExprKind::Variable(array) => StmtKind::ArrayPush { array, value: element },
+        ExprKind::PropertyAccess { object, property } => {
+            StmtKind::PropertyArrayPush { object, property, value: element }
+        }
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            StmtKind::StaticPropertyArrayPush { receiver, property, value: element }
+        }
+        kind @ ExprKind::ArrayAccess { .. } => {
+            return lower_nested_append_assignment(Expr::new(kind, place_span), element, span);
+        }
+        _ => {
+            return Err(CompileError::new(
+                span,
+                "Appending to this foreach target (`foreach ($a as $place[])`) is not supported; append to a variable, property or array element",
+            ))
+        }
+    };
+    Ok(Stmt::new(stmt, span))
+}
+
 /// Scans tokens starting from `start` (skipping nested parentheses, brackets, and braces)
 /// and returns the position and operator of the first top-level assignment at nesting depth 0.
 /// Returns `None` if no assignment operator is found before a semicolon at depth 0.
@@ -813,6 +860,7 @@ pub(crate) fn lower_postfix_incdec_assignment(
     is_increment: bool,
     span: Span,
 ) -> Result<Stmt, CompileError> {
+    crate::parser::expr::reject_dynamic_member_write(&lhs_expr, span)?;
     let op = if matches!(&lhs_expr.kind, ExprKind::ArrayAccess { .. }) {
         AssignmentOperator::IncDec(is_increment)
     } else if is_increment {

@@ -11,7 +11,11 @@
 mod assignment_targets;
 mod append_writes;
 mod arrow_preludes;
+pub(crate) use assignment_targets::{
+    is_dynamic_class_member_read, reject_dynamic_member_write, DYNAMIC_STATIC_PROPERTY_WRITE_ERROR,
+};
 mod calls;
+mod dynamic_calls;
 mod prefix;
 mod prefix_complex;
 mod pratt;

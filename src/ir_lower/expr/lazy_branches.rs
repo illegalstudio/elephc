@@ -76,6 +76,10 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
     if let ExprKind::ArrayAccess { array, index } = &value.kind {
         return lower_array_access_with_missing_warning(ctx, array, index, value, false);
     }
+    // `$class::$p ?? d`: the runtime-named static property is read in PHP's silent probe mode.
+    if let Some(probed) = super::dynamic_class_access::lower_dynamic_static_property_probe(ctx, value) {
+        return probed;
+    }
     // A typed property with no default starts UNINITIALIZED, and an ordinary read of one is
     // fatal in PHP. `??` is precisely the construct that must not raise there, so a property
     // that can be in that state is read the way `isset()` reads it. Every other property keeps

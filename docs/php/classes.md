@@ -755,6 +755,8 @@ new $missing();                          // fatal: Class "NoSuchClass" not found
 
 elephc resolves the class name case-insensitively against compile-time class metadata, matching PHP class lookup. A match dispatches through the same allocation path as `new ClassName()`, including constructor calls, declared property defaults, and supported built-in/SPL runtime storage initialization. Unknown class strings are fatal, and non-string class expressions are rejected with PHP's invalid class-name fatal.
 
+The class name may also come from any of PHP's `new` class-name references: a property (`new $this->class(...)`, `new $obj->map['k'](...)`), an array element (`new $classes[0]`), or a static property, with any chain of `[...]`, `->prop` and `::$prop` after it (`new static::$builder($x)`, `new static::$classes[static::class]($m)`).
+
 ## Dynamic method and static calls
 
 A method or static method can be called by a name held in a variable:
@@ -777,7 +779,29 @@ $static = "version";
 echo $class::$static();           // 1.0 — both class and method dynamic
 ```
 
-`$obj->$name(...)` and `$class::$name(...)` are equivalent to `call_user_func([$obj, $name], ...)` / `call_user_func([$class, $name], ...)`. A dynamic method name on a literal class also works (`ClassName::$name(...)`). Arguments are forwarded positionally. Nullsafe dynamic method calls (`$obj?->$name(...)` and `$obj?->{$expr}(...)`) short-circuit like other `?->` chains: if the receiver is `null`, the method-name expression and arguments are not evaluated and the result is `null`. **Named arguments are rejected** in dynamic calls because the target method — and therefore its parameter names — is not known at compile time.
+`$obj->$name(...)` and `$class::$name(...)` are equivalent to `call_user_func([$obj, $name], ...)` / `call_user_func([$class, $name], ...)`. Arguments are forwarded positionally. Nullsafe dynamic method calls (`$obj?->$name(...)` and `$obj?->{$expr}(...)`) short-circuit like other `?->` chains: if the receiver is `null`, the method-name expression and arguments are not evaluated and the result is `null`.
+
+A runtime method name on a class named in the source — `self::$method(...)`, `static::{'is' . $kind}(...)`, `parent::{$m}(...)`, `ClassName::$name(...)` — dispatches on the name over the methods that class declares or inherits, and each match runs exactly like the named call (`static::m()` keeps late static binding, `self::`/`parent::` forward it, an instance method runs on `$this`). Note that `self::$method(...)` calls the method *named by* `$method`; only without parentheses is `self::$method` a static property. Inaccessible methods, a missing `$this`, too few arguments and unknown names throw PHP's `Error`/`ArgumentCountError` (unknown names fall back to `__call`/`__callStatic` first). Under `static::`, a static method only a subclass declares runs on that subclass when its body never observes the called class, or when the called class is that subclass; otherwise, and for a by-reference parameter or a subclass-only instance method, the call throws an explicit elephc `Error`.
+
+Named arguments work in `$obj->$name(...)` / `$obj->{$expr}(...)`: the call becomes `call_user_func_array([$obj, $name], $args)` with the names as string keys, so they bind against the method resolved at run time (unknown names and overwrites raise PHP's `Error`). One unpacked list may precede them; two unpacked lists next to a named argument are rejected at compile time. Named arguments stay **rejected** in nullsafe and static dynamic calls (`$obj?->$m(...)`, `$class::$m(...)`, `self::$m(...)`).
+
+A callable array literal can be called directly: `[$class, 'method']()`, `[$obj, 'method'](...$args)`. An untyped property holding a callable is called at run time: `($this->handler)($x)`.
+
+`$obj::method()` on an object receiver dispatches on the object's runtime class, so late static binding (`static::class`) sees the subclass, as in PHP. The same runtime-class lookup serves class constants and static properties read through a variable receiver:
+
+```php
+<?php
+class Config { const VERSION = "2.1"; public static $driver = "file"; }
+class AppConfig extends Config { const VERSION = "3.0"; }
+
+$class = "Config";
+echo $class::VERSION;              // 2.1
+echo $class::$driver;              // file
+$config = new AppConfig();
+echo $config::VERSION;             // 3.0 — the object's runtime class
+```
+
+These reads apply PHP's visibility rules from the calling scope. An unknown class name throws `Error: Class "X" not found`. Writing a static property through a variable receiver (`$class::$prop = v`, `$class::$prop[] = v`, `++$class::$prop`, a by-reference use) is not supported yet and is a compile error; use the class name instead.
 
 ## Anonymous classes (`new class {}`)
 

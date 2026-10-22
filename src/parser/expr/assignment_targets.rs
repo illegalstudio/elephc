@@ -1138,3 +1138,42 @@ fn instanceof_target_contains_equivalent(target: &InstanceOfTarget, needle: &Exp
         InstanceOfTarget::Expr(expr) => expr_contains_equivalent(expr, needle),
     }
 }
+
+/// Diagnostic for a write through `$class::$prop`, shared by every write shape.
+pub(crate) const DYNAMIC_STATIC_PROPERTY_WRITE_ERROR: &str =
+    "Writing a static property through a dynamic class (`$class::$prop = ...`) is not supported; use the class name";
+
+/// Returns true for the parser's `$class::X` / `$class::$prop` read desugars, which are values,
+/// not places: a write through them would silently land in a temporary.
+pub(crate) fn is_dynamic_class_member_read(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::FunctionCall { name, .. } => matches!(
+            name.as_str().trim_start_matches('\\'),
+            "__elephc_dynamic_class_constant" | "__elephc_dynamic_static_property"
+        ),
+        ExprKind::ArrayAccess { array, .. } => is_dynamic_class_member_read(array),
+        _ => false,
+    }
+}
+
+/// Rejects a write context (`++`, `--`, `=&`, `foreach (... as &$v)`, `unset`, destructuring)
+/// whose place is rooted in a `$class::$prop` read desugar: that desugar is a value, so the
+/// write would land in a temporary and silently do nothing.
+pub(crate) fn reject_dynamic_member_write(expr: &Expr, span: Span) -> Result<(), crate::errors::CompileError> {
+    if is_dynamic_class_member_place(expr) {
+        return Err(crate::errors::CompileError::new(span, DYNAMIC_STATIC_PROPERTY_WRITE_ERROR));
+    }
+    Ok(())
+}
+
+/// Like `is_dynamic_class_member_read`, also looking through property links
+/// (`$c::$o->x`), which reach the same temporary.
+fn is_dynamic_class_member_place(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::PropertyAccess { object, .. } | ExprKind::NullsafePropertyAccess { object, .. } => {
+            is_dynamic_class_member_place(object)
+        }
+        ExprKind::ArrayAccess { array, .. } => is_dynamic_class_member_place(array),
+        _ => is_dynamic_class_member_read(expr),
+    }
+}

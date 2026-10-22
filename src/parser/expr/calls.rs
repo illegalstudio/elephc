@@ -36,6 +36,20 @@ pub(super) fn parse_scoped_static_call(
     }
     *pos += 1;
     let method = match tokens.get(*pos).map(|(token, _)| token) {
+        // `self::$method(args)` calls the method NAMED by the local `$method`; only without
+        // the parentheses is `self::$name` a static property.
+        Some(Token::Variable(method))
+            if matches!(tokens.get(*pos + 1), Some((Token::LParen, _))) =>
+        {
+            let method = Expr::new(ExprKind::Variable(method.clone()), tokens[*pos].1.span);
+            *pos += 1;
+            return finish_scoped_dynamic_method_call(tokens, pos, span, receiver, method);
+        }
+        // `static::{'should' . $unit}(args)`: a computed method name.
+        Some(Token::LBrace) => {
+            let method = parse_braced_member_name(tokens, pos, span)?;
+            return finish_scoped_dynamic_method_call(tokens, pos, span, receiver, method);
+        }
         Some(Token::Variable(property)) => {
             let property = property.clone();
             *pos += 1;
@@ -95,6 +109,80 @@ pub(super) fn parse_scoped_static_call(
             span,
         ))
     }
+}
+
+/// Parses the braced `{expr}` member name after `::`, consuming through the `}`.
+pub(super) fn parse_braced_member_name(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Expr, CompileError> {
+    *pos += 1; // consume '{'
+    let member = super::parse_expr(tokens, pos)?;
+    if !matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::RBrace)) {
+        return Err(CompileError::new(span, "Expected '}'"));
+    }
+    *pos += 1;
+    Ok(member)
+}
+
+/// Finishes `Receiver::$method(args)` / `Receiver::{expr}(args)` on a class receiver that is
+/// named in the source (`self`, `static`, `parent`, `C`) with a method name only known at run
+/// time. Positioned at the `(`.
+///
+/// A literal braced name (`C::{'m'}()`) is the ordinary call. Otherwise the call becomes
+/// `__elephc_dynamic_static_call(<Receiver>::class, $name, ...args)`: a `ClassConstant`
+/// receiver marks the scoped form, which `crate::ir_lower::expr::dynamic_class_access` expands
+/// into a runtime method-NAME dispatch over the receiver class's methods, each arm lowering the
+/// ordinary `Receiver::m(...)` so late static binding and `$this` forwarding stay PHP's.
+pub(super) fn finish_scoped_dynamic_method_call(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+    receiver: StaticReceiver,
+    method: Expr,
+) -> Result<Expr, CompileError> {
+    if !matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::LParen)) {
+        // `C::{expr}` without a call is PHP 8.3's dynamic class-constant fetch.
+        return Err(CompileError::new(
+            span,
+            "Dynamic class constant fetch with a computed name (`Class::{expr}`) is not supported",
+        ));
+    }
+    *pos += 1; // consume '('
+    if parse_first_class_callable_parens(tokens, pos)? {
+        if let ExprKind::StringLiteral(method) = method.kind {
+            return Ok(Expr::new(
+                ExprKind::FirstClassCallable(CallableTarget::StaticMethod { receiver, method }),
+                span,
+            ));
+        }
+        return Err(CompileError::new(
+            span,
+            "First-class callable syntax on a static method with a runtime name (`Class::$method(...)`) is not supported; use `Closure::fromCallable([Class::class, $method])`",
+        ));
+    }
+    let args = parse_args(tokens, pos, span)?;
+    let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
+    if let ExprKind::StringLiteral(method) = method.kind {
+        return Ok(Expr::new(
+            ExprKind::StaticMethodCall { receiver, method, args },
+            span,
+        ));
+    }
+    super::pratt::reject_named_args_in_dynamic_call(&args, span)?;
+    let mut call_args = vec![
+        Expr::new(ExprKind::ClassConstant { receiver }, span),
+        method,
+    ];
+    call_args.extend(args);
+    Ok(Expr::new(
+        ExprKind::FunctionCall {
+            name: crate::names::Name::unqualified("__elephc_dynamic_static_call"),
+            args: call_args,
+        },
+        span,
+    ))
 }
 
 /// Checks whether `...)` appears at the current position, indicating PHP's first-class callable

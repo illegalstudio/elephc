@@ -315,6 +315,30 @@ impl Scanner<'_> {
             "method_exists" => self.method_exists(args),
             "get_class_methods" => self.usage.hazards.dynamic_method = true,
             "class_exists" | "interface_exists" | "enum_exists" | "trait_exists" => self.literal_class_or_hazard(first),
+            // `$class::NAME` / `$class::$prop` dispatch over every class that resolves the member,
+            // so a class reached only through a runtime name must survive pruning.
+            "__elephc_dynamic_class_constant" | "__elephc_dynamic_static_property" => {
+                self.literal_class_or_hazard(first)
+            }
+            // `$class::m()` dispatches over every class declaring `m`, static or instance.
+            "__elephc_dynamic_static_call" => {
+                match first.map(|arg| &arg.kind) {
+                    // `self::$m()` / `C::{expr}()`: the receiver class is named in the source.
+                    Some(ExprKind::ClassConstant { .. } | ExprKind::StringLiteral(_)) => {
+                        let classes = self.expr_classes(first.expect("matched above"));
+                        self.usage.classes.extend(classes);
+                    }
+                    _ => self.literal_class_or_hazard(first),
+                }
+                match args.get(1).map(|arg| &arg.kind) {
+                    Some(ExprKind::StringLiteral(method)) => {
+                        let method = php_symbol_key(method);
+                        self.usage.wildcard_methods.insert((method.clone(), true));
+                        self.usage.wildcard_methods.insert((method, false));
+                    }
+                    _ => self.usage.hazards.dynamic_method = true,
+                }
+            }
             "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" | "unserialize" => self.usage.hazards.dynamic_class = true,
             "eval" => self.literal_eval_or_hazard(first),
             _ => {}

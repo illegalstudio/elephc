@@ -73,6 +73,10 @@ pub(super) fn lower_lazy_isset_operand(
     ctx: &mut LoweringContext<'_, '_>,
     arg: &Expr,
 ) -> Option<LoweredValue> {
+    // `isset($class::$p)` reads a runtime-named static property in PHP's silent probe mode.
+    if let Some(probed) = super::dynamic_class_access::lower_dynamic_static_property_probe(ctx, arg) {
+        return Some(probe_value_is_set(ctx, probed, arg));
+    }
     match &arg.kind {
         ExprKind::ArrayAccess { array, index } => {
             if array_access_expr_satisfies_array_access(ctx, array) {
@@ -85,6 +89,14 @@ pub(super) fn lower_lazy_isset_operand(
                     arg.span,
                 );
                 return Some(lower_expr(ctx, &synthetic));
+            }
+            // `isset($c::$p['x'])`: the chain's root is a silent probe, so the offset is read
+            // silently over it and the answer is "not null".
+            if !array_access_expr_supports_native_isset_probe(ctx, array)
+                && subscript_root_needs_silent_probe(array)
+            {
+                let probed = lower_array_access_with_missing_warning(ctx, array, index, arg, false);
+                return Some(probe_value_is_set(ctx, probed, arg));
             }
             if !array_access_expr_supports_native_isset_probe(ctx, array) {
                 return None;
@@ -166,6 +178,10 @@ pub(super) fn lower_lazy_empty(
         || args.iter().any(is_spread_arg)
     {
         return None;
+    }
+    // `empty($class::$p)`: the runtime-named static property is probed silently, like `isset()`.
+    if let Some(probed) = super::dynamic_class_access::lower_dynamic_static_property_probe(ctx, &args[0]) {
+        return Some(lower_empty_of_probed_value(ctx, probed, name, expr));
     }
     if let ExprKind::ArrayAccess { array, index } = &args[0].kind {
         // The receiver is read ONCE and judged by the type it lowers to. `$this`, a property

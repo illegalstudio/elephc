@@ -471,6 +471,7 @@ fn parse_prefix_inc_dec(
         }
     }
     if let Ok((target, append_kind)) = operand {
+        super::assignment_targets::reject_dynamic_member_write(&target, span)?;
         if matches!(append_kind, super::pratt::PrefixIncrementTarget::Append) {
             if !increment {
                 return Err(CompileError::new(span,

@@ -24,7 +24,7 @@ pub(crate) use plan::{
 };
 pub(crate) use planner::{
     plan_call_args, plan_call_args_with_regular_param_count_and_assoc_spreads,
-    validate_no_spread_after_named,
+    validate_no_spread_after_named, validate_unknown_callee_arg_order,
 };
 pub(crate) use static_spread::{
     coalesce_planned_indexed_spreads, coalesce_planned_indexed_spreads_with_prefix,

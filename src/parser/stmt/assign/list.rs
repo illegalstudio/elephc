@@ -283,6 +283,7 @@ fn parse_list_target_from_slice(
         && tokens[tokens.len() - 1].0 == Token::RBracket
     {
         let base = parse_expr_from_slice(&tokens[..tokens.len() - 2], span)?;
+        crate::parser::expr::reject_dynamic_member_write(&base, span)?;
         if is_append_target_base(&base) {
             return Ok(ListTarget::Append(base));
         }
@@ -290,6 +291,7 @@ fn parse_list_target_from_slice(
     }
 
     let expr = parse_expr_from_slice(tokens, span)?;
+    crate::parser::expr::reject_dynamic_member_write(&expr, span)?;
     if is_list_destructuring_target(&expr) {
         Ok(ListTarget::Expr(expr))
     } else {

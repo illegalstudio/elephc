@@ -877,7 +877,7 @@ fn emit_loaded_assoc_array_callback_call(
                 push_loaded_hash_value_ref_arg(&elem_ty, target_ty, index, emitter, ctx, data);
                 abi::emit_jump(emitter, &done);
                 emitter.label(&missing);
-                emit_call_user_func_array_missing_arg_error(emitter, data);
+                emit_missing_named_argument_error(index, param_name, emitter, data);
                 emitter.label(&done);
             }
             arg_types.push(PhpType::Int);
@@ -901,7 +901,7 @@ fn emit_loaded_assoc_array_callback_call(
             let loaded_ty = push_loaded_hash_value_arg(&elem_ty, target_ty, emitter, ctx, data);
             abi::emit_jump(emitter, &done);
             emitter.label(&missing);
-            emit_call_user_func_array_missing_arg_error(emitter, data);
+            emit_missing_named_argument_error(index, param_name, emitter, data);
             emitter.label(&done);
             loaded_ty
         };
@@ -3419,6 +3419,50 @@ fn widen_callback_arg_type(left: &PhpType, right: &PhpType) -> PhpType {
         return left.clone();
     }
     left.clone()
+}
+
+/// Throws PHP's `ArgumentCountError: <callee>(): Argument #N ($name) not passed` for a required
+/// parameter a named (associative) argument container left unbound.
+///
+/// Invokers are shared by signature, so the callee name comes from the invoked descriptor's
+/// PHP-visible name words at run time; a closure descriptor's name is compiler-internal, so it
+/// is passed as anonymous and prints `{closure}` (PHP 8.4+ also appends `:file:line`, which the
+/// descriptor does not record). The tail is this parameter's constant.
+fn emit_missing_named_argument_error(
+    index: usize,
+    param_name: Option<&str>,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+) {
+    let Some(param_name) = param_name else {
+        emit_call_user_func_array_missing_arg_error(emitter, data);
+        return;
+    };
+    let tail = format!("(): Argument #{} (${param_name}) not passed", index + 1);
+    let (tail_label, tail_len) = data.add_string(tail.as_bytes());
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::load_at_offset(emitter, "x9", INVOKER_DESCRIPTOR_OFFSET);
+            emitter.instruction("ldr x0, [x9, #16]");                           // callee PHP-visible name pointer from the descriptor
+            emitter.instruction("ldr x1, [x9, #24]");                           // its byte length (0 for an anonymous callee)
+            emitter.instruction("ldr x10, [x9]");                               // the descriptor kind
+            emitter.instruction(&format!("cmp x10, #{}", callable_descriptor::CALLABLE_DESC_KIND_CLOSURE)); // a closure's name is compiler-internal
+            emitter.instruction("csel x1, xzr, x1, eq");                        // so it prints as {closure}
+            abi::emit_symbol_address(emitter, "x2", &tail_label);
+            abi::emit_load_int_immediate(emitter, "x3", tail_len as i64);
+        }
+        Arch::X86_64 => {
+            abi::load_at_offset(emitter, "r10", INVOKER_DESCRIPTOR_OFFSET);
+            emitter.instruction("mov rdi, QWORD PTR [r10 + 16]");               // callee PHP-visible name pointer from the descriptor
+            emitter.instruction("mov rsi, QWORD PTR [r10 + 24]");               // its byte length (0 for an anonymous callee)
+            emitter.instruction("xor r11d, r11d");                              // zero length for the closure case
+            emitter.instruction(&format!("cmp QWORD PTR [r10], {}", callable_descriptor::CALLABLE_DESC_KIND_CLOSURE)); // a closure's name is compiler-internal
+            emitter.instruction("cmove rsi, r11");                              // so it prints as {closure}
+            abi::emit_symbol_address(emitter, "rdx", &tail_label);
+            abi::emit_load_int_immediate(emitter, "rcx", tail_len as i64);
+        }
+    }
+    abi::emit_call_label(emitter, "__rt_throw_missing_argument");
 }
 
 /// Throws a catchable `ArgumentCountError` for a descriptor missing a required argument.

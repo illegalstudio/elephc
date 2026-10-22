@@ -770,7 +770,21 @@ impl Checker {
             return Ok(ret_ty);
         }
         let callee_ty = self.infer_type(callee, env)?;
-        if matches!(callee_ty.codegen_repr(), PhpType::Str | PhpType::Mixed) {
+        // `($this->callback)(...$args)`: an untyped property's static type only reflects its
+        // declared default (`null`) or the array it was refined to (`[$obj, 'm']`), not which
+        // callable it holds; its value is a runtime callable exactly like a boxed one (the
+        // lowering dispatches on the runtime value).
+        let untyped_member_callee = matches!(
+                callee_ty.codegen_repr(),
+                PhpType::Void | PhpType::Array(_) | PhpType::AssocArray { .. }
+            )
+            && matches!(
+                callee.kind,
+                ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. }
+            );
+        if untyped_member_callee
+            || matches!(callee_ty.codegen_repr(), PhpType::Str | PhpType::Mixed)
+        {
             // String and boxed callables resolve at runtime; PHP still rejects unpacking
             // after named arguments while compiling the call expression.
             let callee_desc = match &callee.kind {

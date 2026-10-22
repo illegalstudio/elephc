@@ -550,14 +550,57 @@ fn test_untyped_variadic_accepts_mixed_arguments() {
     .is_ok());
 }
 
-/// Verifies that a dynamic method call with named arguments is rejected with a clear diagnostic
-/// (the target method name is a runtime value, so parameter names are unknown at compile time).
-/// The internal `call_user_func` desugaring must not leak into the message.
+/// Verifies that a dynamic STATIC method call with named arguments is still rejected with a
+/// clear diagnostic (instance calls `$obj->$m(name: v)` bind their names at run time).
+/// The internal desugaring must not leak into the message.
 #[test]
-fn test_error_dynamic_method_call_rejects_named_arguments() {
+fn test_error_dynamic_static_method_call_rejects_named_arguments() {
     expect_error(
-        "<?php class C { public function op(int $a, int $b): int { return $a - $b; } } $c = new C(); $m = \"op\"; $c->$m(b: 3, a: 10);",
+        "<?php class C { public static function op(int $a, int $b): int { return $a - $b; } } $m = \"op\"; C::$m(b: 3, a: 10);",
         "Named arguments are not supported in dynamic calls",
+    );
+    expect_error(
+        "<?php class C { public static function op(int $a, int $b): int { return $a - $b; } public static function t($m) { return self::{$m}(b: 3); } }",
+        "Named arguments are not supported in dynamic calls",
+    );
+}
+
+/// Verifies PHP's compile-time argument-list rules on a dynamic method call with named
+/// arguments, and the explicit refusals of two unpacked lists next to a named argument and of
+/// one variable passed to two named arguments.
+#[test]
+fn test_error_dynamic_method_call_named_argument_order() {
+    expect_error("<?php $o->$m(a: 1, a: 2);", "Duplicate named parameter $a");
+    expect_error("<?php $o->$m(a: 1, 2);", "Cannot use positional argument after named argument");
+    expect_error("<?php $o->$m(a: 1, ...$x);", "Cannot use argument unpacking after named arguments");
+    expect_error(
+        "<?php $o->$m(...$x, ...$y, a: 1);",
+        "Named arguments together with more than one unpacked argument",
+    );
+    // Two by-reference parameters given one variable must alias each other, which separate
+    // argument-array cells cannot do, so the shape is refused instead of compiled wrong.
+    expect_error(
+        "<?php $n = 1; $o->$m(a: $n, b: $n);",
+        "Passing $n to more than one named argument of a call whose method name is only known at run time is not supported",
+    );
+}
+
+/// Verifies the dynamic member forms that stay unsupported fail at compile time with a clear
+/// message: first-class callable of a runtime static method name, a computed class-constant
+/// fetch, and a by-reference foreach into a place.
+#[test]
+fn test_error_dynamic_member_unsupported_forms() {
+    expect_error(
+        "<?php class C { public static function t($m) { return self::$m(...); } }",
+        "First-class callable syntax on a static method with a runtime name",
+    );
+    expect_error(
+        "<?php class C { const A = 1; public static function t($n) { return self::{$n}; } }",
+        "Dynamic class constant fetch with a computed name",
+    );
+    expect_error(
+        "<?php $o = new stdClass; foreach ([1] as &$o->p) {}",
+        "A by-reference foreach value into a property or array element",
     );
 }
 

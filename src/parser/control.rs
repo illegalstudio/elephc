@@ -235,14 +235,10 @@ pub fn parse_foreach(
         ));
     }
 
-    let first_var = match tokens.get(*pos).map(|(t, _)| t) {
-        Some(Token::Variable(n)) => n.clone(),
-        _ => return Err(CompileError::new(span, "Expected variable after 'as'")),
-    };
-    *pos += 1;
+    let first_target = parse_foreach_target(tokens, pos, span, "Expected variable after 'as'")?;
 
     // Check for => (foreach $arr as $key => $value)
-    let (key_var, value_var, value_by_ref, unpack) =
+    let (key_target, value_target, value_by_ref, unpack) =
         if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleArrow {
         if first_by_ref {
             return Err(CompileError::new(
@@ -269,20 +265,34 @@ pub fn parse_foreach(
                 ));
             }
             let (val_var, unpack) = parse_foreach_pattern_target(tokens, pos, span)?;
-            (Some(first_var), val_var, false, Some(unpack))
+            (Some(first_target), ForeachTarget::Var(val_var), false, Some(unpack))
         } else {
-            let val_var = match tokens.get(*pos).map(|(t, _)| t) {
-                Some(Token::Variable(n)) => n.clone(),
-                _ => return Err(CompileError::new(span, "Expected variable after '=>'")),
-            };
-            *pos += 1;
-            (Some(first_var), val_var, value_by_ref, None)
+            let value_target =
+                parse_foreach_target(tokens, pos, span, "Expected variable after '=>'")?;
+            (Some(first_target), value_target, value_by_ref, None)
         }
     } else {
-        (None, first_var, first_by_ref, None)
+        (None, first_target, first_by_ref, None)
+    };
+    let (key_var, value_var, place_stores) =
+        bind_foreach_targets(key_target, value_target, value_by_ref, span)?;
+    let unpack = match (place_stores, unpack) {
+        (Some(stores), None) => Some(stores),
+        (None, unpack) => unpack,
+        // `foreach ($m as $o->k => [$a, $b])`: unpack the value before storing the key.
+        (Some(stores), Some(unpack)) => {
+            let StmtKind::Synthetic(mut stores) = stores.kind else {
+                unreachable!("place stores are a synthetic group");
+            };
+            stores.insert(1, unpack);
+            Some(Stmt::new(StmtKind::Synthetic(stores), span))
+        }
     };
 
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after foreach")?;
+    if value_by_ref {
+        crate::parser::expr::reject_dynamic_member_write(&array, span)?;
+    }
     let body = parse_control_body(tokens, pos, &Token::EndForeach, "endforeach")?;
     let body = match unpack {
         Some(unpack) => prepend_stmt(unpack, body),
@@ -299,6 +309,134 @@ pub fn parse_foreach(
         },
         span,
     ))
+}
+
+/// One `foreach` key or value target.
+enum ForeachTarget {
+    /// `$name`, bound by the loop itself.
+    Var(String),
+    /// A writable place (`$stub->class`, `$a['k']`, `$o->{$p}`, `C::$x`), assigned per iteration.
+    Place(Expr),
+    /// `$place[]`: each iteration appends to the place.
+    Append(Expr),
+}
+
+/// Parses one foreach target up to the `=>` or `)` that ends it.
+fn parse_foreach_target(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+    expected: &str,
+) -> Result<ForeachTarget, CompileError> {
+    if let Some(Token::Variable(name)) = tokens.get(*pos).map(|(token, _)| token) {
+        if matches!(
+            tokens.get(*pos + 1).map(|(token, _)| token),
+            Some(Token::DoubleArrow | Token::RParen)
+        ) {
+            let name = name.clone();
+            *pos += 1;
+            return Ok(ForeachTarget::Var(name));
+        }
+    }
+    // `foreach ($item as $stub->class => $stub->position)`: find the end of the target.
+    let mut depth = 0usize;
+    let mut end = *pos;
+    while end < tokens.len() {
+        match tokens[end].0 {
+            Token::LParen | Token::LBracket | Token::LBrace => depth += 1,
+            Token::RParen if depth == 0 => break,
+            Token::RParen | Token::RBracket | Token::RBrace => depth = depth.saturating_sub(1),
+            Token::DoubleArrow if depth == 0 => break,
+            Token::Semicolon if depth == 0 => break,
+            _ => {}
+        }
+        end += 1;
+    }
+    let append = end >= *pos + 3
+        && tokens[end - 2].0 == Token::LBracket
+        && tokens[end - 1].0 == Token::RBracket;
+    let place_tokens = &tokens[*pos..if append { end - 2 } else { end }];
+    if place_tokens.is_empty() {
+        return Err(CompileError::new(span, expected));
+    }
+    let mut place_pos = 0;
+    let place = parse_expr(place_tokens, &mut place_pos)?;
+    if place_pos != place_tokens.len() {
+        return Err(CompileError::new(span, "Expected ')' after foreach"));
+    }
+    let writable = matches!(
+        place.kind,
+        ExprKind::PropertyAccess { .. }
+            | ExprKind::DynamicPropertyAccess { .. }
+            | ExprKind::StaticPropertyAccess { .. }
+            | ExprKind::ArrayAccess { .. }
+    ) || append && matches!(place.kind, ExprKind::Variable(_) | ExprKind::This);
+    if !writable {
+        return Err(CompileError::new(span, expected));
+    }
+    // A `$class::$p` read is a temporary: storing the loop value into it (or an element or
+    // property under it) would leave the static property unchanged.
+    crate::parser::expr::reject_dynamic_member_write(&place, span)?;
+    *pos = end;
+    Ok(if append { ForeachTarget::Append(place) } else { ForeachTarget::Place(place) })
+}
+
+/// Turns the parsed targets into loop variables. When a target is not a plain variable, the
+/// loop binds hidden temporaries and the body starts by storing them, value first and then the
+/// key, which is the order PHP assigns a foreach's targets in.
+fn bind_foreach_targets(
+    key: Option<ForeachTarget>,
+    value: ForeachTarget,
+    value_by_ref: bool,
+    span: Span,
+) -> Result<(Option<String>, String, Option<Stmt>), CompileError> {
+    let is_var = |target: &ForeachTarget| matches!(target, ForeachTarget::Var(_));
+    if is_var(&value) && key.as_ref().is_none_or(is_var) {
+        let ForeachTarget::Var(value) = value else { unreachable!() };
+        let key = key.map(|key| match key {
+            ForeachTarget::Var(key) => key,
+            _ => unreachable!(),
+        });
+        return Ok((key, value, None));
+    }
+    if value_by_ref {
+        return Err(CompileError::new(
+            span,
+            "A by-reference foreach value into a property or array element (`foreach ($a as &$o->p)`) is not supported; iterate into a variable",
+        ));
+    }
+    let temp = |role: &str| {
+        crate::names::generated_local_name(&format!(
+            "__elephc_foreach_{role}_{}_{}",
+            span.line, span.col
+        ))
+    };
+    let store = |target: ForeachTarget, temp: &str| -> Result<Stmt, CompileError> {
+        let source = Expr::new(ExprKind::Variable(temp.to_string()), span);
+        match target {
+            ForeachTarget::Var(name) => {
+                Ok(Stmt::new(StmtKind::Assign { name, value: source }, span))
+            }
+            ForeachTarget::Place(place) => Ok(Stmt::new(
+                crate::parser::stmt::assignment_target_store_stmt(place, source, span)?,
+                span,
+            )),
+            ForeachTarget::Append(place) => {
+                crate::parser::stmt::append_to_place_stmt(place, source, span)
+            }
+        }
+    };
+    let value_temp = temp("value");
+    let mut stores = vec![store(value, &value_temp)?];
+    let key_temp = match key {
+        Some(key) => {
+            let key_temp = temp("key");
+            stores.push(store(key, &key_temp)?);
+            Some(key_temp)
+        }
+        None => None,
+    };
+    Ok((key_temp, value_temp, Some(Stmt::new(StmtKind::Synthetic(stores), span))))
 }
 
 /// Parses a `foreach` value destructuring pattern into a hidden loop variable plus the
