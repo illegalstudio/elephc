@@ -283,6 +283,9 @@ pub fn parse_foreach(
     };
 
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after foreach")?;
+    if value_by_ref {
+        crate::parser::expr::reject_dynamic_member_write(&array, span)?;
+    }
     let body = parse_control_body(tokens, pos, &Token::EndForeach, "endforeach")?;
     let body = match unpack {
         Some(unpack) => prepend_stmt(unpack, body),

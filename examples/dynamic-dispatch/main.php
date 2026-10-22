@@ -84,3 +84,31 @@ echo "dynamic static: " . $class::describe(...$options) . "\n";
 // Integer keys in the same spread stay positional, so one array can carry both.
 $mixed_keys = [0 => 100, "height" => 50];
 echo "mixed keys: " . (new $class(...$mixed_keys))->width . "\n";
+
+// Class members read through a class or object chosen at runtime, a class name taken from a
+// property for `new`, and a static call that falls back to `__callStatic`.
+class Shape
+{
+    const SIDES = 0;
+    public static string $kind = "shape";
+    public string $twin = "Square";
+
+    public static function __callStatic(string $name, array $args): string
+    {
+        return static::class . " has no " . $name . "(), got " . count($args) . " arguments";
+    }
+}
+
+final class Square extends Shape
+{
+    const SIDES = 4;
+    public static string $kind = "square";
+}
+
+$shape_class = "Square";
+$shape = new Shape();
+echo "dynamic member: " . $shape_class::$kind . " with " . $shape_class::SIDES . " sides\n";
+echo "probe: " . ($shape_class::$color ?? "no color") . "\n";
+$twin = new $shape->twin();
+echo "new from property: " . $twin::$kind . "\n";
+echo "magic fallback: " . $shape_class::area(2, 3) . "\n";

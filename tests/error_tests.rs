@@ -286,6 +286,8 @@ mod locals_retype_fixtures;
 mod syntax;
 #[path = "error_tests/recovery.rs"]
 mod recovery;
+#[path = "error_tests/dynamic_class_members.rs"]
+mod dynamic_class_members;
 #[path = "error_tests/warnings.rs"]
 mod warnings;
 #[path = "error_tests/core_symbols.rs"]

@@ -106,6 +106,7 @@ fn parse_ref_assign(
 ) -> Result<Stmt, CompileError> {
     *pos += 1;
     let source = parse_expr(tokens, pos)?;
+    crate::parser::expr::reject_dynamic_member_write(&source, span)?;
     if !is_valid_reference_source(&source.kind) {
         return Err(CompileError::new(
             span,

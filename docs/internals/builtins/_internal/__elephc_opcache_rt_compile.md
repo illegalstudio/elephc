@@ -2,7 +2,7 @@
 title: "__elephc_opcache_rt_compile() - internals"
 description: "Compiler internals for __elephc_opcache_rt_compile(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1149
+  order: 1152
 ---
 
 ## `__elephc_opcache_rt_compile()` - internals

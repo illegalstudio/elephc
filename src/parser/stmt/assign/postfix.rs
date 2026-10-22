@@ -66,6 +66,14 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     if lhs_pos != lhs_expr_tokens.len() {
         return Err(CompileError::new(span, "Invalid assignment target"));
     }
+    if crate::parser::expr::is_dynamic_class_member_read(&lhs_expr) {
+        // `$class::$prop[] = v` / `$class::$prop[k] = v`: the read desugar is a value, so the
+        // write would land in a temporary.
+        return Err(CompileError::new(
+            span,
+            crate::parser::expr::DYNAMIC_STATIC_PROPERTY_WRITE_ERROR,
+        ));
+    }
 
     // Runtime-name writes need the expression lowerer's captured RHS and lazy ??= plan.
     // A handcrafted assignment without its result target evaluated the value twice.
@@ -813,6 +821,7 @@ pub(crate) fn lower_postfix_incdec_assignment(
     is_increment: bool,
     span: Span,
 ) -> Result<Stmt, CompileError> {
+    crate::parser::expr::reject_dynamic_member_write(&lhs_expr, span)?;
     let op = if matches!(&lhs_expr.kind, ExprKind::ArrayAccess { .. }) {
         AssignmentOperator::IncDec(is_increment)
     } else if is_increment {

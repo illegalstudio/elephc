@@ -83,6 +83,7 @@ mod image;
 mod pcntl;
 mod xml;
 mod arrays;
+mod parser_expr;
 mod calendar;
 mod call_counters;
 mod callables;

@@ -45,6 +45,8 @@ mod anonymous_classes;
 mod intersection_types;
 #[path = "oop/dynamic_dispatch.rs"]
 mod dynamic_dispatch;
+#[path = "oop/dynamic_class_members.rs"]
+mod dynamic_class_members;
 #[path = "oop/misc.rs"]
 mod misc;
 #[path = "oop/attributes.rs"]

@@ -15,6 +15,16 @@ pub(super) fn lower_unset_locals(
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
+    if let Some(arg) = args
+        .iter()
+        .find(|arg| crate::parser::expr::reject_dynamic_member_write(arg, arg.span).is_err())
+    {
+        crate::ir_lower::diagnostics::refuse(
+            arg.span,
+            "Unsetting through a dynamic class (`unset($class::$prop[...])`) is not supported; use the class name",
+        );
+        return Some(lower_null(ctx, expr));
+    }
     if !args.iter().all(|arg| unset_target_supported(ctx, arg)) {
         return None;
     }

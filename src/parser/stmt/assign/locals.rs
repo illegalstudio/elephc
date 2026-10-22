@@ -49,6 +49,14 @@ pub(in crate::parser::stmt) fn parse_incdec_stmt(
         return super::postfix::lower_postfix_incdec_assignment(lhs_expr, is_increment, span);
     }
 
+    // `++$c::$p[k];` goes through a dynamic class: reject it with the targeted write error.
+    if matches!(next_token, Some(Token::Variable(_) | Token::This))
+        && tokens.get(*pos + 1).map(|(t, _)| t) == Some(&Token::DoubleColon)
+    {
+        let lhs_expr = crate::parser::expr::parse_expr(tokens, pos)?;
+        crate::parser::expr::reject_dynamic_member_write(&lhs_expr, span)?;
+    }
+
     // `++$this->n;`, `++$obj->n;`, and `++$a[0];` target storage the simple local path
     // cannot name. Statement position discards the operator's value, so they lower
     // through the same read-modify-write shape as their postfix spellings.

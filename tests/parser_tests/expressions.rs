@@ -41,10 +41,30 @@ fn test_dynamic_method_call_desugars_to_call_user_func() {
     }
 }
 
-/// Verifies that `$cls::method()` with a dynamic class receiver also desugars to call_user_func.
+/// Verifies `$cls::method()` with a literal method name desugars to the runtime class-name
+/// dispatch primitive (expanded by `ir_lower::expr::dynamic_class_access`).
 #[test]
-fn test_dynamic_static_call_desugars_to_call_user_func() {
-    let stmts = parse_source("<?php $cls::build();");
+fn test_dynamic_static_call_desugars_to_dynamic_static_call_primitive() {
+    let stmts = parse_source("<?php $cls::build(1);");
+    let expr = match &stmts[0].kind {
+        StmtKind::ExprStmt(expr) => expr,
+        other => panic!("Expected ExprStmt, got {:?}", other),
+    };
+    match &expr.kind {
+        ExprKind::FunctionCall { name, args } => {
+            assert_eq!(name.as_str(), "__elephc_dynamic_static_call");
+            assert!(matches!(&args[0].kind, ExprKind::Variable(name) if name == "cls"));
+            assert!(matches!(&args[1].kind, ExprKind::StringLiteral(name) if name == "build"));
+            assert_eq!(args.len(), 3);
+        }
+        other => panic!("Expected __elephc_dynamic_static_call FunctionCall, got {:?}", other),
+    }
+}
+
+/// Verifies a variable method name (`$cls::$m()`) keeps the `call_user_func` desugar.
+#[test]
+fn test_dynamic_static_call_with_variable_method_desugars_to_call_user_func() {
+    let stmts = parse_source("<?php $cls::$m();");
     let expr = match &stmts[0].kind {
         StmtKind::ExprStmt(expr) => expr,
         other => panic!("Expected ExprStmt, got {:?}", other),

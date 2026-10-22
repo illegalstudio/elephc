@@ -33,6 +33,8 @@ use crate::types::{
 use std::collections::HashSet;
 
 mod constants;
+mod dynamic_class_access;
+mod lsb_taint;
 mod nullsafe_chain;
 mod ref_place_args;
 mod boxed_user_sort;

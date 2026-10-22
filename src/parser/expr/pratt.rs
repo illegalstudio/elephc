@@ -99,6 +99,7 @@ fn parse_expr_bp_inner(
             Token::PlusPlus | Token::MinusMinus => {
                 let span = tokens[*pos].1.span;
                 let increment = tokens[*pos].0 == Token::PlusPlus;
+                super::assignment_targets::reject_dynamic_member_write(&lhs, span)?;
                 if let Some(error) = super::append_writes::lower_null_property_write(&lhs, None, span) {
                     *pos += 1;
                     lhs = error;
@@ -125,6 +126,9 @@ fn parse_expr_bp_inner(
                 let span = tokens[*pos].1.span;
                 *pos += 1;
                 if matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::RBracket)) {
+                    // `$class::$prop[] = v`: the read desugar is a value, so the append would
+                    // land in a temporary.
+                    super::assignment_targets::reject_dynamic_member_write(&lhs, span)?;
                     lhs = super::append_writes::parse_append_write(
                         lhs, tokens, pos, span, prefix_increment.is_some(),
                     )?;
@@ -169,6 +173,8 @@ fn parse_expr_bp_inner(
                     );
                     continue;
                 }
+                let computed_member =
+                    matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::LBrace));
                 let member = match tokens
                     .get(*pos)
                     .map(|(token, metadata)| (token.clone(), metadata.span))
@@ -199,21 +205,39 @@ fn parse_expr_bp_inner(
                     let dynamic_args = crate::parser::expr::parse_args(tokens, pos, span)?;
                     let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
                     reject_named_args_in_dynamic_call(&dynamic_args, span)?;
-                    let mut call_args =
-                        vec![Expr::new(ExprKind::ArrayLiteral(vec![lhs, member]), span)];
+                    // A literal method name dispatches on the receiver's runtime class like
+                    // `$cls::NAME` (`__elephc_dynamic_static_call`, expanded in ir_lower), so
+                    // `$obj::staticMethod()` resolves statics and late static binding. A
+                    // variable method name keeps the generic callable-array path.
+                    let primitive = if matches!(member.kind, ExprKind::StringLiteral(_)) {
+                        "__elephc_dynamic_static_call"
+                    } else {
+                        "call_user_func"
+                    };
+                    let mut call_args = if primitive == "call_user_func" {
+                        vec![Expr::new(ExprKind::ArrayLiteral(vec![lhs, member]), span)]
+                    } else {
+                        vec![lhs, member]
+                    };
                     call_args.extend(dynamic_args);
                     lhs = Expr::new(
                         ExprKind::FunctionCall {
-                            name: crate::names::Name::unqualified("call_user_func"),
+                            name: crate::names::Name::unqualified(primitive),
                             args: call_args,
                         },
                         span,
                     );
                 } else {
-                    return Err(CompileError::new(
-                        span,
-                        "Dynamic class access (`$class::X`) is only supported for method calls",
-                    ));
+                    let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
+                    if computed_member {
+                        // `$cls::{$expr}` is PHP 8.3's dynamic CONSTANT fetch; reading the braced
+                        // expression as a member name would turn `{$c}` into static property `$c`.
+                        return Err(CompileError::new(
+                            span,
+                            "Dynamic class constant fetch with a computed name (`$class::{expr}`) is not supported",
+                        ));
+                    }
+                    lhs = parse_dynamic_class_member_read(tokens, *pos, lhs, member, span)?;
                 }
             }
             Token::Arrow | Token::QuestionArrow => {
@@ -459,6 +483,12 @@ fn parse_expr_bp_inner(
             }
 
             if !is_assignment_expression_target(&lhs) {
+                if super::assignment_targets::is_dynamic_class_member_read(&lhs) {
+                    return Err(CompileError::new(
+                        lhs.span,
+                        super::assignment_targets::DYNAMIC_STATIC_PROPERTY_WRITE_ERROR,
+                    ));
+                }
                 return Err(CompileError::new(lhs.span, "Invalid assignment target"));
             }
 
@@ -720,6 +750,59 @@ pub(in crate::parser) fn reject_named_args_in_dynamic_call(
         ));
     }
     Ok(())
+}
+
+/// Builds the read of a dynamic-receiver class member: `$cls::NAME` or `$cls::$prop`.
+///
+/// `member` is what followed `::`: a `StringLiteral` for a constant name or a `Variable` for a
+/// static property (the computed `{expr}` form is rejected by the caller). `$this::NAME` / `$this::$prop`
+/// are exactly `static::NAME` / `static::$prop` in PHP (the runtime class of `$this` IS the
+/// called class inside an instance method), so they reuse the late-static-binding nodes.
+/// Every other receiver becomes a call to an internal compiler primitive
+/// (`__elephc_dynamic_class_constant` / `__elephc_dynamic_static_property`) that
+/// `crate::ir_lower::expr::dynamic_class_access` expands into a runtime class-name dispatch over
+/// the AOT class table. Writes (`$cls::$prop = ...`, `++`, compound assignment) stay rejected:
+/// the primitive is a value, not a place.
+fn parse_dynamic_class_member_read(
+    tokens: &[SpannedToken],
+    pos: usize,
+    receiver: Expr,
+    member: Expr,
+    span: Span,
+) -> Result<Expr, CompileError> {
+    let is_write = tokens.get(pos).is_some_and(|(token, _)| {
+        matches!(token, Token::PlusPlus | Token::MinusMinus) || assignment_bp(token).is_some()
+    });
+    let (primitive, name) = match member.kind {
+        ExprKind::StringLiteral(name) => ("__elephc_dynamic_class_constant", name),
+        ExprKind::Variable(name) => ("__elephc_dynamic_static_property", name),
+        _ => unreachable!("computed `::{{expr}}` members are rejected before this point"),
+    };
+    if is_write && primitive == "__elephc_dynamic_static_property" {
+        return Err(CompileError::new(
+            span,
+            "Writing a static property through a dynamic class (`$class::$prop = ...`) is not supported; use the class name",
+        ));
+    }
+    // `$this::NAME` is exactly `static::NAME`. `$this::$prop` deliberately is NOT rewritten to
+    // `static::$prop`: that node reads the declaring class's storage from an instance method
+    // when a subclass redeclares the property, so it goes through the runtime-class dispatch.
+    if matches!(receiver.kind, ExprKind::This) && primitive == "__elephc_dynamic_class_constant" {
+        return Ok(Expr::new(
+            ExprKind::ScopedConstantAccess {
+                receiver: crate::parser::ast::StaticReceiver::Static,
+                name,
+            },
+            span,
+        ));
+    }
+    Ok(Expr::new(
+        ExprKind::FunctionCall {
+            name: crate::names::Name::unqualified(primitive),
+            args: vec![receiver, Expr::new(ExprKind::StringLiteral(name), span)],
+        },
+        span,
+    ))
 }
 
 /// Looks up assignment operator binding power.
