@@ -5,6 +5,7 @@
 //! - `crate::codegen::lower_inst::objects::reflection`.
 //!
 //! Key details:
+//! - Fresh reflected objects and collections transfer their initial reference into boxed slots.
 //! - Preserves compile-time metadata, target-aware object layout, and ownership.
 
 use super::*;
@@ -177,7 +178,7 @@ pub(super) fn emit_reflection_parameter_declaring_function_property(
             metadata.is_generator = *is_generator;
             metadata.returns_reference = *returns_reference;
             emit_reflection_owner_object(ctx, "ReflectionFunction", &metadata)?;
-            emit_box_current_value_as_mixed(
+            emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Object("ReflectionFunction".to_string()),
             );
@@ -207,7 +208,7 @@ pub(super) fn emit_reflection_parameter_declaring_function_property(
             metadata.is_generator = *is_generator;
             metadata.returns_reference = *returns_reference;
             emit_reflection_owner_object(ctx, "ReflectionMethod", &metadata)?;
-            emit_box_current_value_as_mixed(
+            emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Object("ReflectionMethod".to_string()),
             );
@@ -246,7 +247,7 @@ pub(super) fn emit_reflection_parameter_declaring_class_property(
         let declaring_metadata =
             reflection_shallow_class_metadata_for_name(ctx, declaring_class_name)?;
         emit_reflection_owner_object(ctx, "ReflectionClass", &declaring_metadata)?;
-        emit_box_current_value_as_mixed(
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionClass".to_string()),
         );
@@ -291,7 +292,7 @@ pub(super) fn emit_reflection_parameter_class_property(
     if let Some(class_name) = reflection_parameter_class_name(parameter) {
         let class_metadata = reflection_shallow_class_metadata_for_name(ctx, class_name)?;
         emit_reflection_owner_object(ctx, "ReflectionClass", &class_metadata)?;
-        emit_box_current_value_as_mixed(
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionClass".to_string()),
         );
@@ -345,21 +346,21 @@ pub(super) fn emit_reflection_owner_type_property_by_name(
     match type_metadata {
         Some(ReflectionParameterTypeMetadata::Named(type_metadata)) => {
             emit_reflection_named_type_object(ctx, type_metadata)?;
-            emit_box_current_value_as_mixed(
+            emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Object("ReflectionNamedType".to_string()),
             );
         }
         Some(ReflectionParameterTypeMetadata::Union(type_metadata)) => {
             emit_reflection_union_type_object(ctx, type_metadata)?;
-            emit_box_current_value_as_mixed(
+            emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Object("ReflectionUnionType".to_string()),
             );
         }
         Some(ReflectionParameterTypeMetadata::Intersection(type_metadata)) => {
             emit_reflection_intersection_type_object(ctx, type_metadata)?;
-            emit_box_current_value_as_mixed(
+            emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Object("ReflectionIntersectionType".to_string()),
             );

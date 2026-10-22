@@ -168,6 +168,8 @@ mod eval_closure_receivers;
 mod eval_argument_lifetimes;
 mod eval_array_references;
 mod eval_operand_owners;
+#[path = "runtime_gc/eval_reflection_owner_boxing.rs"]
+mod eval_reflection_owner_boxing;
 mod eval_scope_writeback;
 mod unserialize_hydration_data;
 mod serialize_magic_results;

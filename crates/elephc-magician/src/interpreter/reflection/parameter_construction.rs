@@ -68,22 +68,8 @@ pub(super) fn eval_reflection_method_parameter_constructor_error(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    if values.array_len(target)? != 2 {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    let zero = values.int(0)?;
-    let one = values.int(1)?;
-    let receiver = values.array_get(target, zero)?;
-    let method = values.array_get(target, one)?;
-    let method_name = eval_reflection_string_arg(method, values)?;
-    let class_name = match values.type_tag(receiver)? {
-        EVAL_TAG_OBJECT => eval_reflection_object_class_name(receiver, context, values)?,
-        EVAL_TAG_STRING => eval_reflection_string_arg(receiver, values)?,
-        _ => return Err(EvalStatus::RuntimeFatal),
-    };
-    let reflected_name = context
-        .resolve_class_like_name(&class_name)
-        .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
+    let (reflected_name, method_name) =
+        eval_reflection_method_parameter_target(target, context, values)?;
     if eval_reflection_class_like_exists(&reflected_name, context) {
         let Some(reflected_method_name) = eval_reflection_member_name(
             EVAL_REFLECTION_OWNER_METHOD,
@@ -197,22 +183,8 @@ pub(super) fn eval_reflection_method_parameter_metadata(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<EvalReflectionParameterMetadata>, EvalStatus> {
-    if values.array_len(target)? != 2 {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    let zero = values.int(0)?;
-    let one = values.int(1)?;
-    let receiver = values.array_get(target, zero)?;
-    let method = values.array_get(target, one)?;
-    let method_name = eval_reflection_string_arg(method, values)?;
-    let class_name = match values.type_tag(receiver)? {
-        EVAL_TAG_OBJECT => eval_reflection_object_class_name(receiver, context, values)?,
-        EVAL_TAG_STRING => eval_reflection_string_arg(receiver, values)?,
-        _ => return Err(EvalStatus::RuntimeFatal),
-    };
-    let reflected_name = context
-        .resolve_class_like_name(&class_name)
-        .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
+    let (reflected_name, method_name) =
+        eval_reflection_method_parameter_target(target, context, values)?;
     let member = if eval_reflection_class_like_exists(&reflected_name, context) {
         let reflected_method_name = eval_reflection_member_name(
             EVAL_REFLECTION_OWNER_METHOD,
@@ -245,6 +217,45 @@ pub(super) fn eval_reflection_method_parameter_metadata(
         member.parameters,
         selector,
     ))
+}
+
+/// Copies a method target's names while retiring every owned index and array-get result.
+fn eval_reflection_method_parameter_target(
+    target: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(String, String), EvalStatus> {
+    if values.array_len(target)? != 2 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let mut owned = Vec::with_capacity(4);
+    let mut result = (|| {
+        let zero = values.int(0)?;
+        owned.push(zero);
+        let one = values.int(1)?;
+        owned.push(one);
+        let receiver = values.array_get(target, zero)?;
+        owned.push(receiver);
+        let method = values.array_get(target, one)?;
+        owned.push(method);
+        let method_name = eval_reflection_string_arg(method, values)?;
+        let class_name = match values.type_tag(receiver)? {
+            EVAL_TAG_OBJECT => eval_reflection_object_class_name(receiver, context, values)?,
+            EVAL_TAG_STRING => eval_reflection_string_arg(receiver, values)?,
+            _ => return Err(EvalStatus::RuntimeFatal),
+        };
+        let reflected_name = context.resolve_class_like_name(&class_name)
+            .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
+        Ok((reflected_name, method_name))
+    })();
+    // The target array retains its receiver, so retiring these leases cannot destroy a live
+    // receiver. Attempt every release and preserve the original error when one is in flight.
+    for value in owned.into_iter().rev() {
+        if let Err(status) = values.release(value) {
+            if result.is_ok() { result = Err(status); }
+        }
+    }
+    result
 }
 
 /// Converts a `ReflectionParameter` selector runtime value to a supported selector.

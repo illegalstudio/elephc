@@ -627,6 +627,10 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
     emitter.instruction("ldr x1, [sp, #32]");                                   // move the Reflection owner object pointer into the Mixed payload
     emitter.instruction("mov x2, xzr");                                         // object payloads do not use a high word
     emitter.instruction("bl __rt_mixed_from_value");                            // box the Reflection owner object for eval
+    emitter.instruction("str x0, [sp, #0]");                                    // preserve the boxed result after consuming the owner-kind input
+    emitter.instruction("ldr x0, [sp, #32]");                                   // retire the factory reference now retained by the Mixed cell
+    emitter.instruction("bl __rt_decref_any");                                  // leave the box as the only owner of the fresh Reflection object
+    emitter.instruction("ldr x0, [sp, #0]");                                    // return the owning boxed handle to the interpreter
     emitter.instruction(&format!("b {}", done_label));                          // skip the fail-closed return path after boxing
     emitter.label(fail_label);
     emitter.instruction("mov x0, xzr");                                         // return a null pointer so Rust reports runtime failure
@@ -832,6 +836,10 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
     emitter.instruction("xor esi, esi");                                        // object payloads do not use a high word
     emitter.instruction("mov eax, 6");                                          // runtime tag 6 = object
     emitter.instruction("call __rt_mixed_from_value");                          // box the Reflection owner object for eval
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the boxed result after consuming the owner-kind input
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // retire the raw Reflection object retained by its Mixed cell
+    emitter.instruction("call __rt_decref_any");                                // transfer sole object ownership to the returned boxed handle
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // restore the owning boxed result for the Rust caller
     emitter.instruction(&format!("jmp {}", done_label));                        // skip the fail-closed return path after boxing
     emitter.label(fail_label);
     emitter.instruction("xor eax, eax");                                        // return a null pointer so Rust reports runtime failure

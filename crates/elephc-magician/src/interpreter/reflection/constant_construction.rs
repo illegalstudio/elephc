@@ -53,7 +53,7 @@ pub(super) fn eval_reflection_class_constant_object_result_or_throw(
         flags |= EVAL_REFLECTION_MEMBER_FLAG_ENUM_CASE;
     }
     let modifiers = eval_reflection_class_constant_modifiers(visibility, is_final);
-    eval_reflection_owner_object(
+    let result = eval_reflection_owner_object(
         EVAL_REFLECTION_OWNER_CLASS_CONSTANT,
         constant_name,
         &attributes,
@@ -74,8 +74,8 @@ pub(super) fn eval_reflection_class_constant_object_result_or_throw(
         None,
         context,
         values,
-    )
-    .map(Some)
+    );
+    finish_eval_argument_values(result, [constant_value], context, values).map(Some)
 }
 
 /// Throws the catchable ReflectionException for a missing class-like constant.

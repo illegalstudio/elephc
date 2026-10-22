@@ -235,8 +235,16 @@ pub(super) fn eval_reflection_string_array_to_vec(
     let mut result = Vec::with_capacity(len);
     for position in 0..len {
         let key = values.int(position as i64)?;
-        let value = values.array_get(array, key)?;
-        result.push(eval_reflection_string_arg(value, values)?);
+        let value = match values.array_get(array, key) {
+            Ok(value) => value,
+            Err(status) => { let _ = values.release(key); return Err(status); }
+        };
+        let name = eval_reflection_string_arg(value, values);
+        let release_value = values.release(value);
+        let release_key = values.release(key);
+        result.push(name?);
+        release_value?;
+        release_key?;
     }
     Ok(result)
 }
@@ -768,12 +776,8 @@ pub(super) fn eval_throw_reflection_exception(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    let exception = values.new_object("ReflectionException")?;
-    let message = values.string(message)?;
-    let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
+    crate::interpreter::throwables::eval_throw_builtin_exception("ReflectionException", message, context, values)
+
 }
 
 /// Creates a catchable `ValueError` and propagates it through eval throw state.
@@ -782,12 +786,8 @@ pub(super) fn eval_throw_value_error(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    let exception = values.new_object("ValueError")?;
-    let message = values.string(message)?;
-    let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
+    crate::interpreter::throwables::eval_throw_builtin_exception("ValueError", message, context, values)
+
 }
 
 /// Creates a catchable `TypeError` and propagates it through eval throw state.
