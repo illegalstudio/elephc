@@ -26,6 +26,7 @@ mod key_sort_flags;
 mod assoc_helpers;
 mod assoc_chunk;
 mod nested;
+mod scalar_offset_reads;
 mod callbacks;
 mod boxed_filter;
 mod boxed_predicates;

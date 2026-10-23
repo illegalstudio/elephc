@@ -251,6 +251,41 @@ pub(crate) fn lower_array_access_from_values(
     // owning intermediate receiver reachable until the read finishes; the normal release
     // below still retires it after the independent result has been stabilized.
     let receiver_pins = super::pin_in_flight_owners(ctx, &[array_value.value], expr.span);
+    // A statically scalar receiver has no offsets: PHP warns
+    // ("Trying to access array offset on <type>") and answers null. Handing the scalar to the
+    // container runtime dereferenced its payload as a pointer and crashed the program (#2025).
+    // Match the semantic PHP type, not its storage repr: `codegen_repr()` maps a resource to
+    // `Int` and `false` to `Bool`, and the warning must name the type PHP names.
+    let receiver_php = ctx.builder.value_php_type(array_value.value);
+    if matches!(
+        receiver_php,
+        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Resource(_)
+    ) {
+        // An owned callable key is pinned across the warning (a user handler may throw) and
+        // retired afterwards, exactly like the container read path pins it across its runtime
+        // call. `release_coerced_source_if_owned` never releases a callable, so without this
+        // the closure and its captures leaked per read (#2025 review).
+        let callable_owner = if ctx.builder.value_php_type(index_value.value).codegen_repr()
+            == PhpType::Callable
+        {
+            let (rooted, owner) = root_owned_call_operand(ctx, index_value, index.span);
+            index_value = rooted;
+            owner
+        } else {
+            None
+        };
+        if warn_on_missing {
+            emit_scalar_offset_warning(ctx, array_value, &receiver_php, expr.span);
+        }
+        let result = lower_expr(ctx, &Expr::new(ExprKind::Null, expr.span));
+        super::unpin_in_flight_owners(ctx, receiver_pins, expr.span);
+        if let Some(owner) = callable_owner {
+            retire_owned_call_operand(ctx, owner, index.span);
+        } else {
+            release_coerced_source_if_owned(ctx, index_value, Some(index.span));
+        }
+        return stabilize_borrowed_result_and_release_receiver(ctx, array_value, result, expr.span);
+    }
     let op = match array_value.ir_type {
         IrType::Heap(IrHeapKind::Array) => {
             // Nullable scalar keys carry an inline tag. Preserve null as the empty-string
@@ -370,6 +405,78 @@ pub(crate) fn lower_array_access_from_values(
     // dropping that receiver; boxed and retained container reads are already
     // independent and must not be acquired twice.
     stabilize_borrowed_result_and_release_receiver(ctx, array_value, result, expr.span)
+}
+
+/// Emits PHP's warning for a scalar array-offset receiver, naming its runtime type.
+///
+/// A bool receiver names the current value (`on true` / `on false`), so it needs a runtime
+/// split; the other scalar types have one fixed message.
+fn emit_scalar_offset_warning(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+    php_type: &PhpType,
+    span: Span,
+) {
+    let fixed = match php_type {
+        PhpType::Int => Some("int"),
+        PhpType::Float => Some("float"),
+        PhpType::Resource(_) => Some("resource"),
+        PhpType::False => Some("false"),
+        _ => None,
+    };
+    if let Some(type_name) = fixed {
+        emit_scalar_offset_warning_text(ctx, type_name, span);
+        return;
+    }
+    let truth = ctx.emit_value(
+        Op::IsTruthy,
+        vec![receiver.value],
+        None,
+        PhpType::Bool,
+        Op::IsTruthy.default_effects(),
+        Some(span),
+    );
+    let true_block = ctx.builder.create_named_block("array.offset.true", Vec::new());
+    let false_block = ctx.builder.create_named_block("array.offset.false", Vec::new());
+    let done = ctx.builder.create_named_block("array.offset.done", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: truth.value,
+        then_target: true_block,
+        then_args: Vec::new(),
+        else_target: false_block,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(true_block);
+    emit_scalar_offset_warning_text(ctx, "true", span);
+    branch_to(ctx, done);
+    ctx.builder.position_at_end(false_block);
+    emit_scalar_offset_warning_text(ctx, "false", span);
+    branch_to(ctx, done);
+    ctx.builder.position_at_end(done);
+}
+
+/// Emits the fixed, error-reporting-aware PHP warning for one scalar receiver type name.
+fn emit_scalar_offset_warning_text(
+    ctx: &mut LoweringContext<'_, '_>, type_name: &str, span: Span,
+) {
+    let message = lower_expr(
+        ctx,
+        &Expr::new(
+            ExprKind::StringLiteral(format!(
+                "Warning: Trying to access array offset on {}\n",
+                type_name
+            )),
+            span,
+        ),
+    );
+    ctx.emit_void(
+        Op::RuntimeCall,
+        vec![message.value],
+        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::WriteDiagnostic)),
+        crate::ir_lower::effects_lookup::runtime_effects(),
+        Some(span),
+    );
+    crate::ir_lower::ownership::release_if_owned(ctx, message, Some(span));
 }
 
 /// Converts a non-float string offset while preserving warnings for boxed float values.
