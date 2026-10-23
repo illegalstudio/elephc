@@ -664,6 +664,17 @@ pub trait RuntimeValueOps {
         object: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Returns the `get_debug_type()` class name for an object cell: the class name, except
+    /// that an anonymous class reads `class@anonymous`, `Parent@anonymous` or
+    /// `Interface@anonymous` as in php-src. Hosts without debug-name metadata answer the
+    /// plain class name.
+    fn object_debug_class_name(
+        &mut self,
+        object: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.object_class_name(object)
+    }
+
     /// Returns the PHP-visible parent class name for an object or class-name cell.
     fn parent_class_name(
         &mut self,

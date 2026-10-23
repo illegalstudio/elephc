@@ -588,6 +588,7 @@ pub(crate) fn insert_enum_metadata(
             declaration_span,
             is_internal,
             parent: None,
+            anonymous_debug_name: None,
             is_abstract: false,
             is_final: true,
             is_readonly_class: true,

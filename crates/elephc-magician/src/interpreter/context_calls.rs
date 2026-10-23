@@ -252,6 +252,7 @@ pub fn execute_context_object_class_name(
     match lookup {
         "get_class" => eval_get_class_result(object_or_class, context, values),
         "get_parent_class" => eval_get_parent_class_result(object_or_class, context, values),
+        "get_debug_type" => eval_get_debug_type_result(object_or_class, context, values),
         _ => Err(EvalStatus::UnsupportedConstruct),
     }
 }

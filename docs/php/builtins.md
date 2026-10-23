@@ -967,6 +967,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`ctype_digit()`](./builtins/type/ctype_digit.md) | `(string $text): bool` | `bool` | ✓ | ✓ |
 | [`ctype_space()`](./builtins/type/ctype_space.md) | `(string $text): bool` | `bool` | ✓ | ✓ |
 | [`floatval()`](./builtins/type/floatval.md) | `(mixed $value): float` | `float` | ✓ | ✓ |
+| [`get_debug_type()`](./builtins/type/get_debug_type.md) | `(mixed $value): string` | `string` | ✓ | ✓ |
 | [`get_resource_id()`](./builtins/type/get_resource_id.md) | `(resource $resource): int` | `int` | ✓ | ✓ |
 | [`get_resource_type()`](./builtins/type/get_resource_type.md) | `(resource $resource): string` | `string` | ✓ | ✓ |
 | [`gettype()`](./builtins/type/gettype.md) | `(mixed $value): string` | `string` | ✓ | ✓ |

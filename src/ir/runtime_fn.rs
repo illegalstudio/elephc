@@ -792,6 +792,7 @@ pub enum RuntimeFnId {
     Usleep,
     GetResourceId,
     GetResourceType,
+    GetDebugType,
     Gettype,
     IntvalBase,
     IsCallable,
@@ -1410,7 +1411,11 @@ impl RuntimeFnId {
                         | crate::ir::Effects::MAY_THROW.bits(),
                 )
             }
-            RuntimeFnId::ElephcObjectIsEnum
+            // `get_debug_type()` reads the inspected value's runtime state: a boxed cell's tag, an
+            // object's class id and a resource payload whose sign an explicit close flips, so
+            // its answer is not state-independent and calls must not be merged across them.
+            RuntimeFnId::GetDebugType
+            | RuntimeFnId::ElephcObjectIsEnum
             | RuntimeFnId::ElephcObjectPropCount
             | RuntimeFnId::ElephcObjectPropName
             | RuntimeFnId::SplObjectId => crate::ir::Effects::READS_HEAP,
@@ -2089,6 +2094,7 @@ impl RuntimeFnId {
     ///
     /// `Getmypid` qualifies because its wrapper has no parameters to adapt and returns a plain
     /// integer: `$name = "getmypid"; $name()` and `call_user_func($name)` must reach it like PHP.
+    /// `GetDebugType` takes one `mixed` value and answers a static type name, like `Gettype`.
     pub const fn runtime_callable_supported(self) -> bool {
         if matches!(self, Self::MbEreg | Self::MbEregi | Self::MbParseStr) { return false; }
         if self.uses_mbstring_runtime() { return true; }
@@ -2099,6 +2105,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayProduct
                 | RuntimeFnId::CloneWith
                 | RuntimeFnId::Count
+                | RuntimeFnId::GetDebugType
                 | RuntimeFnId::Getmypid
                 | RuntimeFnId::Gettype
                 | RuntimeFnId::InArray
@@ -2128,8 +2135,8 @@ impl RuntimeFnId {
                         | PhpType::Void
                 )
             }),
-            RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct | RuntimeFnId::Getmypid
-            | RuntimeFnId::Gettype | RuntimeFnId::InArray => true,
+            RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct | RuntimeFnId::GetDebugType
+            | RuntimeFnId::Getmypid | RuntimeFnId::Gettype | RuntimeFnId::InArray => true,
             RuntimeFnId::Trim => source.is_none_or(|ty| matches!(ty, PhpType::Str)),
             _ => false,
         }
@@ -2642,6 +2649,9 @@ impl RuntimeFnId {
                 // Type names live in static data, never in the inspected value. A possible
                 // alias would suppress cleanup of boxed array/property read temporaries.
                 | RuntimeFnId::Gettype
+                // `get_debug_type()` answers from the same static type names and class-name
+                // metadata, never from the inspected value's storage.
+                | RuntimeFnId::GetDebugType
                 // Class names come from metadata, including Closure and incomplete-class
                 // literals, not the inspected object's storage or its boxed read cell.
                 | RuntimeFnId::GetClass
@@ -3308,6 +3318,7 @@ impl RuntimeFnId {
             RuntimeFnId::Usleep => "usleep",
             RuntimeFnId::GetResourceId => "get_resource_id",
             RuntimeFnId::GetResourceType => "get_resource_type",
+            RuntimeFnId::GetDebugType => "get_debug_type",
             RuntimeFnId::Gettype => "gettype",
             RuntimeFnId::IntvalBase => "intval_base",
             RuntimeFnId::IsCallable => "is_callable",

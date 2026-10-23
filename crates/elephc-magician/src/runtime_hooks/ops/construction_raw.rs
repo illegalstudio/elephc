@@ -104,6 +104,20 @@ macro_rules! impl_construction_raw_ops {
         Self::handle(unsafe { __elephc_eval_value_object_class_name(object.as_ptr()) })
     }
 
+    /// Returns a boxed Mixed string with a boxed Mixed object's `get_debug_type()` class name.
+    fn object_debug_class_name(
+        &mut self,
+        object: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        unsafe extern "C" {
+            /// Boxes the object's `_class_debug_name_entries` row, or returns null on a miss.
+            fn __elephc_eval_value_object_debug_class_name(
+                object: *mut RuntimeCell,
+            ) -> *mut RuntimeCell;
+        }
+        Self::handle(unsafe { __elephc_eval_value_object_debug_class_name(object.as_ptr()) })
+    }
+
     /// Returns a boxed Mixed string naming a boxed Mixed object's or class string's parent class.
     fn parent_class_name(
         &mut self,

@@ -25,6 +25,7 @@ use crate::value::{RuntimeCell, RuntimeCellHandle};
 
 const CLASS_LOOKUP_GET_CLASS: u64 = 0;
 const CLASS_LOOKUP_GET_PARENT_CLASS: u64 = 1;
+const CLASS_LOOKUP_GET_DEBUG_TYPE: u64 = 2;
 const MEMBER_LOOKUP_METHOD_EXISTS: u64 = 0;
 const MEMBER_LOOKUP_PROPERTY_EXISTS: u64 = 1;
 const CLASS_RELATION_IMPLEMENTS: u64 = 0;
@@ -57,7 +58,8 @@ pub unsafe extern "C" fn __elephc_eval_object_context(
     }).unwrap_or(std::ptr::null_mut())
 }
 
-/// Resolves `get_class()` or `get_parent_class()` against eval dynamic objects.
+/// Resolves `get_class()`, `get_parent_class()` or `get_debug_type()` against eval dynamic
+/// objects. `get_debug_type()` accepts any boxed value, not only objects.
 ///
 /// # Safety
 /// `ctx` must be a valid eval context handle. `object_or_class` must point at a
@@ -181,6 +183,7 @@ unsafe fn eval_object_class_name_inner(
     let lookup = match lookup_kind {
         CLASS_LOOKUP_GET_CLASS => "get_class",
         CLASS_LOOKUP_GET_PARENT_CLASS => "get_parent_class",
+        CLASS_LOOKUP_GET_DEBUG_TYPE => "get_debug_type",
         _ => return EvalStatus::RuntimeFatal.code(),
     };
     clear_result(out);

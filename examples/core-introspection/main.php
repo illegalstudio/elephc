@@ -65,3 +65,10 @@ foreach ($pending as $name => $value) {
 
 // `getmypid()` names the running process, e.g. to tag log lines or lock files.
 echo 'Process id available: ', getmypid() > 0 ? 'yes' : 'no', "\n";
+
+// `get_debug_type()` names a value for log and error messages: scalar type names, the class of
+// an object, and php-src's spelling of an anonymous class.
+$logger = new class extends ArrayObject {};
+foreach ([42, 'id', null, $settings, $logger, fn() => 1] as $value) {
+    echo 'Debug type: ', get_debug_type($value), "\n";
+}

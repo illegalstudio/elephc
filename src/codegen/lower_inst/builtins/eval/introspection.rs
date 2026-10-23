@@ -133,6 +133,9 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_class_relation(
 }
 
 /// Transfers boxed class-name results or detaches native strings before retiring their bridge cell.
+///
+/// `get_debug_type()` names every value, not only objects, so it hands the boxed operand to
+/// the bridge without the object-tag gate the two class-name lookups apply.
 pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_class_name(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -145,8 +148,10 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_class_name(
     abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     ensure_eval_context(ctx)?;
     store_eval_object_operand(ctx, object)?;
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    emit_branch_if_eval_unboxed_not_object(ctx, &non_object_label);
+    if lookup_kind != EVAL_CLASS_LOOKUP_GET_DEBUG_TYPE {
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        emit_branch_if_eval_unboxed_not_object(ctx, &non_object_label);
+    }
     load_eval_context_to_arg(ctx, 0);
     let object_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_arg, EVAL_TEMP_CELL_OFFSET);
@@ -170,13 +175,15 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_class_name(
     if !boxed_result {
         emit_owned_eval_class_name_string(ctx);
     }
-    abi::emit_jump(ctx.emitter, &done_label);
+    if lookup_kind != EVAL_CLASS_LOOKUP_GET_DEBUG_TYPE {
+        abi::emit_jump(ctx.emitter, &done_label);
 
-    ctx.emitter.label(&non_object_label);
-    retire_eval_metadata_operand_boxes(ctx, &[(object, EVAL_TEMP_CELL_OFFSET)])?;
-    emit_eval_string_result(ctx, b"");
-    if boxed_result {
-        emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+        ctx.emitter.label(&non_object_label);
+        retire_eval_metadata_operand_boxes(ctx, &[(object, EVAL_TEMP_CELL_OFFSET)])?;
+        emit_eval_string_result(ctx, b"");
+        if boxed_result {
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+        }
     }
 
     ctx.emitter.label(&done_label);

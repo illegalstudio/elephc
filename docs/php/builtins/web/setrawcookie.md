@@ -2,7 +2,7 @@
 title: "setrawcookie()"
 description: "Adds a Set-Cookie header without URL-encoding the value."
 sidebar:
-  order: 1009
+  order: 1010
 ---
 
 ## setrawcookie()

@@ -138,6 +138,7 @@ impl ClassBuildState {
             declaration_span: class.span,
             is_internal,
             parent: class.extends.clone(),
+            anonymous_debug_name: anonymous_debug_name(class),
             is_abstract: class.is_abstract,
             is_final: class.is_final,
             is_readonly_class: class.is_readonly_class,
@@ -482,4 +483,24 @@ impl ClassBuildState {
         self.static_vtable_methods = parent.static_vtable_methods.clone();
         self.static_vtable_slots = parent.static_vtable_slots.clone();
     }
+}
+
+/// Returns php-src's `get_debug_type()` spelling of an anonymous class, or `None` for a named
+/// class.
+///
+/// php-src (`zend_generate_anon_class_name()`) prefixes an anonymous class with its parent,
+/// else its first declared interface, else `class`. The declared `implements` list is used on
+/// purpose: the implicit `Stringable` a `__toString()` method adds does not count.
+fn anonymous_debug_name(class: &FlattenedClass) -> Option<String> {
+    // The synthetic name is namespaced like any other declaration (`App\class@anonymous#0`).
+    let short_name = class.name.rsplit('\\').next().unwrap_or(&class.name);
+    if !short_name.starts_with("class@anonymous#") {
+        return None;
+    }
+    let prefix = class
+        .extends
+        .as_deref()
+        .or_else(|| class.implements.first().map(String::as_str))
+        .unwrap_or("class");
+    Some(format!("{}@anonymous", prefix.trim_start_matches('\\')))
 }

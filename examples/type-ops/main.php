@@ -42,3 +42,18 @@ $y = 3.14;
 echo "before: " . $y . " (" . gettype($y) . ")\n";
 settype($y, "integer");
 echo "after settype to integer: " . $y . " (" . gettype($y) . ")\n";
+
+// get_debug_type: the modern, class-aware spelling of a value's type
+echo "\n--- get_debug_type ---\n";
+interface Shape {}
+class Square implements Shape {}
+function describe(mixed $value): string
+{
+    return get_debug_type($value);
+}
+echo "get_debug_type(42) = " . describe(42) . "\n";
+echo "get_debug_type(3.14) = " . describe(3.14) . "\n";
+echo "get_debug_type(null) = " . describe(null) . "\n";
+echo "get_debug_type([1, 2]) = " . describe([1, 2]) . "\n";
+echo "get_debug_type(new Square()) = " . describe(new Square()) . "\n";
+echo "get_debug_type(anonymous Shape) = " . describe(new class implements Shape {}) . "\n";

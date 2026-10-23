@@ -101,6 +101,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Vprintf,
     /// Dispatches `vsprintf(...)`.
     Vsprintf,
+    /// Dispatches `get_debug_type(...)`.
+    GetDebugType,
     /// Dispatches `gettype(...)`.
     Gettype,
     /// Dispatches `intval(...)`.
@@ -384,6 +386,7 @@ impl EvalDirectHook {
             Self::Filesystem => eval_builtin_filesystem_call(name, args, context, scope, values),
             #[cfg(feature = "curl")]
             Self::Curl => eval_builtin_curl_declared_call(name, args, context, scope, values),
+            Self::GetDebugType => eval_builtin_get_debug_type(args, context, scope, values),
             Self::Gettype => eval_builtin_gettype(args, context, scope, values),
             Self::Hypot => eval_builtin_hypot(args, context, scope, values),
             Self::Intval => eval_builtin_intval(args, context, scope, values),

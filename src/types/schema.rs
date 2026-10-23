@@ -279,6 +279,11 @@ pub struct ClassInfo {
     /// that prelude's class name.
     pub is_internal: bool,
     pub parent: Option<String>,
+    /// php-src's `get_debug_type()` spelling of an anonymous class (`class@anonymous`,
+    /// `Parent@anonymous` or `Interface@anonymous`, from the parent, else the first DECLARED
+    /// interface); `None` for a named class, which reads its own name. Kept here because the
+    /// flattened `interfaces` list cannot tell a declared `Stringable` from the implicit one.
+    pub anonymous_debug_name: Option<String>,
     pub is_abstract: bool,
     pub is_final: bool,
     pub is_readonly_class: bool,

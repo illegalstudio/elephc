@@ -434,3 +434,10 @@ expect_builtin_arity_error!(
     "<?php function up(array $a): string { return strtoupper($a); } echo up([\"x\"]);",
     "strtoupper(): Argument #1 ($string) must be of type string, array given"
 );
+
+// Tests get_debug_type() arity error when called with no arguments.
+expect_builtin_arity_error!(
+    test_error_get_debug_type_wrong_args,
+    "<?php get_debug_type();",
+    "get_debug_type() takes exactly 1 argument"
+);

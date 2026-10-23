@@ -2,7 +2,7 @@
 title: "__elephc_curl_mime_new() - internals"
 description: "Compiler internals for __elephc_curl_mime_new(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1112
+  order: 1113
 ---
 
 ## `__elephc_curl_mime_new()` - internals

@@ -2,7 +2,7 @@
 title: "session_name() - internals"
 description: "Compiler internals for session_name(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 997
+  order: 998
 ---
 
 ## `session_name()` - internals

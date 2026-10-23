@@ -17,6 +17,8 @@ mod object_cast;
 mod array_cast;
 #[path = "casts_and_constants/introspection.rs"]
 mod introspection;
+#[path = "casts_and_constants/get_debug_type.rs"]
+mod get_debug_type;
 #[path = "casts_and_constants/predicates.rs"]
 mod predicates;
 #[path = "casts_and_constants/math_builtins.rs"]

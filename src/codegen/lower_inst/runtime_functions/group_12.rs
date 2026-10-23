@@ -75,6 +75,9 @@ pub(super) fn lower(
         RuntimeFnId::GetResourceType => Some({
             crate::codegen::lower_inst::builtins::types::lower_get_resource_type(ctx, inst)
         }),
+        RuntimeFnId::GetDebugType => Some({
+            crate::codegen::lower_inst::builtins::lower_get_debug_type(ctx, inst)
+        }),
         RuntimeFnId::Gettype => Some({
             crate::codegen::lower_inst::builtins::lower_gettype(ctx, inst)
         }),

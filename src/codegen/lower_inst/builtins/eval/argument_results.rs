@@ -259,6 +259,7 @@ pub(super) fn eval_class_lookup_kind(name: &str) -> Result<i64> {
     match name {
         "get_class" => Ok(EVAL_CLASS_LOOKUP_GET_CLASS),
         "get_parent_class" => Ok(EVAL_CLASS_LOOKUP_GET_PARENT_CLASS),
+        "get_debug_type" => Ok(EVAL_CLASS_LOOKUP_GET_DEBUG_TYPE),
         _ => Err(CodegenIrError::unsupported(format!(
             "eval object class-name lookup {}",
             name

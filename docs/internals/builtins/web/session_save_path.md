@@ -2,7 +2,7 @@
 title: "session_save_path() - internals"
 description: "Compiler internals for session_save_path(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1001
+  order: 1002
 ---
 
 ## `session_save_path()` - internals

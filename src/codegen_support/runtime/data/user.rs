@@ -167,6 +167,7 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str(".p2align 3\n");
     super::instanceof::emit_instanceof_target_lookup_data(&mut out, &sorted_interfaces, &sorted_classes);
     emit_class_name_lookup_data(&mut out, max_class_id, &class_name_by_id);
+    emit_class_debug_name_lookup_data(&mut out, max_class_id, &class_name_by_id, &class_info_by_id);
     super::throwable_previous::emit_previous_slots(&mut out, max_class_id, &class_info_by_id);
     let weak_map_retire = classes.get("WeakMap")
         .filter(|class| class.is_internal)
@@ -1735,6 +1736,52 @@ fn emit_class_name_lookup_data(
                 class_id
             ));
             out.push_str(&format!("    .ascii \"{}\"\n", escaped_ascii(class_name)));
+        }
+    }
+    out.push_str("    .p2align 3\n");
+}
+
+/// Emits the dense class-id to debug-name table `get_debug_type()` reads.
+///
+/// `_class_debug_name_entries` has the row shape and row count of `_class_name_entries`
+/// (bounded by the same `_class_name_count`). A named class reuses its `_class_name_<id>`
+/// bytes; only an anonymous class gets its own `_class_debug_name_<id>` literal, taken from
+/// `ClassInfo::anonymous_debug_name`.
+fn emit_class_debug_name_lookup_data(
+    out: &mut String,
+    max_class_id: Option<u64>,
+    class_name_by_id: &HashMap<u64, &String>,
+    class_info_by_id: &HashMap<u64, &ClassInfo>,
+) {
+    let debug_name = |class_id: u64| {
+        class_info_by_id
+            .get(&class_id)
+            .and_then(|class_info| class_info.anonymous_debug_name.as_ref())
+    };
+    out.push_str(".p2align 3\n");
+    out.push_str(".globl _class_debug_name_entries\n_class_debug_name_entries:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            if let Some(name) = debug_name(class_id) {
+                out.push_str(&format!("    .quad _class_debug_name_{}\n", class_id));
+                out.push_str(&format!("    .quad {}\n", name.len()));
+            } else if let Some(class_name) = class_name_by_id.get(&class_id) {
+                out.push_str(&format!("    .quad _class_name_{}\n", class_id));
+                out.push_str(&format!("    .quad {}\n", class_name.len()));
+            } else {
+                out.push_str("    .quad _class_name_missing\n");
+                out.push_str("    .quad 0\n");
+            }
+        }
+        for class_id in 0..=max_class_id {
+            let Some(name) = debug_name(class_id) else {
+                continue;
+            };
+            out.push_str(&format!(
+                ".globl _class_debug_name_{0}\n_class_debug_name_{0}:\n",
+                class_id
+            ));
+            out.push_str(&format!("    .ascii \"{}\"\n", escaped_ascii(name)));
         }
     }
     out.push_str("    .p2align 3\n");
@@ -4408,6 +4455,7 @@ mod tests {
             declaration_span: crate::span::Span::dummy(),
             is_internal: false,
             parent: None,
+            anonymous_debug_name: None,
             is_abstract: false,
             is_final: false,
             is_readonly_class: false,

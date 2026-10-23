@@ -1589,6 +1589,9 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _resource_type_stream_context\n_resource_type_stream_context:\n    .ascii \"stream-context\"\n");
     out.push_str(".globl _resource_type_stream_filter\n_resource_type_stream_filter:\n    .ascii \"stream filter\"\n");
     out.push_str(".globl _resource_type_unknown\n_resource_type_unknown:\n    .ascii \"Unknown\"\n");
+    for (label, value) in crate::codegen_support::runtime::strings::DEBUG_TYPE_NAMES {
+        out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {value:?}\n"));
+    }
     out.push_str(".globl _fmt_g\n_fmt_g:\n    .asciz \"%.14G\"\n");
     out.push_str(".globl _fmt_star_e\n_fmt_star_e:\n    .asciz \"%.*e\"\n");
     out.push_str(".globl _fmt_star_f\n_fmt_star_f:\n    .asciz \"%.*f\"\n");

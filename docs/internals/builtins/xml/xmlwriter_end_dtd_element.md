@@ -2,7 +2,7 @@
 title: "xmlwriter_end_dtd_element() - internals"
 description: "Compiler internals for xmlwriter_end_dtd_element(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1038
+  order: 1039
 ---
 
 ## `xmlwriter_end_dtd_element()` - internals

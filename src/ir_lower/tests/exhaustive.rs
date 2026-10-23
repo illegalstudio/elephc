@@ -185,6 +185,7 @@ fn class_info(_class_name: &str) -> ClassInfo {
         declaration_span: crate::span::Span::dummy(),
         is_internal: false,
         parent: None,
+        anonymous_debug_name: None,
         is_abstract: false,
         is_final: false,
         is_readonly_class: false,

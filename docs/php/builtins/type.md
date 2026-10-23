@@ -15,6 +15,7 @@ sidebar:
 | [`ctype_digit()`](./type/ctype_digit.md) | `(string $text): bool` | `bool` | ✓ | ✓ |
 | [`ctype_space()`](./type/ctype_space.md) | `(string $text): bool` | `bool` | ✓ | ✓ |
 | [`floatval()`](./type/floatval.md) | `(mixed $value): float` | `float` | ✓ | ✓ |
+| [`get_debug_type()`](./type/get_debug_type.md) | `(mixed $value): string` | `string` | ✓ | ✓ |
 | [`get_resource_id()`](./type/get_resource_id.md) | `(resource $resource): int` | `int` | ✓ | ✓ |
 | [`get_resource_type()`](./type/get_resource_type.md) | `(resource $resource): string` | `string` | ✓ | ✓ |
 | [`gettype()`](./type/gettype.md) | `(mixed $value): string` | `string` | ✓ | ✓ |

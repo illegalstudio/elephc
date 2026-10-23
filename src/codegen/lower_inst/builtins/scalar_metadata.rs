@@ -84,6 +84,152 @@ pub(crate) fn lower_gettype(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     store_if_result(ctx, inst)
 }
 
+/// Lowers `get_debug_type(value)`.
+///
+/// Statically known scalar and array types fold to their zend type name. A boxed value is
+/// unboxed straight into `__rt_debug_type_name`; an object or resource is handed to the same
+/// helper under its runtime tag, so the class debug-name table and the closed-resource test
+/// live in one place. With a persistent eval context an object may come from an eval-declared
+/// class that owns no generated class id, so object and boxed operands ask Magician instead.
+pub(crate) fn lower_get_debug_type(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "get_debug_type", 1)?;
+    let value = expect_operand(inst, 0)?;
+    let ty = ctx.raw_value_php_type(value)?;
+    let repr = ty.codegen_repr();
+    if matches!(repr, PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_))
+        && super::has_eval_context(ctx)
+    {
+        return super::lower_eval_object_class_name(ctx, inst, value, "get_debug_type");
+    }
+    // Dispatch on the RAW type: a resource's codegen representation is a bare `Int` payload.
+    // Only the inline tagged scalar needs its representation, as in `lower_gettype`.
+    let shape = if matches!(repr, PhpType::TaggedScalar) { repr } else { ty };
+    match shape {
+        PhpType::TaggedScalar => {
+            let null_case = ctx.next_label("get_debug_type_tagged_null");
+            let done = ctx.next_label("get_debug_type_tagged_done");
+            ctx.load_value_to_result(value)?;
+            crate::codegen::sentinels::emit_branch_if_tagged_scalar_null(ctx.emitter, &null_case);
+            emit_type_name_result(ctx, b"int");
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&null_case);
+            emit_type_name_result(ctx, b"null");
+            ctx.emitter.label(&done);
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            ctx.load_value_to_result(value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            abi::emit_call_label(ctx.emitter, "__rt_debug_type_name");
+        }
+        PhpType::Object(_) => {
+            ctx.load_value_to_result(value)?;
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("mov x1, x0");                      // pass the object pointer as the unboxed payload
+                    ctx.emitter.instruction("mov x0, #6");                      // pass runtime tag 6 for an object payload
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("mov rdi, rax");                    // pass the object pointer as the unboxed payload
+                    ctx.emitter.instruction("mov eax, 6");                      // pass runtime tag 6 for an object payload
+                }
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_debug_type_name");
+        }
+        PhpType::Iterable => emit_iterable_debug_type(ctx, value)?,
+        PhpType::Resource(ref kind) => {
+            let subtype = if kind.as_deref() == Some("stream filter") { 9 } else { 0 };
+            ctx.load_value_to_result(value)?;
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("mov x1, x0");                      // pass the resource payload as the unboxed payload
+                    ctx.emitter.instruction("mov x0, #9");                      // pass runtime tag 9 for a resource payload
+                    abi::emit_load_int_immediate(ctx.emitter, "x2", subtype);
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("mov rdi, rax");                    // pass the resource payload as the unboxed payload
+                    ctx.emitter.instruction("mov eax, 9");                      // pass runtime tag 9 for a resource payload
+                    abi::emit_load_int_immediate(ctx.emitter, "rdx", subtype);
+                }
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_debug_type_name");
+        }
+        other => {
+            let Some(type_name) = static_debug_type_name(&other) else {
+                return Err(CodegenIrError::unsupported(format!(
+                    "get_debug_type for PHP type {:?}",
+                    other
+                )));
+            };
+            emit_type_name_result(ctx, type_name);
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Emits `get_debug_type()` for an `iterable` operand, whose type-erased pointer holds either
+/// an array or a `Traversable` object.
+///
+/// The heap kind word tells them apart at run time: an object (heap kind 4) is handed to
+/// `__rt_debug_type_name` under runtime tag 6 so it reports its class name (`Generator`,
+/// `ArrayIterator`, ...), and every other payload is an array.
+fn emit_iterable_debug_type(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    use crate::codegen_support::sentinels::OBJECT_HEAP_KIND;
+    let array_case = ctx.next_label("get_debug_type_iterable_array");
+    let done = ctx.next_label("get_debug_type_iterable_done");
+    ctx.load_value_to_result(value)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            // -- objects report their class name, arrays report "array" --
+            ctx.emitter.instruction(&format!("cmp x0, #{OBJECT_HEAP_KIND}"));   // the object heap kind marks a Traversable payload
+            ctx.emitter.instruction(&format!("b.ne {array_case}"));             // any other iterable payload is an array
+            abi::emit_pop_reg(ctx.emitter, "x1");
+            ctx.emitter.instruction("mov x0, #6");                              // pass runtime tag 6 for an object payload
+        }
+        Arch::X86_64 => {
+            // -- objects report their class name, arrays report "array" --
+            ctx.emitter.instruction(&format!("cmp eax, {OBJECT_HEAP_KIND}"));   // the object heap kind marks a Traversable payload
+            ctx.emitter.instruction(&format!("jne {array_case}"));              // any other iterable payload is an array
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            ctx.emitter.instruction("mov eax, 6");                              // pass runtime tag 6 for an object payload
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_debug_type_name");
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&array_case);
+    let scratch = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x9",
+        Arch::X86_64 => "r11",
+    };
+    abi::emit_pop_reg(ctx.emitter, scratch);
+    emit_type_name_result(ctx, b"array");
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Returns PHP's `get_debug_type()` spelling for statically known non-object types.
+fn static_debug_type_name(ty: &PhpType) -> Option<&'static [u8]> {
+    match ty {
+        PhpType::Int => Some(b"int".as_slice()),
+        PhpType::Float => Some(b"float".as_slice()),
+        PhpType::Str => Some(b"string".as_slice()),
+        PhpType::Bool | PhpType::False => Some(b"bool".as_slice()),
+        PhpType::Void | PhpType::Never => Some(b"null".as_slice()),
+        PhpType::Array(_) | PhpType::AssocArray { .. } => Some(b"array".as_slice()),
+        PhpType::Callable => Some(b"Closure".as_slice()),
+        PhpType::Pointer(_) => Some(b"pointer".as_slice()),
+        PhpType::Buffer(_) => Some(b"buffer".as_slice()),
+        PhpType::Packed(_) => Some(b"packed".as_slice()),
+        PhpType::Object(_)
+        | PhpType::Iterable
+        | PhpType::Resource(_)
+        | PhpType::Mixed
+        | PhpType::Union(_)
+        | PhpType::TaggedScalar => None,
+    }
+}
+
 /// Emits `gettype()` for an inline tagged scalar by dispatching on its tag word.
 pub(in crate::codegen::lower_inst) fn emit_tagged_scalar_gettype(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
     let null_case = ctx.next_label("gettype_tagged_null");
