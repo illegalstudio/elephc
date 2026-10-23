@@ -486,6 +486,11 @@ pub(crate) struct Checker {
     /// Empty outside a guarded region, and reset per body — a name narrowed in the caller says
     /// nothing about a same-named local in a closure checked inside the branch.
     pub narrowed_local_origins: HashMap<String, NarrowedLocalOrigin>,
+    /// Narrowings an `if` kept for the statements after it (its guards' complement, when every
+    /// clause exits), in the order applied. Each enclosing `if` clause and loop body undoes the
+    /// ones published inside it once it is checked: an early exit inside a block narrows the
+    /// paths through that block, not the code after the construct around it. Reset per body.
+    pub(crate) kept_narrowings: Vec<KeptNarrowing>,
     /// Locals of the current body that a reference can reach: `=&` target or source,
     /// by-reference closure captures (`use (&$x)`), any plain variable passed to a
     /// by-reference parameter, and BOTH names a `foreach ($arr as &$v)` touches — the iterable
@@ -630,6 +635,15 @@ pub(crate) struct Checker {
     pub retired_mixed_storage_store_sites: HashSet<(Span, String)>,
 }
 
+/// One narrowing an `if` kept for the statements after it: the local, the type it held before
+/// the guard (`None` when it was unbound), and the narrowed type the `if` left in its place.
+#[derive(Clone)]
+pub(crate) struct KeptNarrowing {
+    pub(crate) var: String,
+    pub(crate) original: Option<PhpType>,
+    pub(crate) narrowed: PhpType,
+}
+
 /// The per-body local-binding eligibility state, saved while a nested body is checked.
 ///
 /// Every field it carries describes ONE function/method/closure/top-level body: a name that is
@@ -639,6 +653,7 @@ pub(crate) struct SavedLocalBindingScope {
     conditional_depth: u32,
     binding_depth: HashMap<String, u32>,
     narrowed_origins: HashMap<String, NarrowedLocalOrigin>,
+    kept_narrowings: Vec<KeptNarrowing>,
     ref_aliased: HashSet<String>,
     boxed_ref_aliased: HashSet<String>,
     boxed_ref_invalidations: Vec<HashSet<String>>,
@@ -833,6 +848,7 @@ impl Checker {
             // checked inside that branch binds its own name in its own frame, so inheriting the
             // origin would measure the closure's store against a binding it does not own.
             narrowed_origins: std::mem::take(&mut self.narrowed_local_origins),
+            kept_narrowings: std::mem::take(&mut self.kept_narrowings),
             ref_aliased: std::mem::take(&mut self.ref_aliased_locals),
             boxed_ref_aliased: std::mem::take(&mut self.boxed_ref_aliased_locals),
             boxed_ref_invalidations: std::mem::take(
@@ -864,6 +880,7 @@ impl Checker {
         self.local_conditional_depth = saved.conditional_depth;
         self.local_binding_depth = saved.binding_depth;
         self.narrowed_local_origins = saved.narrowed_origins;
+        self.kept_narrowings = saved.kept_narrowings;
         self.ref_aliased_locals = saved.ref_aliased;
         self.boxed_ref_aliased_locals = saved.boxed_ref_aliased;
         self.conditional_boxed_ref_invalidations = saved.boxed_ref_invalidations;

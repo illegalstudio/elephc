@@ -336,7 +336,7 @@ fn expr_is_truthy_literal(expr: &Expr) -> bool {
 
 /// Returns true if any statement in the block may break out of the current loop
 /// at the given breakable depth.
-fn block_may_break_current_loop(stmts: &[Stmt]) -> bool {
+pub(crate) fn block_may_break_current_loop(stmts: &[Stmt]) -> bool {
     stmts
         .iter()
         .any(|stmt| stmt_may_break_current_loop(stmt, 1))

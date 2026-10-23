@@ -24,6 +24,7 @@ mod path;
 mod prune;
 mod switch;
 mod terminators;
+pub(crate) use terminators::block_continues_enclosing_loop;
 
 pub(crate) use binding_decisions::{
     expr_carries_local_binding_decision, stmts_carry_local_binding_decision,

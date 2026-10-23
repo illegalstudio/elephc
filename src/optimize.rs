@@ -22,6 +22,7 @@ use std::rc::Rc;
 
 mod binding_decisions;
 mod control;
+pub(crate) use control::block_continues_enclosing_loop;
 mod effect_analysis;
 mod effects;
 mod exception_flow;

@@ -561,6 +561,9 @@ impl Checker {
                     }
                 }
                 self.break_continue_depth += 1;
+                // The facts each case that can reach the end of the `switch` kept; with a
+                // `default`, the ones they all share hold after it.
+                let mut reaching_facts = Vec::new();
                 for (_, body) in cases {
                     let invalidated = self
                         .conditional_boxed_ref_invalidations
@@ -572,7 +575,14 @@ impl Checker {
                         .filter(|name| !invalidated.contains(*name))
                         .cloned()
                         .collect();
+                    // A case runs only for its own values, so what its early exits kept holds
+                    // for the rest of that case; after the `switch` only what every path shares.
+                    let mark = self.kept_narrowings.len();
                     errors.extend(self.check_body(body, env));
+                    let facts = self.take_kept_narrowings_since(mark, env);
+                    if let Some(facts) = self.switch_case_reaching_facts(body, facts) {
+                        reaching_facts.push(facts);
+                    }
                 }
                 if let Some(body) = default {
                     let invalidated = self
@@ -584,7 +594,16 @@ impl Checker {
                         .into_iter()
                         .filter(|name| !invalidated.contains(name))
                         .collect();
+                    let mark = self.kept_narrowings.len();
                     errors.extend(self.check_body(body, env));
+                    let facts = self.take_kept_narrowings_since(mark, env);
+                    if let Some(facts) = self.switch_case_reaching_facts(body, facts) {
+                        reaching_facts.push(facts);
+                    }
+                }
+                // Without a `default`, a value no case matches reaches the end with none of them.
+                if default.is_some() {
+                    self.keep_facts_every_path_shares(&reaching_facts, env);
                 }
                 self.break_continue_depth -= 1;
                 self.callable_array_targets.clear();
@@ -658,6 +677,7 @@ impl Checker {
                         ));
 
                         // Check the guarded body with the "then" type.
+                        let body_mark = self.kept_narrowings.len();
                         let saved = env.get(&guard.var).cloned();
                         env.insert(guard.var.clone(), guard.then_ty.clone());
                         for s in *body {
@@ -665,6 +685,7 @@ impl Checker {
                                 errors.extend(error.flatten());
                             }
                         }
+                        self.undo_kept_narrowings_since(body_mark, env);
                         // Join only when the then-branch WROTE the guarded place, i.e. when the
                         // fact at branch exit is no longer the guard's own `then` type. That is
                         // exactly the lazy-initialization shape; joining unconditionally would
@@ -695,11 +716,13 @@ impl Checker {
                         self.republish_flow_narrowing(&guard.var, &guard.else_ty);
                     } else {
                         // No narrowing for this clause — check the body with the current env.
+                        let body_mark = self.kept_narrowings.len();
                         for s in *body {
                             if let Err(error) = self.check_stmt(s, env) {
                                 errors.extend(error.flatten());
                             }
                         }
+                        self.undo_kept_narrowings_since(body_mark, env);
                         if !self.body_cannot_fall_through(body) {
                             callable_target_exits.push(self.callable_array_targets.clone());
                             callable_target_version_exits
@@ -718,11 +741,13 @@ impl Checker {
                 let mut else_exit_ty: Option<Option<PhpType>> = None;
                 let mut else_falls_through = else_body.is_none();
                 if let Some(body) = else_body {
+                    let body_mark = self.kept_narrowings.len();
                     for s in body {
                         if let Err(error) = self.check_stmt(s, env) {
                             errors.extend(error.flatten());
                         }
                     }
+                    self.undo_kept_narrowings_since(body_mark, env);
                     else_falls_through = !self.body_cannot_fall_through(body);
                 }
                 if else_falls_through {
@@ -773,6 +798,18 @@ impl Checker {
                     if let Some((key, joined)) = joined {
                         env.insert(key, joined);
                     }
+                } else {
+                    // Logged so an enclosing `if` clause or loop body can undo it: the kept
+                    // complement holds for the code after THIS `if`, inside whatever contains it.
+                    for (var, original) in &saved_vars {
+                        if let Some(narrowed) = env.get(var) {
+                            self.kept_narrowings.push(crate::types::checker::KeptNarrowing {
+                                var: var.clone(),
+                                original: original.clone(),
+                                narrowed: narrowed.clone(),
+                            });
+                        }
+                    }
                 }
                 // Closed for the construct even when the complement is KEPT for the code after
                 // it. A kept complement is a sound fact about every path that gets there, so the
@@ -792,7 +829,16 @@ impl Checker {
             StmtKind::DoWhile { body, condition } => {
                 self.boxed_ref_aliased_locals.clear();
                 stabilize_loop_storage(self, stmt.span, body, None, env, None);
-                let errors = self.check_break_continue_target_body(body, env);
+                let mark = self.kept_narrowings.len();
+                let errors = self.check_loop_body(body, env, false);
+                // The body always runs once. When no `break` or `continue` can leave it early,
+                // every path to the condition, and so out of the loop, went through the whole
+                // body, and the facts its early exits kept still hold after the loop.
+                if crate::termination::block_may_break_current_loop(body)
+                    || crate::optimize::block_continues_enclosing_loop(body, 0)
+                {
+                    self.undo_kept_narrowings_since(mark, env);
+                }
                 self.infer_type_with_assignment_effects(condition, env)?;
                 self.callable_array_targets.clear();
                 self.callable_array_target_versions.clear();
@@ -921,11 +967,21 @@ impl Checker {
             } => {
                 let mut errors = Vec::new();
                 let branch_entry_boxed_refs = self.boxed_ref_aliased_locals.clone();
+                // An exception can leave the try body at any statement, so the catches, the
+                // `finally` and the code after a caught exception may all run without what the
+                // body's early exits kept: they are checked without those facts. When no catch
+                // can fall out of the `try`, only a completed body reaches what follows, so the
+                // facts come back after a `finally` that provably writes no local.
+                let try_mark = self.kept_narrowings.len();
                 for s in try_body {
                     if let Err(error) = self.check_stmt(s, env) {
                         errors.extend(error.flatten());
                     }
                 }
+                let completed_facts = self.take_kept_narrowings_since(try_mark, env);
+                let only_completion_falls_out = catches
+                    .iter()
+                    .all(|catch_clause| self.body_cannot_fall_through(&catch_clause.body));
                 for catch_clause in catches {
                     self.boxed_ref_aliased_locals = branch_entry_boxed_refs.clone();
                     let mut resolved_types = Vec::new();
@@ -957,11 +1013,13 @@ impl Checker {
                             PhpType::Object(self.common_catch_type_name(&resolved_types)),
                         );
                     }
+                    let catch_mark = self.kept_narrowings.len();
                     for s in &catch_clause.body {
                         if let Err(error) = self.check_stmt(s, env) {
                             errors.extend(error.flatten());
                         }
                     }
+                    self.undo_kept_narrowings_since(catch_mark, env);
                 }
                 if let Some(body) = finally_body {
                     let invalidated = self
@@ -977,6 +1035,13 @@ impl Checker {
                         .push(self.break_continue_depth);
                     errors.extend(self.check_body(body, env));
                     self.finally_break_continue_bases.pop();
+                }
+                if only_completion_falls_out
+                    && finally_body
+                        .as_deref()
+                        .is_none_or(finally_cannot_write_locals)
+                {
+                    self.keep_facts_every_path_shares(&[completed_facts], env);
                 }
                 self.callable_array_targets.clear();
                 self.callable_array_target_versions.clear();
@@ -1152,18 +1217,104 @@ impl Checker {
         }
     }
 
+    /// Returns the facts a `switch` case contributes at the end of the `switch`: `None` when it
+    /// never reaches the end (it leaves the function or the loop around it), none when a `break`
+    /// or `continue` before its last statement can leave it before they were established, else
+    /// what it kept.
+    fn switch_case_reaching_facts(
+        &self,
+        body: &[Stmt],
+        facts: Vec<crate::types::checker::KeptNarrowing>,
+    ) -> Option<Vec<crate::types::checker::KeptNarrowing>> {
+        // A case that leaves the function, or the loop around the `switch` (`break 2`,
+        // `continue 2`), never reaches the end. `continue 1` does: it leaves the `switch` the
+        // way `break` does, and the check below keeps none of the case's facts for it.
+        if self.case_never_reaches_switch_end(body) {
+            return None;
+        }
+        let before_last_break = match body.split_last() {
+            Some((last, rest)) if matches!(last.kind, StmtKind::Break(1)) => rest,
+            _ => body,
+        };
+        if crate::termination::block_may_break_current_loop(before_last_break)
+            || crate::optimize::block_continues_enclosing_loop(before_last_break, 0)
+        {
+            return Some(Vec::new());
+        }
+        Some(facts)
+    }
+
+    /// Returns whether every path through a `switch` case body leaves past the end of the
+    /// `switch` (a function exit, or a `break`/`continue` of two levels or more) before any
+    /// statement that could reach that end.
+    fn case_never_reaches_switch_end(&self, body: &[Stmt]) -> bool {
+        for stmt in body {
+            if self.stmt_leaves_past_switch_end(stmt) {
+                return true;
+            }
+            if matches!(stmt.kind, StmtKind::Break(_) | StmtKind::Continue(_))
+                || crate::termination::stmt_may_leave_current_switch_from_nested(stmt)
+            {
+                return false;
+            }
+        }
+        false
+    }
+
+    /// Returns whether one statement of a `switch` case leaves past the end of the `switch` on
+    /// every path: see `case_never_reaches_switch_end`.
+    fn stmt_leaves_past_switch_end(&self, stmt: &Stmt) -> bool {
+        match &stmt.kind {
+            StmtKind::Break(levels) | StmtKind::Continue(levels) => *levels >= 2,
+            StmtKind::If {
+                then_body,
+                elseif_clauses,
+                else_body: Some(else_body),
+                ..
+            } => {
+                self.case_never_reaches_switch_end(then_body)
+                    && elseif_clauses
+                        .iter()
+                        .all(|(_, body)| self.case_never_reaches_switch_end(body))
+                    && self.case_never_reaches_switch_end(else_body)
+            }
+            _ => crate::termination::block_guarantees_function_exit_with_divergence(
+                std::slice::from_ref(stmt),
+                &|expr| self.expr_is_declared_never_call(expr),
+            ),
+        }
+    }
+
     /// Checks a loop body with its control-flow depth and conservative property narrowings.
     fn check_break_continue_target_body(
         &mut self,
         body: &[Stmt],
         env: &mut TypeEnv,
     ) -> Vec<CompileError> {
+        self.check_loop_body(body, env, true)
+    }
+
+    /// Checks a loop body one level deeper for `break`/`continue`. With `undo_kept`, the facts
+    /// the body's early exits kept are undone once it has been checked; `do`/`while` passes
+    /// `false` and decides itself, since its body always runs once.
+    fn check_loop_body(
+        &mut self,
+        body: &[Stmt],
+        env: &mut TypeEnv,
+        undo_kept: bool,
+    ) -> Vec<CompileError> {
         // A loop body may observe a property write made by an earlier iteration (the write site
         // is *after* the read site in source order), so property narrowings from outside the
         // loop cannot be trusted inside it.
         Self::purge_property_narrowings(env);
         self.break_continue_depth += 1;
+        let body_mark = self.kept_narrowings.len();
         let errors = self.check_body(body, env);
+        // An early exit inside the body narrows the rest of one iteration, not the code after
+        // the loop, which may run after no iteration at all.
+        if undo_kept {
+            self.undo_kept_narrowings_since(body_mark, env);
+        }
         self.break_continue_depth -= 1;
         errors
     }
@@ -1252,4 +1403,24 @@ impl Checker {
         }
         errors
     }
+}
+
+/// Returns whether a `finally` body provably writes no local: it is empty or only echoes
+/// literals. Anything else may reassign a local (directly, by reference, or through `global` in
+/// a function it calls) to a value of the type it already had, which the types alone cannot
+/// tell apart from an untouched local.
+fn finally_cannot_write_locals(body: &[Stmt]) -> bool {
+    body.iter().all(|stmt| {
+        matches!(
+            &stmt.kind,
+            StmtKind::Echo(expr) if matches!(
+                expr.kind,
+                ExprKind::StringLiteral(_)
+                    | ExprKind::IntLiteral(_)
+                    | ExprKind::FloatLiteral(_)
+                    | ExprKind::BoolLiteral(_)
+                    | ExprKind::Null
+            )
+        )
+    })
 }

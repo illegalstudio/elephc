@@ -133,6 +133,76 @@ impl Checker {
         Ok(Some(GuardNarrowing { var: key, then_ty, else_ty }))
     }
 
+    /// Undoes the narrowings kept by `if`s inside a body that has just been checked, newest
+    /// first: each local still holding the kept type gets back the type it had before that
+    /// `if`'s guard. A local reassigned since keeps its new type. `mark` is the log length
+    /// taken before the body.
+    pub(crate) fn undo_kept_narrowings_since(&mut self, mark: usize, env: &mut TypeEnv) {
+        if mark >= self.kept_narrowings.len() {
+            return;
+        }
+        let undone = self.kept_narrowings.split_off(mark);
+        for kept in undone.into_iter().rev() {
+            if env.get(&kept.var) != Some(&kept.narrowed) {
+                continue;
+            }
+            match kept.original {
+                Some(ty) => {
+                    env.insert(kept.var, ty);
+                }
+                None => {
+                    env.remove(&kept.var);
+                }
+            }
+        }
+    }
+
+    /// Like `undo_kept_narrowings_since`, but returns the facts it undid that still held, each
+    /// local with the type the body left it, so a construct can keep the ones every path shares.
+    /// A chain of guards on one local (`null` excluded, then `string`) is one fact: the last
+    /// guard's type with the type from before the first, which is what undoing it must restore.
+    pub(crate) fn take_kept_narrowings_since(
+        &mut self,
+        mark: usize,
+        env: &mut TypeEnv,
+    ) -> Vec<crate::types::checker::KeptNarrowing> {
+        let mut held: Vec<crate::types::checker::KeptNarrowing> = Vec::new();
+        for kept in self.kept_narrowings.get(mark..).unwrap_or_default() {
+            match held.iter_mut().find(|fact| fact.var == kept.var) {
+                Some(fact) if kept.original.as_ref() == Some(&fact.narrowed) => {
+                    fact.narrowed = kept.narrowed.clone();
+                }
+                Some(fact) => *fact = kept.clone(),
+                None => held.push(kept.clone()),
+            }
+        }
+        held.retain(|fact| env.get(&fact.var) == Some(&fact.narrowed));
+        self.undo_kept_narrowings_since(mark, env);
+        held
+    }
+
+    /// Re-applies the facts that every path reaching the end of a construct kept, and logs them
+    /// as kept by that construct, so an enclosing body can still undo them.
+    pub(crate) fn keep_facts_every_path_shares(
+        &mut self,
+        paths: &[Vec<crate::types::checker::KeptNarrowing>],
+        env: &mut TypeEnv,
+    ) {
+        let Some((first, rest)) = paths.split_first() else {
+            return;
+        };
+        for fact in first {
+            let shared = rest.iter().all(|path| {
+                path.iter()
+                    .any(|other| other.var == fact.var && other.narrowed == fact.narrowed)
+            });
+            if shared && env.get(&fact.var) != Some(&fact.narrowed) {
+                env.insert(fact.var.clone(), fact.narrowed.clone());
+                self.kept_narrowings.push(fact.clone());
+            }
+        }
+    }
+
     /// Synthetic `TypeEnv` key for a narrowed simple property access `$var->prop` (`None` for a
     /// more complex receiver). The `\x01` sigil bytes cannot appear in a real variable name, so
     /// this key never collides with a variable binding — a normal property read only picks it up
@@ -313,6 +383,10 @@ impl Checker {
                 }
             }
             _ if guard_matches(current, target) => current.clone(),
+            // An array guard on a value of unknown shape (`is_array($mixed)`) gives the type a
+            // bare `array` declaration has. On a concrete non-array type the branch is dead, and
+            // the conservative fallback keeps a reassignment there legal.
+            PhpType::Mixed if matches!(target, GuardTarget::AnyArray) => PhpType::php_array(),
             _ => target.fallback_type(),
         }
     }
