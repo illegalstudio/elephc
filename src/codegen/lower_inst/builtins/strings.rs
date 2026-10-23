@@ -36,6 +36,7 @@ mod replace_wrap;
 mod scalar;
 mod search;
 mod simple;
+mod span;
 mod split;
 mod strip_tags;
 mod strip_tags_owners;
@@ -74,6 +75,7 @@ pub(crate) use hash::{
 pub(crate) use mbstring::lower_mbstring;
 pub(crate) use network::{lower_inet, lower_ip2long, lower_long2ip};
 pub(crate) use parse_url::lower_parse_url;
+pub(crate) use span::{lower_preg_quote, lower_strrchr, lower_strspn, lower_substr_compare};
 pub(crate) use printf::{lower_printf, lower_sprintf, lower_vprintf, lower_vsprintf};
 pub(crate) use replace_wrap::{lower_str_pad, lower_string_replace, lower_wordwrap};
 pub(crate) use scalar::{

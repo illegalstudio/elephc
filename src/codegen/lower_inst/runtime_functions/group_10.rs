@@ -237,6 +237,21 @@ pub(super) fn lower(
         RuntimeFnId::Strstr => Some({
             crate::codegen::lower_inst::builtins::strings::lower_strstr(ctx, inst)
         }),
+        RuntimeFnId::Strspn => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_strspn(ctx, inst, false)
+        }),
+        RuntimeFnId::Strcspn => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_strspn(ctx, inst, true)
+        }),
+        RuntimeFnId::Strrchr => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_strrchr(ctx, inst)
+        }),
+        RuntimeFnId::SubstrCompare => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_substr_compare(ctx, inst)
+        }),
+        RuntimeFnId::PregQuote => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_preg_quote(ctx, inst)
+        }),
         RuntimeFnId::ParseUrl => Some({
             crate::codegen::lower_inst::builtins::strings::lower_parse_url(ctx, inst)
         }),

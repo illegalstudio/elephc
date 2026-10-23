@@ -2,7 +2,7 @@
 title: "mb_decode_numericentity()"
 description: "Decodes numeric entities selected by the ordered conversion map."
 sidebar:
-  order: 840
+  order: 841
 ---
 
 ## mb_decode_numericentity()

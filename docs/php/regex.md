@@ -95,6 +95,7 @@ for a complete project.
 | `preg_replace()` | `preg_replace($pattern, $replacement, $subject): string` | Replace all regex matches; `$0`..`$99` and `\0`..`\99` replacement backreferences expand captured groups |
 | `preg_replace_callback()` | `preg_replace_callback($pattern, $callback, $subject): string` | Replace all regex matches with the callback return value; callback receives `array<string>` matches |
 | `preg_split()` | `preg_split($pattern, $subject, $limit = -1, $flags = 0): array` | Split string by regex; supports no-empty, delimiter-capture, offset-capture, and positive limits |
+| `preg_quote()` | `preg_quote($str, $delimiter = null): string` | Escape the PCRE metacharacters (and the delimiter's first byte) with a backslash, NUL as `\000`. It never compiles a pattern, so it needs no `pcre2` package |
 | `mb_ereg_match()` | `mb_ereg_match($pattern, $string, $options = null): bool` | Test a bare multibyte regex at the start of the string through Oniguruma, using the current `mb_regex_encoding()` and `mb_regex_set_options()` settings. An explicit options argument overrides the current options for this call |
 
 ## Pattern syntax
@@ -195,6 +196,7 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 |---|---|---|:-:|:-:|
 | [`preg_match()`](./builtins/regex/preg_match.md) | `(string $pattern, string $subject, array $matches = []): int` | `int` | ✓ | ✓ |
 | [`preg_match_all()`](./builtins/regex/preg_match_all.md) | `(string $pattern, string $subject, mixed $matches = [], int $flags = 0): int` | `int` | ✓ | ✓ |
+| [`preg_quote()`](./builtins/misc/preg_quote.md) | `(string $str, ?string $delimiter = null): string` | `string` | ✓ | ✓ |
 | [`preg_replace()`](./builtins/regex/preg_replace.md) | `(string $pattern, string $replacement, string $subject): string` | `string` | ✓ | ✓ |
 | [`preg_replace_callback()`](./builtins/regex/preg_replace_callback.md) | `(string $pattern, callable $callback, string $subject): string` | `string` | ✓ | ✓ |
 | [`preg_split()`](./builtins/regex/preg_split.md) | `(string $pattern, string $subject, int $limit = -1, int $flags = 0): array` | `array` | ✓ | ✓ |

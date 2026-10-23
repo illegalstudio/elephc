@@ -2,7 +2,7 @@
 title: "base64_decode() - internals"
 description: "Compiler internals for base64_decode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 789
+  order: 790
 ---
 
 ## `base64_decode()` - internals

@@ -2,7 +2,7 @@
 title: "__elephc_bcnumber_divmod() - internals"
 description: "Compiler internals for __elephc_bcnumber_divmod(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1079
+  order: 1084
 ---
 
 ## `__elephc_bcnumber_divmod()` - internals

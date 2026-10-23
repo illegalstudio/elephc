@@ -30,6 +30,8 @@ mod mbstring_exception;
 
 #[path = "strings/search.rs"]
 mod search;
+#[path = "strings/span_compare.rs"]
+mod span_compare;
 #[path = "strings/transform.rs"]
 mod transform;
 #[path = "strings/implode_boxed.rs"]

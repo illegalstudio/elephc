@@ -2,7 +2,7 @@
 title: "__elephc_bcnumber_add() - internals"
 description: "Compiler internals for __elephc_bcnumber_add(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1074
+  order: 1079
 ---
 
 ## `__elephc_bcnumber_add()` - internals

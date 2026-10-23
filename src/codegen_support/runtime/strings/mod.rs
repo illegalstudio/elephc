@@ -70,6 +70,10 @@ mod chunk_split;
 mod count_chars;
 mod strtr;
 mod quotemeta;
+mod preg_quote;
+mod strrchr;
+mod strspn;
+mod substr_compare;
 mod quoted_printable_encode;
 mod wordwrap;
 mod bin2hex;
@@ -230,6 +234,17 @@ pub use count_chars::emit_count_chars;
 pub use strtr::emit_strtr;
 /// Emit the quotemeta regular-expression metacharacter escaper.
 pub use quotemeta::emit_quotemeta;
+/// Emit the preg_quote PCRE metacharacter escaper.
+pub use preg_quote::emit_preg_quote;
+pub(crate) use preg_quote::PREG_QUOTE_NO_DELIMITER;
+/// Emit the strrchr last-byte finder.
+pub use strrchr::emit_strrchr;
+/// Emit the span counter shared by strspn and strcspn.
+pub use strspn::emit_strspn;
+pub(crate) use strspn::{STRSPN_MODE_COMPLEMENT, STRSPN_MODE_SPAN};
+/// Emit the substr_compare windowed comparator.
+pub use substr_compare::emit_substr_compare;
+pub(crate) use substr_compare::SUBSTR_COMPARE_NEGATIVE_LENGTH;
 /// Emit the quoted_printable_encode MIME transfer encoder.
 pub use quoted_printable_encode::emit_quoted_printable_encode;
 /// Emit the str_word_count word scanner.

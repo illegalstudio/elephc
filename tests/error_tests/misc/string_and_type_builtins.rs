@@ -434,3 +434,38 @@ expect_builtin_arity_error!(
     "<?php function up(array $a): string { return strtoupper($a); } echo up([\"x\"]);",
     "strtoupper(): Argument #1 ($string) must be of type string, array given"
 );
+
+// Tests strspn() arity error when called with one argument (accepts 2 to 4).
+expect_builtin_arity_error!(
+    test_error_strspn_wrong_args,
+    "<?php strspn(\"a\");",
+    "strspn() takes 2 to 4 arguments"
+);
+
+// Tests strcspn() arity error when called with too many arguments (accepts 2 to 4).
+expect_builtin_arity_error!(
+    test_error_strcspn_wrong_args,
+    "<?php strcspn(\"a\", \"b\", 0, 1, 2);",
+    "strcspn() takes 2 to 4 arguments"
+);
+
+// Tests strrchr() arity error when called with one argument (accepts 2 or 3).
+expect_builtin_arity_error!(
+    test_error_strrchr_wrong_args,
+    "<?php strrchr(\"a\");",
+    "strrchr() takes 2 or 3 arguments"
+);
+
+// Tests substr_compare() arity error when called without an offset (accepts 3 to 5).
+expect_builtin_arity_error!(
+    test_error_substr_compare_wrong_args,
+    "<?php substr_compare(\"a\", \"b\");",
+    "substr_compare() takes 3 to 5 arguments"
+);
+
+// Tests preg_quote() arity error when called with no arguments (accepts 1 or 2).
+expect_builtin_arity_error!(
+    test_error_preg_quote_wrong_args,
+    "<?php preg_quote();",
+    "preg_quote() takes 1 or 2 arguments"
+);

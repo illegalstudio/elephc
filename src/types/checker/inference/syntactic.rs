@@ -319,7 +319,7 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             | "htmlspecialchars" | "htmlentities" | "html_entity_decode" | "urlencode" | "urldecode"
             | "base64_encode" | "bin2hex" | "hex2bin" | "number_format"
             | "date" | "json_encode" | "json_decode" | "json_last_error_msg" | "gettype"
-            | "chunk_split" | "quotemeta" | "base_convert"
+            | "chunk_split" | "quotemeta" | "preg_quote" | "base_convert"
             // `join` is `implode`'s alias, and dechex/decbin/decoct render integers as
             // strings. Without these arms an array literal such as `[dechex($n)]` would take
             // the `_ => PhpType::Int` fallback below, type the element `int`, and read the
@@ -336,7 +336,9 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             // `base64_decode()` returns `string|false` because `$strict = true` rejects a
             // character outside the Base64 alphabet with `false`. Its representation is the
             // same boxed `Mixed` cell, so it must not be read back as a string pair.
-            | "base64_decode" => {
+            | "base64_decode"
+            // `strrchr()` is `string|false`, boxed like `strstr()`.
+            | "strrchr" => {
                 PhpType::Mixed
             }
             "fopen" | "tmpfile" => PhpType::Union(vec![PhpType::stream_resource(), PhpType::False]),

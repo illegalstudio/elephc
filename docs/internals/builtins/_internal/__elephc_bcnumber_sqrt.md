@@ -2,7 +2,7 @@
 title: "__elephc_bcnumber_sqrt() - internals"
 description: "Compiler internals for __elephc_bcnumber_sqrt(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1086
+  order: 1091
 ---
 
 ## `__elephc_bcnumber_sqrt()` - internals

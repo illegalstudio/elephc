@@ -228,6 +228,10 @@ routing and web transport verification remain open.
 | `stripos()` | `stripos($haystack, $needle, $offset = 0): int\|false` | Case-insensitive `strpos()`. Folding is ASCII-only (`A`-`Z`), so non-ASCII bytes are matched verbatim. `$offset` behaves exactly as in `strpos()` |
 | `strripos()` | `strripos($haystack, $needle, $offset = 0): int\|false` | Case-insensitive `strrpos()`. Folding is ASCII-only (`A`-`Z`). `$offset` behaves exactly as in `strrpos()` |
 | `strstr()` | `strstr($hay, $needle, $before_needle = false): string\|false` | Find first occurrence and return the rest, or the part before it when `$before_needle` is truthy. Returns `false` if not found |
+| `strrchr()` | `strrchr($hay, $needle, $before_needle = false): string\|false` | Find the last occurrence of the needle's first byte (NUL for an empty needle) and return the rest, or the part before it when `$before_needle` is truthy. Returns `false` if not found |
+| `strspn()` | `strspn($str, $characters, $offset = 0, $length = null): int` | Length of the initial segment made only of bytes in `$characters`, inside the `$offset`/`$length` window (negative values count from the end, as in PHP) |
+| `strcspn()` | `strcspn($str, $characters, $offset = 0, $length = null): int` | Length of the initial segment made only of bytes NOT in `$characters`, with the same window as `strspn()` |
+| `substr_compare()` | `substr_compare($hay, $needle, $offset, $length = null, $case_insensitive = false): int` | Binary-safe comparison of `$hay` from `$offset` with `$needle`, up to `$length` bytes. Returns the first differing byte difference, or the comparison of the compared lengths. An `$offset` past the end or a negative `$length` throws `\ValueError` |
 | `str_replace()` | `str_replace($search, $replace, $subject): string` | Replace all occurrences |
 | `str_ireplace()` | `str_ireplace($search, $replace, $subject): string` | Case-insensitive replace |
 | `substr_replace()` | `substr_replace($str, $repl, $start [, $len]): string` | Replace a substring. Negative `$start` counts from the end; a negative `$len` preserves that many trailing bytes after the replacement, matching PHP |

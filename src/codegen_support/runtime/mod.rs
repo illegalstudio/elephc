@@ -76,6 +76,10 @@ pub(crate) use objects::{
 /// object handles above. `RESOURCE_ID_TABLE_SLOTS` sizes its two side tables in
 /// the fixed data section.
 pub(crate) use resource_ids::RESOURCE_ID_TABLE_SLOTS;
+pub(crate) use strings::{
+    PREG_QUOTE_NO_DELIMITER, STRSPN_MODE_COMPLEMENT, STRSPN_MODE_SPAN,
+    SUBSTR_COMPARE_NEGATIVE_LENGTH,
+};
 pub(crate) use data::{
     OB_CLOSURE_INVOKE_NAME, OB_DEFAULT_HANDLER_NAME, OB_NTC_CREATE_FAIL,
     OB_WARN_BAD_CALLBACK_GENERIC, OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX,

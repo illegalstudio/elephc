@@ -139,6 +139,7 @@ pub mod posix_setpgid;
 pub mod posix_setsid;
 pub mod preg_match;
 pub mod preg_match_all;
+pub mod preg_quote;
 pub mod preg_replace;
 pub mod preg_split;
 pub mod putenv;

@@ -98,6 +98,10 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_nl2br(emitter);
     strings::emit_chunk_split(emitter);
     strings::emit_quotemeta(emitter);
+    strings::emit_preg_quote(emitter);
+    strings::emit_strrchr(emitter);
+    strings::emit_strspn(emitter);
+    strings::emit_substr_compare(emitter);
     strings::emit_quoted_printable_encode(emitter);
     strings::emit_str_word_count(emitter);
     strings::emit_count_chars(emitter);

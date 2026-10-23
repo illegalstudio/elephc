@@ -233,3 +233,15 @@ $num = "9";
 $num++;
 echo "'9'++  : ";
 var_dump($num);
+
+// Spans, last occurrences and windowed comparisons
+echo "\n--- spans and comparisons ---\n";
+$line = "  42 apples";
+$indent = strspn($line, " ");
+echo "indent: " . $indent . "\n";
+echo "digits after indent: " . strspn($line, "0123456789", $indent) . "\n";
+echo "chars before first space: " . strcspn("key=value pair", " ") . "\n";
+$path = "/var/log/app/error.log";
+echo "file name: " . substr(strrchr($path, "/"), 1) . "\n";
+echo "same extension: " . (substr_compare($path, ".LOG", -4, 4, true) === 0 ? "yes" : "no") . "\n";
+echo "quoted pattern: " . preg_quote("1.5*2=3?", "/") . "\n";

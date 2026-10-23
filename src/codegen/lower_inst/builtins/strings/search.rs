@@ -303,7 +303,7 @@ pub(crate) fn lower_substr_count(ctx: &mut FunctionContext<'_>, inst: &Instructi
 /// PHP's default is `null`, meaning "to the end of the subject", and an explicitly written
 /// `null` behaves identically. A `TaggedScalar` needs a runtime tag check, while a statically
 /// null operand can immediately take the absent path.
-fn optional_null_length_kind(
+pub(super) fn optional_null_length_kind(
     ctx: &FunctionContext<'_>,
     inst: &Instruction,
     operand_index: usize,
@@ -340,7 +340,7 @@ pub(super) enum OptionalLengthKind {
 /// this gives runtime null the same through-the-end behavior as omission without consuming zero
 /// or any negative integer as a sentinel. Runtime-nullable forms also leave their null/int tag
 /// in the tagged-scalar tag register for `substr_count()`'s remaining-window selection.
-fn load_optional_length_null_as_max(
+pub(super) fn load_optional_length_null_as_max(
     ctx: &mut FunctionContext<'_>,
     length: ValueId,
     name: &str,

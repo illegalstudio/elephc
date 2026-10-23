@@ -693,6 +693,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`phpversion()`](./builtins/misc/phpversion.md) | `(?string $extension = null): string|false` | `string|false` | ✓ | ✓ |
 | [`posix_setpgid()`](./builtins/misc/posix_setpgid.md) | `(int $process_id, int $process_group_id): bool` | `bool` | ✓ | ✓ |
 | [`posix_setsid()`](./builtins/misc/posix_setsid.md) | `(): int` | `int` | ✓ | ✓ |
+| [`preg_quote()`](./builtins/misc/preg_quote.md) | `(string $str, ?string $delimiter = null): string` | `string` | ✓ | ✓ |
 | [`print_r()`](./builtins/misc/print_r.md) | `(mixed $value, bool $return = false): mixed` | `mixed` | ✓ | ✓ |
 | [`restore_error_handler()`](./builtins/misc/restore_error_handler.md) | `(): bool` | `bool` | ✓ | ✓ |
 | [`restore_exception_handler()`](./builtins/misc/restore_exception_handler.md) | `(): bool` | `bool` | ✓ | ✓ |
@@ -936,6 +937,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`str_word_count()`](./builtins/string/str_word_count.md) | `(string $string, int $format = 0, ?string $characters = null): array|int` | `array|int` | ✓ | ✓ |
 | [`strcasecmp()`](./builtins/string/strcasecmp.md) | `(string $string1, string $string2): int` | `int` | ✓ | ✓ |
 | [`strcmp()`](./builtins/string/strcmp.md) | `(string $string1, string $string2): int` | `int` | ✓ | ✓ |
+| [`strcspn()`](./builtins/string/strcspn.md) | `(string $string, string $characters, int $offset = 0, ?int $length = null): int` | `int` | ✓ | ✓ |
 | [`strip_tags()`](./builtins/string/strip_tags.md) | `(string $string, array|string|null $allowed_tags = null): string` | `string` | ✓ | ✓ |
 | [`stripos()`](./builtins/string/stripos.md) | `(string $haystack, string $needle, int $offset = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`stripslashes()`](./builtins/string/stripslashes.md) | `(string $string): string` | `string` | ✓ | ✓ |
@@ -943,14 +945,17 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`strncasecmp()`](./builtins/string/strncasecmp.md) | `(string $string1, string $string2, int $length): int` | `int` | ✓ | ✓ |
 | [`strncmp()`](./builtins/string/strncmp.md) | `(string $string1, string $string2, int $length): int` | `int` | ✓ | ✓ |
 | [`strpos()`](./builtins/string/strpos.md) | `(string $haystack, string $needle, int $offset = 0): mixed` | `mixed` | ✓ | ✓ |
+| [`strrchr()`](./builtins/string/strrchr.md) | `(string $haystack, string $needle, bool $before_needle = false): mixed` | `mixed` | ✓ | ✓ |
 | [`strrev()`](./builtins/string/strrev.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`strripos()`](./builtins/string/strripos.md) | `(string $haystack, string $needle, int $offset = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`strrpos()`](./builtins/string/strrpos.md) | `(string $haystack, string $needle, int $offset = 0): mixed` | `mixed` | ✓ | ✓ |
+| [`strspn()`](./builtins/string/strspn.md) | `(string $string, string $characters, int $offset = 0, ?int $length = null): int` | `int` | ✓ | ✓ |
 | [`strstr()`](./builtins/string/strstr.md) | `(string $haystack, string $needle, bool $before_needle = false): mixed` | `mixed` | ✓ | ✓ |
 | [`strtolower()`](./builtins/string/strtolower.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`strtoupper()`](./builtins/string/strtoupper.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`strtr()`](./builtins/string/strtr.md) | `(string $string, array|string $from, ?string $to = null): string` | `string` | ✓ | ✓ |
 | [`substr()`](./builtins/string/substr.md) | `(string $string, int $offset, ?int $length = null): string` | `string` | ✓ | ✓ |
+| [`substr_compare()`](./builtins/string/substr_compare.md) | `(string $haystack, string $needle, int $offset, ?int $length = null, bool $case_insensitive = false): int` | `int` | ✓ | ✓ |
 | [`substr_count()`](./builtins/string/substr_count.md) | `(string $haystack, string $needle, int $offset = 0, mixed $length = null): int` | `int` | ✓ | - |
 | [`substr_replace()`](./builtins/string/substr_replace.md) | `(string $string, string $replace, int $offset, int $length = null): string` | `string` | ✓ | ✓ |
 | [`trim()`](./builtins/string/trim.md) | `(string $string, string $characters = " \n\r\t\x0B\x0C\x00"): string` | `string` | ✓ | ✓ |

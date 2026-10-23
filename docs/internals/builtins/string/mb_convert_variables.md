@@ -2,7 +2,7 @@
 title: "mb_convert_variables() - internals"
 description: "Compiler internals for mb_convert_variables(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 838
+  order: 839
 ---
 
 ## `mb_convert_variables()` - internals

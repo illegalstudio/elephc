@@ -766,7 +766,8 @@ pub(in crate::interpreter) fn eval_method_parameter_scalar_coercion(
 /// deciding whether to reject them is asking a different question (`null`, `int`, `float` and
 /// `bool` all coerce to `string` under PHP's coercive typing).
 ///
-/// Shared by ordinary builtin string-union binding and optional curl argument validation.
+/// Shared by ordinary builtin string-union binding, optional curl argument validation and the
+/// scalar-parameter guard `builtins::string::strspn::eval_reject_container_argument`.
 pub(in crate::interpreter) fn eval_object_has_to_string(
     value: RuntimeCellHandle,
     context: &mut ElephcEvalContext,

@@ -2,7 +2,7 @@
 title: "mb_trim() - internals"
 description: "Compiler internals for mb_trim(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 895
+  order: 896
 ---
 
 ## `mb_trim()` - internals

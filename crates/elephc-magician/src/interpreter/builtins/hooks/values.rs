@@ -306,6 +306,16 @@ pub(in crate::interpreter) enum EvalValuesHook {
     StrRepeat,
     /// Dispatches `strval(...)`.
     Strval,
+    /// Dispatches `strspn(...)`.
+    Strspn,
+    /// Dispatches `strcspn(...)`.
+    Strcspn,
+    /// Dispatches `strrchr(...)`.
+    Strrchr,
+    /// Dispatches `substr_compare(...)`.
+    SubstrCompare,
+    /// Dispatches `preg_quote(...)`.
+    PregQuote,
     /// Dispatches `strtr(...)`.
     Strtr,
     /// Dispatches `strstr(...)`.
@@ -734,6 +744,13 @@ impl EvalValuesHook {
             Self::Strval => one_arg(evaluated_args, values, |value, values| {
                 eval_strval_result(value, context, values)
             }),
+            Self::Strspn => eval_strspn_values_result(false, evaluated_args, context, values),
+            Self::Strcspn => eval_strspn_values_result(true, evaluated_args, context, values),
+            Self::Strrchr => eval_strrchr_values_result(evaluated_args, values),
+            Self::SubstrCompare => {
+                eval_substr_compare_values_result(evaluated_args, context, values)
+            }
+            Self::PregQuote => eval_preg_quote_values_result(evaluated_args, context, values),
             Self::Strtr => match evaluated_args {
                 [subject, from] => eval_strtr_result(*subject, *from, None, values),
                 [subject, from, to] => eval_strtr_result(*subject, *from, Some(*to), values),

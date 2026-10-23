@@ -2,7 +2,7 @@
 title: "ptr_write_f32()"
 description: "Writes one IEEE 754 single-precision value through a raw pointer, rounding the float to 32 bits."
 sidebar:
-  order: 746
+  order: 747
 ---
 
 ## ptr_write_f32()

@@ -301,6 +301,16 @@ pub(in crate::interpreter) enum EvalDirectHook {
     StrRepeat,
     /// Dispatches `strval(...)`.
     Strval,
+    /// Dispatches `strspn(...)`.
+    Strspn,
+    /// Dispatches `strcspn(...)`.
+    Strcspn,
+    /// Dispatches `strrchr(...)`.
+    Strrchr,
+    /// Dispatches `substr_compare(...)`.
+    SubstrCompare,
+    /// Dispatches `preg_quote(...)`.
+    PregQuote,
     /// Dispatches `strtr(...)`.
     Strtr,
     /// Dispatches `strstr(...)`.
@@ -570,6 +580,11 @@ impl EvalDirectHook {
             },
             Self::StrRepeat => eval_builtin_str_repeat(args, context, scope, values),
             Self::Strval => eval_builtin_strval(args, context, scope, values),
+            Self::Strspn => eval_builtin_strspn(false, args, context, scope, values),
+            Self::Strcspn => eval_builtin_strspn(true, args, context, scope, values),
+            Self::Strrchr => eval_builtin_strrchr(args, context, scope, values),
+            Self::SubstrCompare => eval_builtin_substr_compare(args, context, scope, values),
+            Self::PregQuote => eval_builtin_preg_quote(args, context, scope, values),
             Self::Strtr => eval_builtin_strtr(args, context, scope, values),
             Self::Strstr => eval_builtin_strstr(args, context, scope, values),
             Self::Substr => eval_builtin_substr(args, context, scope, values),

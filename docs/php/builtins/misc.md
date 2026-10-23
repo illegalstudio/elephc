@@ -89,6 +89,7 @@ sidebar:
 | [`phpversion()`](./misc/phpversion.md) | `(?string $extension = null): string|false` | `string|false` | ✓ | ✓ |
 | [`posix_setpgid()`](./misc/posix_setpgid.md) | `(int $process_id, int $process_group_id): bool` | `bool` | ✓ | ✓ |
 | [`posix_setsid()`](./misc/posix_setsid.md) | `(): int` | `int` | ✓ | ✓ |
+| [`preg_quote()`](./misc/preg_quote.md) | `(string $str, ?string $delimiter = null): string` | `string` | ✓ | ✓ |
 | [`print_r()`](./misc/print_r.md) | `(mixed $value, bool $return = false): mixed` | `mixed` | ✓ | ✓ |
 | [`restore_error_handler()`](./misc/restore_error_handler.md) | `(): bool` | `bool` | ✓ | ✓ |
 | [`restore_exception_handler()`](./misc/restore_exception_handler.md) | `(): bool` | `bool` | ✓ | ✓ |

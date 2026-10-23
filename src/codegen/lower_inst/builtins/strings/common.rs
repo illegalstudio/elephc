@@ -371,17 +371,46 @@ pub(super) fn emit_empty_string_result(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Moves the target ABI string result pair into caller-selected registers when needed.
+///
+/// The copies are ordered so neither overwrites a result register before it is read: on x86_64
+/// the result pair is `rax`/`rdx`, and a caller asking for `rdx`/`rcx` (the SysV second string
+/// argument) must copy the length out of `rdx` before the pointer lands there.
 pub(super) fn move_string_result_to_regs(ctx: &mut FunctionContext<'_>, ptr_reg: &str, len_reg: &str) {
     let (result_ptr_reg, result_len_reg) = abi::string_result_regs(ctx.emitter);
-    if ptr_reg != result_ptr_reg {
-        ctx.emitter.instruction(
-            &format!("mov {}, {}", ptr_reg, result_ptr_reg)
-        );                                                                      // move the cast string pointer into the requested argument register
+    if ptr_reg == result_len_reg && len_reg == result_ptr_reg {
+        match ctx.emitter.target.arch {
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("xchg {}, {}", ptr_reg, len_reg)); // swap the cast string pointer and length into the requested registers
+            }
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("eor {0}, {0}, {1}", ptr_reg, len_reg)); // swap the cast string pointer and length without a scratch register
+                ctx.emitter.instruction(&format!("eor {1}, {0}, {1}", ptr_reg, len_reg)); // the length register now holds the pointer
+                ctx.emitter.instruction(&format!("eor {0}, {0}, {1}", ptr_reg, len_reg)); // the pointer register now holds the length
+            }
+        }
+        return;
     }
-    if len_reg != result_len_reg {
-        ctx.emitter.instruction(
-            &format!("mov {}, {}", len_reg, result_len_reg)
-        );                                                                      // move the cast string length into the requested argument register
+    let move_ptr = |ctx: &mut FunctionContext<'_>| {
+        if ptr_reg != result_ptr_reg {
+            ctx.emitter.instruction(
+                &format!("mov {}, {}", ptr_reg, result_ptr_reg)
+            );                                                                  // move the cast string pointer into the requested argument register
+        }
+    };
+    let move_len = |ctx: &mut FunctionContext<'_>| {
+        if len_reg != result_len_reg {
+            ctx.emitter.instruction(
+                &format!("mov {}, {}", len_reg, result_len_reg)
+            );                                                                  // move the cast string length into the requested argument register
+        }
+    };
+    if ptr_reg == result_len_reg {
+        // The pointer's destination still holds the length: copy the length out first.
+        move_len(ctx);
+        move_ptr(ctx);
+    } else {
+        move_ptr(ctx);
+        move_len(ctx);
     }
 }
 

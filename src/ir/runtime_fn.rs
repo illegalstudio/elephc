@@ -473,6 +473,7 @@ pub enum RuntimeFnId {
     Chop,
     Chr,
     ChunkSplit,
+    PregQuote,
     CountChars,
     Crc32,
     CtypeAlnum,
@@ -735,7 +736,11 @@ pub enum RuntimeFnId {
     Strrpos,
     Strtr,
     Strstr,
+    Strspn,
+    Strcspn,
+    Strrchr,
     Substr,
+    SubstrCompare,
     SubstrCount,
     SubstrReplace,
     Trim,
@@ -1334,6 +1339,10 @@ impl RuntimeFnId {
             RuntimeFnId::Strcasecmp |
             RuntimeFnId::Strcmp |
             RuntimeFnId::Strstr |
+            RuntimeFnId::Strspn |
+            RuntimeFnId::Strcspn |
+            RuntimeFnId::Strrchr |
+            RuntimeFnId::PregQuote |
             RuntimeFnId::Substr |
             RuntimeFnId::SubstrReplace |
             RuntimeFnId::Tan |
@@ -1377,6 +1386,7 @@ impl RuntimeFnId {
             | RuntimeFnId::Strripos
             | RuntimeFnId::Strrpos
             | RuntimeFnId::SubstrCount
+            | RuntimeFnId::SubstrCompare
             | RuntimeFnId::BaseConvert
             | RuntimeFnId::ChunkSplit
             | RuntimeFnId::ParseUrl
@@ -2618,6 +2628,8 @@ impl RuntimeFnId {
                 // temporary alive for the boxed result's whole lifetime, which leaked one
                 // block per iteration for `strstr($h, $cond ? "a" : "b")` in a loop.
                 | RuntimeFnId::Strstr
+                // `strrchr()` boxes its `string|false` result exactly like `strstr()`.
+                | RuntimeFnId::Strrchr
                 // `tempnam(directory, prefix)` returns the generated path that `mkstemp()`
                 // wrote into a buffer `__rt_tempnam` allocated itself, then copied out with
                 // `__rt_str_persist` — it is neither of its two argument strings. This was the
@@ -2652,6 +2664,8 @@ impl RuntimeFnId {
                 // temporary alive for the result's whole lifetime, leaking one block per
                 // `chunk_split(build())` call.
                 | RuntimeFnId::ChunkSplit
+                // `__rt_preg_quote` writes into its own concat reservation, like `chunk_split()`.
+                | RuntimeFnId::PregQuote
                 | RuntimeFnId::Decbin
                 | RuntimeFnId::Dechex
                 | RuntimeFnId::Decoct
@@ -3065,6 +3079,7 @@ impl RuntimeFnId {
             RuntimeFnId::Chop => "chop",
             RuntimeFnId::Chr => "chr",
             RuntimeFnId::ChunkSplit => "chunk_split",
+            RuntimeFnId::PregQuote => "preg_quote",
             RuntimeFnId::CountChars => "count_chars",
             RuntimeFnId::Crc32 => "crc32",
             RuntimeFnId::CurlEasyBody => "__elephc_curl_easy_body",
@@ -3251,6 +3266,10 @@ impl RuntimeFnId {
             RuntimeFnId::Strrpos => "strrpos",
             RuntimeFnId::Strtr => "strtr",
             RuntimeFnId::Strstr => "strstr",
+            RuntimeFnId::Strspn => "strspn",
+            RuntimeFnId::Strcspn => "strcspn",
+            RuntimeFnId::Strrchr => "strrchr",
+            RuntimeFnId::SubstrCompare => "substr_compare",
             RuntimeFnId::Substr => "substr",
             RuntimeFnId::SubstrCount => "substr_count",
             RuntimeFnId::SubstrReplace => "substr_replace",

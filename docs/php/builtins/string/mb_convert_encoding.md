@@ -2,7 +2,7 @@
 title: "mb_convert_encoding()"
 description: "Converts strings and recursive array keys and values between character encodings."
 sidebar:
-  order: 836
+  order: 837
 ---
 
 ## mb_convert_encoding()

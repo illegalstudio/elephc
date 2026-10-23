@@ -2,7 +2,7 @@
 title: "setrawcookie() - internals"
 description: "Compiler internals for setrawcookie(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1009
+  order: 1014
 ---
 
 ## `setrawcookie()` - internals
