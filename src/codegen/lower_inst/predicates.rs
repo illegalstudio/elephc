@@ -34,7 +34,15 @@ pub(in crate::codegen::lower_inst) fn emit_value_truthiness(
     value: ValueId,
     op_name: &str,
 ) -> Result<()> {
-    match ctx.raw_value_php_type(value)? {
+    let raw_ty = ctx.raw_value_php_type(value)?;
+    // A nullable scalar's semantic type is a `Union(int, null)` whose storage repr is the
+    // inline tagged pair; the match below is over the SEMANTIC php type, so the union would
+    // fall into the Mixed arm and dereference the raw null sentinel as a box pointer. Dispatch
+    // it on the storage repr instead.
+    if raw_ty.codegen_repr() == PhpType::TaggedScalar {
+        return emit_tagged_scalar_truthiness(ctx, value);
+    }
+    match raw_ty {
         // A packed record address (buffer element or nested record) is one pointer word, and so
         // is a `?ptr<T>` (null is 0); its union must not reach the Mixed cell arm below.
         ty if matches!(
@@ -52,7 +60,6 @@ pub(in crate::codegen::lower_inst) fn emit_value_truthiness(
             emit_float_result_nonzero_bool(ctx);
         }
         PhpType::Str => emit_string_truthiness(ctx, value)?,
-        PhpType::TaggedScalar => emit_tagged_scalar_truthiness(ctx, value)?,
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
             emit_array_truthiness(ctx, value)?;
         }

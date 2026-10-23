@@ -241,7 +241,15 @@ pub(in crate::codegen::lower_inst) fn lower_closure_bind(ctx: &mut FunctionConte
 pub(in crate::codegen::lower_inst) fn lower_empty(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "empty", 1)?;
     let value = expect_operand(inst, 0)?;
-    match ctx.raw_value_php_type(value)? {
+    let raw_ty = ctx.raw_value_php_type(value)?;
+    // A nullable scalar's semantic type is a `Union(int, null)` stored as the inline tagged
+    // pair; the match below is over the semantic type, so the union would reach
+    // `__rt_mixed_is_empty` and dereference the raw null sentinel as a box pointer (#1996).
+    if raw_ty.codegen_repr() == PhpType::TaggedScalar {
+        emit_tagged_scalar_empty_bool(ctx, value)?;
+        return store_if_result(ctx, inst);
+    }
+    match raw_ty {
         // A packed record address or a `?ptr<T>` (null is 0) is one pointer word, not a Mixed cell.
         ty if matches!(ty, PhpType::Int | PhpType::Pointer(_) | PhpType::Packed(_)) || crate::types::is_nullable_pointer_type(&ty) => {
             ctx.load_value_to_result(value)?;
@@ -257,9 +265,6 @@ pub(in crate::codegen::lower_inst) fn lower_empty(ctx: &mut FunctionContext<'_>,
         PhpType::Str => {
             ctx.load_value_to_result(value)?;
             emit_string_length_zero_bool(ctx);
-        }
-        PhpType::TaggedScalar => {
-            emit_tagged_scalar_empty_bool(ctx, value)?;
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
             predicates::emit_array_truthiness(ctx, value)?;

@@ -461,3 +461,31 @@ echo "\n";
     );
     assert_eq!(out, "1111111\n");
 }
+
+/// A nullable scalar parameter holding null is falsy in every condition consumer. Its storage
+/// is the inline tagged pair while its semantic type is the `int|null` union, so the truthiness
+/// dispatch must look at the storage repr; reading it as a Mixed cell dereferenced the raw null
+/// sentinel and crashed (#1996). Covers `if`, `&&`, `!`, `?:`, `while`, `(bool)` and the
+/// `?string`/`?float`/`?bool` nullables, in both directions.
+#[test]
+fn test_tagged_nullable_scalar_is_falsy_in_conditions() {
+    let out = compile_and_run(
+        r#"<?php
+function ifc(?int $x): string { if ($x) { return "T"; } return "F"; }
+function neg(?int $x): string { return $x ? "T" : "F"; }
+function notc(?int $x): string { return !$x ? "N" : "Y"; }
+function andc(?int $x): string { return $x && true ? "T" : "F"; }
+function elvis(?int $x): string { return $x ?: "D"; }
+function cast(?int $x): string { return (bool) $x ? "T" : "F"; }
+function whilec(?int $x): string { while ($x) { return "T"; } return "F"; }
+function s(?string $x): string { return $x ? "T" : "F"; }
+function fl(?float $x): string { return $x ? "T" : "F"; }
+function bo(?bool $x): string { return $x ? "T" : "F"; }
+function emp(?int $x): string { return empty($x) ? "E" : "N"; }
+echo ifc(null), neg(null), neg(0), neg(-3), notc(null), andc(null), elvis(null), cast(null), whilec(null), s(null), fl(null), bo(null), "\n";
+echo ifc(3), andc(3), cast(3), s("a"), fl(1.5), bo(true), "\n";
+echo emp(null), emp(0), emp(5), "\n";
+"#,
+    );
+    assert_eq!(out, "FFFTNFDFFFFF\nTTTTTT\nEEN\n");
+}
