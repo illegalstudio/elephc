@@ -392,7 +392,8 @@ pub(crate) fn fold_block(body: Vec<Stmt>) -> Vec<Stmt> {
                 guard_values.prepare(&mut stmt);
                 guard_values.observe(&stmt);
             }
-            let target_dependent_if = match &stmt.kind {
+            let transparent = crate::optimize::user_guards::is_declaration_transparent(&stmt);
+            let target_dependent_if = crate::optimize::user_guards::fold_block_stmt(transparent, || match &stmt.kind {
                 StmtKind::If {
                     condition,
                     elseif_clauses,
@@ -404,13 +405,20 @@ pub(crate) fn fold_block(body: Vec<Stmt>) -> Vec<Stmt> {
                             .any(|(condition, _)| target_dependent_condition(condition))
                 }
                 _ => false,
-            };
-            let stmt = fold_stmt(stmt);
-            if active_fold_target().is_some() && target_dependent_if {
-                prune_target_boolean_if(stmt)
-            } else {
-                vec![stmt]
-            }
+            });
+            crate::optimize::user_guards::fold_block_stmt(transparent, || {
+                let stmt = fold_stmt(stmt);
+                // A polyfill declaration exists for the statements after it in its guard body.
+                crate::optimize::user_guards::record_reached_declaration(&stmt);
+                if active_fold_target().is_some() && target_dependent_if {
+                    let kept = prune_target_boolean_if(stmt);
+                    // A folded top-level polyfill guard flattens its declaration into this block.
+                    crate::optimize::user_guards::record_materialized(&kept);
+                    kept
+                } else {
+                    vec![stmt]
+                }
+            })
         })
         .collect()
 }
@@ -439,6 +447,7 @@ pub(in crate::optimize) fn target_dependent_condition(expr: &Expr) -> bool {
                     ..
                 }] if crate::builtins::registry::lookup(candidate.trim_start_matches('\\')).is_some()
                     || crate::name_resolver::is_global_date_procedural_alias(candidate.trim_start_matches('\\'))
+                    || crate::optimize::user_guards::user_function_exists_value(candidate).is_some()
             )
         }
         ExprKind::BinaryOp { left, right, .. } => {

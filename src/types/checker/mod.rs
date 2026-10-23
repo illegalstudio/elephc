@@ -10,7 +10,7 @@
 
 mod binding_decision_ambiguity;
 mod builtin_enums;
-mod builtin_interfaces;
+pub(crate) mod builtin_interfaces;
 pub(crate) mod core_attributes;
 mod builtin_iterators;
 mod builtin_json;

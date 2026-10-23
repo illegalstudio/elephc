@@ -296,6 +296,9 @@ impl Checker {
                 &format!("Undefined property: {}::{}", class_name, property),
             ));
         }
+        if let Some(ty) = self.enum_interface_property_type(class_name, property) {
+            return Ok(ty);
+        }
         if self.awaits_generic_instantiation(class_name) {
             // Resolved by this round, spliced by the next one. `Mixed` keeps the rest of this
             // round meaningful; the next sees an ordinary class and types the read properly.
@@ -305,6 +308,31 @@ impl Checker {
             expr.span,
             &format!("Undefined class: {}", class_name),
         ))
+    }
+
+    /// Types a property read through PHP's implicit enum interfaces.
+    ///
+    /// Every enum implements `UnitEnum` (readonly `string $name`) and every backed enum
+    /// `BackedEnum` (readonly `int|string $value`), so a receiver typed as one of them, or as an
+    /// interface extending them, can read those properties. The interface has no slot layout:
+    /// `ir_lower` and codegen read such a receiver through runtime (mixed) property dispatch on
+    /// the actual enum class. Only `->name` is statically `string`; `->value` (whose backing type
+    /// differs per enum, and which a pure enum seen through `UnitEnum` lacks) and any other name
+    /// answer whatever the runtime class answers, so they are `mixed`.
+    pub(crate) fn enum_interface_property_type(
+        &self,
+        interface_name: &str,
+        property: &str,
+    ) -> Option<PhpType> {
+        if self.classes.contains_key(interface_name)
+            || !crate::types::checker::builtin_interfaces::is_enum_contract_interface(
+                &self.interfaces,
+                interface_name,
+            )
+        {
+            return None;
+        }
+        Some(if property == "name" { PhpType::Str } else { PhpType::Mixed })
     }
 
     /// Returns precise SPL runtime storage metadata for callback-filter internals.

@@ -54,6 +54,8 @@ mod dead_code_elimination;
 mod dead_instruction_elimination;
 #[path = "optimizer/declaration_reachability.rs"]
 mod declaration_reachability;
+#[path = "optimizer/function_exists_guards.rs"]
+mod function_exists_guards;
 #[path = "optimizer/dead_store_elimination.rs"]
 mod dead_store_elimination;
 #[path = "optimizer/eir_constant_propagation.rs"]

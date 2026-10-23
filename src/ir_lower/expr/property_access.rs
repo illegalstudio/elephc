@@ -360,6 +360,16 @@ pub(super) fn lower_property_get_from_value(
     if op == Op::NullsafePropGet && value_is_definitely_null(ctx, object.value) {
         return lower_boxed_null(ctx, expr);
     }
+    // `UnitEnum`/`BackedEnum` (and interfaces extending them) have no slot layout of their own:
+    // box the receiver so `->name` / `->value` dispatch on the runtime enum class, exactly as a
+    // `mixed` receiver does.
+    let object = if matches!(op, Op::PropGet | Op::NullsafePropGet)
+        && receiver_is_enum_interface(ctx, object.value)
+    {
+        ctx.box_value_as_mixed(object, PhpType::Mixed, Some(expr.span))
+    } else {
+        object
+    };
     // Route a read of a get-hooked property to its synthetic accessor, except inside that property's
     // own accessor, where `$this->prop` must read the raw backing slot to avoid infinite recursion.
     // A nullsafe read (`$obj?->prop`) routes to a nullsafe call so the null short-circuit is kept.
@@ -500,6 +510,14 @@ fn property_result_type(
         };
     }
     let Some(class_info) = ctx.classes.get(normalized) else {
+        // `UnitEnum`/`BackedEnum` receivers read through runtime dispatch (see
+        // `receiver_is_enum_interface`), whose answer is a mixed cell.
+        if crate::types::checker::builtin_interfaces::is_enum_contract_interface(
+            ctx.interfaces,
+            normalized,
+        ) {
+            return PhpType::Mixed;
+        }
         return fallback_expr_type(expr);
     };
     if let Some(property_ty) = runtime_property_type_override(ctx, normalized, property) {
@@ -1170,4 +1188,18 @@ pub(crate) fn static_property_result_type(
         crate::types::eir_value_php_type(property_ty)
     };
     normalize_value_php_type(result_type)
+}
+
+/// Whether a receiver is statically typed as `UnitEnum`, `BackedEnum` or an interface extending
+/// them (never a class), so its property reads must go through runtime dispatch.
+fn receiver_is_enum_interface(ctx: &LoweringContext<'_, '_>, object: crate::ir::ValueId) -> bool {
+    let PhpType::Object(name) = ctx.builder.value_php_type(object).codegen_repr() else {
+        return false;
+    };
+    let name = name.trim_start_matches('\\');
+    !ctx.classes.contains_key(name)
+        && crate::types::checker::builtin_interfaces::is_enum_contract_interface(
+            ctx.interfaces,
+            name,
+        )
 }
