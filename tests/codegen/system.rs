@@ -2217,6 +2217,24 @@ fn test_preg_replace_no_match() {
     assert_eq!(out, "hello world");
 }
 
+/// Verifies `preg_replace` expands the braced `${n}` and `${nn}` backreferences PHP accepts,
+/// keeping a digit after the brace literal and leaving malformed braced forms untouched.
+#[test]
+fn test_preg_replace_braced_backreferences() {
+    let out = compile_and_run(
+        r#"<?php
+echo preg_replace('/(a)(b)/', '${2}${1}', 'xaby'), '|';
+echo preg_replace('/(a)/', '${1}0', 'a'), '|';
+echo preg_replace('/(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)/', '[${10}]', 'abcdefghij'), '|';
+echo preg_replace('/(a)/', '${x}', 'a'), '|';
+echo preg_replace('/(a)/', '${1', 'a'), '|';
+echo preg_replace('/(a)/', '${123}', 'a'), '|';
+echo preg_replace('/(a)/', '$1${1}\1', 'a');
+"#,
+    );
+    assert_eq!(out, "xbay|a0|[j]|${x}|${1|${123}|aaa");
+}
+
 /// Verifies `preg_replace_callback` invokes the closure for each match and the callback return
 /// value replaces the matched text; captures are accessible via `$matches[0]`.
 #[test]

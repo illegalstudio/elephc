@@ -148,6 +148,11 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     emitter.instruction("cmp x14, x2");                                         // replacement ended after marker ?
     emitter.instruction("b.ge __rt_preg_replace_repl_literal");                 // yes → keep marker literal
     emitter.instruction("ldrb w15, [x1, x14]");                                 // load potential group digit
+    emitter.instruction("cmp w13, #36");                                        // only '$' takes the braced ${n} form
+    emitter.instruction("b.ne __rt_preg_replace_backref_digit");                // a '\' marker needs a digit next
+    emitter.instruction("cmp w15, #123");                                       // does '{' open a braced group number?
+    emitter.instruction("b.eq __rt_preg_replace_backref_brace");                // parse ${n} or ${nn}
+    emitter.label("__rt_preg_replace_backref_digit");
     emitter.instruction("sub w15, w15, #48");                                   // convert ASCII digit to group index
     emitter.instruction("cmp w15, #9");                                         // is it 0..9 ?
     emitter.instruction("b.hi __rt_preg_replace_repl_literal");                 // no → keep marker literal
@@ -163,6 +168,37 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     emitter.instruction("mov x8, #3");                                          // two-digit backreference consumes marker plus two digits
     emitter.instruction("mov x17, #10");                                        // prepare decimal multiplier for two-digit group ids
     emitter.instruction("madd x14, x14, x17, x16");                             // group index = first_digit * 10 + second_digit
+    emitter.instruction("b __rt_preg_replace_backref_parsed");                  // the group index and token length are settled
+
+    // -- ${n} and ${nn}: '$', '{', one or two digits, '}' --
+    emitter.label("__rt_preg_replace_backref_brace");
+    emitter.instruction("add x17, x12, #2");                                    // index of the first braced digit
+    emitter.instruction("cmp x17, x2");                                         // did the replacement end after '${'?
+    emitter.instruction("b.ge __rt_preg_replace_repl_literal");                 // yes → keep the marker literal
+    emitter.instruction("ldrb w15, [x1, x17]");                                 // load the first braced digit
+    emitter.instruction("sub w15, w15, #48");                                   // convert ASCII digit to group index
+    emitter.instruction("cmp w15, #9");                                         // is it 0..9 ?
+    emitter.instruction("b.hi __rt_preg_replace_repl_literal");                 // no → keep the marker literal
+    emitter.instruction("mov x14, x15");                                        // x14 = provisional group index
+    emitter.instruction("mov x8, #4");                                          // ${n} consumes marker, brace, digit and closing brace
+    emitter.instruction("add x17, x12, #3");                                    // index of '}' or a second digit
+    emitter.instruction("cmp x17, x2");                                         // did the replacement end before it?
+    emitter.instruction("b.ge __rt_preg_replace_repl_literal");                 // an unclosed brace stays literal
+    emitter.instruction("ldrb w16, [x1, x17]");                                 // load the byte after the first digit
+    emitter.instruction("cmp w16, #125");                                       // does '}' close a one-digit group?
+    emitter.instruction("b.eq __rt_preg_replace_backref_parsed");               // ${n} is complete
+    emitter.instruction("sub w16, w16, #48");                                   // convert the second ASCII digit
+    emitter.instruction("cmp w16, #9");                                         // is it 0..9 ?
+    emitter.instruction("b.hi __rt_preg_replace_repl_literal");                 // anything else stays literal
+    emitter.instruction("mov x17, #10");                                        // prepare decimal multiplier for two-digit group ids
+    emitter.instruction("madd x14, x14, x17, x16");                             // group index = first_digit * 10 + second_digit
+    emitter.instruction("add x17, x12, #4");                                    // index of the closing brace after two digits
+    emitter.instruction("cmp x17, x2");                                         // did the replacement end before it?
+    emitter.instruction("b.ge __rt_preg_replace_repl_literal");                 // an unclosed brace stays literal
+    emitter.instruction("ldrb w16, [x1, x17]");                                 // load the byte after the second digit
+    emitter.instruction("cmp w16, #125");                                       // does '}' close the two-digit group?
+    emitter.instruction("b.ne __rt_preg_replace_repl_literal");                 // a third digit or other byte stays literal
+    emitter.instruction("mov x8, #5");                                          // ${nn} consumes marker, brace, two digits and closing brace
     emitter.label("__rt_preg_replace_backref_parsed");
     emitter.instruction(&format!("str x8, [sp, #{}]", backref_consume_off));    // save how many replacement bytes this backreference consumed
     emitter.instruction("lsl x14, x14, #4");                                    // scale group index by the fixed 16-byte pair stride
@@ -251,7 +287,7 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
 /// Outputs: rax=result ptr, rdx=result len
 ///
 /// On regex compilation failure, returns the original subject unchanged.
-/// Handles backreference expansion (`$0`..`$99`, `\0`..`\99`) in replacement strings.
+/// Handles backreference expansion (`$0`..`$99`, `${0}`..`${99}`, `\0`..`\99`) in replacement strings.
 /// Uses the concat scratch buffer for output and updates `_concat_off` accordingly.
 fn emit_preg_replace_linux_x86_64(emitter: &mut Emitter) {
     let handle_off = 0;
@@ -363,6 +399,11 @@ fn emit_preg_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, rdx");                                        // replacement ended after marker ?
     emitter.instruction("jge __rt_preg_replace_repl_literal_linux_x86_64");     // yes → keep marker literal
     emitter.instruction("movzx r9d, BYTE PTR [rax + r10]");                     // load potential group digit
+    emitter.instruction("cmp r8b, 36");                                         // only '$' takes the braced ${n} form
+    emitter.instruction("jne __rt_preg_replace_backref_digit_linux_x86_64");    // a '\' marker needs a digit next
+    emitter.instruction("cmp r9d, 123");                                        // does '{' open a braced group number?
+    emitter.instruction("je __rt_preg_replace_backref_brace_linux_x86_64");     // parse ${n} or ${nn}
+    emitter.label("__rt_preg_replace_backref_digit_linux_x86_64");
     emitter.instruction("sub r9d, 48");                                         // convert ASCII digit to group index
     emitter.instruction("cmp r9d, 9");                                          // is it 0..9 ?
     emitter.instruction("ja __rt_preg_replace_repl_literal_linux_x86_64");      // no → keep marker literal
@@ -378,6 +419,39 @@ fn emit_preg_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("imul r10, r10, 10");                                   // shift first digit into the tens place
     emitter.instruction("add r10, r8");                                         // group index = first_digit * 10 + second_digit
     emitter.instruction("mov r12, 3");                                          // two-digit backreference consumes marker plus two digits
+    emitter.instruction("jmp __rt_preg_replace_backref_parsed_linux_x86_64");   // the group index and token length are settled
+
+    // -- ${n} and ${nn}: '$', '{', one or two digits, '}' --
+    emitter.label("__rt_preg_replace_backref_brace_linux_x86_64");
+    emitter.instruction("lea r13, [rcx + 2]");                                  // index of the first braced digit
+    emitter.instruction("cmp r13, rdx");                                        // did the replacement end after '${'?
+    emitter.instruction("jge __rt_preg_replace_repl_literal_linux_x86_64");     // yes → keep the marker literal
+    emitter.instruction("movzx r9d, BYTE PTR [rax + r13]");                     // load the first braced digit
+    emitter.instruction("sub r9d, 48");                                         // convert ASCII digit to group index
+    emitter.instruction("cmp r9d, 9");                                          // is it 0..9 ?
+    emitter.instruction("ja __rt_preg_replace_repl_literal_linux_x86_64");      // no → keep the marker literal
+    emitter.instruction("mov r10, r9");                                         // r10 = provisional group index
+    emitter.instruction("lea r13, [rcx + 3]");                                  // index of '}' or a second digit
+    emitter.instruction("cmp r13, rdx");                                        // did the replacement end before it?
+    emitter.instruction("jge __rt_preg_replace_repl_literal_linux_x86_64");     // an unclosed brace stays literal
+    emitter.instruction("movzx r12d, BYTE PTR [rax + r13]");                    // load the byte after the first digit
+    emitter.instruction("cmp r12d, 125");                                       // does '}' close a one-digit group?
+    emitter.instruction("je __rt_preg_replace_backref_brace_one_linux_x86_64"); // ${n} is complete
+    emitter.instruction("sub r12d, 48");                                        // convert the second ASCII digit
+    emitter.instruction("cmp r12d, 9");                                         // is it 0..9 ?
+    emitter.instruction("ja __rt_preg_replace_repl_literal_linux_x86_64");      // anything else stays literal
+    emitter.instruction("imul r10, r10, 10");                                   // shift first digit into the tens place
+    emitter.instruction("add r10, r12");                                        // group index = first_digit * 10 + second_digit
+    emitter.instruction("lea r13, [rcx + 4]");                                  // index of the closing brace after two digits
+    emitter.instruction("cmp r13, rdx");                                        // did the replacement end before it?
+    emitter.instruction("jge __rt_preg_replace_repl_literal_linux_x86_64");     // an unclosed brace stays literal
+    emitter.instruction("movzx r12d, BYTE PTR [rax + r13]");                    // load the byte after the second digit
+    emitter.instruction("cmp r12d, 125");                                       // does '}' close the two-digit group?
+    emitter.instruction("jne __rt_preg_replace_repl_literal_linux_x86_64");     // a third digit or other byte stays literal
+    emitter.instruction("mov r12, 5");                                          // ${nn} consumes marker, brace, two digits and closing brace
+    emitter.instruction("jmp __rt_preg_replace_backref_parsed_linux_x86_64");   // the two-digit braced group is settled
+    emitter.label("__rt_preg_replace_backref_brace_one_linux_x86_64");
+    emitter.instruction("mov r12, 4");                                          // ${n} consumes marker, brace, digit and closing brace
     emitter.label("__rt_preg_replace_backref_parsed_linux_x86_64");
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r12", backref_consume_off)); // save how many replacement bytes this backreference consumed
     emitter.instruction("shl r10, 4");                                          // scale group index by the fixed 16-byte pair stride
