@@ -181,3 +181,183 @@ echo $box->value;
     );
     assert_eq!(out, "9");
 }
+
+/// Verifies that a constant an enum imports from a trait is readable as `E::CONST` and listed by
+/// `ReflectionClass::getConstants()` after the enum's own cases and constants.
+#[test]
+fn test_enum_reads_trait_constant() {
+    let out = compile_and_run(
+        r#"<?php
+trait T { const TC = 2; function tc(): int { return self::TC; } }
+enum E: string { use T; case A = "a"; const X = 1; }
+echo E::TC, "|", E::X, "|", E::A->value, "|", E::A->tc(), "\n";
+echo implode(",", array_keys((new ReflectionClass("E"))->getConstants())), "\n";
+"#,
+    );
+    assert_eq!(out, "2|1|a|2\nA,X,TC\n");
+}
+
+/// Trait self receivers keep the consuming enum in global, function and class callers.
+#[test]
+fn test_enum_trait_constants_lexical_all() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+trait T { public const A = 1; public const B = self::A + 1; public const N = self::class; }
+enum E { use T; case One; }
+echo E::B, ":", E::N, "|";
+function readE() { echo E::B, ":", E::N, "|"; }
+readE();
+class C {
+ const A = 99;
+ static function readE() {
+  echo E::B, ":", E::N, "\n";
+ }
+}
+C::readE();
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "2:E|2:E|2:E\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Nested traits bind independently to each namespaced consuming enum.
+#[test]
+fn test_enum_trait_constants_namespaced_nested() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+namespace Example;
+trait BaseT { const B = self::A + 1; const N = self::class; }
+trait T { use BaseT; }
+enum E { use T; case One; const A = 1; }
+enum F: string { use T; case One = "one"; const A = 7; }
+class C { const A = 99; static function read() {
+ echo E::B, ":", E::N, "|", F::B, ":", F::N, "\n";
+} }
+C::read();
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "2:Example\\E|8:Example\\F\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Enum cases and trait constants keep PHP case-sensitive member names.
+#[test]
+fn test_enum_trait_constants_case_sensitive() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+trait T { const a = 1; }
+enum E { use T; case A; }
+echo E::a, "\n";
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "1\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Direct enum constants retain the enum scope when read from another class.
+#[test]
+fn test_enum_trait_constants_own_lexical() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+enum E { case One; const A = 1; const B = self::A + 1; const N = self::class; }
+class C { const A = 99; static function readE() { echo E::B, ":", E::N, "\n"; } }
+C::readE();
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "2:E\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Direct and reflected reads agree about the enum scope from a different caller class.
+#[test]
+fn test_enum_trait_constants_reflection_matches_direct_read() {
+    let out = compile_and_run_capture(r#"<?php
+trait T { public const A = 1; public const B = self::A + 1; public const N = self::class; }
+enum E { use T; case One; }
+class C {
+ const A = 99;
+ static function readE() {
+  echo E::B, ":", E::N, "|";
+  $r = new ReflectionClass(E::class);
+  echo $r->getConstant("B"), ":", $r->getConstant("N"), "\n";
+ }
+}
+C::readE();
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "2:E|2:E\n");
+    // The equivalent reviewed baseline has the same independent Reflection context retention.
+}
+
+/// Trait constants imported by an enum lower the magic constants against the DECLARING trait
+/// (`__TRAIT__`, `__NAMESPACE__`) and rebind `__CLASS__` to the consuming enum; a class reads
+/// them across namespaces (#1827 review).
+#[test]
+fn test_enum_imported_trait_constants_lower_magic_constants() {
+    let out = compile_and_run(
+        r#"<?php
+namespace A;
+trait T { const N = __CLASS__; const TR = __TRAIT__; const NS = __NAMESPACE__; }
+enum E { use T; case One; }
+namespace B;
+class C { public static function read(): string { return \A\E::N . "|" . \A\E::TR . "|" . \A\E::NS; } }
+echo C::read(), "\n";
+"#,
+    );
+    assert_eq!(out, "A\\E|A\\T|A\n");
+}
+
+/// A `parent::` constant in an enum body keeps the declaration compiling (scalar and array
+/// forms); reading it raises PHP's catchable `Error` (#1827 review).
+#[test]
+fn test_enum_parent_constant_defers_to_a_catchable_error() {
+    let out = compile_and_run(
+        r#"<?php
+enum E { case One; const A = parent::X; const B = [parent::Y]; }
+echo "declared\n";
+try { echo E::A; } catch (Error $e) { echo "caught:", $e->getMessage(), "\n"; }
+try { echo count(E::B); } catch (Error $e) { echo "caught:", $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "declared\ncaught:Cannot access \"parent\" when current class scope has no parent\ncaught:Cannot access \"parent\" when current class scope has no parent\n"
+    );
+}
+
+/// Private and protected trait constants imported by an enum stay readable inside the enum and
+/// raise PHP's `Error` outside it (#1827 review).
+#[test]
+fn test_enum_imported_trait_constant_visibility_is_enforced() {
+    let out = compile_and_run(
+        r#"<?php
+trait T {
+    private const A = 1;
+    protected const B = 2;
+    public function readA(): int { return self::A; }
+    public function readB(): int { return self::B; }
+}
+enum E { use T; case One; }
+echo E::One->readA(), E::One->readB(), "\n";
+try { echo E::A, "\n"; } catch (Error $e) { echo "caught:", $e->getMessage(), "\n"; }
+try { echo E::B, "\n"; } catch (Error $e) { echo "caught:", $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "12\ncaught:Cannot access private constant E::A\ncaught:Cannot access protected constant E::B\n"
+    );
+}
+
+/// A declared type on a deferred `parent::` enum constant does not reject the declaration:
+/// PHP compiles it, and only reading the constant raises the catchable `Error` (#1827 review).
+#[test]
+fn test_typed_parent_constant_defers_to_a_catchable_error() {
+    let out = compile_and_run(
+        r#"<?php
+enum E { const int P = parent::X; }
+echo "unused\n";
+try { echo E::P, "\n"; } catch (Error $e) { echo "caught:", $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "unused\ncaught:Cannot access \"parent\" when current class scope has no parent\n"
+    );
+}

@@ -138,6 +138,21 @@ pub(super) fn lower_scoped_constant(ctx: &mut LoweringContext<'_, '_>, receiver:
             Some(expr.span),
         );
     }
+    if ctx.enums.contains_key(normalized_class_name) {
+        if let Some(message) = ctx.classes.get(normalized_class_name).and_then(|info|
+            crate::types::enum_constant_access::visibility_error(
+                normalized_class_name, name, info.constant_visibilities.get(name), ctx.current_class.as_deref(),
+            )) {
+            return crate::ir_lower::stmt::lower_throw_access_error_expr_as(ctx, &message, expr.span, PhpType::Mixed);
+        }
+        if let Some(value) = ctx.scoped_constant_value(normalized_class_name, name) {
+            // Constant evaluation uses the declaration scope, independently of the reader.
+            let caller = ctx.current_class.replace(normalized_class_name.to_string());
+            let result = lower_expr(ctx, &value);
+            ctx.current_class = caller;
+            return result;
+        }
+    }
     if matches!(receiver, StaticReceiver::Static) {
         return lower_late_static_scoped_constant(ctx, name, expr);
     }

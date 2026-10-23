@@ -243,6 +243,7 @@ pub fn flatten_classes(
             }
             StmtKind::EnumDecl {
                 name,
+                cases,
                 implements,
                 trait_uses,
                 methods,
@@ -275,6 +276,12 @@ pub fn flatten_classes(
                         property.span,
                         "Enums cannot use traits with properties",
                     ));
+                    continue;
+                }
+                if let Err(error) = validation::validate_enum_constant_case_collisions(
+                    name, cases, constants, trait_uses, &cache,
+                ) {
+                    errors.extend(error.flatten());
                     continue;
                 }
                 let merged_methods = match merge::merge_methods(

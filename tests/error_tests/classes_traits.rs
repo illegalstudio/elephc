@@ -1019,3 +1019,55 @@ fn test_error_cannot_override_final_error_methods() {
         "Cannot override final method Error::getPrevious",
     );
 }
+
+/// PHP forbids `throw` in a constant expression. A source-written throw must be rejected even
+/// though the checker uses a deferred `Throw` internally for a missing `parent`/`self`
+/// receiver; the compiler-generated one stays lazy (#1827 review).
+#[test]
+fn test_error_source_throw_in_class_constant_initializer() {
+    for source in [
+        "<?php class Probe { const int X = throw new Exception(); }",
+        "<?php class Probe { const X = throw new Exception(); }",
+        "<?php class Probe { const int X = 1 + throw new Exception(); }",
+        "<?php interface Probe { const int X = throw new Exception(); }",
+        "<?php trait Probe { const int X = throw new Exception(); }",
+    ] {
+        expect_error(source, "Constant expression contains invalid operations");
+    }
+}
+
+/// A typed class constant naming a declared top-level constant checks the declared type
+/// against that constant's value, including when the declaration is later in the file (#1827).
+#[test]
+fn test_error_typed_constant_rejects_mismatched_referenced_constant() {
+    expect_error(
+        "<?php class Probe { const int Z = LATER; } const LATER = \"hi\";",
+        "Cannot use string as value for class constant Probe::Z of type int",
+    );
+}
+
+/// A source `throw` nested anywhere in a constant initializer is rejected like PHP, for both
+/// top-level and class constants (#1827 review).
+#[test]
+fn test_error_nested_source_throw_in_constant_initializer() {
+    for source in [
+        "<?php const X = @(throw new Exception());",
+        "<?php const X = [throw new Exception()];",
+        "<?php const X = true ? throw new Exception() : 1;",
+        "<?php const X = 1 + (throw new Exception());",
+        "<?php const X = boom(throw new Exception());",
+        "<?php class Probe { const X = [throw new Exception()]; }",
+    ] {
+        expect_error(source, "Constant expression contains invalid operations");
+    }
+}
+
+/// An array-valued top-level constant cannot satisfy a declared scalar constant, even when it
+/// is only reachable through `define()`; the prescan type must not be treated as `int`.
+#[test]
+fn test_error_typed_constant_rejects_declared_array_constant() {
+    expect_error(
+        "<?php define('F2', [1, 2]); class Probe { const int G = F2; }",
+        "Cannot use array<mixed> as value for class constant Probe::G of type int",
+    );
+}

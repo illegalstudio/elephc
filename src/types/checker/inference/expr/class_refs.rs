@@ -119,6 +119,13 @@ impl Checker {
         let mut current_class = Some(class_name.clone());
         while let Some(cn) = current_class.as_deref() {
             if let Some(info) = self.classes.get(cn) {
+                if self.enums.contains_key(cn)
+                    && crate::types::enum_constant_access::visibility_error(
+                        cn, name, info.constant_visibilities.get(name), self.current_class.as_deref(),
+                    ).is_some() {
+                    // EIR emits the catchable Error before evaluating the inaccessible initializer.
+                    return Ok(PhpType::Mixed);
+                }
                 if let Some(type_expr) = info.constant_types.get(name).cloned() {
                     return self.resolve_type_expr(&type_expr, expr.span);
                 }
@@ -134,6 +141,13 @@ impl Checker {
                         };
                         self.warnings
                             .push(crate::errors::CompileWarning::new(expr.span, &message));
+                    }
+                    if self.enums.contains_key(cn) {
+                        // A public initializer may itself read the enum's private constants.
+                        let caller = self.current_class.replace(cn.to_string());
+                        let result = self.infer_type(&value_expr, &TypeEnv::default());
+                        self.current_class = caller;
+                        return result;
                     }
                     return self.infer_type(&value_expr, &TypeEnv::default());
                 }

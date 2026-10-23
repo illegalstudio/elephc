@@ -1145,6 +1145,15 @@ pub(super) fn check_const_decl(
     value: &Expr,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
+    // PHP forbids `throw` in a constant expression. The class-constant path rejects it in
+    // `validate_constant_declaration`; a top-level `const` needs the same check here, before
+    // its value is inferred (#1827 review).
+    if crate::types::deferred_defaults::contains_throw(value) {
+        return Err(CompileError::new(
+            value.span,
+            "Constant expression contains invalid operations",
+        ));
+    }
     let ty = checker.infer_type(value, env)?;
     checker.constants.entry(name.to_string()).or_insert(ty);
     Ok(())

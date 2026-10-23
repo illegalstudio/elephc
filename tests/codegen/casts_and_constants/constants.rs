@@ -76,3 +76,37 @@ var_dump(\constant('Demo\PHP_EOL'));
         )
     );
 }
+
+/// A typed class constant may name a top-level constant declared later in the file, or one
+/// imported with `use const`: PHP evaluates class-constant initializers lazily, on first read,
+/// and checks the declared type against the referenced constant's value then (#1827 review).
+#[test]
+fn test_typed_class_constant_names_a_declared_or_imported_constant() {
+    let out = compile_and_run(
+        r#"<?php
+namespace A { const XV = 5; }
+namespace B { use const A\XV; class C { const int Y = XV; } }
+namespace {
+    class D { const int Z = LATER; }
+    const LATER = 7;
+    echo B\C::Y, D::Z, "\n";
+}
+"#,
+    );
+    assert_eq!(out, "57\n");
+}
+
+/// An array-valued top-level constant can back a typed array class constant. The prescan maps
+/// an initializer it cannot fold to `Int`, so the declared-type check must not trust that
+/// fallback (#1827 review).
+#[test]
+fn test_typed_array_constant_accepts_a_declared_array_constant() {
+    let out = compile_and_run(
+        r#"<?php
+class C { const array A = LATER; }
+const LATER = [1, 2, 3];
+echo count(C::A), "\n";
+"#,
+    );
+    assert_eq!(out, "3\n");
+}

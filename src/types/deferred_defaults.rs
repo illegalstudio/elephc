@@ -25,6 +25,113 @@ pub(crate) fn source_constant_name(default: &Expr) -> Option<String> {
     Some(format!("{receiver}::{name}"))
 }
 
+/// Returns whether any node of a SOURCE expression is a `throw`.
+///
+/// PHP forbids `throw` in a constant expression. The checker builds its deferred lexical
+/// `Error` as a `Throw` too, but only into a normalized copy: callers that still hold the
+/// source expression use this query to reject a source-written throw on its own.
+///
+/// The walk visits every `ExprKind` that can carry a sub-expression, because a throw may sit
+/// anywhere PHP rejects it (`@(throw ...)`, a call argument, an array element, a match arm).
+/// Closure and arrow-function bodies are deliberately not visited: their throw runs when the
+/// closure is called, not when the constant is evaluated.
+pub(crate) fn contains_throw(expr: &Expr) -> bool {
+    use crate::parser::ast::{CallableTarget, InstanceOfTarget};
+    match &expr.kind {
+        ExprKind::Throw(_) => true,
+        ExprKind::StringLiteral(_) | ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)
+        | ExprKind::BoolLiteral(_) | ExprKind::Null | ExprKind::Variable(_)
+        | ExprKind::ConstRef(_) | ExprKind::This | ExprKind::MagicConstant(_)
+        | ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. }
+        | ExprKind::StaticPropertyAccess { .. } | ExprKind::PreIncrement(_)
+        | ExprKind::PostIncrement(_) | ExprKind::PreDecrement(_)
+        | ExprKind::PostDecrement(_) => false,
+        // A closure body is deferred until the closure runs; its defaults are not.
+        ExprKind::Closure { params, .. } => params
+            .iter()
+            .any(|(_, _, default, _)| default.as_ref().is_some_and(contains_throw)),
+        ExprKind::Negate(inner) | ExprKind::Not(inner) | ExprKind::BitNot(inner)
+        | ExprKind::ErrorSuppress(inner) | ExprKind::Print(inner)
+        | ExprKind::Clone(inner) | ExprKind::Spread(inner) | ExprKind::YieldFrom(inner)
+        | ExprKind::PtrCast { expr: inner, .. } | ExprKind::Cast { expr: inner, .. }
+        | ExprKind::NamedArg { value: inner, .. } | ExprKind::IncludeValue { path: inner, .. }
+        | ExprKind::ObjectClassName { object: inner }
+        | ExprKind::PropertyAccess { object: inner, .. }
+        | ExprKind::NullsafePropertyAccess { object: inner, .. } => contains_throw(inner),
+        ExprKind::DynamicPropertyAccess { object, property }
+        | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+            contains_throw(object) || contains_throw(property)
+        }
+        ExprKind::BufferNew { len, .. } => contains_throw(len),
+        ExprKind::BinaryOp { left, right, .. } => contains_throw(left) || contains_throw(right),
+        ExprKind::NullCoalesce { value, default }
+        | ExprKind::ShortTernary { value, default }
+        | ExprKind::Pipe { value, callable: default } => {
+            contains_throw(value) || contains_throw(default)
+        }
+        ExprKind::Assignment { target, value, result_target, .. } => {
+            contains_throw(target)
+                || contains_throw(value)
+                || result_target.as_deref().is_some_and(contains_throw)
+        }
+        ExprKind::InstanceOf { value, target } => {
+            contains_throw(value)
+                || match target {
+                    InstanceOfTarget::Expr(inner) => contains_throw(inner),
+                    InstanceOfTarget::Name(_) | InstanceOfTarget::Generic(_) => false,
+                }
+        }
+        ExprKind::ArrayLiteral(items) => items.iter().any(contains_throw),
+        ExprKind::ArrayLiteralAssoc(items) => items
+            .iter()
+            .any(|(key, value)| contains_throw(key) || contains_throw(value)),
+        ExprKind::ArrayLiteralMixed(entries) => entries
+            .iter()
+            .any(|entry| entry.exprs().any(contains_throw)),
+        ExprKind::Match { subject, arms, default } => {
+            contains_throw(subject)
+                || arms.iter().any(|(conditions, value)| {
+                    conditions.iter().any(contains_throw) || contains_throw(value)
+                })
+                || default.as_deref().is_some_and(contains_throw)
+        }
+        ExprKind::ArrayAccess { array, index } => contains_throw(array) || contains_throw(index),
+        ExprKind::Ternary { condition, then_expr, else_expr } => {
+            contains_throw(condition) || contains_throw(then_expr) || contains_throw(else_expr)
+        }
+        ExprKind::FunctionCall { args, .. }
+        | ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
+        | ExprKind::NewScopedObject { args, .. }
+        | ExprKind::StaticMethodCall { args, .. }
+        | ExprKind::ClosureCall { args, .. } => args.iter().any(contains_throw),
+        ExprKind::ExprCall { callee, args } => {
+            contains_throw(callee) || args.iter().any(contains_throw)
+        }
+        ExprKind::NewDynamic { name_expr, args } => {
+            contains_throw(name_expr) || args.iter().any(contains_throw)
+        }
+        ExprKind::NewDynamicObject { class_name, args, .. } => {
+            contains_throw(class_name) || args.iter().any(contains_throw)
+        }
+        ExprKind::MethodCall { object, args, .. }
+        | ExprKind::NullsafeMethodCall { object, args, .. } => {
+            contains_throw(object) || args.iter().any(contains_throw)
+        }
+        ExprKind::NullsafeDynamicMethodCall { object, method, args } => {
+            contains_throw(object) || contains_throw(method) || args.iter().any(contains_throw)
+        }
+        ExprKind::FirstClassCallable(target) => match target {
+            CallableTarget::Method { object, .. } => contains_throw(object),
+            CallableTarget::Function(_) | CallableTarget::StaticMethod { .. } => false,
+        },
+        ExprKind::Yield { key, value } => {
+            key.as_deref().is_some_and(contains_throw)
+                || value.as_deref().is_some_and(contains_throw)
+        }
+    }
+}
+
 /// Returns whether any normalized default node can raise a deferred lexical Error.
 pub(crate) fn contains_deferred_error(expr: &Expr) -> bool {
     match &expr.kind {

@@ -17,7 +17,7 @@ use crate::types::{ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo, FunctionSig
 
 use super::super::Checker;
 use super::classes::{
-    collect_attribute_args, collect_attribute_names, resolve_lexical_class_value,
+    collect_attribute_args, collect_attribute_names,
     validate_method_shape,
 };
 use super::validation::build_method_sig;
@@ -525,8 +525,8 @@ pub(crate) fn insert_enum_metadata(
         method_decls.push(method);
     }
 
-    // Bind lexical receivers in both direct and imported constants before their values
-    // are read outside enum scope, using the same normalization as ordinary classes.
+    // Bind lexical receivers before reads escape enum scope, preserving missing-parent
+    // accesses as catchable Errors until their constant expression is evaluated.
     let mut constants = HashMap::new();
     let mut constant_types = HashMap::new();
     let mut constant_visibilities = HashMap::new();
@@ -536,7 +536,7 @@ pub(crate) fn insert_enum_metadata(
     for constant in user_constants {
         constants.insert(
             constant.name.clone(),
-            resolve_lexical_class_value(&constant.value, name, None)?,
+            super::classes::normalize_lexical_default_in_scope(&constant.value, Some(name), None)?,
         );
         if let Some(type_expr) = &constant.type_expr {
             constant_types.insert(

@@ -913,9 +913,17 @@ Rules:
   not the collector parameter's position or name. Named variadic entries preserve
   their keys without increasing the positional argument count. A method's returned
   reference remains usable after unpacking.
-- Enums can `use` traits that provide methods, including `insteadof` and `as`
-  adaptations. Traits with properties are rejected because PHP enums cannot have
-  properties.
+- Enums can `use` traits that provide methods and constants, including `insteadof`
+  and `as` adaptations. A trait constant is readable as `EnumName::CONST` and listed
+  by `ReflectionClass::getConstants()` after the enum's own cases and constants.
+  Traits with properties are rejected because PHP enums cannot have properties.
+  Imported constant values bind `self::` and `__CLASS__` to each consuming enum;
+  `__TRAIT__`, `__NAMESPACE__`, `__FUNCTION__`, file paths and line numbers retain
+  their declaration context. A constant cannot share the exact name of a case.
+  Private and protected constants are readable within the enum; outside reads
+  raise a catchable `Error`. A missing `parent::` in a constant initializer raises
+  its catchable `Error` only if evaluation reaches that access, so an unused
+  declaration or an untaken branch does not fail.
 - `self`/`static` type hints in enum methods resolve to the enum.
 
 Enum constants are readable both inside the enum (`self::CONST`) and from outside it (`EnumName::CONST`). Enum method bodies are type-checked like class method bodies, so a mismatched return type or an undefined variable inside an enum method is reported.

@@ -25,6 +25,8 @@ mod array_cast;
 pub(crate) mod call_args;
 /// Shared detection of lazy lexical errors in normalized default expression trees.
 pub(crate) mod deferred_defaults;
+/// Lexical visibility rules shared by enum constant checking and lowering.
+pub(crate) mod enum_constant_access;
 /// Fiber/stack introspection for async and coroutine analysis.
 pub(crate) mod fibers;
 /// C FFI type mapping utilities.
