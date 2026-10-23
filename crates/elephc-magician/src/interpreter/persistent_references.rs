@@ -90,6 +90,10 @@ pub(in crate::interpreter) fn persistent_reference_target(mut target: EvalRefere
                 let array_target = persistent_reference_target(*array_target)?;
                 return Ok(EvalReferenceTarget::NestedArrayElement { array_target: Box::new(array_target), index });
             },
+            EvalReferenceTarget::PersistentArrayElement { array_target, key } => {
+                let array_target = persistent_reference_target(*array_target)?;
+                return Ok(EvalReferenceTarget::PersistentArrayElement { array_target: Box::new(array_target), key });
+            },
             _ => return Ok(target),
         }
     }
