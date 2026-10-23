@@ -45,45 +45,58 @@ pub fn emit_pr_append(emitter: &mut Emitter) {
     emitter.comment("--- runtime: pr_append ---");
     emitter.label_global("__rt_pr_append");
 
-    // -- set up a frame and spill the incoming buf/len across the offset loads --
-    emitter.instruction("sub sp, sp, #32");                                     // allocate the append-helper frame
-    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
-    emitter.instruction("mov x29, sp");                                         // establish the append-helper frame pointer
-    emitter.instruction("str x0, [sp, #0]");                                    // save the source byte pointer
-    emitter.instruction("str x1, [sp, #8]");                                    // save the source byte length
+    // -- frame: [0]=buf, [8]=len, [16]=len copy, [24]=new cap, [32]=offset, [48]=fp/lr --
+    emitter.instruction("sub sp, sp, #64");                                     // allocate the append-helper frame
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #48");                                    // establish the append-helper frame pointer
+    emitter.instruction("stp x0, x1, [sp]");                                    // save the source byte pointer and length
 
-    // -- load the current append offset --
-    abi::emit_symbol_address(emitter, "x9", "_print_r_off");                    // materialize the address of the append-offset global
-    emitter.instruction("ldr x10, [x9]");                                       // load the current append offset
-    abi::emit_symbol_address(emitter, "x11", "_print_r_buf");                   // materialize the base address of the capture buffer
+    // -- load the current capture state --
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_print_r_base", 0);
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_print_r_off", 0);
+    abi::emit_load_symbol_to_reg(emitter, "x11", "_print_r_cap", 0);
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_print_r_base", 0);            // reload the base after the symbol-load helper reused its scratch register
+    emitter.instruction("ldr x12, [sp, #8]");                                   // reload the requested byte length
+    emitter.instruction("adds x13, x10, x12");                                  // end offset after this append
+    let len_ok = "__rt_pr_append_len_ok";
+    emitter.instruction(&format!("b.cc {}", len_ok));                           // a representable append continues to the capacity check
+    emitter.instruction("b __rt_alloc_overflow");                               // a wrapped append can never fit any buffer
+    emitter.label(len_ok);
+    emitter.instruction("cmp x13, x11");                                        // does the append still fit the current capture block?
+    emitter.instruction("b.ls __rt_pr_append_copy");                            // copy directly while the block has room
 
-    // -- clamp the requested length to the remaining buffer capacity --
-    emitter.instruction("mov x12, #65536");                                     // total capture-buffer capacity in bytes
-    emitter.instruction("sub x12, x12, x10");                                   // remaining capacity = capacity - current offset
-    emitter.instruction("ldr x13, [sp, #8]");                                   // reload the requested byte length
-    emitter.instruction("cmp x13, x12");                                        // does the request exceed the remaining capacity?
-    emitter.instruction("csel x13, x12, x13, hi");                              // clamp the copy length to the remaining capacity
-    emitter.instruction("str x13, [sp, #8]");                                   // save the clamped byte length
+    // -- grow the capture block and publish the new base/capacity --
+    emitter.instruction("str x12, [sp, #16]");                                  // preserve the requested length across the grow call
+    emitter.instruction("str x10, [sp, #32]");                                  // preserve the current offset across the grow call
+    emitter.instruction("lsl x2, x11, #1");                                     // start with double the current capacity
+    emitter.instruction("cmp x2, x13");                                         // is the doubled capacity enough for this append?
+    emitter.instruction("csel x2, x13, x2, lo");                                // otherwise grow straight to the required total
+    emitter.instruction("str x2, [sp, #24]");                                   // preserve the new capacity across the grow call
+    emitter.instruction("mov x0, x9");                                          // pass the current base
+    emitter.instruction("mov x1, x10");                                         // pass the bytes already captured
+    emitter.instruction("bl __rt_concat_grow");                                 // allocate, copy, and release the old capture block
+    abi::emit_store_reg_to_symbol(emitter, "x0", "_print_r_base", 0);
+    emitter.instruction("ldr x2, [sp, #24]");                                   // reload the new capacity
+    abi::emit_store_reg_to_symbol(emitter, "x2", "_print_r_cap", 0);
+    emitter.instruction("mov x9, x0");                                          // new capture base
+    emitter.instruction("ldr x10, [sp, #32]");                                  // reload the current offset
+    emitter.instruction("ldr x12, [sp, #16]");                                  // reload the requested length
 
-    // -- copy len bytes from buf to buf_base + off (byte loop) --
+    // -- copy len bytes from the source into the capture block --
+    emitter.label("__rt_pr_append_copy");
+    emitter.instruction("ldr x11, [sp, #0]");                                   // reload the source byte pointer
     emitter.label("__rt_pr_append_loop");
-    emitter.instruction("ldr x12, [sp, #8]");                                   // reload the remaining byte count
     emitter.instruction("cbz x12, __rt_pr_append_done");                        // no more bytes → finish
-    emitter.instruction("ldr x13, [sp, #0]");                                   // reload the current source cursor
-    emitter.instruction("ldrb w14, [x13]");                                     // load the next source byte
-    emitter.instruction("strb w14, [x11, x10]");                                // store the byte at buf_base + off
+    emitter.instruction("ldrb w13, [x11], #1");                                 // load the next source byte
+    emitter.instruction("strb w13, [x9, x10]");                                 // store it at capture_base + offset
     emitter.instruction("add x10, x10, #1");                                    // advance the destination offset
-    emitter.instruction("add x13, x13, #1");                                    // advance the source cursor
-    emitter.instruction("str x13, [sp, #0]");                                   // save the advanced source cursor
     emitter.instruction("sub x12, x12, #1");                                    // decrement the remaining count
-    emitter.instruction("str x12, [sp, #8]");                                   // save the decremented remaining count
     emitter.instruction("b __rt_pr_append_loop");                               // continue copying
 
     emitter.label("__rt_pr_append_done");
-    abi::emit_symbol_address(emitter, "x9", "_print_r_off");                    // materialize the address of the append-offset global
-    emitter.instruction("str x10, [x9]");                                       // store the advanced append offset
-    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #32");                                     // release the append-helper frame
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_print_r_off", 0);
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the append-helper frame
     emitter.instruction("ret");                                                 // return to caller
 }
 
@@ -95,40 +108,57 @@ fn emit_pr_append_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // save the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the append-helper frame pointer
-    emitter.instruction("sub rsp, 32");                                         // allocate the append-helper frame
+    emitter.instruction("sub rsp, 64");                                         // allocate the append-helper frame
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the source byte pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the source byte length
 
-    abi::emit_symbol_address(emitter, "r9", "_print_r_off");                    // materialize the address of the append-offset global
-    emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current append offset
-    abi::emit_symbol_address(emitter, "r11", "_print_r_buf");                   // materialize the base address of the capture buffer
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_print_r_base", 0);
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_print_r_off", 0);
+    abi::emit_load_symbol_to_reg(emitter, "r11", "_print_r_cap", 0);
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_print_r_base", 0);            // reload the base after the symbol-load helper reused its scratch register
+    emitter.instruction("mov rax, r10");                                        // copy the offset before computing the end
+    emitter.instruction("add rax, rsi");                                        // end offset after this append
+    let len_ok = "__rt_pr_append_len_ok_x86";
+    emitter.instruction(&format!("jnc {}", len_ok));                            // a representable append continues to the capacity check
+    emitter.instruction("jmp __rt_alloc_overflow");                             // a wrapped append can never fit any buffer
+    emitter.label(len_ok);
+    emitter.instruction("cmp rax, r11");                                        // does the append still fit the current capture block?
+    emitter.instruction("jbe __rt_pr_append_copy_x86");                         // copy directly while the block has room
 
-    // -- clamp the requested length to the remaining buffer capacity --
-    emitter.instruction("mov rcx, 65536");                                      // total capture-buffer capacity in bytes
-    emitter.instruction("sub rcx, r10");                                        // remaining capacity = capacity - current offset
-    emitter.instruction("cmp QWORD PTR [rbp - 16], rcx");                       // does the request exceed the remaining capacity?
-    emitter.instruction("jbe __rt_pr_append_len_ok_x86");                       // request fits → keep it
-    emitter.instruction("mov QWORD PTR [rbp - 16], rcx");                       // clamp the copy length to the remaining capacity
-    emitter.label("__rt_pr_append_len_ok_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // preserve the requested length
+    emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // preserve the current offset
+    emitter.instruction("mov rsi, r11");                                        // start with double the current capacity
+    emitter.instruction("shl rsi, 1");                                          // double it
+    emitter.instruction("cmp rsi, rax");                                        // is the doubled capacity enough?
+    emitter.instruction("jae __rt_pr_append_cap_ready_x86");                    // keep the doubled capacity when it is
+    emitter.instruction("mov rsi, rax");                                        // otherwise grow straight to the required total
+    emitter.label("__rt_pr_append_cap_ready_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 40], rsi");                       // preserve the new capacity
+    emitter.instruction("mov rax, r9");                                         // pass the current base
+    emitter.instruction("mov rdi, r10");                                        // pass the bytes already captured
+    emitter.instruction("call __rt_concat_grow");                               // allocate, copy, and release the old capture block
+    abi::emit_store_reg_to_symbol(emitter, "rax", "_print_r_base", 0);
+    emitter.instruction("mov r9, rax");                                         // new capture base
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the new capacity
+    abi::emit_store_reg_to_symbol(emitter, "rax", "_print_r_cap", 0);
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the current offset
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // reload the requested length
 
+    emitter.label("__rt_pr_append_copy_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the source byte pointer
     emitter.label("__rt_pr_append_loop_x86");
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // reload the remaining byte count
-    emitter.instruction("test rcx, rcx");                                       // any bytes left to copy?
+    emitter.instruction("test rsi, rsi");                                       // any bytes left to copy?
     emitter.instruction("jz __rt_pr_append_done_x86");                          // no more bytes → finish
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the current source cursor
-    emitter.instruction("mov dl, BYTE PTR [rax]");                              // load the next source byte
-    emitter.instruction("mov BYTE PTR [r11 + r10], dl");                        // store the byte at buf_base + off
+    emitter.instruction("mov al, BYTE PTR [rdi]");                              // load the next source byte
+    emitter.instruction("mov BYTE PTR [r9 + r10], al");                         // store it at capture_base + offset
     emitter.instruction("add r10, 1");                                          // advance the destination offset
-    emitter.instruction("add rax, 1");                                          // advance the source cursor
-    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the advanced source cursor
-    emitter.instruction("sub rcx, 1");                                          // decrement the remaining count
-    emitter.instruction("mov QWORD PTR [rbp - 16], rcx");                       // save the decremented remaining count
+    emitter.instruction("add rdi, 1");                                          // advance the source cursor
+    emitter.instruction("sub rsi, 1");                                          // decrement the remaining count
     emitter.instruction("jmp __rt_pr_append_loop_x86");                         // continue copying
 
     emitter.label("__rt_pr_append_done_x86");
-    abi::emit_symbol_address(emitter, "r9", "_print_r_off");                    // materialize the address of the append-offset global
-    emitter.instruction("mov QWORD PTR [r9], r10");                             // store the advanced append offset
-    emitter.instruction("add rsp, 32");                                         // release the append-helper frame
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_print_r_off", 0);
+    emitter.instruction("add rsp, 64");                                         // release the append-helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to caller
 }
@@ -255,7 +285,7 @@ pub fn emit_pr_finish(emitter: &mut Emitter) {
     // -- load the captured length and buffer pointer into the str_persist ABI --
     abi::emit_symbol_address(emitter, "x9", "_print_r_off");                    // materialize the address of the append-offset global
     emitter.instruction("ldr x2, [x9]");                                        // load the captured byte length into the string-length result reg
-    abi::emit_symbol_address(emitter, "x1", "_print_r_buf");                    // load the capture-buffer address into the string-pointer result reg
+    abi::emit_load_symbol_to_reg(emitter, "x1", "_print_r_base", 0);            // load the current capture-buffer address into the string-pointer result reg
     emitter.instruction("bl __rt_str_persist");                                 // persist the buffer as an owned heap string → x1=ptr, x2=len
 
     // -- reset the capture state (x1/x2 result survives scratch stores) --
@@ -263,6 +293,10 @@ pub fn emit_pr_finish(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [x9]");                                       // reset the append offset to 0
     abi::emit_symbol_address(emitter, "x9", "_print_r_mode");                   // materialize the address of the capture-mode flag
     emitter.instruction("str xzr, [x9]");                                       // reset the capture-mode flag to 0 (restore stdout mode)
+    emitter.instruction("mov x10, #65536");                                     // restore the inline capture capacity
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_print_r_cap", 0);
+    abi::emit_symbol_address(emitter, "x9", "_print_r_buf");                    // restore the inline capture buffer
+    abi::emit_store_reg_to_symbol(emitter, "x9", "_print_r_base", 0);
 
     emitter.instruction("ldp x29, x30, [sp], #16");                             // restore frame pointer and return address
     emitter.instruction("ret");                                                 // return with x1=owned string ptr, x2=length
@@ -279,13 +313,16 @@ fn emit_pr_finish_linux_x86_64(emitter: &mut Emitter) {
 
     abi::emit_symbol_address(emitter, "r11", "_print_r_off");                   // materialize the address of the append-offset global
     emitter.instruction("mov rdx, QWORD PTR [r11]");                            // load the captured byte length into the string-length result reg
-    abi::emit_symbol_address(emitter, "rax", "_print_r_buf");                   // load the capture-buffer address into the string-pointer result reg
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_print_r_base", 0);           // load the current capture-buffer address into the string-pointer result reg
     emitter.instruction("call __rt_str_persist");                               // persist the buffer as an owned heap string → rax=ptr, rdx=len
 
     abi::emit_symbol_address(emitter, "r11", "_print_r_off");                   // materialize the address of the append-offset global
     emitter.instruction("mov QWORD PTR [r11], 0");                              // reset the append offset to 0
     abi::emit_symbol_address(emitter, "r11", "_print_r_mode");                  // materialize the address of the capture-mode flag
     emitter.instruction("mov QWORD PTR [r11], 0");                              // reset the capture-mode flag to 0 (restore stdout mode)
+    abi::emit_symbol_address(emitter, "r10", "_print_r_buf");                   // restore the inline capture buffer
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_print_r_base", 0);
+    abi::emit_store_imm_to_symbol(emitter, "_print_r_cap", 0, 65536);
 
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return with rax=owned string ptr, rdx=length

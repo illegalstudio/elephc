@@ -302,6 +302,8 @@ pub fn emit_vd_obj_count(emitter: &mut Emitter) {
 
     emitter.instruction("mov x1, x0");                                          // keep the object pointer for slot addressing
     emitter.instruction("ldr x9, [x0]");                                        // load the runtime class id from the object header
+    emitter.instruction("cmn x9, #2");                                          // class id -2 marks an incomplete object
+    emitter.instruction("b.eq __rt_vd_obj_count_incomplete");                   // count the synthetic name plus opaque properties
     abi::emit_symbol_address(emitter, "x10", "_class_gc_desc_count");           // resolve the class-id table extent
     emitter.instruction("ldr x10, [x10]");                                      // load the number of registered class ids
     emitter.instruction("cmp x9, x10");                                         // is the class id within the descriptor table?
@@ -339,6 +341,16 @@ pub fn emit_vd_obj_count(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x5");                                          // return the initialized property count
     emitter.instruction("ret");                                                 // return to caller
 
+    emitter.label("__rt_vd_obj_count_incomplete");
+    emitter.instruction("ldr x9, [x1, #24]");                                   // opaque property hash
+    emitter.instruction("cbz x9, __rt_vd_obj_count_incomplete_one");            // no properties still has the synthetic name
+    emitter.instruction("ldr x0, [x9]");                                        // property hash entry count
+    emitter.instruction("add x0, x0, #1");                                      // plus __PHP_Incomplete_Class_Name
+    emitter.instruction("ret");                                                 // return the complete count
+    emitter.label("__rt_vd_obj_count_incomplete_one");
+    emitter.instruction("mov x0, #1");                                          // just the synthetic name row
+    emitter.instruction("ret");                                                 // return to caller
+
     emitter.label("__rt_vd_obj_count_none");
     emitter.instruction("mov x0, #0");                                          // an unknown class dumps an empty body
     emitter.instruction("ret");                                                 // return to caller
@@ -351,6 +363,8 @@ fn emit_vd_obj_count_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_vd_obj_count");
 
     emitter.instruction("mov r9, QWORD PTR [rdi]");                             // load the runtime class id from the object header
+    emitter.instruction("cmp r9, -2");                                          // class id -2 marks an incomplete object
+    emitter.instruction("je __rt_vd_obj_count_incomplete_x86");                 // count the synthetic name plus opaque properties
     abi::emit_symbol_address(emitter, "r10", "_class_gc_desc_count");           // resolve the class-id table extent
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the number of registered class ids
     emitter.instruction("cmp r9, r10");                                         // is the class id within the descriptor table?
@@ -385,6 +399,17 @@ fn emit_vd_obj_count_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rax, QWORD PTR [r10]");                            // count every dynamic property too
     emitter.label("__rt_vd_obj_count_ret_x86");
     emitter.instruction("ret");                                                 // return the initialized property count in rax
+
+    emitter.label("__rt_vd_obj_count_incomplete_x86");
+    emitter.instruction("mov rax, QWORD PTR [rdi + 24]");                       // opaque property hash
+    emitter.instruction("test rax, rax");                                       // no properties?
+    emitter.instruction("jz __rt_vd_obj_count_incomplete_one_x86");             // the synthetic name row still exists
+    emitter.instruction("mov rax, QWORD PTR [rax]");                            // property hash entry count
+    emitter.instruction("add rax, 1");                                          // plus __PHP_Incomplete_Class_Name
+    emitter.instruction("ret");                                                 // return the complete count
+    emitter.label("__rt_vd_obj_count_incomplete_one_x86");
+    emitter.instruction("mov eax, 1");                                          // just the synthetic name row
+    emitter.instruction("ret");                                                 // return to caller
 
     emitter.label("__rt_vd_obj_count_none_x86");
     emitter.instruction("xor rax, rax");                                        // an unknown class dumps an empty body
@@ -422,6 +447,8 @@ pub fn emit_var_dump_open_object(emitter: &mut Emitter) {
     // -- class name from the shared class-id → (name ptr, name len) table --
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the object pointer
     emitter.instruction("ldr x9, [x9]");                                        // load the runtime class id from the object header
+    emitter.instruction("cmn x9, #2");                                          // class id -2 marks an incomplete object
+    emitter.instruction("b.eq __rt_vd_open_obj_incomplete");                    // render the synthetic internal class name
     abi::emit_symbol_address(emitter, "x10", "_class_name_count");              // resolve the class-name table extent
     emitter.instruction("ldr x10, [x10]");                                      // load the number of named class ids
     emitter.instruction("cmp x9, x10");                                         // is the class id within the name table?
@@ -434,6 +461,10 @@ pub fn emit_var_dump_open_object(emitter: &mut Emitter) {
     emitter.label("__rt_vd_open_obj_anon");
     abi::emit_symbol_address(emitter, "x1", "_class_name_missing");             // fall back to the empty class-name slot
     emitter.instruction("mov x2, #0");                                          // a zero-length write emits nothing
+    emitter.instruction("b __rt_vd_open_obj_name");                             // write the empty name slot
+    emitter.label("__rt_vd_open_obj_incomplete");
+    abi::emit_symbol_address(emitter, "x1", "_incomplete_class_name");          // __PHP_Incomplete_Class
+    emitter.instruction("mov x2, #22");                                         // byte length of __PHP_Incomplete_Class
     emitter.label("__rt_vd_open_obj_name");
     emitter.instruction("bl __rt_vd_write");                                    // write the class name
 
@@ -483,6 +514,8 @@ fn emit_var_dump_open_object_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the object pointer
     emitter.instruction("mov r9, QWORD PTR [r9]");                              // load the runtime class id from the object header
+    emitter.instruction("cmp r9, -2");                                          // class id -2 marks an incomplete object
+    emitter.instruction("je __rt_vd_open_obj_incomplete_x86");                  // render the synthetic internal class name
     abi::emit_symbol_address(emitter, "r10", "_class_name_count");              // resolve the class-name table extent
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the number of named class ids
     emitter.instruction("cmp r9, r10");                                         // is the class id within the name table?
@@ -496,6 +529,10 @@ fn emit_var_dump_open_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_vd_open_obj_anon_x86");
     abi::emit_symbol_address(emitter, "rsi", "_class_name_missing");            // fall back to the empty class-name slot
     emitter.instruction("xor rdx, rdx");                                        // a zero-length write emits nothing
+    emitter.instruction("jmp __rt_vd_open_obj_name_x86");                       // write the empty name slot
+    emitter.label("__rt_vd_open_obj_incomplete_x86");
+    abi::emit_symbol_address(emitter, "rsi", "_incomplete_class_name");         // __PHP_Incomplete_Class
+    emitter.instruction("mov edx, 22");                                         // byte length of __PHP_Incomplete_Class
     emitter.label("__rt_vd_open_obj_name_x86");
     emitter.instruction("call __rt_vd_write");                                  // write the class name
 
@@ -724,6 +761,9 @@ pub fn emit_var_dump_object(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #64");                                    // establish the object-walk frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the object pointer
+    emitter.instruction("ldr x9, [x0]");                                        // object header class id
+    emitter.instruction("cmn x9, #2");                                          // class id -2 marks an incomplete object
+    emitter.instruction("b.eq __rt_vd_obj_incomplete");                         // dump the projected name and properties
 
     emitter.instruction("bl __rt_vd_obj_desc");                                 // x0 = this class's var_dump descriptor
     emitter.instruction("str x0, [sp, #8]");                                    // save the descriptor pointer
@@ -792,6 +832,18 @@ pub fn emit_var_dump_object(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_obj_dump_dyn_props");                          // x0 = dynamic-property hash, or 0
     emitter.instruction("cbz x0, __rt_vd_obj_exit");                            // no dynamic properties to append
     emitter.instruction("bl __rt_var_dump_hash");                               // emit one `["name"]=>` block per dynamic property
+    emitter.instruction("b __rt_vd_obj_exit");                                  // skip the incomplete-object projection
+
+    emitter.label("__rt_vd_obj_incomplete");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
+    emitter.instruction("mov x1, #0");                                          // get_object_vars-style visibility mode
+    emitter.instruction("mov x2, #-1");                                         // global lexical scope
+    emitter.instruction("bl __rt_object_to_hash");                              // project the synthetic name and opaque properties
+    emitter.instruction("str x0, [sp, #48]");                                   // preserve the projected hash for release
+    emitter.instruction("bl __rt_var_dump_hash");                               // dump the projected rows
+    emitter.instruction("ldr x0, [sp, #48]");                                   // reload the projected hash
+    emitter.instruction("bl __rt_hash_free_deep");                              // release the throwaway projection
+    emitter.instruction("b __rt_vd_obj_exit");                                  // finish the object body
 
     emitter.label("__rt_vd_obj_exit");
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
@@ -811,6 +863,9 @@ fn emit_var_dump_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish the object-walk frame pointer
     emitter.instruction("sub rsp, 64");                                         // allocate the object-walk frame
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the object pointer
+    emitter.instruction("mov r9, QWORD PTR [rdi]");                             // object header class id
+    emitter.instruction("cmp r9, -2");                                          // class id -2 marks an incomplete object
+    emitter.instruction("je __rt_vd_obj_incomplete_x86");                       // dump the projected name and properties
 
     emitter.instruction("call __rt_vd_obj_desc");                               // rax = this class's var_dump descriptor
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the descriptor pointer
@@ -872,6 +927,19 @@ fn emit_var_dump_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_vd_obj_exit_x86");                             // no dynamic properties to append
     emitter.instruction("mov rdi, rax");                                        // dynamic-property hash → hash walker
     emitter.instruction("call __rt_var_dump_hash");                             // emit one `["name"]=>` block per dynamic property
+    emitter.instruction("jmp __rt_vd_obj_exit_x86");                            // skip the incomplete-object projection
+
+    emitter.label("__rt_vd_obj_incomplete_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // object pointer for the x86_64 projection ABI
+    emitter.instruction("xor edx, edx");                                        // get_object_vars-style visibility mode
+    emitter.instruction("mov rcx, -1");                                         // global lexical scope
+    emitter.instruction("call __rt_object_to_hash");                            // project the synthetic name and opaque properties
+    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // preserve the projected hash for release
+    emitter.instruction("mov rdi, rax");                                        // pass the projected hash to the walker
+    emitter.instruction("call __rt_var_dump_hash");                             // dump the projected rows
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // reload the projected hash into the free ABI
+    emitter.instruction("call __rt_hash_free_deep");                            // release the throwaway projection
+    emitter.instruction("jmp __rt_vd_obj_exit_x86");                            // finish the object body
 
     emitter.label("__rt_vd_obj_exit_x86");
     emitter.instruction("add rsp, 64");                                         // release the object-walk frame

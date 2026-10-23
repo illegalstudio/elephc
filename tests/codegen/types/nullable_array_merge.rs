@@ -170,6 +170,19 @@ bools(true, 3); bools(true, 0); bools(false, 3);
 "#, "NULL\nNULL\nint(7)\nint(7)\nint(8)\nint(8)\nNULL\nNULL\nstring(0) \"\"\nstring(0) \"\"\nstring(7) \"default\"\nstring(7) \"default\"\nNULL\nNULL\nfloat(1.25)\nfloat(1.25)\nfloat(2.5)\nfloat(2.5)\nNULL\nNULL\nbool(false)\nbool(false)\nbool(true)\nbool(true)\n", 8);
 }
 
+/// A bare typed-array miss stays null while its explicit string cast becomes empty.
+#[test]
+fn test_nullable_array_merge_typed_string_miss_and_cast() {
+    assert_merge(r#"<?php
+function check(int $key): void {
+    $values = [""];
+    var_dump($values[$key]);
+    var_dump((string)$values[$key]);
+}
+check(3); check(0);
+"#, "NULL\nstring(0) \"\"\nstring(0) \"\"\nstring(0) \"\"\n", 2);
+}
+
 /// Repeated object merges preserve string payloads and release each source and result owner.
 #[test]
 fn test_nullable_array_merge_owned_object_loop() {

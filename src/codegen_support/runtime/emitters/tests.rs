@@ -478,3 +478,103 @@ fn test_array_slice_str_is_emitted_for_every_supported_target() {
         );
     }
 }
+
+/// The incremental JSON and serialize encoders call the shared scratch-capacity guard and
+/// keep each target's instruction set out of the other target's output.
+///
+/// A misplaced guard is not cosmetic: an x86 `mov rdi, ...` line inside the AArch64 runtime
+/// makes every program that uses `serialize()` fail to assemble, so this pins both the guard
+/// symbol and the target split for the three encoders that write incrementally.
+#[test]
+fn serialize_and_json_encoders_emit_the_capacity_guard_for_their_own_architecture() {
+    for name in ["macos-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let aarch64 = name.contains("aarch64");
+        let mut object = Emitter::new(target);
+        crate::codegen_support::runtime::system::emit_json_encode_object(&mut object);
+        let object = object.output();
+        let mut array = Emitter::new(target);
+        crate::codegen_support::runtime::system::emit_json_encode_array_dynamic(&mut array);
+        let array = array.output();
+        let mut serialize = Emitter::new(target);
+        crate::codegen_support::runtime::system::emit_serialize(&mut serialize);
+        let serialize = serialize.output();
+        for (what, asm) in [("json object", object), ("json array", array), ("serialize", serialize)] {
+            assert!(
+                asm.contains("__rt_concat_headroom"),
+                "{name} {what}: encoder never calls the shared capacity guard"
+            );
+            if aarch64 {
+                assert!(
+                    !asm.contains("QWORD PTR") && !asm.contains("rbp"),
+                    "{name} {what}: x86 instruction leaked into AArch64 output: {}",
+                    asm.lines().find(|line| line.contains("QWORD PTR") || line.contains("rbp")).unwrap_or("")
+                );
+            } else {
+                assert!(
+                    !asm.contains(" x11") && !asm.contains("x29"),
+                    "{name} {what}: AArch64 instruction leaked into x86_64 output"
+                );
+            }
+        }
+    }
+}
+
+/// The capacity guard and its fatal exit are emitted for every supported architecture.
+#[test]
+fn concat_headroom_guard_is_emitted_for_every_architecture() {
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let mut emitter = Emitter::new(target);
+        emit_runtime(&mut emitter, RuntimeFeatures::all());
+        let asm = emitter.output();
+        assert!(asm.contains("__rt_concat_headroom:"), "{name}: missing headroom guard");
+        assert!(asm.contains("__rt_concat_overflow:"), "{name}: missing capacity fatal exit");
+        assert!(asm.contains("_concat_overflow_msg"), "{name}: missing capacity diagnostic");
+    }
+}
+
+/// The complete x86_64 runtime must cross-assemble after the growable string, C-string, and
+/// callback-output changes. This catches Intel-syntax, register, and relocation mistakes that
+/// the AArch64-only local executables cannot exercise.
+#[test]
+fn x86_64_runtime_cross_assembles() {
+    let target = Target::parse("linux-x86_64").unwrap();
+    let mut emitter = Emitter::new(target);
+    emitter.concat_capacity = 8 * 1024 * 1024;
+    emitter.emit_text_prelude();
+    emit_runtime(&mut emitter, RuntimeFeatures::all());
+    let mut asm = emitter.output();
+    asm.push('\n');
+    asm.push_str(&crate::codegen_support::runtime::emit_runtime_data_fixed(
+        8 * 1024 * 1024,
+        target,
+        crate::php_version::PhpVersion::Php85,
+    ));
+    // CI's linux-aarch64 runner does not install clang; the test still runs on
+    // linux-x86_64 and macOS. Skip rather than turn a missing cross tool into a
+    // failure that hides the runtime defects this test is meant to catch.
+    let clang_available = std::process::Command::new("clang")
+        .arg("--version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false);
+    if !clang_available {
+        eprintln!("clang unavailable; skipping x86_64 runtime cross-assembly");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("elephc-x86-asm-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("rt.s");
+    let obj = dir.join("rt.o");
+    std::fs::write(&src, asm).unwrap();
+    let status = std::process::Command::new("clang")
+        .args(["-target", "x86_64-unknown-linux-gnu", "-c"])
+        .arg(&src)
+        .arg("-o")
+        .arg(&obj)
+        .status()
+        .expect("clang available");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(status.success(), "x86_64 runtime must cross-assemble");
+}

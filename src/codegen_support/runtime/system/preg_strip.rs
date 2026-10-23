@@ -58,6 +58,11 @@ pub(crate) fn emit_preg_strip(emitter: &mut Emitter) {
 
     // -- check supported PCRE2 POSIX-wrapper flags --
     emitter.instruction("ldr x3, [sp, #16]");                                   // load the accumulated PCRE2 POSIX compile flags
+    emitter.instruction("cmp w9, #101");                                        // check for the removed 'e' eval modifier
+    emitter.instruction("b.ne __rt_preg_strip_flag_i");                         // continue with the supported modifiers
+    emitter.instruction("orr x3, x3, #0x40000000");                             // mark the pattern invalid: PHP 8 rejects /e
+    emitter.instruction("b __rt_preg_strip_save_flag");                         // keep scanning for the closing delimiter
+    emitter.label("__rt_preg_strip_flag_i");
     emitter.instruction("cmp w9, #105");                                        // check for 'i' case-insensitive modifier
     emitter.instruction("b.ne __rt_preg_strip_flag_m");                         // try the next supported regex modifier
     emitter.instruction("orr x3, x3, #1");                                      // add REG_ICASE for case-insensitive matching
@@ -128,6 +133,11 @@ fn emit_preg_strip_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("movzx r8d, BYTE PTR [rax + r9]");                      // load the current reverse-scan byte from the slash-delimited pattern literal
     emitter.instruction("cmp r8d, 47");                                         // did the reverse scan find the closing '/' delimiter?
     emitter.instruction("je __rt_preg_strip_found_linux_x86_64");               // stop once the closing slash delimiter is located
+    emitter.instruction("cmp r8d, 101");                                        // detect the removed 'e' eval modifier while walking backward
+    emitter.instruction("jne __rt_preg_strip_flag_i_linux_x86_64");             // continue with the supported modifiers
+    emitter.instruction("or rcx, 0x40000000");                                  // mark the pattern invalid: PHP 8 rejects /e
+    emitter.instruction("jmp __rt_preg_strip_skip_flag_linux_x86_64");          // keep scanning for the closing delimiter
+    emitter.label("__rt_preg_strip_flag_i_linux_x86_64");
     emitter.instruction("cmp r8d, 105");                                        // detect the trailing 'i' case-insensitive modifier while walking backward
     emitter.instruction("jne __rt_preg_strip_flag_m_linux_x86_64");             // try the next supported regex modifier
     emitter.instruction("or rcx, 1");                                           // record REG_ICASE for PCRE2 POSIX compilation

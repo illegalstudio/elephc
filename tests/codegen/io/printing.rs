@@ -384,13 +384,12 @@ echo print_r([1, 2], $flag);
     assert_eq!(out, "Array\n(\n    [0] => 1\n    [1] => 2\n)\n");
 }
 
-/// Verifies `print_r($value, true)` clamps the capture at the 64 KiB buffer size
-/// instead of overflowing into adjacent runtime data. PHP would return all 70000
-/// bytes; elephc truncates at 65536 (documented safety cap of the fixed buffer).
-/// The prefix must survive intact — a corrupted capture or clobbered BSS would
-/// change the rendered bytes or crash the binary.
+/// Verifies `print_r($value, true)` grows its capture past the inline 64 KiB block.
+/// PHP returns all 70000 bytes; the runtime must move the capture into owned storage
+/// instead of truncating or overflowing into adjacent runtime data. The whole payload,
+/// including bytes beyond the old 64 KiB boundary, must survive intact.
 #[test]
-fn test_print_r_return_clamps_at_buffer_capacity() {
+fn test_print_r_return_grows_past_buffer_capacity() {
     let out = compile_and_run(
         r#"<?php
 $s = str_repeat("x", 70000);
@@ -402,7 +401,7 @@ echo "|";
 echo substr($r, 65533, 3);
 "#,
     );
-    assert_eq!(out, "65536|xxx|xxx");
+    assert_eq!(out, "70000|xxx|xxx");
 }
 
 /// Verifies `var_dump` formats each argument independently with correct type tags and a trailing newline per call, in source order.

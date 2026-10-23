@@ -25,7 +25,7 @@ sidebar:
 - **Target strategy**: `runtime_call`
 - **Validation**: `checker_hook`
 - **Result type source**: `checked`
-- **Result ownership**: `may_alias_arguments`
+- **Result ownership**: `fresh`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function preg_match(string $pattern, string $subject, array $matches = []): int
+function preg_match(string $pattern, string $subject, array $matches = null): int|false
 ```
 
 ## What the type checker enforces

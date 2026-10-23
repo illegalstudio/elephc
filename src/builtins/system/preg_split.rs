@@ -37,7 +37,7 @@ const fn preg_split_semantics() -> BuiltinSemantics {
 
 /// Returns the conservative EIR container type used by the regex split runtime ABI.
 fn eir_result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
-    PhpType::Array(Box::new(PhpType::Mixed))
+    PhpType::Mixed
 }
 
 /// Returns the split result array type, refining the element type based on argument count.
@@ -45,7 +45,6 @@ fn eir_result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
 /// Returns `Array(Mixed)` when all four arguments are present (the `flags` argument
 /// can cause mixed-type entries via `PREG_OFFSET_CAPTURE`), or `Array(Str)` for 2 or
 /// 3 arguments. The registry pre-infers arguments; the hook must not call `infer_type`.
-fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    let elem = if cx.args.len() >= 4 { PhpType::Mixed } else { PhpType::Str };
-    Ok(PhpType::Array(Box::new(elem)))
+fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    Ok(PhpType::Mixed)
 }

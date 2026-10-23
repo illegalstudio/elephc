@@ -393,7 +393,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_hash_algos_list` | Build the `hash_algos()` array of supported algorithm names | — | `x0` (array ptr) |
 | `__rt_digest_to_string` | Format a raw digest as lowercase hex | digest | `x1`/`x2` |
 | `__rt_crc32` | CRC32 checksum | `x1`/`x2` | `x0` |
-| `__rt_inet_ntop` / `__rt_inet_pton` | IPv4/IPv6 address ↔ packed-binary conversion. IPv4 is parsed and rendered here (`__rt_ip2long`/`__rt_long2ip`); IPv6 goes through libc `inet_pton(3)`/`inet_ntop(3)`, which own `::` compression and the embedded-IPv4 form — and which disagree about zone identifiers (macOS accepts and ignores one, glibc refuses it), a split PHP inherits too. Both destinations come from `__rt_concat_reserve` and are published with `__rt_concat_publish`, so a 16-byte packed address or a 45-byte rendering cannot run off the end of the 64 KiB scratch buffer. The family is chosen the way php-src chooses it — a `:` in the text, the packed LENGTH on the way back — and `AF_INET6` is the TARGET's value (30 on Darwin, 10 on Linux), pinned by emitter tests because a wrong one turns every IPv6 address into `false` only on the cross-compiled binary | address | `x1`/`x2` |
+| `__rt_inet_ntop` / `__rt_inet_pton` | IPv4/IPv6 address ↔ packed-binary conversion. IPv4 is parsed and rendered here (`__rt_ip2long`/`__rt_long2ip`); IPv6 goes through libc `inet_pton(3)`/`inet_ntop(3)`, which own `::` compression and the embedded-IPv4 form — and which disagree about zone identifiers (macOS accepts and ignores one, glibc refuses it), a split PHP inherits too. Both destinations come from `__rt_concat_reserve` and are published with `__rt_concat_publish`, so a 16-byte packed address or a 45-byte rendering cannot run off the end of the shared result arena. The family is chosen the way php-src chooses it — a `:` in the text, the packed LENGTH on the way back — and `AF_INET6` is the TARGET's value (30 on Darwin, 10 on Linux), pinned by emitter tests because a wrong one turns every IPv6 address into `false` only on the cross-compiled binary | address | `x1`/`x2` |
 | `__rt_long2ip` / `__rt_ip2long` | Dotted-quad string ↔ integer conversion | `x0` or `x1`/`x2` | `x1`/`x2` or `x0` |
 | `__rt_vsprintf` | `vsprintf()` formatting with an argument array | format + array + optional eval context | `x1`/`x2` |
 | `__rt_sscanf` | Parse string with format | str + format | `x0` (array ptr) |
@@ -1394,7 +1394,7 @@ A `convert.iconv.*` write filter keeps its libc `iconv_t` open across writes. Ap
 
 Every terminal stdout write in a compiled program travels through one indirection, `__rt_stdout_write` (`io/stdout_write.rs`). Its branch order is part of the output contract:
 
-1. **print_r return-mode capture** — while `_print_r_mode` is set, append the bytes to `_print_r_buf` via `__rt_pr_append` instead of writing
+1. **print_r return-mode capture** — while `_print_r_mode` is set, append the bytes to the current capture block (`_print_r_base`) via `__rt_pr_append` instead of writing
 2. **user output-handler guard** — while `_ob_in_handler` is set, discard the bytes entirely (PHP discards output produced inside an `ob_start()` handler)
 3. **output-buffer capture** — while the `ob_*` stack is non-empty (`_ob_level` > 0), append the bytes to the top output buffer via `__rt_ob_append`
 4. **`--web` capture** — in `--web` builds only, a non-zero `elephc_web_capture` flag routes the bytes to `elephc_web_write`; default worker isolation buffers them, while pool/request isolation frames them onto the handler response stream
@@ -1408,7 +1408,7 @@ The `--web` capture branch is emitted only when compiling with `--web`, so ordin
 
 | Routine | What it does |
 |---|---|
-| `__rt_pr_append` | Append bytes to the 64KB `_print_r_buf` at `_print_r_off`, clamping to the remaining capacity so oversized captures truncate instead of overflowing |
+| `__rt_pr_append` | Append bytes to the current capture block at `_print_r_off`, growing through `__rt_concat_grow` when the inline 64KB block is full, so oversized captures return the full string |
 | `__rt_pr_write` | Walker-facing write wrapper: branch on `_print_r_mode` between the stdout path and `__rt_pr_append` |
 | `__rt_pr_finish` | Persist the captured bytes to an owned heap string via `__rt_str_persist` and reset the capture state |
 
@@ -1692,11 +1692,13 @@ The cdylib boundary also makes recoverable unwinding explicit. Each cdylib user 
 The runtime data layer lives in `src/codegen_support/runtime/data/`. `fixed.rs` emits shared buffers, error strings, and lookup tables; `user.rs` emits per-program globals, statics, enum-case slots, and metadata tables; `instanceof.rs` formats dynamic `instanceof` lookup names. Together they declare global buffers using `.comm` and static data tables:
 
 ```asm
-.comm _concat_buf, 65536     ; 64KB string buffer
+.comm _concat_buf, <heap-size> ; heap-sized string buffer (default 8 MB)
 .comm _concat_off, 8         ; current offset into string buffer
 .comm _print_r_mode, 8       ; print_r($v, true) return-mode capture flag
 .comm _print_r_off, 8        ; print_r capture write offset
-.comm _print_r_buf, 65536    ; 64KB print_r return-mode capture buffer
+.comm _print_r_buf, 65536    ; inline print_r return-mode capture buffer
+_print_r_base: .quad _print_r_buf ; current capture block
+_print_r_cap: .quad 65536   ; current capture capacity
 .comm _ob_level, 8           ; output-buffer (ob_*) stack depth
 .comm _ob_ptrs, 512          ; 64-slot ob buffer base pointers
 .comm _ob_lens, 512          ; 64-slot ob buffer used byte counts
@@ -1759,8 +1761,12 @@ _heap_max:
 .comm _gc_frees, 8           ; free counter
 .comm _gc_live, 8            ; current live heap footprint in bytes
 .comm _gc_peak, 8            ; high-water mark counter
-.comm _cstr_buf, 4096        ; 4KB C-string conversion buffer
-.comm _cstr_buf2, 4096       ; 4KB second C-string buffer
+.comm _cstr_buf, 4096        ; 4KB inline C-string conversion buffer
+.comm _cstr_buf2, 4096       ; 4KB second inline C-string buffer
+_cstr_base: .quad _cstr_buf  ; current primary C-string block
+_cstr_cap: .quad 4096        ; current primary C-string capacity
+_cstr2_base: .quad _cstr_buf2; current secondary C-string block
+_cstr2_cap: .quad 4096       ; current secondary C-string capacity
 .comm _eof_flags, 256        ; EOF flag per file descriptor
 .comm _principal_lookup_buf, 4096 ; passwd/group lookup line buffer
 .comm _elephc_crypto_cipher_iv_length_fn, 8 ; published crypto bridge IV-length callback

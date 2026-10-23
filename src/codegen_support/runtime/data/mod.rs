@@ -141,6 +141,13 @@ pub(crate) const BUFFER_ALLOC_SIZE_MSG: &str =
 /// has no per-call-site operand context, so it reports the shared cause.
 pub(crate) const ALLOC_OVERFLOW_MSG: &str =
     "Fatal error: Possible integer overflow in memory allocation\n";
+/// Fatal error message when a runtime encoder would append past the shared 64 KiB
+/// `_concat_buf` arena. Producers whose size is only known incrementally (`json_encode()`,
+/// `serialize()`) call `__rt_concat_headroom` before each append and fail closed here rather
+/// than overwriting `_concat_off` and the adjacent heap. PHP grows its result buffer on the
+/// heap, so this is an elephc capacity limit, reported instead of corrupting memory.
+pub(crate) const CONCAT_OVERFLOW_MSG: &str =
+    "Fatal error: string result exceeds the configured string buffer\n";
 /// Fatal error message when `str_repeat()` receives a `$times` argument less than 0.
 pub(crate) const STR_REPEAT_TIMES_MSG: &str =
     "Fatal error: str_repeat(): Argument #2 ($times) must be greater than or equal to 0\n";
@@ -298,11 +305,10 @@ pub(crate) const UNSER_PROPERTY_ASSIGN_PREFIX: &str = "Cannot assign ";
 pub(crate) const SPRINTF_WIDTH_MSG: &str =
     "Fatal error: Uncaught ValueError: Width must be between 0 and 2147483647\n";
 /// Fatal error message when a `printf`-family conversion would write past the shared
-/// 64 KiB `_concat_buf` result arena. PHP grows its result buffer on the heap; elephc's
-/// formatted results live in the fixed concat arena, so an oversized result is reported
-/// instead of overrunning the arena.
+/// `_concat_buf` result arena. The arena follows `--heap-size`, so this only reports a
+/// result larger than the program's configured memory budget.
 pub(crate) const SPRINTF_OVERFLOW_MSG: &str =
-    "Fatal error: sprintf(): formatted result exceeds the 65536-byte string buffer\n";
+    "Fatal error: sprintf(): formatted result exceeds the configured string buffer\n";
 /// Fatal error message when a `printf`-family format string consumes more arguments than
 /// were supplied. PHP raises `ArgumentCountError`; elephc reports the same class of error
 /// as a controlled fatal because the alternative is reading past the pushed argument records.

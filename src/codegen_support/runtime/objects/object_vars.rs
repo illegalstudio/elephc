@@ -231,9 +231,9 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #16]");                                   // save the result-hash slot across nested runtime calls
     emitter.instruction("ldr x9, [sp, #0]");                                    // load the object pointer slot for `ldr x9, [sp, #0]`
     emitter.instruction("mov x0, #1");                                          // prepare the projection argument or result with `mov x0, #1`
-    emitter.instruction("ldr x1, [x9, #8]");                                    // load the current object/descriptor operand for `ldr x1, [x9, #8]`
-    emitter.instruction("ldr x2, [x9, #16]");                                   // load the current object/descriptor operand for `ldr x2, [x9, #16]`
-    emitter.instruction("bl __rt_mixed_from_value");                            // call `__rt_mixed_from_value` with the prepared projection arguments
+    emitter.instruction("ldr x1, [x9, #8]");                                    // load the synthetic class-name pointer
+    emitter.instruction("ldr x2, [x9, #16]");                                   // load the synthetic class-name length
+    emitter.instruction("bl __rt_mixed_from_value");                            // persist and box the synthetic name
     emitter.instruction("mov x3, x0");                                          // prepare the projection argument or result with `mov x3, x0`
     emitter.instruction("ldr x0, [sp, #16]");                                   // load the result-hash slot for `ldr x0, [sp, #16]`
     abi::emit_symbol_address(emitter, "x1", "_incomplete_class_property_name");
@@ -446,9 +446,9 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the result-hash slot across nested runtime calls
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // load the object pointer slot for `mov r10, QWORD PTR [rbp - 8]`
     emitter.instruction("mov rax, 1");                                          // prepare the projection argument or result with `mov rax, 1`
-    emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");                        // load the current object/descriptor operand for `mov rdi, QWORD PTR [r10 + 8]`
-    emitter.instruction("mov rsi, QWORD PTR [r10 + 16]");                       // load the current object/descriptor operand for `mov rsi, QWORD PTR [r10 + 16]`
-    emitter.instruction("call __rt_mixed_from_value");                          // call `__rt_mixed_from_value` with the prepared projection arguments
+    emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");                        // load the synthetic class-name pointer
+    emitter.instruction("mov rsi, QWORD PTR [r10 + 16]");                       // load the synthetic class-name length
+    emitter.instruction("call __rt_mixed_from_value");                          // persist and box the synthetic name
     emitter.instruction("mov rcx, rax");                                        // prepare the projection argument or result with `mov rcx, rax`
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // load the result-hash slot for `mov rdi, QWORD PTR [rbp - 24]`
     emitter.instruction("lea rsi, [rip + _incomplete_class_property_name]");    // materialize the metadata symbol used by `lea rsi, [rip + _incomplete_class_property_name]`

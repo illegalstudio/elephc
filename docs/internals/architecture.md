@@ -743,7 +743,7 @@ Traits are flattened into the owning class before inheritance metadata is built.
 
 ### String buffer
 
-64KB scratch buffer in BSS (`_concat_buf`). Used by `itoa`, `concat`, `strtolower`, and all string-producing runtime routines. Reset to offset 0 at the start of each statement. Strings that need to persist beyond the current statement are copied to the heap via `__rt_str_persist`.
+Heap-sized scratch buffer in BSS (`_concat_buf`, sized by `--heap-size`). Used by `itoa`, `concat`, `strtolower`, and all string-producing runtime routines. Reset to offset 0 at the start of each statement. Strings that need to persist beyond the current statement are copied to the heap via `__rt_str_persist`.
 
 ### I/O buffers
 

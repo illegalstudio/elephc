@@ -25,10 +25,10 @@ This page explains where every value lives in memory at runtime.
 │ Buffer descriptor registry   │  _buffer_registry: 4097 x 48B
 │  (generation-safe handles)   │  index 0 reserved; 4096 usable slots
 ├─────────────────────────────┤
-│     String buffer            │  _concat_buf: 64KB, scratch pad
+│     String buffer            │  _concat_buf: heap-sized, scratch pad
 │  (temporary string results)  │  Reset at each statement
 ├─────────────────────────────┤
-│   Output capture buffers     │  _print_r_buf: 64KB return-mode capture,
+│   Output capture buffers     │  _print_r_buf: 64KB inline return-mode capture,
 │  (print_r return mode, ob_*  │  _ob_ptrs/_lens/_caps + handler tables:
 │   buffer-stack bookkeeping)  │  64 slots x 8B each (ob buffer bodies
 │                              │  are heap-allocated)
@@ -343,11 +343,11 @@ non-throwing scalar windows introduce no owner slots that could inhibit integer 
 ## The string buffer (scratch pad)
 
 ```asm
-.comm _concat_buf, 65536    ; 64KB scratch buffer
+.comm _concat_buf, <heap-size>  ; heap-sized scratch buffer (default 8 MB)
 .comm _concat_off, 8        ; current write offset (reset per statement, to the frame base)
 ```
 
-The string buffer (`_concat_buf`) is a 64KB scratch region used by all string operations — `itoa`, `ftoa`, `concat`, `strtolower`, `str_replace`, etc. Each operation writes its result at the current offset and advances the offset.
+The string buffer (`_concat_buf`) is a heap-sized scratch region (default 8 MB, matching the configured heap budget) used by all string operations — `itoa`, `ftoa`, `concat`, `strtolower`, `str_replace`, etc. Each operation writes its result at the current offset and advances the offset.
 
 **The buffer is reset at the start of every statement — to the frame's inherited base, not necessarily 0.** Strings in the buffer are temporary: they live only for the duration of one statement's evaluation, *plus* (for an argument passed into a call) the lifetime of the callee. See [Cross-call slice arguments](#cross-call-slice-arguments) below.
 
@@ -371,7 +371,7 @@ A string operation returns a *borrowed slice* into `_concat_buf` (a pointer + le
 
 To prevent that, each frame records, on entry, the `_concat_off` value it inherited from the caller (the high-water mark below which the caller's live slices sit). That value is the frame's **base**: per-statement resets restore `_concat_off` to the base rather than 0, so the callee's own concatenations append *above* the caller's slices instead of clobbering them. `main` (and other root contexts) have a base of 0, so their behaviour is unchanged. The cursor is also saved/restored around each nested call so the caller can keep concatenating after the call returns.
 
-A consequence is that `_concat_buf` usage grows with the depth of nested calls that are *holding live slice arguments* (each frame reserves its caller's region). In practice this depth is shallow; deeply recursive string builders that would accumulate are a separate, pre-existing compile-time limitation, so the 64KB budget is not a concern for ordinary code.
+A consequence is that `_concat_buf` usage grows with the depth of nested calls that are *holding live slice arguments* (each frame reserves its caller's region). The arena tracks `--heap-size`, so this is bounded by the program's configured memory budget rather than a fixed 64 KiB cap.
 
 ### Copy-on-store
 
@@ -391,15 +391,15 @@ never need to be scanned.
 
 ### Outgrowing the buffer
 
-64KB is where results *prefer* to live, not a ceiling on how large one can be. Every runtime producer reserves its destination through `__rt_concat_reserve`, which hands back scratch while the result still fits and an owned heap block when it does not; `__rt_concat_publish` then advances `_concat_off` only for the scratch case, deciding which it was from the pointer's own address rather than a flag. A producer whose size is not known until it has run — `implode()`, `stream_get_contents()` — starts in scratch and moves the bytes it has already written into a larger owned block with `__rt_concat_grow` when the next piece no longer fits.
+The shared arena is where results *prefer* to live, not a ceiling on how large one can be. Every runtime producer reserves its destination through `__rt_concat_reserve`, which hands back scratch while the result still fits and an owned heap block when it does not; `__rt_concat_publish` then advances `_concat_off` only for the scratch case, deciding which it was from the pointer's own address rather than a flag. A producer whose size is not known until it has run — `implode()`, `stream_get_contents()` — starts in scratch and moves the bytes it has already written into a larger owned block with `__rt_concat_grow` when the next piece no longer fits.
 
 A `.` result (and the `__rt_concat_grow` producers) that outgrows the buffer is stamped `CONCAT_TEMP_HEAP_KIND` instead of heap kind 1: like a scratch slice it has no owner that frees it, and the first consumer that persists it, a store or an `Acquire`, adopts the block in place by retagging it as an owned string rather than copying it, which is what keeps `$s .= ...` from duplicating a large accumulator on every append. That takeover is only safe while nothing else will release the same block. A user function that may return its argument hands the block back as its call result, an owning temporary the caller releases, so before such a call the caller claims a fresh transient argument (a `.`, interpolation or scalar-to-string result, never a builtin view such as `substr($s, 0)` or `$s[0]`, which points into a live string) with `EnsureOwned` (`__rt_str_claim`): the block is retagged as owned without a copy, every later persist duplicates it, and the argument is released after the call unless the callee returned it (`ReleaseUnlessAliases`). Without the claim, `$x = id($big . "b")` stored a block that the release of the call result then freed.
 
-This is a bounds check, not an optimization. A producer that skips it writes straight past `_concat_buf` into the adjacent BSS globals, which corrupts data silently in a CLI program and faults in a `--web` worker, at a size no `--heap-size` can change — `_concat_buf` is a fixed array. `implode()` was the last one still doing that (issue #515).
+This is a bounds check, not an optimization. A producer that skips it writes straight past the current reservation into adjacent runtime state, which corrupts data silently in a CLI program and faults in a `--web` worker. The arena is sized by `--heap-size`, but it is still a fixed budget for one statement: every producer must reserve or grow instead of writing at a pointer it did not own. `implode()` used to do that (issue #515).
 
 ### Implications
 
-- **Bounded usage.** Because the buffer resets each statement, only one statement's worth of string operations needs to fit in 64KB — plus the slice arguments held by any enclosing calls on the current stack (see [Cross-call slice arguments](#cross-call-slice-arguments)). For ordinary code this is comfortably within 64KB, and a result that does not fit takes the heap fallback above rather than overflowing.
+- **Bounded usage.** Because the buffer resets each statement, only one statement's worth of string operations needs to fit in the configured arena — plus the slice arguments held by any enclosing calls on the current stack (see [Cross-call slice arguments](#cross-call-slice-arguments)). The arena follows `--heap-size` (default 8 MB), and a result that does not fit takes the heap fallback above rather than overflowing. A result larger than the configured budget reports a controlled capacity fatal.
 - **Scratch copies.** Concatenation writes a new slice into `_concat_buf`, or a new heap block when the result outgrows the buffer. That scratch path leaves existing string bytes unchanged. In-place extension is the consuming heap append in [Performance characteristics](#performance-characteristics): a unique kind-1 buffer whose right-hand side does not overlap it.
 - **Scratch only.** The buffer is strictly temporary. Anything that needs to survive goes to the heap.
 
@@ -1277,8 +1277,8 @@ read the same uniform heap header, including on the iOS targets.
 | Resource | Size | What happens when full |
 |---|---|---|
 | Stack | OS default (~8MB) | Stack overflow (crash) |
-| String buffer | 64KB | Resets each statement — effectively unlimited |
-| print_r capture | `_print_r_buf` = 64KB; `_print_r_mode`, `_print_r_off` = 8 bytes each | `print_r($value, true)` renders into the capture buffer; oversized captures truncate at 64KB instead of overflowing adjacent data |
+| String buffer | `--heap-size` (default 8 MB) | Resets each statement — bounded by the program budget |
+| print_r capture | `_print_r_buf` = 64KB inline; `_print_r_base`/`_print_r_cap` track the current block; `_print_r_mode`, `_print_r_off` = 8 bytes each | `print_r($value, true)` renders into the capture buffer and grows past the inline block through `__rt_concat_grow`, so the full rendered string is returned |
 | Output-buffer (`ob_*`) stack | `_ob_level`, `_ob_in_handler`, `_ob_flushing`, `_ob_implicit_flush` = 8 bytes each; `_ob_ptrs`, `_ob_lens`, `_ob_caps`, `_ob_handler_stubs`, `_ob_handler_envs`, `_ob_name_ptrs`, `_ob_name_lens`, `_ob_chunk_sizes`, `_ob_flags`, `_ob_started` = 512 bytes each (64 slots) | Up to 64 nested `ob_start()` levels; the buffer bodies themselves are heap-allocated (16KB default capacity, page-aligned chunk size + 1 when a chunk size is set, grown by doubling) |
 | Web capture flag | `elephc_web_capture` = 8 bytes | `--web` bridge output-capture flag read by `__rt_stdout_write`; zero selects the plain `write(1, ...)` syscall path |
 | Eval bridge hook slots | `_elephc_eval_ob_handler_fn`, `_elephc_eval_dynamic_object_destruct_fn`, `_elephc_eval_closure_bind_fn`, `_elephc_eval_wrap_callback_fn`, `_elephc_eval_object_gc_child_fn`, `_elephc_eval_object_release_fn`, `_elephc_eval_array_reference_retire_fn`, `_elephc_eval_object_clone_fn` = 8 bytes each | Late-bound Magician callbacks for eval-managed handlers, closures, callbacks, objects, references, and cloning |
@@ -1302,7 +1302,7 @@ read the same uniform heap header, including on the iOS targets.
 | Range element count | `range()` sizes its result from `\|end - start\| + 1` | An interval needing more than 1073741823 elements never reaches the allocator: the lowering guard raises reference PHP's catchable `ValueError` ("The supplied range exceeds the maximum array size: start=… end=… step=…") first, naming the ordered endpoints and `abs($step)`. The runtime's own overflow abort remains as the backstop |
 | Fill element count | `array_fill()` sizes its result from `$count` | A `$count` past `INT_MAX` (2147483647) never reaches the allocator: the lowering guard raises reference PHP's catchable `ValueError` ("array_fill(): Argument #2 ($count) is too large"). Counts at or below the bound whose payload does not fit the heap still report "Fatal error: heap memory exhausted", which is what reference PHP reports as a memory-limit fatal too |
 | Buffer length | Fixed at `buffer_new<T>()` | A negative length, or a `length * stride` that does not fit in a non-negative machine word, aborts with "Fatal error: buffer_new() length is negative or exceeds the maximum buffer size" |
-| C-string buffers | `_cstr_buf`, `_cstr_buf2` = 4KB each, `_empty_str` = 1 byte | Long converted paths/strings are truncated to buffer size; `_empty_str` is a safe zero-length string pointer |
+| C-string buffers | `_cstr_buf`, `_cstr_buf2` = 4KB inline each; `_cstr_base`/`_cstr_cap` and `_cstr2_base`/`_cstr2_cap` track the current block; `_empty_str` = 1 byte | A path, pattern, or command longer than 4KB grows into an owned block through `__rt_cstr_grow`/`__rt_cstr2_grow` instead of being truncated or overwriting adjacent runtime state; `_empty_str` is a safe zero-length string pointer |
 | File descriptor state | `_eof_flags`, `_stream_read_filters`, `_stream_write_filters` = 256 bytes each; `_popen_files`, `_dir_handles`, `_glob_handles`, `_zstream_handles`, `_bzstream_handles`, `_iconv_handles`, `_tls_sessions`, `_stream_chunk_size` = 2048 bytes each; on Apple targets only, `_iconv_write_options` = 256 bytes | Per-fd stream, process, directory, compression, iconv, TLS, and chunk-size bookkeeping for up to 256 descriptors; `_iconv_write_options` holds each `convert.iconv` write filter's own `//TRANSLIT`/`//IGNORE` bits |
 | Stream filter scratch | `_stream_filter_buf`, `_stream_grow_scratch` = 64KB each | Scratch space for stream filters, including length-growing filters such as base64 and quoted-printable encoders |
 | Stream context and callbacks | `_stream_context_options`, `_stream_notification_callback`, `_stream_connect_host`, `_stream_open_opened_path_scratch`, `_url_stat_matched` | Current stream-context options hash, notification callback, TLS peer host, wrapper opened-path scratch, and wrapper url_stat match flag |

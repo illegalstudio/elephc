@@ -110236,7 +110236,7 @@
         },
         {
           "by_ref": true,
-          "default": [],
+          "default": null,
           "name": "matches",
           "optional": true,
           "type": "mixed"
@@ -110352,7 +110352,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -110394,13 +110394,13 @@
         },
         {
           "by_ref": true,
-          "default": "[]",
+          "default": "null",
           "name": "matches",
           "optional": true,
           "type": "array"
         }
       ],
-      "return_type": "int",
+      "return_type": "int|false",
       "variadic": null
     },
     "since": null,
@@ -110427,7 +110427,7 @@
         },
         {
           "by_ref": true,
-          "default": [],
+          "default": null,
           "name": "matches",
           "optional": true,
           "type": "mixed"
@@ -110447,7 +110447,7 @@
     },
     "area": "Regex",
     "canonical_name": "preg_match_all",
-    "description": "Performs a global regular expression match, including terminal empty matches, optionally filling `$matches`, and returns the number of matches. AOT capture output supports local variables and local references; unsupported non-local destinations are diagnosed. Unsupported flag bits or conflicting order modes return 0 and clear a supplied capture destination on both backends.",
+    "description": "Performs a global regular expression match, including terminal empty matches, optionally filling `$matches`, and returns the number of matches. AOT capture output supports local variables and local references; unsupported non-local destinations are diagnosed. Unsupported flag bits or conflicting order modes raise PHP's `ValueError` on both backends.",
     "eval": {
       "adapter_reason": "by-reference-or-lvalue",
       "area": "regex",
@@ -110475,7 +110475,7 @@
         },
         {
           "by_ref": true,
-          "default": "[]",
+          "default": "null",
           "name": "matches",
           "optional": true,
           "type": "mixed"
@@ -110550,7 +110550,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -110592,7 +110592,7 @@
         },
         {
           "by_ref": true,
-          "default": "[]",
+          "default": "null",
           "name": "matches",
           "optional": true,
           "type": "mixed"
@@ -110605,7 +110605,7 @@
           "type": "int"
         }
       ],
-      "return_type": "int",
+      "return_type": "int|false",
       "variadic": null
     },
     "since": null,
@@ -110741,7 +110741,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -110788,7 +110788,7 @@
           "type": "string"
         }
       ],
-      "return_type": "string",
+      "return_type": "mixed",
       "variadic": null
     },
     "since": null,
@@ -110924,7 +110924,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -111177,7 +111177,7 @@
           "type": "int"
         }
       ],
-      "return_type": "array",
+      "return_type": "array|false",
       "variadic": null
     },
     "since": null,
@@ -120948,7 +120948,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",

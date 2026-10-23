@@ -8,7 +8,7 @@ sidebar:
 ## preg_split()
 
 ```php
-function preg_split(string $pattern, string $subject, int $limit = -1, int $flags = 0): array
+function preg_split(string $pattern, string $subject, int $limit = -1, int $flags = 0): array|false
 ```
 
 Splits a string by a regular expression.
@@ -19,7 +19,7 @@ Splits a string by a regular expression.
 - `$limit` (`int`), default `-1`, optional
 - `$flags` (`int`), default `0`, optional
 
-**Returns**: `array`
+**Returns**: `array|false`
 
 ## Availability
 

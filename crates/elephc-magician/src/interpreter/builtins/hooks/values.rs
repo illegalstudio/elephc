@@ -570,7 +570,7 @@ impl EvalValuesHook {
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::PregMatch => eval_preg_match_values_result(evaluated_args, values),
-            Self::PregMatchAll => eval_preg_match_all_values_result(evaluated_args, values),
+            Self::PregMatchAll => eval_preg_match_all_values_result(evaluated_args, context, values),
             Self::PregReplace => eval_preg_replace_values_result(evaluated_args, values),
             Self::PregReplaceCallback => {
                 eval_preg_replace_callback_values_result(

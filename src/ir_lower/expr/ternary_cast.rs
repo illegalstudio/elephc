@@ -76,7 +76,12 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
     // Keep the original producer visible for a no-op string cast. Wrapping an
     // owned string temporary in `Cast(Str)` would hide its ownership from the
     // retaining store/call cleanup and leak the detached string allocation.
-    if matches!(target, CastType::String) && value.ir_type == IrType::Str {
+    // Array reads are the exception: a missing element is carried as the shared
+    // null sentinel, and `(string)` must materialize it as a real empty string.
+    let missing_string_cast = matches!(target, CastType::String)
+        && value.ir_type == IrType::Str
+        && string_cast_may_miss(inner);
+    if matches!(target, CastType::String) && value.ir_type == IrType::Str && !missing_string_cast {
         return value;
     }
     let source_type = ctx.builder.value_php_type(value.value);
@@ -89,6 +94,18 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
         Op::Cast.default_effects(),
         Some(expr.span),
     );
+    if missing_string_cast {
+        let owned = ctx.emit_owned_value(
+            Op::StrPersist,
+            vec![result.value],
+            None,
+            PhpType::Str,
+            Op::StrPersist.default_effects(),
+            Some(expr.span),
+        );
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
+        return owned;
+    }
     if matches!(target, CastType::String) {
         release_coerced_source_if_owned(ctx, value, Some(expr.span));
     } else if matches!(target, CastType::Int | CastType::Float | CastType::Bool)
@@ -97,6 +114,20 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
     }
     result
+}
+
+/// Returns true when a string cast's source is an array read that can miss.
+///
+/// A missing element of a concrete typed array is represented by the in-band
+/// `NULL_SENTINEL`, not by a real empty string. The string cast must normalize it
+/// so `var_dump((string) $a[$key])` prints `string(0) ""` while a bare read still
+/// prints `NULL`. Error suppression wraps the same read without changing it.
+fn string_cast_may_miss(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::ArrayAccess { .. } => true,
+        ExprKind::ErrorSuppress(inner) => string_cast_may_miss(inner),
+        _ => false,
+    }
 }
 
 /// Lowers PHP's `(array)` cast by the source classification it shares with the checker.

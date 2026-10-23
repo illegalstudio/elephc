@@ -124,3 +124,24 @@ fn bigint_in_array_with_flag_becomes_string() {
     );
     assert_eq!(out, "string:10000000000000000000");
 }
+
+/// Verifies a 38-digit integer token keeps every significant digit when it is promoted
+/// to float. The old float fallback copied only 31 bytes into a stack scratch, so
+/// `999…9` (38 digits) decoded as `1.0E+31` instead of PHP's `1.0E+38`.
+#[test]
+fn long_integer_token_preserves_all_significant_digits() {
+    let out = compile_and_run(
+        r#"<?php var_dump(json_decode(str_repeat("9", 38)));"#,
+    );
+    assert_eq!(out, "float(1.0E+38)\n");
+}
+
+/// Verifies a long fractional token (more than 31 characters) keeps every digit through
+/// the full-token `atof` conversion instead of being truncated by the old stack scratch.
+#[test]
+fn long_fractional_token_preserves_all_significant_digits() {
+    let out = compile_and_run(
+        r#"<?php var_dump(json_decode("1.2345678901234567890123456789012345678"));"#,
+    );
+    assert_eq!(out, "float(1.2345678901234567)\n");
+}

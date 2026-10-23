@@ -49,25 +49,45 @@ pub fn emit_shell_exec(emitter: &mut Emitter) {
 
     // -- open pipe with popen("cmd", "r") --
     emitter.instruction("add x1, sp, #32");                                     // x1 = pointer to "r\0" on stack
-    emitter.bl_c("popen");                                           // popen(cmd, "r") → x0=FILE*
+    emitter.bl_c("popen");                                                      // popen(cmd, "r") → x0=FILE*
     emitter.instruction("str x0, [sp, #0]");                                    // save FILE* on stack
 
-    // -- set up output buffer using concat_buf --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_buf");
-    emitter.instruction("str x9, [sp, #8]");                                    // save buffer start ptr
-    emitter.instruction("mov x10, #0");                                         // x10 = bytes written counter
-    emitter.instruction("str x10, [sp, #16]");                                  // save counter on stack
+    // -- reserve a growable output buffer before reading the pipe --
+    emitter.instruction("mov x0, #4096");                                       // start with a small scratch-backed capacity
+    emitter.instruction("bl __rt_concat_reserve");                              // reserve concat scratch or owned heap storage
+    emitter.instruction("str x0, [sp, #8]");                                    // save buffer start ptr
+    emitter.instruction("str xzr, [sp, #16]");                                  // bytes written counter = 0
+    emitter.instruction("mov x9, #4096");                                       // initial capacity
+    emitter.instruction("str x9, [sp, #24]");                                   // save capacity on stack
 
     // -- read loop: fgetc until EOF --
     emitter.label("__rt_shell_exec_loop");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload FILE* from stack
-    emitter.bl_c("fgetc");                                           // read one byte → w0=char or -1 (EOF)
+    emitter.bl_c("fgetc");                                                      // read one byte → w0=char or -1 (EOF)
     emitter.instruction("cmn w0, #1");                                          // compare 32-bit return with -1 (EOF)
     emitter.instruction("b.eq __rt_shell_exec_close");                          // if EOF, stop reading
 
-    // -- store byte in concat_buf --
+    // -- grow the result buffer when the next byte would fill it --
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload buffer start
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload bytes written count
+    emitter.instruction("ldr x11, [sp, #24]");                                  // reload the current capacity
+    emitter.instruction("cmp x10, x11");                                        // is the buffer already full?
+    emitter.instruction("b.lo __rt_shell_exec_store");                          // the next byte still fits
+    emitter.instruction("str x0, [sp, #40]");                                   // preserve the byte across the grow call
+    emitter.instruction("mov x0, x9");                                          // current buffer pointer
+    emitter.instruction("mov x1, x10");                                         // bytes to preserve
+    emitter.instruction("lsl x2, x11, #1");                                     // double the capacity
+    emitter.instruction("bl __rt_concat_grow");                                 // move the output into a larger owned block
+    emitter.instruction("str x0, [sp, #8]");                                    // publish the grown buffer pointer
+    emitter.instruction("ldr x9, [sp, #24]");                                   // reload the old capacity
+    emitter.instruction("lsl x9, x9, #1");                                      // double it in the tracking slot
+    emitter.instruction("str x9, [sp, #24]");                                   // save the new capacity
+    emitter.instruction("ldr x0, [sp, #40]");                                   // restore the pending output byte
+    emitter.instruction("ldr x9, [sp, #8]");                                    // reload the grown buffer pointer
+    emitter.instruction("ldr x10, [sp, #16]");                                  // reload the byte count
+
+    // -- store byte in the result buffer --
+    emitter.label("__rt_shell_exec_store");
     emitter.instruction("strb w0, [x9, x10]");                                  // store byte at buffer[count]
     emitter.instruction("add x10, x10, #1");                                    // increment byte count
     emitter.instruction("str x10, [sp, #16]");                                  // save updated count
@@ -76,11 +96,12 @@ pub fn emit_shell_exec(emitter: &mut Emitter) {
     // -- close the pipe --
     emitter.label("__rt_shell_exec_close");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload FILE* from stack
-    emitter.bl_c("pclose");                                          // close the pipe
+    emitter.bl_c("pclose");                                                     // close the pipe
 
-    // -- return output string --
+    // -- publish the output string --
     emitter.instruction("ldr x1, [sp, #8]");                                    // x1 = output buffer start
     emitter.instruction("ldr x2, [sp, #16]");                                   // x2 = output length
+    emitter.instruction("bl __rt_concat_publish");                              // advance the scratch offset only for scratch-backed results
 
     // -- tear down stack frame --
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
@@ -100,7 +121,7 @@ fn emit_shell_exec_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while the shell helper performs nested libc calls
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the x86_64 shell helper
-    emitter.instruction("sub rsp, 32");                                         // reserve aligned local space for FILE*, output length, output buffer ptr, and the popen mode string
+    emitter.instruction("sub rsp, 48");                                         // reserve aligned local space for FILE*, counters, buffer, byte scratch, and the popen mode string
 
     abi::emit_call_label(emitter, "__rt_cstr");                                 // convert the command string result regs into a null-terminated C string in the scratch buffer
     emitter.instruction("mov rdi, rax");                                        // pass the null-terminated command pointer in the SysV first-argument register
@@ -112,9 +133,11 @@ fn emit_shell_exec_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // did popen succeed and return a readable pipe?
     emitter.instruction("je __rt_shell_exec_empty");                            // failed pipes map to the empty PHP string result
 
-    abi::emit_symbol_address(emitter, "r8", "_concat_buf");
-    emitter.instruction("mov QWORD PTR [rbp - 24], r8");                        // save the concat scratch buffer pointer so the read loop can append output bytes
+    emitter.instruction("mov rax, 4096");                                       // start with a small scratch-backed capacity
+    emitter.instruction("call __rt_concat_reserve");                            // reserve concat scratch or owned heap storage
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the growable output buffer pointer for the read loop
     emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // initialize the shell output length counter at zero bytes
+    emitter.instruction("mov QWORD PTR [rbp - 40], 4096");                      // initialize the current capacity
 
     emitter.label("__rt_shell_exec_loop");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the FILE* for the next fgetc() probe
@@ -122,9 +145,23 @@ fn emit_shell_exec_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp eax, -1");                                         // did the pipe reach EOF?
     emitter.instruction("je __rt_shell_exec_close");                            // stop reading once the full shell output has been consumed
 
-    emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the concat scratch buffer pointer for the next output byte store
-    emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // reload the current shell output length before appending another byte
-    emitter.instruction("mov BYTE PTR [r8 + r9], al");                          // append the freshly read shell-output byte into the concat scratch buffer
+    emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // reload the current shell output length
+    emitter.instruction("cmp r9, QWORD PTR [rbp - 40]");                        // is the buffer already full?
+    emitter.instruction("jb __rt_shell_exec_store");                            // the next byte still fits
+    emitter.instruction("mov BYTE PTR [rbp - 48], al");                         // preserve the byte across the grow call
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // current buffer pointer
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // bytes to preserve
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // current capacity
+    emitter.instruction("shl rsi, 1");                                          // double the capacity
+    emitter.instruction("call __rt_concat_grow");                               // move the output into a larger owned block
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // publish the grown buffer pointer
+    emitter.instruction("shl QWORD PTR [rbp - 40], 1");                         // record the doubled capacity
+    emitter.instruction("mov al, BYTE PTR [rbp - 48]");                         // restore the pending output byte
+
+    emitter.label("__rt_shell_exec_store");
+    emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the output buffer pointer
+    emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // reload the current shell output length
+    emitter.instruction("mov BYTE PTR [r8 + r9], al");                          // append the freshly read shell-output byte
     emitter.instruction("add r9, 1");                                           // advance the shell output length after appending one more byte
     emitter.instruction("mov QWORD PTR [rbp - 16], r9");                        // save the updated shell output length for the next read iteration
     emitter.instruction("jmp __rt_shell_exec_loop");                            // continue reading until the pipe reports EOF
@@ -132,16 +169,17 @@ fn emit_shell_exec_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_shell_exec_close");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the FILE* before closing the popen pipe
     emitter.bl_c("pclose");                                                     // close the pipe after the full command output has been read
-    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the concat scratch buffer pointer as the PHP string pointer result
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the output buffer pointer as the PHP string pointer result
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // return the measured command output length as the PHP string length result
-    emitter.instruction("add rsp, 32");                                         // release the x86_64 shell helper's aligned local frame
+    emitter.instruction("call __rt_concat_publish");                            // advance the scratch offset only for scratch-backed results
+    emitter.instruction("add rsp, 48");                                         // release the x86_64 shell helper's aligned local frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the captured shell output
     emitter.instruction("ret");                                                 // return to the caller with the captured shell output ptr/len
 
     emitter.label("__rt_shell_exec_empty");
     emitter.instruction("mov rax, 0");                                          // return empty string ptr (null) when popen fails
     emitter.instruction("mov rdx, 0");                                          // return empty string len = 0 when popen fails
-    emitter.instruction("add rsp, 32");                                         // release the x86_64 shell helper's aligned local frame before returning the empty result
+    emitter.instruction("add rsp, 48");                                         // release the x86_64 shell helper's aligned local frame before returning the empty result
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the empty shell result
     emitter.instruction("ret");                                                 // return to the caller with the empty PHP string result
 }

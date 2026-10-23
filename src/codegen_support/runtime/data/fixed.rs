@@ -9,7 +9,7 @@
 //! - Fixed symbols are cached across compilations, with target and PHP-profile inputs covered by the cache key.
 
 use super::{
-    ALLOC_OVERFLOW_MSG, ARRAY_ALLOC_SIZE_MSG, BUFFER_ALLOC_SIZE_MSG, RANGE_SIZE_MSG,
+    ALLOC_OVERFLOW_MSG, CONCAT_OVERFLOW_MSG, ARRAY_ALLOC_SIZE_MSG, BUFFER_ALLOC_SIZE_MSG, RANGE_SIZE_MSG,
     DIRNAME_LEVELS_MSG, HASH_COPY_FINALIZED_CTX_MSG, HASH_FINAL_FINALIZED_CTX_MSG,
     HASH_HMAC_UNKNOWN_ALGO_MSG, HASH_INIT_UNKNOWN_ALGO_MSG,
     HASH_UNKNOWN_ALGO_MSG, HASH_UPDATE_FINALIZED_CTX_MSG, ICONV_STRPOS_OFFSET_MSG,
@@ -69,7 +69,7 @@ pub(crate) fn emit_runtime_data_fixed(
 ) -> String {
     let mut out = String::new();
     out.push_str(".data\n");
-    out.push_str(&comm_directive("_concat_buf", 65536, target));
+    out.push_str(&comm_directive("_concat_buf", heap_size.max(65_536), target));
     out.push_str(&comm_directive("_concat_off", 8, target));
     out.push_str(&comm_directive("_mbstring_catalog_array", 8, target));
     out.push_str(&comm_directive("_mbstring_deferred_capture_head", 8, target));
@@ -211,6 +211,11 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_print_r_mode", 8, target));
     out.push_str(&comm_directive("_print_r_off", 8, target));
     out.push_str(&comm_directive("_print_r_buf", 65536, target));
+    // `print_r($value, true)` grows past the inline 64 KiB block instead of
+    // truncating: `_print_r_base`/`_print_r_cap` track the current capture
+    // destination and its capacity, just like the C-string buffers.
+    out.push_str(".p2align 3\n.globl _print_r_base\n_print_r_base:\n    .quad _print_r_buf\n");
+    out.push_str(".p2align 3\n.globl _print_r_cap\n_print_r_cap:\n    .quad 65536\n");
     // Output-buffering (ob_*) stack state. _ob_level is the active nesting depth
     // (0 = no buffering) consulted by __rt_stdout_write and __rt_pr_write before
     // the terminal write syscall; _ob_ptrs/_ob_lens/_ob_caps are 64-slot parallel
@@ -695,6 +700,10 @@ pub(crate) fn emit_runtime_data_fixed(
         ALLOC_OVERFLOW_MSG
     ));
     out.push_str(&format!(
+        ".globl _concat_overflow_msg\n_concat_overflow_msg:\n    .ascii {:?}\n",
+        CONCAT_OVERFLOW_MSG
+    ));
+    out.push_str(&format!(
         ".globl _str_repeat_times_msg\n_str_repeat_times_msg:\n    .ascii {:?}\n",
         STR_REPEAT_TIMES_MSG
     ));
@@ -932,6 +941,14 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_gc_peak", 8, target));
     out.push_str(&comm_directive("_cstr_buf", 4096, target));
     out.push_str(&comm_directive("_cstr_buf2", 4096, target));
+    // C-string conversions need a NUL-terminated copy for libc. The 4 KiB inline
+    // buffers stay as the common case; these pointers let the helpers grow into an
+    // owned block when a path, pattern, or command is longer than that, instead of
+    // copying past the buffer into adjacent runtime state.
+    out.push_str(".p2align 3\n.globl _cstr_base\n_cstr_base:\n    .quad _cstr_buf\n");
+    out.push_str(".p2align 3\n.globl _cstr_cap\n_cstr_cap:\n    .quad 4096\n");
+    out.push_str(".p2align 3\n.globl _cstr2_base\n_cstr2_base:\n    .quad _cstr_buf2\n");
+    out.push_str(".p2align 3\n.globl _cstr2_cap\n_cstr2_cap:\n    .quad 4096\n");
     out.push_str(&comm_directive("_eof_flags", 256, target));
     out.push_str(&comm_directive("_popen_files", 2048, target));
     out.push_str(&comm_directive("_dir_handles", 2048, target));

@@ -51,6 +51,7 @@ pub(crate) fn emit_preg_match(emitter: &mut Emitter) {
 
     // -- strip delimiters from pattern --
     emitter.instruction("bl __rt_preg_strip");                                  // → x1=stripped, x2=len, x3=flags
+    emitter.instruction("tbnz x3, #30, __rt_preg_match_fail");                  // the removed /e modifier is invalid in PHP 8
     emitter.instruction(&format!("str x3, [sp, #{}]", flags_off));              // save flags
 
     // -- materialize the PCRE pattern as a C string --
@@ -66,7 +67,7 @@ pub(crate) fn emit_preg_match(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x2, [sp, #{}]", flags_off));              // pass PCRE2 POSIX compile flags from delimiter parsing
     emitter.instruction(&format!("add x3, sp, #{}", match_slot_count_off));     // receive the compiled match-slot count
     emitter.bl_c("elephc_pcre2_v1_compile");                                    // compile without exposing PCRE2-owned layouts
-    emitter.instruction("cbnz x0, __rt_preg_match_no");                         // compile failed → no match
+    emitter.instruction("cbnz x0, __rt_preg_match_fail");                       // compile failed → PHP false
 
     // -- null-terminate subject --
     emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_ptr_off));        // load subject ptr
@@ -95,6 +96,11 @@ pub(crate) fn emit_preg_match(emitter: &mut Emitter) {
 
     emitter.label("__rt_preg_match_no");
     emitter.instruction("mov x0, #0");                                          // no match → return 0
+    emitter.instruction("b __rt_preg_match_ret");                               // skip the failure sentinel
+
+    emitter.label("__rt_preg_match_fail");
+    emitter.instruction("mov x0, #-1");                                         // failure sentinel: PHP false
+    emitter.instruction("b __rt_preg_match_ret");                               // return the sentinel
 
     emitter.label("__rt_preg_match_ret");
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_off));         // restore frame pointer and return address
@@ -150,7 +156,7 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x2, [sp, #{}]", flags_off));              // pass PCRE2 POSIX compile flags from delimiter parsing
     emitter.instruction(&format!("add x3, sp, #{}", nmatch_off));               // receive the compiled match-slot count
     emitter.bl_c("elephc_pcre2_v1_compile");                                    // compile without exposing PCRE2-owned layouts
-    emitter.instruction("cbnz x0, __rt_preg_match_capture_empty");              // compile failure produces no match and an empty matches array
+    emitter.instruction("cbnz x0, __rt_preg_match_capture_compile_fail");       // compile failure returns PHP false plus an empty matches array
 
     // -- allocate fixed Elephc offset pairs for every compiled capture --
     emitter.instruction(&format!("ldr x9, [sp, #{}]", nmatch_off));             // load match-slot count returned by the shim
@@ -244,6 +250,13 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload opaque handle after capture-buffer allocation failed
     emitter.bl_c("elephc_pcre2_v1_free");                                       // free compiled regex resources before returning no match
 
+    emitter.label("__rt_preg_match_capture_compile_fail");
+    emitter.instruction("mov x0, #0");                                          // empty array capacity for the failed call
+    emitter.instruction("mov x1, #16");                                         // empty matches array still has string slot metadata
+    emitter.instruction("bl __rt_array_new");                                   // allocate empty indexed string matches array
+    emitter.instruction("mov x1, x0");                                          // return empty matches array in x1
+    emitter.instruction("mov x0, #-1");                                         // failure sentinel: PHP false
+    emitter.instruction("b __rt_preg_match_capture_ret");                       // return the false sentinel and empty matches
     emitter.label("__rt_preg_match_capture_empty");
     emitter.instruction("mov x0, #0");                                          // empty array capacity for no-match or compile-failure paths
     emitter.instruction("mov x1, #16");                                         // empty matches array still has string slot metadata
@@ -281,43 +294,50 @@ fn emit_preg_match_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving regex compilation scratch storage
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the regex object, regmatch buffer, and subject spill slots
     emitter.instruction(&format!("sub rsp, {}", stack_size));                   // reserve aligned local storage for the opaque handle, pair, and spill fields
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", subject_ptr_off)); // preserve the elephc subject pointer across delimiter stripping and regex compilation helper calls
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", subject_len_off)); // preserve the elephc subject length across delimiter stripping and regex compilation helper calls
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", subject_ptr_off));// preserve the elephc subject pointer across delimiter stripping and regex compilation helper calls
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", subject_len_off));// preserve the elephc subject length across delimiter stripping and regex compilation helper calls
     emitter.instruction("mov rax, rdi");                                        // move the elephc pattern pointer into the preg-strip helper input register
     emitter.instruction("mov rdx, rsi");                                        // move the elephc pattern length into the preg-strip helper input register
     emitter.instruction("call __rt_preg_strip");                                // strip slash delimiters and collect supported regex flags from the elephc pattern payload
+    emitter.instruction("bt rcx, 30");                                          // did the pattern use the removed /e modifier?
+    emitter.instruction("jc __rt_preg_match_fail_linux_x86_64");                // PHP 8 rejects /e as an unknown modifier
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", flags_off));  // preserve the regex flag word returned by the delimiter-strip helper for the later regcomp() call
     emitter.instruction("call __rt_pcre_to_posix");                             // materialize PCRE pattern as a null-terminated C string
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pattern_cstr_off)); // preserve the null-terminated PCRE pattern pointer for the upcoming regcomp() call
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pattern_cstr_off));// preserve the null-terminated PCRE pattern pointer for the upcoming regcomp() call
     super::emit_prepare_regex_locale(emitter);
     emitter.instruction(&format!("lea rdi, [rsp + {}]", handle_off));           // pass opaque-handle output storage
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", pattern_cstr_off)); // pass the null-terminated PCRE pattern C string as the second regcomp() argument
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", pattern_cstr_off));// pass the null-terminated PCRE pattern C string as the second regcomp() argument
     emitter.instruction(&format!("mov edx, DWORD PTR [rsp + {}]", flags_off));  // pass PCRE2 POSIX compile flags from delimiter parsing
     emitter.instruction(&format!("lea rcx, [rsp + {}]", match_slot_count_off)); // receive the compiled match-slot count
     emitter.bl_c("elephc_pcre2_v1_compile");                                    // compile without exposing PCRE2-owned layouts
     emitter.instruction("test eax, eax");                                       // did regcomp() succeed and produce a compiled regex object?
-    emitter.instruction("jnz __rt_preg_match_no_linux_x86_64");                 // failed regex compilation maps to a PHP false-style no-match result
-    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off)); // reload the elephc subject pointer before null-terminating it in the secondary scratch buffer
-    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off)); // reload the elephc subject length before null-terminating it in the secondary scratch buffer
+    emitter.instruction("jnz __rt_preg_match_fail_linux_x86_64");               // failed regex compilation maps to PHP false
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off));// reload the elephc subject pointer before null-terminating it in the secondary scratch buffer
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off));// reload the elephc subject length before null-terminating it in the secondary scratch buffer
     emitter.instruction("call __rt_cstr2");                                     // materialize a null-terminated C version of the subject string for PCRE2 regex execution
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", subject_cstr_off)); // preserve the subject C string pointer for the regexec() call and later cleanup path
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", subject_cstr_off));// preserve the subject C string pointer for the regexec() call and later cleanup path
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // pass compiled opaque handle
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_cstr_off)); // pass the null-terminated subject C string as the second regexec() argument
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_cstr_off));// pass the null-terminated subject C string as the second regexec() argument
     emitter.instruction("mov edx, 1");                                          // request only the full-match pair
     emitter.instruction(&format!("lea rcx, [rsp + {}]", match_pair_off));       // receive one fixed signed-64-bit offset pair
     emitter.instruction("xor r8d, r8d");                                        // use default execution flags
     emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute without exposing PCRE2-owned layouts
-    emitter.instruction(&format!("mov DWORD PTR [rsp + {}], eax", regexec_result_off)); // preserve the regexec() result code across the mandatory regfree() cleanup call
+    emitter.instruction(&format!("mov DWORD PTR [rsp + {}], eax", regexec_result_off));// preserve the regexec() result code across the mandatory regfree() cleanup call
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled opaque handle
     emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
-    emitter.instruction(&format!("mov eax, DWORD PTR [rsp + {}]", regexec_result_off)); // reload the saved regexec() status code after regfree() clobbered caller-saved registers
+    emitter.instruction(&format!("mov eax, DWORD PTR [rsp + {}]", regexec_result_off));// reload the saved regexec() status code after regfree() clobbered caller-saved registers
     emitter.instruction("test eax, eax");                                       // interpret a zero regexec() result as a successful regex match
     emitter.instruction("jnz __rt_preg_match_no_linux_x86_64");                 // return zero when PCRE2 regex execution reports no match
     emitter.instruction("mov eax, 1");                                          // return one when PCRE2 regex execution reports a successful match
     emitter.instruction("jmp __rt_preg_match_ret_linux_x86_64");                // share the common epilogue after materializing the successful match result
 
     emitter.label("__rt_preg_match_no_linux_x86_64");
-    emitter.instruction("xor eax, eax");                                        // return zero for compile failures and subjects that do not match the regex
+    emitter.instruction("xor eax, eax");                                        // return zero when the subject does not match
+    emitter.instruction("jmp __rt_preg_match_ret_linux_x86_64");                // skip the failure sentinel
+
+    emitter.label("__rt_preg_match_fail_linux_x86_64");
+    emitter.instruction("mov rax, -1");                                         // failure sentinel: PHP false
+    emitter.instruction("jmp __rt_preg_match_ret_linux_x86_64");                // return the sentinel
 
     emitter.label("__rt_preg_match_ret_linux_x86_64");
     emitter.instruction(&format!("add rsp, {}", stack_size));                   // release the opaque-handle, pair, and subject spill storage before returning
@@ -348,45 +368,47 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving capture helper storage
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for regex and capture spill slots
     emitter.instruction(&format!("sub rsp, {}", stack_size));                   // reserve local storage for the opaque handle, pair buffer, and matches state
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", subject_ptr_off)); // preserve the elephc subject pointer across pattern helper calls
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", subject_len_off)); // preserve the elephc subject length across pattern helper calls
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", subject_ptr_off));// preserve the elephc subject pointer across pattern helper calls
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", subject_len_off));// preserve the elephc subject length across pattern helper calls
     emitter.instruction("mov rax, rdi");                                        // move pattern pointer into preg-strip helper input register
     emitter.instruction("mov rdx, rsi");                                        // move pattern length into preg-strip helper input register
     emitter.instruction("call __rt_preg_strip");                                // strip slash delimiters and collect supported regex flags
+    emitter.instruction("bt rcx, 30");                                          // did the pattern use the removed /e modifier?
+    emitter.instruction("jc __rt_preg_match_capture_compile_fail_linux_x86_64");// PHP 8 rejects /e as an unknown modifier
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", flags_off));  // save stripped regex flags for regcomp
     emitter.instruction("call __rt_pcre_to_posix");                             // materialize PCRE pattern as a C string
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pattern_cstr_off)); // save null-terminated PCRE pattern for regcomp
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pattern_cstr_off));// save null-terminated PCRE pattern for regcomp
     super::emit_prepare_regex_locale(emitter);
     emitter.instruction(&format!("lea rdi, [rsp + {}]", handle_off));           // pass opaque-handle output storage
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", pattern_cstr_off)); // pass null-terminated PCRE pattern to regcomp
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", pattern_cstr_off));// pass null-terminated PCRE pattern to regcomp
     emitter.instruction(&format!("mov edx, DWORD PTR [rsp + {}]", flags_off));  // pass PCRE2 POSIX compile flags from delimiter parsing
     emitter.instruction(&format!("lea rcx, [rsp + {}]", nmatch_off));           // receive the compiled match-slot count
     emitter.bl_c("elephc_pcre2_v1_compile");                                    // compile without exposing PCRE2-owned layouts
     emitter.instruction("test eax, eax");                                       // did regex compilation succeed?
-    emitter.instruction("jnz __rt_preg_match_capture_empty_linux_x86_64");      // compile failure returns no match and an empty matches array
+    emitter.instruction("jnz __rt_preg_match_capture_compile_fail_linux_x86_64");// compile failure returns PHP false plus an empty matches array
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", nmatch_off)); // load match-slot count returned by the shim
     emitter.instruction("mov r10, rdi");                                        // copy slot count for allocation-overflow validation
     emitter.instruction("shr r10, 60");                                         // detect a wrapped 16-byte pair-vector size
-    emitter.instruction("jnz __rt_preg_match_capture_malloc_fail_linux_x86_64"); // free the handle instead of allocating a wrapped size
+    emitter.instruction("jnz __rt_preg_match_capture_malloc_fail_linux_x86_64");// free the handle instead of allocating a wrapped size
     emitter.instruction("shl rdi, 4");                                          // allocate one 16-byte signed-64-bit pair per slot
     emitter.bl_c("malloc");                                                     // allocate the fixed offset-pair vector
     emitter.instruction("test rax, rax");                                       // did malloc return a capture buffer?
     emitter.instruction("jz __rt_preg_match_capture_malloc_fail_linux_x86_64"); // allocation failure frees the opaque handle and returns no match
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", regmatches_ptr_off)); // save dynamic offset-pair buffer pointer
-    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off)); // reload subject pointer before C-string conversion
-    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off)); // reload subject length before C-string conversion
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", regmatches_ptr_off));// save dynamic offset-pair buffer pointer
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off));// reload subject pointer before C-string conversion
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off));// reload subject length before C-string conversion
     emitter.instruction("call __rt_cstr2");                                     // materialize null-terminated subject for regexec
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", subject_cstr_off)); // save subject C string across regexec and pushes
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", subject_cstr_off));// save subject C string across regexec and pushes
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // pass compiled opaque handle
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_cstr_off)); // pass subject C string to regexec
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_cstr_off));// pass subject C string to regexec
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", nmatch_off)); // request one regmatch slot for every capture group
-    emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // pass dynamic fixed offset-pair buffer
+    emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", regmatches_ptr_off));// pass dynamic fixed offset-pair buffer
     emitter.instruction("xor r8d, r8d");                                        // use default execution flags
     emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute and initialize every requested offset pair
-    emitter.instruction(&format!("mov DWORD PTR [rsp + {}], eax", regexec_result_off)); // save regexec status across regfree
+    emitter.instruction(&format!("mov DWORD PTR [rsp + {}], eax", regexec_result_off));// save regexec status across regfree
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled opaque handle
     emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
-    emitter.instruction(&format!("mov eax, DWORD PTR [rsp + {}]", regexec_result_off)); // reload saved regexec status
+    emitter.instruction(&format!("mov eax, DWORD PTR [rsp + {}]", regexec_result_off));// reload saved regexec status
     emitter.instruction("test eax, eax");                                       // was there a successful regex match?
     emitter.instruction("jnz __rt_preg_match_capture_no_match_linux_x86_64");   // no match frees capture storage and returns an empty array
 
@@ -395,7 +417,7 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_preg_match_capture_scan_linux_x86_64");
     emitter.instruction("mov r10, r9");                                         // copy capture index before scaling
     emitter.instruction("shl r10, 4");                                          // scale capture index by the fixed 16-byte pair stride
-    emitter.instruction(&format!("mov r12, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic offset-pair buffer base
+    emitter.instruction(&format!("mov r12, QWORD PTR [rsp + {}]", regmatches_ptr_off));// load dynamic offset-pair buffer base
     emitter.instruction("add r10, r12");                                        // compute address of this offset pair
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // load signed-64-bit capture start
     emitter.instruction("cmp r11, 0");                                          // check whether this capture participated
@@ -405,27 +427,27 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r9, 1");                                           // move to the previous capture slot
     emitter.instruction("jmp __rt_preg_match_capture_scan_linux_x86_64");       // continue searching for the highest populated capture
     emitter.label("__rt_preg_match_capture_scan_found_linux_x86_64");
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", max_group_off)); // save highest capture index to materialize
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", max_group_off));// save highest capture index to materialize
 
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", nmatch_off)); // allocate enough slots for every compiled capture
     emitter.instruction("mov rsi, 16");                                         // string arrays use pointer/length payload slots
     emitter.instruction("call __rt_array_new");                                 // allocate indexed string matches array
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", matches_array_off)); // save matches array pointer across pushes
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", group_idx_off)); // start with capture index zero
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", matches_array_off));// save matches array pointer across pushes
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", group_idx_off));// start with capture index zero
     emitter.label("__rt_preg_match_capture_group_loop_linux_x86_64");
-    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", group_idx_off)); // reload current capture index
-    emitter.instruction(&format!("mov r8, QWORD PTR [rsp + {}]", max_group_off)); // reload highest capture index
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", group_idx_off));// reload current capture index
+    emitter.instruction(&format!("mov r8, QWORD PTR [rsp + {}]", max_group_off));// reload highest capture index
     emitter.instruction("cmp r9, r8");                                          // have all required captures been materialized?
     emitter.instruction("jg __rt_preg_match_capture_success_linux_x86_64");     // finish after the highest populated capture
     emitter.instruction("mov r10, r9");                                         // copy capture index before scaling
     emitter.instruction("shl r10, 4");                                          // scale capture index by the fixed 16-byte pair stride
-    emitter.instruction(&format!("mov r12, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic offset-pair buffer base
+    emitter.instruction(&format!("mov r12, QWORD PTR [rsp + {}]", regmatches_ptr_off));// load dynamic offset-pair buffer base
     emitter.instruction("add r10, r12");                                        // compute address of this offset pair
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // load signed-64-bit capture start
     emitter.instruction("mov rcx, QWORD PTR [r10 + 8]");                        // load signed-64-bit capture end
     emitter.instruction("cmp r11, 0");                                          // detect unmatched captures before the highest populated slot
-    emitter.instruction("jl __rt_preg_match_capture_empty_string_linux_x86_64"); // emit PHP's empty string for an interior unmatched capture
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_cstr_off)); // reload subject C string base
+    emitter.instruction("jl __rt_preg_match_capture_empty_string_linux_x86_64");// emit PHP's empty string for an interior unmatched capture
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_cstr_off));// reload subject C string base
     emitter.instruction("add rsi, r11");                                        // compute capture string pointer
     emitter.instruction("mov rdx, rcx");                                        // copy capture end offset before subtracting start
     emitter.instruction("sub rdx, r11");                                        // capture length = rm_eo - rm_so
@@ -434,23 +456,23 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor esi, esi");                                        // empty unmatched capture has a null pointer
     emitter.instruction("xor edx, edx");                                        // empty unmatched capture has zero length
     emitter.label("__rt_preg_match_capture_push_linux_x86_64");
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", matches_array_off)); // reload matches array pointer
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", matches_array_off));// reload matches array pointer
     emitter.instruction("call __rt_array_push_str");                            // append capture string to matches array
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", matches_array_off)); // save possibly-grown matches array pointer
-    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", group_idx_off)); // reload capture index after helper calls
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", matches_array_off));// save possibly-grown matches array pointer
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", group_idx_off));// reload capture index after helper calls
     emitter.instruction("add r9, 1");                                           // advance to next capture index
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", group_idx_off)); // save next capture index
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", group_idx_off));// save next capture index
     emitter.instruction("jmp __rt_preg_match_capture_group_loop_linux_x86_64"); // continue materializing captures
 
     emitter.label("__rt_preg_match_capture_success_linux_x86_64");
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // reload dynamic capture buffer for cleanup
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off));// reload dynamic capture buffer for cleanup
     emitter.bl_c("free");                                                       // free the dynamic offset-pair vector before returning matches
-    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", matches_array_off)); // return matches array pointer in rdx
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", matches_array_off));// return matches array pointer in rdx
     emitter.instruction("mov eax, 1");                                          // report that preg_match found a match
     emitter.instruction("jmp __rt_preg_match_capture_ret_linux_x86_64");        // share helper epilogue
 
     emitter.label("__rt_preg_match_capture_no_match_linux_x86_64");
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // reload dynamic capture buffer for the no-match cleanup path
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off));// reload dynamic capture buffer for the no-match cleanup path
     emitter.bl_c("free");                                                       // free the dynamic offset-pair vector before returning an empty matches array
     emitter.instruction("jmp __rt_preg_match_capture_empty_linux_x86_64");      // allocate and return the empty matches array
 
@@ -458,6 +480,13 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload opaque handle after capture-buffer allocation failed
     emitter.bl_c("elephc_pcre2_v1_free");                                       // free compiled regex resources before returning no match
 
+    emitter.label("__rt_preg_match_capture_compile_fail_linux_x86_64");
+    emitter.instruction("xor edi, edi");                                        // empty array capacity for the failed call
+    emitter.instruction("mov esi, 16");                                         // empty matches array still uses string slot metadata
+    emitter.instruction("call __rt_array_new");                                 // allocate empty indexed string matches array
+    emitter.instruction("mov rdx, rax");                                        // return empty matches array pointer in rdx
+    emitter.instruction("mov rax, -1");                                         // failure sentinel: PHP false
+    emitter.instruction("jmp __rt_preg_match_capture_ret_linux_x86_64");        // return the false sentinel and empty matches
     emitter.label("__rt_preg_match_capture_empty_linux_x86_64");
     emitter.instruction("xor edi, edi");                                        // empty array capacity for no-match or compile-failure paths
     emitter.instruction("mov esi, 16");                                         // empty matches array still uses string slot metadata

@@ -14,30 +14,34 @@ use super::support::*;
 #[test]
 fn execute_program_preg_third_review_omitted_invalid_flags() {
     let program = parse_fragment(br#"
-foreach ([3, 4, 7, -1] as $flag) { echo preg_match_all('/(a)/', 'aaa', flags: $flag), '|'; }
+foreach ([3, 4, 7, -1] as $flag) {
+    try { echo preg_match_all('/(a)/', 'aaa', flags: $flag), '|'; }
+    catch (ValueError $e) { echo 'VE|'; }
+}
 return preg_match_all('/(a)/', 'aaa', flags: PREG_OFFSET_CAPTURE);
 "#).expect("parse omitted capture fixture");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
     let result = execute_program(&program, &mut scope, &mut values).expect("execute omitted captures");
-    assert_eq!(values.output, "0|0|0|0|");
+    assert_eq!(values.output, "VE|VE|VE|VE|");
     assert_eq!(values.get(result), FakeValue::Int(3));
 }
 
-/// Unsupported flags clear aliased captures instead of aborting the eval program.
+/// Unsupported flags raise a catchable `ValueError` before aliased captures are touched.
 #[test]
 fn execute_program_preg_third_review_extra_flag_bits() {
     let program = parse_fragment(br#"
 $matches = ['old']; $alias =& $matches;
 foreach ([4, -1, PREG_SET_ORDER | 4] as $flag) {
-    echo preg_match_all('/(a)/', 'aaa', $alias, $flag), ':', count($matches), '|';
+    try { echo preg_match_all('/(a)/', 'aaa', $alias, $flag), ':', count($matches), '|'; }
+    catch (ValueError $e) { echo 'VE|'; }
 }
 return true;
 "#).expect("parse unsupported flags fixture");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
     let result = execute_program(&program, &mut scope, &mut values).expect("execute unsupported flags");
-    assert_eq!(values.output, "0:0|0:0|0:0|");
+    assert_eq!(values.output, "VE|VE|VE|");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
@@ -363,14 +367,18 @@ return preg_match(pattern: "/x/", subject: "x", flags: PREG_OFFSET_CAPTURE);"#,
 fn execute_program_preg_oct9_conflicting_order() {
     let program = parse_fragment(br#"
 $matches = ["old"];
-echo preg_match_all("/(a)/", "a", $matches, PREG_PATTERN_ORDER | PREG_SET_ORDER), ":", count($matches), "|";
-echo preg_match_all("/(a)/", "a", $matches, PREG_PATTERN_ORDER | PREG_SET_ORDER | PREG_OFFSET_CAPTURE), ":", count($matches), "|";
-return preg_match_all("/(a)/", "a", $matches, PREG_PATTERN_ORDER | PREG_SET_ORDER | PREG_UNMATCHED_AS_NULL);
+try { echo preg_match_all("/(a)/", "a", $matches, PREG_PATTERN_ORDER | PREG_SET_ORDER), ":", count($matches), "|"; }
+catch (ValueError $e) { echo "VE|"; }
+try { echo preg_match_all("/(a)/", "a", $matches, PREG_PATTERN_ORDER | PREG_SET_ORDER | PREG_OFFSET_CAPTURE), ":", count($matches), "|"; }
+catch (ValueError $e) { echo "VE|"; }
+try { $result = preg_match_all("/(a)/", "a", $matches, PREG_PATTERN_ORDER | PREG_SET_ORDER | PREG_UNMATCHED_AS_NULL); }
+catch (ValueError $e) { echo "VE|"; $result = 0; }
+return $result;
 "#).expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
-    assert_eq!(values.output, "0:0|0:0|");
+    assert_eq!(values.output, "VE|VE|VE|");
     assert_eq!(values.get(result), FakeValue::Int(0));
 }
 

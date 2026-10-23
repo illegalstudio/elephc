@@ -251,7 +251,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     // Honor the json_decode `$associative` flag: 0 → stdClass, non-zero → assoc.
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_json_decode_assoc");
     emitter.instruction("ldr x9, [x9]");                                        // load the assoc flag
-    emitter.instruction("cbz x9, __rt_json_decode_mixed_object_empty_stdclass"); // 0 → wrap in a stdClass instance
+    emitter.instruction("cbz x9, __rt_json_decode_mixed_object_empty_stdclass");// 0 → wrap in a stdClass instance
     emitter.instruction("mov x0, #5");                                          // tag = associative array
     emitter.instruction("mov x2, #0");                                          // mixed_from_value high word unused for assoc payload
     emitter.instruction("bl __rt_json_box_owned_container");                    // box as Mixed(assoc)
@@ -446,25 +446,12 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_mixed_from_value");                            // box as Mixed(int)
     emitter.instruction("b __rt_json_decode_mixed_done");                       // continue in the JSON decoder control path
 
-    // Float path: copy the trimmed raw slice into a 32-byte stack buffer with a
-    // trailing NUL, then call libc atof which expects a C string.
+    // Float path: convert the full trimmed token through the growable C-string helper so
+    // numbers longer than any fixed scratch keep every significant digit.
     emitter.label("__rt_json_decode_mixed_number_float");
     emitter.instruction("ldr x1, [sp, #72]");                                   // trimmed raw ptr
     emitter.instruction("ldr x2, [sp, #80]");                                   // trimmed raw len
-    emitter.instruction("add x11, sp, #40");                                    // scratch buffer base (32 bytes available)
-    emitter.instruction("mov x9, #0");                                          // load or prepare JSON decoder state
-    emitter.label("__rt_json_decode_mixed_float_copy");
-    emitter.instruction("cmp x9, x2");                                          // copied every byte?
-    emitter.instruction("b.ge __rt_json_decode_mixed_float_copy_done");         // branch on the current JSON decoder condition
-    emitter.instruction("cmp x9, #31");                                         // bound the copy to 31 bytes + NUL terminator
-    emitter.instruction("b.ge __rt_json_decode_mixed_float_copy_done");         // branch on the current JSON decoder condition
-    emitter.instruction("ldrb w10, [x1, x9]");                                  // load or prepare JSON decoder state
-    emitter.instruction("strb w10, [x11, x9]");                                 // store updated JSON decoder state
-    emitter.instruction("add x9, x9, #1");                                      // update the JSON decoder cursor or counter
-    emitter.instruction("b __rt_json_decode_mixed_float_copy");                 // continue in the JSON decoder control path
-    emitter.label("__rt_json_decode_mixed_float_copy_done");
-    emitter.instruction("strb wzr, [x11, x9]");                                 // append the NUL terminator atof needs
-    emitter.instruction("mov x0, x11");                                         // pass the C-string pointer to atof in x0
+    emitter.instruction("bl __rt_cstr");                                        // copy the whole token to a NUL-terminated buffer
     emitter.bl_c("atof");                                                       // libc atof → d0 = double
     emitter.instruction("fmov x1, d0");                                         // move the double bits into the integer payload register
     emitter.instruction("mov x0, #2");                                          // tag = float
