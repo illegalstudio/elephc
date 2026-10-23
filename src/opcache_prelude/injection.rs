@@ -137,6 +137,25 @@ fn inject_if_used_on_compiler_stack(
             || (detect::program_references(&program, "ini_set")
                 && !detect::program_declares(&program, "ini_set"));
 
+        // `opcache_reset()` emits php-src's `Debug Restart Scheduled! Reason: user` only when the
+        // effective `opcache.log_verbosity_level` reaches DEBUG (4), and only when the cache is
+        // enabled (a disabled reset returns before scheduling). Capture the destination then —
+        // the empty string means stderr.
+        let restart_log = {
+            let accel = crate::opcache::runtime_cache::runtime_cache_config(
+                php_version.version_id(),
+                web,
+                overrides,
+            );
+            (accel.enabled && accel.log_verbosity_level >= 4).then_some(accel.error_log)
+        };
+
+        // A runtime `opcache.enable` disable is only possible when an `ini_set()` exists, and the
+        // override-store helpers the live gate reads are declared exactly then. Recorded on
+        // `sites` so `bake_manifest` re-renders the manifest-dependent bodies with the same gate.
+        sites.ini_set_injected = ini_set_injected;
+        let runtime_gate = || ini_set_injected.then(runtime_enabled_expr);
+
         // Interpreter-backed eval can select an OPcache callable at runtime, including
         // literal fragments with computed names. Supply declarations in configured binaries,
         // while native and scope-only literals keep their no-interpreter startup behavior.
@@ -162,7 +181,11 @@ fn inject_if_used_on_compiler_stack(
             declarations.push(if restricted {
                 build::restricted_reset_decl(warning())
             } else {
-                build::reset_decl(cache_enabled(php_version, web, overrides))
+                build::reset_decl(
+                    cache_enabled(php_version, web, overrides),
+                    restart_log.as_deref(),
+                    runtime_gate(),
+                )
             });
         }
 
@@ -178,6 +201,7 @@ fn inject_if_used_on_compiler_stack(
                 overrides,
                 restricted,
                 preload,
+                runtime_gate(),
             ));
         }
 
@@ -188,7 +212,7 @@ fn inject_if_used_on_compiler_stack(
             declarations.push(if restricted {
                 build::restricted_is_script_cached_decl(warning())
             } else {
-                is_script_cached_declaration(php_version, web, manifest, overrides)
+                is_script_cached_declaration(php_version, web, manifest, overrides, runtime_gate())
             });
         }
 
@@ -199,7 +223,7 @@ fn inject_if_used_on_compiler_stack(
             declarations.push(if restricted {
                 build::restricted_invalidate_decl(warning())
             } else {
-                invalidate_declaration(php_version, web, manifest, overrides, strict)
+                invalidate_declaration(php_version, web, manifest, overrides, strict, runtime_gate())
             });
         }
 

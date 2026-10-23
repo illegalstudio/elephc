@@ -15,7 +15,12 @@
 //!   governs `opcache_reset()`) from that same directive table, so the two stay in sync.
 //! - `rt_status_keys` is the ABI the generated `opcache_get_status()` body uses to pull
 //!   the runtime script cache's figures one at a time; it is shared the same way.
+//! - `accel_log` renders php-src's `zend_accel_error` line shape and applies its
+//!   `log_verbosity_level` gate. Magician shares the file for the runtime diagnostics;
+//!   the compiler uses it for the startup refusals reference PHP emits while registering
+//!   the INI entries.
 
+pub mod accel_log;
 pub mod directives;
 pub mod rt_status_keys;
 pub mod runtime_cache;

@@ -27,6 +27,10 @@
 //!   stored. It is an admission rule like `config`'s, kept separate because it is
 //!   pattern matching rather than a scalar comparison.
 
+// Shared VERBATIM with the `elephc` compiler, which emits the startup refusals reference
+// PHP prints while registering the INI entries. Keep it dependency-free and free of any
+// `crate::` path so the same source file compiles in both crates.
+#[path = "../../../../src/opcache/accel_log.rs"]
 pub(crate) mod accel_log;
 pub(crate) mod blacklist;
 pub(crate) mod config;
@@ -48,7 +52,7 @@ pub(crate) use config::{
 };
 #[allow(unused_imports)]
 pub use config::{
-    swap_directive, DIRECTIVE_FILE_UPDATE_PROTECTION, DIRECTIVE_REVALIDATE_FREQ,
+    swap_directive, DIRECTIVE_ENABLE, DIRECTIVE_FILE_UPDATE_PROTECTION, DIRECTIVE_REVALIDATE_FREQ,
     DIRECTIVE_UNKNOWN, DIRECTIVE_VALIDATE_TIMESTAMPS,
 };
 pub(crate) use file_store::contains as file_cache_contains;

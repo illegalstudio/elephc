@@ -36,6 +36,10 @@ pub struct ManifestBakeSites {
     /// The compile-time `opcache.restrict_api` verdict ([`restrict_api_denies`]), replayed so
     /// the re-rendered `opcache_get_status` keeps the same gate it was injected with.
     pub(super) restricted: bool,
+    /// Whether an `ini_set()` was injected, so a runtime `opcache.enable` disable is possible and
+    /// the re-rendered bodies must carry the live gate ([`runtime_enabled_expr`]). Replayed from
+    /// `inject_if_used` because the bake re-renders the same bodies.
+    pub(super) ini_set_injected: bool,
 }
 
 impl ManifestBakeSites {
@@ -100,6 +104,7 @@ pub fn bake_manifest(
     }
 
     let mut baked: Vec<(&str, Stmt)> = Vec::new();
+    let runtime_gate = || sites.ini_set_injected.then(runtime_enabled_expr);
     crate::synthetic_class::internal_declarations(|| {
         if sites.get_status {
             baked.push((
@@ -111,6 +116,7 @@ pub fn bake_manifest(
                     overrides,
                     sites.restricted,
                     preload,
+                    runtime_gate(),
                 )),
             ));
         }
@@ -122,6 +128,7 @@ pub fn bake_manifest(
                     web,
                     manifest,
                     overrides,
+                    runtime_gate(),
                 )),
             ));
         }
@@ -145,6 +152,7 @@ pub fn bake_manifest(
                     manifest,
                     overrides,
                     strict,
+                    runtime_gate(),
                 )),
             ));
         }
