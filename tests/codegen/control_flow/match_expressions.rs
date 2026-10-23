@@ -16,6 +16,8 @@
 //! - `gettype` probes assert PHP's per-arm type preservation across arms.
 //! - Explicit `UnhandledMatchError` construction is distinct from the current
 //!   fatal terminator used when no match arm and no default arm succeeds.
+//! - `match (true)` arms whose single condition is an `instanceof` guard see
+//!   that guard's then-narrowing, as the ternary already does.
 
 use super::*;
 
@@ -737,4 +739,93 @@ echo $count, "|", $a[0], "|", $a[1];
         "expected clean heap summary, got: {}",
         out.stderr
     );
+}
+
+/// A `match (true)` arm guarded by `$v instanceof A` reads `$v` as `A`, so a
+/// property that only `A` declares is read from `A` instead of the declared
+/// `A|B` union. Before the fix the arm's inference failed silently and the
+/// function returned the checker's `int` placeholder (`int(0)` twice).
+#[test]
+fn test_match_true_instanceof_narrows_declared_union_arm() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public $n = 'a'; }
+class B { public $m = 'b'; }
+function an(A|B $v) {
+    return match (true) {
+        $v instanceof A => $v->n,
+        default => 'z',
+    };
+}
+var_dump(an(new A), an(new B));
+"#,
+    );
+    assert_eq!(out, "string(1) \"a\"\nstring(1) \"z\"\n");
+}
+
+/// An untyped parameter that joins two classes (and null) gets the same
+/// per-arm narrowing: each arm reads the property its own class declares.
+/// Before the fix this failed to compile with "Undefined property: A::m".
+#[test]
+fn test_match_true_instanceof_narrows_untyped_joined_param_arms() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public $n = 'a'; }
+class B { public $m = 'b'; }
+function g($v, $d = null) {
+    return match (true) {
+        $v instanceof A => $v->n,
+        $v instanceof B => $v->m,
+        default => 'd',
+    };
+}
+var_dump(g(new A), g(new B), g(null, 'x'));
+"#,
+    );
+    assert_eq!(out, "string(1) \"a\"\nstring(1) \"b\"\nstring(1) \"d\"\n");
+}
+
+/// Control (also passes without the narrowing): an arm that writes the
+/// guarded variable is inferred without the narrowing, so the reassignment
+/// keeps its own type.
+#[test]
+fn test_match_true_instanceof_arm_that_writes_the_variable_is_not_narrowed() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public $n = 'a'; }
+class B { public $m = 'b'; }
+function w(A|B $v) {
+    return match (true) {
+        $v instanceof A => ($v = new B) instanceof B ? 'reassigned' : 'x',
+        default => 'z',
+    };
+}
+var_dump(w(new A), w(new B));
+"#,
+    );
+    assert_eq!(out, "string(10) \"reassigned\"\nstring(1) \"z\"\n");
+}
+
+/// A `match (true)` arm guarded by a PROPERTY `instanceof` that reassigns the
+/// property inside the arm reads the new value: the arm is not narrowed to the
+/// guard's class, so `$h->p->m()` after `($h->p = new B())` resolves against
+/// the declared `mixed` property instead of failing with "Undefined method: A::m".
+#[test]
+fn test_match_true_instanceof_property_guard_rewritten_in_arm_is_not_narrowed() {
+    let out = compile_and_run(
+        r#"<?php
+class A {}
+class B { public function m() { return "B::m"; } }
+class Holder { public mixed $p; }
+function keep($x) { return ""; }
+$h = new Holder();
+$h->p = new A();
+$r = match (true) {
+    $h->p instanceof A => keep($h->p = new B()) . $h->p->m(),
+    default => "none",
+};
+var_dump($r);
+"#,
+    );
+    assert_eq!(out, "string(4) \"B::m\"\n");
 }

@@ -221,7 +221,35 @@ impl Checker {
                     for condition in conditions {
                         self.infer_type_with_assignment_effects(condition, &mut arm_env)?;
                     }
-                    self.infer_type_with_assignment_effects(result, &mut arm_env)?;
+                    // `match (true)`: the arm sees its single condition's then-narrowing, as in
+                    // the result-type inference (`infer_basic_expr_type`). The narrowed binding
+                    // is scoped to the result and restored before the arm env is joined.
+                    let narrowing = match conditions.as_slice() {
+                        [condition] if matches!(subject.kind, ExprKind::BoolLiteral(true)) => {
+                            self.guard_narrowing(condition, &arm_env)?.filter(|guard| {
+                                super::basic::match_arm_may_narrow(result, &guard.var)
+                            })
+                        }
+                        _ => None,
+                    };
+                    if let Some(guard) = narrowing {
+                        let previous = arm_env.get(&guard.var).cloned();
+                        arm_env.insert(guard.var.clone(), guard.then_ty.clone());
+                        self.infer_type_with_assignment_effects(result, &mut arm_env)?;
+                        // An arm that reassigned the variable keeps its own type.
+                        if arm_env.get(&guard.var) == Some(&guard.then_ty) {
+                            match previous {
+                                Some(ty) => {
+                                    arm_env.insert(guard.var, ty);
+                                }
+                                None => {
+                                    arm_env.remove(&guard.var);
+                                }
+                            }
+                        }
+                    } else {
+                        self.infer_type_with_assignment_effects(result, &mut arm_env)?;
+                    }
                     merge_array_storage_effects(env, &arm_env);
                 }
                 if let Some(default) = default {
