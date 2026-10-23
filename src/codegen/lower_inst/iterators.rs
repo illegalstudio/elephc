@@ -2020,12 +2020,11 @@ pub(super) fn emit_interface_dispatch_call(
             ctx.emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");      // select this class's interface metadata block
             ctx.emitter.instruction("mov r10, QWORD PTR [r11]");                // load implemented interface count
             ctx.emitter.instruction("add r11, 8");                              // move to first [interface id, table] pair
-            abi::emit_load_int_immediate(ctx.emitter, "r9", interface_id);
+            abi::emit_load_int_immediate(ctx.emitter, "rax", interface_id);
             ctx.emitter.label(&scan_loop);
             ctx.emitter.instruction("test r10, r10");                           // check whether implemented interfaces remain
             ctx.emitter.instruction(&format!("je {}", missing));                // stop when no implemented interface matched
-            ctx.emitter.instruction("mov r8, QWORD PTR [r11]");                 // load current implemented interface id
-            ctx.emitter.instruction("cmp r8, r9");                              // compare with target interface id
+            ctx.emitter.instruction("cmp QWORD PTR [r11], rax");                // compare the current implemented interface id with the target
             ctx.emitter.instruction(&format!("je {}", found));                  // dispatch through this table when matched
             ctx.emitter.instruction("add r11, 16");                             // advance to next interface metadata entry
             ctx.emitter.instruction("sub r10, 1");                              // consume one interface entry
