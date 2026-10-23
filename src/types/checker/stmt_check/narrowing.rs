@@ -91,6 +91,13 @@ impl Checker {
             return Ok(None);
         };
         let negated = prefix_negated ^ comparison_negated;
+        // `instanceof Coll` where `Coll` is a generic template tests its member-less MARKER
+        // interface (`crate::generics::classes`), which every instantiation implements. Narrowing
+        // to it would hide every method the value has; see `template_guard_narrowing`.
+        let template_guard = matches!(
+            &target,
+            GuardTarget::Exact(PhpType::Object(class)) if self.names_generic_template(class)
+        );
         let Some(key) = self.guard_env_key(receiver) else {
             return Ok(None);
         };
@@ -121,8 +128,11 @@ impl Checker {
             }
             None => return Ok(None),
         };
-        let matched = self.narrow_to(&current, &target);
-        let complement = self.narrow_complement(&current, &target);
+        let (matched, complement) = if template_guard {
+            (template_guard_narrowing(&current), current.clone())
+        } else {
+            (self.narrow_to(&current, &target), self.narrow_complement(&current, &target))
+        };
         // `!` on the condition and a self-negating guard (`isset(...)`, `!== null`) each swap the
         // branches, so two negations cancel out — `negated` is already that XOR.
         let (then_ty, else_ty) = if negated {
@@ -131,6 +141,23 @@ impl Checker {
             (matched, complement)
         };
         Ok(Some(GuardNarrowing { var: key, then_ty, else_ty }))
+    }
+
+    /// Whether `class` names a generic class or interface TEMPLATE, which after monomorphization
+    /// is only the member-less marker interface its instantiations share
+    /// (`crate::generics::classes`). An `instanceof` against it is not a narrowing.
+    pub(crate) fn names_generic_template(&self, class: &str) -> bool {
+        let key = crate::generics::classes::template_key(class);
+        self.class_templates.iter().any(|template| template.key == key)
+    }
+
+    /// Whether `name` is a generic CLASS template, whose marker interface is hidden from
+    /// reflection (see `InterfaceInfo::reflection_hidden`).
+    pub(crate) fn names_generic_class_template(&self, name: &str) -> bool {
+        let key = crate::generics::classes::template_key(name);
+        self.class_templates
+            .iter()
+            .any(|template| template.is_class && template.key == key)
     }
 
     /// Synthetic `TypeEnv` key for a narrowed simple property access `$var->prop` (`None` for a
@@ -502,6 +529,31 @@ fn type_is_definitely_non_null(ty: &PhpType) -> bool {
 /// (else) members. Exact targets require a matching variant; an `Object` target matches an object
 /// member with the same class name (inheritance-aware narrowing is left for the future), and
 /// `AnyArray` matches either array shape.
+/// The type a local takes where `instanceof <Template>` holds.
+///
+/// An object keeps its own class (the class already carries every method the marker would hide),
+/// a union keeps its object members, and anything else — `mixed`, or a scalar the guard can never
+/// match at runtime — becomes `mixed`, so a call dispatches on the runtime class and a store under
+/// the guard merges against `mixed` the way one under `instanceof Shape` merges against `Shape`.
+fn template_guard_narrowing(current: &PhpType) -> PhpType {
+    match current {
+        PhpType::Object(_) => current.clone(),
+        PhpType::Union(members) => {
+            let objects: Vec<PhpType> = members
+                .iter()
+                .filter(|member| matches!(member, PhpType::Object(_)))
+                .cloned()
+                .collect();
+            match objects.len() {
+                0 => PhpType::Mixed,
+                1 => objects.into_iter().next().expect("one object member"),
+                _ => PhpType::Union(objects),
+            }
+        }
+        _ => PhpType::Mixed,
+    }
+}
+
 fn guard_matches(member: &PhpType, target: &GuardTarget) -> bool {
     match target {
         GuardTarget::AnyArray => matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. }),

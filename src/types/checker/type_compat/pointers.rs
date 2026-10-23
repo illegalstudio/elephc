@@ -161,7 +161,21 @@ impl Checker {
                 Ok(PhpType::Array(Box::new(self.resolve_type_expr(inner, span)?)))
             }
             crate::parser::ast::TypeExpr::AssocArray { key, value } => {
-                let key_ty = self.resolve_type_expr(key, span)?;
+                let key_ty = match self.resolve_type_expr(key, span)? {
+                    // `array-key` (`int|string`) is PHP's own key domain, and an OBJECT key can
+                    // only come from a substituted PHPDoc template (`Collection<TValue, TKey>`
+                    // on `flip()`): php-src never stores either as a typed key. Both are read
+                    // as the mixed key storage that holds any int or string key.
+                    PhpType::Union(members)
+                        if members
+                            .iter()
+                            .all(|m| matches!(m, PhpType::Int | PhpType::Str)) =>
+                    {
+                        PhpType::Mixed
+                    }
+                    PhpType::Object(_) => PhpType::Mixed,
+                    other => other,
+                };
                 if !matches!(key_ty, PhpType::Int | PhpType::Str | PhpType::Mixed) {
                     return Err(CompileError::new(
                         span,

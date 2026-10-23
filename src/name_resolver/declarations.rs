@@ -71,6 +71,7 @@ fn resolve_type_params(
                 .as_ref()
                 .map(|ty| resolve_type_expr_with_type_params(ty, namespace, imports, symbols, type_params)),
             variance: param.variance,
+            from_docblock: param.from_docblock,
         })
         .collect()
 }

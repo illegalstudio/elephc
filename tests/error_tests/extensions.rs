@@ -997,6 +997,19 @@ fn test_error_type_arguments_on_a_non_generic_class_annotation() {
     );
 }
 
+/// Type arguments on an enum the program declares: enums share the class namespace and never
+/// declare type parameters, so the mistake is reported exactly as for a class instead of the
+/// arguments being erased like those on a name declared outside the program.
+#[test]
+fn test_error_type_arguments_on_a_declared_enum_annotation() {
+    expect_error(
+        "<?php enum Suit { case Hearts; } \
+         function f(Suit<int> $s): string { return $s->name; } \
+         echo f(Suit::Hearts);",
+        "'Suit' is written with type arguments but declares no type parameters",
+    );
+}
+
 /// An enum may implement a generic interface at a concrete type. It declares no type parameters
 /// of its own — there is no `enum Suit<T>` — so the only generic half it carries is the arguments
 /// written on what it implements.

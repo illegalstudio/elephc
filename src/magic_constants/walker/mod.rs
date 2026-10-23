@@ -239,6 +239,11 @@ pub(crate) trait Pass {
     fn enter_class(&mut self, _name: &str) {}
     /// Called when leaving a class or interface declaration.
     fn leave_class(&mut self) {}
+    /// Called around the inheritance clauses (`extends`/`implements`) of the class or
+    /// interface just entered, so a pass can tell an inherited name from a member type.
+    fn enter_heritage(&mut self) {}
+    /// Called after the inheritance clauses of the class or interface just entered.
+    fn leave_heritage(&mut self) {}
     /// Called when entering a trait declaration.
     fn enter_trait(&mut self, _name: &str) {}
     /// Called when leaving a trait declaration.

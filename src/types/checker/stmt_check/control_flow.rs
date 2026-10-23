@@ -464,7 +464,10 @@ impl Checker {
                         }
                     }
                 } else if let PhpType::Object(class_name) = &arr_ty {
-                    if !self.object_type_implements_iterable(class_name) {
+                    // An instantiation inferred THIS round is not in the class table yet; the
+                    // next monomorphization round checks the loop against the spliced class.
+                    let pending = self.awaits_generic_instantiation(class_name);
+                    if !pending && !self.object_type_implements_iterable(class_name) {
                         return Err(CompileError::new(
                             stmt.span,
                             &format!(

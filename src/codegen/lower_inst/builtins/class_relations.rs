@@ -122,7 +122,7 @@ fn relation_names(
 
 /// Computes implemented interface names for a class or parent interfaces for an interface.
 fn class_implements(ctx: &FunctionContext<'_>, target: &ClassLikeTarget) -> Vec<String> {
-    match target {
+    let mut names = match target {
         ClassLikeTarget::Class(class_name) => lookup_class(ctx, class_name)
             .map(|info| info.interfaces.clone())
             .unwrap_or_default(),
@@ -132,7 +132,18 @@ fn class_implements(ctx: &FunctionContext<'_>, target: &ClassLikeTarget) -> Vec<
             names
         }
         ClassLikeTarget::Trait(_) | ClassLikeTarget::Unknown => Vec::new(),
-    }
+    };
+    names.retain(|name| !reflection_hidden_interface(ctx, name));
+    names
+}
+
+/// Whether `name` is a generic class template's marker interface, which answers `instanceof`
+/// but is invisible to reflection (see `InterfaceInfo::reflection_hidden`).
+pub(in crate::codegen::lower_inst) fn reflection_hidden_interface(
+    ctx: &FunctionContext<'_>,
+    name: &str,
+) -> bool {
+    lookup_interface(ctx, name).is_some_and(|info| info.reflection_hidden)
 }
 
 /// Computes parent class names from the immediate parent through ancestors.

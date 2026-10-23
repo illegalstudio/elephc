@@ -1071,6 +1071,19 @@ In a generic class, a method can refer to the class's `T` and declare a separate
 If a method already declares native type parameters, its written signature takes precedence
 over the docblock.
 
+A PHPDoc method template is erased, not monomorphized, when the method is dispatched
+dynamically: an interface method, a method that implements or overrides another one
+(including built-in interfaces such as `ArrayAccess`, `Countable` or `IteratorAggregate`),
+or any method of a class with an undeclared ancestor. An instantiated method never takes a
+vtable slot (see above), so specializing it would break interface conformance and override
+dispatch; the method keeps its native signature and runs as php-src runs it. A method template
+that no parameter or return position adopts is dropped the same way.
+
+`instanceof` on a generic class or interface template (`$x instanceof Coll`) holds for every
+instantiation and subclass, as in php-src, where the template is an ordinary class. The marker
+a class template leaves behind is hidden from `interface_exists()`,
+`get_declared_interfaces()` and `class_implements()`.
+
 A constructor can also declare `@template`. Its arguments specialize the constructed class,
 so promoted properties use the same concrete types as the constructor parameters:
 
