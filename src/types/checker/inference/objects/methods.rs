@@ -638,6 +638,12 @@ impl Checker {
             .get(&impl_class_name)
             .map(|class_info| Self::declared_method_param_flags(class_info, &method_key, false))
             .unwrap_or_default();
+        self.widen_override_untyped_method_params(
+            class_name,
+            &impl_class_name,
+            &method_key,
+            &arg_types,
+        );
         if let Some(class_info) = self.classes.get_mut(&impl_class_name) {
             if let Some(sig) = class_info.methods.get_mut(&method_key) {
                 let regular_param_count = if sig.variadic.is_some() {
@@ -720,6 +726,89 @@ impl Checker {
             }
         }
         Ok(PhpType::Int)
+    }
+
+    /// Widens the untyped parameters of every override a call on `receiver_class` can reach.
+    ///
+    /// The call is typed against the receiver's class, so the specialization below teaches only
+    /// the body that class dispatches to. A subclass that overrides the method runs ITS body
+    /// whenever the object is that subclass — `$parentTyped->add($v)`, or a fluent `: self`
+    /// chain — and kept the narrower types its own direct calls taught it: the override stored
+    /// the boxed argument into a slot typed for something else and printed a pointer. Every
+    /// override below the receiver class gets the same widening, by the same rules.
+    fn widen_override_untyped_method_params(
+        &mut self,
+        receiver_class: &str,
+        receiver_impl_class: &str,
+        method_key: &str,
+        arg_types: &[PhpType],
+    ) {
+        let mut override_impls: Vec<String> = self
+            .classes
+            .iter()
+            .filter(|(name, _)| self.class_descends_from(name, receiver_class))
+            .filter_map(|(_, info)| info.method_impl_classes.get(method_key).cloned())
+            .filter(|impl_class| impl_class != receiver_impl_class)
+            .collect();
+        override_impls.sort();
+        override_impls.dedup();
+        for impl_class in override_impls {
+            let declared_flags = self
+                .classes
+                .get(&impl_class)
+                .map(|info| Self::declared_method_param_flags(info, method_key, false))
+                .unwrap_or_default();
+            let key_owner = format!("{}::{}", impl_class, method_key);
+            let Some(sig) = self
+                .classes
+                .get_mut(&impl_class)
+                .and_then(|info| info.methods.get_mut(method_key))
+            else {
+                continue;
+            };
+            let regular_param_count = if sig.variadic.is_some() {
+                sig.params.len().saturating_sub(1)
+            } else {
+                sig.params.len()
+            };
+            for (i, arg_ty) in arg_types.iter().enumerate() {
+                if i >= regular_param_count
+                    || declared_flags.get(i).copied().unwrap_or(false)
+                    || sig.ref_params.get(i).copied().unwrap_or(false)
+                    || self
+                        .interface_method_boxed_params
+                        .contains(&(key_owner.clone(), i))
+                    || matches!(*arg_ty, PhpType::Void | PhpType::Never | PhpType::Callable)
+                {
+                    continue;
+                }
+                let key = (key_owner.clone(), i);
+                if sig.params[i].1 == PhpType::Int && !self.param_specialization_seen.contains(&key)
+                {
+                    self.param_specialization_seen.insert(key);
+                    sig.params[i].1 = arg_ty.clone();
+                } else {
+                    sig.params[i].1 = Self::union_param_type(&sig.params[i].1, arg_ty);
+                }
+            }
+        }
+    }
+
+    /// Returns whether `class_name` is `ancestor` or one of its subclasses.
+    fn class_descends_from(&self, class_name: &str, ancestor: &str) -> bool {
+        let mut current = Some(class_name.to_string());
+        let mut hops = 0usize;
+        while let Some(name) = current {
+            if name == ancestor {
+                return true;
+            }
+            hops += 1;
+            if hops > self.classes.len() {
+                return false;
+            }
+            current = self.classes.get(&name).and_then(|info| info.parent.clone());
+        }
+        false
     }
 
     /// Returns preserved late-static return syntax for an instance method.

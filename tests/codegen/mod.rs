@@ -49,6 +49,7 @@ mod eval_scope_access_mask;
 mod eval_native_catalog;
 mod eval_undefined_functions;
 mod operators;
+mod chained_call;
 mod control_flow;
 mod scalar_strings;
 mod array_basics;
