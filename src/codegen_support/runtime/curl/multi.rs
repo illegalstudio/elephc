@@ -51,7 +51,7 @@ pub(crate) fn emit_curl_multi(emitter: &mut Emitter) {
     emit_handle_producer(
         emitter,
         "__rt_curl_multi_init",
-        "_elephc_curl_multi_init_fn",
+        Some("_elephc_curl_multi_init_fn"),
         "curl_multi_init (allocate a libcurl multi handle)",
         CURL_MULTI_RESOURCE_KIND,
     );

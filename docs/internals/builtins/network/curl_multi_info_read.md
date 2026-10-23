@@ -2,7 +2,7 @@
 title: "curl_multi_info_read() - internals"
 description: "Compiler internals for curl_multi_info_read(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 710
+  order: 712
 ---
 
 ## `curl_multi_info_read()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_curl.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_curl.rs)
-- **Lowering**: [`src/curl_prelude.rs`:1608](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude.rs#L1608) (`curl_multi_info_read`)
+- **Lowering**: [`src/curl_prelude/oracle.rs`:2101](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude/oracle.rs#L2101) (`curl_multi_info_read`)
 - **Function symbol**: `curl_multi_info_read()`
 
 

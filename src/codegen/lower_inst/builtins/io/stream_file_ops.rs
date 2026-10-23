@@ -125,7 +125,14 @@ pub(crate) fn lower_fread(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     let length = expect_operand(inst, 1)?;
     load_stream_fd_to_result(ctx, stream, "fread")?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    require_int(ctx.load_value_to_result(length)?.codegen_repr(), "fread length")?;
+    // The length resolves like any other integer operand, so a runtime `mixed`/`union`
+    // value (an untyped callback parameter minus 10, say) is unboxed through
+    // `__rt_mixed_cast_int` instead of failing the compile.
+    crate::codegen::lower_inst::call_operands::resolve_int_operand_to_result(
+        ctx,
+        length,
+        "fread length",
+    )?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x1, x0");                              // pass the requested byte count to the fread runtime helper

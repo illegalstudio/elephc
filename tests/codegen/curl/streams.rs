@@ -457,8 +457,16 @@ fn curl_debugfunction_shadows_stderr_permanently() {
         "#
     ));
     assert_eq!(output.stdout, "stderr/-\n-/cb\n-/cb\n-/-\n-/-\n-/-\n");
+    // `debugProbe()` closes each handle, and PHP 8.5 deprecates `curl_close()`; drop
+    // those known lines so the assertion still isolates the leaked-trace case.
+    let leaked: String = output
+        .stderr
+        .lines()
+        .filter(|line| !line.contains("Function curl_close() is deprecated since 8.5"))
+        .collect::<Vec<_>>()
+        .join("\n");
     assert_eq!(
-        output.stderr, "",
+        leaked, "",
         "a shadowed debug sink must SWALLOW the trace, as php does — not fall through to \
          libcurl's default and print it to fd 2"
     );
@@ -619,4 +627,31 @@ fn curl_reset_clears_stream_options_and_copy_carries_them() {
         // `hello-curl` first: the reset handle's body reaching the terminal.
         "hello-curl\nreset-file-empty\nbool(true)\nhello-curl\ncopy-headers\ncopy-upload\n"
     );
+}
+
+/// A PHP-stream option whose resource was CLOSED after it was set is reset with php's
+/// "resource has gone away" warning when the transfer is set up.
+///
+/// `is_resource()` answers `false` for a `fclose()`d handle, which is what lets the prelude
+/// tell "closed since setopt" apart from "still open".
+#[test]
+fn curl_exec_resets_a_stream_closed_after_setopt() {
+    let output = compile_and_run_capture(
+        r#"<?php
+$sink = fopen("php://temp", "w+");
+$ch = curl_init("file:///dev/null");
+curl_setopt($ch, CURLOPT_FILE, $sink);
+fclose($sink);
+curl_exec($ch);
+echo "done\n";
+"#,
+    );
+    assert!(
+        output.stderr.contains(
+            "curl_exec(): CURLOPT_FILE resource has gone away, resetting to default"
+        ),
+        "stderr was: {}",
+        output.stderr
+    );
+    assert_eq!(output.stdout, "done\n");
 }

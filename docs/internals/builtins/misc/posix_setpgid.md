@@ -2,7 +2,7 @@
 title: "posix_setpgid() - internals"
 description: "Compiler internals for posix_setpgid(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 682
+  order: 684
 ---
 
 ## `posix_setpgid()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/posix_setpgid.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/posix_setpgid.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:705](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L705) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

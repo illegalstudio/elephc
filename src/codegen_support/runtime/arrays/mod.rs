@@ -74,6 +74,7 @@ mod array_numeric_aggregate;
 mod array_push_int;
 mod array_push_refcounted;
 mod array_push_str;
+mod array_set_callable;
 mod array_set_int;
 mod array_set_mixed;
 mod array_set_mixed_key;
@@ -340,6 +341,7 @@ pub use array_push_refcounted::emit_array_push_refcounted;
 /// Emit refcounted array push helper.
 pub use array_push_str::emit_array_push_str;
 /// Emit string-optimized array push helper.
+pub use array_set_callable::emit_array_set_callable;
 pub use array_set_int::emit_array_set_int;
 /// Emit scalar indexed-array set helper.
 pub use array_set_mixed::emit_array_set_mixed;

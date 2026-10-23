@@ -21,10 +21,6 @@ fn test_error_first_class_builtin_non_literal_arguments() {
         "array_reverse() preserve_keys argument must be a literal bool in AOT mode",
     );
     expect_error(
-        "<?php $n = $argc > 5 ? 'A' : 'B'; $f = constant(...); $f($n);",
-        "constant() first argument must be a string literal in AOT mode",
-    );
-    expect_error(
         "<?php $m = $argc > 5 ? 1 : 0; $f = str_word_count(...); $f('a b', $m);",
         "str_word_count() format argument must be an integer literal in AOT mode",
     );

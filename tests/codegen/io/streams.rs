@@ -1718,6 +1718,20 @@ fn test_fopen_data_uri_invalid_returns_false() {
     assert_eq!(out, "false");
 }
 
+/// `file_get_contents("data://…")` decodes the URI at compile time, exactly like the `fopen`
+/// path, for a base64 payload, a percent-encoded payload, and an empty media type.
+#[test]
+fn test_file_get_contents_data_uri_decodes_at_compile_time() {
+    let out = compile_and_run(
+        r#"<?php
+echo file_get_contents("data://text/plain;base64,SGVsbG8gd29ybGQ="), "|";
+echo file_get_contents("data://text/plain,Hello%20raw%2Bworld"), "|";
+echo file_get_contents("data://,plain");
+"#,
+    );
+    assert_eq!(out, "Hello world|Hello raw+world|plain");
+}
+
 /// One PHAR entry for the test builder: archive name, recorded uncompressed
 /// size, the bytes as stored in the data section, and the entry flag word.
 struct TestPharEntry<'a> {
@@ -3131,6 +3145,21 @@ echo stream_socket_server("tcp://999.1.2.3:80") === false ? "b" : "B";
 "#,
     );
     assert_eq!(out, "ab");
+}
+
+/// `stream_socket_server()`'s by-reference `$errno`/`$errstr` outputs are write-only and
+/// undefined before the call, so the auto-vivify pass declares them like a declared function's
+/// by-reference output. Reading them afterwards must not be an "Undefined variable".
+#[test]
+fn test_stream_socket_server_by_ref_error_outputs_are_declared() {
+    let out = compile_and_run(
+        r#"<?php
+$server = stream_socket_server("tcp://127.0.0.1:0", $errno, $errstr);
+echo is_resource($server) ? "ok" : "fail";
+echo ":", $errno === null && $errstr === null ? "unset" : "set";
+"#,
+    );
+    assert_eq!(out, "ok:unset");
 }
 
 /// Verifies compiled PHP output for stream socket client connects to server.
@@ -7175,6 +7204,9 @@ echo ($again === $first ? "1" : "0");
 }
 
 /// Verifies compiled PHP output for closedir allows directory handle reuse.
+///
+/// Like PHP, a closed directory handle no longer satisfies `is_resource()`;
+/// the reuse assertion is that a freshly opened handle still reads entries.
 #[test]
 fn test_closedir_allows_directory_handle_reuse() {
     let out = compile_and_run(
@@ -7189,7 +7221,7 @@ echo (is_resource($d2) ? "r" : "?");
 echo (is_string($e) ? "ok" : "no");
 "#,
     );
-    assert_eq!(out, "rok");
+    assert_eq!(out, "?ok");
 }
 
 /// Verifies compiled PHP output for array literal of resources round trips.

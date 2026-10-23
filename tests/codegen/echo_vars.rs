@@ -151,3 +151,17 @@ fn test_echo_int_zero_variable() {
     let out = compile_and_run("<?php $z = 0; echo $z;");
     assert_eq!(out, "0");
 }
+
+/// Verifies PHP's close-tag syntax end to end: `?>` ends code mode, the newline right
+/// after it is swallowed, the text up to the next `<?php` re-entry is inline HTML
+/// output, and the close tag is an implied statement terminator — `echo 3?>` needs no
+/// semicolon. All three behaviors in one fixture (byte-checked against `php`).
+#[test]
+fn close_tag_inline_html_and_implied_terminator() {
+    let out = compile_and_run(
+        r#"<?php echo 1; ?>
+two<?php echo 3?>four<?php echo 5;
+"#,
+    );
+    assert_eq!(out, "1two3four5");
+}

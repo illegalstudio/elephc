@@ -76,6 +76,16 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     }
 
     *pos = assign_pos + 1;
+    // `$arr[] = &$rhs` / `$arr[$k] = &$rhs` / `$obj->p = &$rhs`: a reference element. elephc
+    // arrays and properties are value-typed, so a reference element is not representable; the
+    // leading `&` is accepted and the right-hand side is stored by value — the same result the
+    // equivalent `= $rhs` produces. Documented in `docs/php/arrays.md`.
+    if matches!(
+        tokens.get(*pos).map(|(token, _)| token),
+        Some(Token::Ampersand)
+    ) {
+        *pos += 1;
+    }
     let rhs = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
     if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {
@@ -456,6 +466,16 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
     }
 
     *pos = assign_pos + 1;
+    // `$arr[] = &$rhs` / `$arr[$k] = &$rhs` / `$obj->p = &$rhs`: a reference element. elephc
+    // arrays and properties are value-typed, so a reference element is not representable; the
+    // leading `&` is accepted and the right-hand side is stored by value — the same result the
+    // equivalent `= $rhs` produces. Documented in `docs/php/arrays.md`.
+    if matches!(
+        tokens.get(*pos).map(|(token, _)| token),
+        Some(Token::Ampersand)
+    ) {
+        *pos += 1;
+    }
     let rhs = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
     if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {

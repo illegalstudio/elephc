@@ -23,6 +23,13 @@ pub use info::Information;
 pub use http_input::{InputInformation, InputSource};
 pub use ini::{CoreEncodingDefaults, IniRequest, IniString, IniUpdate, MimeRegexError};
 pub use core_ini::CoreIni;
+
+/// Parses the Core `display_errors` directive exactly like the INI store: `0` disables the
+/// display copy, `1` renders it through the output layer, `2` sends it to stderr. The
+/// compiler bakes the same mode the runtime derives so both agree.
+pub fn display_errors_mode(value: &[u8]) -> u8 {
+    ini::numeric::display_errors(value)
+}
 pub use output::{OutputHeaders, OutputPlan};
 pub use response::Response;
 pub(crate) use output::mime_pattern;

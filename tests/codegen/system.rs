@@ -2875,6 +2875,62 @@ fn test_is_callable_object_method_array_missing_method_returns_false() {
     assert_eq!(out, "n");
 }
 
+/// Verifies a callable array naming a method the class does not declare is callable when the
+/// class implements `__call`, matching PHP's magic-method dispatch.
+#[test]
+fn test_is_callable_object_method_array_missing_method_with_call_returns_true() {
+    let out = compile_and_run(
+        r#"<?php
+            class Greeter {
+                public function __call(string $name, array $args) {
+                    return "hi";
+                }
+            }
+            $obj = new Greeter();
+            echo is_callable([$obj, "missing"]) ? "y" : "n";
+        "#,
+    );
+    assert_eq!(out, "y");
+}
+
+/// Verifies a declared public method remains callable on a class that also implements `__call`.
+#[test]
+fn test_is_callable_object_method_array_declared_method_with_call_returns_true() {
+    let out = compile_and_run(
+        r#"<?php
+            class Greeter {
+                public function __call(string $name, array $args) {
+                    return "magic";
+                }
+                public function hello() {
+                    return "hi";
+                }
+            }
+            $obj = new Greeter();
+            echo is_callable([$obj, "hello"]) ? "y" : "n";
+        "#,
+    );
+    assert_eq!(out, "y");
+}
+
+/// Verifies `__call` alone does NOT make the OBJECT callable: only `__invoke` does. Without
+/// this guard the array probe's `__call` fallback would leak into `is_callable($obj)`.
+#[test]
+fn test_is_callable_object_with_only_call_returns_false() {
+    let out = compile_and_run(
+        r#"<?php
+            class Greeter {
+                public function __call(string $name, array $args) {
+                    return "hi";
+                }
+            }
+            $obj = new Greeter();
+            echo is_callable($obj) ? "y" : "n";
+        "#,
+    );
+    assert_eq!(out, "n");
+}
+
 /// Verifies is callable class string static method array returns true.
 #[test]
 fn test_is_callable_class_string_static_method_array_returns_true() {
@@ -3310,6 +3366,43 @@ echo "|", ((gettimeofday(true) > 1700000000.0) ? "float_ok" : "float_bad");
 "#,
     );
     assert_eq!(out, "array_ok|float_ok");
+}
+
+/// Verifies `uniqid()` composes `gettimeofday()` and `sprintf` into PHP's 13-hex-digit body,
+/// keeps the prefix, and appends an entropy suffix under `$more_entropy`. Injected by the
+/// version prelude as a pure-PHP declaration (like `zend_version`), so no fixture asserts the
+/// clock-dependent value itself.
+#[test]
+fn test_uniqid_shape_prefix_and_entropy() {
+    let out = compile_and_run(
+        r#"<?php
+$u = uniqid();
+echo strlen($u) === 13 ? "len" : "badlen";
+echo "|", str_starts_with(uniqid("pre_"), "pre_") ? "prefix" : "badprefix";
+echo "|", str_contains(uniqid("", true), ".") ? "entropy" : "noentropy";
+"#,
+    );
+    assert_eq!(out, "len|prefix|entropy");
+}
+
+/// Verifies `random_bytes()` composes `random_int()`/`chr()` into a `$length`-byte string,
+/// rejects a non-positive length with PHP's `ValueError`, and is injected pay-for-use like
+/// `uniqid()`.
+#[test]
+fn test_random_bytes_length_and_value_error() {
+    let out = compile_and_run(
+        r#"<?php
+echo strlen(random_bytes(8)), ":";
+echo strlen(random_bytes(64)), ":";
+echo random_bytes(16) !== random_bytes(16) ? "diff" : "same", ":";
+try {
+    random_bytes(0);
+} catch (\ValueError $e) {
+    echo "value-error";
+}
+"#,
+    );
+    assert_eq!(out, "8:64:diff:value-error");
 }
 
 /// Verifies strftime()/gmstrftime() translate `%`-specifiers to formatted output: 1:1 mappings,

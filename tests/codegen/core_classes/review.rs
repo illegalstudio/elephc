@@ -108,8 +108,25 @@ fn test_core_review_error_exception_uncaught_creation_line() {
     let line = source.lines().position(|line| line.starts_with("$error = new")).unwrap() + 1;
     let out = compile_and_run_capture(source);
     assert!(!out.success);
-    assert!(out.stdout.contains("Fatal error: Uncaught ReportError: uncaught in "), "{}", out.stdout);
-    assert!(out.stdout.ends_with(&format!(":{line}\n")), "{}", out.stdout);
+    // php's uncaught report: the location line, the synthetic `#0 {main}` frame, and the
+    // `thrown in` trailer that repeats the throw site.
+    let report = out
+        .stdout
+        .lines()
+        .find(|line| line.starts_with("Fatal error:"))
+        .expect("report line");
+    assert!(
+        report.starts_with("Fatal error: Uncaught ReportError: uncaught in "),
+        "{}",
+        out.stdout
+    );
+    assert!(report.ends_with(&format!(":{line}")), "{}", out.stdout);
+    assert!(out.stdout.contains("Stack trace:\n#0 {main}\n"), "{}", out.stdout);
+    assert!(
+        out.stdout.trim_end().ends_with(&format!("on line {line}")),
+        "{}",
+        out.stdout
+    );
 }
 
 /// Fatal locations match getters for independent overrides, explicit zero, and an empty filename.
@@ -127,7 +144,21 @@ fn test_core_review_error_exception_uncaught_location_overrides() {
         let expected = out.stdout.lines().next().unwrap().strip_prefix("expected:").unwrap();
         if let Some(suffix) = oracle_suffix { assert_eq!(expected, suffix, "{arguments}"); }
         assert!(out.stdout.contains("Fatal error: Uncaught LocatedReport: located in "), "{arguments}: {}", out.stdout);
-        assert!(out.stdout.ends_with(&format!(" in {expected}\n")), "{arguments}: {}", out.stdout);
+        if oracle_suffix.is_some() {
+            // The location line ends with the getter's `file:line`. The `thrown in` trailer
+            // repeats that site, but elephc deliberately drops it when the file is empty
+            // (php prints "thrown in Unknown") or the line is 0 — it will not fabricate
+            // an origin — so only the fully-located cases can pin the trailer.
+            assert!(out.stdout.contains(&format!(" in {expected}\n")), "{arguments}: {}", out.stdout);
+            let (file, line) = expected.rsplit_once(':').unwrap_or(("", "0"));
+            if !file.is_empty() && line != "0" {
+                assert!(
+                    out.stdout.trim_end().ends_with(&format!("on line {line}")),
+                    "{arguments}: {}",
+                    out.stdout
+                );
+            }
+        }
     }
 }
 

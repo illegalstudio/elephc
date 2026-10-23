@@ -19,7 +19,6 @@ use crate::names::php_symbol_key;
 use crate::types::{ClassInfo, PhpType};
 
 use super::super::super::context::FunctionContext;
-use super::super::predicates;
 use super::{expect_operand, load_value_to_first_int_arg, store_if_result};
 
 /// Lowers `intval($value, $base)`, PHP's two-argument integer conversion.
@@ -838,9 +837,58 @@ fn const_bool_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Optio
 pub(crate) fn lower_is_resource(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "is_resource", 1)?;
     let value = expect_operand(inst, 0)?;
-    match ctx.raw_value_php_type(value)? {
-        PhpType::Resource(_) => emit_bool_result(ctx, true),
-        PhpType::Mixed | PhpType::Union(_) => predicates::emit_mixed_tag_eq(ctx, value, 9)?,
+    // BOTH types are needed. `value_php_type` applies `codegen_repr`, which maps a resource
+    // to its integer storage (`PhpType::Resource(_) -> Int`) and a tagged nullable int
+    // (`?int`) to `TaggedScalar`; the RAW type is what still spells the semantic type.
+    // Matching the stripped type alone made every resource answer false, and matching the
+    // raw type alone dereferenced a tagged scalar's integer payload as a Mixed pointer
+    // (`is_resource($nullableInt)` segfaulted).
+    let raw = ctx.raw_value_php_type(value)?;
+    let repr = ctx.value_php_type(value)?;
+    match (raw, repr) {
+        (PhpType::Resource(_), _) => {
+            // A closed resource carries the negative `-id` sentinel — the same sign bit
+            // `__rt_resource_type_name` reads to answer `"Unknown"` — and PHP's
+            // `is_resource()` is `false` for it. Load the payload and test the sign instead
+            // of answering a static `true`.
+            ctx.load_value_to_result(value)?;
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #0");                      // is the payload still the positive live id?
+                    ctx.emitter.instruction("cset x0, ge");                     // a negative payload is a closed-resource sentinel
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("test rax, rax");                   // is the payload still the positive live id?
+                    ctx.emitter.instruction("setns al");                        // a negative payload is a closed-resource sentinel
+                    ctx.emitter.instruction("movzx rax, al");                   // widen the normalized boolean byte
+                }
+            }
+        }
+        (PhpType::Mixed | PhpType::Union(_), PhpType::Mixed) => {
+            // A boxed resource still carries tag 9 when closed; the closed-ness is only in
+            // the payload's sign. Unbox and require BOTH `tag == 9` and a non-negative
+            // payload, so a boxed closed resource answers `false` like a bare one.
+            ctx.load_value_to_result(value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #9");                      // is the unboxed runtime tag a resource?
+                    ctx.emitter.instruction("cset x0, eq");                     // x0 = the tag is a resource
+                    ctx.emitter.instruction("cmp x1, #0");                      // is the payload still the live positive id?
+                    ctx.emitter.instruction("cset x1, ge");                     // x1 = the payload is not the closed sentinel
+                    ctx.emitter.instruction("and x0, x0, x1");                  // a resource must satisfy both
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("cmp rax, 9");                      // is the unboxed runtime tag a resource?
+                    ctx.emitter.instruction("sete al");                         // al = the tag is a resource
+                    ctx.emitter.instruction("movzx rax, al");                   // widen the tag test
+                    ctx.emitter.instruction("test rdi, rdi");                   // is the payload still the live positive id?
+                    ctx.emitter.instruction("setns r10b");                      // r10b = the payload is not the closed sentinel
+                    ctx.emitter.instruction("movzx r10, r10b");                 // widen the payload test
+                    ctx.emitter.instruction("and rax, r10");                    // a resource must satisfy both
+                }
+            }
+        }
         _ => emit_bool_result(ctx, false),
     }
     store_if_result(ctx, inst)

@@ -25684,8 +25684,7 @@ catch (Error $error) { echo ":typed"; }');
 /// diagnostic reserved for `EvalStatus::RuntimeFatal`.
 #[test]
 fn test_eval_reflection_property_get_value_rejects_uninitialized_aot_storage() {
-    let out = compile_and_run_capture(
-        r#"<?php
+    let source = r#"<?php
 class EvalAotReflectUninitializedGetTarget {
     public string $name = "Ada";
     public int $typed;
@@ -25696,17 +25695,43 @@ $typed = new ReflectionProperty("EvalAotReflectUninitializedGetTarget", "typed")
 echo $name->getValue($object) . ":";
 echo $typed->getValue($object);
 ');
-"#,
-    );
+"#;
+    // The reflection throw is reported at the eval() call site, like php maps eval'd errors
+    // back to the host statement.
+    let line = source
+        .lines()
+        .position(|line| line.contains("echo eval("))
+        .expect("eval call site")
+        + 1;
+    let out = compile_and_run_capture(source);
     assert!(
         !out.success,
         "program unexpectedly succeeded: stdout={:?}",
         out.stdout
     );
-    assert_eq!(
-        out.stdout,
-        "Ada:\nFatal error: Uncaught Error: Typed property \
-EvalAotReflectUninitializedGetTarget::$typed must not be accessed before initialization\n"
+    // The terminal report carries PHP's stack-trace block, placed at the eval call site.
+    let prefix = "Ada:\nFatal error: Uncaught Error: Typed property \
+EvalAotReflectUninitializedGetTarget::$typed must not be accessed before initialization in ";
+    assert!(
+        out.stdout.starts_with(prefix),
+        "unexpected fatal report: {:?}",
+        out.stdout
+    );
+    let report = out
+        .stdout
+        .lines()
+        .find(|line| line.starts_with("Fatal error:"))
+        .expect("fatal report line");
+    assert!(report.ends_with(&format!(":{line}")), "{:?}", out.stdout);
+    assert!(
+        out.stdout.contains("Stack trace:\n#0 {main}\n  thrown in "),
+        "missing stack-trace block: {:?}",
+        out.stdout
+    );
+    assert!(
+        out.stdout.trim_end().ends_with(&format!("on line {line}")),
+        "the trailer must end with php's location and blank line: {:?}",
+        out.stdout
     );
     assert_eq!(out.stderr, "");
 }

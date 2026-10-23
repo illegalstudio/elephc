@@ -2,7 +2,7 @@
 title: "session_id()"
 description: "Reads or sets the current session id."
 sidebar:
-  order: 996
+  order: 998
 ---
 
 ## session_id()
@@ -20,7 +20,7 @@ Reads or sets the current session id.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
+- **Compiled (AOT)**: supported through the compiler-injected web prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._

@@ -698,6 +698,16 @@ pub(crate) fn stmt_invalidation(stmt: &Stmt) -> Invalidation {
             array,
             index,
             value,
+        } if array == "GLOBALS" => {
+            // `$GLOBALS['name'] = …` writes the program-global `name` through the global
+            // table (the lowering routes it to `StoreGlobal`), so every propagated binding —
+            // the named global included — must be dropped here.
+            expr_invalidation(index).union(expr_invalidation(value)).union(Invalidation::All)
+        }
+        StmtKind::ArrayAssign {
+            array,
+            index,
+            value,
         } => {
             let mut inv = expr_invalidation(index).union(expr_invalidation(value));
             inv.add(array);

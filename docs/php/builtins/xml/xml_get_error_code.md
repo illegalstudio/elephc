@@ -2,7 +2,7 @@
 title: "xml_get_error_code()"
 description: "Returns the parser's last error code."
 sidebar:
-  order: 1015
+  order: 1017
 ---
 
 ## xml_get_error_code()
@@ -20,7 +20,7 @@ Returns the parser's last error code.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
+- **Compiled (AOT)**: supported through the compiler-injected xml prelude.
 - **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xml_get_error_code.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xml_get_error_code.rs)).
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._

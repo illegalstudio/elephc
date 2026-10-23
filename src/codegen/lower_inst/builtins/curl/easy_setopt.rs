@@ -26,7 +26,7 @@ use crate::codegen::Result;
 use crate::ir::Instruction;
 
 use super::super::store_if_result;
-use super::super::strings::load_string_arg_to_regs;
+use super::super::strings::{load_as_int, load_string_arg_to_regs};
 use super::shared::{curl_arg_reg, ensure_curl_arg_count, load_handle_to_first_arg};
 
 /// Lowers `__elephc_curl_easy_setopt_long($handle, $option, $value)`.
@@ -39,10 +39,16 @@ pub(crate) fn lower_curl_easy_setopt_long(
     let value = super::super::super::expect_operand(inst, 2)?;
 
     // Stage value then option, so the pops below restore them in argument order.
+    //
+    // `load_as_int`, NOT `load_value_to_reg`: a `mixed`-typed operand (the prelude's
+    // open_basedir mask, a value a caller widened on purpose) is a BOXED cell, and loading
+    // it as a register handed libcurl the cell's address as the option value — the setopt
+    // then "succeeded" and applied nothing. `load_as_int` unboxes, so both typed and mixed
+    // operands arrive as the integer libcurl reads.
     let scratch = abi::int_result_reg(ctx.emitter);
-    ctx.load_value_to_reg(value, scratch)?;
+    load_as_int(ctx, value, "__elephc_curl_easy_setopt_long value")?;
     abi::emit_push_reg(ctx.emitter, scratch);
-    ctx.load_value_to_reg(option, scratch)?;
+    load_as_int(ctx, option, "__elephc_curl_easy_setopt_long option")?;
     abi::emit_push_reg(ctx.emitter, scratch);
 
     load_handle_to_first_arg(ctx, inst, 0, "curl_setopt")?;
@@ -50,6 +56,26 @@ pub(crate) fn lower_curl_easy_setopt_long(
     abi::emit_pop_reg(ctx.emitter, curl_arg_reg(ctx, 2));                       // C ABI value = the long value
 
     emit_setopt_call(ctx, "__rt_curl_easy_setopt_long");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `__elephc_curl_easy_setopt_null($handle, $option)` — clears a nullable string
+/// option by forwarding a NULL pointer to libcurl (an empty string is not the same).
+pub(crate) fn lower_curl_easy_setopt_null(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_curl_arg_count(inst, "__elephc_curl_easy_setopt_null", 2)?;
+    let option = super::super::super::expect_operand(inst, 1)?;
+
+    let scratch = abi::int_result_reg(ctx.emitter);
+    load_as_int(ctx, option, "__elephc_curl_easy_setopt_null option")?;
+    abi::emit_push_reg(ctx.emitter, scratch);
+
+    load_handle_to_first_arg(ctx, inst, 0, "curl_setopt")?;
+    abi::emit_pop_reg(ctx.emitter, curl_arg_reg(ctx, 1));                       // C ABI opt = the libcurl option number
+
+    emit_setopt_call(ctx, "__rt_curl_easy_setopt_null");
     store_if_result(ctx, inst)
 }
 
@@ -92,7 +118,7 @@ pub(crate) fn lower_curl_setopt_bytes(
     load_string_arg_to_regs(ctx, inst, 2, builtin_name, ptr_scratch, len_scratch)?;
     abi::emit_push_reg(ctx.emitter, len_scratch);
     abi::emit_push_reg(ctx.emitter, ptr_scratch);
-    ctx.load_value_to_reg(option, ptr_scratch)?;
+    load_as_int(ctx, option, builtin_name)?;
     abi::emit_push_reg(ctx.emitter, ptr_scratch);
 
     load_handle_to_first_arg(ctx, inst, 0, "curl_setopt")?;

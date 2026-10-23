@@ -421,6 +421,18 @@ pub(crate) unsafe fn setopt_str(curl: *mut CURL, option: c_int, value: *const c_
     curl_easy_setopt(curl, option, value)
 }
 
+/// Clears a nullable string option by forwarding libcurl's own `NULL`.
+///
+/// php-src's nullable string options (`CURLOPT_CUSTOMREQUEST`, `CURLOPT_ACCEPT_ENCODING`,
+/// …) reset to their default when handed `null`, and it does so with a NULL `char *` — an
+/// empty string selects a different behaviour for several of them.
+///
+/// # Safety
+/// `curl` must be a still-live pointer from [`init`].
+pub(crate) unsafe fn setopt_null(curl: *mut CURL, option: c_int) -> CURLcode {
+    curl_easy_setopt(curl, option, std::ptr::null::<c_char>())
+}
+
 /// Sets a raw data-pointer option (`CURLOPTTYPE_OBJECTPOINT`/`CBPOINT`), e.g.
 /// `CURLOPT_ERRORBUFFER` or `CURLOPT_WRITEDATA`. Unlike string options,
 /// libcurl stores this pointer verbatim and dereferences it later, so it must
@@ -546,6 +558,28 @@ pub(crate) unsafe fn setopt_debug_function(
     curl: *mut CURL,
     option: c_int,
     callback: Option<CurlDebugCallback>,
+) -> CURLcode {
+    match callback {
+        Some(callback) => curl_easy_setopt(curl, option, callback),
+        None => curl_easy_setopt(curl, option, std::ptr::null::<c_void>()),
+    }
+}
+
+/// The `curl_prereq_callback` C function-pointer type (libcurl 7.80+):
+/// `int (*)(void *clientp, char *conn_primary_ip, char *conn_local_ip,
+/// int conn_primary_port, int conn_local_port)`.
+pub(crate) type CurlPrereqCallback =
+    unsafe extern "C" fn(*mut c_void, *mut c_char, *mut c_char, c_int, c_int) -> c_int;
+
+/// Sets `CURLOPT_PREREQFUNCTION`. `None` clears it back to libcurl's default, which
+/// answers `CURL_PREREQFUNC_OK` and keeps the transfer going.
+///
+/// # Safety
+/// `curl` must be a still-live pointer from [`init`].
+pub(crate) unsafe fn setopt_prereq_function(
+    curl: *mut CURL,
+    option: c_int,
+    callback: Option<CurlPrereqCallback>,
 ) -> CURLcode {
     match callback {
         Some(callback) => curl_easy_setopt(curl, option, callback),

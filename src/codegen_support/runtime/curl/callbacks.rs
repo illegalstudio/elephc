@@ -199,9 +199,29 @@ pub fn emit_curl_invoke_callback(emitter: &mut Emitter) {
     // -- decode the return according to spec.result_kind --
     emitter.instruction("ldr x11, [sp, #240]");                                 // spec pointer
     emitter.instruction("ldr x11, [x11, #16]");                                 // spec.result_kind
-    emitter.instruction("cbnz x11, __rt_curl_invoke_cb_string");                // 1 = string-into-buffer
+    emitter.instruction("cbz x11, __rt_curl_invoke_cb_int");                    // 0 = int-return
+    emitter.instruction("cmp x11, #2");                                         // 2 = string-or-int-return
+    emitter.instruction("b.eq __rt_curl_invoke_cb_string_or_int");              // dispatch the combined read shape
+    emitter.instruction("b __rt_curl_invoke_cb_string");                        // 1 = string-into-buffer
+
+    // result_kind 2: the PHP return may be a string (upload bytes) or an int (libcurl's own
+    // read return, e.g. CURL_READFUNC_PAUSE/ABORT). An int is published as the adapter's
+    // result with out_len = -1, a sentinel the caller uses to tell the two apart.
+    emitter.label("__rt_curl_invoke_cb_string_or_int");
+    emitter.instruction("ldr x0, [sp, #264]");                                  // boxed return
+    emitter.instruction("bl __rt_mixed_unbox");                                 // x0 = tag, x1 = lo, x2 = hi
+    emitter.instruction("cmp x0, #1");                                          // is the return a PHP string?
+    emitter.instruction("b.eq __rt_curl_invoke_cb_string");                     // a string return uploads its bytes
+    emitter.instruction("cmp x0, #0");                                          // is the return a PHP int?
+    emitter.instruction("b.ne __rt_curl_invoke_cb_release_return");             // null/bool/… → out_len stays 0 (EOF)
+    emitter.instruction("str x1, [sp, #280]");                                  // publish the int as this adapter's result
+    emitter.instruction("ldr x11, [sp, #240]");                                 // spec pointer
+    emitter.instruction("mov x12, #-1");                                        // sentinel: the return was an int
+    emitter.instruction("str x12, [x11, #40]");                                 // spec.out_len = -1
+    emitter.instruction("b __rt_curl_invoke_cb_release_return");                // release the owned int-return cell
 
     // result_kind 0: PHP's own `zval_get_long` of the return value.
+    emitter.label("__rt_curl_invoke_cb_int");
     emitter.instruction("ldr x0, [sp, #264]");                                  // boxed return
     emitter.instruction("bl __rt_mixed_cast_int");                              // x0 = the return cast to a PHP int
     emitter.instruction("str x0, [sp, #280]");                                  // publish it as this adapter's result
@@ -385,10 +405,29 @@ fn emit_curl_invoke_callback_x86_64(emitter: &mut Emitter) {
     // -- decode the return according to spec.result_kind --
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // spec pointer
     emitter.instruction("mov r11, QWORD PTR [r11 + 16]");                       // spec.result_kind
-    emitter.instruction("test r11, r11");                                       // 0 = integer, 1 = string-into-buffer
-    emitter.instruction("jnz __rt_curl_invoke_cb_string_x86");                  // decode the boxed return as a string
+    emitter.instruction("test r11, r11");                                       // 0 = integer, 1 = string-into-buffer, 2 = string-or-int
+    emitter.instruction("jz __rt_curl_invoke_cb_int_x86");                      // decode the boxed return as an integer
+    emitter.instruction("cmp r11, 2");                                          // 2 = string-or-int
+    emitter.instruction("je __rt_curl_invoke_cb_string_or_int_x86");           // dispatch the combined read shape
+    emitter.instruction("jmp __rt_curl_invoke_cb_string_x86");                  // decode the boxed return as a string
+
+    // result_kind 2: the PHP return may be a string (upload bytes) or an int (libcurl's own
+    // read return, e.g. CURL_READFUNC_PAUSE/ABORT). An int is published as the adapter's
+    // result with out_len = -1, a sentinel the caller uses to tell the two apart.
+    emitter.label("__rt_curl_invoke_cb_string_or_int_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // boxed return (unbox reads rax)
+    emitter.instruction("call __rt_mixed_unbox");                               // rax = tag, rdi = lo, rdx = hi
+    emitter.instruction("cmp rax, 1");                                          // is the return a PHP string?
+    emitter.instruction("je __rt_curl_invoke_cb_string_x86");                   // a string return uploads its bytes
+    emitter.instruction("cmp rax, 0");                                          // is the return a PHP int?
+    emitter.instruction("jne __rt_curl_invoke_cb_release_return_x86");          // null/bool/… → out_len stays 0
+    emitter.instruction("mov QWORD PTR [rbp - 64], rdi");                       // publish the int as this adapter's result
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // spec pointer
+    emitter.instruction("mov QWORD PTR [r11 + 40], -1");                        // spec.out_len = -1: the return was an int
+    emitter.instruction("jmp __rt_curl_invoke_cb_release_return_x86");          // release the owned int-return cell
 
     // result_kind 0: PHP's own `zval_get_long` of the return value.
+    emitter.label("__rt_curl_invoke_cb_int_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // boxed return (cast reads rax)
     emitter.instruction("call __rt_mixed_cast_int");                            // rax = the return cast to a PHP int
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // publish it as this adapter's result

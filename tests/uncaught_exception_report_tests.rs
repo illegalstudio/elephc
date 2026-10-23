@@ -199,9 +199,18 @@ fn uncaught_empty_message_omits_the_separator() {
         location_suffix(&dir, &format!("{prefix}.php"), 2)
     );
 
-    assert_eq!(
-        reported, expected,
-        "an empty message must not be preceded by a colon, yet must still carry the location"
+    assert!(
+        reported.starts_with(&expected),
+        "an empty message must not be preceded by a colon, yet must still carry the location: {reported:?}"
+    );
+    // The terminal report always closes with php's stack-trace block.
+    assert!(
+        reported.contains("Stack trace:\n#0 {main}\n"),
+        "missing stack-trace block: {reported:?}"
+    );
+    assert!(
+        reported.trim_end().ends_with("on line 2"),
+        "the trailer must repeat the throw site: {reported:?}"
     );
     assert_eq!(code, Some(255));
     let _ = fs::remove_dir_all(&dir);

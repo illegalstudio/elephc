@@ -38,6 +38,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_set_mixed(emitter);
     arrays::emit_array_set_mixed_key(emitter);
     arrays::emit_array_get_mixed_key(emitter);
+    arrays::emit_array_set_callable(emitter);
     arrays::emit_array_set_refcounted(emitter);
     arrays::emit_array_set_str(emitter);
     arrays::emit_array_union(emitter);

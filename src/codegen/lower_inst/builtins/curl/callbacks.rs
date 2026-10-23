@@ -30,6 +30,7 @@ use crate::codegen::abi;
 use crate::codegen::context::FunctionContext;
 use crate::codegen::Result;
 use crate::ir::Instruction;
+use crate::types::PhpType;
 
 use super::super::store_if_result;
 use super::shared::{curl_arg_reg, ensure_curl_arg_count, load_handle_to_first_arg};
@@ -53,7 +54,27 @@ pub(crate) fn lower_curl_easy_set_callback(
     let scratch = abi::int_result_reg(ctx.emitter);
     ctx.load_value_to_reg(adapter, scratch)?;
     abi::emit_push_reg(ctx.emitter, scratch);
+    let self_ty = ctx.value_php_type(self_object)?;
     ctx.load_value_to_reg(self_object, scratch)?;
+    if matches!(self_ty, PhpType::Mixed | PhpType::Union(_)) {
+        // THE HANDLE ARRIVES BOXED: `curl_setopt()`'s `$handle` is untyped (a bridge
+        // callback's `$ch` is an untyped parameter, which is what php-src's fixtures
+        // spell), so this slot must receive the RAW OBJECT POINTER, not the Mixed
+        // cell — otherwise every `$ch` the trampoline hands back would deref the cell
+        // itself: `get_class` would index the class-name table with the cell's tag
+        // word and `instanceof` would answer false. Unbox exactly like the mixed
+        // get_class/instanceof paths do; the prelude's own instanceof guard has
+        // already proven the payload is a live `CurlHandle` object.
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        // `__rt_mixed_unbox` returns (tag, payload_lo, payload_hi); the raw object
+        // pointer is the low payload word on every supported target.
+        let payload = match ctx.emitter.target.arch {
+            crate::codegen_support::platform::Arch::AArch64 => "x1",
+            crate::codegen_support::platform::Arch::X86_64 => "rdi",
+        };
+        ctx.emitter
+            .instruction(&format!("mov {}, {}", scratch, payload));
+    }
     abi::emit_push_reg(ctx.emitter, scratch);
     ctx.load_value_to_reg(descriptor, scratch)?;
     abi::emit_push_reg(ctx.emitter, scratch);

@@ -340,6 +340,27 @@ pub unsafe extern "C" fn elephc_curl_easy_setopt_str(
     })
 }
 
+/// Clears a nullable string option (`CURLOPT_CUSTOMREQUEST`, `CURLOPT_ACCEPT_ENCODING`,
+/// `CURLOPT_RANGE`, …) by forwarding libcurl's own `NULL`. Refused unless the option really
+/// is a string option, mirroring [`elephc_curl_easy_setopt_str`].
+///
+/// # Safety
+/// Callable from generated code; no Rust references cross the boundary.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_curl_easy_setopt_null(id: i64, opt: i32) -> i32 {
+    handles::ffi_guard(0, || {
+        if options::option_kind(opt) != options::KIND_STRING {
+            return 0;
+        }
+        let mut guard = handles::lock_recover(handles::handles());
+        let Some(entry) = guard.get_mut(&id) else {
+            return 0;
+        };
+        let code = unsafe { easy::setopt_null(entry.curl, opt as c_int) };
+        (code == easy::CURLE_OK) as i32
+    })
+}
+
 /// Sets a `struct curl_slist *` option (`CURLOPT_HTTPHEADER`, `CURLOPT_QUOTE`,
 /// `CURLOPT_RESOLVE`, ...) from a blob of NUL-TERMINATED items: each item's
 /// bytes followed by one `0` byte, so an empty blob is an empty list and a
@@ -525,6 +546,10 @@ pub extern "C" fn elephc_curl_easy_perform(id: i64) -> i32 {
             unsafe { refresh_monitor_traceparent(entry) };
             entry.body.clear();
             entry.callback_threw = false;
+            // A fresh transfer forgets the previous request header: php-src answers
+            // CURLINFO_HEADER_OUT from the LAST transfer's capture, and an erroring
+            // transfer must not reuse an older one.
+            entry.header_out = None;
             // Opens a fresh callback-throw scope: the process-wide gate that suppresses
             // further callbacks after a throw must not survive into this transfer.
             // Zero the error buffer first: libcurl is not guaranteed to
@@ -694,6 +719,11 @@ pub const ELEPHC_CURL_STR_OP_INFO_SLIST: i32 = 4;
 pub const ELEPHC_CURL_STR_OP_INFO_ALL: i32 = 5;
 /// `elephc_curl_easy_str_op`'s `op`: build `CURLINFO_CERTINFO` as a JSON blob.
 pub const ELEPHC_CURL_STR_OP_INFO_CERTINFO: i32 = 6;
+/// `elephc_curl_easy_str_op`'s `op`: read the captured outgoing request header
+/// (`CURLINFO_HEADER_OUT`). Unlike every other info op this is answered from
+/// `EasyEntry::header_out` — the debug trampoline's own capture — never from libcurl,
+/// because PHP's constant is a PHP-defined number libcurl does not carry.
+pub const ELEPHC_CURL_STR_OP_INFO_HEADER_OUT: i32 = 7;
 
 /// Runs one STRING-PRODUCING operation on handle `id` and parks its result in
 /// the handle's scratch buffer, for [`elephc_curl_easy_take_scratch`] to hand
@@ -752,6 +782,13 @@ pub unsafe extern "C" fn elephc_curl_easy_str_op(
                 .map(|items| info::frame_items(&items)),
             ELEPHC_CURL_STR_OP_INFO_ALL => Some(unsafe { info::getinfo_all_json(entry.curl) }),
             ELEPHC_CURL_STR_OP_INFO_CERTINFO => Some(unsafe { info::certinfo_json(entry.curl) }),
+            // The debug trampoline captured the outgoing request header into the entry;
+            // without a capture yet the answer is `None`, which the prelude renders as
+            // php's `false` for a header no transfer delivered.
+            ELEPHC_CURL_STR_OP_INFO_HEADER_OUT => match &entry.header_out {
+                Some(bytes) => Some(bytes.clone()),
+                None => None,
+            },
             _ => None,
         };
         match produced {
@@ -935,6 +972,9 @@ pub extern "C" fn elephc_curl_easy_reset(id: i64) -> i32 {
         entry.body.clear();
         entry.taken_body.clear();
         entry.scratch.clear();
+        // A reset handle has no captured request header; php's `curl_reset()` answers
+        // `CURLINFO_HEADER_OUT` with `false` for the same reason.
+        entry.header_out = None;
         entry.last_errno = easy::CURLE_OK;
         entry.last_error.clear();
         entry.error_buf.iter_mut().for_each(|byte| *byte = 0);
@@ -1249,6 +1289,13 @@ pub extern "C" fn elephc_curl_easy_free(id: i64) {
         if let Some(mut entry) = guard.remove(&id) {
             // Do not hold the table lock across `curl_easy_cleanup`.
             drop(guard);
+            if entry.pushed {
+                // LIBCURL OWNS A PUSHED HANDLE. It creates it inside
+                // `curl_multi_perform` and frees it with the multi handle, so cleaning it
+                // up here frees live libcurl state a second time (measured: malloc abort
+                // in `_xzm_free_abort` right after the push callback returned).
+                return;
+            }
             unsafe { easy::cleanup(entry.curl) };
             // AFTER cleanup, never before: libcurl holds raw pointers to the
             // handle's slist options until the handle itself is gone.
@@ -1525,7 +1572,7 @@ unsafe fn bytes_to_cstring(ptr: *const u8, len: usize) -> Option<CString> {
 
 /// Extracts the NUL-terminated message libcurl wrote into a
 /// `CURLOPT_ERRORBUFFER` buffer, up to (and excluding) the first NUL byte.
-fn extract_error_message(buf: &[u8]) -> Vec<u8> {
+pub(crate) fn extract_error_message(buf: &[u8]) -> Vec<u8> {
     let end = buf.iter().position(|&byte| byte == 0).unwrap_or(buf.len());
     buf[..end].to_vec()
 }

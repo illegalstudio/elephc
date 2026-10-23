@@ -209,8 +209,50 @@ fn catalog_hosted_preludes() -> Vec<(&'static str, String, bool)> {
 
 /// PHP-visible functions a catalog-hosted prelude declares WITHOUT a shared contract,
 /// with the reason each exclusion is correct rather than an oversight.
-const UNCONTRACTED_PRELUDE_DECLARATIONS: &[(&str, &str)] = &[(
-    "curl_file_create",
+/// Prelude parameters deliberately declared WIDER than the contract they mirror.
+///
+/// `curl_multi_exec()`'s `$still_running` is php's `int &$still_running`, but php.net's own
+/// examples seed it with `null` before the loop, and php-src accepts that because it is an
+/// internal function. This compiler rejects `null` for a non-nullable by-reference parameter
+/// (docs/php/types.md, "A `null` variable passed to a non-nullable by-reference parameter"),
+/// so the prelude leaves the parameter untyped and the contract keeps PHP's signature. The
+/// entry documents that divergence here instead of weakening the contract.
+const WIDENED_PRELUDE_PARAMS: &[(&str, &str, &str)] = &[
+    (
+        "curl_multi_exec",
+        "still_running",
+        "php.net seeds `$still_running = null`; a typed `int &` parameter is a compile error for \
+         a null argument here (php-src coerces it for internal functions).",
+    ),
+    (
+        "curl_multi_info_read",
+        "queued_messages",
+        "a caller may pass any variable as the write-only output (PHP accepts an uninitialized \
+         `$msgs`), and this compiler's by-reference rule requires the caller's storage to match \
+         a nullable parameter's representation; leaving it untyped keeps every variable shape \
+         legal while the contract documents PHP's `?int`.",
+    ),
+    (
+        "curl_setopt",
+        "option",
+        "PHP declares `int $option` but coerces a numeric string at run time; the prelude takes \
+         `mixed` so the coercion (and PHP's TypeError for a non-numeric option) happens at run \
+         time instead of at compile time.",
+    ),
+];
+
+const UNCONTRACTED_PRELUDE_DECLARATIONS: &[(&str, &str)] = &[
+    (
+        "phpinfo",
+        "Core's `phpinfo()` is not modelled by the shared catalog at all. The curl prelude \
+         declares a minimal implementation that prints the compiled binary's curl section (the \
+         feature that makes a program able to inspect its own build), so it only exists when the \
+         curl surface is injected. A contract would need an eval binding that does not exist, \
+         and an EvalImplementationPending label would be false because nothing else implements \
+         phpinfo.",
+    ),
+    (
+        "curl_file_create",
     "a plain alias of the CURLFile constructor. It has no `builtin!` binding (the prelude \
      is the whole implementation) and no `eval_builtin!` home either — inside eval() it \
      resolves through the native-class fallback, see elephc-magician's \
@@ -218,7 +260,8 @@ const UNCONTRACTED_PRELUDE_DECLARATIONS: &[(&str, &str)] = &[(
      does not exist, or an EvalImplementationPending label that would be false because \
      eval() can already call it. Consequence, accepted: the PHP comparison page counts \
      the curl module 34/35 rather than 35/35.",
-)];
+    ),
+];
 
 /// Verifies no injected compiler prelude calls a PHP-visible extension builtin.
 ///
@@ -390,12 +433,18 @@ fn prelude_contracts_match_their_injected_signatures() {
             let at = format!("{name}(${}) in {prelude}", param.name);
             assert_eq!(actual.by_ref, param.by_ref, "{at}: by-reference marker");
             assert!(!actual.variadic, "{at}: fixed parameter declared variadic");
-            assert!(
-                php_type_matches(param.ty, &actual.php_type),
-                "{at}: declared type `{}` is not the contract's {:?}",
-                actual.php_type,
-                param.ty
-            );
+            let widened = matches!(actual.php_type.as_str(), "" | "mixed")
+                && WIDENED_PRELUDE_PARAMS
+                    .iter()
+                    .any(|(function, parameter, _)| *function == name && *parameter == param.name);
+            if !widened {
+                assert!(
+                    php_type_matches(param.ty, &actual.php_type),
+                    "{at}: declared type `{}` is not the contract's {:?}",
+                    actual.php_type,
+                    param.ty
+                );
+            }
             match (param.default, actual.default.as_deref()) {
                 (None, None) => {}
                 (Some(expected), Some(text)) => assert!(

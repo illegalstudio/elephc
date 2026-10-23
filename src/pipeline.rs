@@ -27,6 +27,7 @@ use crate::{
     autoload, codegen, debug_info, errors, exports, func_args, ir, ir_lower, ir_passes, lexer,
     linker, list_id_prelude, mysqli_prelude, name_resolver, opcache_prelude, optimize, parser,
     pdo_prelude, resolver, runtime_cache, source_map, tz_prelude, types, var_export_prelude,
+    filter_prelude,
     web_prelude,
 };
 
@@ -374,7 +375,46 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
     let ast = var_export_prelude::inject_if_used(ast, &mut prelude_inventory);
     timings.record_since("var-export-prelude", phase_started);
 
-    // Inject the OPcache preludes (pure elephc-PHP functions): `opcache_get_configuration()`
+    // Inject the filter prelude (`filter_var` with FILTER_VALIDATE_IP, written in
+    // elephc-PHP) only when the program references filter_var and does not declare its
+    // own, so other binaries carry nothing. Runs after include resolution so usage
+    // inside includes is detected, and before name resolution so the call resolves to
+    // the injected function.
+    crate::progress::phase("filter-prelude");
+    let phase_started = Instant::now();
+    let ast = filter_prelude::inject_if_used(ast, &mut prelude_inventory);
+    timings.record_since("filter-prelude", phase_started);
+
+    // Inject the `ext/curl` prelude (the `CurlHandle` class and the `curl_*` wrappers over
+    // the internal `__elephc_curl_*` builtins) only when the program references that
+    // surface, so non-curl binaries never declare `CurlHandle`, never link
+    // `-lelephc_curl`, and never require the managed native `curl` package. Runs after the
+    // filter prelude and BEFORE the OPcache stage, whose ini_get/ini_set injection exists
+    // only for references already in the program — the curl prelude's open_basedir guard is
+    // one of them. Declaration-only and order-independent otherwise, and before name
+    // resolution so a namespaced caller resolves to it. `--with-curl` forces the
+    // injection for a program that only reaches curl dynamically. The version selects the
+    // curl SURFACE too: `curl_multi_get_handles()` is 8.5-only.
+    crate::progress::phase("curl-prelude");
+    let phase_started = Instant::now();
+    let ast = if php_version == crate::php_version::PhpVersion::default() {
+        crate::curl_prelude::inject_if_used(
+            ast,
+            with_crates.contains("curl"),
+            &mut prelude_inventory,
+        )
+    } else {
+        crate::curl_prelude::inject_if_used_for_version(
+            ast,
+            with_crates.contains("curl"),
+            php_version,
+            &mut prelude_inventory,
+        )
+    };
+    timings.record_since("curl-prelude", phase_started);
+
+
+// Inject the OPcache preludes (pure elephc-PHP functions): `opcache_get_configuration()`
     // returns a compile-time array literal built from the version-keyed OPcache
     // directive matrix, and `opcache_reset()` returns the compile-time cache-enabled
     // boolean. Each is injected only when the program references it, so other binaries
@@ -489,31 +529,6 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
     let ast = crate::testing_prelude::inject_if_used(ast, entry.is_test_suite(), &mut prelude_inventory);
     timings.record_since("testing-prelude", phase_started);
 
-    // Inject the `ext/curl` prelude (the `CurlHandle` class and the `curl_*` wrappers over
-    // the internal `__elephc_curl_*` builtins) only when the program references that
-    // surface, so non-curl binaries never declare `CurlHandle`, never link
-    // `-lelephc_curl`, and never require the managed native `curl` package. Runs after
-    // the hash prelude (both are order-independent declaration-only preludes) and before
-    // name resolution so a namespaced caller resolves to it. `--with-curl` forces the
-    // injection for a program that only reaches curl dynamically. The version selects the
-    // curl SURFACE too: `curl_multi_get_handles()` is 8.5-only.
-    crate::progress::phase("curl-prelude");
-    let phase_started = Instant::now();
-    let ast = if php_version == crate::php_version::PhpVersion::default() {
-        crate::curl_prelude::inject_if_used(
-            ast,
-            with_crates.contains("curl"),
-            &mut prelude_inventory,
-        )
-    } else {
-        crate::curl_prelude::inject_if_used_for_version(
-            ast,
-            with_crates.contains("curl"),
-            php_version,
-            &mut prelude_inventory,
-        )
-    };
-    timings.record_since("curl-prelude", phase_started);
 
     // Inject the `ext/xml` / `ext/xmlwriter` prelude (the `XMLParser` and `XMLWriter`
     // classes and the `xml_*` / `xmlwriter_*` wrappers over the `elephc_xml` extern block)
@@ -745,6 +760,12 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
     let phase_started = Instant::now();
     let ast = optimize::fold_constants_for_target(ast, target);
     timings.record_since("opt-fold", phase_started);
+
+    // PHP auto-vivifies an undefined variable on an array write (`$a[0] = 1;`) and on a
+    // by-reference output argument (`curl_multi_exec($mh, $active)`). Declare the implicit
+    // `$a = [];` / `$x = null;` here so the checker sees an ordinary binding instead of
+    // reporting `Undefined variable`.
+    let ast = crate::auto_vivify::normalize(ast);
 
     crate::progress::phase("typecheck");
     let phase_started = Instant::now();

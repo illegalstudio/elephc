@@ -52,8 +52,15 @@ pub(super) fn prepare_call_site(
         abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file", 0);
         abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_script_source_file_len", 0);
         abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file_len", 0);
-        abi::emit_load_int_immediate(ctx.emitter, scratch, i64::from(inst.span.map_or(0, |span| span.line)));
-        abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_line", 0);
+        // A prelude-internal call site can carry no span (line 0). Storing that would erase
+        // the last REAL location, and a throw raised right after it would then have no line
+        // to report — `curl_setopt($ch, CURLOPT_POSTFIELDS, $object)` lost its `in file:3`
+        // that way. Keep the previous location unless this site has one.
+        let diagnostic_line = i64::from(inst.span.map_or(0, |span| span.line));
+        if diagnostic_line != 0 {
+            abi::emit_load_int_immediate(ctx.emitter, scratch, diagnostic_line);
+            abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_line", 0);
+        }
     }
     if !ctx.backtrace_enabled || !instruction_may_enter_php_frame(inst) {
         return Ok(());
@@ -69,6 +76,10 @@ pub(super) fn prepare_call_site(
     let activation_offset = ctx
         .exception_activation_offset
         .expect("backtrace activation requires an activation frame slot");
+    // The activation's LINE is deliberately left alone. The entry push captured the line this
+    // frame was CALLED from — php reports that call site for the frame (measured:
+    // `#0 file(3): inner()` for a frame entered at line 3, even though the frame's own last
+    // call sits on line 2). Overwriting it here printed the frame's most recent call instead.
     abi::store_at_offset(ctx.emitter, scratch, activation_offset - 32);
     // Address-taken entries need real symbols: Mach-O folds temporary L labels into
     // their enclosing symbol's signed 24-bit addend, which large PHP frames exceed.
@@ -1133,19 +1144,40 @@ fn load_borrowed_argument_tail_box(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Returns class, function, and call-type strings for the current frame.
+///
+/// Generic type arguments are erased: the shape merge folds every instantiation of one generic
+/// method into a single emitted body, and that body's inline frame reader can only name ONE
+/// class. Keeping `Box<User>`/`Box<Order>` here made the two readers' `.ascii` payloads differ,
+/// which correctly blocked the fold and left every throwing program with duplicated bodies — so
+/// the reader names the generic SHAPE instead, the same way the folded body does.
 fn frame_function_parts(ctx: &FunctionContext<'_>) -> (Option<String>, String, &'static str) {
     match ctx.function.display_name().rsplit_once("::") {
         Some((class, function)) => (
-            Some(class.trim_start_matches('\\').to_string()),
-            function.to_string(),
+            Some(erase_type_arguments(class.trim_start_matches('\\'))),
+            erase_type_arguments(function),
             if ctx.function.flags.is_static { "::" } else { "->" },
         ),
         None => (
             None,
-            ctx.function.display_name().trim_start_matches('\\').to_string(),
+            erase_type_arguments(ctx.function.display_name().trim_start_matches('\\')),
             "",
         ),
     }
+}
+
+/// Removes `<...>` type-argument groups from a class or function name.
+fn erase_type_arguments(name: &str) -> String {
+    let mut erased = String::with_capacity(name.len());
+    let mut depth = 0usize;
+    for ch in name.chars() {
+        match ch {
+            '<' => depth += 1,
+            '>' if depth > 0 => depth -= 1,
+            _ if depth == 0 => erased.push(ch),
+            _ => {}
+        }
+    }
+    erased
 }
 
 /// Returns the compact callable spelling used by `debug_print_backtrace()`.

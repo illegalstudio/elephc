@@ -2,7 +2,7 @@
 title: "iconv_get_encoding()"
 description: "Reports the configured input, output, or internal character encoding."
 sidebar:
-  order: 817
+  order: 819
 ---
 
 ## iconv_get_encoding()

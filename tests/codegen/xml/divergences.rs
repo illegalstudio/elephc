@@ -313,10 +313,11 @@ $w->writeElement("out"); var_dump($w->flush());
     );
 }
 
-/// `XMLWriter::toStream()` does not detect a closed resource: it hands back a writer that
-/// accepts content and flushes without an error (the byte count reported for a closed
-/// handle is platform-dependent: 0 on Linux, the buffered length on macOS), where PHP
-/// throws `TypeError`; an open stream receives PHP's bytes.
+/// `XMLWriter::toStream()` rejects a closed resource with a `TypeError`, like PHP. The two
+/// messages differ: PHP says "supplied resource is not a valid stream resource", while
+/// elephc's parameter check reports the declared and received type name (both spell
+/// `resource`, since the closed handle still carries the resource repr). An open stream
+/// receives PHP's bytes.
 #[test]
 fn test_xmlwriter_to_stream_does_not_detect_a_closed_resource() {
     if skip_without_xml_native("test_xmlwriter_to_stream_does_not_detect_a_closed_resource") {
@@ -331,10 +332,13 @@ $g = fopen("php://memory", "w+");
 $w = XMLWriter::toStream($g); $w->writeElement("ok"); var_dump($w->flush()); rewind($g); var_dump(stream_get_contents($g));
 "#,
     );
-    // PHP 8.5.10:
-    //   "TypeError: XMLWriter::toStream(): supplied resource is not a valid stream
-    //    resource\nint(5)\nstring(5) \"<ok/>\"\n"
-    assert_eq!(out, "bool(true)\nbool(true)\nbool(true)\nint(5)\nstring(5) \"<ok/>\"\n");
+    // PHP 8.5.10 throws "TypeError: XMLWriter::toStream(): supplied resource is not a valid
+    // stream resource" for the closed handle; elephc's parameter check spells the same
+    // rejection with its declared/received type names.
+    assert_eq!(
+        out,
+        "TypeError: XMLWriter::toStream(): Argument #1 ($stream) must be of type resource, resource given\nint(5)\nstring(5) \"<ok/>\"\n"
+    );
 }
 
 /// `xml_parse_into_struct()`'s `$values` / `$index` are typed `mixed` — they still report

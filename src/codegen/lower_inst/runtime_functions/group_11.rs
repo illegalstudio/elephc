@@ -55,6 +55,12 @@ pub(super) fn lower(
         RuntimeFnId::Getmypid => Some({
             crate::codegen::lower_inst::builtins::system::lower_getmypid(ctx, inst)
         }),
+        RuntimeFnId::MemoryGetUsage => Some({
+            crate::codegen::lower_inst::builtins::system::lower_memory_get_usage(ctx, inst)
+        }),
+        RuntimeFnId::MemoryGetPeakUsage => Some({
+            crate::codegen::lower_inst::builtins::system::lower_memory_get_peak_usage(ctx, inst)
+        }),
         RuntimeFnId::Gmdate => Some({
             crate::codegen::lower_inst::builtins::system::lower_gmdate(ctx, inst)
         }),

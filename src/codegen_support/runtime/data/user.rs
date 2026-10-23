@@ -829,6 +829,21 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
+    // One byte per class id: whether the class declares a public `__call`. The
+    // `is_callable([$obj, 'name'])` helper consults this when `name` is not a declared
+    // public method, because PHP routes such a probe through `__call` when one exists.
+    out.push_str(".p2align 3\n");
+    out.push_str(".globl _class_has_call\n_class_has_call:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let has_call = class_info_by_id
+                .get(&class_id)
+                .is_some_and(|class_info| class_has_public_call_method(class_info));
+            out.push_str(&format!("    .byte {}\n", u8::from(has_call)));
+        }
+    }
+    out.push_str(".globl _class_has_call_missing\n_class_has_call_missing:\n    .byte 0\n");
+
     out.push_str(".p2align 3\n");
     out.push_str(".globl _user_wrapper_vtable_ptrs\n_user_wrapper_vtable_ptrs:\n");
     if let Some(max_class_id) = max_class_id {
@@ -3161,6 +3176,20 @@ fn emit_user_wrapper_vtable(
     Ok(())
 }
 
+/// Returns whether a class declares a public `__call` (magic method dispatch).
+///
+/// The method table keys are canonicalized, but this compares with `php_symbol_key` so a
+/// mixed-case declaration still counts, matching PHP's case-insensitive method lookup.
+fn class_has_public_call_method(class_info: &ClassInfo) -> bool {
+    class_info.methods.keys().any(|method| {
+        php_symbol_key(method) == "__call"
+            && class_info
+                .method_visibilities
+                .get(method)
+                .is_some_and(|visibility| matches!(visibility, Visibility::Public))
+    })
+}
+
 /// Emits the per-class callable-method name table and count for __invoke support.
 /// Only public instance methods are included. Each method name is emitted as an
 /// ASCII label; the table is indexed by class_id at runtime.
@@ -4061,9 +4090,19 @@ fn serprop_widens_int_to_float(prop_ty: &PhpType) -> bool {
 /// inline `{payload, tag}` pair gets `TAGGED_SCALAR_PROPERTY_TAG`. A `Closure`
 /// property holds its callable descriptor directly (tag 10), never a Mixed box.
 fn prop_value_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType) -> u64 {
+    let underlying = prop_underlying_value_tag(prop_ty);
     if class_info.reference_properties.contains(prop_name) {
-        return 7;
+        // An owned reference property's slot holds a cell pointer, not the value; flag it so
+        // the serialize writer and the unserialize injector dereference the cell first.
+        return underlying
+            | crate::codegen_support::sentinels::REFERENCE_PROPERTY_TAG_FLAG;
     }
+    underlying
+}
+
+/// The runtime value tag a serialize property-info row dispatches on, before any
+/// reference-property flag is OR-ed in.
+fn prop_underlying_value_tag(prop_ty: &PhpType) -> u64 {
     if prop_ty.codegen_repr() == PhpType::TaggedScalar {
         return TAGGED_SCALAR_PROPERTY_TAG;
     }

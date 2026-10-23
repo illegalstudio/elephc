@@ -9,6 +9,7 @@
 //! - Keep startup thin so CLI validation and pipeline behavior stay in dedicated modules.
 
 mod autoload;
+mod auto_vivify;
 mod brand;
 mod builtins;
 mod cli;
@@ -86,6 +87,7 @@ mod timings;
 mod types;
 mod tz_prelude;
 mod xml_prelude;
+mod filter_prelude;
 mod var_export_prelude;
 mod version_prelude;
 mod web_prelude;

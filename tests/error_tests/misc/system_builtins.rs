@@ -775,15 +775,6 @@ fn test_error_constant_undefined_name() {
     expect_error("<?php echo constant(\"NOPE\");", "Undefined constant: NOPE");
 }
 
-/// Verifies `constant()` rejects a runtime-computed name in AOT mode.
-#[test]
-fn test_error_constant_dynamic_name() {
-    expect_error(
-        "<?php define(\"FOO\", 1); $n = \"FOO\"; echo constant($n);",
-        "constant() first argument must be a string literal in AOT mode",
-    );
-}
-
 /// Verifies `constant()` rejects a class-constant name.
 #[test]
 fn test_error_constant_class_constant_name() {

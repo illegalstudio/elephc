@@ -22,7 +22,7 @@
 //! - THE PENDING/ATTACHED SPLIT is what makes a failed array walk safe. `pending_mime`
 //!   (`EasyEntry`) is under construction and not yet visible to libcurl; `mime` is the one
 //!   actually set via `CURLOPT_MIMEPOST`. A PHP-level failure partway through the array
-//!   (an unsupported value shape, an embedded NUL in a name, a libcurl-level rejection)
+//!   (an unsupported value shape, a libcurl-level rejection)
 //!   calls [`abort`], which frees ONLY the half-built pending structure — the handle keeps
 //!   whatever mime an earlier, successful `curl_setopt()` call already attached, exactly as
 //!   a failed `curl_setopt(..., CURLOPT_HTTPHEADER, ...)` leaves the previous header list
@@ -32,9 +32,9 @@
 //!   `$data` survives an embedded NUL intact — matching php-src's own
 //!   `curl_mime_data(part, Z_STRVAL_P(value), Z_STRLEN_P(value))`. Every other field
 //!   (name, a `CURLFile`'s disk path, the MIME type, the posted filename) goes through
-//!   libcurl's NUL-terminated C-string setters, so those fail closed (`false`) on an
-//!   embedded NUL rather than silently truncating — the same contract
-//!   `crate::abi::elephc_curl_easy_setopt_str` already has for every other string option.
+//!   libcurl's NUL-terminated C-string setters, so an embedded NUL ENDS the value: it is
+//!   truncated at the first NUL, matching php-src, which hands the same C string straight
+//!   to libcurl.
 //! - `CURLOPT_MIMEPOST` (10269 = `CURLOPTTYPE_OBJECTPOINT` (10000) + 269, from the pinned
 //!   `curl.h`) IS NOT PHP-VISIBLE SURFACE. php-src builds this structure internally
 //!   whenever `CURLOPT_POSTFIELDS` is given an array and never exposes the option number as
@@ -145,9 +145,9 @@ pub(crate) unsafe fn add_part(entry: &mut EasyEntry) -> bool {
 
 /// Sets one field on the current pending part (see the `FIELD_*` constants for `kind`).
 /// `false` when there is no current part (`add_part` was never called), `kind` is not one
-/// of the five recognized codes, a non-[`FIELD_DATA`] field carries an embedded NUL (which
-/// would silently truncate through libcurl's C-string setters), or libcurl itself rejects
-/// the value.
+/// of the five recognized codes, or libcurl itself rejects the value. A non-[`FIELD_DATA`]
+/// field is truncated at its first embedded NUL, exactly as libcurl's C-string setters
+/// (and therefore php-src) would.
 ///
 /// # Safety
 /// `entry.curl` must be a still-live pointer from `easy::init` (not read directly by this
@@ -169,6 +169,15 @@ pub(crate) unsafe fn set_field(entry: &mut EasyEntry, kind: i32, bytes: &[u8]) -
             unsafe { curl_mime_data(part, ptr, bytes.len()) }
         }
         FIELD_NAME | FIELD_FILEDATA | FIELD_TYPE | FIELD_FILENAME => {
+            // libcurl's setters take NUL-terminated C strings, so an embedded NUL ends the
+            // value. php-src hands these straight through and therefore TRUNCATES at the
+            // first NUL (`curl_setopt($ch, CURLOPT_POSTFIELDS, ["file" => new
+            // CURLStringFile("x", "foo.txt\0broken", "text/plain\0broken")])` returns true
+            // and posts `foo.txt` / `text/plain`); reproduce that instead of failing closed.
+            let bytes = match bytes.iter().position(|&byte| byte == 0) {
+                Some(nul) => &bytes[..nul],
+                None => bytes,
+            };
             let Ok(text) = CString::new(bytes) else {
                 return false;
             };

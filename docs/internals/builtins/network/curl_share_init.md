@@ -2,7 +2,7 @@
 title: "curl_share_init() - internals"
 description: "Compiler internals for curl_share_init(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 722
+  order: 724
 ---
 
 ## `curl_share_init()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_curl.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_curl.rs)
-- **Lowering**: [`src/curl_prelude.rs`:1780](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude.rs#L1780) (`curl_share_init`)
+- **Lowering**: [`src/curl_prelude/oracle.rs`:2359](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude/oracle.rs#L2359) (`curl_share_init`)
 - **Function symbol**: `curl_share_init()`
 
 

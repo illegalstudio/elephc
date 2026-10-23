@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_socket_server.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_socket_server.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:705](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L705) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,19 +39,21 @@ sidebar:
 ## Signature summary
 
 ```php
-function stream_socket_server(string $address): mixed
+function stream_socket_server(string $address, mixed $error_code = null, mixed $error_message = null): mixed
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 1–3 arguments (2 optional).
+- **By-reference parameters**: `$error_code`, `$error_message`.
 
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_server.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_server.rs) (`eval_builtin!`)
 - **Execution**: Magician interpreter adapter.
-- **Adapter reason**: `runtime-state-or-resource`.
+- **Adapter reason**: `by-reference-or-lvalue`.
 - **Dispatch hooks**: `direct`, `values`
+- **By-reference parameters**: `$error_code`, `$error_message`.
 
 ## Cross-references
 

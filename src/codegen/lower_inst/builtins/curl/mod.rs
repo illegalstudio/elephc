@@ -44,9 +44,11 @@ pub(crate) use callbacks::{lower_curl_adapter_addr, lower_curl_easy_set_callback
 pub(crate) use easy_errno::lower_curl_easy_errno;
 pub(crate) use easy_error::lower_curl_easy_error;
 pub(crate) use easy_getinfo::{lower_curl_easy_getinfo_double, lower_curl_easy_getinfo_long};
-pub(crate) use easy_init::lower_curl_easy_init;
+pub(crate) use easy_init::{lower_curl_easy_from_id, lower_curl_easy_init};
 pub(crate) use easy_perform::lower_curl_easy_perform;
-pub(crate) use easy_setopt::{lower_curl_easy_setopt_long, lower_curl_easy_setopt_str};
+pub(crate) use easy_setopt::{
+    lower_curl_easy_setopt_long, lower_curl_easy_setopt_null, lower_curl_easy_setopt_str,
+};
 pub(crate) use easy_setopt_slist::lower_curl_easy_setopt_slist;
 pub(crate) use lifecycle::{
     lower_curl_easy_copy, lower_curl_easy_pause, lower_curl_easy_reset, lower_curl_easy_upkeep,

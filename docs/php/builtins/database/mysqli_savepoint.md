@@ -21,7 +21,7 @@ Creates a named savepoint in the open transaction.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
+- **Compiled (AOT)**: supported through the compiler-injected mysqli prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._

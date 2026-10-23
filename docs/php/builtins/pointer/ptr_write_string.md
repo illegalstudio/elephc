@@ -2,7 +2,7 @@
 title: "ptr_write_string()"
 description: "Copies PHP string bytes into raw memory at the given pointer."
 sidebar:
-  order: 749
+  order: 751
 ---
 
 ## ptr_write_string()

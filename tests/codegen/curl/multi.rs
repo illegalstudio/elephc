@@ -175,6 +175,35 @@ fn multi_info_read_without_the_optional_by_reference_argument() {
     assert_eq!(out, "msg\nnone 7\n");
 }
 
+/// A `CURLMSG_DONE` message carries the transfer's own `CURLcode`, and `curl_multi_info_read()`
+/// records it on the easy handle so `curl_errno()`/`curl_error()` answer the completed transfer.
+/// The detailed message comes from the handle's `CURLOPT_ERRORBUFFER`, not the terse
+/// `curl_easy_strerror` text. This is php-src's `bug77946`.
+#[test]
+fn multi_info_read_records_the_transfer_error_on_the_handle() {
+    if skip_without_curl_native("multi_info_read_records_the_transfer_error_on_the_handle") {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+        $mh = curl_multi_init();
+        $ch = curl_init("unknown://scheme.tld");
+        curl_multi_add_handle($mh, $ch);
+        $running = 0;
+        do {
+            $status = curl_multi_exec($mh, $running);
+            $info = curl_multi_info_read($mh);
+            if ($info !== false) {
+                echo $info["result"], "|", curl_errno($info["handle"]), "|";
+                echo str_contains(curl_error($info["handle"]), "Protocol") ? "protocol" : "other", "\n";
+            }
+        } while ($status === CURLM_CALL_MULTI_PERFORM || $running > 0);
+        curl_multi_close($mh);
+        "#
+    );
+    assert_eq!(out, "1|1|protocol\n");
+}
+
 /// `curl_multi_getcontent()` does NOT consume the captured body — php-src's
 /// `RETURN_STR_COPY` leaves the buffer in place — and answers `null` (not `""`) for a
 /// handle that was never capturing, which is a genuinely different answer.
@@ -375,39 +404,34 @@ fn multi_setopt_applies_longs_and_refuses_the_rest() {
     assert_eq!(out, "TTT\nValueError\n");
 }
 
-/// The `CURLMOPT_PUSHFUNCTION` refusal is its own fixture because it must ALSO print PHP's
-/// warning, not merely answer `false` — an inert `true` (or a silent `false`) is exactly
-/// what this build's unsupported-option contract forbids.
+/// `CURLMOPT_PUSHFUNCTION` IS A SUPPORTED OPTION. The bridge installs one push trampoline
+/// per multi handle and reads the callable off each attached easy handle's push slot, so
+/// `curl_multi_setopt()` must accept a callable and answer `true` — an inert `false` plus
+/// an "unsupported" warning was the pre-push contract this fixture pins the end of.
 #[test]
-fn multi_setopt_pushfunction_warns_and_returns_false() {
-    if skip_without_curl_native("multi_setopt_pushfunction_warns_and_returns_false") {
+fn multi_setopt_pushfunction_installs_the_callable() {
+    if skip_without_curl_native("multi_setopt_pushfunction_installs_the_callable") {
         return;
     }
     let output = compile_and_run_capture(
         r#"<?php
         $mh = curl_multi_init();
-        echo curl_multi_setopt($mh, CURLMOPT_PUSHFUNCTION, 1) ? "T" : "F", "\n";
+        echo curl_multi_setopt($mh, CURLMOPT_PUSHFUNCTION, function () { return 0; }) ? "T" : "F", "\n";
         "#,
     );
-    assert_eq!(output.stdout, "F\n");
+    assert_eq!(output.stdout, "T\n");
     assert!(
-        output.stderr.contains(
-            "Warning: curl_multi_setopt(): Option 20014 is not supported by this build"
-        ),
-        "the refusal must say so through PHP's warning channel; stderr was: {}",
+        !output.stderr.contains("is not supported by this build"),
+        "the push option must not report itself unsupported; stderr was: {}",
         output.stderr
     );
 }
 
 /// PUNCH-LIST ITEM 7: `curl_multi_setopt()` CLASSIFIES THE OPTION BEFORE IT TYPE-CHECKS
-/// THE VALUE, the order php-src uses (one `switch (option)`) and the order `curl_setopt()`
-/// already used. A closure on `CURLMOPT_PUSHFUNCTION` is therefore the ordinary
-/// "unsupported by this build" answer — `false` plus PHP's warning —
-/// not a `TypeError` about scalar types, and a closure on an option number that is not a
-/// multi option at all is php-src's `ValueError`. Measured on PHP 8.4.20:
-/// `curl_multi_setopt($mh, 999999, function () {})` raises `ValueError`, and a non-callable
-/// array on `CURLMOPT_PUSHFUNCTION` raises a TypeError about a CALLBACK — never the
-/// `string|int|float|bool` complaint the value-first order produced here.
+/// THE VALUE, the order php-src uses (one `switch (option)`). A closure on
+/// `CURLMOPT_PUSHFUNCTION` is now a real installation, and a number that is not a multi
+/// option at all is php-src's `ValueError` — measured on PHP 8.4.20:
+/// `curl_multi_setopt($mh, 999999, function () {})` raises `ValueError`.
 #[test]
 fn multi_setopt_classifies_the_option_before_type_checking_the_value() {
     if skip_without_curl_native("multi_setopt_classifies_the_option_before_type_checking_the_value")
@@ -437,16 +461,48 @@ fn multi_setopt_classifies_the_option_before_type_checking_the_value() {
         } catch (TypeError $e) {
             echo "TypeError\n";
         }
+        // A value that is not a callable is php-src's callback TypeError.
+        try {
+            curl_multi_setopt($mh, CURLMOPT_PUSHFUNCTION, "no_such_push_function");
+            echo "no-throw\n";
+        } catch (TypeError $e) {
+            echo "callback-TypeError\n";
+        }
         "#,
     );
-    assert_eq!(output.stdout, "F\nValueError\nTypeError\n");
+    assert_eq!(output.stdout, "T\nValueError\nTypeError\ncallback-TypeError\n");
     assert!(
-        output.stderr.contains(
-            "Warning: curl_multi_setopt(): Option 20014 is not supported by this build"
-        ),
-        "the closure must reach the unsupported-option warning, not a type error; stderr was: {}",
+        !output.stderr.contains("is not supported by this build"),
+        "no option here is unsupported; stderr was: {}",
         output.stderr
     );
+}
+
+/// A `mixed`-typed INTEGER OPERAND MUST REACH LIBCURL AS AN INTEGER. `curl_setopt()`'s
+/// long setter used to load its operand as a plain register, so a value the checker had
+/// widened to `mixed` arrived at the bridge as the ADDRESS of its box: libcurl answered
+/// `CURLE_OK` for a wild option value and applied nothing. `CURLOPT_PROTOCOLS` makes that
+/// observable without a network — a protocol mask that excludes FILE must make a
+/// `file://` transfer fail with `CURLE_UNSUPPORTED_PROTOCOL`.
+#[test]
+fn mixed_long_option_operands_reach_libcurl_as_integers() {
+    if skip_without_curl_native("mixed_long_option_operands_reach_libcurl_as_integers") {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+        function widen(mixed $value): mixed {
+            return $value;
+        }
+        $ch = curl_init();
+        echo curl_setopt($ch, CURLOPT_PROTOCOLS, widen(CURLPROTO_HTTP)) ? "T" : "F";
+        echo curl_setopt($ch, CURLOPT_URL, "file://" . __FILE__) ? "T" : "F";
+        echo "\n";
+        var_dump(curl_exec($ch));
+        echo curl_errno($ch), "\n";
+        "#,
+    );
+    assert_eq!(out, "TT\nbool(false)\n1\n");
 }
 
 /// THE DRIFT RATCHET FOR `curl_multi_setopt()`'s PRELUDE-SIDE OPTION TABLE. The prelude
@@ -508,10 +564,11 @@ fn every_registered_multi_option_is_classified_by_the_prelude() {
     ));
     assert_eq!(
         output.stdout,
-        format!("{}\nclassified\n", names.len()),
+        format!("{}\nTYPEERROR CURLMOPT_PUSHFUNCTION\nclassified\n", names.len()),
         "every frozen CURLMOPT_* must be classified by the prelude, never rejected as \
          'not a valid cURL multi option': the prelude's table (src/curl_prelude.rs, \
-         curl_multi_setopt) has drifted from multi_option_kind's"
+         curl_multi_setopt) has drifted from multi_option_kind's. The callback option is \
+         classified by validating its (here invalid) value, hence the TypeError."
     );
 }
 

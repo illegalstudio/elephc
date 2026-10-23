@@ -182,6 +182,31 @@ impl Checker {
     /// initial pass. Iterates `fn_decls`, calls `initial_function_param_types` then
     /// `resolve_function_signature` for each unchecked function, and finally resolves all variant
     /// groups via `resolve_function_variant_groups`. Appends errors to `errors`.
+    /// Seeds the body-check parameter types for a function no call site resolved.
+    ///
+    /// An unhinted by-value parameter is `mixed` in php: this body sees whatever a dynamic
+    /// caller passes — a curl read callback receives a stream resource — and the `Int`
+    /// placeholder only exists for a call site to replace. Seeding `Int` here rejected
+    /// `fread($handle, …)` in every callback a program registers without calling directly.
+    /// The FFI callback and variant surfaces keep the placeholder through
+    /// `initial_function_param_types`, which is where it is a declaration-time marker.
+    fn deferred_function_param_types(
+        &mut self,
+        name: &str,
+        decl: &FnDecl,
+    ) -> Result<Vec<(String, crate::types::PhpType)>, CompileError> {
+        let mut params = self.initial_function_param_types(name, decl)?;
+        for (index, (_, ty)) in params.iter_mut().enumerate() {
+            let unhinted = decl.param_types.get(index).and_then(|hint| hint.as_ref()).is_none();
+            let has_default = decl.defaults.get(index).and_then(|value| value.as_ref()).is_some();
+            let by_ref = decl.ref_params.get(index).copied().unwrap_or(false);
+            if unhinted && !has_default && !by_ref && matches!(ty, crate::types::PhpType::Int) {
+                *ty = crate::types::PhpType::Mixed;
+            }
+        }
+        Ok(params)
+    }
+
     pub(super) fn resolve_unchecked_functions(&mut self, errors: &mut Vec<CompileError>) {
         let unchecked: Vec<String> = self
             .fn_decls
@@ -197,7 +222,7 @@ impl Checker {
             .collect();
         for name in unchecked {
             if let Some(decl) = self.fn_decls.get(&name).cloned() {
-                match self.initial_function_param_types(&name, &decl) {
+                match self.deferred_function_param_types(&name, &decl) {
                     Ok(param_types) => {
                         if let Err(error) =
                             self.resolve_function_signature(&name, &decl, param_types)

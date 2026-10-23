@@ -2,7 +2,7 @@
 title: "xmlwriter_open_memory()"
 description: "Creates a writer that buffers its output in memory."
 sidebar:
-  order: 1045
+  order: 1047
 ---
 
 ## xmlwriter_open_memory()
@@ -19,7 +19,7 @@ Creates a writer that buffers its output in memory.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
+- **Compiled (AOT)**: supported through the compiler-injected xml prelude.
 - **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_open_memory.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_open_memory.rs)).
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._

@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use elephc_builtin_contract::{lookup_constant, ConstValue};
 
 use crate::codegen_support::platform::{Platform, Target};
-use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind};
+use crate::parser::ast::{Expr, ExprKind, Program, Stmt, StmtKind};
 use crate::types::iconv_constants::{iconv_impl, ICONV_VERSION};
 use crate::types::pcntl_constants::pcntl_int_constants;
 use crate::types::predefined_constants::{literal_of, php_type_of, registered_constants};
@@ -104,7 +104,91 @@ pub(crate) fn collect_constants(
         );
     }
     collect_constant_decls(program, &mut constants);
+    fold_const_ref_values(&mut constants);
     constants
+}
+
+/// Replaces `ConstRef` leaves in constant value expressions with the literal they name.
+///
+/// A user constant may alias another constant — `use const NAN as PHP_NAN; const NAN =
+/// PHP_NAN;` — and the alias survives name resolution as a `ConstRef`. Consumers that
+/// materialize a constant's value expression directly (`get_defined_constants()`,
+/// `defined()`, `constant()`) only understand literals, so an unresolved alias there was a
+/// hard codegen error even though the declaration is legal PHP.
+///
+/// Folding happens after every declaration is registered, so aliases resolve regardless of
+/// declaration order. A reference cycle (`const A = B; const B = A;`) leaves the leaf in
+/// place, which keeps the previous (diagnostic) behaviour instead of looping.
+fn fold_const_ref_values(constants: &mut HashMap<String, (ExprKind, PhpType)>) {
+    let snapshot = constants.clone();
+    let folded = constants
+        .iter()
+        .filter_map(|(name, (value, _))| {
+            let mut visiting = vec![name.clone()];
+            let resolved = fold_constant_refs(value, &snapshot, &mut visiting);
+            (resolved != *value).then(|| (name.clone(), resolved))
+        })
+        .collect::<Vec<_>>();
+    for (name, value) in folded {
+        let ty = constant_expr_type(&value);
+        constants.insert(name, (value, ty));
+    }
+}
+
+/// Recursively resolves `ConstRef` leaves, including inside negations and array literals.
+fn fold_constant_refs(
+    value: &ExprKind,
+    table: &HashMap<String, (ExprKind, PhpType)>,
+    visiting: &mut Vec<String>,
+) -> ExprKind {
+    match value {
+        ExprKind::ConstRef(name) => {
+            let key = name.as_str().to_string();
+            // `PHP_BINARY` must stay a REFERENCE: its metadata slot is a compile-time
+            // placeholder that the runtime materializer replaces at every observable fetch,
+            // so folding it here would freeze an alias such as `const P = PHP_BINARY;` to
+            // the placeholder instead of the running program's path.
+            if elephc_builtin_contract::canonical_constant_name(name.as_str()) == "PHP_BINARY" {
+                return value.clone();
+            }
+            if visiting.iter().any(|seen| seen == &key) {
+                return value.clone();
+            }
+            let Some((target, _)) = table.get(&key) else {
+                return value.clone();
+            };
+            visiting.push(key);
+            let resolved = fold_constant_refs(target, table, visiting);
+            visiting.pop();
+            resolved
+        }
+        ExprKind::Negate(inner) => {
+            ExprKind::Negate(Box::new(Expr::new(
+                fold_constant_refs(&inner.kind, table, visiting),
+                inner.span,
+            )))
+        }
+        ExprKind::ArrayLiteral(items) => ExprKind::ArrayLiteral(
+            items
+                .iter()
+                .map(|item| {
+                    Expr::new(fold_constant_refs(&item.kind, table, visiting), item.span)
+                })
+                .collect(),
+        ),
+        ExprKind::ArrayLiteralAssoc(items) => ExprKind::ArrayLiteralAssoc(
+            items
+                .iter()
+                .map(|(key, value)| {
+                    (
+                        Expr::new(fold_constant_refs(&key.kind, table, visiting), key.span),
+                        Expr::new(fold_constant_refs(&value.kind, table, visiting), value.span),
+                    )
+                })
+                .collect(),
+        ),
+        _ => value.clone(),
+    }
 }
 
 /// Recursively scans statements for user-defined constant declarations.

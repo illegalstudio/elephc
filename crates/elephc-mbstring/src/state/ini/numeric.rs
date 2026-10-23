@@ -150,8 +150,5 @@ pub(in crate::state) fn quantity(input: &[u8]) -> (i64, Option<Vec<u8>>) {
 
 /// Parses Core display_errors through textual modes and PHP's unsigned-byte C integer conversion.
 pub(in crate::state) fn display_errors(input: &[u8]) -> u8 {
-    if [b"on".as_slice(), b"yes", b"true", b"stdout"].iter().any(|name| input.eq_ignore_ascii_case(name)) { return 1; }
-    if input.eq_ignore_ascii_case(b"stderr") { return 2; }
-    let mode = signed_prefix(input, false).0 as u8;
-    if mode > 2 { 1 } else { mode }
+    elephc_builtin_contract::mbstring_abi::ini::core::display_errors_mode(input)
 }

@@ -28,10 +28,11 @@ use crate::opcache_prelude;
 use crate::parser::ast::{BinOp, CType, CastType, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{class, e_array, e_array_assoc, e_binop, e_bool, e_call, e_cast,
     e_const, e_index, e_instance_of, e_int, e_method_call, e_neg, e_new, e_not, e_null,
-    e_post_inc, e_static_prop, e_str, e_ternary, e_this, e_this_prop, e_var, extern_fn,
-    function, interface, internal_declarations, method, s_array_assign, s_assign, s_continue,
-    s_do_while, s_expr, s_for, s_foreach, s_if, s_prop_assign, s_return, s_return_void,
-    s_static_prop_assign, s_throw, t_array, t_class, t_mixed, t_nullable, t_ptr, t_union
+    e_post_inc, e_static_prop, e_str, e_suppress, e_ternary, e_this, e_this_prop, e_var,
+    extern_fn, function, interface, internal_declarations, method, s_array_assign, s_assign,
+    s_continue, s_do_while, s_expr, s_for, s_foreach, s_if, s_prop_assign, s_return,
+    s_return_void, s_static_prop_assign, s_throw, t_array, t_class, t_mixed, t_nullable, t_ptr,
+    t_union
 };
 use crate::web_prelude::PhpVersion;
 
@@ -4035,7 +4036,7 @@ fn decl_fn_elephc_session_send_cookie() -> Stmt {
                 vec![],
                 None,
             ),
-            s_expr(e_call("header", vec![e_binop(e_str("Set-Cookie: "), BinOp::Concat, e_var("cookie")), e_bool(false)])),
+            s_expr(e_suppress(e_call("header", vec![e_binop(e_str("Set-Cookie: "), BinOp::Concat, e_var("cookie")), e_bool(false)]))),
             s_return(e_bool(true)),
         ])
         .build()
@@ -4050,27 +4051,27 @@ fn decl_fn_elephc_session_send_cache_headers() -> Stmt {
             s_if(
                 e_binop(e_var("limiter"), BinOp::StrictEq, e_str("nocache")),
                 vec![
-                    s_expr(e_call("header", vec![e_str("Expires: Thu, 19 Nov 1981 08:52:00 GMT")])),
-                    s_expr(e_call("header", vec![e_str("Cache-Control: no-store, no-cache, must-revalidate")])),
-                    s_expr(e_call("header", vec![e_str("Pragma: no-cache")])),
+                    s_expr(e_suppress(e_call("header", vec![e_str("Expires: Thu, 19 Nov 1981 08:52:00 GMT")]))),
+                    s_expr(e_suppress(e_call("header", vec![e_str("Cache-Control: no-store, no-cache, must-revalidate")]))),
+                    s_expr(e_suppress(e_call("header", vec![e_str("Pragma: no-cache")]))),
                 ],
                 vec![
                 (e_binop(e_var("limiter"), BinOp::StrictEq, e_str("public")), vec![
                     s_assign("expire", e_call("elephc_web_session_get_cache_expire", vec![])),
-                    s_expr(e_call("header", vec![e_binop(e_binop(e_str("Expires: "), BinOp::Concat, e_call("gmdate", vec![e_str("D, d M Y H:i:s"), e_binop(e_call("time", vec![]), BinOp::Add, e_binop(e_var("expire"), BinOp::Mul, e_int(60)))])), BinOp::Concat, e_str(" GMT"))])),
-                    s_expr(e_call("header", vec![e_binop(e_str("Cache-Control: public, max-age="), BinOp::Concat, e_binop(e_var("expire"), BinOp::Mul, e_int(60)))])),
-                    s_expr(e_call("header", vec![e_binop(e_binop(e_str("Last-Modified: "), BinOp::Concat, e_call("gmdate", vec![e_str("D, d M Y H:i:s"), e_call("time", vec![])])), BinOp::Concat, e_str(" GMT"))])),
+                    s_expr(e_suppress(e_call("header", vec![e_binop(e_binop(e_str("Expires: "), BinOp::Concat, e_call("gmdate", vec![e_str("D, d M Y H:i:s"), e_binop(e_call("time", vec![]), BinOp::Add, e_binop(e_var("expire"), BinOp::Mul, e_int(60)))])), BinOp::Concat, e_str(" GMT"))]))),
+                    s_expr(e_suppress(e_call("header", vec![e_binop(e_str("Cache-Control: public, max-age="), BinOp::Concat, e_binop(e_var("expire"), BinOp::Mul, e_int(60)))]))),
+                    s_expr(e_suppress(e_call("header", vec![e_binop(e_binop(e_str("Last-Modified: "), BinOp::Concat, e_call("gmdate", vec![e_str("D, d M Y H:i:s"), e_call("time", vec![])])), BinOp::Concat, e_str(" GMT"))]))),
                 ]),
                 (e_binop(e_var("limiter"), BinOp::StrictEq, e_str("private")), vec![
                     s_assign("expire", e_call("elephc_web_session_get_cache_expire", vec![])),
-                    s_expr(e_call("header", vec![e_str("Expires: Thu, 19 Nov 1981 08:52:00 GMT")])),
-                    s_expr(e_call("header", vec![e_binop(e_str("Cache-Control: private, max-age="), BinOp::Concat, e_binop(e_var("expire"), BinOp::Mul, e_int(60)))])),
-                    s_expr(e_call("header", vec![e_binop(e_binop(e_str("Last-Modified: "), BinOp::Concat, e_call("gmdate", vec![e_str("D, d M Y H:i:s"), e_call("time", vec![])])), BinOp::Concat, e_str(" GMT"))])),
+                    s_expr(e_suppress(e_call("header", vec![e_str("Expires: Thu, 19 Nov 1981 08:52:00 GMT")]))),
+                    s_expr(e_suppress(e_call("header", vec![e_binop(e_str("Cache-Control: private, max-age="), BinOp::Concat, e_binop(e_var("expire"), BinOp::Mul, e_int(60)))]))),
+                    s_expr(e_suppress(e_call("header", vec![e_binop(e_binop(e_str("Last-Modified: "), BinOp::Concat, e_call("gmdate", vec![e_str("D, d M Y H:i:s"), e_call("time", vec![])])), BinOp::Concat, e_str(" GMT"))]))),
                 ]),
                 (e_binop(e_var("limiter"), BinOp::StrictEq, e_str("private_no_expire")), vec![
                     s_assign("expire", e_call("elephc_web_session_get_cache_expire", vec![])),
-                    s_expr(e_call("header", vec![e_binop(e_str("Cache-Control: private, max-age="), BinOp::Concat, e_binop(e_var("expire"), BinOp::Mul, e_int(60)))])),
-                    s_expr(e_call("header", vec![e_binop(e_binop(e_str("Last-Modified: "), BinOp::Concat, e_call("gmdate", vec![e_str("D, d M Y H:i:s"), e_call("time", vec![])])), BinOp::Concat, e_str(" GMT"))])),
+                    s_expr(e_suppress(e_call("header", vec![e_binop(e_str("Cache-Control: private, max-age="), BinOp::Concat, e_binop(e_var("expire"), BinOp::Mul, e_int(60)))]))),
+                    s_expr(e_suppress(e_call("header", vec![e_binop(e_binop(e_str("Last-Modified: "), BinOp::Concat, e_call("gmdate", vec![e_str("D, d M Y H:i:s"), e_call("time", vec![])])), BinOp::Concat, e_str(" GMT"))]))),
                 ]),
             ],
                 None,

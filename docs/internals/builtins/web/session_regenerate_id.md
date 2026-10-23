@@ -2,7 +2,7 @@
 title: "session_regenerate_id() - internals"
 description: "Compiler internals for session_regenerate_id(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 999
+  order: 1001
 ---
 
 ## `session_regenerate_id()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:3155](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3155) (`session_regenerate_id`)
+- **Lowering**: [`src/web_prelude/build.rs`:3156](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3156) (`session_regenerate_id`)
 - **Function symbol**: `session_regenerate_id()`
 
 

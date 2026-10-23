@@ -630,6 +630,22 @@ impl Checker {
                     } else {
                         self.infer_type(default_expr, caller_env)?
                     };
+                    // An untyped by-reference parameter is semantically mixed (see the
+                    // supplied-argument branch above): its OMITTED default must keep the same
+                    // canonical cell shape, or a `&$q = null` parameter is specialized to
+                    // `Void` and the caller's by-reference cell is built for a type that pushes
+                    // no payload, corrupting the frame.
+                    //
+                    // A `null` default does not make a BY-VALUE parameter null-only either:
+                    // PHP still accepts any value there, so it stays mixed. Typing it `Void`
+                    // narrowed the body to a type no argument can satisfy and rejected
+                    // `new C($m)` / `strlen($m)` after an `is_null($m)` guard.
+                    let ty = if decl.ref_params.get(i).copied().unwrap_or(false)
+                        || matches!(ty, PhpType::Void | PhpType::Never)
+                    {
+                        PhpType::Mixed
+                    } else {
+                        ty                    };
                     param_types.push((decl.params[i].clone(), ty));
                 }
             }

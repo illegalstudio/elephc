@@ -20,6 +20,7 @@ use crate::types::PhpType;
 
 pub use crate::builtins::requirements::{
     file_get_contents_requirements, file_put_contents_requirements, fopen_requirements,
+    fsockopen_requirements,
     stream_filter_requirements, unlink_requirements, BuiltinRequirement,
     BuiltinRequirementInput, BuiltinRequirements, RequirementsFn,
 };

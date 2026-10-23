@@ -2,7 +2,7 @@
 title: "chunk_split() - internals"
 description: "Compiler internals for chunk_split(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 795
+  order: 797
 ---
 
 ## `chunk_split()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/chunk_split.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/chunk_split.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:705](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L705) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

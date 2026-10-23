@@ -2,7 +2,7 @@
 title: "xmlwriter_end_attribute()"
 description: "Ends the current attribute."
 sidebar:
-  order: 1033
+  order: 1035
 ---
 
 ## xmlwriter_end_attribute()
@@ -20,7 +20,7 @@ Ends the current attribute.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
+- **Compiled (AOT)**: supported through the compiler-injected xml prelude.
 - **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_end_attribute.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_end_attribute.rs)).
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._

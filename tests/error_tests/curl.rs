@@ -1,7 +1,6 @@
 //! Purpose:
-//! Compile-time diagnostic tests for the `ext/curl` prelude surface: `CurlHandle` is
-//! `final` and not user-constructible, and the `curl_*` wrappers reject wrong argument
-//! counts and wrong argument types.
+//! Compile-time diagnostic tests for the `ext/curl` prelude surface: the handle classes are
+//! `final`, and the `curl_*` wrappers reject wrong argument counts and wrong argument types.
 //!
 //! Called from:
 //! - `cargo test --test error_tests curl` through Rust's test harness.
@@ -9,8 +8,10 @@
 //! Key details:
 //! - These need only the INJECTED PRELUDE, never a link, so unlike
 //!   `tests/codegen/curl/` they run on every machine whether or not the managed native
-//!   `curl` package is installed. That is exactly why the two object-model rules
-//!   (`final`, private constructor) are pinned here rather than there.
+//!   `curl` package is installed. That is exactly why the `final` object-model rule is
+//!   pinned here rather than there. (Direct construction is a runtime `Error` since the
+//!   classes gained PHP's throwing constructor; it is covered by
+//!   `tests/codegen/curl/php_src_behaviour.rs`.)
 //! - `check_source` already injects the curl prelude between alias collection and name
 //!   resolution, mirroring `pipeline::compile`, so the checker sees the prelude's typed
 //!   signatures.
@@ -34,21 +35,15 @@ fn expect_curl_error(src: &str, needle: &str) {
     );
 }
 
-/// PHP's `CurlHandle` is `final`: a session object is minted by `curl_init()` and by
-/// nothing else, so a user class cannot extend it.
+/// `CurlHandle` is `final`: a session object is minted by `curl_init()` and by
+/// nothing else, so a user class cannot extend it. (Direct construction is now a
+/// runtime `Error`, covered by `tests/codegen/curl/php_src_behaviour.rs`.)
 #[test]
 fn curl_handle_cannot_be_extended() {
     expect_curl_error(
         "<?php class MyHandle extends CurlHandle {} $h = curl_init();",
         "final",
     );
-}
-
-/// `CurlHandle`'s constructor is private, matching php-src, so `new CurlHandle()` is
-/// rejected. A user must go through `curl_init()`.
-#[test]
-fn curl_handle_cannot_be_constructed() {
-    expect_curl_error("<?php $h = new CurlHandle();", "private");
 }
 
 /// `curl_setopt()` takes exactly three arguments, so a call missing the value is an arity
@@ -74,16 +69,14 @@ fn curl_init_rejects_a_non_string_url() {
     expect_curl_error("<?php $ch = curl_init(42);", "curl_init");
 }
 
-/// `curl_setopt()`'s first parameter is typed `CurlHandle`, so passing an int is a
-/// compile-time type error naming that class — the earliest point elephc can tell the
-/// difference, and the same guard every other `curl_*` wrapper carries.
-#[test]
-fn curl_setopt_rejects_wrong_handle_type() {
-    expect_curl_error(
-        r#"<?php curl_setopt(1, CURLOPT_URL, "http://127.0.0.1/");"#,
-        "CurlHandle",
-    );
-}
+/// `curl_setopt()`'s first parameter is UNTYPED with a runtime guard: a callback's
+/// `$ch` arrives as an untyped parameter (php-src's own fixtures spell it that way),
+/// so the wrong-handle rejection happens at run time, exactly like PHP 8's typed
+/// parameter. The runtime side is pinned by
+/// `tests/codegen/curl/php_src_behaviour.rs`'s wrong-handle test; this suite keeps only
+/// compile-time pins — the wrong-handle and bad-callback-value rejections live in the
+/// prelude's runtime guards now, so only the arity diagnostic above still names the
+/// function at compile time.
 
 /// `curl_getinfo()`'s handle parameter is typed the same way, so the wrong-handle
 /// diagnostic is not a `curl_setopt()`-only accident.
@@ -95,15 +88,14 @@ fn curl_getinfo_rejects_wrong_handle_type() {
     );
 }
 
-/// `CurlMultiHandle` is `final` and not user-constructible, exactly like `CurlHandle`:
-/// `curl_multi_init()` is the only way to obtain one.
+/// `CurlMultiHandle` is `final`, exactly like `CurlHandle`: `curl_multi_init()` is the
+/// only way to obtain one.
 #[test]
-fn curl_multi_handle_cannot_be_extended_or_constructed() {
+fn curl_multi_handle_cannot_be_extended() {
     expect_curl_error(
         "<?php class MyMulti extends CurlMultiHandle {} $mh = curl_multi_init();",
         "final",
     );
-    expect_curl_error("<?php $mh = new CurlMultiHandle();", "private");
 }
 
 /// `curl_multi_exec()`'s `$still_running` is REQUIRED, so a one-argument call is an arity
@@ -159,15 +151,14 @@ fn curl_multi_get_handles_is_undefined_before_php_85() {
     );
 }
 
-/// `CurlShareHandle` is `final` and not user-constructible, exactly like `CurlHandle`/
-/// `CurlMultiHandle`: `curl_share_init()` is the only way to obtain one.
+/// `CurlShareHandle` is `final`, exactly like `CurlHandle`/`CurlMultiHandle`:
+/// `curl_share_init()` is the only way to obtain one.
 #[test]
-fn curl_share_handle_cannot_be_extended_or_constructed() {
+fn curl_share_handle_cannot_be_extended() {
     expect_curl_error(
         "<?php class MyShare extends CurlShareHandle {} $sh = curl_share_init();",
         "final",
     );
-    expect_curl_error("<?php $sh = new CurlShareHandle();", "private");
 }
 
 /// `curl_share_setopt()` takes exactly three arguments, so a call missing the value is an
@@ -184,10 +175,8 @@ fn curl_share_setopt_rejects_wrong_arity() {
 /// time — the same guard the easy/multi surfaces carry.
 #[test]
 fn curl_share_functions_reject_a_non_handle() {
-    expect_curl_error(
-        r#"<?php curl_share_setopt("nope", CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS);"#,
-        "CurlShareHandle",
-    );
+    // `curl_share_setopt()` takes `mixed` and raises the TypeError at runtime (see
+    // `tests/codegen/curl/php_src_behaviour.rs`); the readers stay compile-time typed.
     expect_curl_error(r#"<?php curl_share_errno(42);"#, "CurlShareHandle");
     expect_curl_error(r#"<?php curl_share_close([]);"#, "CurlShareHandle");
 }
@@ -201,21 +190,16 @@ fn curl_share_errno_rejects_wrong_arity() {
     );
 }
 
-/// Issue #892: `curl_multi_exec()`'s by-reference `$still_running` seeded with `null`
-/// reached the EIR backend as `unsupported EIR backend feature: icmp for PHP type Void`,
-/// positionless, on the FIRST use of the variable after the call.
+/// php-src's stub declares `curl_multi_exec(CurlMultiHandle $mh, &$still_running)` — the
+/// by-reference parameter is UNTYPED — so a `null`-seeded variable is legal PHP and the call
+/// writes an int back through it. elephc declares the same untyped by-ref parameter and
+/// auto-vivifies a null-seeded variable, matching the reference runtime.
 ///
-/// The cause is not curl-specific and neither is the fix: `types_compatible` accepts
-/// `null` for `int` — correct for a by-VALUE parameter, which PHP coerces — and that
-/// acceptance short-circuited every later by-reference check, so the argument was admitted
-/// with the caller's local still typed `Void` while the callee wrote an int through the
-/// reference. `$running > 0` then lowered an integer compare on a null.
-///
-/// The recovery half of the message is asserted too, because "expects Int, got Void" alone
-/// would leave a user staring at a line php-src runs without complaint.
+/// (This replaces the earlier test that required `int &$still_running`: that typing was
+/// elephc's own divergence from the stub, and it made `$running = null` a compile error.)
 #[test]
-fn curl_multi_exec_rejects_a_null_seeded_still_running() {
-    expect_curl_error(
+fn curl_multi_exec_accepts_a_null_seeded_still_running() {
+    check_source(
         "<?php
          $mh = curl_multi_init();
          $running = null;
@@ -223,15 +207,15 @@ fn curl_multi_exec_rejects_a_null_seeded_still_running() {
              $status = curl_multi_exec($mh, $running);
          } while ($running > 0 && $status == CURLM_OK);
          echo $running;",
-        "parameter $still_running expects int, got null",
-    );
-    expect_curl_error(
+    )
+    .expect("php-src's untyped by-ref parameter accepts a null-seeded variable");
+    check_source(
         "<?php
          $mh = curl_multi_init();
          $running = null;
          curl_multi_exec($mh, $running);",
-        "initialize it (for example `= 0`), or declare BOTH the parameter and the variable nullable",
-    );
+    )
+    .expect("php-src's untyped by-ref parameter accepts a null-seeded variable");
 }
 
 /// The shape the diagnostic points at compiles, so the recovery it prints is real.
@@ -371,6 +355,12 @@ fn check_source_for_php_version(
         ast,
         false,
         php_version,
+        &mut prelude_inventory,
+    );
+    let ast = elephc::opcache_prelude::inject_ini_wrappers(
+        ast,
+        elephc::web_prelude::PhpVersion::default(),
+        &elephc::codegen::ini_overrides(),
         &mut prelude_inventory,
     );
     let ast = elephc::name_resolver::resolve(ast).map_err(|e| e.message.clone())?;

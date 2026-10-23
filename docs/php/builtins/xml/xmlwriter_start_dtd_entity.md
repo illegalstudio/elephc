@@ -2,7 +2,7 @@
 title: "xmlwriter_start_dtd_entity()"
 description: "Starts a DTD entity declaration."
 sidebar:
-  order: 1058
+  order: 1060
 ---
 
 ## xmlwriter_start_dtd_entity()
@@ -22,7 +22,7 @@ Starts a DTD entity declaration.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
+- **Compiled (AOT)**: supported through the compiler-injected xml prelude.
 - **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_start_dtd_entity.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_start_dtd_entity.rs)).
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._

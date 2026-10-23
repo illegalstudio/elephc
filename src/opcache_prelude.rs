@@ -146,6 +146,11 @@ use injection::*;
 use manifest_bake::*;
 
 pub use injection::inject_if_used;
+// The bin tree offers the same library surface but does not use this wrapper itself (the
+// pipeline's ini block lives inside `inject_if_used`); only the in-process test harness
+// calls it, so the import is allowed unused there.
+#[allow(unused_imports)]
+pub use injection::inject_ini_wrappers;
 pub use manifest::{collect_manifest, ScriptEntry};
 pub use manifest_bake::{bake_manifest, ManifestBakeSites};
 #[allow(unused_imports)]

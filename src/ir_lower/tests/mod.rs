@@ -178,6 +178,14 @@ fn try_lower_source_at_for_target(
     let ast = crate::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::testing_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    // The curl prelude's OpenBaseDir guard reads ini_get; the ini surface ships with the
+    // injection the production pipeline adds for a program that references it.
+    let ast = crate::opcache_prelude::inject_ini_wrappers(
+        ast,
+        crate::php_version::PhpVersion::default(),
+        &[],
+        &mut prelude_inventory,
+    );
     let ast = crate::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::version_prelude::inject_if_used(

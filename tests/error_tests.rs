@@ -72,6 +72,15 @@ fn check_source_with_defines_and_options(
     let ast = elephc::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    // The curl prelude's OpenBaseDir guard reads ini_get/ini_set; the ini wrappers are
+    // pay-for-use prelude functions the production pipeline injects for a program that
+    // references them (here: through the curl prelude itself).
+    let ast = elephc::opcache_prelude::inject_ini_wrappers(
+        ast,
+        elephc::web_prelude::PhpVersion::default(),
+        &elephc::codegen::ini_overrides(),
+        &mut prelude_inventory,
+    );
     let ast = elephc::name_resolver::resolve(ast).map_err(|e| e.message.clone())?;
     // Mirrors `pipeline::compile`: the object-cast prelude is injected past name resolution,
     // so a `(object)` cast has the helper it is lowered to and a program that declares that

@@ -2,7 +2,7 @@
 title: "xml_parse_into_struct() - internals"
 description: "Compiler internals for xml_parse_into_struct(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1017
+  order: 1019
 ---
 
 ## `xml_parse_into_struct()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/xml/xml_parse_into_struct.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/xml/xml_parse_into_struct.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:705](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L705) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

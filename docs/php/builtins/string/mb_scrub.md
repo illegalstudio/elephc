@@ -2,7 +2,7 @@
 title: "mb_scrub()"
 description: "Replaces malformed encoded units using the current substitution setting."
 sidebar:
-  order: 874
+  order: 876
 ---
 
 ## mb_scrub()

@@ -222,6 +222,12 @@ pub(super) fn module_uses_backtrace(module: &Module) -> bool {
     functions()
         .flat_map(|function| function.instructions.iter())
         .any(|inst| {
+            // An instruction that may throw can end the process through the uncaught report,
+            // and php's report renders the suspended frames: the activations must be tracked
+            // for a program that never calls debug_backtrace() itself.
+            if inst.effects.contains(crate::ir::Effects::MAY_THROW) {
+                return true;
+            }
             inst.op == Op::CoreBuiltin
                 && matches!(
                     inst.immediate,
@@ -428,6 +434,7 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     abi::emit_frame_prologue(ctx.emitter, ctx.frame_size);
     capture_concat_base(ctx);
     emit_callee_saved_saves(ctx);
+    emit_display_errors_configuration(ctx);
     ctx.emitter.comment("save argc/argv to globals");
     abi::emit_store_process_args_to_globals(ctx.emitter);
     // Measure the stack only after argc/argv are safe in globals: the initializer is an
@@ -935,6 +942,22 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
 /// Under `--web` this runs per request rather than once. The call is a setter over
 /// compile-time constants, so re-installing is idempotent, and putting it in the handler
 /// prologue is what guarantees a recycled worker starts configured.
+/// Installs php's compiled `display_errors` mode for the diagnostic writer.
+///
+/// Runs before the mbstring startup call, which can already emit startup warnings: the
+/// mode decides whether that display copy renders through the output layer (the CLI
+/// default), goes to stderr, or is suppressed.
+fn emit_display_errors_configuration(ctx: &mut FunctionContext<'_>) {
+    let mode = crate::codegen_support::display_errors_mode();
+    let scratch = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x9",
+        Arch::X86_64 => "r11",
+    };
+    ctx.emitter.comment("install the compiled display_errors mode");
+    abi::emit_load_int_immediate(ctx.emitter, scratch, mode as i64);
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_rt_display_errors", 0);
+}
+
 fn emit_opcache_configuration(ctx: &mut FunctionContext<'_>) {
     if !ctx.module.required_runtime_features.eval_bridge {
         return;

@@ -107,6 +107,16 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         StmtKind::ArrayPush { value, .. } | StmtKind::StaticPropertyArrayPush { value, .. } => {
             expr_effect(value).with_side_effects().with_may_throw()
         }
+        // `$GLOBALS['name'] = …` writes the program-global `name` (the lowering routes it to
+        // `StoreGlobal`), so a function containing it must be flagged as a global writer —
+        // that is what lets the top-level `writes_globals` guard invalidate every local.
+        StmtKind::ArrayAssign { array, index, value } if array == "GLOBALS" => {
+            expr_effect(index)
+                .combine(expr_effect(value))
+                .with_side_effects()
+                .with_may_throw()
+                .with_writes_globals()
+        }
         StmtKind::ArrayAssign { index, value, .. }
         | StmtKind::PropertyArrayAssign { index, value, .. }
         | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {

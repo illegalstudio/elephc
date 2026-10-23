@@ -340,16 +340,16 @@ fn test_include_function_variant_specializes_untyped_string_param_from_call() {
 }
 
 /// Verifies that when an included file defines a function with an untyped
-/// parameter, calling it with an integer argument (which cannot be passed to
-/// strlen) produces a compile error. The specialized variant is not available
-/// for that type, and no valid fallback exists.
+/// parameter, calling it with an array (which cannot be passed to strlen)
+/// produces a compile error. The specialized variant is not available for that
+/// type, and no valid fallback exists.
 #[test]
 fn test_include_function_variant_keeps_error_when_call_does_not_respecialize() {
     assert!(compile_files_fails(
         &[
             (
                 "main.php",
-                "<?php\nrequire 'lib.php';\necho describe_text(123);\n",
+                "<?php\nrequire 'lib.php';\necho describe_text([1, 2]);\n",
             ),
             (
                 "lib.php",

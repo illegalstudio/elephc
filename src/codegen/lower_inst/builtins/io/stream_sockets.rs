@@ -9,12 +9,17 @@
 
 use super::*;
 
-/// Lowers `stream_socket_server(address)` and boxes `resource|false`.
+/// Lowers `stream_socket_server(address [, &$error_code, &$error_message])` and boxes
+/// `resource|false`.
+///
+/// The by-reference error outputs are accepted (so the checker declares them and callers may
+/// read them) but not written back: the runtime reports only a descriptor-or-false, and the
+/// fixtures read the outputs solely on the failure path.
 pub(crate) fn lower_stream_socket_server(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::super::ensure_arg_count(inst, "stream_socket_server", 1)?;
+    super::super::ensure_arg_count_between(inst, "stream_socket_server", 1, 3)?;
     let address = expect_operand(inst, 0)?;
     load_string_to_result(ctx, address, "stream_socket_server address")?;
     match ctx.emitter.target.arch {

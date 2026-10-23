@@ -330,6 +330,32 @@ fn test_loop_condition_reads_by_reference_out_parameter() {
     assert_eq!(out, "3:0");
 }
 
+/// `exit`/`die` are language constructs and may be written without parentheses; the bare
+/// form ends the program exactly like `exit()`.
+#[test]
+fn test_bare_exit_and_die_end_the_program() {
+    let out = compile_and_run(
+        "<?php function stop(): void { exit; } echo 'a'; stop(); echo 'b';",
+    );
+    assert_eq!(out, "a");
+    let out = compile_and_run(
+        "<?php function stop(): void { die; } echo 'a'; stop(); echo 'b';",
+    );
+    assert_eq!(out, "a");
+}
+
+/// `exit("message")` / `die("message")` prints the message to stdout and ends the process with
+/// status 0, unlike the integer form, which uses the value as the exit status.
+#[test]
+fn test_exit_with_string_message_prints_and_succeeds() {
+    let out = compile_and_run(
+        r#"<?php echo "before\n"; exit("bye\n"); echo "after";"#,
+    );
+    assert_eq!(out, "before\nbye\n");
+    let out = compile_and_run(r#"<?php die("dead\n");"#);
+    assert_eq!(out, "dead\n");
+}
+
 /// The same guarantee for a `while` loop whose condition is the by-reference out-parameter
 /// alone, with the extra statement in the body that makes the hoist profitable.
 #[test]
@@ -338,4 +364,31 @@ fn test_while_condition_reads_by_reference_out_parameter() {
         "<?php function pull(array $queue, int &$left): string { $left = count($queue) - 1; return (string) $left; } function main(): void { $left = 1; $seen = 0; $queue = [1, 2, 3]; while ($left > 0) { pull($queue, $left); $seen++; array_pop($queue); } echo $seen, ':', $left; } main();",
     );
     assert_eq!(out, "3:0");
+}
+
+/// PHP auto-vivifies an undefined variable on an array write (`$a[0] = 1;`, `$a[] = 1;`).
+/// The pre-checker normalization declares it, and a push inside a loop must ACCUMULATE
+/// rather than reset each iteration.
+#[test]
+fn test_array_write_auto_vivifies() {
+    let out = compile_and_run(
+        "<?php $a[0] = 1; $b['k'] = 2; foreach ([3, 4] as $v) { $c[] = $v; } echo $a[0], ':', $b['k'], ':', implode(',', $c);",
+    );
+    assert_eq!(out, "1:2:3,4");
+}
+
+/// A variable passed to a by-reference output parameter is auto-vivified as null, exactly
+/// like an assignment, so `f($y)` with `function f(&$x)` binds `$y`.
+#[test]
+fn test_byref_output_auto_vivifies() {
+    let out = compile_and_run("<?php function setTo(&$x): void { $x = 7; } setTo($y); echo $y;");
+    assert_eq!(out, "7");
+}
+
+/// A lone `;` is PHP's EMPTY STATEMENT: legal at any statement position and generating no
+/// code.
+#[test]
+fn test_empty_statement_is_a_no_op() {
+    let out = compile_and_run("<?php echo 'a';; echo 'b';;");
+    assert_eq!(out, "ab");
 }

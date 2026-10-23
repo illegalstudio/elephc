@@ -563,6 +563,31 @@ impl Checker {
         self.current_by_ref_return = prev_by_ref_return;
         self.closure_depth -= 1;
         body_result?;
+        // A `use (&$cap)` capture is aliased, so a body write is observable outside. Record
+        // every capture whose type the body widened so the enclosing scope can adopt it —
+        // including for an INLINE closure argument (passed straight to a call, never bound
+        // to a local, so there is no assignment to drain it from). Only a widening is
+        // recorded: an outer `Array(Never)` (an empty array) or unset/`Void` binding
+        // replaced by an array shape the body produced. Drained at the next statement.
+        for cap in capture_refs {
+            let Some(widened) = closure_sig.env.get(cap).cloned() else {
+                continue;
+            };
+            if !matches!(
+                widened,
+                PhpType::Array(_) | PhpType::AssocArray { .. }
+            ) {
+                continue;
+            }
+            let is_widening = match env.get(cap) {
+                Some(PhpType::Array(inner)) => **inner == PhpType::Never,
+                Some(PhpType::Void) | None => true,
+                _ => false,
+            };
+            if is_widening {
+                self.byref_capture_writeback.insert(cap.clone(), widened);
+            }
+        }
         self.resolve_closure_return_type(body, return_type, expr.span, &closure_sig.env)?;
         Ok(PhpType::Callable)
     }

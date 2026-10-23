@@ -2,7 +2,7 @@
 title: "curl_init() - internals"
 description: "Compiler internals for curl_init(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 703
+  order: 705
 ---
 
 ## `curl_init()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_curl.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_curl.rs)
-- **Lowering**: [`src/curl_prelude.rs`:214](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude.rs#L214) (`curl_init`)
+- **Lowering**: [`src/curl_prelude/oracle.rs`:123](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude/oracle.rs#L123) (`curl_init`)
 - **Function symbol**: `curl_init()`
 
 

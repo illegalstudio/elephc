@@ -61,6 +61,9 @@ pub(crate) fn spanned(token: Token, span: Span) -> SpannedToken {
 pub enum Token {
     // Structural
     OpenTag,        // <?php
+    /// A `?>` close tag's inline HTML: the text between the close tag and the next
+    /// `<?php`/`<?=` re-entry. The statement position renders it as PHP output.
+    InlineHtml(String),
     Semicolon,      // ;
     LParen,         // (
     RParen,         // )

@@ -2,7 +2,7 @@
 title: "long2ip() - internals"
 description: "Compiler internals for long2ip(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 832
+  order: 834
 ---
 
 ## `long2ip()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/long2ip.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/long2ip.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:705](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L705) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

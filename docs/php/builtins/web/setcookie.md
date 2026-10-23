@@ -2,7 +2,7 @@
 title: "setcookie()"
 description: "Adds a Set-Cookie header, URL-encoding the value."
 sidebar:
-  order: 1009
+  order: 1011
 ---
 
 ## setcookie()
@@ -26,7 +26,7 @@ Adds a Set-Cookie header, URL-encoding the value.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
+- **Compiled (AOT)**: supported through the compiler-injected web prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._

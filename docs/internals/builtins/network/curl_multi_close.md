@@ -2,7 +2,7 @@
 title: "curl_multi_close() - internals"
 description: "Compiler internals for curl_multi_close(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 705
+  order: 707
 ---
 
 ## `curl_multi_close()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_curl.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_curl.rs)
-- **Lowering**: [`src/curl_prelude.rs`:1628](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude.rs#L1628) (`curl_multi_close`)
+- **Lowering**: [`src/curl_prelude/oracle.rs`:2136](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude/oracle.rs#L2136) (`curl_multi_close`)
 - **Function symbol**: `curl_multi_close()`
 
 

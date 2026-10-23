@@ -139,6 +139,19 @@ fn lower_cast_to_int(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
             predicates::emit_array_truthiness(ctx, value)?;
         }
+        // php WARNS and answers 1 for an ordinary object (enums included), but its
+        // `CurlHandle` and `CurlMultiHandle` install a cast handler that answers the OBJECT
+        // HANDLE with no warning (php-src's `curl_int_cast.phpt` pins it; measured on
+        // 8.5.10). `CurlShareHandle` does not — it warns and answers 1 like any other.
+        PhpType::Object(class) => {
+            if int_cast_yields_the_object_handle(&class) {
+                ctx.load_value_to_result(value)?;
+                abi::emit_call_label(ctx.emitter, "__rt_object_handle_of");
+            } else {
+                emit_object_to_number_warning(ctx, value, 0)?;
+                abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+            }
+        }
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "int cast for PHP type {:?}",
@@ -194,6 +207,17 @@ fn lower_cast_to_float(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Res
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
             predicates::emit_array_truthiness(ctx, value)?;
             abi::emit_int_result_to_float_result(ctx.emitter);
+        }
+        // See the int arm: php warns and answers 1.0 for every ordinary object.
+        PhpType::Object(_) => {
+            emit_object_to_number_warning(ctx, value, 1)?;
+            let one = ctx.data.add_float(1.0);
+            abi::emit_load_symbol_to_reg(
+                ctx.emitter,
+                abi::float_result_reg(ctx.emitter),
+                &one,
+                0,
+            );
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -509,6 +533,39 @@ fn lower_object_to_string(
         return lower_runtime_object_method_call(ctx, inst, normalized, "__toString");
     }
     emit_missing_tostring_fatal(ctx, normalized);
+    Ok(())
+}
+
+/// Returns whether `(int)` on this class answers the object handle instead of warning.
+///
+/// Only php's two curl handle classes install a `cast_object` handler for the integer cast;
+/// `CurlShareHandle` and every userland object warn and answer 1.
+fn int_cast_yields_the_object_handle(class_name: &str) -> bool {
+    let name = class_name.trim_start_matches('\\');
+    name.eq_ignore_ascii_case("CurlHandle") || name.eq_ignore_ascii_case("CurlMultiHandle")
+}
+
+/// Emits php's "Object of class X could not be converted to int|float" warning for a cast.
+///
+/// Reuses the runtime warning the printf family already emits: it resolves the object's
+/// RUNTIME class name (so a subclass is named correctly) and formats it between the shared
+/// prefix and the int/float suffix. `kind` is 0 for int and non-zero for float.
+fn emit_object_to_number_warning(
+    ctx: &mut FunctionContext<'_>,
+    value: crate::ir::ValueId,
+    kind: i64,
+) -> Result<()> {
+    ctx.load_value_to_result(value)?;
+    let target = ctx.emitter.target;
+    let object = abi::int_arg_reg_name(target, 0);
+    let result = abi::int_result_reg(ctx.emitter);
+    if object != result {
+        abi::emit_reg_move(ctx.emitter, object, result);
+    }
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 1), kind);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 2), 0);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 3), 0);
+    abi::emit_call_label(ctx.emitter, "__rt_sprintf_warn_object_numeric");
     Ok(())
 }
 

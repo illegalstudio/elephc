@@ -66,8 +66,16 @@ pub(crate) const SLOT_DEBUG: i32 = 4;
 /// gives `CURLOPT_XFERINFOFUNCTION` precedence when both are registered; merging them
 /// would make "set progress last" win, which is not what either does.
 pub(crate) const SLOT_XFERINFO: i32 = 5;
+/// Slot index for `CURLOPT_PREREQFUNCTION` (20312, libcurl 7.80+).
+pub(crate) const SLOT_PREREQ: i32 = 6;
 /// Number of callback slots on an easy handle.
-pub(crate) const SLOT_COUNT: usize = 6;
+/// `CURLMOPT_PUSHFUNCTION`'s callable, installed on the PARENT easy handle by the prelude
+/// when the multi has a push callback and the handle is attached. It never reaches an easy
+/// `curl_easy_setopt`: the multi trampoline reads it through the parent's own id, which is
+/// also why `apply_registration` ignores this index.
+pub(crate) const SLOT_PUSH: usize = 7;
+/// One push slot on top of the six libcurl easy callbacks.
+pub(crate) const SLOT_COUNT: usize = 8;
 
 /// `CURL_READFUNC_ABORT`: returned by a read callback to fail the transfer with
 /// `CURLE_ABORTED_BY_CALLBACK` (libcurl 8.21.0, `include/curl/curl.h`).
@@ -90,12 +98,19 @@ const CURLOPT_XFERINFODATA: c_int = 10057;
 /// receives a `userdata` that matches no handle, so it never calls PHP at all.
 const CURLOPT_DEBUGFUNCTION: c_int = 20094;
 const CURLOPT_DEBUGDATA: c_int = 10095;
+/// `CURLOPT_PREREQFUNCTION` (20312) / `CURLOPT_PREREQDATA` (10313). The data option is
+/// `CURLOPTTYPE_OBJECTPOINT + 313` (pinned libcurl 8.21.0, `include/curl/curl.h:2225,
+/// 2228`), so unlike the debug pair the function/data numbers DO share an offset.
+const CURLOPT_PREREQFUNCTION: c_int = 20312;
+const CURLOPT_PREREQDATA: c_int = 10313;
 
 /// `result_kind`: the PHP return value is read as an integer (`zval_get_long`).
 const RESULT_INT: i64 = 0;
-/// `result_kind`: the PHP return value is read as a string and copied into
-/// `CallSpec::out_buf`, capped at `out_cap` (php-src's `MIN(size * nmemb, len)`).
-const RESULT_STRING: i64 = 1;
+/// The read trampoline's result kind: the PHP callable may return a string (upload bytes) or
+/// an int (libcurl's own read return — a byte count, `CURL_READFUNC_PAUSE`, or
+/// `CURL_READFUNC_ABORT`). An int return is published as the adapter result with
+/// `out_len = -1`, a sentinel the trampoline uses to tell the two apart.
+const RESULT_STRING_OR_INT: i64 = 2;
 
 /// Runtime value tags shared with `__rt_mixed_from_value`. Only the four the
 /// callback surface needs are named here.
@@ -424,16 +439,23 @@ unsafe extern "C" fn read_callback(
                 hi: 0,
             },
         ];
-        let (_, out_len, threw) = invoke(
+        let (result, out_len, threw) = invoke(
             slot,
             &args,
-            RESULT_STRING,
+            RESULT_STRING_OR_INT,
             buffer as *mut u8,
             total as i64,
         );
         if threw {
             mark_threw(id);
             return CURL_READFUNC_ABORT;
+        }
+        if out_len < 0 {
+            // The PHP callback returned an int: libcurl's own read return (a byte count,
+            // `CURL_READFUNC_PAUSE`, or `CURL_READFUNC_ABORT`). Negatives other than the
+            // sentinel cannot occur, but clamp defensively so a stray value is not a huge
+            // `usize`.
+            return result.max(0) as usize;
         }
         out_len.max(0) as usize
     }));
@@ -515,13 +537,21 @@ unsafe extern "C" fn debug_callback(
 ) -> c_int {
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let id = userdata as i64;
-        let Some(slot) = take_slot(id, SLOT_DEBUG as usize) else {
-            return 0;
-        };
         let bytes = if data.is_null() || size == 0 {
             &[][..]
         } else {
             std::slice::from_raw_parts(data as *const u8, size)
+        };
+        // THE OUTGOING REQUEST HEADER IS CAPTURED HERE, IN C, BEFORE AND INDEPENDENTLY OF
+        // THE PHP CALL (php-src's `curl_debug` does the same at `interface.c`:917), AND
+        // BEFORE THE THROW GATE: after a callback throw the gate suppresses the PHP
+        // dispatch, but the capture must still happen — a throw inside the callback
+        // cannot lose `CURLINFO_HEADER_OUT`.
+        if info_type == 2 {
+            handles::store_header_out(id, bytes);
+        }
+        let Some(slot) = take_slot(id, SLOT_DEBUG as usize) else {
+            return 0;
         };
         let args = [
             CallArg {
@@ -542,6 +572,83 @@ unsafe extern "C" fn debug_callback(
         0
     }));
     outcome.unwrap_or(0)
+}
+
+/// The `CURLOPT_PREREQFUNCTION` trampoline (libcurl 7.80+, after the connection is
+/// established and before the request is sent).
+///
+/// The C shape is `int (*)(void *clientp, char *conn_primary_ip, char *conn_local_ip,
+/// int conn_primary_port, int conn_local_port)`. PHP reaches the same five arguments
+/// php-src marshals: the `CurlHandle` object (the adapter's argument 0), then both IP
+/// strings and both ports as `int`s. php-src keeps `rval = CURL_PREREQFUNC_OK` when the
+/// PHP return is out of range (the ValueError/TypeError it raises aborts the transfer
+/// through the `threw` path instead), so the trampoline only forwards a PHP answer it
+/// could read: `0` when the callable threw, `1` only when PHP answered nonzero.
+///
+/// # Safety
+/// Called by libcurl during a transfer. The IP pointers are valid for the call only —
+/// `invoke` deep-copies them — and the trampoline must not unwind.
+unsafe extern "C" fn prereq_callback(
+    userdata: *mut c_void,
+    conn_primary_ip: *mut c_char,
+    conn_local_ip: *mut c_char,
+    conn_primary_port: c_int,
+    conn_local_port: c_int,
+) -> c_int {
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let id = userdata as i64;
+        let Some(slot) = take_slot(id, SLOT_PREREQ as usize) else {
+            return 0;
+        };
+        let primary_ip = cstr_bytes(conn_primary_ip);
+        let local_ip = cstr_bytes(conn_local_ip);
+        let args = [
+            CallArg {
+                tag: TAG_STRING,
+                lo: primary_ip.as_ptr() as i64,
+                hi: primary_ip.len() as i64,
+            },
+            CallArg {
+                tag: TAG_STRING,
+                lo: local_ip.as_ptr() as i64,
+                hi: local_ip.len() as i64,
+            },
+            CallArg {
+                tag: TAG_INT,
+                lo: conn_primary_port as i64,
+                hi: 0,
+            },
+            CallArg {
+                tag: TAG_INT,
+                lo: conn_local_port as i64,
+                hi: 0,
+            },
+        ];
+        let (result, _, threw) = invoke(slot, &args, RESULT_INT, std::ptr::null_mut(), 0);
+        if threw {
+            mark_threw(id);
+            // Nonzero aborts the transfer with CURLE_ABORTED_BY_CALLBACK (42), the
+            // same surface php-src's raised ValueError/TypeError produces.
+            return 1;
+        }
+        result as c_int
+    }));
+    outcome.unwrap_or(1)
+}
+
+/// Borrows a NUL-terminated libcurl IP string as bytes, or an empty slice for a null
+/// pointer. libcurl's buffers are valid only for the call itself, and [`invoke`]
+/// deep-copies before PHP can observe them, so nothing here outlives the trampoline.
+///
+/// # Safety
+/// `ip` must point to a valid NUL-terminated string for the duration of the call, or be
+/// null.
+unsafe fn cstr_bytes<'a>(ip: *const c_char) -> &'a [u8] {
+    if ip.is_null() {
+        &[]
+    } else {
+        std::ffi::CStr::from_ptr(ip).to_bytes()
+    }
 }
 
 /// Installs the read trampoline and its `userdata` on `curl`. Called from
@@ -621,6 +728,129 @@ unsafe fn apply_registration(curl: *mut CURL, id: i64, slots: &[CallbackSlot; SL
         let _ = easy::setopt_debug_function(curl, CURLOPT_DEBUGFUNCTION, None);
         let _ = easy::setopt_ptr(curl, CURLOPT_DEBUGDATA, std::ptr::null_mut());
     }
+
+    if slots[SLOT_PREREQ as usize].is_set() {
+        let _ = easy::setopt_prereq_function(curl, CURLOPT_PREREQFUNCTION, Some(prereq_callback));
+        let _ = easy::setopt_ptr(curl, CURLOPT_PREREQDATA, userdata);
+    } else {
+        // libcurl's own default prereq callback answers OK, so clearing the function
+        // pointer restores "no pre-request hook" exactly like php-src's handler reset.
+        let _ = easy::setopt_prereq_function(curl, CURLOPT_PREREQFUNCTION, None);
+        let _ = easy::setopt_ptr(curl, CURLOPT_PREREQDATA, std::ptr::null_mut());
+    }
+}
+
+/// `CURLMOPT_PUSHFUNCTION`: libcurl reports a server push on `parent` and asks whether to
+/// accept it. php-src hands the PHP callable `($parent_ch, $pushed_ch, $headers)`; the
+/// pushed handle has no PHP object yet, so the prelude wrapper receives its bridge id and
+/// mints the `CurlHandle` itself.
+///
+/// # Safety
+/// Called by libcurl during `curl_multi_perform`. Must not unwind and must not hold the
+/// handle-table lock across the PHP call.
+unsafe extern "C" fn push_callback(
+    parent: *mut crate::easy::CURL,
+    pushed: *mut crate::easy::CURL,
+    headers_count: usize,
+    headers: *mut c_void,
+    userdata: *mut c_void,
+) -> c_int {
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = userdata;
+        let parent_id = crate::multi::easy_id_of(parent);
+        if parent_id == 0 {
+            return 1; // CURL_PUSH_DENY
+        }
+        let Some(slot) = take_slot(parent_id, SLOT_PUSH) else {
+            return 1;
+        };
+        // The parent's php-layer write mode is inherited by libcurl's duplicated handle.
+        let inherit_return_transfer = crate::handles::lock_recover(crate::handles::handles())
+            .get(&parent_id)
+            .map(|entry| entry.return_transfer)
+            .unwrap_or(false);
+        let pushed_id = crate::handles::register_pushed(pushed, inherit_return_transfer);
+        if pushed_id == 0 {
+            return 1;
+        }
+        // `$headers` is php-src's array of `"name: value"` lines; the wrapper decodes this
+        // JSON array because a CallArg can only carry an int, a string, or null.
+        let mut json = String::from("[");
+        for index in 0..headers_count {
+            let line = curl_pushheader_bynum(headers, index as c_int);
+            if line.is_null() {
+                continue;
+            }
+            let text = std::ffi::CStr::from_ptr(line).to_string_lossy();
+            if json.len() > 1 {
+                json.push(',');
+            }
+            match serde_json::to_string(&text) {
+                Ok(encoded) => json.push_str(&encoded),
+                Err(_) => json.push_str("\"\""),
+            }
+        }
+        json.push(']');
+        let args = [
+            CallArg {
+                tag: TAG_INT,
+                lo: pushed_id,
+                hi: 0,
+            },
+            CallArg {
+                tag: TAG_STRING,
+                lo: json.as_ptr() as i64,
+                hi: json.len() as i64,
+            },
+        ];
+        let (result, _, threw) = invoke(slot, &args, RESULT_INT, std::ptr::null_mut(), 0);
+        if threw {
+            // A throwing callable denies the push; libcurl destroys the offered handle.
+            crate::handles::unregister_pushed(pushed_id);
+            mark_threw(parent_id);
+            return 1;
+        }
+        // php-src's CURL_PUSH_OK is 0 and CURL_PUSH_DENY is 1; the wrapper returns the
+        // PHP callable's int, and any non-zero answer denies the push.
+        if result != 0 {
+            crate::handles::unregister_pushed(pushed_id);
+            return 1;
+        }
+        // CURL_PUSH_OK: libcurl adds the handle to the multi and hands OWNERSHIP to us, so
+        // the entry (and the PHP object rooted for it) must clean it up on teardown.
+        crate::handles::accept_pushed(pushed_id);
+        0
+    }));
+    outcome.unwrap_or(1)
+}
+
+/// Installs the bridge's push trampoline on a fresh multi handle, with the multi id as
+/// libcurl's userdata. The PHP callable itself lives on each attached easy handle's
+/// `SLOT_PUSH`, so the trampoline needs no state of its own.
+pub(crate) fn install_push_trampoline(multi: *mut crate::multi::CURLM, multi_id: i64) {
+    unsafe {
+        let _ = curl_multi_setopt(
+            multi,
+            20_014, // CURLMOPT_PUSHFUNCTION
+            push_callback as *const c_void,
+        );
+        let _ = curl_multi_setopt(
+            multi,
+            10_015, // CURLMOPT_PUSHDATA
+            multi_id as usize as *mut c_void,
+        );
+    }
+}
+
+extern "C" {
+    /// `curl_multi_setopt(multi, option, ...)`; the option number picks how libcurl reads
+    /// the third argument, which is why this stays a variadic declaration.
+    fn curl_multi_setopt(multi: *mut crate::multi::CURLM, option: c_int, ...) -> i32;
+    /// Reads one pushed request header by index, or NULL past the end.
+    fn curl_pushheader_bynum(
+        headers: *mut c_void,
+        num: c_int,
+    ) -> *mut std::os::raw::c_char;
 }
 
 /// Installs (`descriptor` non-null) or clears (`descriptor` null) the callback in

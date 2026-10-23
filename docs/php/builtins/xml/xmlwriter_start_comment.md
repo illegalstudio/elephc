@@ -2,7 +2,7 @@
 title: "xmlwriter_start_comment()"
 description: "Starts a comment."
 sidebar:
-  order: 1053
+  order: 1055
 ---
 
 ## xmlwriter_start_comment()
@@ -20,7 +20,7 @@ Starts a comment.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
+- **Compiled (AOT)**: supported through the compiler-injected xml prelude.
 - **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_start_comment.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_start_comment.rs)).
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._

@@ -18,9 +18,12 @@
 //!   so the two can never drift; `PHP_SAPI` itself is baked from `web_prelude::sapi_name`
 //!   by `codegen_support::prescan::collect_constants`.
 
-use crate::parser::ast::{CastType, Program, Stmt, TypeExpr};
+use crate::parser::ast::{BinOp, CastType, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
-    e_cast, e_const, e_str, e_var, function, internal_declarations, s_assign,
+    class, e_array, e_assign, e_binop, e_bool, e_call, e_cast, e_concat, e_concat_all, e_const,
+    e_index, e_int, e_new_fq, e_not, e_null, e_post_inc, e_str, e_this, e_this_prop, e_var, function,
+    internal_declarations, method, s_array_push, s_assign, s_expr, s_for, s_foreach, s_if,
+    s_prop_array_assign, s_prop_array_push, s_return, s_return_void, s_throw, t_array, t_mixed,
 };
 use crate::web_prelude::PhpVersion;
 
@@ -63,6 +66,325 @@ fn ini_restore_decl() -> Stmt {
         .build()
 }
 
+/// `__elephc_dynamic_constant()`: the runtime lookup behind a non-literal `constant($name)`.
+///
+/// Looks the name up in the flat global-constant inventory (`get_defined_constants(false)`),
+/// strips a leading `\` the way PHP's global lookup does, and raises `\Error` for an unknown
+/// name — PHP's own `Undefined constant "X"` behaviour. Class constants (`Foo::BAR`) are not in
+/// this inventory and raise the same `\Error`.
+fn dynamic_constant_decl() -> Stmt {
+    function("__elephc_dynamic_constant")
+        .param("name", TypeExpr::Str)
+        .returns(t_mixed())
+        .body(vec![
+            s_assign(
+                "name",
+                e_call("ltrim", vec![e_var("name"), e_str("\\")]),
+            ),
+            s_assign("all", e_call("get_defined_constants", vec![e_bool(false)])),
+            s_if(
+                e_not(e_call(
+                    "array_key_exists",
+                    vec![e_var("name"), e_var("all")],
+                )),
+                vec![s_throw(e_new_fq(
+                    "Error",
+                    vec![e_concat_all(vec![
+                        e_str("Undefined constant \""),
+                        e_var("name"),
+                        e_str("\""),
+                    ])],
+                ))],
+                vec![],
+                None,
+            ),
+            s_return(e_index(e_var("all"), e_var("name"))),
+        ])
+        .build()
+}
+
+/// `random_bytes()`: `$length` cryptographically secure random bytes.
+///
+/// Composed from `random_int()` (a CSPRNG) one byte at a time via `chr()`, so no new runtime
+/// emitter is needed. A non-positive length raises PHP's `ValueError`.
+fn random_bytes_decl() -> Stmt {
+    function("random_bytes")
+        .param("length", TypeExpr::Int)
+        .returns(TypeExpr::Str)
+        .body(vec![
+            s_if(
+                e_binop(e_var("length"), BinOp::Lt, e_int(1)),
+                vec![s_throw(e_new_fq(
+                    "ValueError",
+                    vec![e_str(
+                        "random_bytes(): Argument #1 ($length) must be greater than 0",
+                    )],
+                ))],
+                vec![],
+                None,
+            ),
+            s_assign("bytes", e_str("")),
+            s_for(
+                Some(s_assign("i", e_int(0))),
+                Some(e_binop(e_var("i"), BinOp::Lt, e_var("length"))),
+                Some(s_expr(e_post_inc("i"))),
+                vec![s_assign(
+                    "bytes",
+                    e_concat(
+                        e_var("bytes"),
+                        e_call("chr", vec![e_call("random_int", vec![e_int(0), e_int(255)])]),
+                    ),
+                )],
+            ),
+            s_return(e_var("bytes")),
+        ])
+        .build()
+}
+
+/// `uniqid()`: PHP's time-based unique id, composed from `gettimeofday()` and `sprintf`.
+///
+/// php-src formats the current seconds and microseconds as `%08x%05x`, so the 13-hex-digit
+/// body is byte-for-byte what php produces. `$more_entropy` appends a `.%08x` derived from
+/// the same clock; it exists for uniqueness, not cryptographic quality, and no fixture
+/// asserts its exact value.
+fn uniqid_decl() -> Stmt {
+    function("uniqid")
+        .param_default("prefix", TypeExpr::Str, e_str(""))
+        .param_default("more_entropy", TypeExpr::Bool, e_bool(false))
+        .returns(TypeExpr::Str)
+        .body(vec![
+            s_assign("tv", e_call("gettimeofday", vec![])),
+            s_if(
+                e_var("more_entropy"),
+                vec![s_return(e_concat(
+                    e_var("prefix"),
+                    e_call(
+                        "sprintf",
+                        vec![
+                            e_str("%08x%05x.%08x"),
+                            e_index(e_var("tv"), e_str("sec")),
+                            e_index(e_var("tv"), e_str("usec")),
+                            e_binop(
+                                e_index(e_var("tv"), e_str("usec")),
+                                BinOp::BitXor,
+                                e_index(e_var("tv"), e_str("sec")),
+                            ),
+                        ],
+                    ),
+                ))],
+                vec![],
+                None,
+            ),
+            s_return(e_concat(
+                e_var("prefix"),
+                e_call(
+                    "sprintf",
+                    vec![
+                        e_str("%08x%05x"),
+                        e_index(e_var("tv"), e_str("sec")),
+                        e_index(e_var("tv"), e_str("usec")),
+                    ],
+                ),
+            )),
+        ])
+        .build()
+}
+
+/// `WeakMap`: the SPL object-keyed map, injected like the other version-surface declarations.
+///
+/// elephc has no weak references, so the map is backed by two parallel arrays — keys and
+/// values — and resolves a key by object IDENTITY (`===`). That is exact for the map's own
+/// `offsetSet`/`offsetGet`/`offsetExists`/`offsetUnset`/`count` semantics; the one divergence
+/// is that a stored key object is held by the array rather than weakly, so it is not collected
+/// while it remains a key. A program that never mentions `WeakMap` carries nothing.
+fn weakmap_decl() -> Stmt {
+    class("WeakMap")
+        .implements("ArrayAccess")
+        .implements("Countable")
+        .private_prop("__elephc_keys", t_array(), Some(e_array(vec![])))
+        .private_prop("__elephc_values", t_array(), Some(e_array(vec![])))
+        .method(
+            method("offsetSet")
+                .param("offset", t_mixed())
+                .param("value", t_mixed())
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_foreach(
+                        e_this_prop("__elephc_keys"),
+                        Some("__elephc_i"),
+                        "__elephc_k",
+                        vec![s_if(
+                            e_binop(e_var("__elephc_k"), BinOp::StrictEq, e_var("offset")),
+                            vec![
+                                s_prop_array_assign(
+                                    e_this(),
+                                    "__elephc_values",
+                                    e_var("__elephc_i"),
+                                    e_var("value"),
+                                ),
+                                s_return_void(),
+                            ],
+                            vec![],
+                            None,
+                        )],
+                    ),
+                    s_prop_array_push(e_this(), "__elephc_keys", e_var("offset")),
+                    s_prop_array_push(e_this(), "__elephc_values", e_var("value")),
+                ]),
+        )
+        .method(
+            method("offsetGet")
+                .param("offset", t_mixed())
+                .returns(t_mixed())
+                .body(vec![
+                    s_foreach(
+                        e_this_prop("__elephc_keys"),
+                        Some("__elephc_i"),
+                        "__elephc_k",
+                        vec![s_if(
+                            e_binop(e_var("__elephc_k"), BinOp::StrictEq, e_var("offset")),
+                            vec![s_return(e_index(
+                                e_this_prop("__elephc_values"),
+                                e_var("__elephc_i"),
+                            ))],
+                            vec![],
+                            None,
+                        )],
+                    ),
+                    s_return(e_null()),
+                ]),
+        )
+        .method(
+            method("offsetExists")
+                .param("offset", t_mixed())
+                .returns(TypeExpr::Bool)
+                .body(vec![
+                    s_foreach(
+                        e_this_prop("__elephc_keys"),
+                        None,
+                        "__elephc_k",
+                        vec![s_if(
+                            e_binop(e_var("__elephc_k"), BinOp::StrictEq, e_var("offset")),
+                            vec![s_return(e_bool(true))],
+                            vec![],
+                            None,
+                        )],
+                    ),
+                    s_return(e_bool(false)),
+                ]),
+        )
+        .method(
+            method("offsetUnset")
+                .param("offset", t_mixed())
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_assign("__elephc_next_keys", e_array(vec![])),
+                    s_assign("__elephc_next_values", e_array(vec![])),
+                    s_foreach(
+                        e_this_prop("__elephc_keys"),
+                        Some("__elephc_i"),
+                        "__elephc_k",
+                        vec![s_if(
+                            e_binop(e_var("__elephc_k"), BinOp::StrictNotEq, e_var("offset")),
+                            vec![
+                                s_array_push("__elephc_next_keys", e_var("__elephc_k")),
+                                s_array_push(
+                                    "__elephc_next_values",
+                                    e_index(e_this_prop("__elephc_values"), e_var("__elephc_i")),
+                                ),
+                            ],
+                            vec![],
+                            None,
+                        )],
+                    ),
+                    s_expr(e_assign(
+                        e_this_prop("__elephc_keys"),
+                        e_var("__elephc_next_keys"),
+                    )),
+                    s_expr(e_assign(
+                        e_this_prop("__elephc_values"),
+                        e_var("__elephc_next_values"),
+                    )),
+                ]),
+        )
+        .method(
+            method("count")
+                .returns(TypeExpr::Int)
+                .body(vec![s_return(e_call(
+                    "count",
+                    vec![e_this_prop("__elephc_keys")],
+                ))]),
+        )
+        .build()
+}
+
+/// `get_debug_type()`: the diagnostic type name, `null`/`bool`/`int`/`float`/`string`/`array`,
+/// a class name, or `resource (<type>)`. Transcribed as a real PHP function (`is_*` dispatch)
+/// so it is available everywhere, and injected pay-for-use like the rest of this prelude.
+fn get_debug_type_decl() -> Stmt {
+    function("get_debug_type")
+        .param("value", t_mixed())
+        .returns(TypeExpr::Str)
+        .body(vec![
+            s_if(
+                e_call("is_null", vec![e_var("value")]),
+                vec![s_return(e_str("null"))],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_call("is_bool", vec![e_var("value")]),
+                vec![s_return(e_str("bool"))],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_call("is_int", vec![e_var("value")]),
+                vec![s_return(e_str("int"))],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_call("is_float", vec![e_var("value")]),
+                vec![s_return(e_str("float"))],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_call("is_string", vec![e_var("value")]),
+                vec![s_return(e_str("string"))],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_call("is_array", vec![e_var("value")]),
+                vec![s_return(e_str("array"))],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_call("is_object", vec![e_var("value")]),
+                vec![s_return(e_call("get_class", vec![e_var("value")]))],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_call("is_resource", vec![e_var("value")]),
+                vec![s_return(e_concat(
+                    e_str("resource ("),
+                    e_concat(
+                        e_call("get_resource_type", vec![e_var("value")]),
+                        e_str(")"),
+                    ),
+                ))],
+                vec![],
+                None,
+            ),
+            s_return(e_str("unknown")),
+        ])
+        .build()
+}
+
 /// Prepends the version-surface functions this program actually references.
 ///
 /// Each function is independently detected and independently guarded: a program that
@@ -92,11 +414,21 @@ fn inject_if_used_on_compiler_stack(
     php_version: PhpVersion,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Program {
-    let selected: Vec<&str> = ["zend_version", "php_sapi_name", "ini_restore"]
+    let selected: Vec<&str> = [
+        "zend_version",
+        "php_sapi_name",
+        "ini_restore",
+        "uniqid",
+        "random_bytes",
+        "constant",
+        "WeakMap",
+        "get_debug_type",
+    ]
         .into_iter()
         .filter(|name| {
             crate::opcache_prelude::detect::program_references(&program, name)
                 && !crate::opcache_prelude::detect::program_declares(&program, name)
+                && !crate::opcache_prelude::detect::program_declares_class(&program, name)
         })
         .collect();
     if selected.is_empty() {
@@ -120,6 +452,21 @@ pub(crate) fn version_declarations(selected: &[&str], php_version: PhpVersion) -
         }
         if selected.contains(&"ini_restore") {
             declarations.push(ini_restore_decl());
+        }
+        if selected.contains(&"uniqid") {
+            declarations.push(uniqid_decl());
+        }
+        if selected.contains(&"random_bytes") {
+            declarations.push(random_bytes_decl());
+        }
+        if selected.contains(&"constant") {
+            declarations.push(dynamic_constant_decl());
+        }
+        if selected.contains(&"WeakMap") {
+            declarations.push(weakmap_decl());
+        }
+        if selected.contains(&"get_debug_type") {
+            declarations.push(get_debug_type_decl());
         }
         declarations
     })
@@ -158,6 +505,16 @@ mod tests {
             matches!(
                 &stmt.kind,
                 StmtKind::FunctionDecl { name, .. } if name.eq_ignore_ascii_case(expected)
+            )
+        })
+    }
+
+    /// Returns whether an injected program declares a class.
+    fn declares_class(program: &Program, expected: &str) -> bool {
+        program.iter().any(|stmt| {
+            matches!(
+                &stmt.kind,
+                StmtKind::ClassDecl { name, .. } if name.eq_ignore_ascii_case(expected)
             )
         })
     }
@@ -247,5 +604,39 @@ mod tests {
             PhpVersion::Php85,
         );
         assert!(declares(&injected, "php_sapi_name"));
+    }
+
+    /// `new WeakMap` pulls in the class declaration; an unrelated program carries none, and
+    /// a user-declared `WeakMap` class is never clobbered.
+    #[test]
+    fn weakmap_is_injected_only_when_referenced() {
+        let injected = inject_for_test(parse("<?php $m = new WeakMap();"), PhpVersion::Php85);
+        assert!(declares_class(&injected, "WeakMap"));
+
+        let injected = inject_for_test(parse("<?php echo 1;"), PhpVersion::Php85);
+        assert!(!declares_class(&injected, "WeakMap"));
+
+        let source = "<?php class WeakMap { public $a = 1; } $m = new WeakMap(); echo $m->a;";
+        let injected = inject_for_test(parse(source), PhpVersion::Php85);
+        let count = injected
+            .iter()
+            .filter(|stmt| {
+                matches!(
+                    &stmt.kind,
+                    StmtKind::ClassDecl { name, .. } if name.eq_ignore_ascii_case("WeakMap")
+                )
+            })
+            .count();
+        assert_eq!(count, 1, "the user declaration must be the only one");
+    }
+
+    /// `get_debug_type` is injected only when referenced.
+    #[test]
+    fn get_debug_type_is_injected_only_when_referenced() {
+        let injected = inject_for_test(parse("<?php echo get_debug_type(1);"), PhpVersion::Php85);
+        assert!(declares(&injected, "get_debug_type"));
+
+        let injected = inject_for_test(parse("<?php echo 1;"), PhpVersion::Php85);
+        assert!(!declares(&injected, "get_debug_type"));
     }
 }

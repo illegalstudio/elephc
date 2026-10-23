@@ -279,7 +279,14 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
         } => {
             let (index, value) = propagate_write_key_and_value(index, value, &env);
             let mut next_env = env_after_expr_side_effects(env, &[&index, &value]);
-            next_env.remove(&array);
+            // `$GLOBALS['name'] = …` writes the program-global `name` through the global
+            // table (the lowering routes it to `StoreGlobal`), so every propagated binding —
+            // the named global included — must be dropped here.
+            if array == "GLOBALS" {
+                next_env.clear();
+            } else {
+                next_env.remove(&array);
+            }
             (
                 Stmt::new(
                     StmtKind::ArrayAssign {

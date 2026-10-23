@@ -163,3 +163,32 @@ echo get_class($o), ":", $o[0], $o[1];
     );
     assert_eq!(out, "SplFixedArray:79");
 }
+
+/// `WeakMap` stores values by object IDENTITY and reports its size.
+///
+/// The map is array-backed (elephc has no weak references), so this pins the observable
+/// contract the curl audit's `curl_multi_get_handles` fixture relies on: two distinct keys
+/// hold two entries, re-storing a key replaces in place, and `unset` removes it.
+#[test]
+fn test_weakmap_stores_by_object_identity() {
+    let out = compile_and_run(
+        r#"<?php
+class K {
+    public int $n;
+    public function __construct(int $n) { $this->n = $n; }
+}
+$m = new WeakMap();
+$a = new K(1);
+$b = new K(2);
+$m[$a] = "x";
+$m[$b] = "y";
+echo $m[$a], $m[$b], ":", count($m), ":";
+echo isset($m[$a]) ? "y" : "n", isset($m[$b]) ? "y" : "n", ":";
+$m[$a] = "z";
+echo $m[$a], ":", count($m), ":";
+unset($m[$a]);
+echo count($m), ":", isset($m[$a]) ? "y" : "n", ":", $m[$b];
+"#,
+    );
+    assert_eq!(out, "xy:2:yy:z:2:1:n:y");
+}

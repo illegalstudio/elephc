@@ -789,6 +789,11 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x14, #24]");                                 // property value tag
     emitter.instruction("ldr x7, [sp, #0]");                                    // reload the object pointer
     emitter.instruction("add x7, x7, x9");                                      // address of the property slot
+    emitter.instruction("tst x10, #256");                                       // is this an owned reference property?
+    emitter.instruction("b.eq __rt_serialize_object_ref_ready");                // an ordinary slot already holds the value
+    emitter.instruction("ldr x7, [x7]");                                        // dereference the slot to its ref-cell (same layout)
+    emitter.instruction("and x10, x10, #255");                                  // recover the declared value tag
+    emitter.label("__rt_serialize_object_ref_ready");
     emitter.instruction("ldr x1, [x7]");                                        // value low payload word
     emitter.instruction("ldr x2, [x7, #8]");                                    // value high payload word
     emitter.instruction("mov x0, x10");                                         // value tag
@@ -890,6 +895,11 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x14, #24]");                                 // property value tag
     emitter.instruction("ldr x7, [sp, #0]");                                    // reload the object pointer
     emitter.instruction("add x7, x7, x9");                                      // address of the property slot
+    emitter.instruction("tst x10, #256");                                       // is this an owned reference property?
+    emitter.instruction("b.eq __rt_serialize_named_prop_ref_ready");            // an ordinary slot already holds the value
+    emitter.instruction("ldr x7, [x7]");                                        // dereference the slot to its ref-cell (same layout)
+    emitter.instruction("and x10, x10, #255");                                  // recover the declared value tag
+    emitter.label("__rt_serialize_named_prop_ref_ready");
     emitter.instruction("ldr x1, [x7]");                                        // value low payload word
     emitter.instruction("ldr x2, [x7, #8]");                                    // value high payload word
     emitter.instruction("mov x0, x10");                                         // value tag
@@ -1743,6 +1753,11 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [r11 + 24]");                        // property value tag
     emitter.instruction("mov rcx, QWORD PTR [rbp - 8]");                        // reload the object pointer
     emitter.instruction("add rcx, r8");                                         // address of the property slot
+    emitter.instruction("test r9, 256");                                        // is this an owned reference property?
+    emitter.instruction("je __rt_serialize_object_ref_ready_x");                // an ordinary slot already holds the value
+    emitter.instruction("mov rcx, QWORD PTR [rcx]");                            // dereference the slot to its ref-cell (same layout)
+    emitter.instruction("and r9, 255");                                         // recover the declared value tag
+    emitter.label("__rt_serialize_object_ref_ready_x");
     emitter.instruction("mov rsi, QWORD PTR [rcx]");                            // value low payload word
     emitter.instruction("mov rdx, QWORD PTR [rcx + 8]");                        // value high payload word
     emitter.instruction("mov rdi, r9");                                         // value tag
@@ -1844,6 +1859,11 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [r10 + 24]");                        // property value tag
     emitter.instruction("mov rcx, QWORD PTR [rbp - 8]");                        // reload the object pointer
     emitter.instruction("add rcx, r8");                                         // address of the property slot
+    emitter.instruction("test r9, 256");                                        // is this an owned reference property?
+    emitter.instruction("je __rt_serialize_named_prop_ref_ready_x");            // an ordinary slot already holds the value
+    emitter.instruction("mov rcx, QWORD PTR [rcx]");                            // dereference the slot to its ref-cell (same layout)
+    emitter.instruction("and r9, 255");                                         // recover the declared value tag
+    emitter.label("__rt_serialize_named_prop_ref_ready_x");
     emitter.instruction("mov rsi, QWORD PTR [rcx]");                            // value low payload word
     emitter.instruction("mov rdx, QWORD PTR [rcx + 8]");                        // value high payload word
     emitter.instruction("mov rdi, r9");                                         // value tag

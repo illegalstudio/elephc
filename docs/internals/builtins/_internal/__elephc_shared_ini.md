@@ -2,7 +2,7 @@
 title: "__elephc_shared_ini() - internals"
 description: "Compiler internals for __elephc_shared_ini(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1182
+  order: 1186
 ---
 
 ## `__elephc_shared_ini()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/shared_ini.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/shared_ini.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:705](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L705) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

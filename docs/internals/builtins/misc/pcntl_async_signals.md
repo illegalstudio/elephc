@@ -2,7 +2,7 @@
 title: "pcntl_async_signals() - internals"
 description: "Compiler internals for pcntl_async_signals(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 647
+  order: 649
 ---
 
 ## `pcntl_async_signals()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/pcntl_async_signals.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/pcntl_async_signals.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:705](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L705) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

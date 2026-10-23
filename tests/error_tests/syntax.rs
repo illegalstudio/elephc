@@ -377,6 +377,14 @@ fn test_error_missing_semicolon() {
     expect_error("<?php echo \"hi\"", "Expected ';'");
 }
 
+/// Verifies the close tag's implicit terminator stops at end of input: `?>` ends PHP
+/// mode, so a statement left unterminated AFTER a close tag has no semicolon to rely
+/// on and the next code section re-opens with the same requirement.
+#[test]
+fn test_error_missing_semicolon_before_eof_after_close_tag() {
+    expect_error("<?php echo 1 ?>x<?php echo 2", "Expected ';'");
+}
+
 /// Verifies the error diagnostic for missing equals.
 #[test]
 fn test_error_missing_equals() {

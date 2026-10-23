@@ -800,6 +800,10 @@ class LoweringInfo:
     codegen_file: Optional[str] = None
     codegen_line: Optional[int] = None
     codegen_function: Optional[str] = None  # e.g. "lower_strlen"
+    # Display name of the prelude that declares a prelude-routed builtin ("curl",
+    # "hash", "PDO"). Recorded here because the declaring source can be a MODULE
+    # (`src/curl_prelude/build.rs`), whose file name does not carry the label.
+    prelude_label: Optional[str] = None
     runtime_helpers: List[str] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)  # pulled from the /// doc comment of the lowering fn
 

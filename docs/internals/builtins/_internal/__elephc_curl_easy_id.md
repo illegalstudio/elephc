@@ -2,7 +2,7 @@
 title: "__elephc_curl_easy_id() - internals"
 description: "Compiler internals for __elephc_curl_easy_id(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1099
+  order: 1102
 ---
 
 ## `__elephc_curl_easy_id()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/curl/__elephc_curl_easy_id.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/curl/__elephc_curl_easy_id.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:705](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L705) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -2,7 +2,7 @@
 title: "pcntl_wifsignaled() - internals"
 description: "Compiler internals for pcntl_wifsignaled(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 675
+  order: 677
 ---
 
 ## `pcntl_wifsignaled()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/pcntl_wifsignaled.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/pcntl_wifsignaled.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:705](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L705) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -160,7 +160,7 @@ mod tests {
         // branch adds (see `support.rs` for the roll-call).
         // +4: the `ptr_read_f32`/`ptr_write_f32`/`ptr_read_f64`/`ptr_write_f64` pointer builtins.
         // +1: `buffer_ptr`, the payload address of a buffer.
-        assert_eq!(contracts().len(), 1166 + curl_surface);
+        assert_eq!(contracts().len(), 1170 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

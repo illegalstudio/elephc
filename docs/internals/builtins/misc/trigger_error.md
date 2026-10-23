@@ -2,7 +2,7 @@
 title: "trigger_error() - internals"
 description: "Compiler internals for trigger_error(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 690
+  order: 692
 ---
 
 ## `trigger_error()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/trigger_error.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/trigger_error.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:705](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L705) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

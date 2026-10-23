@@ -491,7 +491,8 @@ echo call_user_func('opcache_reset', counter: $counter), ':', $counter, "\n";
 /// What the user declarations print on every route, the by-reference counter included.
 const OPCACHE_USER_DECLARATION_OUTPUT: &str =
     "own:direct\nown:variable\nown:array\nown:callback\nown:first-class\n\
-     own:surplus\n2:2\n3:3\n4:4\n5:5\n6:5\n";
+     own:surplus\n2:2\n3:3\n4:4\n5:5\n\
+     Warning: opcache_reset(): Argument #1 ($counter) must be passed by reference, value given\n6:5\n";
 
 /// Compiles the user declarations natively with the given extra CLI arguments, runs the calls
 /// through an opaque `eval()`, asserts the pinned output and removes the fixture directory.

@@ -2,7 +2,7 @@
 title: "base64_decode() - internals"
 description: "Compiler internals for base64_decode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 790
+  order: 792
 ---
 
 ## `base64_decode()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/base64_decode.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/base64_decode.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:705](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L705) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

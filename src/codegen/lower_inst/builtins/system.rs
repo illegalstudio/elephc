@@ -710,6 +710,48 @@ pub(crate) fn lower_getmypid(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `memory_get_usage(?bool $real_usage = false)` from the runtime's live-byte counter.
+pub(crate) fn lower_memory_get_usage(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_memory_counter(ctx, inst, "memory_get_usage", "_gc_live")
+}
+
+/// Lowers `memory_get_peak_usage(?bool $real_usage = false)` from the runtime's peak counter.
+pub(crate) fn lower_memory_get_peak_usage(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_memory_counter(ctx, inst, "memory_get_peak_usage", "_gc_peak")
+}
+
+/// Emits a memory-counter builtin: evaluate the optional `$real_usage` for its side effects,
+/// then load `symbol` (the live or peak footprint counter) into the integer result register.
+fn lower_memory_counter(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    symbol: &str,
+) -> Result<()> {
+    ensure_arg_count_between(inst, name, 0, 1)?;
+    if let Some(real_usage) = inst.operands.first().copied() {
+        // php evaluates the argument even though the build tracks one footprint.
+        ctx.load_value_to_result(real_usage)?;
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x9", symbol);
+            ctx.emitter.instruction("ldr x0, [x9]");                            // load the live/peak byte counter
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rcx", symbol);
+            ctx.emitter.instruction("mov rax, QWORD PTR [rcx]");                // load the live/peak byte counter
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `usleep(microseconds)` through the target's C library symbol.
 pub(crate) fn lower_usleep(
     ctx: &mut FunctionContext<'_>,
@@ -731,6 +773,21 @@ pub(super) fn lower_exit(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
         abi::emit_exit(ctx.emitter, 0);
         return Ok(());
     };
+    if ctx.value_php_type(status)?.codegen_repr() == PhpType::Str {
+        // `exit("message")` / `die("message")` prints the message to stdout, then ends the
+        // process with status 0 — unlike the integer form, which uses the value as the status.
+        ctx.load_value_to_result(status)?;
+        crate::codegen::lower_inst::output_values::emit_loaded_value_to_stdout(
+            ctx,
+            &PhpType::Str,
+        )?;
+        if ctx.shared.instrument.is_on() {
+            abi::emit_call_label(ctx.emitter, "__rt_ob_flush_all");
+            crate::codegen::frame::emit_instr_terminate(ctx);
+        }
+        abi::emit_exit(ctx.emitter, 0);
+        return Ok(());
+    }
     require_integer_like(ctx.load_value_to_result(status)?, "exit status")?;
     emit_dynamic_exit(ctx);
     Ok(())

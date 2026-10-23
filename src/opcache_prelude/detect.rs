@@ -375,6 +375,27 @@ pub(crate) fn program_declares(program: &[Stmt], target: &str) -> bool {
     program.iter().any(|stmt| stmt_declares(stmt, target))
 }
 
+/// Returns whether the program declares a CLASS named `target` (case-insensitively).
+///
+/// Separate from [`program_declares`], which answers for free functions: a prelude that
+/// injects a CLASS (`WeakMap`) must let a user declaration of that class win, and a class
+/// name is never a function name.
+pub(crate) fn program_declares_class(program: &[Stmt], target: &str) -> bool {
+    program.iter().any(|stmt| stmt_declares_class(stmt, target))
+}
+
+/// Returns whether one statement declares a class named `target`, recursing into the
+/// declaration-carrying blocks [`stmt_declares`] walks.
+fn stmt_declares_class(stmt: &Stmt, target: &str) -> bool {
+    match &stmt.kind {
+        StmtKind::ClassDecl { name, .. } if name.eq_ignore_ascii_case(target) => true,
+        StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::IncludeOnceGuard { body, .. }
+        | StmtKind::Synthetic(body) => body.iter().any(|stmt| stmt_declares_class(stmt, target)),
+        _ => false,
+    }
+}
+
 /// Returns the span of the program's own declaration of `target`, if it has one.
 ///
 /// [`program_declares`] answers the question a prelude that lets the USER definition win needs;
@@ -680,7 +701,10 @@ fn expr_refs(expr: &Expr, target: Symbol<'_>) -> Option<Span> {
         ExprKind::NamedArg { value, .. } => expr_refs(value, target),
         ExprKind::ExprCall { callee, args } => expr_refs(callee, target)
             .or_else(|| args.iter().find_map(|arg| expr_refs(arg, target))),
-        ExprKind::NewObject { args, .. } | ExprKind::NewGeneric { args, .. } => {
+        ExprKind::NewObject { class_name, args } => name_is(class_name, target)
+            .then_some(expr.span)
+            .or_else(|| args.iter().find_map(|arg| expr_refs(arg, target))),
+        ExprKind::NewGeneric { args, .. } => {
             args.iter().find_map(|arg| expr_refs(arg, target))
         }
         ExprKind::NewDynamic { name_expr, args } => expr_refs(name_expr, target)

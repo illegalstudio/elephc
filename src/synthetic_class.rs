@@ -462,6 +462,15 @@ pub fn e_not(value: Expr) -> Expr {
     Expr::new(ExprKind::Not(Box::new(value)), Span::dummy())
 }
 
+/// `@value`, PHP's error-suppression operator.
+///
+/// The prelude uses it where php's own engine performs an operation that must never surface a
+/// diagnostic — the session module's cookie and cache-header emission, which php silently skips
+/// once the response has started instead of warning like a user `header()` call would.
+pub fn e_suppress(value: Expr) -> Expr {
+    Expr::new(ExprKind::ErrorSuppress(Box::new(value)), Span::dummy())
+}
+
 /// `-value`, the unary minus.
 ///
 /// A NEGATIVE LITERAL IS THIS TOO. The parser does NOT fold `-3` into `IntLiteral(-3)`; it
@@ -2161,6 +2170,8 @@ fn audit_expr(expr: &Expr, out: &mut Vec<String>) {
             }
         }
         ExprKind::Spread(inner) => audit_expr(inner, out),
+        // `@expr` suppresses diagnostics; the wrapped call is still reachable.
+        ExprKind::ErrorSuppress(inner) => audit_expr(inner, out),
         // Leaves: nothing to descend into. A class-constant read names no function.
         ExprKind::ScopedConstantAccess { .. } | ExprKind::ClassConstant { .. } => {}
         ExprKind::Variable(_)

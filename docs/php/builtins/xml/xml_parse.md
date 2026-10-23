@@ -2,7 +2,7 @@
 title: "xml_parse()"
 description: "Parses a chunk of XML data, dispatching the registered handlers."
 sidebar:
-  order: 1016
+  order: 1018
 ---
 
 ## xml_parse()
@@ -22,7 +22,7 @@ Parses a chunk of XML data, dispatching the registered handlers.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
+- **Compiled (AOT)**: supported through the compiler-injected xml prelude.
 - **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xml_parse.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xml_parse.rs)).
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._

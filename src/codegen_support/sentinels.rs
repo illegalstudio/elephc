@@ -95,6 +95,15 @@ pub(crate) const TAGGED_SCALAR_ARRAY_VALUE_TYPE: i64 = 11;
 /// carries it: there a tagged slot is `0`, since it owns no heap reference.
 pub(crate) const TAGGED_SCALAR_PROPERTY_TAG: u64 = 12;
 
+/// Bit OR-ed into a serialize property-info row's value tag to mark an OBJECT-OWNED
+/// reference property.
+///
+/// A reference-backed property's slot holds a pointer to a 16-byte cell whose layout matches
+/// the slot's own (`value` at offset 0, secondary word at offset 8), so the serialize writer
+/// and the unserialize injector dereference the cell and then dispatch on `tag & 0xff`. The
+/// bit is above every runtime value tag (0-12), so masking recovers the declared tag exactly.
+pub(crate) const REFERENCE_PROPERTY_TAG_FLAG: u64 = 0x100;
+
 /// Accepted-tag mask bit that admits a `false` member's boxed tag-3 payload only when it is zero.
 ///
 /// `true` and `false` share runtime value tag 3, so a declared `false` (or `int|false`) member

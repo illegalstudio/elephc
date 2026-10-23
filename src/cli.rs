@@ -751,6 +751,13 @@ fn parse_ini_assignment(assignment: &str) -> Result<(String, String), String> {
     if key.is_empty() {
         return Err(format!("Invalid --ini '{assignment}': empty key"));
     }
+    // PHP's INI scanner strips one pair of surrounding double quotes from a directive
+    // value (`--INI-- open_basedir="/tmp"` in the fixtures reads back as `/tmp`), so the
+    // flag's value is normalized the same way before any start-up application.
+    let value = value
+        .strip_prefix('"')
+        .and_then(|stripped| stripped.strip_suffix('"'))
+        .unwrap_or(value);
     Ok((key.to_string(), value.to_string()))
 }
 

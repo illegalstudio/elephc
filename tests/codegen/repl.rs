@@ -184,10 +184,21 @@ fn test_repl_recovers_reported_eval_failures() {
     assert_eq!(output.status.code(), Some(1));
     let out = String::from_utf8_lossy(&output.stdout);
     let error = String::from_utf8_lossy(&output.stderr);
-    assert!(out.starts_with("int(0)\nint(1)\nint(2)\n"), "stdout: {out}\nstderr: {error}");
+    // The E_USER_ERROR display copy is a diagnostic on stdout, so compare the submission
+    // RESULTS as a sequence with the display lines removed.
+    let results: String = out
+        .lines()
+        .filter(|line| !line.starts_with("Fatal error:"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        results.starts_with("int(0)\nint(1)\nint(2)\n"),
+        "results: {results}\nstdout: {out}\nstderr: {error}"
+    );
     assert!(out.ends_with("int(1)\nalive"), "{out}");
+    assert!(out.contains("Fatal error: recover user fatal"), "{out}");
     for diagnostic in ["unsupported construct", "fragment is invalid",
-        "runtime failed", "recover user fatal", "ArgumentCountError", "TypeError"] {
+        "runtime failed", "ArgumentCountError", "TypeError"] {
         assert!(error.contains(diagnostic), "missing {diagnostic}: {error}");
     }
     assert!(!error.contains("use-after-free") && !error.contains("double free"), "{error}");

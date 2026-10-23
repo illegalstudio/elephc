@@ -319,7 +319,14 @@ echo warn_after_near_full_scratch($argc, $pad), "\n";
         count_ir_concat_resets(&opt_ir) >= 3,
         "expected concat_reset before FToI(FloatKeyDiagnostic), before ArrayGet, and at merge to survive:\n{opt_ir}"
     );
-    fixture.assert_equiv(&[], "65536:20:-1:done:1\n");
+    // display_errors=1 (php CLI's default) puts the two runtime diagnostics on stdout
+    // before the echoed result, exactly as php prints them.
+    fixture.assert_equiv(
+        &[],
+        "Deprecated: Implicit conversion from float 1.5 to int loses precision\n\
+         Warning: Undefined array key 100\n\
+         65536:20:-1:done:1\n",
+    );
 }
 
 /// Releasing an array constructed via `Op::HashSpread` (`[...$src]`) whose elements
@@ -367,5 +374,7 @@ echo run_hash_spread_dtor($argc, $pad), "\n";
         count_ir_concat_resets(&opt_ir) >= 4,
         "expected concat_reset after unset($copy) to survive in optimized IR:\n{opt_ir}"
     );
-    fixture.assert_equiv(&[], "Z:101:-1\n");
+    // The destructor's `Z` has no trailing newline, so php's display copy of the array
+    // warning lands directly after it before the echoed result.
+    fixture.assert_equiv(&[], "ZWarning: Undefined array key 101\n:101:-1\n");
 }

@@ -57,6 +57,9 @@ struct ClassNamedThrow {
     class_id_symbol: &'static str,
     /// Human description of the Throwable, for the emitted comments.
     what: &'static str,
+    /// Name of the PHP-visible builtin whose internal frame the uncaught report prepends, if the
+    /// throw is raised by a runtime builtin that owns no PHP activation of its own.
+    frame_name: Option<&'static str>,
 }
 
 const OBJECT_NOT_ARRAY: ClassNamedThrow = ClassNamedThrow {
@@ -69,6 +72,7 @@ const OBJECT_NOT_ARRAY: ClassNamedThrow = ClassNamedThrow {
     suffix_len: OBJECT_NOT_ARRAY_SUFFIX.len(),
     class_id_symbol: "_spl_error_class_id",
     what: "object-not-array Error",
+    frame_name: None,
 };
 
 const SERIALIZATION_DENIED: ClassNamedThrow = ClassNamedThrow {
@@ -81,6 +85,7 @@ const SERIALIZATION_DENIED: ClassNamedThrow = ClassNamedThrow {
     suffix_len: SERIALIZATION_DENIED_SUFFIX.len(),
     class_id_symbol: "_spl_exception_class_id",
     what: "serialization-denied Exception",
+    frame_name: Some("serialize"),
 };
 
 const UNSERIALIZATION_DENIED: ClassNamedThrow = ClassNamedThrow {
@@ -93,6 +98,7 @@ const UNSERIALIZATION_DENIED: ClassNamedThrow = ClassNamedThrow {
     suffix_len: SERIALIZATION_DENIED_SUFFIX.len(),
     class_id_symbol: "_spl_exception_class_id",
     what: "unserialization-denied Exception",
+    frame_name: None,
 };
 
 const SERIALIZABLE_RESULT: ClassNamedThrow = ClassNamedThrow {
@@ -105,6 +111,7 @@ const SERIALIZABLE_RESULT: ClassNamedThrow = ClassNamedThrow {
     suffix_len: SERIALIZABLE_RESULT_SUFFIX.len(),
     class_id_symbol: "_spl_exception_class_id",
     what: "invalid Serializable result Exception",
+    frame_name: None,
 };
 
 /// Emits the object-pointer and class-name entries for a catchable non-ArrayAccess Error.
@@ -150,6 +157,7 @@ fn emit_class_named_throw_aarch64(emitter: &mut Emitter, spec: &ClassNamedThrow)
             // Reached from the object entry's atom by an unconditional branch only, so a shared
             // label keeps it alive under macOS dead stripping without splitting this atom.
             emitter.label_shared(&message);
+            emit_frame_publication_aarch64(emitter, spec);
         }
         (Some(label), None) => emit_object_entry_aarch64(emitter, spec, label),
         (None, Some(name_label)) => emit_name_entry_aarch64(emitter, name_label),
@@ -182,9 +190,51 @@ fn emit_class_named_throw_aarch64(emitter: &mut Emitter, spec: &ClassNamedThrow)
     emit_throwable_creation_line_unknown(emitter, "x0");
     emitter.instruction("str xzr, [x0, #40]");                                  // previous = null
     abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);              // publish the Throwable for the unwinder
+    if spec.frame_name.is_some() {
+        // The synthetic frame belongs to THIS throwable: the report prints it only while this
+        // object is the one escaping, so a caught (or rethrown-later) exception can never lend
+        // its frame to an unrelated failure.
+        abi::emit_store_reg_to_symbol(emitter, "x0", "_uncaught_internal_frame_owner", 0);
+    }
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the local frame
     emitter.instruction("b __rt_throw_current");                                // unwind, or report it uncaught and exit like PHP
+}
+
+/// Publishes the internal frame the uncaught report prints for a runtime-builtin throw (ARM64).
+///
+/// A builtin owns no PHP activation, so php's trace still names it from the call that reached
+/// it — `#0 file(3): serialize(Object(CURLFile))`. The class name is already resolved into
+/// `x11`/`x12` at this point; the line is the call site `prepare_call_site` published.
+fn emit_frame_publication_aarch64(emitter: &mut Emitter, spec: &ClassNamedThrow) {
+    let Some(name) = spec.frame_name else { return };
+    emitter.comment("publish the internal frame the uncaught report prints");
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_php_diagnostic_line", 0);
+    abi::emit_store_reg_to_symbol(emitter, "x9", "_uncaught_internal_frame_line", 0);
+    abi::emit_symbol_address(emitter, "x9", "_uncaught_internal_serialize_name");
+    abi::emit_store_reg_to_symbol(emitter, "x9", "_uncaught_internal_frame_name_ptr", 0);
+    abi::emit_load_int_immediate(emitter, "x9", name.len() as i64);
+    abi::emit_store_reg_to_symbol(emitter, "x9", "_uncaught_internal_frame_name_len", 0);
+    abi::emit_store_reg_to_symbol(emitter, "x11", "_uncaught_internal_frame_class_ptr", 0);
+    abi::emit_store_reg_to_symbol(emitter, "x12", "_uncaught_internal_frame_class_len", 0);
+    abi::emit_load_int_immediate(emitter, "x9", 1);
+    abi::emit_store_reg_to_symbol(emitter, "x9", "_uncaught_internal_frame_valid", 0);
+}
+
+/// Publishes the same frame publication for x86_64 (`r11`/`r12` hold the class name).
+fn emit_frame_publication_x86_64(emitter: &mut Emitter, spec: &ClassNamedThrow) {
+    let Some(name) = spec.frame_name else { return };
+    emitter.comment("publish the internal frame the uncaught report prints");
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_php_diagnostic_line", 0);
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_uncaught_internal_frame_line", 0);
+    abi::emit_symbol_address(emitter, "r10", "_uncaught_internal_serialize_name");
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_uncaught_internal_frame_name_ptr", 0);
+    abi::emit_load_int_immediate(emitter, "r10", name.len() as i64);
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_uncaught_internal_frame_name_len", 0);
+    abi::emit_store_reg_to_symbol(emitter, "r11", "_uncaught_internal_frame_class_ptr", 0);
+    abi::emit_store_reg_to_symbol(emitter, "r12", "_uncaught_internal_frame_class_len", 0);
+    abi::emit_load_int_immediate(emitter, "r10", 1);
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_uncaught_internal_frame_valid", 0);
 }
 
 /// Emits the ARM64 object entry: sets up the helper frame and resolves the object's class name
@@ -238,6 +288,7 @@ fn emit_class_named_throw_x86_64(emitter: &mut Emitter, spec: &ClassNamedThrow) 
             // Reached from the object entry's atom by an unconditional jump only, so a shared
             // label keeps it alive under macOS dead stripping without splitting this atom.
             emitter.label_shared(&message);
+            emit_frame_publication_x86_64(emitter, spec);
         }
         (Some(label), None) => emit_object_entry_x86_64(emitter, spec, label),
         (None, Some(name_label)) => emit_name_entry_x86_64(emitter, name_label),
@@ -272,6 +323,10 @@ fn emit_class_named_throw_x86_64(emitter: &mut Emitter, spec: &ClassNamedThrow) 
     emit_throwable_creation_line_unknown(emitter, "rax");
     emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // previous = null
     abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);             // publish the Throwable for the unwinder
+    if spec.frame_name.is_some() {
+        // See the AArch64 arm: the frame is printed only for the throwable that published it.
+        abi::emit_store_reg_to_symbol(emitter, "rax", "_uncaught_internal_frame_owner", 0);
+    }
     emitter.instruction("mov rsp, rbp");                                        // release the local frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("jmp __rt_throw_current");                              // unwind, or report it uncaught and exit like PHP

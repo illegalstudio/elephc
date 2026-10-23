@@ -300,8 +300,8 @@ fn persistent_share_reuses_the_same_underlying_share_for_equivalent_options() {
     let url = server.url("/hello");
     let out = compile_and_run(&format!(
         r#"<?php
-        $a = curl_share_init_persistent([CURL_LOCK_DATA_DNS, CURL_LOCK_DATA_COOKIE]);
-        $b = curl_share_init_persistent([CURL_LOCK_DATA_COOKIE, CURL_LOCK_DATA_DNS, CURL_LOCK_DATA_DNS]);
+        $a = curl_share_init_persistent([CURL_LOCK_DATA_DNS, CURL_LOCK_DATA_CONNECT]);
+        $b = curl_share_init_persistent([CURL_LOCK_DATA_CONNECT, CURL_LOCK_DATA_DNS, CURL_LOCK_DATA_DNS]);
         echo get_class($a), " ", get_class($b), "\n";
         echo ($a === $b) ? "same-object" : "different-object", "\n";
         echo ($a->__elephc_handle === $b->__elephc_handle) ? "same-share" : "different-share", "\n";
@@ -327,7 +327,7 @@ fn persistent_share_with_different_options_is_a_different_share() {
     let out = compile_and_run(
         r#"<?php
         $a = curl_share_init_persistent([CURL_LOCK_DATA_DNS]);
-        $b = curl_share_init_persistent([CURL_LOCK_DATA_COOKIE]);
+        $b = curl_share_init_persistent([CURL_LOCK_DATA_CONNECT]);
         echo ($a->__elephc_handle === $b->__elephc_handle) ? "same" : "different", "\n";
         "#,
     );

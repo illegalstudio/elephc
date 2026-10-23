@@ -2,7 +2,7 @@
 title: "__elephc_bcnumber_pow() - internals"
 description: "Compiler internals for __elephc_bcnumber_pow(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1084
+  order: 1086
 ---
 
 ## `__elephc_bcnumber_pow()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/__elephc_bcnumber_pow.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/__elephc_bcnumber_pow.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:705](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L705) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

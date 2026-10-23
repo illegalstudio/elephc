@@ -24,8 +24,50 @@
 use super::http_fixture::LocalHttpServer;
 use crate::support::*;
 
-/// `CURLOPT_WRITEFUNCTION` receives every body chunk as a PHP string and `curl_exec()`
-/// answers `true` rather than the body — the callback, not the caller, owns the bytes.
+/// `CURLOPT_PREREQFUNCTION` fires after the connection is established and before the
+/// request, receives php-src's five arguments (`$ch`, both IPs as strings, both ports
+/// as ints), and its return decides the transfer: `CURL_PREREQFUNC_ABORT` fails the
+/// transfer with `CURLE_ABORTED_BY_CALLBACK` (42) and libcurl's own error message;
+/// `CURL_PREREQFUNC_OK` lets it through.
+#[test]
+fn curl_prereqfunction_aborts_the_transfer_before_the_request() {
+    if skip_without_curl_native("curl_prereqfunction_aborts_the_transfer_before_the_request") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/hello");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        $seen = '';
+        $ch = curl_init("{url}");
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+        curl_setopt($ch, CURLOPT_PREREQFUNCTION, function ($ch, $remoteIp, $localIp, $remotePort, $localPort) use (&$seen) {{
+            $seen .= get_class($ch) . "|";
+            $seen .= (is_string($remoteIp) && is_string($localIp) ? "ip" : "bad") . "|";
+            $seen .= (is_int($remotePort) && is_int($localPort) ? "port" : "bad") . "|";
+            return CURL_PREREQFUNC_ABORT;
+        }});
+        $r = curl_exec($ch);
+        var_dump($r);
+        var_dump(curl_error($ch));
+        var_dump(curl_errno($ch));
+        var_dump(curl_errno($ch) === CURLE_ABORTED_BY_CALLBACK);
+        echo $seen;
+        // A null reset restores the default: the same handle transfers fine now.
+        var_dump(curl_setopt($ch, CURLOPT_PREREQFUNCTION, null));
+        echo curl_exec($ch);
+        "#
+    ));
+    assert_eq!(
+        out,
+        "bool(false)\nstring(41) \"operation aborted by pre-request callback\"\nint(42)\nbool(true)\nCurlHandle|ip|port|bool(true)\nhello-curl",
+        "the prereq callback must marshal five args, abort with errno 42, and a null reset must transfer"
+    );
+}
+
+/// `curl_writefunction_accumulates_the_body` — `CURLOPT_WRITEFUNCTION` receives every body
+/// chunk as a PHP string and `curl_exec()` answers `true` rather than the body — the
+/// callback, not the caller, owns the bytes.
 #[test]
 fn curl_writefunction_accumulates_the_body() {
     if skip_without_curl_native("curl_writefunction_accumulates_the_body") {
@@ -48,6 +90,34 @@ fn curl_writefunction_accumulates_the_body() {
         "#
     ));
     assert_eq!(out, "hello-curl|T|0");
+}
+
+/// A `[$object, 'method']` write callback whose method is absent but whose class declares
+/// `__call` is routed through the magic method, matching PHP (php-src's
+/// `curl_write_trampoline` fixture). The bridge invokes the wrapped closure with the
+/// `CurlHandle` and the body chunk, and `__call` receives them as its argument array.
+#[test]
+fn curl_writefunction_object_call_fallback_dispatches_through_call() {
+    if skip_without_curl_native("curl_writefunction_object_call_fallback_dispatches_through_call") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/hello");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        class Trampoline {{
+            public function __call(string $name, array $args): int {{
+                echo "magic:", $name, ":", count($args);
+                return 10;
+            }}
+        }}
+        $ch = curl_init("{url}");
+        curl_setopt($ch, CURLOPT_WRITEFUNCTION, [new Trampoline(), "trampoline"]);
+        $r = curl_exec($ch);
+        echo "|", $r === true ? "T" : "F";
+        "#
+    ));
+    assert_eq!(out, "magic:trampoline:2|T");
 }
 
 /// A `CURLOPT_WRITEFUNCTION` that returns fewer bytes than it was given aborts the
@@ -760,9 +830,10 @@ fn curl_callbacks_do_not_leak_per_transfer() {
          3 transfers leaked {thrice_leaked})"
     );
     assert_eq!(
-        once_leaked, 3,
-        "expected exactly one leaked block per installed callable (the pre-existing \
-         __elephc_normalize_callable retain), got {once_leaked} for three handles"
+        once_leaked, 0,
+        "a handle's installed callables must be released when the handle dies \
+         (the __elephc_normalize_callable descriptor is an owning temporary now), \
+         got {once_leaked} for three handles"
     );
 }
 
@@ -1205,7 +1276,10 @@ fn curl_copy_handle_preserves_stdout_mode_over_a_rooted_write_callback() {
 
 /// The callback options this build does NOT implement stay honestly rejected:
 /// `curl_setopt()` answers `false` and emits PHP's unsupported-option warning rather than
-/// an inert `true`.
+/// an inert `true`. `CURLOPT_SSH_HOSTKEYFUNCTION` is the exception: PHP installs it and
+/// answers `true`, and its callback fires only for an SSH transfer, so this build accepts
+/// it too rather than diverging for every non-SSH transfer. `CURLOPT_PREREQFUNCTION` is
+/// implemented now (see the dedicated test below) and also answers `true`.
 #[test]
 fn curl_remaining_callback_options_stay_rejected() {
     if skip_without_curl_native("curl_remaining_callback_options_stay_rejected") {
@@ -1220,5 +1294,5 @@ fn curl_remaining_callback_options_stay_rejected() {
         echo curl_setopt($ch, CURLOPT_SSH_HOSTKEYFUNCTION, $cb) ? "T" : "F";
         "#,
     );
-    assert_eq!(out, "FFF");
+    assert_eq!(out, "FTT");
 }

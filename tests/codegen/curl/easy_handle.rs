@@ -428,11 +428,12 @@ fn curl_setopt_forwards_and_rejects_honestly() {
 /// own HONEST rejection — a wrongly-typed value is a `TypeError`, never a silent `false`:
 /// 20011 (`CURLOPT_WRITEFUNCTION`) and the rest of the first callback wave to
 /// `tests/codegen/curl/callbacks.rs`; 10100 (`CURLOPT_SHARE`) to
-/// `tests/codegen/curl/share.rs`; and 10001 (`CURLOPT_FILE`) with the other three PHP
-/// stream options to `tests/codegen/curl/streams.rs`. `CURLOPT_FILE` in particular can no
-/// longer appear here at all: `curl_setopt($ch, 10001, 1)` is now a `TypeError` for the
-/// non-stream `1`, which is php's own answer, so probing it with an int would abort the
-/// program rather than print `rejected`.
+/// `tests/codegen/curl/share.rs`; 10001 (`CURLOPT_FILE`) with the other three PHP
+/// stream options to `tests/codegen/curl/streams.rs`; and 20312
+/// (`CURLOPT_PREREQFUNCTION`) to `tests/codegen/curl/callbacks.rs` too. `CURLOPT_FILE`
+/// in particular can no longer appear here at all: `curl_setopt($ch, 10001, 1)` is now a
+/// `TypeError` for the non-stream `1`, which is php's own answer, so probing it with an
+/// int would abort the program rather than print `rejected`.
 #[test]
 fn unsupported_options_are_rejected_before_libcurl() {
     if skip_without_curl_native("unsupported_options_are_rejected_before_libcurl") {
@@ -441,9 +442,9 @@ fn unsupported_options_are_rejected_before_libcurl() {
     let output = compile_and_run_capture(
         r#"<?php
         $ch = curl_init();
-        echo curl_setopt($ch, 20200, 1) ? "accepted\n" : "rejected\n";
+        echo curl_setopt($ch, 20200, function () { return 0; }) ? "accepted\n" : "rejected\n";
         echo curl_setopt($ch, 40291, "blob") ? "accepted\n" : "rejected\n";
-        echo curl_setopt($ch, 20312, 1) ? "accepted\n" : "rejected\n";
+        echo curl_setopt($ch, 40292, "blob") ? "accepted\n" : "rejected\n";
         curl_setopt($ch, 10002, "file:///nonexistent-elephc-curl-probe");
         curl_setopt($ch, 19913, true);
         $body = curl_exec($ch);
@@ -455,7 +456,7 @@ fn unsupported_options_are_rejected_before_libcurl() {
         output.stdout,
         "rejected\nrejected\nrejected\nexec-false\nerrno\n"
     );
-    for option in ["20200", "40291", "20312"] {
+    for option in ["20200", "40291", "40292"] {
         assert!(
             output.stderr.contains(&format!(
                 "Warning: curl_setopt(): Option {option} is not supported by this build"

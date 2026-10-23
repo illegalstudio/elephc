@@ -23,7 +23,7 @@ mod recovery;
 
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
-use crate::parser::ast::{AttributeGroup, ExprKind, Stmt, StmtKind};
+use crate::parser::ast::{AttributeGroup, Expr, ExprKind, Stmt, StmtKind};
 use crate::parser::control;
 use crate::parser::expr::parse_expr;
 use crate::span::Span;
@@ -152,6 +152,8 @@ fn parse_stmt_dispatch(
     span: Span,
 ) -> Result<Stmt, CompileError> {
     match &tokens[*pos].0 {
+        // A lone `;` is PHP's EMPTY STATEMENT: legal at any statement position and
+        // generating no code. Lower it to an empty synthetic group.
         Token::Semicolon => {
             *pos += 1;
             Ok(Stmt::new(StmtKind::Synthetic(Vec::new()), span))
@@ -292,6 +294,29 @@ fn parse_stmt_dispatch(
             let levels = parse_loop_exit_level("continue", tokens, pos)?;
             expect_semicolon(tokens, pos)?;
             Ok(Stmt::new(StmtKind::Continue(levels), span))
+        }
+        // Inline HTML between a `?>` close tag and the next `<?php`/`<?=` re-entry is
+        // PHP output: an Echo statement of the raw text.
+        Token::InlineHtml(text) => {
+            *pos += 1;
+            Ok(Stmt::new(
+                StmtKind::Echo(Expr::new(
+                    ExprKind::StringLiteral(text.clone()),
+                    span,
+                )),
+                span,
+            ))
+        }
+        // A re-entry `<?php`/`<?=` after a close tag is a no-op in code mode: it produces
+        // no statement, exactly like a lone `;`. Returning an empty synthetic — rather
+        // than recursing into the next token — is what lets the enclosing loop see the
+        // following token: a block's own `}` ends the block, and `foreach … { ?>
+        // <html> <?php } ?>` is valid PHP. (A `<?php` reached WITHOUT an intervening
+        // close tag is not PHP — the lexer only emits these tokens across the
+        // close/re-open boundary.)
+        Token::OpenTag => {
+            *pos += 1;
+            Ok(Stmt::new(StmtKind::Synthetic(Vec::new()), span))
         }
         other => Err(CompileError::new(
             span,

@@ -81,6 +81,13 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("ldr x6, [x14, #16]");                                  // property byte offset
     emitter.instruction("ldr x7, [x14, #24]");                                  // property value tag
     emitter.instruction("add x8, x0, x6");                                      // address of the property slot
+    emitter.instruction("tst x7, #256");                                        // is this an owned reference property?
+    emitter.instruction("b.eq __rt_obj_store_prop_ref_ready");                  // an ordinary slot holds the value directly
+    emitter.instruction("ldr x8, [x8]");                                        // dereference the slot to its ref-cell (same layout)
+    emitter.instruction("and x7, x7, #255");                                    // recover the declared value tag
+    emitter.label("__rt_obj_store_prop_ref_ready");
+    // The ref-cell (and the masked declared tag) are what the previous-value release needs:
+    // a reference property releases the value held in its cell, not the slot's cell pointer.
     emitter.instruction("stp x3, x7, [sp, #-32]!");                             // preserve box and tag across the previous-value release
     emitter.instruction("stp x8, x30, [sp, #16]");                              // preserve slot and return address across the release
     emitter.instruction("mov x0, x8");                                          // pass the property slot to the previous-value release

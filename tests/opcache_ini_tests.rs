@@ -244,6 +244,10 @@ fn default_details_returns_entry_arrays() {
 /// `opcache_get_configuration()['directives']`, which uses registration order. The walk
 /// compares each key against its predecessor with `strcmp` and also pins the first/last key,
 /// so a re-ordering of the rendered key list fails here.
+///
+/// `open_basedir` is the last modeled directive: `ope` sorts after every `opc` entry, and
+/// php also lists it. It replaced `opcache.validate_timestamps` as the tail when the
+/// `open_basedir` directive joined the registry.
 #[test]
 fn keys_are_sorted_ascending() {
     let dir = make_test_dir("opcache_ini_sorted");
@@ -264,7 +268,7 @@ fn keys_are_sorted_ascending() {
     let bin = compile(&dir, src, "app");
     let (out, _) = run_binary(&bin);
     assert_eq!(
-        out, "SORTED\narg_separator.input\nopcache.validate_timestamps\n",
+        out, "SORTED\narg_separator.input\nopen_basedir\n",
         "ini_get_all keys must be sorted ascending"
     );
 }

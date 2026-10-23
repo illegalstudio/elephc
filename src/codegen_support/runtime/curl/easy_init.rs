@@ -38,7 +38,7 @@ pub(crate) fn emit_curl_easy_init(emitter: &mut Emitter) {
     emit_handle_producer(
         emitter,
         "__rt_curl_easy_init",
-        "_elephc_curl_easy_init_fn",
+        Some("_elephc_curl_easy_init_fn"),
         "curl_easy_init (allocate a libcurl easy handle)",
         CURL_EASY_RESOURCE_KIND,
     );
@@ -50,8 +50,21 @@ pub(crate) fn emit_curl_easy_copy(emitter: &mut Emitter) {
     emit_handle_producer(
         emitter,
         "__rt_curl_easy_copy",
-        "_elephc_curl_easy_duphandle_fn",
+        Some("_elephc_curl_easy_duphandle_fn"),
         "curl_easy_copy (duplicate a libcurl easy handle)",
+        CURL_EASY_RESOURCE_KIND,
+    );
+}
+
+/// `__rt_curl_easy_from_id` — in: an existing bridge handle id in `x0`/`rdi`. Out: Mixed
+/// in `x0`/`rax` (a boxed resource-kind-6 handle owning that id, or boxed PHP `false` for
+/// id `0`). Used by the server-push callback, whose handle libcurl created itself.
+pub(crate) fn emit_curl_easy_from_id(emitter: &mut Emitter) {
+    emit_handle_producer(
+        emitter,
+        "__rt_curl_easy_from_id",
+        None,
+        "curl_easy_from_id (box an existing pushed handle id)",
         CURL_EASY_RESOURCE_KIND,
     );
 }
@@ -67,7 +80,7 @@ pub(super) const CURL_EASY_RESOURCE_KIND: u8 = 6;
 pub(super) fn emit_handle_producer(
     emitter: &mut Emitter,
     label: &str,
-    slot: &str,
+    slot: Option<&str>,
     description: &str,
     kind: u8,
 ) {
@@ -84,8 +97,10 @@ pub(super) fn emit_handle_producer(
 
             emitter.instruction("mov x29, sp");                                 // set the frame pointer
 
-            emit_load_entry_or_branch(emitter, slot, &false_label);
-            emit_call_entry(emitter);                                           // elephc_curl_easy_init(), x0 = handle id (0 on failure)
+            if let Some(slot) = slot {
+                emit_load_entry_or_branch(emitter, slot, &false_label);
+                emit_call_entry(emitter);                                       // elephc_curl_easy_init(), x0 = handle id (0 on failure)
+            }                                                                   // no slot: the caller already put the id in x0
 
             emitter.instruction(&format!("cbz x0, {false_label}"));             // id 0 = libcurl could not allocate -> PHP false
 
@@ -126,8 +141,10 @@ pub(super) fn emit_handle_producer(
 
             emitter.instruction("sub rsp, 16");                                 // keep nested calls 16-byte aligned
 
-            emit_load_entry_or_branch(emitter, slot, &false_label_x86);
-            emit_call_entry(emitter);                                           // elephc_curl_easy_init(), rax = handle id (0 on failure)
+            if let Some(slot) = slot {
+                emit_load_entry_or_branch(emitter, slot, &false_label_x86);
+                emit_call_entry(emitter);                                       // elephc_curl_easy_init(), rax = handle id (0 on failure)
+            }                                                                   // no slot: the caller already put the id in rax
 
             emitter.instruction("test rax, rax");                               // id 0 = libcurl could not allocate
 

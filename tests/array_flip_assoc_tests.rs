@@ -140,8 +140,20 @@ fn assert_program_output_warnings_and_clean_heap(
         "compiled binary exited non-zero ({:?}):\n{stderr}",
         output.status.code()
     );
-    assert_eq!(stdout, expected_stdout, "program stdout diverged:\n{stderr}");
-    assert_eq!(stderr.matches("Can only flip string and integer values, entry skipped").count(), warnings, "{stderr}");
+    // The skipped-entry diagnostic is a PHP WARNING, and `display_errors=1` (php CLI's
+    // default) puts its display copy on STDOUT, ahead of the value the expression produces.
+    let mut expected = String::new();
+    for _ in 0..warnings {
+        expected.push_str(
+            "Warning: array_flip(): Can only flip string and integer values, entry skipped\n",
+        );
+    }
+    expected.push_str(expected_stdout);
+    assert_eq!(stdout, expected, "program stdout diverged:\n{stderr}");
+    assert!(
+        !stderr.contains("Can only flip string and integer values, entry skipped"),
+        "the display copy belongs on stdout, not stderr:\n{stderr}"
+    );
     assert!(
         stderr.contains("live_blocks=0"),
         "array_flip leaked heap blocks:\n{stderr}"

@@ -20,6 +20,7 @@ builtin! {
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Fsockopen,
     ),
+    requirements: crate::builtins::semantics::fsockopen_requirements,
 }
 
 /// Validates ref output params are plain variables, then returns `Union(stream_resource, Bool)`.

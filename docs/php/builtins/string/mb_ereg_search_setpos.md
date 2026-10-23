@@ -2,7 +2,7 @@
 title: "mb_ereg_search_setpos()"
 description: "Changes the progressive regex byte position, accepting negative offsets relative to the retained subject."
 sidebar:
-  order: 856
+  order: 858
 ---
 
 ## mb_ereg_search_setpos()

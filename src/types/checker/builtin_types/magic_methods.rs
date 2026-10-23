@@ -84,7 +84,13 @@ pub(crate) fn patch_magic_method_signatures(checker: &mut Checker) {
                 param.1 = PhpType::Str;
             }
             if let Some(param) = sig.params.get_mut(1) {
-                param.1 = PhpType::Array(Box::new(PhpType::Never));
+                // A GENERIC array hint, not `Array(Never)`. The magic-dispatch path
+                // (`$obj->missing(...)`) specializes this from the real arguments, and a
+                // DIRECT `$obj->__call($name, $args)` call sharpens it through
+                // `sharpens_to_call_site_array`, which only recognizes a generic hint.
+                // `Array(Never)` matched neither and stayed as the placeholder, so every
+                // element read lowered as `Never` and returned null.
+                param.1 = PhpType::Array(Box::new(PhpType::Mixed));
             }
         }
         // `__callStatic` is a static method, so it lives in `static_methods`.
@@ -93,7 +99,7 @@ pub(crate) fn patch_magic_method_signatures(checker: &mut Checker) {
                 param.1 = PhpType::Str;
             }
             if let Some(param) = sig.params.get_mut(1) {
-                param.1 = PhpType::Array(Box::new(PhpType::Never));
+                param.1 = PhpType::Array(Box::new(PhpType::Mixed));
             }
         }
     }

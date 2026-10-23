@@ -774,6 +774,8 @@ fn render(value: &Expr) -> (String, u8) {
         ExprKind::PostIncrement(name) => (format!("${name}++"), ATOM),
         ExprKind::Negate(inner) => (format!("-{}", at(inner, 85)), 85),
         ExprKind::Not(inner) => (format!("!{}", at(inner, 75)), 75),
+        // php's error-suppression operator binds like the other unary prefixes.
+        ExprKind::ErrorSuppress(inner) => (format!("@{}", at(inner, 85)), 85),
         ExprKind::Cast { target, expr } => {
             (format!("({}) {}", cast_type(target), at(expr, 85)), 85)
         }

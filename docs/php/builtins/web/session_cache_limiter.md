@@ -2,7 +2,7 @@
 title: "session_cache_limiter()"
 description: "Reads or sets the cache limiter that controls session response caching."
 sidebar:
-  order: 988
+  order: 990
 ---
 
 ## session_cache_limiter()
@@ -20,7 +20,7 @@ Reads or sets the cache limiter that controls session response caching.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
+- **Compiled (AOT)**: supported through the compiler-injected web prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._

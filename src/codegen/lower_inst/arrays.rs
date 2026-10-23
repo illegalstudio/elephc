@@ -1835,12 +1835,15 @@ fn lower_array_set_aarch64(
             abi::emit_call_label(ctx.emitter, "__rt_array_set_int");
         }
         PhpType::Callable => {
+            // `__rt_array_set_callable` retains the descriptor for the array owner, releases
+            // the descriptor it overwrites, and stamps the storage `value_type 10` so the
+            // array's own destructor releases it too. The plain int setter did none of that,
+            // which leaked one descriptor per replacement (bug #45161).
             ctx.load_value_to_reg(value, "x0")?;
-            abi::emit_incref_if_refcounted(ctx.emitter, value_ty);
-            ctx.emitter.instruction("mov x2, x0");                              // pass an array-owned callable descriptor to the indexed-array setter
+            ctx.emitter.instruction("mov x2, x0");                              // pass the descriptor to the callable-aware setter
             ctx.load_value_to_reg(array, "x0")?;
             ctx.load_value_to_reg(index, "x1")?;
-            abi::emit_call_label(ctx.emitter, "__rt_array_set_int");
+            abi::emit_call_label(ctx.emitter, "__rt_array_set_callable");
         }
         PhpType::Str => {
             ctx.load_string_value_to_regs(value, "x2", "x3")?;
@@ -1982,12 +1985,15 @@ fn lower_array_set_x86_64(
             abi::emit_call_label(ctx.emitter, "__rt_array_set_int");
         }
         PhpType::Callable => {
+            // `__rt_array_set_callable` retains the descriptor for the array owner, releases
+            // the descriptor it overwrites, and stamps the storage `value_type 10` so the
+            // array's own destructor releases it too. The plain int setter did none of that,
+            // which leaked one descriptor per replacement (bug #45161).
             ctx.load_value_to_reg(value, "rax")?;
-            abi::emit_incref_if_refcounted(ctx.emitter, value_ty);
-            ctx.emitter.instruction("mov rdx, rax");                            // pass an array-owned callable descriptor to the indexed-array setter
+            ctx.emitter.instruction("mov rdx, rax");                            // pass the descriptor to the callable-aware setter
             ctx.load_value_to_reg(array, "rdi")?;
             ctx.load_value_to_reg(index, "rsi")?;
-            abi::emit_call_label(ctx.emitter, "__rt_array_set_int");
+            abi::emit_call_label(ctx.emitter, "__rt_array_set_callable");
         }
         PhpType::Str => {
             ctx.load_string_value_to_regs(value, "rdx", "rcx")?;

@@ -2,7 +2,7 @@
 title: "opcache_get_configuration()"
 description: "Returns the OPcache directives, blacklist, and version, or false when API access is restricted."
 sidebar:
-  order: 639
+  order: 641
 ---
 
 ## opcache_get_configuration()
@@ -19,7 +19,7 @@ Returns the OPcache directives, blacklist, and version, or false when API access
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
+- **Compiled (AOT)**: supported through the compiler-injected OPcache prelude.
 - **`eval()` (magician interpreter)**: supported through native OPcache prelude declarations or dedicated interpreter handlers; see [OPcache](../../opcache.md).
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._

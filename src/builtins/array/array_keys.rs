@@ -93,6 +93,9 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         }
         PhpType::AssocArray { key, .. } => Ok(PhpType::Array(key)),
         PhpType::Mixed => Ok(PhpType::Array(Box::new(PhpType::Mixed))),
+        // A runtime union — `curl_version()` is `array|false` — is validated at run time by the
+        // lowering, like `array_map()`'s mixed/union argument.
+        PhpType::Union(_) => Ok(PhpType::Array(Box::new(PhpType::Mixed))),
         _ => Err(CompileError::new(
             cx.span,
             "array_keys() argument must be array",

@@ -2,7 +2,7 @@
 title: "session_destroy()"
 description: "Destroys the data stored for the current session."
 sidebar:
-  order: 992
+  order: 994
 ---
 
 ## session_destroy()
@@ -19,7 +19,7 @@ Destroys the data stored for the current session.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
+- **Compiled (AOT)**: supported through the compiler-injected web prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._

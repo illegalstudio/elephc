@@ -279,7 +279,11 @@ def _prelude_route_text(b: dict) -> str:
     lowering rather than hard-coded. Falls back to a prelude-neutral phrase when
     the record carries no lowering block.
     """
-    source = Path(((b.get("lowering") or {}).get("codegen_file") or "")).name
+    lowering = b.get("lowering") or {}
+    label = lowering.get("prelude_label")
+    if label:
+        return f"the compiler-injected {label} prelude"
+    source = Path((lowering.get("codegen_file") or "")).name
     suffix = "_prelude.rs"
     if source.endswith(suffix):
         return f"the compiler-injected {source[: -len(suffix)]} prelude"

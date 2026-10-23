@@ -98,7 +98,8 @@ pub(crate) const SLOT_READ: i32 = 2;
 pub(crate) const SLOT_PROGRESS: i32 = 3;
 pub(crate) const SLOT_DEBUG: i32 = 4;
 pub(crate) const SLOT_XFERINFO: i32 = 5;
-pub(crate) const SLOT_COUNT: usize = 6;
+pub(crate) const SLOT_PREREQ: i32 = 6;
+pub(crate) const SLOT_COUNT: usize = 7;
 
 /// `crates/elephc-curl/src/callbacks.rs`'s `CallSpec::result_kind`: the PHP return value
 /// is read as an integer.
@@ -106,6 +107,10 @@ pub(crate) const RESULT_INT: i64 = 0;
 /// `crates/elephc-curl/src/callbacks.rs`'s `CallSpec::result_kind`: the PHP return value
 /// is read as a string and copied into `CallSpec::out_buf`, capped at `out_cap`.
 pub(crate) const RESULT_STRING: i64 = 1;
+/// The read trampoline's combined result kind: the PHP callable may return a string (upload
+/// bytes) or an int (libcurl's own read answer, published as the adapter result with
+/// `out_len = -1`).
+pub(crate) const RESULT_STRING_OR_INT: i64 = 2;
 
 /// Runtime value tags the callback argument marshalling uses, copied verbatim from
 /// `crates/elephc-curl/src/callbacks.rs`'s own `TAG_*` constants (which in turn mirror

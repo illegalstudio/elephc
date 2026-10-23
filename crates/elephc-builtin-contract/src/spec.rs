@@ -55,6 +55,9 @@ pub enum Area {
     /// `ext/xml` and `ext/xmlwriter` surfaces declared by the xml prelude (plus the one
     /// registry builtin `xml_parse_into_struct`).
     Xml,
+    /// `ext/filter` constants (`FILTER_*`); the `filter_var()` function itself is a
+    /// version-prelude injection, like `get_debug_type()`.
+    Filter,
 }
 
 /// Describes how a PHP-visible catalog entry reaches executable behavior.

@@ -2,7 +2,7 @@
 title: "mb_ereg_match()"
 description: "Tests a raw multibyte regex at the string start using the current regex encoding and options."
 sidebar:
-  order: 765
+  order: 767
 ---
 
 ## mb_ereg_match()

@@ -217,6 +217,11 @@ pub(crate) struct Checker {
     /// Tracks capture payloads for closures assigned to variables, keyed by variable name.
     /// Each entry is (capture_name, capture_type, is_by_ref).
     pub callable_captures: HashMap<String, Vec<(String, PhpType, bool)>>,
+    /// Array types a closure's BODY widened on its `use (&$x)` captures, recorded by closure
+    /// inference and drained into the enclosing scope at the next statement. PHP aliases the
+    /// capture, so a body write is observable outside — including for an inline closure
+    /// argument, which no assignment exists to drain it from.
+    pub byref_capture_writeback: HashMap<String, PhpType>,
     /// Tracks callable-array targets assigned to variables, keyed by variable name.
     pub callable_array_targets: HashMap<String, CallableTarget>,
     /// Identifies the assignment that produced each callable-array target fact.

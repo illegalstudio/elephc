@@ -47,6 +47,11 @@ impl Checker {
                 .entry((*name).to_string())
                 .or_insert_with(crate::superglobals::superglobal_type);
         }
+        // `$GLOBALS` is visible in every scope; type it as the global table the EIR lowering
+        // routes literal-key reads and writes to.
+        local_env
+            .entry("GLOBALS".to_string())
+            .or_insert_with(|| PhpType::Array(Box::new(PhpType::Mixed)));
         let function_key = name.to_string();
         let callable_param_names: Vec<String> = param_types
             .iter()

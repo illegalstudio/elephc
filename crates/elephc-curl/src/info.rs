@@ -144,6 +144,16 @@ pub(crate) unsafe fn getinfo_all_json(curl: *mut CURL) -> Vec<u8> {
         /// libcurl added it later, at 67, next to `CURLINFO_QUEUE_TIME_T` (65) rather
         /// than beside the other timers.
         pub(super) const POSTTRANSFER_TIME_T: i32 = 0x60_0000 + 67;
+        /// `CURLINFO_QUEUE_TIME_T` (`CURLINFO_OFF_T + 65`), PHP 8.5 / libcurl 8.6.
+        pub(super) const QUEUE_TIME_T: i32 = 0x60_0000 + 65;
+        /// `CURLINFO_CONN_ID` (`CURLINFO_OFF_T + 64`), PHP 8.5 / libcurl 8.2.
+        pub(super) const CONN_ID: i32 = 0x60_0000 + 64;
+        /// `CURLINFO_USED_PROXY` (`CURLINFO_LONG + 66`), PHP 8.5 / libcurl 8.7.
+        pub(super) const USED_PROXY: i32 = 0x20_0000 + 66;
+        /// `CURLINFO_HTTPAUTH_USED` (`CURLINFO_LONG + 69`), PHP 8.5 / libcurl 8.10.
+        pub(super) const HTTPAUTH_USED: i32 = 0x20_0000 + 69;
+        /// `CURLINFO_PROXYAUTH_USED` (`CURLINFO_LONG + 70`), PHP 8.5 / libcurl 8.10.
+        pub(super) const PROXYAUTH_USED: i32 = 0x20_0000 + 70;
     }
 
     let mut map = serde_json::Map::new();
@@ -270,6 +280,7 @@ pub(crate) unsafe fn getinfo_all_json(curl: *mut CURL) -> Vec<u8> {
         }
     };
     off_t_key(&mut map, "appconnect_time_us", info::APPCONNECT_TIME_T);
+    off_t_key(&mut map, "queue_time_us", info::QUEUE_TIME_T);
     off_t_key(&mut map, "connect_time_us", info::CONNECT_TIME_T);
     off_t_key(&mut map, "namelookup_time_us", info::NAMELOOKUP_TIME_T);
     off_t_key(&mut map, "pretransfer_time_us", info::PRETRANSFER_TIME_T);
@@ -285,12 +296,16 @@ pub(crate) unsafe fn getinfo_all_json(curl: *mut CURL) -> Vec<u8> {
     string_key(&mut map, "capath", info::CAPATH);
     string_key(&mut map, "cainfo", info::CAINFO);
 
-    // `request_header` is ABSENT, and that is php-src's own behaviour for a handle that
-    // never had `CURLINFO_HEADER_OUT` turned on — which no elephc handle can, because
-    // that option stays `KIND_UNSUPPORTED` (see `crate::options`): capturing the request
-    // header needs debug-callback plumbing this build does not have. php-src adds the key only
-    // when it has captured text, so an absent key here is indistinguishable from php-src
-    // with the option off, rather than a fabricated empty string.
+    // php-src emits these AFTER `cainfo` and before `conn_id`, in this order.
+    long_key(&mut map, "used_proxy", info::USED_PROXY);
+    long_key(&mut map, "httpauth_used", info::HTTPAUTH_USED);
+    long_key(&mut map, "proxyauth_used", info::PROXYAUTH_USED);
+    off_t_key(&mut map, "conn_id", info::CONN_ID);
+
+    // `request_header` is added by the prelude once CURLINFO_HEADER_OUT has captured the
+    // outgoing request, matching php-src's conditional `if (ch->header.str)`. The capture
+    // itself runs in the bridge's debug trampoline (CURLOPT_VERBOSE delivers the outgoing
+    // header there), so this map only reports what the prelude stored.
 
     serde_json::Value::Object(map).to_string().into_bytes()
 }

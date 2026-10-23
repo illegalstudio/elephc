@@ -287,6 +287,12 @@ impl Scanner<'_> {
         for helper in crate::builtins::xml::prelude_helpers_for(&key) {
             self.record_callable(helper);
         }
+        // A dynamic `constant($name)` lowers to a direct call to the version prelude's
+        // `__elephc_dynamic_constant()`, so the declaration must be rooted from the builtin
+        // call; a literal call never reaches it but the extra edge only over-keeps.
+        if key == "constant" {
+            self.record_callable("__elephc_dynamic_constant");
+        }
         let normalized = self.normalized_function_arguments(&key, args);
         let first = normalized.first().map(unwrap_named_arg);
         match key.as_str() {

@@ -295,6 +295,26 @@ echo $p->doSomething(1, 2, 3);
     assert_eq!(out, "called:doSomething:1,2,3");
 }
 
+/// Verifies a DIRECT `$obj->__call($name, $args)` invocation reads object elements of the
+/// argument array. The magic-dispatch path specializes `__call`'s array parameter from the
+/// call site, but a direct call used to leave the `Array(Never)` placeholder in place, so
+/// every element read lowered as `Never` and returned null.
+#[test]
+fn test_magic_call_direct_invocation_reads_object_argument() {
+    let out = compile_and_run(
+        r#"<?php
+class Proxy {
+    public function __call(string $method, array $args): string {
+        return $method . ":" . get_class($args[0]) . ":" . $args[1];
+    }
+}
+$payload = new stdClass();
+echo (new Proxy())->__call("handle", [$payload, "tail"]);
+"#,
+    );
+    assert_eq!(out, "handle:stdClass:tail");
+}
+
 /// Verifies `__callStatic` is invoked for undefined static methods, receiving the
 /// method name and argument list.
 #[test]

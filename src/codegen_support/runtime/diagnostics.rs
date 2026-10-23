@@ -58,14 +58,45 @@ pub(crate) fn emit_diagnostics(emitter: &mut Emitter, features: RuntimeFeatures)
     emitter.label("__rt_diag_pop_done");
     emitter.instruction("ret");                                                 // return to the expression wrapper after restoring suppression state
 
+    // DIAGNOSTICS ROUTE THROUGH THE OUTPUT LAYER. php (display_errors=1 on the CLI) renders
+    // diagnostics into the ordinary output surface, which output buffering captures in order
+    // with echo/var_dump output — the curl_copy_handle_basic_006 EXPECTF order proves it.
+    // `__rt_diag_write` therefore tail-paths through `__rt_stdout_write` instead of a raw
+    // stderr syscall. The 7 producers share the leaf convention (ptr in x1, len in x2 on
+    // AArch64; ptr in rdi, len in rsi on x86_64) and keep registers live across this call,
+    // so this helper is non-leaf and preserves every volatile register around it.
+    //
+    // __rt_stdout_write takes the bytes as (ptr in x0, len in x1) on AArch64; the two
+    // producer words shift over inside the preserved frame.
     emitter.label_global("__rt_diag_write");
     abi::emit_symbol_address(emitter, "x9", "_rt_diag_suppression");
     emitter.instruction("ldr x10, [x9]");                                       // load suppression depth before deciding whether to emit the warning
-    emitter.instruction("cbnz x10, __rt_diag_warning_done");                    // suppress the warning while inside an active @ scope
-    emitter.instruction("mov x0, #2");                                          // fd = stderr for runtime warning diagnostics
-    emitter.syscall(4);
-    emitter.label("__rt_diag_warning_done");
+    emitter.instruction("cbnz x10, 1f");                                        // suppress the warning while inside an active @ scope
+    abi::emit_symbol_address(emitter, "x9", "_rt_display_errors");              // read the compiled display_errors mode
+    emitter.instruction("ldr x10, [x9]");                                       // load the display copy mode: 0 off, 1 output layer, 2 stderr
+    emitter.instruction("cbz x10, 1f");                                         // display_errors=0 renders no display copy
+    emitter.instruction("cmp x10, #2");                                         // does php send the display copy to stderr?
+    emitter.instruction("b.ne 2f");                                             // otherwise route it through the output layer
+    emitter.instruction("mov x0, #2");                                          // fd = stderr for display_errors=stderr
+    emitter.syscall(4);                                                         // write the producer's x1/x2 bytes to stderr
+    emitter.instruction("ret");                                                 // return after the stderr display copy
+    emitter.label("2");
+    emitter.instruction("sub sp, sp, #1024");                                   // reserve the diagnostic write frame (register preservation without a scratch borrow)
+    emitter.instruction("str x29, [sp, #1008]");                                // preserve caller linkage without borrowing a volatile register
+    emitter.instruction("str x30, [sp, #1016]");                                // preserve the return address at the fixed frame footer
+    emitter.instruction("str x1, [sp, #984]");                                  // park the producer's byte pointer across the volatile save
+    emitter.instruction("str x2, [sp, #992]");                                  // park the producer's byte length across the volatile save
+    super::warning_dispatch::volatile_registers(emitter, false);                // preserve the volatile general/SIMD registers the producers hold across this non-leaf call
+    emitter.instruction("ldr x0, [sp, #984]");                                  // byte pointer → __rt_stdout_write's first argument
+    emitter.instruction("ldr x1, [sp, #992]");                                  // byte length → __rt_stdout_write's second argument
+    abi::emit_call_label(emitter, "__rt_stdout_write");                          // emit through the output layer (ob-aware, stdout-surface)
+    super::warning_dispatch::volatile_registers(emitter, true);                 // restore every preserved register so the producers see their values intact
+    emitter.instruction("ldr x30, [sp, #1016]");                                // reload the preserved return address from the fixed frame footer
+    emitter.instruction("ldr x29, [sp, #1008]");                                // reload the preserved caller frame pointer
+    emitter.instruction("add sp, sp, #1024");                                   // release the diagnostic write frame while preserving every volatile register
     emitter.instruction("ret");                                                 // return after either writing or suppressing the warning
+    emitter.label("1");
+    emitter.instruction("ret");                                                 // the suppressed path returns without writing
 }
 
 /// Emits x86_64 Linux-specific diagnostic helpers for suppression depth and warning output.
@@ -101,15 +132,32 @@ fn emit_diagnostics_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_diag_pop_done_linux_x86_64");
     emitter.instruction("ret");                                                 // return to the expression wrapper after restoring suppression state
 
+    //
+    // __rt_diag_write routes through __rt_stdout_write (the output layer) with the same
+    // argument spellings (ptr in rdi, len in rsi); it is non-leaf here so the producers'
+    // live volatile registers survive the call.
     emitter.label_global("__rt_diag_write");
     abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);    // load suppression depth before deciding whether to emit the warning
     emitter.instruction("test r10, r10");                                       // is runtime warning output currently suppressed?
-    emitter.instruction("jnz __rt_diag_warning_done_linux_x86_64");             // suppress the warning while inside an active @ scope
+    emitter.instruction("jnz 1f");                                              // suppress the warning while inside an active @ scope
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_display_errors", 0);      // read the compiled display_errors mode
+    emitter.instruction("test r10, r10");                                       // display_errors=0 renders no display copy
+    emitter.instruction("jz 1f");                                               // skip the write when the display copy is off
+    emitter.instruction("cmp r10, 2");                                          // does php send the display copy to stderr?
+    emitter.instruction("jne 2f");                                              // otherwise route it through the output layer
     emitter.instruction("mov rdx, rsi");                                        // move warning length into the Linux write length register
     emitter.instruction("mov rsi, rdi");                                        // move warning pointer into the Linux write buffer register
-    emitter.instruction("mov edi, 2");                                          // fd = stderr for runtime warning diagnostics
+    emitter.instruction("mov edi, 2");                                          // fd = stderr for display_errors=stderr
     emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
-    emitter.instruction("syscall");                                             // emit the runtime warning diagnostic to stderr
-    emitter.label("__rt_diag_warning_done_linux_x86_64");
+    emitter.instruction("syscall");                                             // emit the stderr display copy
+    emitter.instruction("ret");                                                 // return after the stderr display copy
+    emitter.label("2");
+    abi::emit_frame_prologue(emitter, 1024);                                    // reserve the diagnostic write frame with SysV alignment
+    super::warning_dispatch::volatile_registers(emitter, false);                // preserve the volatile general/SIMD registers the producers hold across this non-leaf call
+    abi::emit_call_label(emitter, "__rt_stdout_write");                          // emit through the output layer (ob-aware, stdout-surface)
+    super::warning_dispatch::volatile_registers(emitter, true);                 // restore every preserved register so the producers see their values intact
+    abi::emit_frame_restore(emitter, 1024);                                     // release the diagnostic write frame while preserving every volatile register
     emitter.instruction("ret");                                                 // return after either writing or suppressing the warning
+    emitter.label("1");
+    emitter.instruction("ret");                                                 // the suppressed path returns without writing
 }

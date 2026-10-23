@@ -53,6 +53,20 @@ impl Checker {
         stmt: &Stmt,
         env: &mut TypeEnv,
     ) -> Result<(), CompileError> {
+        // Adopt the by-ref capture types the PREVIOUS statement's inline closures widened.
+        // A `use (&$cap)` capture is aliased, so a body write is observable outside; the
+        // same widening guard as the recorder keeps an unrelated outer binding untouched.
+        let writeback = self.byref_capture_writeback.drain().collect::<Vec<_>>();
+        for (capture, widened) in writeback {
+            let is_widening = match env.get(&capture) {
+                Some(crate::types::PhpType::Array(inner)) => **inner == crate::types::PhpType::Never,
+                Some(crate::types::PhpType::Void) | None => true,
+                _ => false,
+            };
+            if is_widening {
+                env.insert(capture, widened);
+            }
+        }
         match &stmt.kind {
             StmtKind::Synthetic(stmts) => {
                 if self.check_empty_indexed_nested_append(stmts, env)? {

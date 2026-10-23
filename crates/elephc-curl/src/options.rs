@@ -43,8 +43,10 @@
 //! - `CURLINFO_HEADER_OUT` (2) is in the table even though it is not a `CURLOPT_*`
 //!   constant: php-src's `curl_setopt()` switch accepts it (it turns on request-header
 //!   tracking through the debug callback), so answering `ValueError` for it would be
-//!   wrong. Capturing the request header still needs machinery this build does not have,
-//!   so it stays `KIND_UNSUPPORTED`.
+//!   wrong. Capturing the request header is implemented by the prelude (it enables
+//!   CURLOPT_VERBOSE and the bridge's debug trampoline stores the outgoing header), so the
+//!   prelude intercepts this option before consulting the table; the row stays
+//!   `KIND_UNSUPPORTED` as the fail-closed answer for any other route.
 //! - ANYTHING NOT IN THIS TABLE IS `KIND_INVALID`, which the prelude turns into php-src's
 //!   own `ValueError: curl_setopt(): Argument #2 ($option) is not a valid cURL option`.
 //!   That is the real php-src behaviour for an unrecognized option number, and it is a
@@ -356,7 +358,7 @@ pub(crate) const OPTION_KINDS: &[(i32, i32)] = &[
     // 10183, HOST_PUBLIC_KEY_SHA256 10311) are live.
     (20200, KIND_UNSUPPORTED), // CURLOPT_FNMATCH_FUNCTION
     (20219, KIND_CALLBACK), // CURLOPT_XFERINFOFUNCTION
-    (20312, KIND_UNSUPPORTED), // CURLOPT_PREREQFUNCTION
+    (20312, KIND_CALLBACK), // CURLOPT_PREREQFUNCTION
     (20316, KIND_UNSUPPORTED), // CURLOPT_SSH_HOSTKEYFUNCTION
     (30115, KIND_OFF_T), // CURLOPT_INFILESIZE_LARGE
     (30117, KIND_OFF_T), // CURLOPT_MAXFILESIZE_LARGE

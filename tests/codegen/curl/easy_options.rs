@@ -236,14 +236,13 @@ fn wave_a_setopt_array_applies_and_stops_on_failure() {
         echo str_contains(curl_exec($ch), "user-agent: array-agent") ? "ua\n" : "no-ua\n";
 
         $bad = curl_init();
-        echo curl_setopt_array($bad, [CURLOPT_FNMATCH_FUNCTION => 1]) ? "accepted\n" : "stopped\n";
+        echo curl_setopt_array($bad, [CURLOPT_CAINFO_BLOB => "x"]) ? "accepted\n" : "stopped\n";
         "#
     ));
-    // CURLOPT_FNMATCH_FUNCTION is a real option this build cannot carry, so it warns and
+    // CURLOPT_CAINFO_BLOB is a real option this build cannot carry, so it warns and
     // answers `false` — `curl_setopt_array()` reports that as `false`, never a throw.
-    // (It used to be CURLOPT_WRITEFUNCTION here; that callback is now implemented, so the
-    // rejection example moved to a callback option that still is not: see
-    // `docs/php/curl.md`'s "the 11 rejected options" for the full current list.)
+    // (Callback options are now VALIDATED rather than rejected, so a bad callable there
+    // throws instead; a blob option is the stable rejection example.)
     assert_eq!(out, "applied\nua\nstopped\n");
 }
 
@@ -328,7 +327,44 @@ fn wave_b_slist_options_require_an_array() {
     );
     assert_eq!(
         out,
-        "curl_setopt(): Argument #3 ($value) must be of type array, string given\nquote\nresolve\n"
+        "curl_setopt(): The CURLOPT_HTTPHEADER option must have an array value\nquote\nresolve\n"
+    );
+}
+
+/// A non-integer `$option` raises php-src's run-time TypeError, and an integer that names no
+/// cURL option raises its ValueError. The `curl_setopt()` parameter contract is enforced at
+/// the call, not at compile time, so a non-numeric string reaches the guard and reports the
+/// same message php does.
+#[test]
+fn wave_b_option_type_and_validity_errors() {
+    if skip_without_curl_native("wave_b_option_type_and_validity_errors") {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+        $ch = curl_init();
+        try {
+            curl_setopt($ch, '', false);
+        } catch (\TypeError $e) {
+            echo $e->getMessage(), "\n";
+        }
+        try {
+            curl_setopt($ch, -10, 0);
+        } catch (\ValueError $e) {
+            echo $e->getMessage(), "\n";
+        }
+        try {
+            curl_setopt($ch, 1000, 0);
+        } catch (\ValueError $e) {
+            echo $e->getMessage(), "\n";
+        }
+        "#,
+    );
+    assert_eq!(
+        out,
+        "curl_setopt(): Argument #2 ($option) must be of type int, string given\n\
+         curl_setopt(): Argument #2 ($option) is not a valid cURL option\n\
+         curl_setopt(): Argument #2 ($option) is not a valid cURL option\n"
     );
 }
 
@@ -658,9 +694,10 @@ fn getinfo_array_keys_are_in_php_s_order() {
          size_download,speed_download,speed_upload,download_content_length,\
          upload_content_length,starttransfer_time,redirect_time,redirect_url,primary_ip,\
          certinfo,primary_port,local_ip,local_port,http_version,protocol,ssl_verifyresult,\
-         scheme,appconnect_time_us,connect_time_us,namelookup_time_us,pretransfer_time_us,\
-         redirect_time_us,starttransfer_time_us,posttransfer_time_us,total_time_us,\
-         effective_method,capath,cainfo\n\
+         scheme,appconnect_time_us,queue_time_us,connect_time_us,namelookup_time_us,\
+         pretransfer_time_us,redirect_time_us,starttransfer_time_us,posttransfer_time_us,\
+         total_time_us,effective_method,capath,cainfo,used_proxy,httpauth_used,\
+         proxyauth_used,conn_id\n\
          total_time=ok namelookup_time=ok connect_time=ok pretransfer_time=ok \
          starttransfer_time=ok redirect_time=ok \n"
     );
@@ -671,7 +708,7 @@ fn getinfo_array_keys_are_in_php_s_order() {
 ///
 /// `http_connectcode`, `num_connects` and `appconnect_time` were reported as missing from
 /// `curl_getinfo()`'s array. They are missing from PHP's array as well: measured on PHP
-/// 8.4.20, the no-`$option` array is a fixed 41 keys and contains none of the three, across
+/// 8.4.20, the no-`$option` array is a fixed 46 keys and contains none of the three, across
 /// plain HTTP, HTTPS, a refused connection and a never-executed handle. What php DOES offer
 /// is `curl_getinfo($ch, CURLINFO_HTTP_CONNECTCODE)` and friends, so THAT is what this
 /// pins — together with the array's exact size, so a future "helpful" addition to the array
@@ -715,7 +752,7 @@ fn getinfo_option_form_answers_keys_absent_from_the_array() {
     ));
     assert_eq!(
         out,
-        "41\nnot-in-array not-in-array not-in-array \nint 0\nint connected\nfloat zero\n\
+        "46\nnot-in-array not-in-array not-in-array \nint 0\nint connected\nfloat zero\n\
          us-int\nposttransfer-int\n"
     );
 }

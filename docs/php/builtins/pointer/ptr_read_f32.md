@@ -2,7 +2,7 @@
 title: "ptr_read_f32()"
 description: "Reads one IEEE 754 single-precision value through a raw pointer and returns it as a float."
 sidebar:
-  order: 739
+  order: 741
 ---
 
 ## ptr_read_f32()

@@ -482,10 +482,15 @@ pub enum RuntimeFnId {
     CtypeSpace,
     /// Allocates a libcurl easy handle and boxes it as a resource-kind-6 Mixed cell.
     CurlEasyInit,
+    /// Boxes an ALREADY-EXISTING bridge easy-handle id as a resource-kind-6 Mixed cell.
+    /// Used by the server-push trampoline, whose pushed handle libcurl created itself.
+    CurlEasyFromId,
     /// Applies an integer-valued `curl_setopt()` option to an easy handle.
     CurlEasySetoptLong,
     /// Applies a string-valued `curl_setopt()` option to an easy handle.
     CurlEasySetoptStr,
+    /// Clears a nullable string-valued `curl_setopt()` option (php-src forwards `NULL`).
+    CurlEasySetoptNull,
     /// Applies a `struct curl_slist *`-valued `curl_setopt()` option to an easy handle.
     CurlEasySetoptSlist,
     /// Installs, replaces, or clears a PHP callable on one of `curl_setopt()`'s callback
@@ -762,6 +767,10 @@ pub enum RuntimeFnId {
     Getdate,
     Getenv,
     Getmypid,
+    /// Returns the amount of memory currently allocated to PHP (`_gc_live`).
+    MemoryGetUsage,
+    /// Returns the peak amount of memory allocated to PHP (`_gc_peak`).
+    MemoryGetPeakUsage,
     Gmdate,
     Gmmktime,
     Header,
@@ -1506,7 +1515,11 @@ impl RuntimeFnId {
                 crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::MAY_FATAL.bits(),
             ),
             // `getmypid()` is not a constant: a `pcntl_fork()` child reads its own id.
-            RuntimeFnId::Time | RuntimeFnId::Getmypid => crate::ir::Effects::READS_PROCESS,
+            // The memory counters change on every allocation, so they are process reads too.
+            RuntimeFnId::Time
+            | RuntimeFnId::Getmypid
+            | RuntimeFnId::MemoryGetUsage
+            | RuntimeFnId::MemoryGetPeakUsage => crate::ir::Effects::READS_PROCESS,
             RuntimeFnId::Microtime | RuntimeFnId::Hrtime => {
                 crate::ir::Effects::from_bits_retain(
                     crate::ir::Effects::READS_PROCESS.bits()
@@ -1722,6 +1735,7 @@ impl RuntimeFnId {
             | RuntimeFnId::CurlEasyError
             | RuntimeFnId::CurlEasyGetinfoLong
             | RuntimeFnId::CurlEasyInit
+            | RuntimeFnId::CurlEasyFromId
             | RuntimeFnId::CurlEasySetoptLong
             | RuntimeFnId::CurlEasySetCallback
             | RuntimeFnId::CurlEasyCopy
@@ -1732,6 +1746,7 @@ impl RuntimeFnId {
             | RuntimeFnId::CurlEasyStrOp
             | RuntimeFnId::CurlEasySetoptSlist
             | RuntimeFnId::CurlEasySetoptStr
+            | RuntimeFnId::CurlEasySetoptNull
             | RuntimeFnId::CurlOptionKind
             | RuntimeFnId::CurlEasyId
             | RuntimeFnId::CurlMultiInit
@@ -1897,6 +1912,7 @@ impl RuntimeFnId {
             | RuntimeFnId::CurlEasyError
             | RuntimeFnId::CurlEasyGetinfoLong
             | RuntimeFnId::CurlEasyInit
+            | RuntimeFnId::CurlEasyFromId
             | RuntimeFnId::CurlEasyPerform
             | RuntimeFnId::CurlEasySetoptLong
             // `CurlAdapterAddr` is deliberately ABSENT: it materializes a runtime label's
@@ -1912,6 +1928,7 @@ impl RuntimeFnId {
             | RuntimeFnId::CurlEasyStrOp
             | RuntimeFnId::CurlEasySetoptSlist
             | RuntimeFnId::CurlEasySetoptStr
+            | RuntimeFnId::CurlEasySetoptNull
             | RuntimeFnId::CurlOptionKind
             | RuntimeFnId::CurlEasyId
             | RuntimeFnId::CurlMultiInit
@@ -2113,6 +2130,8 @@ impl RuntimeFnId {
                 | RuntimeFnId::CloneWith
                 | RuntimeFnId::Count
                 | RuntimeFnId::Getmypid
+                | RuntimeFnId::MemoryGetUsage
+                | RuntimeFnId::MemoryGetPeakUsage
                 | RuntimeFnId::Gettype
                 | RuntimeFnId::InArray
                 | RuntimeFnId::Trim
@@ -2142,6 +2161,7 @@ impl RuntimeFnId {
                 )
             }),
             RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct | RuntimeFnId::Getmypid
+            | RuntimeFnId::MemoryGetUsage | RuntimeFnId::MemoryGetPeakUsage
             | RuntimeFnId::Gettype | RuntimeFnId::InArray => true,
             RuntimeFnId::Trim => source.is_none_or(|ty| matches!(ty, PhpType::Str)),
             _ => false,
@@ -2364,6 +2384,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::CurlEasySetoptLong
                 | RuntimeFnId::CurlEasySetoptSlist
                 | RuntimeFnId::CurlEasySetoptStr
+                | RuntimeFnId::CurlEasySetoptNull
                 // Installing a callback answers a bare 0/1 acceptance flag; the pointers
                 // it forwards are borrowed by the bridge, never storage it hands back.
                 | RuntimeFnId::CurlEasySetCallback
@@ -2510,6 +2531,9 @@ impl RuntimeFnId {
                 | RuntimeFnId::CurlEasyGetinfoDouble
                 | RuntimeFnId::CurlEasyGetinfoLong
                 | RuntimeFnId::CurlEasyInit
+                // `__rt_curl_easy_from_id` boxes the pushed handle's id into a NEW Mixed
+                // cell; the cell owns that handle, so it can never alias an argument.
+                | RuntimeFnId::CurlEasyFromId
                 // Its bytes are copied out of the bridge's borrowed scratch buffer and
                 // boxed by `__rt_mixed_from_value`, which persists the string, so the
                 // cell handed back owns storage no argument shares.
@@ -3091,6 +3115,7 @@ impl RuntimeFnId {
             RuntimeFnId::CurlEasyStrOp => "__elephc_curl_easy_str_op",
             RuntimeFnId::CurlEasyCopy => "__elephc_curl_easy_copy",
             RuntimeFnId::CurlEasyInit => "__elephc_curl_easy_init",
+            RuntimeFnId::CurlEasyFromId => "__elephc_curl_easy_from_id",
             RuntimeFnId::CurlEasyPause => "__elephc_curl_easy_pause",
             RuntimeFnId::CurlEasyReset => "__elephc_curl_easy_reset",
             RuntimeFnId::CurlEasyUpkeep => "__elephc_curl_easy_upkeep",
@@ -3099,6 +3124,7 @@ impl RuntimeFnId {
             RuntimeFnId::CurlEasySetoptLong => "__elephc_curl_easy_setopt_long",
             RuntimeFnId::CurlEasySetoptSlist => "__elephc_curl_easy_setopt_slist",
             RuntimeFnId::CurlEasySetoptStr => "__elephc_curl_easy_setopt_str",
+            RuntimeFnId::CurlEasySetoptNull => "__elephc_curl_easy_setopt_null",
             RuntimeFnId::CurlEasySetCallback => "__elephc_curl_easy_set_callback",
             RuntimeFnId::CurlAdapterAddr => "__elephc_curl_adapter_addr",
             RuntimeFnId::CurlOptionKind => "__elephc_curl_option_kind",
@@ -3293,6 +3319,8 @@ impl RuntimeFnId {
             RuntimeFnId::Getdate => "getdate",
             RuntimeFnId::Getenv => "getenv",
             RuntimeFnId::Getmypid => "getmypid",
+            RuntimeFnId::MemoryGetUsage => "memory_get_usage",
+            RuntimeFnId::MemoryGetPeakUsage => "memory_get_peak_usage",
             RuntimeFnId::Gmdate => "gmdate",
             RuntimeFnId::Gmmktime => "gmmktime",
             RuntimeFnId::Header => "header",

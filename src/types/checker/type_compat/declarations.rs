@@ -562,7 +562,15 @@ impl Checker {
             } else if decl.ref_params.get(idx).copied().unwrap_or(false) {
                 param_types.push((param_name.clone(), PhpType::Mixed));
             } else if let Some(default_expr) = decl.defaults.get(idx).and_then(|d| d.as_ref()) {
-                param_types.push((param_name.clone(), self.declaration_default_type(default_expr)));
+                // A `null` default keeps an untyped parameter `mixed`, not `null`-only: PHP
+                // still accepts any value, so narrowing to `Void` would reject valid bodies.
+                let inferred = self.declaration_default_type(default_expr);
+                let inferred = if matches!(inferred, PhpType::Void | PhpType::Never) {
+                    PhpType::Mixed
+                } else {
+                    inferred
+                };
+                param_types.push((param_name.clone(), inferred));
             } else {
                 param_types.push((param_name.clone(), PhpType::Int));
             }

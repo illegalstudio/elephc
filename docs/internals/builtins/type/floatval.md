@@ -2,7 +2,7 @@
 title: "floatval() - internals"
 description: "Compiler internals for floatval(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 957
+  order: 959
 ---
 
 ## `floatval()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/floatval.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/floatval.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:705](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L705) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

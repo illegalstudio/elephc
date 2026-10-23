@@ -2,7 +2,7 @@
 title: "session_commit() - internals"
 description: "Compiler internals for session_commit(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 989
+  order: 991
 ---
 
 ## `session_commit()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:3729](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3729) (`session_commit`)
+- **Lowering**: [`src/web_prelude/build.rs`:3730](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3730) (`session_commit`)
 - **Function symbol**: `session_commit()`
 
 

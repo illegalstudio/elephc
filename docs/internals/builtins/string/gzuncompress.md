@@ -2,7 +2,7 @@
 title: "gzuncompress() - internals"
 description: "Compiler internals for gzuncompress(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 803
+  order: 805
 ---
 
 ## `gzuncompress()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/gzuncompress.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/gzuncompress.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:705](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L705) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

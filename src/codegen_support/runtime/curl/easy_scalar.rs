@@ -63,6 +63,13 @@ pub(crate) fn emit_curl_easy_scalar_helpers(emitter: &mut Emitter) {
     );
     emit_forwarder(
         emitter,
+        "__rt_curl_easy_setopt_null",
+        "_elephc_curl_easy_setopt_null_fn",
+        "curl_easy_setopt_null (clear a nullable string-valued libcurl option)",
+        IntResult::Boolean,
+    );
+    emit_forwarder(
+        emitter,
         "__rt_curl_easy_setopt_slist",
         "_elephc_curl_easy_setopt_slist_fn",
         "curl_easy_setopt_slist (apply a string-list libcurl option)",

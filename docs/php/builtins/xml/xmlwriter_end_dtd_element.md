@@ -2,7 +2,7 @@
 title: "xmlwriter_end_dtd_element()"
 description: "Ends the current DTD element declaration."
 sidebar:
-  order: 1039
+  order: 1041
 ---
 
 ## xmlwriter_end_dtd_element()
@@ -20,7 +20,7 @@ Ends the current DTD element declaration.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
+- **Compiled (AOT)**: supported through the compiler-injected xml prelude.
 - **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_end_dtd_element.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_end_dtd_element.rs)).
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._

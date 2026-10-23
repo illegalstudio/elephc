@@ -308,7 +308,7 @@ fn warned_float_miss_keeps_its_zero_value_shape() {
 function raw(string $k) { $m = ["a" => 1.5]; return $m[$k]; }
 var_dump(raw("zz"));
 "#,
-        "float(0)\nWarning: Undefined array key \"zz\"\n",
+        "Warning: Undefined array key \"zz\"\nfloat(0)\n",
     );
 }
 

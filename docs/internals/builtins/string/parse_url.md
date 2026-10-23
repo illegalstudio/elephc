@@ -2,7 +2,7 @@
 title: "parse_url() - internals"
 description: "Compiler internals for parse_url(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 906
+  order: 908
 ---
 
 ## `parse_url()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/parse_url.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/parse_url.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:705](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L705) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

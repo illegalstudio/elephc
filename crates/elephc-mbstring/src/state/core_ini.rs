@@ -45,6 +45,9 @@ impl CoreIni {
             let accepted = match key {
                 Key::Separators => !value.is_empty(),
                 Key::DisplayErrors => { state.display_errors = numeric::display_errors(value); true },
+                // `open_basedir`: any string is a legal value (php validates the paths only
+                // against real file access); empty means "no restriction" and stays valid.
+                Key::OpenBaseDir => true,
                 Key::MaxNesting | Key::MaxVariables => {
                     let (parsed, warning) = numeric::quantity(value);
                     if let Some(warning) = warning {
@@ -73,7 +76,11 @@ impl CoreIni {
     pub fn set(&mut self, name: &[u8], value: IniString) -> Option<IniString> {
         let key = lookup(name)?;
         if DIRECTIVES[key as usize].access & 1 == 0 { return None; }
-        self.display_errors = numeric::display_errors(&value);
+        // Only display_errors derives a parsed mode; every other Core directive stores its
+        // raw string as given.
+        if key == Key::DisplayErrors {
+            self.display_errors = numeric::display_errors(&value);
+        }
         Some(std::mem::replace(&mut self.local[key as usize], value).scalar_result())
     }
 

@@ -2,7 +2,7 @@
 title: "iterator_to_array() - internals"
 description: "Compiler internals for iterator_to_array(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 773
+  order: 775
 ---
 
 ## `iterator_to_array()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/spl/iterator_to_array.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/spl/iterator_to_array.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:705](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L705) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

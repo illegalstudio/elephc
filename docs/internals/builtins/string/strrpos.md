@@ -2,7 +2,7 @@
 title: "strrpos() - internals"
 description: "Compiler internals for strrpos(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 936
+  order: 938
 ---
 
 ## `strrpos()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/strrpos.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/strrpos.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:705](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L705) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

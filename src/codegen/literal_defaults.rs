@@ -158,6 +158,7 @@ pub(crate) struct LiteralAssocEntry {
 }
 
 /// Converts a supported default expression into a direct storage value.
+
 pub(crate) fn literal_default_value(
     context: &str,
     php_type: &PhpType,

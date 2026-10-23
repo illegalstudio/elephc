@@ -223,6 +223,7 @@ pub(in crate::interpreter) fn eval_curl_callback_slot(option: i64) -> Option<(us
         20_056 => Some((ffi::SLOT_PROGRESS as usize, "CURLOPT_PROGRESSFUNCTION")),
         20_094 => Some((ffi::SLOT_DEBUG as usize, "CURLOPT_DEBUGFUNCTION")),
         20_219 => Some((ffi::SLOT_XFERINFO as usize, "CURLOPT_XFERINFOFUNCTION")),
+        20_312 => Some((ffi::SLOT_PREREQ as usize, "CURLOPT_PREREQFUNCTION")),
         _ => None,
     }
 }
@@ -585,6 +586,7 @@ unsafe fn eval_curl_invoke_typed<V: RuntimeValueOps>(
             .as_ref()
             .expect("callable presence checked immediately above"),
         table_id,
+        slot,
         spec,
         context,
         values,
@@ -609,6 +611,7 @@ unsafe fn eval_curl_invoke_typed<V: RuntimeValueOps>(
 fn eval_curl_run_callback<V: RuntimeValueOps>(
     callable: &EvaluatedCallable,
     table_id: i64,
+    slot: usize,
     spec: &mut ffi::CallSpec,
     context: &mut ElephcEvalContext,
     values: &mut V,
@@ -656,11 +659,25 @@ fn eval_curl_run_callback<V: RuntimeValueOps>(
         outcome, args, context, values,
     )?;
     let converted = (|| {
+        // RESULT_STRING_OR_INT (2): the read trampoline's combined shape. An INT return is
+        // libcurl's own read answer (a byte count, CURL_READFUNC_PAUSE, or CURL_READFUNC_ABORT),
+        // published as the adapter result with `out_len = -1`; a STRING return uploads its bytes.
+        if spec.result_kind == ffi::RESULT_STRING_OR_INT
+            && values.type_tag(result)? != EVAL_TAG_STRING
+        {
+            let integer = eval_int_value(result, values)?;
+            spec.out_len = -1;
+            return Ok(integer);
+        }
         debug_assert!(
-            spec.result_kind == ffi::RESULT_INT || spec.result_kind == ffi::RESULT_STRING,
-            "the bridge only ever asks for an int or a string result"
+            spec.result_kind == ffi::RESULT_INT
+                || spec.result_kind == ffi::RESULT_STRING
+                || spec.result_kind == ffi::RESULT_STRING_OR_INT,
+            "the bridge only ever asks for an int, a string, or a read result"
         );
-        if spec.result_kind == ffi::RESULT_STRING {
+        if spec.result_kind == ffi::RESULT_STRING
+            || spec.result_kind == ffi::RESULT_STRING_OR_INT
+        {
             // php-src reads the read callback's answer as a STRING and treats anything else as
             // end-of-data — `Z_TYPE(retval) == IS_STRING` in `curl_read`, not a cast — and
             // truncates a longer string with `MIN(size * nmemb, len)` rather than failing
@@ -681,6 +698,29 @@ fn eval_curl_run_callback<V: RuntimeValueOps>(
             }
             spec.out_len = written as i64;
             return Ok(0);
+        }
+        // php-src's prereq trampoline validates the PHP return BEFORE libcurl sees it: a
+        // non-int return (including null from a callback that returns nothing) is a TypeError,
+        // an int outside {CURL_PREREQFUNC_OK, CURL_PREREQFUNC_ABORT} is a ValueError, and both
+        // carry the same message. This mirrors the AOT prelude's wrapper closure for the same
+        // slot; the caller's parked-throw plumbing aborts the transfer with
+        // CURLE_ABORTED_BY_CALLBACK and re-raises after the exec returns.
+        if slot == ffi::SLOT_PREREQ as usize {
+            if values.type_tag(result)? != EVAL_TAG_INT {
+                return eval_throw_type_error(
+                    "The CURLOPT_PREREQFUNCTION callback must return either CURL_PREREQFUNC_OK or CURL_PREREQFUNC_ABORT",
+                    context,
+                    values,
+                );
+            }
+            let answer = eval_int_value(result, values)?;
+            if answer != 0 && answer != 1 {
+                return eval_throw_builtin_value_error(
+                    "The CURLOPT_PREREQFUNCTION callback must return either CURL_PREREQFUNC_OK or CURL_PREREQFUNC_ABORT",
+                    context,
+                    values,
+                );
+            }
         }
         eval_int_value(result, values)
     })();

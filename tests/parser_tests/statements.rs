@@ -191,3 +191,47 @@ fn test_this_property_element_increment_retains_php_incdec() {
     assert!(matches!(&array.kind, ExprKind::PropertyAccess { object, property }
         if matches!(object.kind, ExprKind::This) && property == "arr"));
 }
+
+/// Verifies a `?>` close tag with inline HTML parses as an `Echo` statement of the raw
+/// text, and the `<?php` re-entry after it continues the statement stream — so
+/// `<?php echo 1 ?>x<?php echo 2;` renders `1`, the HTML, then `2`, exactly like PHP.
+#[test]
+fn test_close_tag_inline_html_is_an_echo_statement() {
+    // Spans differ between the two spellings, so compare the echoed literals only.
+    let echoed = |program: Vec<Stmt>| {
+        program
+            .into_iter()
+            .filter_map(|stmt| match stmt.kind {
+                StmtKind::Echo(expr) => Some(expr.kind),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        echoed(parse_source("<?php echo 1 ?>x<?php echo 2;")),
+        echoed(parse_source("<?php echo 1; echo 'x'; echo 2;"))
+    );
+}
+
+/// Verifies the implied statement terminator before a close tag: `echo 2?>` needs no
+/// semicolon, exactly like PHP, while a missing semicolon at end of input (no close
+/// tag) stays a parse error.
+#[test]
+fn test_close_tag_is_an_implied_statement_terminator() {
+    let echoed = parse_source("<?php echo 2?>y<?php echo 3;")
+        .into_iter()
+        .filter_map(|stmt| match stmt.kind {
+            StmtKind::Echo(expr) => Some(expr.kind),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        echoed,
+        vec![
+            ExprKind::IntLiteral(2),
+            ExprKind::StringLiteral("y".to_string()),
+            ExprKind::IntLiteral(3),
+        ]
+    );
+    assert!(parse_fails("<?php echo 2"));
+}

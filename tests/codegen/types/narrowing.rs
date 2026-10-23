@@ -724,3 +724,28 @@ echo S::get()->v;
     );
     assert_eq!(out, "7");
 }
+
+/// A scalar-only union may be reassigned to another scalar-only union inside a loop. Both are
+/// stored as the same boxed cell, so the reassignment does not change the representation; before
+/// this the merge refused every union-to-union store and a loop body (whose binding is not
+/// kill-eligible) reported a hard `cannot reassign`.
+#[test]
+fn test_scalar_union_reassignment_inside_loop() {
+    let out = compile_and_run(
+        r#"<?php
+function first(): string|bool { return "a"; }
+function second(): ?string { return null; }
+$r = first();
+foreach ([1, 2] as $ignored) {
+    $r = second();
+}
+var_dump($r);
+$r = first();
+for ($i = 0; $i < 2; $i++) {
+    $r = second();
+}
+echo $r === null ? "null" : "not-null";
+"#,
+    );
+    assert_eq!(out, "NULL\nnull");
+}

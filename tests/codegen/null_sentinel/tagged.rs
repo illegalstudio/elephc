@@ -71,11 +71,13 @@ fn test_tagged_int_at_sentinel_isset_is_true() {
     assert_eq!(out, "set");
 }
 
-/// An out-of-bounds int-array read var_dumps as NULL, not as the sentinel integer.
+/// An out-of-bounds int-array read var_dumps as NULL, not as the sentinel integer. PHP also
+/// warns about the missing key; the runtime warning carries no ` in <file> on line <n>`
+/// suffix (a documented diagnostics divergence), so only the message line is expected.
 #[test]
 fn test_tagged_array_miss_var_dumps_null() {
     let out = compile_and_run_tagged("<?php $a = [1, 2]; var_dump($a[5]);");
-    assert_eq!(out, "NULL\n");
+    assert_eq!(out, "Warning: Undefined array key 5\nNULL\n");
 }
 
 /// ?? falls back to the default for an out-of-bounds int-array read.
@@ -89,7 +91,7 @@ fn test_tagged_array_miss_null_coalesce_falls_back() {
 #[test]
 fn test_tagged_array_miss_dynamic_index_is_null() {
     let out = compile_and_run_tagged("<?php $a = [1, 2]; $i = 9; var_dump($a[$i]);");
-    assert_eq!(out, "NULL\n");
+    assert_eq!(out, "Warning: Undefined array key 9\nNULL\n");
 }
 
 /// An associative-array miss on an int-valued map yields null for var_dump and ??.
@@ -100,7 +102,7 @@ fn test_tagged_assoc_miss_is_null() {
     );
     assert_eq!(
         out,
-        "NULL\n9"
+        "Warning: Undefined array key \"zz\"\nNULL\n9"
     );
 }
 
@@ -112,7 +114,7 @@ fn test_tagged_array_miss_strict_equals_null() {
     );
     assert_eq!(
         out,
-        "bool(true)\nbool(false)\nbool(false)\n"
+        "Warning: Undefined array key 5\nbool(true)\nbool(false)\nWarning: Undefined array key 5\nbool(false)\n"
     );
 }
 
@@ -124,7 +126,7 @@ fn test_tagged_array_miss_arithmetic_coerces_to_zero() {
     );
     assert_eq!(
         out,
-        "1|1|0"
+        "Warning: Undefined array key 5\n1|Warning: Undefined array key 5\n1|Warning: Undefined array key 5\n0"
     );
 }
 
@@ -136,7 +138,7 @@ fn test_tagged_array_miss_string_contexts_are_empty() {
     );
     assert_eq!(
         out,
-        "end|xy"
+        "Warning: Undefined array key 5\nend|Warning: Undefined array key 5\nxy"
     );
 }
 
@@ -146,7 +148,7 @@ fn test_tagged_array_miss_truthiness() {
     let out = compile_and_run_tagged(
         "<?php $a = [10]; echo $a[5] ? \"t\" : \"f\"; echo $a[0] ? \"T\" : \"F\";",
     );
-    assert_eq!(out, "fT");
+    assert_eq!(out, "Warning: Undefined array key 5\nfT");
 }
 
 /// ??= stores the fallback when the current value is a null array read.
@@ -171,7 +173,7 @@ fn test_tagged_gettype_dispatches_on_runtime_tag() {
     let out = compile_and_run_tagged(
         "<?php $a = [10]; echo gettype($a[0]), \"|\", gettype($a[5]);",
     );
-    assert_eq!(out, "integer|NULL");
+    assert_eq!(out, "integer|Warning: Undefined array key 5\nNULL");
 }
 
 /// empty() treats a null miss and a zero hit as empty, and a non-zero hit as non-empty.
@@ -221,7 +223,10 @@ fn test_tagged_unary_minus_and_abs_narrow_null() {
     let out = compile_and_run_tagged(
         "<?php $a = [3]; echo -$a[9], \"|\", abs($a[9]), \"|\", -$a[0], \"|\", abs(-$a[0]);",
     );
-    assert_eq!(out, "0|0|-3|3");
+    assert_eq!(
+        out,
+        "Warning: Undefined array key 9\n0|Warning: Undefined array key 9\n0|-3|3"
+    );
 }
 
 

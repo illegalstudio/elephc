@@ -1153,15 +1153,16 @@ array_walk($w, function ($v) { echo strlen($v); });
 }
 
 /// Verifies contextual callback typing does not silence real errors: an integer element type
-/// still rejects a string-only builtin applied to the inherited parameter.
+/// still rejects an array-only builtin applied to the inherited parameter. `strlen` is not used
+/// here because PHP coerces an int argument to string, so `strlen($intElement)` is valid.
 #[test]
 fn test_array_callback_contextual_typing_still_rejects_wrong_element_use() {
     expect_error(
         r#"<?php
 $w = [3, 1, 2];
-usort($w, fn($a, $b) => strlen($a) <=> strlen($b));
+usort($w, fn($a, $b) => array_sum($a) <=> array_sum($b));
 "#,
-        "strlen() argument must be string",
+        "array_sum() argument must be array",
     );
 }
 

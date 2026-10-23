@@ -43,8 +43,14 @@ echo "ready";
 "#);
     assert!(output.success, "{}", output.stderr);
     assert_eq!(output.stdout, "ready");
+    // The first warning's display copy starts output, exactly like php, so the later
+    // header() calls report the already-sent outcome instead of re-validating their value.
     assert!(output.stderr.contains("Warning: header(): Header may not contain NUL bytes"), "{}", output.stderr);
-    assert!(output.stderr.contains("Warning: header(): Header may not contain more than a single header, new line detected"), "{}", output.stderr);
-    assert!(!output.stderr.contains("headers already sent"), "{}", output.stderr);
+    assert_eq!(
+        output.stderr.matches("Warning: header(): Cannot modify header information - headers already sent").count(),
+        2,
+        "{}",
+        output.stderr
+    );
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }

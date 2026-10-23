@@ -2,7 +2,7 @@
 title: "mb_ord() - internals"
 description: "Compiler internals for mb_ord(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 867
+  order: 869
 ---
 
 ## `mb_ord()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_ord.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_ord.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:705](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L705) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

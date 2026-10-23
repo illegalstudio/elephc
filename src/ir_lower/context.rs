@@ -280,6 +280,11 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub local_types: TypeEnv,
     /// Nested expression depth separates a reference-assignment call from its argument calls.
     pub(crate) expression_depth: usize,
+    /// Set while the read half of a recognized nested append is lowered. PHP auto-vivifies
+    /// `$a[$k][] = $v` silently — the read of `$a[$k]` is not an observable access — so the
+    /// missing-key warning must not fire there. A boxed (`Mixed`) container takes the
+    /// ordinary read path instead of the `isset`-guarded one, so this is what keeps it quiet.
+    pub(crate) nested_append_read_suppressed: bool,
     /// Staging published by the enclosing reference assignment, if one is being lowered.
     ///
     /// `finish_reference_return_call` adopts the transferred lease into that staging immediately
@@ -598,6 +603,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             closure_counter: 0,
             hidden_temp_counter: 0,
             expression_depth: 0,
+            nested_append_read_suppressed: false,
             reference_call_context: None,
             call_argument_evaluation_scopes: Vec::new(),
             borrowed_string_call_operands: HashSet::new(),
@@ -3546,6 +3552,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::ClosureBind
                     | Op::FirstClassCallableNew
                     | Op::CallableArrayNew
+                    // Normalizing a callable builds a FRESH owned descriptor: the caller owns
+                    // it outright, so storing it into a local must MOVE it rather than acquire
+                    // a second reference (which nothing would release — the refcount climbed
+                    // by one per assignment and leaked the descriptor, bug #45161).
+                    | Op::NormalizeCallable
                     | Op::BufferNew
                     | Op::GeneratorNew
                     | Op::CatchBind

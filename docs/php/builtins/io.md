@@ -92,7 +92,7 @@ sidebar:
 | [`stream_socket_pair()`](./io/stream_socket_pair.md) | `(int $domain, int $type, int $protocol): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_socket_recvfrom()`](./io/stream_socket_recvfrom.md) | `(resource $socket, int $length, int $flags = 0, string $address = ''): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_socket_sendto()`](./io/stream_socket_sendto.md) | `(resource $socket, string $data, int $flags = 0, string $address = ''): mixed` | `mixed` | ✓ | ✓ |
-| [`stream_socket_server()`](./io/stream_socket_server.md) | `(string $address): mixed` | `mixed` | ✓ | ✓ |
+| [`stream_socket_server()`](./io/stream_socket_server.md) | `(string $address, mixed $error_code = null, mixed $error_message = null): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_socket_shutdown()`](./io/stream_socket_shutdown.md) | `(resource $stream, int $mode): bool` | `bool` | ✓ | ✓ |
 | [`stream_supports_lock()`](./io/stream_supports_lock.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`stream_wrapper_register()`](./io/stream_wrapper_register.md) | `(string $protocol, string $class, int $flags = 0): bool` | `bool` | ✓ | ✓ |

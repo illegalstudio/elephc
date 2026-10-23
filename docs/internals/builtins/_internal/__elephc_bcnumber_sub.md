@@ -2,7 +2,7 @@
 title: "__elephc_bcnumber_sub() - internals"
 description: "Compiler internals for __elephc_bcnumber_sub(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1088
+  order: 1090
 ---
 
 ## `__elephc_bcnumber_sub()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/__elephc_bcnumber_sub.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/__elephc_bcnumber_sub.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:705](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L705) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

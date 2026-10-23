@@ -150,9 +150,28 @@ macro_rules! impl_lifecycle_scalar_ops {
 
     /// Emits one PHP warning through the generated runtime diagnostic helper.
     fn warning(&mut self, message: &str) -> Result<(), EvalStatus> {
-        // Magician submits complete diagnostics, unlike native fragment producers.
+        // Magician submits complete diagnostics, unlike native fragment producers. php's
+        // display copy carries the level prefix, and the native producers add it themselves;
+        // submitting a message without one gets it here so every eval warning renders exactly
+        // like its native counterpart.
+        let message = if [
+            "Warning: ",
+            "Notice: ",
+            "Deprecated: ",
+            "Strict Standards: ",
+            "Fatal error: ",
+        ]
+        .iter()
+        .any(|prefix| message.starts_with(prefix))
+        {
+            message.to_string()
+        } else {
+            format!("Warning: {message}")
+        };
         let terminated;
-        let message = if message.ends_with('\n') { message } else {
+        let message = if message.ends_with('\n') {
+            message.as_str()
+        } else {
             terminated = format!("{message}\n");
             &terminated
         };
@@ -161,6 +180,7 @@ macro_rules! impl_lifecycle_scalar_ops {
         }
         Ok(())
     }
+
 
     /// Emits one unsuppressible PHP fatal through the generated runtime and terminates.
     fn fatal(&mut self, message: &str) -> Result<(), EvalStatus> {

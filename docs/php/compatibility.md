@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3180 constants).
 
-Overall coverage: functions **983 / 2169** (45%), classes **171 / 329** (52%), constants **1173 / 3180** (37%).
+Overall coverage: functions **985 / 2169** (45%), classes **171 / 329** (52%), constants **1179 / 3180** (37%).
 
 ## Coverage by PHP module
 
@@ -31,7 +31,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | [`exif`](./image.md#functions) | 4 / 4 · 100% | - | 1 / 1 · 100% |
 | `ffi` | - | 0 / 5 · 0% | - |
 | `fileinfo` | 0 / 6 · 0% | 0 / 1 · 0% | 0 / 11 · 0% |
-| `filter` | 0 / 7 · 0% | 0 / 2 · 0% | 0 / 56 · 0% |
+| `filter` | 0 / 7 · 0% | 0 / 2 · 0% | 6 / 56 · 11% |
 | `ftp` | 0 / 36 · 0% | 0 / 1 · 0% | 0 / 11 · 0% |
 | [`gd`](./image.md#functions) | 83 / 106 · 78% | 1 / 2 · 50% | 67 / 89 · 75% |
 | `gettext` | 0 / 10 · 0% | - | - |
@@ -70,7 +70,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `sodium` | 0 / 104 · 0% | 0 / 1 · 0% | 0 / 94 · 0% |
 | [`spl`](./spl.md#functions) | 15 / 15 · 100% | 54 / 55 · 98% | - |
 | `sqlite3` | - | 0 / 4 · 0% | 0 / 12 · 0% |
-| `standard` | 385 / 545 · 71% | 3 / 6 · 50% | 163 / 400 · 41% |
+| `standard` | 387 / 545 · 71% | 3 / 6 · 50% | 163 / 400 · 41% |
 | `sysvmsg` | 0 / 7 · 0% | 0 / 1 · 0% | 0 / 5 · 0% |
 | `sysvsem` | 0 / 4 · 0% | 0 / 1 · 0% | - |
 | `sysvshm` | 0 / 7 · 0% | 0 / 1 · 0% | - |
@@ -96,7 +96,7 @@ The counts above are what a compiled program has. Exported backend support diffe
 - `mysqli` constants: 52 / 0
 - `pdo` functions: 1 / 0
 - `session` functions: 23 / 0
-- `standard` functions: 385 / 345
+- `standard` functions: 387 / 347
 - `standard` constants: 163 / 142
 
 Of those functions, 195 from `exif`, `gd`, `mysqli`, `pdo`, `session` are implemented by PHP preludes and have no shared `eval_builtin!` binding. This count is separate from OPcache's dedicated interpreter handlers and native prelude dispatch, which are counted as supported inside `eval()`. See **eval() coverage of the prelude-implemented modules** under [Known limitations](#known-limitations) for what is tracked.

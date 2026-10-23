@@ -2,7 +2,7 @@
 title: "session_create_id() - internals"
 description: "Compiler internals for session_create_id(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 990
+  order: 992
 ---
 
 ## `session_create_id()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:3340](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3340) (`session_create_id`)
+- **Lowering**: [`src/web_prelude/build.rs`:3341](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3341) (`session_create_id`)
 - **Function symbol**: `session_create_id()`
 
 

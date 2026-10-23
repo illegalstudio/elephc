@@ -9,6 +9,7 @@
 //! - Public module boundaries here are part of the crate-facing compiler API.
 
 pub mod autoload;
+pub mod auto_vivify;
 /// Local Cargo source inputs shared by bridge discovery and integration-test builders.
 #[doc(hidden)]
 pub mod bridge_sources;
@@ -120,6 +121,8 @@ pub mod types;
 /// Conditionally-injected timezone-introspection prelude (extern + marshalling).
 pub mod tz_prelude;
 pub mod xml_prelude;
+/// Conditionally-injected `filter_var`/`FILTER_VALIDATE_IP` prelude (elephc-PHP).
+pub mod filter_prelude;
 /// Conditionally-injected `var_export` prelude (elephc-PHP rendering function).
 pub mod var_export_prelude;
 /// Conditionally-injected PHP version-surface prelude (`zend_version`, `php_sapi_name`,

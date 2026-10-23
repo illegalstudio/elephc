@@ -2,7 +2,7 @@
 title: "curl_multi_init() - internals"
 description: "Compiler internals for curl_multi_init(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 711
+  order: 713
 ---
 
 ## `curl_multi_init()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_curl.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_curl.rs)
-- **Lowering**: [`src/curl_prelude.rs`:1518](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude.rs#L1518) (`curl_multi_init`)
+- **Lowering**: [`src/curl_prelude/oracle.rs`:1997](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude/oracle.rs#L1997) (`curl_multi_init`)
 - **Function symbol**: `curl_multi_init()`
 
 

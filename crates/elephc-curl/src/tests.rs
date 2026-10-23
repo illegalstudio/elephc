@@ -143,6 +143,7 @@ mod option_table {
             "CURLOPT_PROGRESSFUNCTION",
             "CURLOPT_XFERINFOFUNCTION",
             "CURLOPT_DEBUGFUNCTION",
+            "CURLOPT_PREREQFUNCTION",
         ];
 
         let surface = frozen_surface();
@@ -246,7 +247,6 @@ mod option_table {
             "CURLOPT_SSLKEY_BLOB",
             // Callbacks outside the six this build invokes.
             "CURLOPT_FNMATCH_FUNCTION",
-            "CURLOPT_PREREQFUNCTION",
             "CURLOPT_SSH_HOSTKEYFUNCTION",
             // NOTE: the five PHP-STREAM options (`CURLOPT_FILE`, `CURLOPT_INFILE`/
             // `CURLOPT_READDATA`, `CURLOPT_WRITEHEADER`, `CURLOPT_STDERR`) used to be
@@ -276,10 +276,10 @@ mod option_table {
              docs/php/curl.md to match before changing this test"
         );
 
-        // The headline the doc quotes: 271 PHP `CURLOPT_*` names, 11 rejected.
+        // The headline the doc quotes: 271 PHP `CURLOPT_*` names, 10 rejected.
         let total = constants.keys().filter(|n| n.starts_with("CURLOPT_")).count();
         assert_eq!(total, 271, "the frozen CURLOPT_* name count changed");
-        assert_eq!(rejected.len(), 11, "the rejected CURLOPT_* name count changed");
+        assert_eq!(rejected.len(), 10, "the rejected CURLOPT_* name count changed");
     }
 }
 
@@ -779,7 +779,7 @@ mod native {
     /// correct when `cargo test` runs other tests concurrently against the
     /// same process-wide table.
     fn handle_exists(id: i64) -> bool {
-        handles::lock_recover(handles::handles()).contains_key(&id)
+        crate::handles::lock_recover(crate::handles::handles()).contains_key(&id)
     }
 
     /// Exercises automatic trace injection, removal, and user precedence through the
@@ -805,7 +805,7 @@ mod native {
         monitoring::set_test_active(true);
         assert_eq!(elephc_curl_easy_perform(id), 1);
         {
-            let guard = handles::lock_recover(handles::handles());
+            let guard = crate::handles::lock_recover(crate::handles::handles());
             let entry = guard.get(&id).expect("live handle");
             assert_eq!(entry.applied_traceparent.as_deref(), Some(TRACE));
             let list = *entry
@@ -821,7 +821,7 @@ mod native {
         monitoring::set_test_active(false);
         assert_eq!(elephc_curl_easy_perform(id), 1);
         {
-            let guard = handles::lock_recover(handles::handles());
+            let guard = crate::handles::lock_recover(crate::handles::handles());
             let entry = guard.get(&id).expect("live handle");
             assert_eq!(entry.applied_traceparent, None);
             let list = *entry
@@ -846,7 +846,7 @@ mod native {
         monitoring::set_test_active(true);
         assert_eq!(elephc_curl_easy_perform(id), 1);
         {
-            let guard = handles::lock_recover(handles::handles());
+            let guard = crate::handles::lock_recover(crate::handles::handles());
             let entry = guard.get(&id).expect("live handle");
             assert_eq!(entry.applied_traceparent, None);
             let list = *entry
@@ -1497,14 +1497,14 @@ mod native_mime {
 
     /// Whether `id`'s entry currently has an ATTACHED mime (survived a successful `post`).
     fn has_attached_mime(id: i64) -> bool {
-        handles::lock_recover(handles::handles())
+        crate::handles::lock_recover(crate::handles::handles())
             .get(&id)
             .is_some_and(|entry| entry.mime.is_some())
     }
 
     /// Whether `id`'s entry currently has a PENDING (not yet posted) mime builder.
     fn has_pending_mime(id: i64) -> bool {
-        handles::lock_recover(handles::handles())
+        crate::handles::lock_recover(crate::handles::handles())
             .get(&id)
             .is_some_and(|entry| entry.pending_mime.is_some())
     }
@@ -1539,7 +1539,38 @@ mod native_mime {
         elephc_curl_easy_free(id);
     }
 
-    /// A SECOND successful build replaces the first ATTACHED mime rather than leaking it or
+    /// A non-[`FIELD_DATA`] field carrying an embedded NUL is TRUNCATED at that NUL rather
+    /// than rejected: libcurl's C-string setters stop at the first NUL, and php-src hands the
+    /// same C string straight through, so
+    /// `curl_setopt($ch, CURLOPT_POSTFIELDS, ["file" => new CURLStringFile("x",
+    /// "foo.txt\0broken", "text/plain\0broken")])` returns true and posts `foo.txt` /
+    /// `text/plain`. The binary-safe [`FIELD_DATA`] path is covered by `happy_path...`.
+    #[test]
+    fn c_string_field_truncates_at_embedded_nul() {
+        let id = elephc_curl_easy_init();
+        assert_ne!(id, 0);
+
+        assert_eq!(elephc_curl_mime_new(id), 1);
+        assert_eq!(elephc_curl_mime_add_part(id), 1);
+
+        let filename = b"foo.txt\0broken";
+        assert_eq!(
+            unsafe {
+                elephc_curl_mime_part_field(id, FIELD_FILENAME, filename.as_ptr(), filename.len())
+            },
+            1
+        );
+        let mime = b"text/plain\0broken";
+        assert_eq!(
+            unsafe { elephc_curl_mime_part_field(id, FIELD_TYPE, mime.as_ptr(), mime.len()) },
+            1
+        );
+
+        assert_eq!(elephc_curl_mime_post(id), 1);
+        assert!(has_attached_mime(id));
+
+        elephc_curl_easy_free(id);
+    }
     /// leaving two live structures — the same "free the old one only after the new one is
     /// live" contract `elephc_curl_easy_setopt_slist` has for `CURLOPT_HTTPHEADER`. This is
     /// the shape `curl_setopt($ch, CURLOPT_POSTFIELDS, $array)` takes every time it runs
@@ -2393,4 +2424,46 @@ mod native_share {
         elephc_curl_easy_free(attached);
         assert_eq!(share_cleanup_result(share), Some(CURLSHE_OK));
     }
+}
+
+/// Verifies a pushed handle is libcurl-owned only until the push callback answers.
+///
+/// `CURLMOPT_PUSHFUNCTION`'s contract makes this a correctness boundary, not a detail:
+/// `CURL_PUSH_DENY` has libcurl DESTROY the offered handle (so the bridge entry must go,
+/// or a later `curl_setopt()` on the minted `CurlHandle` would reach freed memory), while
+/// `CURL_PUSH_OK` hands ownership to the application (so `elephc_curl_easy_free` must run
+/// `curl_easy_cleanup` instead of skipping it, which used to leak every accepted push).
+#[test]
+fn pushed_entries_are_libcurl_owned_until_the_callback_accepts_them() {
+    let id = crate::handles::next_id();
+    let mut entry = crate::handles::EasyEntry::new(std::ptr::null_mut(), id);
+    entry.pushed = true;
+    crate::handles::lock_recover(crate::handles::handles()).insert(id, entry);
+
+    // Registered during the callback: libcurl still owns the handle, so teardown must not
+    // clean it up.
+    assert!(
+        crate::handles::lock_recover(crate::handles::handles())
+            .get(&id)
+            .expect("the registered entry must exist")
+            .pushed,
+        "a freshly registered pushed entry must be libcurl-owned"
+    );
+
+    // CURL_PUSH_OK: ownership moves to the application.
+    crate::handles::accept_pushed(id);
+    assert!(
+        !crate::handles::lock_recover(crate::handles::handles())
+            .get(&id)
+            .expect("an accepted entry stays in the table")
+            .pushed,
+        "an accepted pushed handle must be application-owned"
+    );
+
+    // CURL_PUSH_DENY (or a throwing callback) drops the entry instead.
+    crate::handles::unregister_pushed(id);
+    assert!(
+        crate::handles::lock_recover(crate::handles::handles()).get(&id).is_none(),
+        "a denied pushed handle must not stay addressable"
+    );
 }

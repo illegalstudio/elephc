@@ -53,6 +53,10 @@ fn emit_file_get_contents_bytes(
             emit_literal_phar_file_get_contents_bytes(ctx, path_literal, persist_literal_bytes);
             return Ok(());
         }
+        if path_literal.starts_with("data://") {
+            emit_literal_data_file_get_contents_bytes(ctx, path_literal, persist_literal_bytes);
+            return Ok(());
+        }
         if path_literal == "php://input" {
             // file_get_contents('php://input'): under --web `__rt_php_input` copies
             // the captured request body into an owned string; in a non-web build it
@@ -87,6 +91,47 @@ fn emit_file_get_contents_bytes(
         },
     );
     Ok(())
+}
+
+/// Emits a literal `file_get_contents("data://...")` payload decoded at compile time.
+///
+/// Like the `phar://` shortcut, the decoded bytes live in read-only `.data`, so a following
+/// `$offset`/`$length` window (which trims its input in place) copies them into an owned string
+/// first when `persist` is set. An unparseable URI answers a null pointer, which boxes to PHP
+/// `false`.
+fn emit_literal_data_file_get_contents_bytes(
+    ctx: &mut FunctionContext<'_>,
+    path: &str,
+    persist: bool,
+) {
+    match super::fopen_data::decode_data_uri_for_fopen(path) {
+        Some(payload) => {
+            let (symbol, len) = ctx.data.add_string(&payload);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    abi::emit_symbol_address(ctx.emitter, "x1", &symbol);
+                    ctx.emitter.instruction(&format!("mov x2, #{}", len));      // decoded data:// payload byte length
+                }
+                Arch::X86_64 => {
+                    abi::emit_symbol_address(ctx.emitter, "rax", &symbol);
+                    ctx.emitter.instruction(&format!("mov rdx, {}", len));      // decoded data:// payload byte length
+                }
+            }
+            if persist {
+                abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            }
+        }
+        None => match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x1, #0");                          // null string pointer asks the boxer for PHP false
+                ctx.emitter.instruction("mov x2, #0");                          // clear the unused failure length
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("xor eax, eax");                        // null string pointer asks the boxer for PHP false
+                ctx.emitter.instruction("xor edx, edx");                        // clear the unused failure length
+            }
+        },
+    }
 }
 
 /// Rejects a non-null `$context` argument instead of silently ignoring the stream context.

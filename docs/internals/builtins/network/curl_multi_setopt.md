@@ -2,7 +2,7 @@
 title: "curl_multi_setopt() - internals"
 description: "Compiler internals for curl_multi_setopt(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 714
+  order: 716
 ---
 
 ## `curl_multi_setopt()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_curl.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_curl.rs)
-- **Lowering**: [`src/curl_prelude.rs`:1682](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude.rs#L1682) (`curl_multi_setopt`)
+- **Lowering**: [`src/curl_prelude/oracle.rs`:2220](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude/oracle.rs#L2220) (`curl_multi_setopt`)
 - **Function symbol**: `curl_multi_setopt()`
 
 

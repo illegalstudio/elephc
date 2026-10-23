@@ -162,16 +162,19 @@ pub(super) fn recognize<'a>(
         _ => return None,
     }
 
-    // A local container must be an indexed- or associative-array local the checker knows about;
-    // anything else falls open to ordinary lowering. A property container is gated at lowering
-    // time instead, on the IR type of the loaded property.
+    // A local container must be a local the checker knows about: an indexed- or associative-
+    // array local, or a boxed `Mixed` one (a `use (&$cap)` capture is a `Heap(Mixed)` ref
+    // cell). A property container is gated at lowering time instead, on the IR type of the
+    // loaded property.
     if let BaseKind::Local(name) = base {
         let ty = ctx.local_type(name);
-        let supported = matches!(&ty, PhpType::Array(_) | PhpType::AssocArray { .. })
-            || matches!(&ty, PhpType::Object(class) if class.eq_ignore_ascii_case("WeakMap"));
-        if !ctx.has_local_slot(name)
-            || !supported
-        {
+        // A boxed `Mixed` local is in scope too: it is what a `use (&$cap)` capture or a
+        // dynamic property write materializes, and PHP auto-vivifies it silently.
+        let supported = matches!(
+            &ty,
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
+        ) || matches!(&ty, PhpType::Object(class) if class.eq_ignore_ascii_case("WeakMap"));
+        if !ctx.has_local_slot(name) || !supported {
             return None;
         }
     }
@@ -260,13 +263,16 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
     let isset_op = match container.ir_type {
         IrType::Heap(IrHeapKind::Hash) => Op::HashIsset,
         IrType::Heap(IrHeapKind::Array) => Op::ArrayIsset,
-        // Anything else (a `Mixed` property, an object) is out of scope: fall open to today's
-        // lowering, which is what the parser's desugar already produces.
+        // Anything else (a `Mixed` property, an object, a boxed by-ref capture) is out of scope
+        // for the isset-guarded body: fall open to the ordinary lowering, with the read half's
+        // missing-key warning suppressed (PHP auto-vivifies `$a[$k][] = $v` silently).
         _ => {
             if ctx.value_is_owning_temporary(container) {
                 crate::ir_lower::ownership::release_if_owned(ctx, container, Some(span));
             }
+            ctx.nested_append_read_suppressed = true;
             super::lower_stmt(ctx, group.read);
+            ctx.nested_append_read_suppressed = false;
             super::lower_stmt(ctx, group.push);
             super::lower_stmt(ctx, group.write_back);
             return;

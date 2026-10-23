@@ -403,7 +403,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`stream_socket_pair()`](./builtins/io/stream_socket_pair.md) | `(int $domain, int $type, int $protocol): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_socket_recvfrom()`](./builtins/io/stream_socket_recvfrom.md) | `(resource $socket, int $length, int $flags = 0, string $address = ''): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_socket_sendto()`](./builtins/io/stream_socket_sendto.md) | `(resource $socket, string $data, int $flags = 0, string $address = ''): mixed` | `mixed` | ✓ | ✓ |
-| [`stream_socket_server()`](./builtins/io/stream_socket_server.md) | `(string $address): mixed` | `mixed` | ✓ | ✓ |
+| [`stream_socket_server()`](./builtins/io/stream_socket_server.md) | `(string $address, mixed $error_code = null, mixed $error_message = null): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_socket_shutdown()`](./builtins/io/stream_socket_shutdown.md) | `(resource $stream, int $mode): bool` | `bool` | ✓ | ✓ |
 | [`stream_supports_lock()`](./builtins/io/stream_supports_lock.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`stream_wrapper_register()`](./builtins/io/stream_wrapper_register.md) | `(string $protocol, string $class, int $flags = 0): bool` | `bool` | ✓ | ✓ |
@@ -648,6 +648,8 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`http_response_code()`](./builtins/misc/http_response_code.md) | `(int $response_code = 0): int` | `int` | ✓ | ✓ |
 | [`ini_restore()`](./builtins/misc/ini_restore.md) | `(string $option): void` | `void` | ✓ | - |
 | [`isset()`](./builtins/misc/isset.md) | `(mixed $var, ...$vars): bool` | `bool` | ✓ | ✓ |
+| [`memory_get_peak_usage()`](./builtins/misc/memory_get_peak_usage.md) | `(bool $real_usage = false): int` | `int` | ✓ | ✓ |
+| [`memory_get_usage()`](./builtins/misc/memory_get_usage.md) | `(bool $real_usage = false): int` | `int` | ✓ | ✓ |
 | [`opcache_compile_file()`](./builtins/misc/opcache_compile_file.md) | `(mixed $filename): bool` | `bool` | ✓ | ✓ |
 | [`opcache_get_configuration()`](./builtins/misc/opcache_get_configuration.md) | `(): array|false` | `array|false` | ✓ | ✓ |
 | [`opcache_get_status()`](./builtins/misc/opcache_get_status.md) | `(mixed $include_scripts = true): mixed` | `mixed` | ✓ | ✓ |

@@ -318,6 +318,47 @@ impl Checker {
             return Some(PhpType::Union(vec![PhpType::Int, PhpType::Float]));
         }
         if matches!(existing, PhpType::Union(_)) {
+            // Two SCALAR-ONLY boxed unions merge into the union of their members: both sides
+            // are stored as the same `Heap(Mixed)` cell, so the reassignment does not change
+            // the representation, and PHP accepts it. Refusing it turned a loop reassignment
+            // such as `$r = curl_exec(...)` (`string|bool`) then
+            // `$r = curl_multi_getcontent(...)` (`string|null`) into a hard `cannot
+            // reassign`, because a retype inside a loop body is not kill-eligible.
+            //
+            // The members must all be scalars. A declared `array` parameter is itself a
+            // union (`array<mixed>|array<mixed,mixed>`), and merging it with `array|false`
+            // would dissolve the declared contract the checker is there to enforce; a
+            // `TaggedScalar` `int|null` keeps its dedicated storage and the retype path.
+            if let (PhpType::Union(existing_members), PhpType::Union(new_members)) =
+                (existing, new_ty)
+            {
+                let scalar_only = |members: &[PhpType]| {
+                    members.iter().all(|member| {
+                        matches!(
+                            member.codegen_repr(),
+                            PhpType::Int
+                                | PhpType::Float
+                                | PhpType::Str
+                                | PhpType::Bool
+                                | PhpType::Void
+                                | PhpType::Never
+                        )
+                    })
+                };
+                if existing.codegen_repr() == PhpType::Mixed
+                    && new_ty.codegen_repr() == PhpType::Mixed
+                    && scalar_only(existing_members)
+                    && scalar_only(new_members)
+                {
+                    let mut members = existing_members.clone();
+                    for member in new_members {
+                        if !members.contains(member) {
+                            members.push(member.clone());
+                        }
+                    }
+                    return Some(PhpType::Union(members));
+                }
+            }
             return None;
         }
         if existing == new_ty {

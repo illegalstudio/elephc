@@ -2,7 +2,7 @@
 title: "xmlwriter_start_dtd()"
 description: "Starts a DTD."
 sidebar:
-  order: 1055
+  order: 1057
 ---
 
 ## xmlwriter_start_dtd()
@@ -23,7 +23,7 @@ Starts a DTD.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
+- **Compiled (AOT)**: supported through the compiler-injected xml prelude.
 - **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_start_dtd.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_start_dtd.rs)).
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._

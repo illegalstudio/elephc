@@ -19,7 +19,7 @@ use crate::{
 macro_rules! constant {
     (
         $name:literal, $module:ident, $value:expr
-        $(, since: $since:ident)? $(, route: $route:ident)? $(, extension: $extension:literal)? $(,)?
+        $(, since: $since:ident)? $(, route: $route:ident)? $(, extension: $extension:literal)? $(, deprecated: $dep:literal)? $(,)?
     ) => {
         ConstantContract {
             id: BuiltinId::from_canonical_name($name),
@@ -30,6 +30,7 @@ macro_rules! constant {
             route: constant!(@route $($route)?),
             extension: constant!(@flag $($extension)?),
             internal: false,
+            deprecation: constant!(@dep $($dep)?),
         }
     };
     (@since $since:ident) => { Some(PhpVersion::$since) };
@@ -38,6 +39,8 @@ macro_rules! constant {
     (@route) => { ConstantRoute::Predefined };
     (@flag $value:literal) => { $value };
     (@flag) => { false };
+    (@dep $dep:literal) => { Some($dep) };
+    (@dep) => { None };
 }
 
 pub(crate) static CONSTANTS: &[ConstantContract] = &[
@@ -103,6 +106,12 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("FILE_NO_DEFAULT_CONTEXT", Standard, ConstValue::Int(16)),
     constant!("FILE_SKIP_EMPTY_LINES", Standard, ConstValue::Int(4)),
     constant!("FILE_USE_INCLUDE_PATH", Standard, ConstValue::Int(1)),
+    constant!("FILTER_DEFAULT", Filter, ConstValue::Int(516)),
+    constant!("FILTER_FLAG_IPV4", Filter, ConstValue::Int(1048576)),
+    constant!("FILTER_FLAG_IPV6", Filter, ConstValue::Int(2097152)),
+    constant!("FILTER_FLAG_NO_PRIV_RANGE", Filter, ConstValue::Int(8388608)),
+    constant!("FILTER_FLAG_NO_RES_RANGE", Filter, ConstValue::Int(4194304)),
+    constant!("FILTER_VALIDATE_IP", Filter, ConstValue::Int(275)),
     constant!("FNM_CASEFOLD", Standard, ConstValue::Int(16)),
     constant!("FNM_NOESCAPE", Standard, ConstValue::TargetDependent(ConstType::Int)),
     constant!("FNM_PATHNAME", Standard, ConstValue::TargetDependent(ConstType::Int)),

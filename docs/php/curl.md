@@ -473,7 +473,7 @@ shorter lifetime off, so the share is never freed.
 
 `curl_setopt()` classifies every option number against a frozen table generated
 from the pinned libcurl headers, then reads the PHP value according to that
-option's real C type. **260 of PHP's 271 `CURLOPT_*` names are implemented.**
+option's real C type. **261 of PHP's 271 `CURLOPT_*` names are implemented.**
 
 An option this build cannot carry returns `false` and emits PHP's warning — never
 an inert `true`:
@@ -491,7 +491,7 @@ curl_setopt($ch, 987654, 1);
 // ValueError: curl_setopt(): Argument #2 ($option) is not a valid cURL option
 ```
 
-### The 11 rejected options
+### The 10 rejected options
 
 This list is pinned by a test
 (`elephc_curl::tests::option_table::the_documented_rejection_set_is_exactly_this`),
@@ -500,16 +500,27 @@ so it cannot drift from the code:
 | Options | Why |
 |---|---|
 | `CURLOPT_CAINFO_BLOB`, `CURLOPT_ISSUERCERT_BLOB`, `CURLOPT_PROXY_CAINFO_BLOB`, `CURLOPT_PROXY_ISSUERCERT_BLOB`, `CURLOPT_PROXY_SSLCERT_BLOB`, `CURLOPT_PROXY_SSLKEY_BLOB`, `CURLOPT_SSLCERT_BLOB`, `CURLOPT_SSLKEY_BLOB` | In-memory certificate/key blobs. The **file-path** forms (`CURLOPT_SSLCERT`, `CURLOPT_CAINFO`, …) all work — write the material to a file. |
-| `CURLOPT_FNMATCH_FUNCTION`, `CURLOPT_PREREQFUNCTION`, `CURLOPT_SSH_HOSTKEYFUNCTION` | Callbacks outside the six implemented ones (below). SSH itself *is* built in, so `CURLOPT_SSH_KNOWNHOSTS` and the rest of the `CURLOPT_SSH_*` family work — it is only the host-key **callback** that is unimplemented. |
+| `CURLOPT_FNMATCH_FUNCTION` | A callback outside the seven implemented ones (below). |
+| `CURLOPT_SSH_HOSTKEYFUNCTION` | Accepted like PHP (`curl_setopt()` answers `true`), but the callback is never invoked. SSH itself *is* built in, so `CURLOPT_SSH_KNOWNHOSTS` and the rest of the `CURLOPT_SSH_*` family work — it is only the host-key **callback** that is unimplemented. |
 
 `CURLINFO_HEADER_OUT` — which is a `curl_setopt()` option despite its name — is
 rejected the same way, so `curl_getinfo($ch, CURLINFO_HEADER_OUT)` has nothing to
 report.
 
-`curl_multi_setopt()` implements 8 of PHP's 9 `CURLMOPT_*` options;
-`CURLMOPT_PUSHFUNCTION` is rejected because it is a callback, and this build
-carries no callback machinery on the multi handle — not because of HTTP/2, which
-*is* built in. `curl_share_setopt()` implements `CURLSHOPT_SHARE` and
+`curl_multi_setopt()` implements all 9 of PHP's `CURLMOPT_*` options.
+`CURLMOPT_PUSHFUNCTION` installs libcurl's HTTP/2 server-push callback: the
+bridge installs one push trampoline on the multi handle and reads the PHP
+callable from each attached easy handle, so both set-then-add and
+add-then-set orders work, and `[$object, 'method']` callables resolve through
+`__call` exactly like `curl_setopt()`'s callbacks. The pushed `CurlHandle` is
+handed to the callback and returned by `curl_multi_info_read()` as the SAME
+object; it inherits the parent's write mode (a `CURLOPT_RETURNTRANSFER` parent
+captures the pushed body too) and its write/header callables. The callback's
+answer decides ownership, exactly as libcurl documents it: returning
+`CURL_PUSH_OK` transfers the pushed handle to the application, so its
+`CurlHandle` teardown runs `curl_easy_cleanup()`, while any other answer (or a
+thrown exception) denies the push and libcurl destroys the handle — the bridge
+then drops its entry so the handle cannot be addressed afterwards. `curl_share_setopt()` implements `CURLSHOPT_SHARE` and
 `CURLSHOPT_UNSHARE` over the five `CURL_LOCK_DATA_*` values PHP exposes.
 
 ### PHP-layer options
@@ -688,7 +699,7 @@ wire, not `basename()`.
 
 ## Callbacks
 
-Six libcurl callbacks invoke real PHP callables (closures, `'function_name'`
+Seven libcurl callbacks invoke real PHP callables (closures, `'function_name'`
 strings, `[$obj, 'method']` arrays, first-class callables):
 
 | Option | Signature |
@@ -699,14 +710,19 @@ strings, `[$obj, 'method']` arrays, first-class callables):
 | `CURLOPT_PROGRESSFUNCTION` | `fn(CurlHandle $ch, int $dlTotal, int $dlNow, int $ulTotal, int $ulNow): int` |
 | `CURLOPT_XFERINFOFUNCTION` | same as `CURLOPT_PROGRESSFUNCTION` |
 | `CURLOPT_DEBUGFUNCTION` | `fn(CurlHandle $ch, int $type, string $data): int` |
+| `CURLOPT_PREREQFUNCTION` | `fn(CurlHandle $ch, string $remoteIp, string $localIp, int $remotePort, int $localPort): int` — must return `CURL_PREREQFUNC_OK` or `CURL_PREREQFUNC_ABORT`; any other `int` is a `ValueError`, any non-`int` a `TypeError`, both with php-src's message, raised after `curl_exec()` returns |
+
+`CURLMOPT_PUSHFUNCTION` (a multi option, not an easy one) takes
+`fn(CurlHandle $parent, CurlHandle $pushed, array $headers): int` and returns
+`CURL_PUSH_OK` to accept the pushed stream or anything else to deny it.
 
 An exception thrown inside a callback propagates out of `curl_exec()` /
 `curl_multi_exec()` and can be caught normally; the transfer is aborted and the
 handle stays reusable afterwards.
 
-`CURLOPT_FNMATCH_FUNCTION`, `CURLOPT_PREREQFUNCTION`,
-`CURLOPT_SSH_HOSTKEYFUNCTION` and `CURLMOPT_PUSHFUNCTION` are rejected with the
-standard warning.
+`CURLOPT_FNMATCH_FUNCTION` is rejected with the standard warning.
+`CURLOPT_SSH_HOSTKEYFUNCTION` is accepted like PHP (`curl_setopt()` answers
+`true`), though its callback is never invoked.
 
 ## curl inside `eval()`
 
@@ -987,6 +1003,72 @@ that is itself an array), and an object inside a nested array.
   and elephc's bridge defers the real `curl_share_cleanup()` until the last
   attached easy handle detaches, so `unset()` order does not matter and nothing
   leaks.
+
+## php-src test compatibility
+
+elephc's curl surface is audited against php-src's own `ext/curl/tests` suite
+(PHP-8.5 branch). The runner is `scripts/curl/php_src_tests/run_php_src_tests.py`:
+it compiles each `.phpt`'s `--FILE--` section with elephc, runs the binary, and
+compares against `--EXPECT--` / `--EXPECTF--` using php-src `run-tests.php`'s own
+semantics. `--SKIPIF--` is evaluated with a real PHP CLI binary. See that
+directory's `README.md` for prerequisites.
+
+As of the latest audit against the php-src 8.5.10 `ext/curl/tests` tree, with
+the suite's own services running locally (Caddy from the checked-in `Caddyfile`,
+its root CA trusted through `CURL_CA_BUNDLE`, and a local FTP server for the
+`PHP_CURL_FTP_REMOTE_*` fixtures): **170 of 175** tests pass, 4 are skipped by
+php-src's own unconditional gates, and 1 cannot pass in this environment (below).
+Without those services the runner reports 158 passing and 17 skipped; the extra
+passes are the fixtures php-src gates behind "test needs Caddy" and the
+remote-FTP environment variables. The test count follows the php-src tree: a
+branch-tip checkout carries a few additional fixtures, including the
+callback-lifetime pair below.
+
+### Remaining audit failure
+
+- `curl_setopt_CURLOPT_FOLLOWLOCATION`: php-src's own reference fails it in this
+  environment. The checked-in `Caddyfile` configures no `/redirect` route, so
+  Caddy answers `200` with an empty body while the fixture's `EXPECTF` requires
+  a non-empty `%s`. Measured with the reference CLI (via `openssl.cafile`): PHP
+  prints `string(0) ""` exactly as elephc does, so this is a property of the
+  fixture's server config, not of the curl implementation.
+
+php-src's own `--SKIPIF--` blocks four fixtures on this platform regardless of
+implementation: `check_win_config` (Windows only), `curl_setopt_ssl` (php-src
+skips it on macOS), and `curl_fnmatch_trampoline` / `curl_ssh_hostkey_trampoline`
+which php-src skips unconditionally with "cannot properly test".
+
+### Known gaps outside this audit
+
+- elephc is refcount-only; a callback closure that captures its own handle
+  forms a cycle the runtime never breaks. Affects `curl_callback_lifetime` and
+  `curl_callback_lifetime_destructor` on a php-src branch checkout; those
+  fixtures are not part of the 8.5.10 release tree.
+
+### Blockers outside the curl surface
+
+Several upstream tests fail on general PHP-frontend/builtin gaps rather than curl
+semantics; they are tracked here so a curl-only audit is not mistaken for a
+complete result:
+
+- The general runtime gaps the curl fixtures exposed and which stay open: a
+  `$obj->arr[$i] = …` write on a receiver the lowering still types `mixed`
+  (despite a passing `instanceof` guard) lands on the stdClass-only path and is
+  dropped for declared classes — the curl prelude roots its callback table
+  through a local read-modify-write until that path dispatches on the runtime
+  class; the auto-vivify pass hoists an implicit `$a = [];` to the scope top,
+  so a program that probes `isset($a)` before the first array write answers
+  `true` where PHP answers `false`; and `$arr[] = $var` inside a nested
+  `foreach` can store an empty value (the prelude works around it by appending
+  outside the inner loop). Separately, an included file may still not START
+  with inline HTML: the lexer requires `<?php` as its first bytes, where PHP
+  treats everything outside PHP tags as output (template-style files).
+
+Diagnostics are also rendered differently from PHP CLI: elephc writes warnings
+to stderr without PHP's leading newline, so tests whose `--EXPECT--` interleaves
+a notice with stdout output only match after the runner applies PHP's
+`display_errors` prefix. This is a general runtime-output divergence, not a curl
+one.
 
 ## See also
 

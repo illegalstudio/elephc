@@ -97,4 +97,8 @@ pub struct ConstantContract {
     pub extension: bool,
     /// Whether this constant is compiler/runtime-internal, never PHP-visible.
     pub internal: bool,
+    /// PHP deprecation reason (e.g. `"as it had no effect since 5.1.2"`) when PHP marks this
+    /// constant `#[\Deprecated]`; `None` when it is not deprecated. The deprecation warning is
+    /// emitted at run time when the constant is evaluated, exactly like reference PHP.
+    pub deprecation: Option<&'static str>,
 }

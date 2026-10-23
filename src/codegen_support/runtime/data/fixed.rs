@@ -485,6 +485,13 @@ pub(crate) fn emit_runtime_data_fixed(
     // request on demand instead of every request or none.
     out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_request_fn"), 8, target));
     out.push_str(&comm_directive("_rt_diag_suppression", 8, target));
+    // display_errors display-copy mode read by __rt_diag_write: 0 off, 1 the output layer,
+    // 2 stderr. The main prologue installs the compiled mode before any startup diagnostic
+    // runs; the word starts at php's CLI default (1) so a diagnostic emitted even earlier
+    // still renders like php instead of vanishing into a zero initializer.
+    out.push_str(&format!(
+        ".globl _rt_display_errors\n_rt_display_errors:\n    .quad 1\n"
+    ));
     // elephc_web_capture: per-request output-capture mode flag read by
     // __rt_stdout_write. Zero (the default) routes echo output to the plain
     // write(1, …) syscall; non-zero (set only by the --web bridge) routes it to
@@ -830,6 +837,36 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _uncaught_exc_in\n_uncaught_exc_in:\n    .ascii \" in \"\n");
     out.push_str(".globl _uncaught_exc_colon\n_uncaught_exc_colon:\n    .ascii \":\"\n");
     out.push_str(".globl _uncaught_exc_nl\n_uncaught_exc_nl:\n    .ascii \"\\n\"\n");
+    // The Stack trace block php renders after the location line: the header, the per-frame
+    // "#N " prefix written by the activation readers, the synthetic {main} entry that closes
+    // every trace, and the "thrown in <file> on line <n>" trailer.
+    out.push_str(".globl _uncaught_trace_header\n_uncaught_trace_header:\n    .ascii \"Stack trace:\\n\"\n");
+    out.push_str(".globl _uncaught_trace_hash\n_uncaught_trace_hash:\n    .ascii \"#\"\n");
+    out.push_str(".globl _uncaught_trace_main\n_uncaught_trace_main:\n    .ascii \" {main}\\n\"\n");
+    out.push_str(".globl _uncaught_thrown_in\n_uncaught_thrown_in:\n    .ascii \"  thrown in \"\n");
+    out.push_str(".globl _uncaught_thrown_line\n_uncaught_thrown_line:\n    .ascii \" on line \"\n");
+    out.push_str(".globl _uncaught_trace_blank\n_uncaught_trace_blank:\n    .ascii \"\\n\\n\"\n");
+    // A throw raised INSIDE a runtime builtin has no PHP activation of its own, but php's trace
+    // still names it (`#0 file(3): serialize(Object(CURLFile))`). The builtin publishes the
+    // frame it is about to fail from; the uncaught report prints it ahead of the activation
+    // chain when the flag is set.
+    out.push_str(".globl _uncaught_trace_space\n_uncaught_trace_space:\n    .ascii \" \"\n");
+    out.push_str(".globl _uncaught_trace_open\n_uncaught_trace_open:\n    .ascii \"(\"\n");
+    out.push_str(".globl _uncaught_trace_close\n_uncaught_trace_close:\n    .ascii \"): \"\n");
+    out.push_str(".globl _uncaught_trace_object_open\n_uncaught_trace_object_open:\n    .ascii \"(Object(\"\n");
+    out.push_str(".globl _uncaught_trace_internal_close\n_uncaught_trace_internal_close:\n    .ascii \"))\\n\"\n");
+    out.push_str(".globl _uncaught_internal_serialize_name\n_uncaught_internal_serialize_name:\n    .ascii \"serialize\"\n");
+    for symbol in [
+        "_uncaught_internal_frame_valid",
+        "_uncaught_internal_frame_owner",
+        "_uncaught_internal_frame_name_ptr",
+        "_uncaught_internal_frame_name_len",
+        "_uncaught_internal_frame_line",
+        "_uncaught_internal_frame_class_ptr",
+        "_uncaught_internal_frame_class_len",
+    ] {
+        out.push_str(&comm_directive(symbol, 8, target));
+    }
     // Printed only when `__rt_exception_matches` walks into the "metadata never emitted"
     // sentinel, which no correct build should reach — see that helper for why it aborts there
     // instead of answering "no match".

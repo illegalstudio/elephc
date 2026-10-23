@@ -85,6 +85,9 @@ pub(super) fn lower(
         RuntimeFnId::CurlEasyInit => Some({
             crate::codegen::lower_inst::builtins::curl::lower_curl_easy_init(ctx, inst)
         }),
+        RuntimeFnId::CurlEasyFromId => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_easy_from_id(ctx, inst)
+        }),
         RuntimeFnId::CurlEasyPerform => Some({
             crate::codegen::lower_inst::builtins::curl::lower_curl_easy_perform(ctx, inst)
         }),
@@ -99,6 +102,9 @@ pub(super) fn lower(
         }),
         RuntimeFnId::CurlEasySetoptStr => Some({
             crate::codegen::lower_inst::builtins::curl::lower_curl_easy_setopt_str(ctx, inst)
+        }),
+        RuntimeFnId::CurlEasySetoptNull => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_easy_setopt_null(ctx, inst)
         }),
         RuntimeFnId::CurlEasySetoptSlist => Some({
             crate::codegen::lower_inst::builtins::curl::lower_curl_easy_setopt_slist(ctx, inst)

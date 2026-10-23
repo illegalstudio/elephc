@@ -16,7 +16,41 @@ pub(super) fn lower_array_access(
     index: &Expr,
     expr: &Expr,
 ) -> LoweredValue {
-    lower_array_access_with_missing_warning(ctx, array, index, expr, true)
+    // `$GLOBALS['name']` is the live global-variable table: a literal string key reads the
+    // global `$name` directly, exactly as a bare `global $name; $name` would. A non-literal
+    // key is left to the ordinary array path (an unsupported global-table read).
+    if let ExprKind::Variable(root) = &array.kind {
+        if root == "GLOBALS" {
+            if let ExprKind::StringLiteral(name) = &index.kind {
+                return lower_global_table_read(ctx, name, expr);
+            }
+        }
+    }
+    // A recognized nested append's read half is not an observable access: PHP auto-vivifies
+    // `$a[$k][] = $v` silently. A boxed (`Mixed`) container reaches here instead of the
+    // isset-guarded napp body, so the flag is what keeps it quiet.
+    let warn = !ctx.nested_append_read_suppressed;
+    lower_array_access_with_missing_warning(ctx, array, index, expr, warn)
+}
+
+/// Reads global variable `name` for a `$GLOBALS['name']` reference. The name is registered as
+/// a program-global so a top-level binding of the same name uses global storage too and the
+/// alias is real in both directions.
+fn lower_global_table_read(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    expr: &Expr,
+) -> LoweredValue {
+    ctx.all_global_var_names.insert(name.to_string());
+    let data = ctx.intern_global_name(name);
+    ctx.emit_value(
+        Op::LoadGlobal,
+        Vec::new(),
+        Some(Immediate::GlobalName(data)),
+        PhpType::Mixed,
+        Op::LoadGlobal.default_effects(),
+        Some(expr.span),
+    )
 }
 
 /// Lowers `$base[...][$index]` as the source of a by-reference `foreach`, separating the element

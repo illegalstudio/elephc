@@ -24,10 +24,17 @@
 //!   component independently. Explicit line zero and an empty filename remain visible.
 //!   Synthesized errors with no known location omit the suffix.
 //!
-//! - WHAT THIS STILL DOES NOT EMIT. PHP continues with `Stack trace:`, `#0 {main}` and
-//!   `  thrown in <file> on line <n>`. `Throwable::getTrace()` and `getTraceAsString()` remain
-//!   synthetic in `lower_inst.rs` — an empty array and an empty string — because elephc keeps no
-//!   call stack to render, so there is nothing truthful to print.
+//! - THE TRACE BLOCK. PHP continues with `Stack trace:`, one `#N <file>(<line>): <function>(…)`
+//!   entry per suspended PHP activation, the synthetic `#N {main}`, and a
+//!   `  thrown in <file> on line <n>` trailer. The runtime walks the activation chain each
+//!   activation's own frame reader renders into, and a throw raised INSIDE a runtime builtin
+//!   publishes a synthetic `#0 file(line): builtin(Object(Class))` entry first. The trailer
+//!   follows the same truthfulness rule as the header: an empty source path drops it, and a
+//!   zero effective line drops just the ` on line <n>` half — never `on line 0`.
+//!
+//!   `Throwable::getTrace()` and `getTraceAsString()` remain synthetic in `lower_inst.rs` (an
+//!   empty array and an empty string): the report renders the native activation chain, which is
+//!   not the same data a PHP-level `getTrace()` would return.
 //!
 //! - The exit status moves from `1` to `255`, which is what reference PHP returns for an uncaught
 //!   exception. A script that branched on `$?` saw the wrong value before.
@@ -125,7 +132,25 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_throwable_location_borrowed");
     emitter.instruction("stp x1, x2, [sp]");                                    // save the resolved borrowed filename pointer and length
     emitter.instruction("str x0, [sp, #16]");                                   // save the effective line before output overwrites result registers
-    emitter.instruction("cbz x3, __rt_uncaught_newline");                       // omit only unknown origins, preserving explicit zero and empty overrides
+    emitter.instruction("cbnz x3, __rt_uncaught_location_known");               // a stored creation site is authoritative
+    // A throw raised INSIDE a runtime builtin has no user `new` behind it, so the Throwable
+    // carries no creation line. php reports the call site that reached the builtin: the line
+    // the TOP SUSPENDED FRAME was entered from, and — when no PHP frame is suspended — the
+    // last published diagnostic line.
+    abi::emit_load_symbol_to_reg(emitter, "x0", "_exc_call_frame_top", 0);      // innermost suspended frame
+    emitter.instruction("cbz x0, __rt_uncaught_diagnostic_line");               // no PHP frame: fall back to the diagnostic line
+    emitter.instruction("ldr x0, [x0, #32]");                                   // the line this frame was entered from
+    emitter.instruction("cbnz x0, __rt_uncaught_location_found");               // a real call site supplies the location
+    emitter.label("__rt_uncaught_diagnostic_line");
+    abi::emit_load_symbol_to_reg(emitter, "x0", "_php_diagnostic_line", 0);     // the line the failing call was made on
+    emitter.instruction("cbz x0, __rt_uncaught_newline");                       // nothing to report: keep the location suffix off
+    emitter.label("__rt_uncaught_location_found");
+    emitter.instruction("str x0, [sp, #16]");                                   // use the resolved line as the effective one
+    abi::emit_symbol_address(emitter, "x1", "_script_source_file");
+    abi::emit_load_symbol_to_reg(emitter, "x2", "_script_source_file_len", 0);
+    emitter.instruction("cbz x2, __rt_uncaught_newline");                       // a module with no source path cannot name a file
+    emitter.instruction("stp x1, x2, [sp]");                                    // hand the diagnostic filename to the writer below
+    emitter.label("__rt_uncaught_location_known");
     abi::emit_symbol_address(emitter, "x1", "_uncaught_exc_in");
     emitter.instruction(&format!("mov x2, #{}", UNCAUGHT_IN_LEN));              // introduce the effective location
     emitter.instruction("mov x0, #1");                                          // fd = stdout
@@ -145,6 +170,135 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     emitter.label("__rt_uncaught_newline");
     abi::emit_symbol_address(emitter, "x1", "_uncaught_exc_nl");
     emitter.instruction(&format!("mov x2, #{}", UNCAUGHT_NEWLINE_LEN));         // terminating newline
+    emitter.instruction("mov x0, #1");                                          // fd = stdout
+    emitter.syscall(4);
+    // Stack trace. php walks the suspended PHP frames, prints one "#N <file>(<line>):
+    // <function>(<args>)" entry per frame, closes with the synthetic "#N {main}", and appends
+    // the "thrown in <file> on line <n>" trailer plus the blank line every fatal report ends
+    // with. Each activation's frame reader already renders the entry in its print mode; this
+    // helper only walks the chain and supplies the zero-based index.
+    abi::emit_symbol_address(emitter, "x1", "_uncaught_trace_header");
+    emitter.instruction("mov x2, #13");                                         // "Stack trace:\\n"
+    emitter.instruction("mov x0, #1");                                          // fd = stdout
+    emitter.syscall(4);
+    emitter.instruction("mov x20, #0");                                         // zero-based trace index printed by each reader
+    // A runtime builtin that fails publishes the frame it is failing from: php names the
+    // builtin even though it owns no PHP activation of its own, e.g.
+    // `#0 file(3): serialize(Object(CURLFile))`.
+    let no_internal = "__rt_uncaught_no_internal_frame";
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_uncaught_internal_frame_valid", 0);
+    emitter.instruction(&format!("cbz x9, {no_internal}"));                     // no builtin frame is pending
+    // The frame belongs to the throwable that published it. A caught exception must not lend
+    // it to a later failure, and a rethrown one must keep it — the pointer identifies both.
+    // Load the OWNER first: `emit_load_symbol_to_reg` resolves an AArch64 symbol through
+    // x9, so loading `_exc_value` into x9 before it would be clobbered by the second load.
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_uncaught_internal_frame_owner", 0);
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_exc_value", 0);
+    emitter.instruction("cmp x9, x10");                                         // is the escaping throwable the frame's owner?
+    emitter.instruction(&format!("b.ne {no_internal}"));                        // another exception: no synthetic frame
+    abi::emit_symbol_address(emitter, "x1", "_uncaught_trace_hash");
+    emitter.instruction("mov x2, #1");                                          // "#"
+    emitter.instruction("mov x0, #1");                                          // fd = stdout
+    emitter.syscall(4);
+    emitter.instruction("mov x0, #0");                                          // the builtin frame is the innermost one
+    emitter.instruction("bl __rt_itoa");                                        // returns pointer in x1 and length in x2
+    emitter.instruction("mov x0, #1");                                          // fd = stdout
+    emitter.syscall(4);
+    abi::emit_symbol_address(emitter, "x1", "_uncaught_trace_space");
+    emitter.instruction("mov x2, #1");                                          // " "
+    emitter.instruction("mov x0, #1");                                          // fd = stdout
+    emitter.syscall(4);
+    emitter.instruction("ldr x1, [sp]");                                        // resolved filename pointer kept across the trace walk
+    emitter.instruction("ldr x2, [sp, #8]");                                    // and its length
+    emitter.instruction("mov x0, #1");                                          // fd = stdout
+    emitter.syscall(4);
+    abi::emit_symbol_address(emitter, "x1", "_uncaught_trace_open");
+    emitter.instruction("mov x2, #1");                                          // "("
+    emitter.instruction("mov x0, #1");                                          // fd = stdout
+    emitter.syscall(4);
+    abi::emit_load_symbol_to_reg(emitter, "x0", "_uncaught_internal_frame_line", 0);
+    emitter.instruction("bl __rt_itoa");                                        // returns pointer in x1 and length in x2
+    emitter.instruction("mov x0, #1");                                          // fd = stdout
+    emitter.syscall(4);
+    abi::emit_symbol_address(emitter, "x1", "_uncaught_trace_close");
+    emitter.instruction("mov x2, #3");                                          // "): "
+    emitter.instruction("mov x0, #1");                                          // fd = stdout
+    emitter.syscall(4);
+    abi::emit_symbol_address(emitter, "x1", "_uncaught_internal_frame_name_ptr");
+    emitter.instruction("ldr x1, [x1]");                                        // the builtin's PHP-visible name
+    abi::emit_symbol_address(emitter, "x9", "_uncaught_internal_frame_name_len");
+    emitter.instruction("ldr x2, [x9]");                                        // and its byte length
+    emitter.instruction("mov x0, #1");                                          // fd = stdout
+    emitter.syscall(4);
+    abi::emit_symbol_address(emitter, "x1", "_uncaught_trace_object_open");
+    emitter.instruction("mov x2, #8");                                          // "(Object("
+    emitter.instruction("mov x0, #1");                                          // fd = stdout
+    emitter.syscall(4);
+    abi::emit_symbol_address(emitter, "x1", "_uncaught_internal_frame_class_ptr");
+    emitter.instruction("ldr x1, [x1]");                                        // the refused value's class name
+    abi::emit_symbol_address(emitter, "x9", "_uncaught_internal_frame_class_len");
+    emitter.instruction("ldr x2, [x9]");                                        // and its byte length
+    emitter.instruction("mov x0, #1");                                          // fd = stdout
+    emitter.syscall(4);
+    abi::emit_symbol_address(emitter, "x1", "_uncaught_trace_internal_close");
+    emitter.instruction("mov x2, #3");                                          // "))\n"
+    emitter.instruction("mov x0, #1");                                          // fd = stdout
+    emitter.syscall(4);
+    emitter.instruction("mov x20, #1");                                         // the activation chain starts at index one
+    emitter.label(no_internal);
+    abi::emit_load_symbol_to_reg(emitter, "x19", "_exc_call_frame_top", 0);     // innermost suspended frame first
+    emitter.label("__rt_uncaught_trace_walk");
+    emitter.instruction("cbz x19, __rt_uncaught_trace_done");                   // the chain is exhausted
+    emitter.instruction("ldr x9, [x19, #24]");                                  // per-call-site frame reader
+    emitter.instruction("cbz x9, __rt_uncaught_trace_next");                    // an activation without one contributes no entry
+    emitter.instruction("mov x0, x19");                                         // the suspended activation record
+    emitter.instruction("mov x1, #0");                                          // no debug_backtrace option bits
+    emitter.instruction("mov x2, x20");                                         // non-negative index selects print mode
+    emitter.instruction("blr x9");                                              // print one "#N file(line): function(args)" entry
+    emitter.instruction("add x20, x20, #1");                                    // the next frame takes the next index
+    emitter.label("__rt_uncaught_trace_next");
+    emitter.instruction("ldr x19, [x19]");                                      // follow the activation chain towards {main}
+    emitter.instruction("b __rt_uncaught_trace_walk");
+    emitter.label("__rt_uncaught_trace_done");
+    abi::emit_symbol_address(emitter, "x1", "_uncaught_trace_hash");
+    emitter.instruction("mov x2, #1");                                          // "#"
+    emitter.instruction("mov x0, #1");                                          // fd = stdout
+    emitter.syscall(4);
+    emitter.instruction("mov x0, x20");                                         // itoa takes the closing index in x0
+    emitter.instruction("bl __rt_itoa");                                        // returns pointer in x1 and length in x2
+    emitter.instruction("mov x0, #1");                                          // fd = stdout
+    emitter.syscall(4);
+    abi::emit_symbol_address(emitter, "x1", "_uncaught_trace_main");
+    emitter.instruction("mov x2, #8");                                          // " {main}\\n"
+    emitter.instruction("mov x0, #1");                                          // fd = stdout
+    emitter.syscall(4);
+    // A zero line (an internal error the report could not place) or an empty source path
+    // leaves nothing truthful to print here. php always has both, so it always prints the
+    // trailer; printing `on line 0` would fabricate an origin, so the trailer is dropped
+    // instead — the same rule the header's location suffix follows.
+    emitter.instruction("ldr x2, [sp, #8]");                                    // resolved filename length saved by the location block
+    emitter.instruction("cbz x2, __rt_uncaught_trace_blank");                   // no source path: omit the trailer
+    abi::emit_symbol_address(emitter, "x1", "_uncaught_thrown_in");
+    emitter.instruction("mov x2, #12");                                         // "  thrown in "
+    emitter.instruction("mov x0, #1");                                          // fd = stdout
+    emitter.syscall(4);
+    emitter.instruction("ldr x1, [sp]");                                        // resolved filename pointer kept across the trace walk
+    emitter.instruction("ldr x2, [sp, #8]");                                    // and its length
+    emitter.instruction("mov x0, #1");                                          // fd = stdout
+    emitter.syscall(4);
+    emitter.instruction("ldr x0, [sp, #16]");                                   // effective line saved before output began
+    emitter.instruction("cbz x0, __rt_uncaught_trace_blank");                   // no resolved line: omit " on line N"
+    abi::emit_symbol_address(emitter, "x1", "_uncaught_thrown_line");
+    emitter.instruction("mov x2, #9");                                          // " on line "
+    emitter.instruction("mov x0, #1");                                          // fd = stdout
+    emitter.syscall(4);
+    emitter.instruction("ldr x0, [sp, #16]");                                   // the same effective line the header used
+    emitter.instruction("bl __rt_itoa");                                        // returns pointer in x1 and length in x2
+    emitter.instruction("mov x0, #1");                                          // fd = stdout
+    emitter.syscall(4);
+    emitter.label("__rt_uncaught_trace_blank");
+    abi::emit_symbol_address(emitter, "x1", "_uncaught_trace_blank");
+    emitter.instruction("mov x2, #2");                                          // the blank line php ends a fatal report with
     emitter.instruction("mov x0, #1");                                          // fd = stdout
     emitter.syscall(4);
     emitter.instruction(&format!("mov x0, #{}", UNCAUGHT_EXIT_STATUS));         // PHP exits 255 for an uncaught exception
@@ -217,7 +371,27 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rsp + 8], rdx");                        // save the resolved filename length, including an explicit zero
     emitter.instruction("mov QWORD PTR [rsp + 16], rcx");                       // preserve the effective line before syscall clobbers rcx
     emitter.instruction("test r8, r8");                                         // distinguish explicit zero from an unknown origin
-    emitter.instruction("jz __rt_uncaught_newline");                            // omit only unknown origins, preserving explicit zero and empty overrides
+    emitter.instruction("jnz __rt_uncaught_location_known");                    // a stored creation site is authoritative
+    // See the AArch64 arm: an internal throw reports the call site that reached the builtin.
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_exc_call_frame_top", 0);     // innermost suspended frame
+    emitter.instruction("test rax, rax");                                       // no PHP frame: fall back to the diagnostic line
+    emitter.instruction("jz __rt_uncaught_diagnostic_line");                    // use the last published diagnostic line
+    emitter.instruction("mov rax, QWORD PTR [rax + 32]");                       // the line this frame was entered from
+    emitter.instruction("test rax, rax");                                       // a real call site supplies the location
+    emitter.instruction("jnz __rt_uncaught_location_found");                    // report it
+    emitter.label("__rt_uncaught_diagnostic_line");
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_php_diagnostic_line", 0);     // the line the failing call was made on
+    emitter.instruction("test rax, rax");                                       // nothing to report keeps the suffix off
+    emitter.instruction("jz __rt_uncaught_newline");                            // no location at all
+    emitter.label("__rt_uncaught_location_found");
+    emitter.instruction("mov QWORD PTR [rsp + 16], rax");                       // use the resolved line as the effective one
+    abi::emit_symbol_address(emitter, "rsi", "_script_source_file");
+    abi::emit_load_symbol_to_reg(emitter, "rdx", "_script_source_file_len", 0);
+    emitter.instruction("test rdx, rdx");                                       // a module with no source path cannot name a file
+    emitter.instruction("jz __rt_uncaught_newline");                            // omit the suffix when there is no filename
+    emitter.instruction("mov QWORD PTR [rsp], rsi");                            // hand the diagnostic filename to the writer below
+    emitter.instruction("mov QWORD PTR [rsp + 8], rdx");                        // and its length
+    emitter.label("__rt_uncaught_location_known");
     abi::emit_symbol_address(emitter, "rsi", "_uncaught_exc_in");
     emitter.instruction(&format!("mov edx, {}", UNCAUGHT_IN_LEN));              // introduce the effective location
     emitter.instruction("mov edi, 1");                                          // fd = stdout
@@ -246,6 +420,154 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edi, 1");                                          // fd = stdout
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
     emitter.instruction("syscall");                                             // terminate the uncaught-exception diagnostic with a newline
+    // Stack trace. See the AArch64 arm for the format; each activation's frame reader renders
+    // one entry in print mode and the walk closes with the synthetic {main} entry.
+    abi::emit_symbol_address(emitter, "rsi", "_uncaught_trace_header");
+    emitter.instruction("mov edx, 13");                                         // "Stack trace:\\n"
+    emitter.instruction("mov edi, 1");                                          // fd = stdout
+    emitter.instruction("mov eax, 1");                                          // syscall 1 = write
+    emitter.instruction("syscall");                                             // write the trace header
+    emitter.instruction("xor r13d, r13d");                                      // zero-based trace index printed by each reader
+    // See the AArch64 arm: a runtime builtin that fails publishes its own frame.
+    let no_internal = "__rt_uncaught_no_internal_frame";
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_uncaught_internal_frame_valid", 0);
+    emitter.instruction("test r10, r10");                                       // no builtin frame is pending
+    emitter.instruction(&format!("jz {no_internal}"));                          // skip the synthetic frame
+    // See the AArch64 arm: only the throwable that published the frame may print it.
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_value", 0);
+    abi::emit_load_symbol_to_reg(emitter, "r11", "_uncaught_internal_frame_owner", 0);
+    emitter.instruction("cmp r10, r11");                                        // is the escaping throwable the frame's owner?
+    emitter.instruction(&format!("jne {no_internal}"));                         // another exception: no synthetic frame
+    abi::emit_symbol_address(emitter, "rsi", "_uncaught_trace_hash");
+    emitter.instruction("mov edx, 1");                                          // "#"
+    emitter.instruction("mov edi, 1");                                          // fd = stdout
+    emitter.instruction("mov eax, 1");                                          // syscall 1 = write
+    emitter.instruction("syscall");                                             // write the frame introducer
+    emitter.instruction("xor eax, eax");                                        // the builtin frame is the innermost one
+    emitter.instruction("call __rt_itoa");                                      // returns pointer in rax and length in rdx
+    emitter.instruction("mov rsi, rax");                                        // move the digits out of rax
+    emitter.instruction("mov edi, 1");                                          // fd = stdout
+    emitter.instruction("mov eax, 1");                                          // syscall 1 = write
+    emitter.instruction("syscall");                                             // write the index
+    abi::emit_symbol_address(emitter, "rsi", "_uncaught_trace_space");
+    emitter.instruction("mov edx, 1");                                          // " "
+    emitter.instruction("mov edi, 1");                                          // fd = stdout
+    emitter.instruction("mov eax, 1");                                          // syscall 1 = write
+    emitter.instruction("syscall");                                             // write the separator
+    emitter.instruction("mov rsi, QWORD PTR [rsp]");                            // resolved filename pointer kept across the trace walk
+    emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");                        // and its length
+    emitter.instruction("mov edi, 1");                                          // fd = stdout
+    emitter.instruction("mov eax, 1");                                          // syscall 1 = write
+    emitter.instruction("syscall");                                             // write the source filename
+    abi::emit_symbol_address(emitter, "rsi", "_uncaught_trace_open");
+    emitter.instruction("mov edx, 1");                                          // "("
+    emitter.instruction("mov edi, 1");                                          // fd = stdout
+    emitter.instruction("mov eax, 1");                                          // syscall 1 = write
+    emitter.instruction("syscall");                                             // write the line opener
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_uncaught_internal_frame_line", 0);
+    emitter.instruction("call __rt_itoa");                                      // returns pointer in rax and length in rdx
+    emitter.instruction("mov rsi, rax");                                        // move the digits out of rax
+    emitter.instruction("mov edi, 1");                                          // fd = stdout
+    emitter.instruction("mov eax, 1");                                          // syscall 1 = write
+    emitter.instruction("syscall");                                             // write the call-site line
+    abi::emit_symbol_address(emitter, "rsi", "_uncaught_trace_close");
+    emitter.instruction("mov edx, 3");                                          // "): "
+    emitter.instruction("mov edi, 1");                                          // fd = stdout
+    emitter.instruction("mov eax, 1");                                          // syscall 1 = write
+    emitter.instruction("syscall");                                             // write the name opener
+    abi::emit_symbol_address(emitter, "r9", "_uncaught_internal_frame_name_ptr");
+    emitter.instruction("mov rsi, QWORD PTR [r9]");                             // the builtin's PHP-visible name
+    abi::emit_symbol_address(emitter, "r9", "_uncaught_internal_frame_name_len");
+    emitter.instruction("mov rdx, QWORD PTR [r9]");                             // and its byte length
+    emitter.instruction("mov edi, 1");                                          // fd = stdout
+    emitter.instruction("mov eax, 1");                                          // syscall 1 = write
+    emitter.instruction("syscall");                                             // write the builtin name
+    abi::emit_symbol_address(emitter, "rsi", "_uncaught_trace_object_open");
+    emitter.instruction("mov edx, 8");                                          // "(Object("
+    emitter.instruction("mov edi, 1");                                          // fd = stdout
+    emitter.instruction("mov eax, 1");                                          // syscall 1 = write
+    emitter.instruction("syscall");                                             // write the object opener
+    abi::emit_symbol_address(emitter, "r9", "_uncaught_internal_frame_class_ptr");
+    emitter.instruction("mov rsi, QWORD PTR [r9]");                             // the refused value's class name
+    abi::emit_symbol_address(emitter, "r9", "_uncaught_internal_frame_class_len");
+    emitter.instruction("mov rdx, QWORD PTR [r9]");                             // and its byte length
+    emitter.instruction("mov edi, 1");                                          // fd = stdout
+    emitter.instruction("mov eax, 1");                                          // syscall 1 = write
+    emitter.instruction("syscall");                                             // write the class name
+    abi::emit_symbol_address(emitter, "rsi", "_uncaught_trace_internal_close");
+    emitter.instruction("mov edx, 3");                                          // "))\n"
+    emitter.instruction("mov edi, 1");                                          // fd = stdout
+    emitter.instruction("mov eax, 1");                                          // syscall 1 = write
+    emitter.instruction("syscall");                                             // close the synthetic frame
+    emitter.instruction("mov r13d, 1");                                         // the activation chain starts at index one
+    emitter.label(no_internal);
+    abi::emit_load_symbol_to_reg(emitter, "r12", "_exc_call_frame_top", 0);     // innermost suspended frame first
+    emitter.label("__rt_uncaught_trace_walk");
+    emitter.instruction("test r12, r12");                                       // the chain is exhausted
+    emitter.instruction("jz __rt_uncaught_trace_done");                         // finish the trace
+    emitter.instruction("mov r11, QWORD PTR [r12 + 24]");                       // per-call-site frame reader
+    emitter.instruction("test r11, r11");                                       // an activation without one contributes no entry
+    emitter.instruction("jz __rt_uncaught_trace_next");                         // skip it
+    emitter.instruction("mov rdi, r12");                                        // the suspended activation record
+    emitter.instruction("xor esi, esi");                                        // no debug_backtrace option bits
+    emitter.instruction("mov rdx, r13");                                        // non-negative index selects print mode
+    emitter.instruction("call r11");                                            // print one frame entry
+    emitter.instruction("add r13, 1");                                          // the next frame takes the next index
+    emitter.label("__rt_uncaught_trace_next");
+    emitter.instruction("mov r12, QWORD PTR [r12]");                            // follow the activation chain towards {main}
+    emitter.instruction("jmp __rt_uncaught_trace_walk");                        // continue the walk
+    emitter.label("__rt_uncaught_trace_done");
+    abi::emit_symbol_address(emitter, "rsi", "_uncaught_trace_hash");
+    emitter.instruction("mov edx, 1");                                          // "#"
+    emitter.instruction("mov edi, 1");                                          // fd = stdout
+    emitter.instruction("mov eax, 1");                                          // syscall 1 = write
+    emitter.instruction("syscall");                                             // write the closing index introducer
+    emitter.instruction("mov rax, r13");                                        // itoa takes the closing index in rax
+    emitter.instruction("call __rt_itoa");                                      // returns pointer in rax and length in rdx
+    emitter.instruction("mov rsi, rax");                                        // move the digits out of rax
+    emitter.instruction("mov edi, 1");                                          // fd = stdout
+    emitter.instruction("mov eax, 1");                                          // syscall 1 = write
+    emitter.instruction("syscall");                                             // write the closing index
+    abi::emit_symbol_address(emitter, "rsi", "_uncaught_trace_main");
+    emitter.instruction("mov edx, 8");                                          // " {main}\\n"
+    emitter.instruction("mov edi, 1");                                          // fd = stdout
+    emitter.instruction("mov eax, 1");                                          // syscall 1 = write
+    emitter.instruction("syscall");                                             // close the trace with {main}
+    // See the AArch64 arm: no source path or no resolved line means the trailer has no
+    // truthful content, so it is dropped rather than printed as `on line 0`.
+    emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");                        // resolved filename length saved by the location block
+    emitter.instruction("test rdx, rdx");                                       // an empty source path has no filename to print
+    emitter.instruction("jz __rt_uncaught_trace_blank");                        // -> omit the trailer
+    abi::emit_symbol_address(emitter, "rsi", "_uncaught_thrown_in");
+    emitter.instruction("mov edx, 12");                                         // "  thrown in "
+    emitter.instruction("mov edi, 1");                                          // fd = stdout
+    emitter.instruction("mov eax, 1");                                          // syscall 1 = write
+    emitter.instruction("syscall");                                             // write the thrown-in introducer
+    emitter.instruction("mov rsi, QWORD PTR [rsp]");                            // resolved filename pointer kept across the trace walk
+    emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");                        // and its length
+    emitter.instruction("mov edi, 1");                                          // fd = stdout
+    emitter.instruction("mov eax, 1");                                          // syscall 1 = write
+    emitter.instruction("syscall");                                             // write the source filename
+    emitter.instruction("mov rax, QWORD PTR [rsp + 16]");                       // effective line saved before output began
+    emitter.instruction("test rax, rax");                                       // a zero line means the report could not place the throw
+    emitter.instruction("jz __rt_uncaught_trace_blank");                        // -> omit the line suffix
+    abi::emit_symbol_address(emitter, "rsi", "_uncaught_thrown_line");
+    emitter.instruction("mov edx, 9");                                          // " on line "
+    emitter.instruction("mov edi, 1");                                          // fd = stdout
+    emitter.instruction("mov eax, 1");                                          // syscall 1 = write
+    emitter.instruction("syscall");                                             // write the line introducer
+    emitter.instruction("mov rax, QWORD PTR [rsp + 16]");                       // the same effective line the header used
+    emitter.instruction("call __rt_itoa");                                      // returns pointer in rax and length in rdx
+    emitter.instruction("mov rsi, rax");                                        // move the digits out of rax
+    emitter.instruction("mov edi, 1");                                          // fd = stdout
+    emitter.instruction("mov eax, 1");                                          // syscall 1 = write
+    emitter.instruction("syscall");                                             // write the thrown line
+    emitter.label("__rt_uncaught_trace_blank");
+    abi::emit_symbol_address(emitter, "rsi", "_uncaught_trace_blank");
+    emitter.instruction("mov edx, 2");                                          // the blank line php ends a fatal report with
+    emitter.instruction("mov edi, 1");                                          // fd = stdout
+    emitter.instruction("mov eax, 1");                                          // syscall 1 = write
+    emitter.instruction("syscall");                                             // terminate the report
     emitter.instruction(&format!("mov edi, {}", UNCAUGHT_EXIT_STATUS));         // PHP exits 255 for an uncaught exception
     emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit
     emitter.instruction("syscall");                                             // exit the process after reporting the throwable
@@ -312,13 +634,27 @@ mod tests {
         assert!(asm.contains("cbz x2, __rt_uncaught_location"));
         assert!(asm.contains("__rt_uncaught_location:\n"));
         assert!(asm.contains("bl __rt_throwable_location_borrowed"));
-        assert!(asm.contains("cbz x3, __rt_uncaught_newline"));
+        assert!(asm.contains("cbnz x3, __rt_uncaught_location_known"));
+        // An internal throw falls back to the top suspended frame's entry line, then to the
+        // last published diagnostic line — never to a fabricated zero.
+        assert!(asm.contains("__rt_uncaught_diagnostic_line"));
+        assert!(asm.contains("__rt_uncaught_location_known:"));
         assert!(asm.contains("ldp x1, x2, [sp]"));
         assert!(asm.contains("_uncaught_exc_in"));
         assert!(asm.contains("__rt_throwable_location_borrowed"));
         assert!(asm.contains("_uncaught_exc_colon"));
         assert!(asm.contains("ldr x0, [sp, #16]"));
         assert!(asm.contains("bl __rt_itoa"));
+        // The trace block reuses the filename/line the location block saved, and never
+        // fabricates a line: with no resolved line it drops only the " on line N" half.
+        // The synthetic builtin frame is gated on the throwable that published it, so a
+        // caught exception cannot lend its frame to a later failure.
+        assert!(asm.contains("_uncaught_internal_frame_owner"));
+        assert!(asm.contains("_uncaught_trace_header"));
+        assert!(asm.contains("_uncaught_thrown_in"));
+        assert!(asm.contains("ldr x2, [sp, #8]"));
+        assert!(asm.contains("cbz x0, __rt_uncaught_trace_blank"));
+        assert!(asm.contains("__rt_uncaught_trace_blank:"));
     }
 
     /// Verifies the x86_64 report makes the same decisions, in SysV registers.
@@ -361,7 +697,9 @@ mod tests {
         assert!(asm.contains("jz __rt_uncaught_location"));
         assert!(asm.contains("__rt_uncaught_location:\n"));
         assert!(asm.contains("call __rt_throwable_location_borrowed"));
-        assert_eq!(asm.matches("jz __rt_uncaught_newline").count(), 1);
+        assert!(asm.contains("jnz __rt_uncaught_location_known"));
+        assert!(asm.contains("__rt_uncaught_diagnostic_line"));
+        assert!(asm.contains("__rt_uncaught_location_known:"));
         assert!(asm.contains("mov rsi, QWORD PTR [rsp]"));
         assert!(asm.contains("_uncaught_exc_in"));
         assert!(asm.contains("__rt_throwable_location_borrowed"));
@@ -369,6 +707,12 @@ mod tests {
         assert!(asm.contains("mov rax, QWORD PTR [rsp + 16]"));
         assert!(asm.contains("call __rt_itoa"));
         assert!(asm.contains("mov rsi, rax"));
+        // Same trace-block rule as the AArch64 arm.
+        assert!(asm.contains("_uncaught_trace_header"));
+        assert!(asm.contains("_uncaught_thrown_in"));
+        assert!(asm.contains("mov rdx, QWORD PTR [rsp + 8]"));
+        assert!(asm.contains("jz __rt_uncaught_trace_blank"));
+        assert!(asm.contains("__rt_uncaught_trace_blank:"));
     }
 
     /// Verifies both throw paths JUMP to the report instead of inlining the old constant write.

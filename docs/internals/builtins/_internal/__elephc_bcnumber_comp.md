@@ -2,7 +2,7 @@
 title: "__elephc_bcnumber_comp() - internals"
 description: "Compiler internals for __elephc_bcnumber_comp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1077
+  order: 1079
 ---
 
 ## `__elephc_bcnumber_comp()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/__elephc_bcnumber_comp.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/__elephc_bcnumber_comp.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:705](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L705) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

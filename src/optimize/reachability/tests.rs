@@ -1374,6 +1374,14 @@ fn curl_prelude_dispatches_only_user_callables() {
     let program = crate::autoload::collect_aliases(program).expect("alias collection failed");
     let mut inventory = PreludeInventory::new();
     let program = crate::curl_prelude::inject_if_used(program, true, &mut inventory);
+    // The curl prelude's OpenBaseDir guard reads ini_get; the ini surface ships with the
+    // injection the production pipeline adds for a program that references it.
+    let program = crate::opcache_prelude::inject_ini_wrappers(
+        program,
+        crate::php_version::PhpVersion::default(),
+        &[],
+        &mut inventory,
+    );
     let program = crate::name_resolver::resolve(program).expect("fixture must resolve");
     let program = crate::func_args::desugar(program).expect("fixture must desugar");
     let program = crate::optimize::fold_constants(program);
@@ -1404,8 +1412,17 @@ fn curl_prelude_dispatches_only_user_callables() {
     hazardous_functions.sort_unstable();
     assert_eq!(
         hazardous_functions,
-        ["__elephc_curl_sync_read_slot", "curl_setopt"],
-        "the curl prelude's dynamic-dispatch sites changed"
+        [
+            "__elephc_curl_push_invoke",
+            "__elephc_curl_sync_read_slot",
+            "curl_multi_setopt",
+            "curl_setopt",
+        ],
+        "the curl prelude's dynamic-dispatch sites changed. `__elephc_curl_push_invoke` \
+         dispatches the CURLMOPT_PUSHFUNCTION callable through `call_user_func()`, exactly \
+         like the read dispatcher; `curl_multi_setopt` is listed because its \
+         CURLMOPT_PUSHFUNCTION validation calls `is_callable()`, which the scanner treats \
+         conservatively as a dynamic-function hazard."
     );
     assert!(
         hazardous_methods.is_empty(),

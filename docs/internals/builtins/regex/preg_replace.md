@@ -2,7 +2,7 @@
 title: "preg_replace() - internals"
 description: "Compiler internals for preg_replace(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 768
+  order: 770
 ---
 
 ## `preg_replace()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/preg_replace.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/preg_replace.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:705](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L705) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

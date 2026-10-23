@@ -164,6 +164,14 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
                 value: Box::new(mapped_element_type(callback_ret_ty, callback_is_string)),
             })
         }
+        // A runtime `mixed`/union source — `curl_version()['feature_list']` reads an element
+        // of an `array|false` — is validated at runtime by the lowering, exactly like
+        // `fread()`'s stream argument. The callback sees a `mixed` element and the result is
+        // the raw PHP array.
+        PhpType::Mixed | PhpType::Union(_) => {
+            check_map_callback(cx, &PhpType::Mixed)?;
+            Ok(PhpType::php_array())
+        }
         _ => Err(CompileError::new(
             cx.span,
             "array_map() second argument must be array",

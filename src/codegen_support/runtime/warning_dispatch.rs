@@ -32,7 +32,7 @@ fn ins(e: &mut Emitter, arm: &str, x86: &str) {
 }
 
 /// Loads one local scratch word into a C argument register.
-fn arg(e: &mut Emitter, index: usize, offset: usize) {
+pub(crate) fn arg(e: &mut Emitter, index: usize, offset: usize) {
     abi::emit_load_temporary_stack_slot(e, abi::int_arg_reg_name(e.target, index), offset);
 }
 
@@ -42,7 +42,7 @@ fn save(e: &mut Emitter, offset: usize) {
 }
 
 /// Preserves or restores every volatile general/SIMD register used by legacy warning producers.
-fn volatile_registers(e: &mut Emitter, restore: bool) {
+pub(crate) fn volatile_registers(e: &mut Emitter, restore: bool) {
     let arm = e.target.arch == Arch::AArch64;
     let registers = if arm {
         (0..19).map(|index| format!("x{index}")).collect::<Vec<_>>()

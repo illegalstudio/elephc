@@ -68,6 +68,23 @@ fn collect_in_stmt(stmt: &Stmt, names: &mut HashSet<String>) {
         StmtKind::Global { vars } => {
             names.extend(vars.iter().cloned());
         }
+        // `$GLOBALS['name'] = …` (and its `[]` push form) writes the program-global `name`
+        // through the global-variable table, so `name` counts as a global name exactly like
+        // an explicit `global $name;` declaration does.
+        StmtKind::ArrayAssign { array, index, value }
+            if array == "GLOBALS" =>
+        {
+            if let ExprKind::StringLiteral(name) = &index.kind {
+                names.insert(name.clone());
+            }
+            collect_in_expr(index, names);
+            collect_in_expr(value, names);
+        }
+        StmtKind::ArrayPush { array, value }
+            if array == "GLOBALS" =>
+        {
+            collect_in_expr(value, names);
+        }
         StmtKind::If {
             condition,
             then_body,
@@ -299,6 +316,15 @@ fn collect_in_expr(expr: &Expr, names: &mut HashSet<String>) {
             collect_in_expr(callable, names);
         }
         ExprKind::ArrayAccess { array, index } => {
+            // `$GLOBALS['name']` with a literal string key names a program-global: the
+            // top-level binding of `name` has to use global storage so the alias is real.
+            if let ExprKind::Variable(root) = &array.kind {
+                if root == "GLOBALS" {
+                    if let ExprKind::StringLiteral(name) = &index.kind {
+                        names.insert(name.clone());
+                    }
+                }
+            }
             collect_in_expr(array, names);
             collect_in_expr(index, names);
         }

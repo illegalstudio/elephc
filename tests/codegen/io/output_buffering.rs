@@ -118,7 +118,7 @@ var_dump($len);');
 /// (`ob_get_contents`/`ob_get_clean` stay silent, the rest raise E_NOTICE).
 #[test]
 fn test_no_buffer_operations_return_false() {
-    let out = compile_and_run(
+    let out = compile_and_run_raw(
         r#"<?php
 var_dump(ob_get_contents());
 var_dump(ob_get_clean());
@@ -625,7 +625,7 @@ echo $size;
 /// the named notices, and everything still flushes at script end.
 #[test]
 fn test_flags_gate_operations_with_notices() {
-    let out = compile_and_run(
+    let out = compile_and_run_raw(
         r#"<?php
 ob_start(null, 0, 0);
 echo "locked;";
@@ -666,7 +666,7 @@ var_dump(ob_get_clean());
 /// leaves the stack unchanged.
 #[test]
 fn test_ob_start_unknown_function_name_rejected() {
-    let out = compile_and_run(
+    let out = compile_and_run_raw(
         r#"<?php
 $r = ob_start('no_such_handler_fn');
 echo $r === false ? "rejected" : "started";

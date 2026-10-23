@@ -49,7 +49,7 @@ pub(crate) fn emit_curl_share(emitter: &mut Emitter) {
     emit_handle_producer(
         emitter,
         "__rt_curl_share_init",
-        "_elephc_curl_share_init_fn",
+        Some("_elephc_curl_share_init_fn"),
         "curl_share_init (allocate a libcurl share handle)",
         CURL_SHARE_RESOURCE_KIND,
     );
@@ -83,7 +83,7 @@ pub(crate) fn emit_curl_share(emitter: &mut Emitter) {
     emit_handle_producer(
         emitter,
         "__rt_curl_share_init_persistent",
-        "_elephc_curl_share_persistent_init_fn",
+        Some("_elephc_curl_share_persistent_init_fn"),
         "curl_share_init_persistent (build or find the process-lifetime share, PHP 8.5)",
         CURL_SHARE_RESOURCE_KIND,
     );

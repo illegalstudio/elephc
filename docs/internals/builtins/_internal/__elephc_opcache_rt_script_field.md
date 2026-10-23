@@ -2,7 +2,7 @@
 title: "__elephc_opcache_rt_script_field() - internals"
 description: "Compiler internals for __elephc_opcache_rt_script_field(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1155
+  order: 1159
 ---
 
 ## `__elephc_opcache_rt_script_field()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/__elephc_opcache_rt_script_field.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_opcache_rt_script_field.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:705](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L705) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

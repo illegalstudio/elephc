@@ -311,12 +311,12 @@ fn test_core_trigger_error_aot_handler_suppresses_user_fatal() {
 fn test_core_trigger_error_aot_unhandled_user_error_is_fatal() {
     let out = compile_and_run_capture("<?php\ntrigger_error(\"boom\", E_USER_ERROR);\necho 'unreachable';");
     assert!(!out.success, "E_USER_ERROR must terminate the process");
-    assert_eq!(out.stdout, "");
+    // display_errors renders the fatal on the output surface, exactly like php's CLI.
     assert!(
-        out.stderr.contains("Fatal error: boom in ")
-            && out.stderr.contains(" on line 2\n"),
-        "unexpected stderr: {:?}",
-        out.stderr
+        out.stdout.contains("Fatal error: boom in ")
+            && out.stdout.contains(" on line 2\n"),
+        "unexpected stdout: {:?}",
+        out.stdout
     );
 }
 
@@ -331,13 +331,13 @@ fn test_core_trigger_error_eval_unhandled_user_error_is_fatal() {
         "#,
     );
     assert!(!out.success, "eval E_USER_ERROR must terminate the process");
-    assert_eq!(out.stdout, "");
+    // display_errors renders the fatal on the output surface, exactly like php's CLI.
     assert!(
-        out.stderr.contains("Fatal error: boom in ")
-            && out.stderr.contains(" on line ")
-            && !out.stderr.contains("eval() runtime failed"),
-        "unexpected stderr: {:?}",
-        out.stderr
+        out.stdout.contains("Fatal error: boom in ")
+            && out.stdout.contains(" on line ")
+            && !out.stdout.contains("eval() runtime failed"),
+        "unexpected stdout: {:?}",
+        out.stdout
     );
 }
 
@@ -786,4 +786,20 @@ fn test_core_get_resources_aot_inventory_and_filters() {
         out,
         "3:5:4:O:1:5:Unknown:get_resources(): Argument #1 ($type) must be a valid resource type:6:N"
     );
+}
+
+/// `is_resource()` answers `false` for a closed stream, matching PHP: a `fclose()`d handle
+/// keeps its `"Unknown"` type name but stops being a resource.
+#[test]
+fn test_core_is_resource_is_false_for_a_closed_stream() {
+    let out = compile_and_run(
+        r#"<?php
+        $fp = fopen("php://memory", "w+");
+        var_dump(is_resource($fp));
+        fclose($fp);
+        var_dump(is_resource($fp));
+        var_dump(get_resource_type($fp));
+        "#,
+    );
+    assert_eq!(out, "bool(true)\nbool(false)\nstring(7) \"Unknown\"\n");
 }

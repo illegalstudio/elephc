@@ -45,6 +45,27 @@ fn test_php_float_max() {
     assert_eq!(out, "1");
 }
 
+/// `constant($name)` resolves a RUNTIME name through the prelude's flat global-constant
+/// inventory, including a leading-backslash form and a name only known inside a loop.
+#[test]
+fn test_dynamic_constant_lookup() {
+    let out = compile_and_run(
+        r#"<?php
+const ELEPHC_DYN_CONST = 41;
+$names = ["ELEPHC_DYN_CONST", "PHP_INT_MAX"];
+foreach ($names as $name) {
+    echo constant($name), ":";
+}
+echo constant("\\ELEPHC_DYN_CONST"), ":";
+function via_param($name) {
+    return constant($name);
+}
+echo via_param("ELEPHC_DYN_CONST");
+"#,
+    );
+    assert_eq!(out, "41:9223372036854775807:41:41");
+}
+
 /// A namespaced user constant may be named after a predefined constant the lexer tokenizes
 /// on its own (`NAN`, `PHP_EOL`). The declaration binds `Demo\NAN`, and the global constant
 /// stays reachable through its import. It failed with `Expected constant name after

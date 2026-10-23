@@ -2,7 +2,7 @@
 title: "curl_share_strerror() - internals"
 description: "Compiler internals for curl_share_strerror(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 725
+  order: 727
 ---
 
 ## `curl_share_strerror()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_curl.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_curl.rs)
-- **Lowering**: [`src/curl_prelude.rs`:1829](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude.rs#L1829) (`curl_share_strerror`)
+- **Lowering**: [`src/curl_prelude/oracle.rs`:2422](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude/oracle.rs#L2422) (`curl_share_strerror`)
 - **Function symbol**: `curl_share_strerror()`
 
 

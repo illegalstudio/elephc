@@ -21,7 +21,7 @@ use crate::{
 macro_rules! constant {
     (
         $name:literal, $module:ident, $value:expr
-        $(, since: $since:ident)? $(, route: $route:ident)? $(, extension: $extension:literal)? $(,)?
+        $(, since: $since:ident)? $(, route: $route:ident)? $(, extension: $extension:literal)? $(, deprecated: $dep:literal)? $(,)?
     ) => {
         ConstantContract {
             id: BuiltinId::from_canonical_name($name),
@@ -32,6 +32,7 @@ macro_rules! constant {
             route: constant!(@route $($route)?),
             extension: constant!(@flag $($extension)?),
             internal: false,
+            deprecation: constant!(@dep $($dep)?),
         }
     };
     (@since $since:ident) => { Some(PhpVersion::$since) };
@@ -40,6 +41,8 @@ macro_rules! constant {
     (@route) => { ConstantRoute::Predefined };
     (@flag $value:literal) => { $value };
     (@flag) => { false };
+    (@dep $dep:literal) => { Some($dep) };
+    (@dep) => { None };
 }
 
 pub(crate) static CURL_CONSTANTS: &[ConstantContract] = &[
@@ -272,7 +275,7 @@ pub(crate) static CURL_CONSTANTS: &[ConstantContract] = &[
     constant!("CURLOPT_APPEND", Curl, ConstValue::Int(50)),
     constant!("CURLOPT_AUTOREFERER", Curl, ConstValue::Int(58)),
     constant!("CURLOPT_AWS_SIGV4", Curl, ConstValue::Int(10305), since: Php82),
-    constant!("CURLOPT_BINARYTRANSFER", Curl, ConstValue::Int(19914)),
+    constant!("CURLOPT_BINARYTRANSFER", Curl, ConstValue::Int(19914), deprecated: "since 8.4, as it had no effect since 5.1.2"),
     constant!("CURLOPT_BUFFERSIZE", Curl, ConstValue::Int(98)),
     constant!("CURLOPT_CAINFO", Curl, ConstValue::Int(10065)),
     constant!("CURLOPT_CAINFO_BLOB", Curl, ConstValue::Int(40309), since: Php82),

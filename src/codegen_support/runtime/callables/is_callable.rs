@@ -180,12 +180,13 @@ fn emit_method_name_aarch64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: is_callable_method_name ---");
     emitter.label_global("__rt_is_callable_method_name");
 
-    emitter.instruction("sub sp, sp, #64");                                     // reserve frame for receiver, method string, and table cursor
-    emitter.instruction("stp x29, x30, [sp, #48]");                             // save caller frame pointer and return address around comparisons
-    emitter.instruction("add x29, sp, #48");                                    // establish this helper's frame pointer
+    emitter.instruction("sub sp, sp, #80");                                     // reserve frame for receiver, method string, table cursor, and __call flag
+    emitter.instruction("stp x29, x30, [sp, #64]");                             // save caller frame pointer and return address around comparisons
+    emitter.instruction("add x29, sp, #64");                                    // establish this helper's frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save receiver object pointer
     emitter.instruction("str x1, [sp, #8]");                                    // save candidate method string pointer
     emitter.instruction("str x2, [sp, #16]");                                   // save candidate method string length
+    emitter.instruction("str x3, [sp, #48]");                                   // save the __call fallback flag (1 for array callables, 0 for __invoke probes)
     emitter.instruction("cbz x0, __rt_is_callable_method_false");               // null receivers are not callable method arrays
     emitter.instruction("ldr x9, [x0]");                                        // load receiver runtime class id from object header
     abi::emit_symbol_address(emitter, "x10", "_class_callable_method_ptrs");
@@ -199,7 +200,7 @@ fn emit_method_name_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #40]");                                   // load current method table index
     emitter.instruction("ldr x10, [sp, #32]");                                  // load method table entry count
     emitter.instruction("cmp x9, x10");                                         // have all public methods been checked?
-    emitter.instruction("b.ge __rt_is_callable_method_false");                  // no method name matched
+    emitter.instruction("b.ge __rt_is_callable_method_miss");                   // no declared method matched; try the __call fallback
     emitter.instruction("ldr x11, [sp, #24]");                                  // reload method table pointer
     emitter.instruction("add x11, x11, #8");                                    // skip the count word before indexed entries
     emitter.instruction("lsl x12, x9, #4");                                     // multiply method index by 16-byte entry size
@@ -215,6 +216,16 @@ fn emit_method_name_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x9, [sp, #40]");                                   // persist the incremented method table index
     emitter.instruction("b __rt_is_callable_method_loop");                      // continue scanning public methods
 
+    emitter.label("__rt_is_callable_method_miss");
+    emitter.instruction("ldr x9, [sp, #48]");                                   // load the __call fallback flag
+    emitter.instruction("cbz x9, __rt_is_callable_method_false");               // only array callables may fall back to __call
+    emitter.instruction("ldr x10, [sp, #0]");                                   // reload receiver object pointer
+    emitter.instruction("ldr x9, [x10]");                                       // load receiver runtime class id
+    abi::emit_symbol_address(emitter, "x10", "_class_has_call");
+    emitter.instruction("ldrb w9, [x10, x9]");                                  // does the receiver's class declare public __call?
+    emitter.instruction("cbz w9, __rt_is_callable_method_false");               // a class without __call makes the name non-callable
+    emitter.instruction("b __rt_is_callable_method_true");                      // __call makes any method name callable
+
     emitter.label("__rt_is_callable_method_true");
     emitter.instruction("mov x0, #1");                                          // return true for public method matches
     emitter.instruction("b __rt_is_callable_method_done");                      // restore frame before returning true
@@ -223,8 +234,8 @@ fn emit_method_name_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #0");                                          // return false when no public method matches
 
     emitter.label("__rt_is_callable_method_done");
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore caller frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                     // release method lookup frame
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore caller frame pointer and return address
+    emitter.instruction("add sp, sp, #80");                                     // release method lookup frame
     emitter.instruction("ret");                                                 // return boolean result in x0
 }
 
@@ -321,6 +332,7 @@ fn emit_object_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #16");                                    // establish this helper's frame pointer
     abi::emit_symbol_address(emitter, "x1", "_callable_invoke_name");
     emitter.instruction("mov x2, #8");                                          // method string length for "__invoke"
+    emitter.instruction("mov x3, #0");                                          // an __invoke probe must NOT fall back to __call
     abi::emit_call_label(emitter, "__rt_is_callable_method_name");              // test whether the object exposes public __invoke
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore caller frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release delegation frame
@@ -401,6 +413,7 @@ fn emit_array_aarch64(emitter: &mut Emitter) {
 
     emitter.label("__rt_is_callable_array_dispatch_object");
     emitter.instruction("ldr x0, [sp, #8]");                                    // pass saved receiver object to method-name lookup
+    emitter.instruction("mov x3, #1");                                          // a callable-array method may fall back to __call
     abi::emit_call_label(emitter, "__rt_is_callable_method_name");              // x1/x2 already hold method pointer and length from mixed unbox
     emitter.instruction("b __rt_is_callable_array_done");                       // keep method lookup result and restore frame
 
@@ -504,6 +517,7 @@ fn emit_assoc_aarch64(emitter: &mut Emitter) {
 
     emitter.label("__rt_is_callable_assoc_dispatch_object");
     emitter.instruction("ldr x0, [sp, #8]");                                    // pass saved receiver object to method-name lookup
+    emitter.instruction("mov x3, #1");                                          // a callable-array method may fall back to __call
     abi::emit_call_label(emitter, "__rt_is_callable_method_name");              // x1/x2 already hold method pointer and length from hash or mixed lookup
     emitter.instruction("b __rt_is_callable_assoc_done");                       // keep method lookup result and restore frame
 
@@ -787,10 +801,11 @@ fn emit_method_name_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve caller frame pointer before method table scan
     emitter.instruction("mov rbp, rsp");                                        // establish stable frame base for receiver and method string
-    emitter.instruction("sub rsp, 48");                                         // reserve slots for receiver, method string, table pointer, count, index, and entry
+    emitter.instruction("sub rsp, 64");                                         // reserve slots for receiver, method string, table pointer, count, index, and __call flag
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save receiver object pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save candidate method string pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save candidate method string length
+    emitter.instruction("mov QWORD PTR [rbp - 56], rcx");                       // save the __call fallback flag (1 for array callables, 0 for __invoke probes)
     emitter.instruction("test rdi, rdi");                                       // null receivers cannot expose callable methods
     emitter.instruction("je __rt_is_callable_method_false_x86_64");             // return false for null receiver objects
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load receiver runtime class id from object header
@@ -804,7 +819,7 @@ fn emit_method_name_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_is_callable_method_loop_x86_64");
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // load current method table index
     emitter.instruction("cmp r10, QWORD PTR [rbp - 40]");                       // have all public methods been checked?
-    emitter.instruction("jge __rt_is_callable_method_false_x86_64");            // no method name matched
+    emitter.instruction("jge __rt_is_callable_method_miss_x86_64");             // no declared method matched; try the __call fallback
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload method table pointer
     emitter.instruction("add r11, 8");                                          // skip count word before indexed method entries
     emitter.instruction("shl r10, 4");                                          // multiply method index by 16-byte entry size
@@ -821,6 +836,17 @@ fn emit_method_name_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // persist incremented method table index
     emitter.instruction("jmp __rt_is_callable_method_loop_x86_64");             // continue scanning public methods
 
+    emitter.label("__rt_is_callable_method_miss_x86_64");
+    emitter.instruction("cmp QWORD PTR [rbp - 56], 0");                         // is the __call fallback allowed for this probe?
+    emitter.instruction("je __rt_is_callable_method_false_x86_64");             // only array callables may fall back to __call
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload receiver object pointer
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load receiver runtime class id
+    abi::emit_symbol_address(emitter, "r11", "_class_has_call");
+    emitter.instruction("movzx r10d, BYTE PTR [r11 + r10]");                    // does the receiver's class declare public __call?
+    emitter.instruction("test r10, r10");                                       // zero means the class has no __call
+    emitter.instruction("je __rt_is_callable_method_false_x86_64");             // a class without __call makes the name non-callable
+    emitter.instruction("jmp __rt_is_callable_method_true_x86_64");             // __call makes any method name callable
+
     emitter.label("__rt_is_callable_method_true_x86_64");
     emitter.instruction("mov rax, 1");                                          // return true for public method matches
     emitter.instruction("jmp __rt_is_callable_method_done_x86_64");             // restore frame before returning true
@@ -829,7 +855,7 @@ fn emit_method_name_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor eax, eax");                                        // return false when no public method matches
 
     emitter.label("__rt_is_callable_method_done_x86_64");
-    emitter.instruction("add rsp, 48");                                         // release method lookup frame slots
+    emitter.instruction("add rsp, 64");                                         // release method lookup frame slots
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return boolean result in rax
 }
@@ -928,6 +954,7 @@ fn emit_object_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish stable frame base for delegation
     abi::emit_symbol_address(emitter, "rsi", "_callable_invoke_name");
     emitter.instruction("mov rdx, 8");                                          // method string length for "__invoke"
+    emitter.instruction("xor ecx, ecx");                                        // an __invoke probe must NOT fall back to __call
     abi::emit_call_label(emitter, "__rt_is_callable_method_name");              // test whether object exposes public __invoke
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return delegated method lookup result
@@ -1006,6 +1033,7 @@ fn emit_array_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_is_callable_array_dispatch_object_x86_64");
     emitter.instruction("mov rsi, rdi");                                        // move method string pointer to second argument register
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload receiver object pointer into first argument register
+    emitter.instruction("mov rcx, 1");                                          // a callable-array method may fall back to __call
     abi::emit_call_label(emitter, "__rt_is_callable_method_name");              // rdx already holds method string length from mixed unbox
     emitter.instruction("jmp __rt_is_callable_array_done_x86_64");              // keep method lookup result and restore frame
 
@@ -1110,6 +1138,7 @@ fn emit_assoc_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, rsi");                                        // move method string length to third argument register
     emitter.instruction("mov rsi, rdi");                                        // move unboxed method string pointer to second argument register
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload receiver object pointer into first argument register
+    emitter.instruction("mov rcx, 1");                                          // a callable-array method may fall back to __call
     abi::emit_call_label(emitter, "__rt_is_callable_method_name");              // check whether the method string names a public receiver method
     emitter.instruction("jmp __rt_is_callable_assoc_done_x86_64");              // keep method lookup result and restore frame
 

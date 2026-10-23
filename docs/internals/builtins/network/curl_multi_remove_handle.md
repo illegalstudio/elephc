@@ -2,7 +2,7 @@
 title: "curl_multi_remove_handle() - internals"
 description: "Compiler internals for curl_multi_remove_handle(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 712
+  order: 714
 ---
 
 ## `curl_multi_remove_handle()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_curl.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_curl.rs)
-- **Lowering**: [`src/curl_prelude.rs`:1544](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude.rs#L1544) (`curl_multi_remove_handle`)
+- **Lowering**: [`src/curl_prelude/oracle.rs`:2032](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude/oracle.rs#L2032) (`curl_multi_remove_handle`)
 - **Function symbol**: `curl_multi_remove_handle()`
 
 

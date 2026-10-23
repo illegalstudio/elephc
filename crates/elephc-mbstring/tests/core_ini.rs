@@ -138,8 +138,10 @@ fn core_ini_abi_and_query_provider_share_request_state() {
     let mut all = call(INI_GET_ALL, &[MbArgV1::boolean(true)]);
     let bytes = unsafe { std::slice::from_raw_parts(all.bytes, all.len as usize) };
     let (graph, owners) = decode_ini_array(bytes, all.value as u64).unwrap();
-    assert_eq!(graph.arrays()[0].len(), 4);
-    assert_eq!(owners.len(), 8);
+    // Five directives since `open_basedir` joined the Core INI catalog; two owned strings
+    // (name and value) per entry.
+    assert_eq!(graph.arrays()[0].len(), 5);
+    assert_eq!(owners.len(), 10);
     unsafe { elephc_mbstring_release_v1(&mut all); }
     std::thread::spawn(|| assert_eq!(query(QUERY_CONFIG_ENTRY), (b";&".to_vec(), 2, 1, 0))).join().unwrap();
     assert_eq!(query(QUERY_CONFIG_FIELD).3, 1);

@@ -2,7 +2,7 @@
 title: "ini_get_all()"
 description: "Returns every configuration directive, optionally with its access level and scope."
 sidebar:
-  order: 984
+  order: 986
 ---
 
 ## ini_get_all()
@@ -21,7 +21,7 @@ Returns every configuration directive, optionally with its access level and scop
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected shared_ini prelude.
+- **Compiled (AOT)**: supported through the compiler-injected web prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._

@@ -2,7 +2,7 @@
 title: "var_dump() - internals"
 description: "Compiler internals for var_dump(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 694
+  order: 696
 ---
 
 ## `var_dump()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/var_dump.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/var_dump.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:705](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L705) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

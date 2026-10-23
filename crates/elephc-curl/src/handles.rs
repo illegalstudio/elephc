@@ -124,6 +124,10 @@ pub(crate) struct EasyEntry {
     /// `crate::callbacks::SLOT_*`. Borrowed, never owned: the descriptors are rooted in
     /// `CurlHandle` properties on the PHP side (see `crate::callbacks`).
     pub(crate) callbacks: [CallbackSlot; SLOT_COUNT],
+    /// True for a handle libcurl created itself through a server push. Those are OWNED BY
+    /// LIBCURL: it frees them with the multi handle, so `elephc_curl_easy_free` must only
+    /// drop the bridge entry, never `curl_easy_cleanup` (that was a double free).
+    pub(crate) pushed: bool,
     /// Whether `CURLOPT_WRITEFUNCTION` currently owns the body. With
     /// `return_transfer`, models php-src's single `handlers.write->method` enum:
     /// `write_user` = `PHP_CURL_USER`, `return_transfer` = `PHP_CURL_RETURN`, neither =
@@ -139,6 +143,13 @@ pub(crate) struct EasyEntry {
     /// global `EG(exception)` gate; keying that on this per-handle flag left it sticky on
     /// the multi path, which never clears it.
     pub(crate) callback_threw: bool,
+    /// The outgoing request header the debug trampoline captured (the `type == 2`
+    /// delivery), for `CURLINFO_HEADER_OUT` — php-src's own trampoline stores this IN C,
+    /// before it ever calls the PHP callback (`interface.c`'s `curl_debug`), so a throw
+    /// inside the callback must not lose it. `None` until a transfer delivered one;
+    /// cleared at the start of every `curl_easy_perform` and duplicated by
+    /// `curl_copy_handle`, like php-src's `ch->header.str`.
+    pub(crate) header_out: Option<Vec<u8>>,
 }
 
 // RUNTIME CA SELECTION (`crate::ca`) DELIBERATELY KEEPS NO STATE HERE. A discovered file
@@ -184,6 +195,17 @@ pub(crate) struct EasyEntry {
 // identical contract stated at the ABI boundary.
 unsafe impl Send for EasyEntry {}
 
+/// Stores the debug trampoline's captured outgoing request header for `id`. Called from
+/// `crate::callbacks`' debug trampoline on every `type == 2` libcurl delivery, with the
+/// callback's PHP status irrelevant: php-src captures the same bytes in its own C
+/// trampoline (`interface.c`'s `curl_debug`), before any PHP callable runs.
+pub(crate) fn store_header_out(id: i64, bytes: &[u8]) {
+    let mut guard = lock_recover(handles());
+    if let Some(entry) = guard.get_mut(&id) {
+        entry.header_out = Some(bytes.to_vec());
+    }
+}
+
 impl EasyEntry {
     /// Builds a fresh entry around an already-initialized `curl` handle, with
     /// its error buffer allocated and zeroed at the fixed size libcurl
@@ -198,6 +220,7 @@ impl EasyEntry {
             return_transfer: false,
             body: Vec::new(),
             taken_body: Vec::new(),
+            header_out: None,
             error_buf: vec![0u8; easy::CURL_ERROR_SIZE],
             last_errno: 0,
             last_error: Vec::new(),
@@ -209,6 +232,7 @@ impl EasyEntry {
             mime: None,
             pending_mime: None,
             pending_part: None,
+            pushed: false,
         }
     }
 
@@ -245,6 +269,70 @@ impl EasyEntry {
 pub(crate) fn handles() -> &'static Mutex<HashMap<i64, EasyEntry>> {
     static HANDLES: OnceLock<Mutex<HashMap<i64, EasyEntry>>> = OnceLock::new();
     HANDLES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Drops the bridge entry for a pushed handle libcurl DENIED, or that the push callback
+/// refused by throwing.
+///
+/// libcurl's `CURLMOPT_PUSHFUNCTION` contract destroys a denied pushed handle, so the entry
+/// must not survive: the prelude has already minted a `CurlHandle` for this id, and keeping
+/// the entry would let a later `curl_setopt()`/`curl_getinfo()` on that object reach freed
+/// memory.
+pub(crate) fn unregister_pushed(id: i64) {
+    lock_recover(handles()).remove(&id);
+}
+
+/// Transfers ownership of an ACCEPTED pushed handle to the application.
+///
+/// `CURL_PUSH_OK` hands the pushed handle to the application (libcurl only *adds it to the
+/// multi*, it does not keep owning it). Until this runs the entry is libcurl-owned, so a
+/// deny would destroy it; afterwards `elephc_curl_easy_free` must `curl_easy_cleanup` it
+/// exactly like any other handle a `CurlHandle` object owns.
+pub(crate) fn accept_pushed(id: i64) {
+    if let Some(entry) = lock_recover(handles()).get_mut(&id) {
+        entry.pushed = false;
+    }
+}
+
+/// Registers a libcurl-owned handle created by a server push under a fresh bridge id.
+///
+/// The PHP side wraps the id into a `CurlHandle` so the push callback can address the
+/// pushed transfer (`curl_setopt`, `curl_multi_getcontent`). Ownership is libcurl's only
+/// until the push callback answers: [`accept_pushed`] hands it to the application (the
+/// entry then cleans the handle up on teardown) and [`unregister_pushed`] drops the entry
+/// for a denied push, whose handle libcurl destroys.
+pub(crate) fn register_pushed(curl: *mut crate::easy::CURL, inherit_return_transfer: bool) -> i64 {
+    if curl.is_null() {
+        return 0;
+    }
+    let id = next_id();
+    let mut entry = EasyEntry::new(curl, id);
+    entry.pushed = true;
+    // libcurl's pushed handle is a DUP of the parent, so php-src's pushed handle keeps the
+    // parent's write MODE: a RETURNTRANSFER parent captures the pushed body. Mirror that,
+    // and drop the inherited header registration so the pushed headers are not appended to
+    // the parent's capture.
+    entry.return_transfer = inherit_return_transfer;
+    crate::callbacks::clear_all(&mut entry);
+    unsafe {
+        // libcurl creates a pushed handle by DUPLICATING the parent's easy handle, so it
+        // inherits the parent's WRITE/HEADER callbacks AND their userdata — the parent's
+        // bridge id. Re-point every PHP-visible callback at THIS handle's entry, or the
+        // pushed body is appended to the parent's capture buffer and the pushed handle
+        // stays empty (php-src re-binds the same way before handing the handle to the
+        // push callback).
+        crate::php_layer::install_write_callback(curl, id);
+        crate::callbacks::install_read_callback(curl, id);
+        // `error_buf`'s heap address is stable across the move into the table, exactly as
+        // in `elephc_curl_easy_init`.
+        crate::easy::setopt_ptr(
+            curl,
+            crate::easy::CURLOPT_ERRORBUFFER,
+            entry.error_buf.as_mut_ptr() as *mut std::ffi::c_void,
+        );
+    }
+    lock_recover(handles()).insert(id, entry);
+    id
 }
 
 /// Allocates the next positive handle id. Monotonic and never reused, even

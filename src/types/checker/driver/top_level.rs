@@ -209,6 +209,10 @@ impl Checker {
         for name in crate::superglobals::SUPERGLOBALS {
             global_env.insert((*name).to_string(), crate::superglobals::superglobal_type());
         }
+        // `$GLOBALS` is the live global-variable table. It is typed as an `array<mixed>` so
+        // `$GLOBALS['name']` reads and writes are ordinary array operations here; the EIR
+        // lowering routes a literal key to the real global storage.
+        global_env.insert("GLOBALS".to_string(), PhpType::Array(Box::new(PhpType::Mixed)));
         for (name, ty) in &self.extern_globals {
             global_env.insert(name.clone(), ty.clone());
         }

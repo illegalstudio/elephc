@@ -114,6 +114,39 @@ fn test_strlen_empty() {
     assert_eq!(out, "0");
 }
 
+/// Compiles `<?php echo strlen(123);` and asserts stdout is `3`, matching PHP's int-to-string
+/// coercion for a builtin string parameter.
+#[test]
+fn test_strlen_int_argument_coerces_to_string() {
+    let out = compile_and_run("<?php echo strlen(123);");
+    assert_eq!(out, "3");
+}
+
+/// Compiles `<?php $a = 1.25; echo strlen($a);` and asserts stdout is `4`, matching PHP's
+/// float-to-string coercion at a builtin string parameter.
+#[test]
+fn test_strlen_float_variable_coerces_to_string() {
+    let out = compile_and_run("<?php $a = 1.25; echo strlen($a);");
+    assert_eq!(out, "4");
+}
+
+/// Compiles `<?php $a = true; echo strlen($a);` and asserts stdout is `1` (PHP renders `true`
+/// as the one-byte string `"1"`).
+#[test]
+fn test_strlen_bool_variable_coerces_to_string() {
+    let out = compile_and_run("<?php $a = true; echo strlen($a);");
+    assert_eq!(out, "1");
+}
+
+/// Compiles a function that is never called and whose untyped parameter feeds `strlen`. The
+/// parameter keeps the checker's `Int` placeholder with no call site, so this asserts the
+/// builtin accepts and casts a scalar rather than rejecting it as non-string.
+#[test]
+fn test_strlen_untyped_parameter_without_call_site() {
+    let out = compile_and_run("<?php function f($x) { return strlen($x); } echo 'ok';");
+    assert_eq!(out, "ok");
+}
+
 /// Compiles `<?php echo intval("42");` and asserts stdout is `42` (string to int conversion).
 #[test]
 fn test_intval_string() {

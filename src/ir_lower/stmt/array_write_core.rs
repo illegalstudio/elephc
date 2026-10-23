@@ -109,6 +109,15 @@ pub(super) fn lower_array_assign(
     value: &Expr,
     span: Span,
 ) {
+    // `$GLOBALS['name'] = value` (and its `.=` desugaring, whose right-hand side reads the
+    // same `$GLOBALS['name']`) writes the global `$name` directly. A non-literal key is left
+    // to the ordinary array path.
+    if array == "GLOBALS" {
+        if let ExprKind::StringLiteral(name) = &index.kind {
+            lower_global_table_write(ctx, name, value, span);
+            return;
+        }
+    }
     let update = desugared_element_update(value, span, |read| {
         reads_local_array_element(read, array, index)
     });
@@ -122,6 +131,30 @@ pub(super) fn lower_array_assign(
         return;
     }
     lower_array_assign_with_diagnosed_key(ctx, array, index, value, span, update.is_some());
+}
+
+/// Writes global variable `name` for a `$GLOBALS['name'] = value` statement. The name is
+/// registered as a program-global so a top-level binding of the same name uses global storage
+/// too and the alias is real in both directions.
+fn lower_global_table_write(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    value: &Expr,
+    span: Span,
+) {
+    let stored = crate::ir_lower::expr::lower_expr(ctx, value);
+    ctx.all_global_var_names.insert(name.to_string());
+    let data = ctx.intern_global_name(name);
+    ctx.builder.emit_with_effects(
+        Op::StoreGlobal,
+        vec![stored.value],
+        Some(Immediate::GlobalName(data)),
+        IrType::Void,
+        PhpType::Void,
+        Ownership::NonHeap,
+        Op::StoreGlobal.default_effects(),
+        Some(span),
+    );
 }
 
 /// How a statement value produced by the parser's update desugaring re-reads its own target.

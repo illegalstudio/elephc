@@ -920,6 +920,31 @@ pub(super) fn parse_named_expr(
                 span,
             ))
         }
+    } else if name.parts.len() == 1
+        && (name.parts[0].eq_ignore_ascii_case("exit") || name.parts[0].eq_ignore_ascii_case("die"))
+        && !matches!(
+            tokens.get(*pos).map(|(token, _)| token),
+            Some(Token::LParen)
+        )
+    {
+        // `exit`/`die` are language constructs and may be written without parentheses
+        // (`exit;`, `die;`, and `exit EXPR`). Lower the bare form to the call the checker
+        // already handles, so it is not read as a constant reference.
+        let mut args = Vec::new();
+        if *pos < tokens.len()
+            && !matches!(
+                tokens[*pos].0,
+                Token::Semicolon
+                    | Token::RParen
+                    | Token::RBracket
+                    | Token::RBrace
+                    | Token::Comma
+                    | Token::Eof
+            )
+        {
+            args.push(crate::parser::expr::pratt::parse_expr_bp(tokens, pos, 0)?);
+        }
+        Ok(Expr::new(ExprKind::FunctionCall { name, args }, span))
     } else {
         Ok(Expr::new(ExprKind::ConstRef(name), span))
     }

@@ -112,6 +112,22 @@ pub fn set_ini_overrides(overrides: Vec<(String, String)>) {
 
 /// Returns this compilation's `--ini` directive overrides (empty unless
 /// [`set_ini_overrides`] ran for it, which is the no-override default).
-pub(crate) fn ini_overrides() -> Vec<(String, String)> {
+pub fn ini_overrides() -> Vec<(String, String)> {
     INI_OVERRIDES.with(|entries| entries.borrow().clone())
+}
+
+/// Resolves php's compiled `display_errors` mode from the `--ini` overrides.
+///
+/// php applies the last assignment to a directive, so the last one wins. Without an
+/// override the CLI default is `1`: the display copy renders through the output layer.
+/// `0` disables it and `2` (`stderr`) renders it on the diagnostic stream.
+pub fn display_errors_mode() -> u8 {
+    ini_overrides()
+        .iter()
+        .rev()
+        .find(|(name, _)| name == "display_errors")
+        .map(|(_, value)| {
+            elephc_builtin_contract::mbstring_abi::ini::core::display_errors_mode(value.as_bytes())
+        })
+        .unwrap_or(1)
 }

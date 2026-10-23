@@ -55,6 +55,26 @@ var_dump($c->never);
     assert_eq!(out, "NULL\n");
 }
 
+/// Verifies that a global-constant reference inside a static or instance property default is
+/// resolved to its value before the literal default is materialized, including when it appears
+/// as an array element.
+#[test]
+fn test_property_defaults_resolve_global_constant_references() {
+    let out = compile_and_run(
+        r#"<?php
+const ELEPHC_DEFAULT_NUMBER = 7;
+class Holder {
+    public static $staticScalar = ELEPHC_DEFAULT_NUMBER;
+    public static $staticArray = ['a', ELEPHC_DEFAULT_NUMBER];
+    public $instanceArray = [ELEPHC_DEFAULT_NUMBER, 'b'];
+}
+$h = new Holder();
+echo Holder::$staticScalar, "|", Holder::$staticArray[1], "|", $h->instanceArray[0], "\n";
+"#,
+    );
+    assert_eq!(out, "7|7|7\n");
+}
+
 /// Verifies that an untyped no-default property later assigned an int still defaults to null.
 #[test]
 fn test_untyped_property_without_default_assigned_int_later() {

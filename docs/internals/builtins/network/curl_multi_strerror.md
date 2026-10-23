@@ -2,7 +2,7 @@
 title: "curl_multi_strerror() - internals"
 description: "Compiler internals for curl_multi_strerror(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 715
+  order: 717
 ---
 
 ## `curl_multi_strerror()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_curl.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_curl.rs)
-- **Lowering**: [`src/curl_prelude.rs`:1723](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude.rs#L1723) (`curl_multi_strerror`)
+- **Lowering**: [`src/curl_prelude/oracle.rs`:2294](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude/oracle.rs#L2294) (`curl_multi_strerror`)
 - **Function symbol**: `curl_multi_strerror()`
 
 

@@ -1250,6 +1250,18 @@ mod tests {
                 crate::pdo_prelude::OptionalDrivers::from_build_environment(),
             ),
             "image" => crate::image_prelude::image_declarations(),
+            "curl" => {
+                let version = std::env::var("ELEPHC_ORACLE_VERSION")
+                    .ok()
+                    .map(|spelling| {
+                        crate::php_version::PhpVersion::ALL
+                            .into_iter()
+                            .find(|candidate| candidate.spelling() == spelling)
+                            .unwrap_or_else(|| panic!("unknown PHP version {spelling}"))
+                    })
+                    .unwrap_or(crate::php_version::PhpVersion::Php85);
+                crate::curl_prelude::build::curl_declarations(version)
+            }
             other => panic!("unknown prelude {other}"),
         };
         let php = std::fs::read_to_string(&php_path).expect("must read the PHP fixture");
@@ -1274,6 +1286,34 @@ mod tests {
                         .expect("dump parsed");
                 }
                 panic!("mismatch in {label}");
+            }
+        }
+    }
+
+    /// PERMANENT GATE — the built curl declarations must match the PHP oracle for every
+    /// supported profile, not only when the env-driven oracle is asked for. Keep
+    /// `src/curl_prelude/build.rs` in sync with `CURL_PRELUDE_SRC` by re-running
+    /// `scripts/curl/php_src_tests/regenerate_curl_prelude.py` after a prelude edit.
+    #[test]
+    fn curl_built_declarations_match_the_php_for_every_profile() {
+        for version in crate::php_version::PhpVersion::ALL {
+            let source = crate::curl_prelude::prelude_source_for_version(version);
+            let tokens = crate::lexer::tokenize(source.as_ref()).expect("curl oracle must tokenize");
+            let parsed = crate::parser::parse_internal(&tokens).expect("curl oracle must parse");
+            let built = crate::curl_prelude::build::curl_declarations(version);
+            assert_eq!(
+                built.len(),
+                parsed.len(),
+                "declaration count for {}",
+                version.spelling()
+            );
+            for (built_stmt, parsed_stmt) in built.iter().zip(parsed.iter()) {
+                assert_eq!(
+                    strip_spans(&format!("{built_stmt:?}")),
+                    strip_spans(&format!("{parsed_stmt:?}")),
+                    "mismatch for {}",
+                    version.spelling()
+                );
             }
         }
     }
@@ -1328,12 +1368,26 @@ mod tests {
                     .unwrap_or(crate::php_version::PhpVersion::Php86);
                 crate::mysqli_prelude::assembled_source_for_version(version)
             }
+            // The full curl prelude for one profile. Its version fences are stripped by
+            // `prelude_source_for_version`, so transcribe the NEWEST profile (which carries
+            // every gated member) and add the conditionals by hand in the built form.
+            "curl" => {
+                let version = std::env::var("ELEPHC_TRANSCRIBE_VERSION")
+                    .ok()
+                    .map(|spelling| {
+                        crate::php_version::PhpVersion::ALL
+                            .into_iter()
+                            .find(|candidate| candidate.spelling() == spelling)
+                            .unwrap_or_else(|| panic!("unknown PHP version {spelling}"))
+                    })
+                    .unwrap_or(crate::php_version::PhpVersion::Php85);
+                crate::curl_prelude::prelude_source_for_version(version).into_owned()
+            }
             other => panic!("unknown prelude {other}"),
         };
         let tokens = crate::lexer::tokenize(&source).expect("prelude must tokenize");
         let parsed = crate::parser::parse_internal(&tokens).expect("prelude must parse");
-        let rendered = match std::env::var("ELEPHC_TRANSCRIBE_SPLIT") {
-            Ok(aggregator) => transcribe_split(&parsed, &aggregator),
+        let rendered = match std::env::var("ELEPHC_TRANSCRIBE_SPLIT") {            Ok(aggregator) => transcribe_split(&parsed, &aggregator),
             Err(_) => transcribe(&parsed),
         };
         std::fs::write(&out, rendered).expect("must write the transcription");

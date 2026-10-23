@@ -664,6 +664,12 @@ fn emit_sprintf_warnings_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool) 
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // resume string formatting with the literal Array
 
+    // The integer/float cast lowering calls this warning through the target-neutral spelling
+    // the AArch64 emitter publishes. On this target the body lives behind the `_x64` name, so
+    // expose a jump alias: the caller already placed the object, kind, eval context, and
+    // callable-descriptor arguments in rdi/rsi/rdx/rcx.
+    emitter.label_global("__rt_sprintf_warn_object_numeric");
+    emitter.instruction("jmp __rt_sprintf_warn_object_numeric_x64");            // reuse the full object/Closure warning body
     emitter.label_global("__rt_sprintf_warn_object_numeric_x64");
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish an aligned warning frame
@@ -885,6 +891,9 @@ mod tests {
         assert!(x64.contains("_iterable_array_str"), "{x64}");
         assert!(x64.contains("__rt_sprintf_warn_array_to_string_x64"), "{x64}");
         assert!(x64.contains("__rt_sprintf_warn_object_numeric_x64"), "{x64}");
+        // The integer/float cast lowering calls the target-neutral spelling on every target;
+        // x86_64 publishes it as a jump alias over the `_x64` body.
+        assert!(x64.contains("__rt_sprintf_warn_object_numeric:"), "{x64}");
         assert!(x64.contains("__rt_sprintf_throw_string_error_x64"), "{x64}");
     }
 

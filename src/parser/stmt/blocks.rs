@@ -66,6 +66,10 @@ pub(crate) fn expect_semicolon(
     if *pos < tokens.len() && tokens[*pos].0 == Token::Semicolon {
         *pos += 1;
         Ok(())
+    } else if *pos < tokens.len() && matches!(tokens[*pos].0, Token::InlineHtml(_)) {
+        // PHP's close tag is an implicit statement terminator: `echo 1 ?>` needs no
+        // semicolon. The InlineHtml token stays put — it is the NEXT statement.
+        Ok(())
     } else {
         let span = if *pos < tokens.len() {
             tokens[*pos].1.span

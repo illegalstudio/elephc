@@ -76,6 +76,23 @@ pub fn file_put_contents_requirements(
     }
 }
 
+/// Resolves the TLS bridge needed by `fsockopen()`.
+///
+/// `fsockopen("tls://host", 443)` opens a TLS-wrapped stream exactly like
+/// `stream_socket_client("tls://…")`; a non-literal host is treated conservatively because the
+/// scheme is only known at run time.
+pub fn fsockopen_requirements(input: &BuiltinRequirementInput<'_>) -> Vec<BuiltinRequirement> {
+    match input.args.first().map(|arg| &arg.kind) {
+        Some(ExprKind::StringLiteral(host))
+            if host.starts_with("tls://") || host.starts_with("ssl://") =>
+        {
+            vec![BuiltinRequirement::Bridge("elephc_tls")]
+        }
+        Some(ExprKind::StringLiteral(_)) => Vec::new(),
+        _ => vec![BuiltinRequirement::Bridge("elephc_tls")],
+    }
+}
+
 /// Resolves transport, compression, and PHAR libraries needed by `fopen()`.
 pub fn fopen_requirements(input: &BuiltinRequirementInput<'_>) -> Vec<BuiltinRequirement> {
     let Some(ExprKind::StringLiteral(filename)) = input.args.first().map(|arg| &arg.kind) else {
@@ -169,6 +186,41 @@ mod tests {
             Span::dummy(),
         )];
         assert_eq!(file_get_contents_requirements(&input(&dynamic)).len(), 4);
+    }
+
+    /// Verifies `fsockopen` links the TLS bridge exactly when the scheme can ask for a handshake.
+    #[test]
+    fn fsockopen_requirements_follow_the_host_scheme() {
+        let tls = [Expr::new(
+            ExprKind::StringLiteral("tls://example.test".to_string()),
+            Span::dummy(),
+        )];
+        assert_eq!(
+            fsockopen_requirements(&input(&tls)),
+            vec![BuiltinRequirement::Bridge("elephc_tls")]
+        );
+        let ssl = [Expr::new(
+            ExprKind::StringLiteral("ssl://example.test".to_string()),
+            Span::dummy(),
+        )];
+        assert_eq!(
+            fsockopen_requirements(&input(&ssl)),
+            vec![BuiltinRequirement::Bridge("elephc_tls")]
+        );
+        let plain = [Expr::new(
+            ExprKind::StringLiteral("example.test".to_string()),
+            Span::dummy(),
+        )];
+        assert!(fsockopen_requirements(&input(&plain)).is_empty());
+        // A run-time host can carry any scheme, so the bridge must be available.
+        let dynamic = [Expr::new(
+            ExprKind::Variable("host".to_string()),
+            Span::dummy(),
+        )];
+        assert_eq!(
+            fsockopen_requirements(&input(&dynamic)),
+            vec![BuiltinRequirement::Bridge("elephc_tls")]
+        );
     }
 
     /// Verifies PHAR writes and known stream filters select their exact bridge libraries.

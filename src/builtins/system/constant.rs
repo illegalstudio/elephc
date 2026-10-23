@@ -36,7 +36,9 @@ builtin! {
     semantics: BuiltinSemantics {
         validation: BuiltinValidation::SignatureOnly,
         result_type: BuiltinResultType::Checked,
-        effects: BuiltinEffects::Static(crate::ir::Effects::READS_GLOBAL),
+        effects: BuiltinEffects::Static(
+            crate::ir::Effects::READS_GLOBAL.union(crate::ir::Effects::MAY_THROW),
+        ),
         result_ownership: BuiltinResultOwnership::NonHeap,
         requirements: BuiltinRequirements::Static(&[]),
         target_strategy: BuiltinTargetStrategy::EirPrimitive,
@@ -66,10 +68,11 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         _ => None,
     };
     let Some(name) = literal else {
-        return Err(CompileError::aot_literal_required(
-            cx.span,
-            "constant() first argument must be a string literal in AOT mode",
-        ));
+        // A dynamic name is resolved at run time through the prelude helper
+        // `__elephc_dynamic_constant`, which looks the name up in the flat global-constant
+        // inventory. Its result type is `mixed` because the constant's own type is not known
+        // until the lookup runs.
+        return Ok(PhpType::Mixed);
     };
     let name = elephc_builtin_contract::canonical_constant_name(&name);
     if name.contains("::") {
@@ -87,18 +90,22 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     }
 }
 
-/// Rejects a `constant()` call that reached backend-neutral lowering.
+/// Composes a dynamic `constant($name)` onto the prelude's runtime lookup.
 ///
-/// Direct calls are rewritten into a plain constant reference by
+/// Direct literal calls are rewritten into a plain constant reference by
 /// `crate::ir_lower::expr::constants::lower_static_constant_call()` before the registry
-/// lowering runs, so reaching here means the name was not a literal — which `check` already
-/// refuses for every path that type-checks.
+/// lowering runs, so reaching here means the name is a runtime string. The lookup, the
+/// `\Error` for an unknown name, and the leading-backslash strip all live in the
+/// prelude-declared `__elephc_dynamic_constant()`, which this emits a direct call to.
 fn lower(
-    _ctx: &mut dyn BuiltinLoweringContext,
+    ctx: &mut dyn BuiltinLoweringContext,
     call: &NormalizedBuiltinCall<'_>,
 ) -> Result<LoweredBuiltinValue, BuiltinLoweringError> {
-    Err(BuiltinLoweringError::new(format!(
-        "{}() needs a compile-time constant name",
-        call.name,
-    )))
+    let name = call.operand(0)?;
+    Ok(ctx.emit_user_call(
+        "__elephc_dynamic_constant",
+        vec![name],
+        PhpType::Mixed,
+        Some(call.span),
+    ))
 }

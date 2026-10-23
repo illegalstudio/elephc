@@ -469,6 +469,40 @@ echo serialize($copy) === $wire ? "same\n" : "changed\n";
     );
 }
 
+/// A class whose property was promoted to a reference-backed slot (anywhere in the program,
+/// e.g. `$alias =& $obj->prop`) still serializes and unserializes that property: the writer
+/// and the injector dereference the property's ref-cell, whose layout matches the slot's.
+/// Measured on PHP 8.5.10.
+#[test]
+fn test_serialize_reference_property_round_trips() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public string $data = "";
+    public string $tag = "";
+    public function __construct(string $data, string $tag) { $this->data = $data; $this->tag = $tag; }
+}
+$original = new Box("payload", "t");
+echo serialize($original), "\n";
+$copy = unserialize(serialize($original));
+echo $copy->data, "|", $copy->tag, "\n";
+$ref =& $original->data;
+echo serialize($original), "\n";
+$again = unserialize(serialize($original));
+echo $again->data, "|", $again->tag, "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "O:3:\"Box\":2:{s:4:\"data\";s:7:\"payload\";s:3:\"tag\";s:1:\"t\";}\n",
+            "payload|t\n",
+            "O:3:\"Box\":2:{s:4:\"data\";s:7:\"payload\";s:3:\"tag\";s:1:\"t\";}\n",
+            "payload|t\n",
+        )
+    );
+}
+
 /// Verifies object serialization (Stage A): public/protected/private mangled keys,
 /// declaration order, mixed-typed properties, null, nested objects, and objects
 /// inside indexed/associative arrays — all byte-exact with the PHP interpreter.

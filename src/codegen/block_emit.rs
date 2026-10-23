@@ -1719,6 +1719,7 @@ fn normalized_candidate_body(
 /// would fold bodies whose runtime output differs.
 fn normalize_body_text(text: &str, function: &Function) -> String {
     let self_symbol = crate::names::mangle_fqn(&function.name);
+    let self_label_prefix = format!("_eir_{}_", crate::names::label_fragment(&function.name));
     let entry_symbol = entry_symbol_for_name(&function.name, function.flags.is_static);
     // Order matters: the longer suffix symbols must be erased before the entry symbol, or the
     // entry erasure would consume their prefix and leave a mangled remainder behind.
@@ -1740,6 +1741,11 @@ fn normalize_body_text(text: &str, function: &Function) -> String {
                 return line.to_string();
             }
             let mut erased_line = line.to_string();
+            // Address-taken internal labels are named after the candidate
+            // (`_eir_Box_User___indirect_backtrace_frame_reader_2`), with a DIFFERENT mangling
+            // than its entry symbol, so the operand-aware erasure below misses them. The prefix
+            // is still the candidate's own identity; canonicalize it too.
+            erased_line = erased_line.replace(&self_label_prefix, "_eir_<SELF>_");
             for symbol in &own_symbols {
                 erased_line = erase_word_bounded(&erased_line, symbol);
             }

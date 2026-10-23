@@ -82,6 +82,57 @@ pub fn inject_if_used(
 ///
 /// The eval interpreter's fallback OPcache functions answer from exactly that configuration,
 /// so they are only allowed to answer for a binary that has it.
+/// Injects ONLY the CLI ini surface (`ini_get`/`ini_set`/`ini_get_all` plus the shared
+/// helpers and the `ELEPHC_INI_*` block) for a program that references them.
+///
+/// Used by the in-process codegen harness, whose injection chain mirrors the production
+/// pipeline stage by stage and must offer the same names for tests that compile curl+ini
+/// programs in-process — the curl prelude's open_basedir guard reads `ini_get` now, so a
+/// curl test harness compile without this surface says `Undefined function: ini_get`.
+/// The `--web` variants are excluded: the harness does not build web binaries, and the
+/// production pipeline's ini block skips them for exactly the redeclaration reason the
+/// block above documents.
+///
+/// Runs under `crate::compiler_stack::with_compiler_stack` like every prelude injection
+/// whose usage scan walks the whole program.
+#[allow(dead_code)] // public test/support API; the compiler pipeline inlines the same block in `inject_if_used`.
+pub fn inject_ini_wrappers(
+    program: Program,
+    php_version: PhpVersion,
+    overrides: &[(String, String)],
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> Program {
+    let ini_get_used = detect::program_references(&program, "ini_get")
+        && !detect::program_declares(&program, "ini_get");
+    let ini_set_used = detect::program_references(&program, "ini_set")
+        && !detect::program_declares(&program, "ini_set");
+    let ini_get_all_used = detect::program_references(&program, "ini_get_all")
+        && !detect::program_declares(&program, "ini_get_all");
+    if !(ini_get_used || ini_set_used || ini_get_all_used) {
+        return program;
+    }
+    let mut combined = crate::synthetic_class::internal_declarations(|| {
+        let mut declarations = ini_helper_declarations(php_version, overrides);
+        if ini_get_used {
+            declarations.push(build::cli_ini_get_decl());
+        }
+        if ini_set_used {
+            declarations.push(build::cli_ini_set_decl());
+        }
+        if ini_get_all_used {
+            declarations.push(ini_module_known_declaration(false));
+            declarations.push(build::cli_ini_get_all_decl());
+        }
+        // The runtime `ELEPHC_INI_*` helper block ships with the ini surface on the CLI
+        // path, exactly as the full pipeline's ini block does.
+        declarations.extend(env_override_declarations());
+        declarations
+    });
+    inventory.record_program("opcache-ini", &combined);
+    combined.extend(program);
+    combined
+}
+
 pub(crate) fn opcache_configuration_is_cli_default(web: bool, overrides: &[(String, String)]) -> bool {
     !web && !overrides
         .iter()

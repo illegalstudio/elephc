@@ -710,6 +710,18 @@ impl Scanner<'_> {
     fn scan_parameter_attributes(&mut self, parameter_attributes: &[Vec<AttributeGroup>]) {
         for groups in parameter_attributes {
             self.scan_attributes(groups);
+            // A `#[\SensitiveParameter]` parameter is wrapped in a `SensitiveParameterValue`
+            // whenever a frame is RENDERED. The uncaught report renders traces for every
+            // program, so this is not limited to debug_backtrace() callers — without this
+            // edge the class is pruned and codegen fails with "missing
+            // SensitiveParameterValue metadata" (the PDO prelude's constructors carry it).
+            let sensitive = groups.iter().flat_map(|group| &group.attributes).any(|attribute| {
+                attribute.name.as_canonical().eq_ignore_ascii_case("SensitiveParameter")
+            });
+            if sensitive {
+                let class = self.record_class("SensitiveParameterValue");
+                self.usage.instantiated_classes.insert(class);
+            }
         }
     }
 

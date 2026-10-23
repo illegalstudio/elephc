@@ -4166,7 +4166,7 @@ fn ir_backend_handles_scalar_casts_and_string_indexing() {
         (
             "string_indexing",
             "<?php echo \"hello\"[1]; echo \":\"; echo \"hello\"[-1]; echo \":\"; echo \"hi\"[9];",
-            "e:o:",
+            "e:o:Warning: Uninitialized string offset 9\n",
         ),
         (
             "string_switch_subject",
@@ -4271,8 +4271,16 @@ fn ir_backend_handles_basic_indexed_arrays() {
         ("array_get_int", "<?php $a = [10, 20]; echo $a[1];", "20"),
         ("array_get_float", "<?php $a = [1.5, 2.5]; echo $a[1];", "2.5"),
         ("array_get_string", "<?php $a = [\"a\", \"b\"]; echo $a[1];", "b"),
-        ("array_get_oob_null", "<?php $a = [10]; echo $a[9];", ""),
-        ("array_get_negative_null", "<?php $a = [10]; echo $a[-1];", ""),
+        (
+            "array_get_oob_null",
+            "<?php $a = [10]; echo $a[9];",
+            "Warning: Undefined array key 9\n",
+        ),
+        (
+            "array_get_negative_null",
+            "<?php $a = [10]; echo $a[-1];",
+            "Warning: Undefined array key -1\n",
+        ),
         ("array_count_strings", "<?php $a = [\"a\", \"b\"]; echo count($a);", "2"),
         (
             "array_push_grows_local",
@@ -4408,7 +4416,7 @@ echo is_null($a[5]) ? "N" : "bad";
 "#;
     assert_eq!(
         compile_and_run_ir_backend("mixed_indexed_array_set", source),
-        "4:7:z:ok:G:N"
+        "4:7:z:ok:Warning: Undefined array key 4\nG:N"
     );
 }
 
@@ -5276,7 +5284,7 @@ echo "done";
 "#;
     assert_eq!(
         compile_and_run_ir_backend("iterable_echo", source),
-        "Array|Array|Arraydone"
+        "Array|Array|Warning: Array to string conversion\nArraydone"
     );
 }
 
@@ -5365,7 +5373,11 @@ fn ir_backend_handles_basic_associative_arrays() {
         ("hash_get_int", "<?php $h = [\"a\" => 1]; echo $h[\"a\"];", "1"),
         ("hash_get_string", "<?php $h = [\"a\" => \"z\"]; echo $h[\"a\"];", "z"),
         ("hash_get_float", "<?php $h = [\"a\" => 1.5]; echo $h[\"a\"];", "1.5"),
-        ("hash_get_miss", "<?php $h = [\"a\" => 1]; echo $h[\"missing\"];", ""),
+        (
+            "hash_get_miss",
+            "<?php $h = [\"a\" => 1]; echo $h[\"missing\"];",
+            "Warning: Undefined array key \"missing\"\n",
+        ),
         ("hash_int_key", "<?php $h = [1 => \"one\"]; echo $h[1];", "one"),
         ("hash_set_updates_local", "<?php $h = [\"a\" => 1]; $h[\"a\"] = 7; echo $h[\"a\"];", "7"),
         ("hash_set_string_value", "<?php $h = [\"a\" => \"x\"]; $h[\"a\"] = \"y\"; echo $h[\"a\"];", "y"),
@@ -5866,12 +5878,13 @@ echo "after";
     assert!(missing.status.success(), "IR backend missing-file fixture failed");
     assert_eq!(
         String::from_utf8(missing.stdout).expect("stdout should be utf8"),
-        "after"
+        "Warning: file_get_contents(): Failed to open stream\nafter"
     );
-    let stderr = String::from_utf8(missing.stderr).expect("stderr should be utf8");
+    // php CLI displays the warning on stdout; the compiled program writes no log copy.
     assert!(
-        stderr.contains("Warning: file_get_contents()"),
-        "expected file_get_contents warning, got stderr={stderr}"
+        missing.stderr.is_empty(),
+        "display copy belongs on stdout, got stderr={:?}",
+        String::from_utf8_lossy(&missing.stderr)
     );
 }
 
@@ -6627,12 +6640,12 @@ fn ir_backend_handles_define_builtin() {
     );
     assert_eq!(
         String::from_utf8(duplicate.stdout).expect("stdout should be utf8"),
-        "ok1"
+        "Warning: define(): Constant already defined\nok1"
     );
-    let stderr = String::from_utf8(duplicate.stderr).expect("stderr should be utf8");
     assert!(
-        stderr.contains("Warning: define()"),
-        "expected duplicate define warning, got stderr={stderr}"
+        duplicate.stderr.is_empty(),
+        "display copy belongs on stdout, got stderr={:?}",
+        String::from_utf8_lossy(&duplicate.stderr)
     );
 }
 

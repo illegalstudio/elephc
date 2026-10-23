@@ -175,6 +175,14 @@ pub(super) fn lower_const_ref(
         );
     }
     if let Some((value, php_type)) = ctx.constant_value(name.as_str()) {
+        // PHP emits a deprecation warning when a `#[\Deprecated]` constant is EVALUATED, so
+        // the warning is a run-time event at the reference's own file/line, not a compile
+        // diagnostic. Emit it ahead of the value, exactly once per reference.
+        if let Some(reason) =
+            elephc_builtin_contract::lookup_constant(name.as_str()).and_then(|c| c.deprecation)
+        {
+            emit_constant_deprecation(ctx, name.as_str(), reason, expr);
+        }
         return lower_constant_value(ctx, value, php_type, expr);
     }
     if ctx.has_eval_barrier() || ctx.eval_executed() {
@@ -200,6 +208,65 @@ pub(super) fn lower_const_ref(
         Op::LoadGlobal.default_effects(),
         Some(expr.span),
     )
+}
+
+/// Emits the run-time deprecation warning for a `#[\Deprecated]` constant reference.
+///
+/// PHP raises `E_USER_DEPRECATED` with `Constant <name> is deprecated <reason>` at the
+/// reference's own file and line; the message text is interned once per reference site.
+/// Emitted through the same `Op::CoreBuiltin` selector `trigger_error()` lowers to, so a
+/// user error handler sees it exactly like PHP's.
+fn emit_constant_deprecation(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    reason: &str,
+    expr: &Expr,
+) {
+    let message = format!("Constant {name} is deprecated {reason}");
+    let message_data = ctx.data.intern_string(&message);
+    let message = ctx.emit_value(
+        Op::ConstStr,
+        Vec::new(),
+        Some(Immediate::Data(message_data)),
+        PhpType::Str,
+        Op::ConstStr.default_effects(),
+        Some(expr.span),
+    );
+    let level = ctx.emit_value(
+        Op::ConstI64,
+        Vec::new(),
+        Some(Immediate::I64(16_384)), // E_USER_DEPRECATED
+        PhpType::Int,
+        Op::ConstI64.default_effects(),
+        Some(expr.span),
+    );
+    let file_path = ctx.source_path().unwrap_or("unknown").to_string();
+    let file_data = ctx.data.intern_string(&file_path);
+    let file = ctx.emit_value(
+        Op::ConstStr,
+        Vec::new(),
+        Some(Immediate::Data(file_data)),
+        PhpType::Str,
+        Op::ConstStr.default_effects(),
+        Some(expr.span),
+    );
+    let line = ctx.emit_value(
+        Op::ConstI64,
+        Vec::new(),
+        Some(Immediate::I64(i64::from(expr.span.line))),
+        PhpType::Int,
+        Op::ConstI64.default_effects(),
+        Some(expr.span),
+    );
+    ctx.emit_void(
+        Op::CoreBuiltin,
+        vec![message.value, level.value, file.value, line.value],
+        Some(Immediate::I64(
+            crate::ir::CoreBuiltinOp::TriggerError.as_i64(),
+        )),
+        crate::ir::CoreBuiltinOp::TriggerError.effects(),
+        Some(expr.span),
+    );
 }
 
 /// Lowers a prescanned constant value using its checker-visible PHP type.

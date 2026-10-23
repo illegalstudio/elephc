@@ -296,6 +296,7 @@ fn area_name(area: Area) -> &'static str {
         Area::Image => "image",
         Area::Opcache => "opcache",
         Area::Xml => "xml",
+        Area::Filter => "filter",
     }
 }
 

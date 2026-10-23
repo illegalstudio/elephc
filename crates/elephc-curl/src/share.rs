@@ -111,6 +111,10 @@ pub(crate) type CURLSHcode = c_int;
 
 /// `CURLSHE_OK`: the share operation succeeded.
 const CURLSHE_OK: CURLSHcode = 0;
+/// `CURLSHE_BAD_OPTION` (1): recorded when `curl_share_setopt()` is handed an option that
+/// is not a cURL share option at all — php-src leaves it behind for `curl_share_errno()`
+/// even though the call itself throws.
+const CURLSHE_BAD_OPTION: CURLSHcode = 1;
 
 extern "C" {
     /// Allocates a new share handle, or returns null on failure.
@@ -257,6 +261,10 @@ pub extern "C" fn elephc_curl_share_init() -> i64 {
 pub extern "C" fn elephc_curl_share_setopt(share_id: i64, opt: i64, value: i64) -> i32 {
     handles::ffi_guard(SHARE_SETOPT_REFUSED, || {
         if share_option_kind(opt) != SHARE_OPTION_LONG {
+            // php-src records CURLSHE_BAD_OPTION before raising its ValueError.
+            if let Some(entry) = handles::lock_recover(shares()).get_mut(&share_id) {
+                entry.last_errno = CURLSHE_BAD_OPTION;
+            }
             return SHARE_SETOPT_INVALID;
         }
         let mut guard = handles::lock_recover(shares());

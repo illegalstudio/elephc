@@ -334,6 +334,9 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let resolved = elephc::tz_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::list_id_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::var_export_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    // Mirrors `pipeline::compile`: the filter prelude ships right after the var-export one,
+    // before the OPcache stage whose ini injection the curl prelude needs.
+    let resolved = elephc::filter_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved =
         elephc::image_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::hash_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
@@ -343,6 +346,22 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let resolved = elephc::curl_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::xml_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::dom_html_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    // Mirrors `pipeline::compile`'s OPcache ini block for non-web binaries: the ini
+    // wrappers are pay-for-use prelude functions, and a curl test's in-process compile
+    // that references ini_get (the OpenBaseDir guard) needs them injected here — the
+    // production pipeline's OPcache stage carries the same block.
+    let ini_overrides: Vec<(String, String)> =
+        elephc::codegen_support::ini_overrides();
+    let resolved = elephc::opcache_prelude::inject_ini_wrappers(
+        resolved,
+        php_version,
+        &ini_overrides,
+        &mut prelude_inventory,
+    );
+    // Mirrors `pipeline::compile`: the version-surface functions (`zend_version`,
+    // `php_sapi_name`, `ini_restore`, `uniqid`) are injected before name resolution.
+    let resolved =
+        elephc::version_prelude::inject_if_used(resolved, php_version, &mut prelude_inventory);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
         elephc::autoload::run(resolved, dir, &autoload_registry).expect("autoload failed");
@@ -359,6 +378,10 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     // before the optimizer, so the checker and the backend only ever see ordinary PHP.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
     let resolved = elephc::optimize::fold_constants_for_target(resolved, target());
+    // Mirrors `pipeline::compile`: PHP auto-vivifies an undefined variable on an array write
+    // and on a by-reference output argument, so declare the implicit initializer before the
+    // checker sees the program.
+    let resolved = elephc::auto_vivify::normalize(resolved);
     // Mirrors `pipeline::compile`: checking runs to a generic-instantiation fixpoint, so every
     // reachable template has become an ordinary monomorphic declaration before lowering. A
     // plain `check_with_target` here would leave templates in the program and hand the backend
@@ -933,6 +956,25 @@ fn compile_and_run_with_heap_size_and_optional_regex(
     heap_size: usize,
     with_regex: bool,
 ) -> String {
+    compile_and_run_with_options(source, heap_size, with_regex, false)
+}
+
+/// Compiles and runs one fixture and returns the binary's raw stdout, diagnostics included.
+///
+/// php writes its display copy of warning/notice diagnostics through the output layer, and
+/// a few fixtures assert that interleaving directly (output buffering flags, for example).
+/// Every other fixture keeps the harness split, where diagnostics land on stderr.
+pub(crate) fn compile_and_run_raw(source: &str) -> String {
+    compile_and_run_with_options(source, 8_388_608, false, true)
+}
+
+/// Compiles, runs and either splits php's display diagnostics or returns the raw surface.
+fn compile_and_run_with_options(
+    source: &str,
+    heap_size: usize,
+    with_regex: bool,
+    raw: bool,
+) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
     let pid = std::process::id();
@@ -945,7 +987,9 @@ fn compile_and_run_with_heap_size_and_optional_regex(
         );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
 
-    let elephc_out = assemble_and_run(
+    // The raw surface matches what php writes: the PHP cross-check below must see the
+    // display copies, and only the harness convention strips them afterwards.
+    let elephc_out = assemble_and_run_raw(
         &user_asm,
         &runtime_obj,
         &dir,
@@ -972,7 +1016,11 @@ fn compile_and_run_with_heap_size_and_optional_regex(
     }
 
     let _ = fs::remove_dir_all(&dir);
-    elephc_out
+    if raw {
+        elephc_out
+    } else {
+        split_display_diagnostics(elephc_out, String::new()).0
+    }
 }
 
 // Convenience wrapper that calls `compile_and_run_with_heap_size` with the default
@@ -1120,7 +1168,9 @@ fn compile_and_run_with_repr(source: &str, null_repr: elephc::codegen::NullRepr)
     );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
 
-    let elephc_out = assemble_and_run(
+    // The raw surface matches what php writes: the PHP cross-check below must see the
+    // display copies, and only the harness convention strips them afterwards.
+    let elephc_out = assemble_and_run_raw(
         &user_asm,
         &runtime_obj,
         &dir,

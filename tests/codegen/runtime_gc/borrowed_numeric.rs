@@ -173,4 +173,3 @@ $n=(int)($argc+999);
 echo numericPart($n), ':', closurePart($n);
 "#, r#"499500:500500"#, Some(6032));
 }
-

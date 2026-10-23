@@ -2,7 +2,7 @@
 title: "session_decode()"
 description: "Loads serialized session data into the session superglobal."
 sidebar:
-  order: 991
+  order: 993
 ---
 
 ## session_decode()
@@ -20,7 +20,7 @@ Loads serialized session data into the session superglobal.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
+- **Compiled (AOT)**: supported through the compiler-injected web prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._

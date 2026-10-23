@@ -2,7 +2,7 @@
 title: "fsockopen() - internals"
 description: "Compiler internals for fsockopen(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 783
+  order: 785
 ---
 
 ## `fsockopen()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fsockopen.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fsockopen.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:705](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L705) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -27,7 +27,7 @@ sidebar:
 - **Result type source**: `checked`
 - **Result ownership**: `may_alias_arguments`
 - **Effects**: `static (16 declared effects)`
-- **Requirements**: `static (0 requirements)`
+- **Requirements**: `shared`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 

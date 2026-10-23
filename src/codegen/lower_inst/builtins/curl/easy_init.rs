@@ -32,3 +32,19 @@ pub(crate) fn lower_curl_easy_init(
     abi::emit_call_label(ctx.emitter, "__rt_curl_easy_init");
     store_if_result(ctx, inst)
 }
+
+/// Lowers `__elephc_curl_easy_from_id($id)` — boxes an id libcurl already created (a
+/// server-pushed handle) as a resource-kind-6 Mixed cell. The id is an ordinary integer
+/// argument, so the bridge is not called at all; only the free pointer publication is
+/// needed, because the resulting cell is released through the shared kind-6 teardown.
+pub(crate) fn lower_curl_easy_from_id(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_curl_arg_count(inst, "__elephc_curl_easy_from_id", 1)?;
+    let id = super::super::super::expect_operand(inst, 0)?;
+    ctx.load_value_to_result(id)?;
+    crate::codegen::curl::publish_elephc_curl_function_pointers(ctx.emitter);
+    abi::emit_call_label(ctx.emitter, "__rt_curl_easy_from_id");
+    store_if_result(ctx, inst)
+}

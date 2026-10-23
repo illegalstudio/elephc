@@ -46,12 +46,24 @@ fn validate(input: &BuiltinSemanticInput<'_>) -> Result<(), CompileError> {
             "strlen() takes exactly 1 argument",
         ));
     };
-    // Accept Str, Mixed, and Union types — PHP's strlen() coerces its
+    // Accept Str, Mixed, Union, and the coercible scalars — PHP's strlen() coerces its
     // argument to a string per the standard PHP type juggling rules
     // (numbers become their decimal representation, true → "1",
     // false/null → ""). Dynamic inputs first use the ordinary EIR
-    // string-cast operation, then the same string-length operation.
-    if !matches!(ty, PhpType::Str | PhpType::Mixed | PhpType::Union(_)) {
+    // string-cast operation, then the same string-length operation. An unannotated
+    // parameter with no call site keeps the checker's `Int` placeholder, and a builtin
+    // string parameter is not rewritten by parameter binding, so `Int`/`Float`/`Bool`
+    // must be accepted and cast here exactly like `Mixed`.
+    if !matches!(
+        ty,
+        PhpType::Str
+            | PhpType::Mixed
+            | PhpType::Union(_)
+            | PhpType::Int
+            | PhpType::Float
+            | PhpType::Bool
+            | PhpType::False
+    ) {
         return Err(CompileError::new(
             input.span,
             "strlen() argument must be string",
@@ -76,7 +88,12 @@ fn lower(
     let value = call.operand(0)?;
     let string = match ctx.value_php_type(value).codegen_repr() {
         PhpType::Str => value,
-        PhpType::Mixed | PhpType::Union(_) => {
+        PhpType::Mixed
+        | PhpType::Union(_)
+        | PhpType::Int
+        | PhpType::Float
+        | PhpType::Bool
+        | PhpType::False => {
             ctx.emit_value(
                 Op::Cast,
                 vec![value],

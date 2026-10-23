@@ -2,7 +2,7 @@
 title: "ptr_sizeof() - internals"
 description: "Compiler internals for ptr_sizeof(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 743
+  order: 745
 ---
 
 ## `ptr_sizeof()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/ptr_sizeof.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/ptr_sizeof.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:705](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L705) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

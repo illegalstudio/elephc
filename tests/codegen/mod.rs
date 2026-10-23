@@ -8,6 +8,7 @@
 //! - Submodules group focused fixtures for exceptions, fibers, buffers, preprocessor, namespaces, and related suites.
 
 mod exceptions;
+mod filter_var;
 mod fibers;
 mod buffers;
 mod buffer_ptr;

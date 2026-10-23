@@ -2,7 +2,7 @@
 title: "curl_setopt() - internals"
 description: "Compiler internals for curl_setopt(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 718
+  order: 720
 ---
 
 ## `curl_setopt()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_curl.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_curl.rs)
-- **Lowering**: [`src/curl_prelude.rs`:262](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude.rs#L262) (`curl_setopt`)
+- **Lowering**: [`src/curl_prelude/oracle.rs`:324](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude/oracle.rs#L324) (`curl_setopt`)
 - **Function symbol**: `curl_setopt()`
 
 

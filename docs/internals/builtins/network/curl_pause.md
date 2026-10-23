@@ -2,7 +2,7 @@
 title: "curl_pause() - internals"
 description: "Compiler internals for curl_pause(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 716
+  order: 718
 ---
 
 ## `curl_pause()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_curl.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_curl.rs)
-- **Lowering**: [`src/curl_prelude.rs`:1392](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude.rs#L1392) (`curl_pause`)
+- **Lowering**: [`src/curl_prelude/oracle.rs`:1842](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude/oracle.rs#L1842) (`curl_pause`)
 - **Function symbol**: `curl_pause()`
 
 

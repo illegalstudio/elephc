@@ -551,7 +551,7 @@ def validate_presentation_overrides(repo: Path, entries: list[dict]) -> None:
 # by exactly one of them.
 PRELUDE_SOURCES: dict[str, tuple[str | tuple[str, ...], str, str]] = {
     "curl": (
-        "curl_prelude.rs",
+        "curl_prelude/oracle.rs",
         "curl",
         "crates/elephc-builtin-contract/src/catalog_curl.rs",
     ),
@@ -683,6 +683,7 @@ def resolve_non_registry_lowering(
         lowering.codegen_file = str(prelude.relative_to(repo))
         lowering.codegen_line = read(prelude)[: match.start()].count("\n") + 1
         lowering.codegen_function = canonical
+        lowering.prelude_label = label
         lowering.notes.append(f"Implemented by the compiler-injected {label} prelude.")
     elif kind == "name-resolver-rewrite":
         rewriter = repo / "src" / "name_resolver" / "expressions.rs"
@@ -907,6 +908,7 @@ def _builtin_to_dict(b: Builtin) -> dict:
             "codegen_file": b.lowering.codegen_file,
             "codegen_line": b.lowering.codegen_line,
             "codegen_function": b.lowering.codegen_function,
+            "prelude_label": b.lowering.prelude_label,
             "runtime_helpers": b.lowering.runtime_helpers,
             "notes": b.lowering.notes,
         },

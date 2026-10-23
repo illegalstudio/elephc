@@ -17699,6 +17699,114 @@
       },
       "extension": false,
       "internal": false,
+      "module": "filter",
+      "name": "FILTER_DEFAULT",
+      "route": "predefined",
+      "since": null,
+      "value": 516
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_FLAG_IPV4",
+      "route": "predefined",
+      "since": null,
+      "value": 1048576
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_FLAG_IPV6",
+      "route": "predefined",
+      "since": null,
+      "value": 2097152
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_FLAG_NO_PRIV_RANGE",
+      "route": "predefined",
+      "since": null,
+      "value": 8388608
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_FLAG_NO_RES_RANGE",
+      "route": "predefined",
+      "since": null,
+      "value": 4194304
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "filter",
+      "name": "FILTER_VALIDATE_IP",
+      "route": "predefined",
+      "since": null,
+      "value": 275
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
       "module": "standard",
       "name": "FNM_CASEFOLD",
       "route": "predefined",

@@ -16,6 +16,16 @@ expect_builtin_arity_error!(
     "strlen() takes exactly 1 argument"
 );
 
+/// Verifies `strlen` still rejects a non-coercible argument (an array) after scalar arguments
+/// were made acceptable; PHP throws a `TypeError` for this case at run time.
+#[test]
+fn test_error_strlen_rejects_array_argument() {
+    expect_error(
+        "<?php strlen([]);",
+        "strlen(): Argument #1 ($string) must be of type string, array given",
+    );
+}
+
 // Tests intval() arity error when called with no arguments. The optional second parameter
 // (`$base`) is now accepted, so the derived phrasing is a range rather than an exact count.
 expect_builtin_arity_error!(

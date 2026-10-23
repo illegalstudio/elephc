@@ -2,7 +2,7 @@
 title: "session_gc() - internals"
 description: "Compiler internals for session_gc(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 994
+  order: 996
 ---
 
 ## `session_gc()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:3385](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3385) (`session_gc`)
+- **Lowering**: [`src/web_prelude/build.rs`:3386](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3386) (`session_gc`)
 - **Function symbol**: `session_gc()`
 
 

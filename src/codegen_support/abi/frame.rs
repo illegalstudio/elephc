@@ -113,8 +113,9 @@ pub fn emit_return(emitter: &mut Emitter) {
 }
 
 /// Emits code that computes the address of a local frame slot and stores it in `dest`.
-/// Uses the frame pointer (x29/rbp) as the base. Large offsets on AArch64 are walked down in
-/// 4095-byte chunks to stay within immediate-add instructions.
+/// Uses the frame pointer (x29/rbp) as the base. On AArch64 an offset below 16 MiB takes one
+/// page-granular `sub` with `lsl #12` plus its low twelve bits; only a larger frame falls
+/// back to walking the destination down in 4095-byte chunks.
 pub fn emit_frame_slot_address(emitter: &mut Emitter, dest: &str, offset: usize) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -123,12 +124,29 @@ pub fn emit_frame_slot_address(emitter: &mut Emitter, dest: &str, offset: usize)
             } else if offset <= 4095 {
                 emitter.instruction(&format!("sub {}, x29, #{}", dest, offset)); // compute the local-slot address directly from the frame pointer
             } else {
-                emitter.instruction(&format!("mov {}, x29", dest));             // seed the destination register from the frame pointer for a far local-slot address
-                let mut remaining = offset;
-                while remaining > 0 {
-                    let chunk = remaining.min(4095);
-                    emitter.instruction(&format!("sub {}, {}, #{}", dest, dest, chunk)); // walk the destination register down toward the distant local-slot address
-                    remaining -= chunk;
+                // AArch64's `sub Rd, Rn, #imm{, lsl #12}` takes a 12-bit immediate that may be
+                // shifted left by 12, so ANY offset below 2^24 (16 MiB) is two instructions —
+                // one page-granular subtraction plus its low twelve bits. The old form emitted
+                // one `sub` per 4095 bytes, which turned a 150 KiB frame into ~37 instructions
+                // PER slot access; on a large function that pushed the assembled text past the
+                // Mach-O @PAGE relocation addend limit (8 MiB) and made the assembler fail.
+                let pages = offset >> 12;
+                let rest = offset & 0xFFF;
+                if pages <= 4095 {
+                    emitter.instruction(&format!("sub {}, x29, #{}, lsl #12", dest, pages)); // page-granular part of the far slot address
+                    if rest != 0 {
+                        emitter.instruction(&format!("sub {}, {}, #{}", dest, dest, rest));   // remaining low bits of the far slot address
+                    }
+                } else {
+                    // A frame past 16 MiB cannot be reached by one shifted immediate; walk it
+                    // down in page-sized steps. No real function reaches this today.
+                    emitter.instruction(&format!("mov {}, x29", dest));             // seed the destination register from the frame pointer
+                    let mut remaining = offset;
+                    while remaining > 0 {
+                        let chunk = remaining.min(4095);
+                        emitter.instruction(&format!("sub {}, {}, #{}", dest, dest, chunk)); // walk the destination register down toward the distant slot
+                        remaining -= chunk;
+                    }
                 }
             }
         }

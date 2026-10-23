@@ -87,8 +87,11 @@ pub use crate::codegen_support::{
     generate_runtime_with_features_pic, link_requirements_for_runtime_features,
     runtime_features_for_program_and_classes, LinkRequirement, RuntimeFeatures,
 };
+// The ini_overrides getter is a test/support API (the error-test pipeline mirrors read it);
+// the pipeline itself reads it through codegen_support's crate-local path.
+#[allow(unused_imports)]
 pub use crate::codegen_support::{
-    prepare_declared_name_order, set_autoload_rule_count, set_compile_profile,
+    ini_overrides, prepare_declared_name_order, set_autoload_rule_count, set_compile_profile,
     set_ini_overrides, set_linked_extensions, set_opcache_api_restricted,
     set_opcache_manifest_len,
 };

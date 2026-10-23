@@ -2,7 +2,7 @@
 title: "xmlwriter_start_pi()"
 description: "Starts a processing instruction."
 sidebar:
-  order: 1061
+  order: 1063
 ---
 
 ## xmlwriter_start_pi()
@@ -21,7 +21,7 @@ Starts a processing instruction.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
+- **Compiled (AOT)**: supported through the compiler-injected xml prelude.
 - **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_start_pi.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_start_pi.rs)).
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._

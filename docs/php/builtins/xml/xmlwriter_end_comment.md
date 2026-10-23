@@ -2,7 +2,7 @@
 title: "xmlwriter_end_comment()"
 description: "Ends the current comment."
 sidebar:
-  order: 1035
+  order: 1037
 ---
 
 ## xmlwriter_end_comment()
@@ -20,7 +20,7 @@ Ends the current comment.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
+- **Compiled (AOT)**: supported through the compiler-injected xml prelude.
 - **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_end_comment.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_end_comment.rs)).
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._

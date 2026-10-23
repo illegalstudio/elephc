@@ -2,7 +2,7 @@
 title: "session_cache_limiter() - internals"
 description: "Compiler internals for session_cache_limiter(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 988
+  order: 990
 ---
 
 ## `session_cache_limiter()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:3494](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3494) (`session_cache_limiter`)
+- **Lowering**: [`src/web_prelude/build.rs`:3495](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3495) (`session_cache_limiter`)
 - **Function symbol**: `session_cache_limiter()`
 
 

@@ -164,9 +164,11 @@ fn test_mbstring_startup_mime_configuration() {
     ] {
         let output = run("<?php echo mb_get_info('http_output_conv_mimetypes');",
             &[&format!("mbstring.http_output_conv_mimetypes={pattern}")], None);
-        assert_eq!(output.0, expected);
+        // php renders a startup diagnostic as a display copy on the output surface.
         let diagnostic = "Warning: PHP Startup: [ (offset=1): missing terminating ] for character class\n";
-        assert_eq!(output.1.matches(diagnostic).count(), usize::from(warning), "{}", output.1);
+        let rendered = if warning { format!("{diagnostic}{expected}") } else { expected.to_string() };
+        assert_eq!(output.0, rendered);
+        assert_eq!(output.1.matches("PHP Startup").count(), 0, "{}", output.1);
     }
 }
 

@@ -1898,3 +1898,58 @@ echo $sargs[0];
     );
     assert_eq!(out, "4|3|[1,2,3]|7");
 }
+
+/// `$arr[] = &$rhs`: elephc's arrays are value-typed, so a reference element is not
+/// representable; the leading `&` is accepted and the right-hand side is stored by value.
+/// Measured on PHP 8.5.10: reading the appended element is the same either way.
+#[test]
+fn test_array_append_reference_syntax_is_accepted() {
+    let out = compile_and_run(
+        r#"<?php
+$arr = [1];
+$rhs = 2;
+$arr[] = &$rhs;
+echo count($arr), ":", $arr[0], $arr[1];
+"#,
+    );
+    assert_eq!(out, "2:12");
+}
+
+/// Bug #45161: replacing a CALLABLE stored at a packed array element must release the
+/// descriptor it replaces, and the array must release its own elements when the array dies.
+/// The indexed setter used `__rt_array_set_int`, which overwrites the slot without releasing
+/// the old value and stamps the storage scalar — so every replacement leaked one descriptor
+/// and the array's death leaked the last one.
+#[test]
+fn test_replacing_a_packed_array_callable_element_is_heap_clean() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+$a = [];
+for ($i = 0; $i < 500; $i++) {
+    $a[0] = function () { return 1; };
+}
+echo count($a);
+"#,
+    );
+    assert_eq!(out.stdout, "1");
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
+}
+
+/// Bug #45161: a callable held at a packed element must be released when the ARRAY dies, not
+/// only on replacement — the value_type stamp the setter writes decides what the array's
+/// destructor releases.
+#[test]
+fn test_packed_array_callable_element_released_on_array_death() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+for ($i = 0; $i < 100; $i++) {
+    $a = [function () { return 1; }];
+}
+echo "done";
+"#,
+    );
+    assert_eq!(out.stdout, "done");
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
+}

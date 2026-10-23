@@ -2,7 +2,7 @@
 title: "__elephc_curl_easy_setopt_str() - internals"
 description: "Compiler internals for __elephc_curl_easy_setopt_str(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1108
+  order: 1112
 ---
 
 ## `__elephc_curl_easy_setopt_str()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/curl/__elephc_curl_easy_setopt_str.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/curl/__elephc_curl_easy_setopt_str.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:705](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L705) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

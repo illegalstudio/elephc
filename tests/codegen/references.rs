@@ -452,3 +452,39 @@ echo $copy[0], ":", $copy[1], "\n";
 "#);
     assert_eq!(out, "9:9\nupdated:updated\nnull:null\n1:2\n");
 }
+
+/// A by-reference parameter with an OMITTED `null` default must keep the canonical `mixed`
+/// cell shape. The call-site specialization used to type it from the default (`Void`), so the
+/// caller built a reference cell for a type that pushes no payload, corrupting the frame
+/// (SIGBUS) once the function returned a refcounted value.
+#[test]
+fn test_by_reference_null_default_parameter_keeps_mixed_cell() {
+    let out = compile_and_run(
+        r#"<?php
+function build(&$scratch = null) {
+    return ["a" => 1, "b" => 2];
+}
+$result = build();
+echo count($result), ":", $result["a"], ":", $result["b"], "\n";
+"#,
+    );
+    assert_eq!(out, "2:1:2\n");
+}
+
+/// The same omitted-default by-reference parameter still writes through when a caller DOES
+/// supply a variable, so the fix does not only cover the temp-cell path.
+#[test]
+fn test_by_reference_null_default_parameter_writes_through_when_supplied() {
+    let out = compile_and_run(
+        r#"<?php
+function fill(&$out = null) {
+    $out = "set";
+    return [1];
+}
+$slot = null;
+$result = fill($slot);
+echo $slot, ":", count($result), "\n";
+"#,
+    );
+    assert_eq!(out, "set:1\n");
+}

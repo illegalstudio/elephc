@@ -149,12 +149,15 @@ fn union_probe(pick_len: usize) -> String {
 /// Asserts the loop body was skipped, the following statement ran, and the warning names `type`.
 fn assert_skipped_with_warning(bin: &Path, type_name: &str) {
     let (stdout, stderr) = run_binary(bin);
-    assert_eq!(stdout, "before\nafter\n", "loop body must not run");
+    // `display_errors=1` (php CLI's default) puts the display copy on STDOUT, in the place the
+    // warning fires; php's own reference output below shows exactly that layout. The runtime
+    // writes no separate log copy.
     assert_eq!(
-        stderr,
-        format!("{WARNING_PREFIX}{type_name} given\n"),
-        "runtime warning must match reference PHP's message body"
+        stdout,
+        format!("before\n{WARNING_PREFIX}{type_name} given\nafter\n"),
+        "the loop body must not run and the warning must sit between before/after"
     );
+    assert_eq!(stderr, "", "the display copy belongs on stdout");
 }
 
 /// Reference (`php -d xdebug.mode=off`, PHP 8.5.6):
@@ -299,11 +302,13 @@ fn statements_after_the_loop_still_run() {
                   echo \"four\\n\";\n";
     let (bin, _) = compile(&dir, source, "sequence_probe");
     let (stdout, stderr) = run_binary(&bin);
-    assert_eq!(stdout, "one\ntwo\nthree=7\nfour\n");
     assert_eq!(
-        stderr,
-        format!("{WARNING_PREFIX}false given\n{WARNING_PREFIX}int given\n")
+        stdout,
+        format!(
+            "{WARNING_PREFIX}false given\none\n{WARNING_PREFIX}int given\ntwo\nthree=7\nfour\n"
+        )
     );
+    assert_eq!(stderr, "");
 }
 
 /// The original field repro, reduced: `opcache_get_configuration()` returns `false` under
@@ -336,9 +341,14 @@ fn opcache_restricted_configuration_repro_exits_zero() {
     );
 
     let (stdout, stderr) = run_binary(&dir.join("opcache_probe"));
-    assert_eq!(stdout, "2 ok\n", "the statement after the loop must run");
+    assert_eq!(
+        stdout,
+        format!("{WARNING_PREFIX}null given\n2 ok\n"),
+        "the statement after the loop must run, with its warning on stdout"
+    );
+    // The opcache restriction notice is reported through the diagnostic log channel.
     assert!(
-        stderr.contains(&format!("{WARNING_PREFIX}null given")),
-        "expected the foreach warning, got: {stderr}"
+        stderr.contains("Zend OPcache API is restricted"),
+        "expected the restrict_api notice, got: {stderr}"
     );
 }

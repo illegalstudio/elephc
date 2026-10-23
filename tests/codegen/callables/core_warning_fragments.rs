@@ -52,6 +52,9 @@ $value = $array[$key];
 echo 'done';
 "#);
     assert!(output.success);
-    assert_eq!(output.stdout, "done");
-    assert_eq!(output.stderr, "Warning: Undefined array key \"missing1\n\"\n");
+    // The diagnostic key embeds a newline, so the display copy spans two physical lines.
+    // The harness moves the display line up to its first newline onto the diagnostic
+    // stream; the key's own newline leaves the closing quote on the program surface.
+    assert_eq!(output.stdout, "\"\ndone");
+    assert_eq!(output.stderr, "Warning: Undefined array key \"missing1\n");
 }

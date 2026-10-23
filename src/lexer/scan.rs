@@ -75,6 +75,60 @@ pub(super) fn scan_tokens_in_source(
                 span,
                 "PHP opening and closing tags are not valid in .lfc source files",
             ));
+        } else if cursor.remaining().starts_with("?>") {
+            // PHP's closing tag. PHP eats exactly ONE newline immediately after `?>`,
+            // the text up to the next `<?php` / `<?=` re-entry is inline HTML output,
+            // and `<?php` re-enters code mode. An empty HTML stretch (the `?>` at the
+            // very end of a file, the convention most PHP files follow) emits nothing.
+            cursor.advance();
+            cursor.advance();
+            // PHP consumes one NEWLINE after `?>`, and NEWLINE is `\r\n`, `\n` OR a lone
+            // `\r` (measured: `<?php echo "A"; ?>\r\nB` and `?>\rB` both print `AB`).
+            // Consuming only `\n` leaked the `\r` into the inline HTML of every CRLF file.
+            match cursor.peek() {
+                Some('\r') => {
+                    cursor.advance();
+                    if cursor.peek() == Some('\n') {
+                        cursor.advance();
+                    }
+                }
+                Some('\n') => {
+                    cursor.advance();
+                }
+                _ => {}
+            }
+            let html_start = cursor.span();
+            let before = cursor.remaining();
+            while !cursor.is_eof()
+                && !cursor.remaining().starts_with("<?php")
+                && !cursor.remaining().starts_with("<?=")
+            {
+                cursor.advance();
+            }
+            let end = cursor.span();
+            let html_span = crate::span::Span::with_end_from(html_start, end);
+            let after = cursor.remaining();
+            let html = &before[..before.len() - after.len()];
+            // The token is emitted even for an empty HTML stretch: it marks the close
+            // tag, which is PHP's implicit statement terminator (`echo 3 ?>` needs no
+            // semicolon), and an empty Echo outputs nothing.
+            tokens.push((
+                Token::InlineHtml(html.to_string()),
+                TokenMetadata::new(html_span),
+            ));
+            // A re-entry tag puts the stream back in code mode. `<?=` re-enters with an
+            // implied `echo` (PHP 5.4+, always enabled — short_open_tag does not apply).
+            if cursor.remaining().starts_with("<?php") || cursor.remaining().starts_with("<?=") {
+                let tag_span = cursor.span();
+                let width = if cursor.remaining().starts_with("<?php") { 5 } else { 3 };
+                for _ in 0..width {
+                    cursor.advance();
+                }
+                tokens.push(spanned(Token::OpenTag, tag_span));
+                if width == 3 {
+                    tokens.push((Token::Echo, TokenMetadata::new(tag_span)));
+                }
+            }
         } else if cursor.peek() == Some('"') {
             // Double-quoted strings may contain interpolation ($var)
             let string_tokens = literals::scan_double_string_interpolated(&mut cursor)?;

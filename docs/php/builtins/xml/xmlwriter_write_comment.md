@@ -2,7 +2,7 @@
 title: "xmlwriter_write_comment()"
 description: "Writes a complete comment."
 sidebar:
-  order: 1066
+  order: 1068
 ---
 
 ## xmlwriter_write_comment()
@@ -21,7 +21,7 @@ Writes a complete comment.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
+- **Compiled (AOT)**: supported through the compiler-injected xml prelude.
 - **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_write_comment.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_write_comment.rs)).
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._

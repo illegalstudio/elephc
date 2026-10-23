@@ -23,6 +23,7 @@ mod http_fixture;
 mod monitoring;
 mod multi;
 mod multipart;
+mod php_src_behaviour;
 mod share;
 mod streams;
 mod tls_fixture;

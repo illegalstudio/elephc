@@ -1686,6 +1686,48 @@ pub(crate) fn assemble_and_run(
         String::from_utf8_lossy(&output.stderr)
     );
 
+    split_display_diagnostics(
+        String::from_utf8(output.stdout).unwrap(),
+        String::from_utf8(output.stderr).unwrap(),
+    )
+    .0
+}
+
+/// Assembles, links, and runs a fixture, returning the binary's raw stdout.
+///
+/// Unlike `assemble_and_run`, php's display diagnostics stay interleaved exactly as
+/// `display_errors=STDOUT` wrote them. Used by fixtures that assert that interleaving.
+pub(crate) fn assemble_and_run_raw(
+    user_asm: &str,
+    runtime_obj: &Path,
+    dir: &Path,
+    requirements: &TestLinkRequirements,
+    extra_link_paths: &[String],
+    extra_frameworks: &[String],
+) -> String {
+    let obj_path = dir.join("test.o");
+    let bin_path = dir.join("test");
+
+    assemble_from_stdin(user_asm, &obj_path);
+
+    link_binary(
+        &obj_path,
+        runtime_obj,
+        &bin_path,
+        requirements,
+        extra_link_paths,
+        extra_frameworks,
+    );
+
+    let output = run_binary(&bin_path, dir);
+    assert!(
+        output.status.success(),
+        "binary exited with status {}\nstdout: {}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
     String::from_utf8(output.stdout).unwrap()
 }
 
@@ -1718,7 +1760,11 @@ pub(crate) fn assemble_and_run_with_env(
         "binary exited with error: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    String::from_utf8(output.stdout).unwrap()
+    split_display_diagnostics(
+        String::from_utf8(output.stdout).unwrap(),
+        String::from_utf8(output.stderr).unwrap(),
+    )
+    .0
 }
 
 // Captures stdout and stderr from a compiled binary, along with its exit status.
@@ -1731,6 +1777,48 @@ pub(crate) struct ProgramOutput {
     pub(crate) stderr: String,
     // true if the process exited with a successful (zero) exit code.
     pub(crate) success: bool,
+}
+
+/// Splits php CLI display diagnostics back onto the diagnostic stream.
+///
+/// `display_errors=STDOUT` is php's CLI default, so the released binary writes
+/// `Warning:` / `Notice:` / `Deprecated:` / `Strict Standards:` lines through the
+/// output layer, interleaved with program output exactly as php does. The php-src
+/// fixture runner compares the real binary against that behaviour; the AOT unit
+/// suite keeps its historical split (program output on stdout, diagnostics on
+/// stderr) so a fixture can assert either surface without the other leaking in.
+pub(crate) fn split_display_diagnostics(stdout: String, stderr: String) -> (String, String) {
+    const LEVELS: [&str; 4] = [
+        "Warning: ",
+        "Notice: ",
+        "Deprecated: ",
+        "Strict Standards: ",
+    ];
+    let mut program = String::with_capacity(stdout.len());
+    let mut diagnostics = stderr;
+    let mut cursor = 0;
+    while cursor < stdout.len() {
+        let rest = &stdout[cursor..];
+        // A diagnostic can start anywhere: php writes it at the current output position,
+        // so an `echo` that already emitted a partial line leaves it mid-line. The display
+        // copy still covers the rest of that line plus its terminating newline.
+        let next = LEVELS
+            .iter()
+            .filter_map(|prefix| rest.find(prefix))
+            .min()
+            .map(|offset| cursor + offset);
+        let Some(start) = next else {
+            program.push_str(rest);
+            break;
+        };
+        program.push_str(&stdout[cursor..start]);
+        let end = stdout[start..]
+            .find('\n')
+            .map_or(stdout.len(), |offset| start + offset + 1);
+        diagnostics.push_str(&stdout[start..end]);
+        cursor = end;
+    }
+    (program, diagnostics)
 }
 
 /// Assembles user assembly, links it with a runtime object, runs the binary,
@@ -1759,9 +1847,13 @@ pub(crate) fn assemble_and_run_capture(
 
     let output = run_binary(&bin_path, dir);
 
+    let (stdout, stderr) = split_display_diagnostics(
+        String::from_utf8(output.stdout).unwrap(),
+        String::from_utf8(output.stderr).unwrap(),
+    );
     ProgramOutput {
-        stdout: String::from_utf8(output.stdout).unwrap(),
-        stderr: String::from_utf8(output.stderr).unwrap(),
+        stdout,
+        stderr,
         success: output.status.success(),
     }
 }
@@ -1798,9 +1890,13 @@ pub(crate) fn assemble_and_run_capture_per_argv(
         .iter()
         .map(|args| {
             let output = run_binary_with_args(&bin_path, dir, args);
+            let (stdout, stderr) = split_display_diagnostics(
+                String::from_utf8(output.stdout).unwrap(),
+                String::from_utf8(output.stderr).unwrap(),
+            );
             ProgramOutput {
-                stdout: String::from_utf8(output.stdout).unwrap(),
-                stderr: String::from_utf8(output.stderr).unwrap(),
+                stdout,
+                stderr,
                 success: output.status.success(),
             }
         })

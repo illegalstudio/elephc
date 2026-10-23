@@ -43,6 +43,8 @@ sidebar:
 | [`http_response_code()`](./misc/http_response_code.md) | `(int $response_code = 0): int` | `int` | ✓ | ✓ |
 | [`ini_restore()`](./misc/ini_restore.md) | `(string $option): void` | `void` | ✓ | - |
 | [`isset()`](./misc/isset.md) | `(mixed $var, ...$vars): bool` | `bool` | ✓ | ✓ |
+| [`memory_get_peak_usage()`](./misc/memory_get_peak_usage.md) | `(bool $real_usage = false): int` | `int` | ✓ | ✓ |
+| [`memory_get_usage()`](./misc/memory_get_usage.md) | `(bool $real_usage = false): int` | `int` | ✓ | ✓ |
 | [`opcache_compile_file()`](./misc/opcache_compile_file.md) | `(mixed $filename): bool` | `bool` | ✓ | ✓ |
 | [`opcache_get_configuration()`](./misc/opcache_get_configuration.md) | `(): array|false` | `array|false` | ✓ | ✓ |
 | [`opcache_get_status()`](./misc/opcache_get_status.md) | `(mixed $include_scripts = true): mixed` | `mixed` | ✓ | ✓ |

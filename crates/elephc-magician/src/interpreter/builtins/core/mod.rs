@@ -43,6 +43,8 @@ mod get_included_files;
 mod get_mangled_object_vars;
 mod get_required_files;
 mod get_resources;
+mod memory_get_peak_usage;
+mod memory_get_usage;
 mod ob_clean;
 mod ob_end_clean;
 mod ob_end_flush;
@@ -85,6 +87,8 @@ pub(in crate::interpreter) use gc_enable::*;
 pub(in crate::interpreter) use gc_enabled::*;
 pub(in crate::interpreter) use gc_mem_caches::*;
 pub(in crate::interpreter) use gc_status::*;
+pub(in crate::interpreter) use memory_get_peak_usage::*;
+pub(in crate::interpreter) use memory_get_usage::*;
 pub(in crate::interpreter) use ob_get_clean::*;
 pub(in crate::interpreter) use ob_get_contents::*;
 pub(in crate::interpreter) use ob_get_flush::*;
@@ -130,6 +134,8 @@ pub(in crate::interpreter) fn eval_builtin_core_call(
         "gc_enabled" => eval_builtin_gc_enabled(args, values),
         "gc_mem_caches" => eval_builtin_gc_mem_caches(args, values),
         "gc_status" => eval_builtin_gc_status(args, values),
+        "memory_get_usage" => eval_builtin_memory_get_usage(args, values),
+        "memory_get_peak_usage" => eval_builtin_memory_get_peak_usage(args, values),
         "ob_get_clean" => eval_builtin_ob_get_clean(args, context, scope, values),
         "ob_get_contents" => eval_builtin_ob_get_contents(args, context, scope, values),
         "ob_get_flush" => eval_builtin_ob_get_flush(args, context, scope, values),
@@ -200,6 +206,8 @@ pub(in crate::interpreter) fn eval_core_values_result(
         "gc_enabled" => eval_gc_enabled_values_result(evaluated_args, values),
         "gc_mem_caches" => eval_gc_mem_caches_values_result(evaluated_args, values),
         "gc_status" => eval_gc_status_values_result(evaluated_args, values),
+        "memory_get_usage" => eval_memory_get_usage_values_result(evaluated_args, values),
+        "memory_get_peak_usage" => eval_memory_get_peak_usage_values_result(evaluated_args, values),
         "ob_get_clean" => eval_ob_get_clean_result(evaluated_args, context, values),
         "ob_get_contents" => eval_ob_get_contents_result(evaluated_args, context, values),
         "ob_get_flush" => eval_ob_get_flush_result(evaluated_args, context, values),

@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/version_prelude.rs`:56](https://github.com/illegalstudio/elephc/blob/main/src/version_prelude.rs#L56) (`ini_restore`)
+- **Lowering**: [`src/version_prelude.rs`:59](https://github.com/illegalstudio/elephc/blob/main/src/version_prelude.rs#L59) (`ini_restore`)
 - **Function symbol**: `ini_restore()`
 
 

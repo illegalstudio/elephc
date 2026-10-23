@@ -22,11 +22,13 @@
 //! - EVERY NAN reaches its coercion site through a FUNCTION RETURN, a PARAMETER or an array
 //!   element, never as a literal. `NAN` in literal position is const-folded, so a literal probe
 //!   would measure the constant folder and pass even with the runtime path deleted.
-//! - Stdout and stderr are asserted SEPARATELY. The warning is a runtime diagnostic written by
-//!   the COMPILED PROGRAM to its own stderr, which is a different stream from the compiler's —
-//!   the `elephc_diagnostics` filter used for compile output can therefore never swallow it.
+//! - Stdout and stderr are asserted SEPARATELY, and the warning is a DISPLAY COPY on stdout:
+//!   php CLI runs with `display_errors=1`, so the diagnostic is written at the coercion site in
+//!   the program's own output, immediately before whatever that site prints. The compiler's own
+//!   diagnostics never reach this stream (`elephc_diagnostics` filters them from the COMPILE's
+//!   stderr), and the compiled program writes nothing to stderr.
 //! - WARNING COUNTS are part of the fixture. php-src warns once per coercion, so a `while`
-//!   condition that runs three times warns three times; asserting the whole stderr text (not
+//!   condition that runs three times warns three times; asserting the whole stdout text (not
 //!   just "contains") is what pins that.
 //! - NEGATIVE CONTROLS matter more than the positives here. php-src warns for NAN and for
 //!   NOTHING ELSE: `INF`, `-INF`, `0.0` and `-0.0` all coerce silently. A fix that warned on
@@ -42,7 +44,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// The exact stderr line elephc emits for one NAN-to-bool coercion.
+/// The exact display line elephc emits for one NAN-to-bool coercion.
 ///
 /// php-src appends ` in <file> on line <n>`; elephc deliberately does not (see the module
 /// preamble). Keeping the text in one constant makes the message and the counts below impossible
@@ -120,9 +122,9 @@ fn compile(dir: &Path, source: &str, stem: &str, php_version: Option<&str>) -> P
 
 /// Compiles and runs `source`, asserting its stdout and its stderr independently.
 ///
-/// Stdout carries the PHP program's own output and stderr carries every runtime warning, so an
-/// assertion on one can never be satisfied by the other. `expected_stderr` is the COMPLETE
-/// stderr, which is what pins the warning COUNT as well as its text.
+/// Stdout carries the PHP program's output INCLUDING the display copy of every runtime warning,
+/// at the coercion site that emitted it; the compiled program writes nothing to stderr.
+/// `expected_stdout` is the COMPLETE stdout, which is what pins the warning COUNT and its text.
 fn assert_run(prefix: &str, source: &str, expected_stdout: &str, expected_stderr: &str) {
     assert_run_for_version(prefix, source, None, expected_stdout, expected_stderr);
 }
@@ -161,9 +163,6 @@ fn assert_run_for_version(
 
 /// Returns `NAN_WARNING` repeated `count` times, i.e. the whole stderr of a program that
 /// coerced a NAN to bool exactly `count` times.
-fn warnings(count: usize) -> String {
-    NAN_WARNING.repeat(count)
-}
 
 // ---------------------------------------------------------------------------
 // The coercion sites — every syntactic form that turns a float into a bool
@@ -187,8 +186,11 @@ var_dump(!f());
 echo f() ? "tern-true\n" : "tern-false\n";
 var_dump(boolval(f()));
 "#,
-        "bool(false)\nbool(true)\nif-true\nbool(false)\ntern-true\nbool(true)\n",
-        &warnings(6),
+        &format!(
+            "{w}bool(false)\n{w}bool(true)\n{w}if-true\n{w}bool(false)\n{w}tern-true\n{w}bool(true)\n",
+            w = NAN_WARNING
+        ),
+        "",
     );
 }
 
@@ -211,8 +213,12 @@ var_dump(f() && true);
 var_dump(f() || false);
 var_dump(false || f());
 "#,
-        "n=2\nbool(true)\nbool(true)\nbool(true)\n",
-        &warnings(6),
+        &format!(
+            "{loop_warnings}n=2\n{w}bool(true)\n{w}bool(true)\n{w}bool(true)\n",
+            loop_warnings = NAN_WARNING.repeat(3),
+            w = NAN_WARNING
+        ),
+        "",
     );
 }
 
@@ -232,8 +238,8 @@ function m(): mixed { return NAN; }
 var_dump((bool)m());
 var_dump(empty(m()));
 "#,
-        "bool(true)\nbool(false)\n",
-        &warnings(2),
+        &format!("{w}bool(true)\n{w}bool(false)\n", w = NAN_WARNING),
+        "",
     );
 }
 
@@ -249,8 +255,8 @@ function arr(): array { return [NAN]; }
 $a = arr();
 var_dump((bool)$a[0]);
 "#,
-        "bool(true)\n",
-        &warnings(1),
+        &format!("{w}bool(true)\n", w = NAN_WARNING),
+        "",
     );
 }
 
@@ -268,8 +274,8 @@ function nanret(): float { return NAN; }
 function takes(float $x): bool { return (bool)$x; }
 var_dump(takes(nanret()));
 "#,
-        "bool(true)\n",
-        &warnings(1),
+        &format!("{w}bool(true)\n", w = NAN_WARNING),
+        "",
     );
 }
 
@@ -287,8 +293,8 @@ function nanret(): float { return NAN; }
 function passthrough(float $x): float { return $x; }
 var_dump((bool)passthrough(nanret()));
 "#,
-        "bool(true)\n",
-        &warnings(1),
+        &format!("{w}bool(true)\n", w = NAN_WARNING),
+        "",
     );
 }
 
@@ -362,8 +368,8 @@ fn a_missed_float_read_reports_the_undefined_key_and_not_the_nan_warning() {
 function raw(string $k) { $m = ["a" => 1.5]; return $m[$k]; }
 var_dump(empty(raw("zz")));
 "#,
-        "bool(true)\n",
-        "Warning: Undefined array key \"zz\"\n",
+        "Warning: Undefined array key \"zz\"\nbool(true)\n",
+        "",
     );
 }
 
@@ -437,7 +443,7 @@ var_dump((bool)f());
 var_dump(empty(f()));
 "#,
         Some("8.5"),
-        "bool(true)\nbool(false)\n",
-        &warnings(2),
+        &format!("{w}bool(true)\n{w}bool(false)\n", w = NAN_WARNING),
+        "",
     );
 }

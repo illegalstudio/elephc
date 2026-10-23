@@ -2,7 +2,7 @@
 title: "pcntl_setns()"
 description: "Joins one Linux namespace of the selected process."
 sidebar:
-  order: 658
+  order: 660
 ---
 
 ## pcntl_setns()
