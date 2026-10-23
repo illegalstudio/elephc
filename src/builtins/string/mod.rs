@@ -182,6 +182,7 @@ pub mod ucfirst;
 pub mod ucwords;
 pub mod urldecode;
 pub mod urlencode;
+pub mod version_compare;
 pub mod vprintf;
 pub mod vsprintf;
 pub mod wordwrap;

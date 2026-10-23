@@ -374,7 +374,7 @@ mod tests {
         // through forwarding homes (see `eval_support`).
         // Plus the four `ptr_read_f32`/`ptr_write_f32`/`ptr_read_f64`/`ptr_write_f64`
         // raw-memory builtins, bound in eval through their own registry homes.
-        assert_eq!(eval_registry, 687 + curl_surface);
+        assert_eq!(eval_registry, 689 + curl_surface);
         // 83 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use, plus the ELEVEN
         // `__elephc_opcache_rt_*` runtime script-cache helpers this branch adds.
@@ -401,7 +401,8 @@ mod tests {
         // `__elephc_opcache_rt_*` runtime script-cache helpers rolled through above add the rest.
         // The four float pointer builtins (`ptr_read_f32`, `ptr_write_f32`, `ptr_read_f64`,
         // `ptr_write_f64`) are ordinary registry builtins on both backends.
-        assert_eq!(aot_registry, 756);
+        // `random_bytes` and `version_compare` are registry builtins with eval homes.
+        assert_eq!(aot_registry, 758);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
         assert_eq!(aot_external, 409 + curl_surface);
@@ -452,7 +453,7 @@ mod tests {
         assert_eq!(shared_runtime, 85);
         assert_eq!(hybrid_adapter, 2);
         // Includes the four float pointer builtins, which eval runs through interpreter adapters.
-        assert_eq!(interpreter_adapter, 600 + curl_surface);
+        assert_eq!(interpreter_adapter, 602 + curl_surface);
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own.
         assert_eq!(unsupported, 478);

@@ -2,7 +2,7 @@
 title: "xmlwriter_write_pi()"
 description: "Writes a complete processing instruction."
 sidebar:
-  order: 1072
+  order: 1074
 ---
 
 ## xmlwriter_write_pi()

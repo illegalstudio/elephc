@@ -39,6 +39,7 @@ mod simple;
 mod split;
 mod strip_tags;
 mod strip_tags_owners;
+mod version;
 
 #[allow(unused_imports)]
 use common::*;
@@ -74,6 +75,7 @@ pub(crate) use hash::{
 pub(crate) use mbstring::lower_mbstring;
 pub(crate) use network::{lower_inet, lower_ip2long, lower_long2ip};
 pub(crate) use parse_url::lower_parse_url;
+pub(crate) use version::lower_version_compare;
 pub(crate) use printf::{lower_printf, lower_sprintf, lower_vprintf, lower_vsprintf};
 pub(crate) use replace_wrap::{lower_str_pad, lower_string_replace, lower_wordwrap};
 pub(crate) use scalar::{

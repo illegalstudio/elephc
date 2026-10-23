@@ -24,6 +24,7 @@ sidebar:
 | `rand()` | `rand([$min, $max]): int` | Random integer |
 | `mt_rand()` | `mt_rand([$min, $max]): int` | Alias for rand(), except that `$min > $max` throws `\ValueError` instead of swapping the bounds |
 | `random_int()` | `random_int($min, $max): int` | Cryptographic random. `$min > $max` throws `\ValueError`. |
+| `random_bytes()` | `random_bytes($length): string` | Cryptographically secure random bytes from the operating system (`arc4random_buf` on macOS, `getrandom` on Linux). A `$length` below 1 throws `\ValueError`; if the system refuses to provide randomness an `\Exception` is thrown (`Random\RandomException` is not declared yet). |
 | `sin()` | `sin($angle): float` | Sine (radians) |
 | `cos()` | `cos($angle): float` | Cosine (radians) |
 | `tan()` | `tan($angle): float` | Tangent (radians) |

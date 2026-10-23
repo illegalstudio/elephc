@@ -2,7 +2,7 @@
 title: "mb_parse_str()"
 description: "Parses URL-encoded input with shared encoding detection and writes decoded variables by reference."
 sidebar:
-  order: 868
+  order: 869
 ---
 
 ## mb_parse_str()

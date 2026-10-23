@@ -2,7 +2,7 @@
 title: "strip_tags()"
 description: "Strips HTML and PHP tags from a string. Optional `$allowed_tags` is a string like `\"<p><a>\"` or an array of tag names. Weak callers also coerce scalars and Stringable objects; strict callers require `array|string|null`."
 sidebar:
-  order: 926
+  order: 927
 ---
 
 ## strip_tags()

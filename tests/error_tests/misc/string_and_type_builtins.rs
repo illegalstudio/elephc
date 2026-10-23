@@ -434,3 +434,53 @@ expect_builtin_arity_error!(
     "<?php function up(array $a): string { return strtoupper($a); } echo up([\"x\"]);",
     "strtoupper(): Argument #1 ($string) must be of type string, array given"
 );
+
+// Tests version_compare() arity error when called with one argument (accepts 2 or 3).
+expect_builtin_arity_error!(
+    test_error_version_compare_wrong_args,
+    "<?php version_compare(\"1\");",
+    "version_compare() takes 2 or 3 arguments"
+);
+
+// Tests random_bytes() arity error when called with no arguments.
+expect_builtin_arity_error!(
+    test_error_random_bytes_wrong_args,
+    "<?php random_bytes();",
+    "random_bytes() takes exactly 1 argument"
+);
+
+/// Verifies `version_compare()` rejects an array passed through a bare `array` parameter for
+/// either version, and an array operator, instead of comparing the string `"Array"`.
+#[test]
+fn test_error_version_compare_wrong_argument_types() {
+    expect_error(
+        "<?php function f(array $a): int { return version_compare($a, \"1\"); } f([1]);",
+        "version_compare(): Argument #1 ($version1) must be of type string, array given",
+    );
+    expect_error(
+        "<?php var_dump(version_compare(\"1\", [2]));",
+        "version_compare(): Argument #2 ($version2) must be of type string, array given",
+    );
+    expect_error(
+        "<?php var_dump(version_compare(\"1\", \"2\", []));",
+        "version_compare(): Argument #3 ($operator) must be of type ?string, array given",
+    );
+    expect_error(
+        "<?php var_dump(version_compare(new stdClass(), \"1\"));",
+        "version_compare(): Argument #1 ($version1) must be of type string, stdClass given",
+    );
+}
+
+/// Verifies `random_bytes()` rejects an array `$length`, including one passed through a bare
+/// `array` parameter.
+#[test]
+fn test_error_random_bytes_wrong_argument_types() {
+    expect_error(
+        "<?php var_dump(random_bytes([]));",
+        "random_bytes(): Argument #1 ($length) must be of type int, array given",
+    );
+    expect_error(
+        "<?php function g(array $a) { $r = random_bytes($a); echo strlen($r); } g([1]);",
+        "random_bytes(): Argument #1 ($length) must be of type int, array given",
+    );
+}

@@ -55,6 +55,12 @@ pub(super) fn emit_value_error(ctx: &mut FunctionContext<'_>, message: &str) {
     emit_static_exception(ctx, "ValueError", "_spl_value_error_class_id", message);
 }
 
+/// Throws a built-in `Exception` with the given message (`random_bytes()` when the operating
+/// system refuses to provide randomness; `Random\RandomException` is not declared yet).
+pub(super) fn emit_exception(ctx: &mut FunctionContext<'_>, message: &str) {
+    emit_static_exception(ctx, "Exception", "_spl_exception_class_id", message);
+}
+
 /// The register condition a materialized builtin argument must satisfy to skip its
 /// `ValueError`.
 ///

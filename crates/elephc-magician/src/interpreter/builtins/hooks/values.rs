@@ -206,6 +206,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Rad2deg,
     /// Dispatches `rand(...)`.
     Rand,
+    /// Dispatches `random_bytes(...)`.
+    RandomBytes,
     /// Dispatches `random_int(...)`.
     RandomInt,
     /// Dispatches `round(...)`.
@@ -306,6 +308,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     StrRepeat,
     /// Dispatches `strval(...)`.
     Strval,
+    /// Dispatches `version_compare(...)`.
+    VersionCompare,
     /// Dispatches `strtr(...)`.
     Strtr,
     /// Dispatches `strstr(...)`.
@@ -560,6 +564,7 @@ impl EvalValuesHook {
             }
             Self::Rad2deg => one_arg(evaluated_args, values, eval_rad2deg_result),
             Self::Rand => eval_rand_values_result(evaluated_args, values),
+            Self::RandomBytes => eval_random_bytes_values_result(evaluated_args, context, values),
             Self::RandomInt => eval_random_int_values_result(evaluated_args, values),
             Self::Round => match evaluated_args {
                 [value] => eval_round_result(*value, None, None, values),
@@ -734,6 +739,9 @@ impl EvalValuesHook {
             Self::Strval => one_arg(evaluated_args, values, |value, values| {
                 eval_strval_result(value, context, values)
             }),
+            Self::VersionCompare => {
+                eval_version_compare_values_result(evaluated_args, context, values)
+            }
             Self::Strtr => match evaluated_args {
                 [subject, from] => eval_strtr_result(*subject, *from, None, values),
                 [subject, from, to] => eval_strtr_result(*subject, *from, Some(*to), values),

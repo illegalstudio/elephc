@@ -2,7 +2,7 @@
 title: "pclose() - internals"
 description: "Compiler internals for pclose(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 757
+  order: 758
 ---
 
 ## `pclose()` - internals

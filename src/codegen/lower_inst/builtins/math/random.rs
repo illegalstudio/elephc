@@ -62,6 +62,70 @@ pub(crate) fn lower_rand(
     store_if_result(ctx, inst)
 }
 
+/// php-src's verbatim `ValueError` wording for `random_bytes()` with `$length < 1`.
+const RANDOM_BYTES_LENGTH_MESSAGE: &str =
+    "random_bytes(): Argument #1 ($length) must be greater than 0";
+
+/// php-src's message when the operating system cannot provide randomness.
+const RANDOM_BYTES_FAILURE_MESSAGE: &str =
+    "Failed to retrieve randomness from the operating system";
+
+/// Lowers `random_bytes($length)` to the OS-generator helper.
+///
+/// A length below 1 raises php-src's `ValueError` before the helper runs; a helper failure
+/// (the kernel refused `getrandom`) throws instead of returning weak bytes.
+pub(crate) fn lower_random_bytes(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::super::ensure_arg_count(inst, "random_bytes", 1)?;
+    let length = expect_operand(inst, 0)?;
+    if ctx.value_php_type(length)?.codegen_repr() == PhpType::Str {
+        load_numeric_string_length(ctx, length)?;
+    } else {
+        load_numeric_as_int(ctx, length, "random_bytes")?;
+    }
+    let result = abi::int_result_reg(ctx.emitter);
+    super::super::super::exceptions::emit_value_error_unless(
+        ctx,
+        super::super::super::exceptions::ValueGuard::SignedAtLeast(result, 1),
+        RANDOM_BYTES_LENGTH_MESSAGE,
+    );
+    // -- fill the buffer, throwing when the operating system refuses randomness --
+    abi::emit_call_label(ctx.emitter, "__rt_random_bytes");
+    let ok = ctx.next_label("random_bytes_ok");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {ok}"));                  // the helper filled the whole buffer
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rcx, rcx");                           // did the helper fill the whole buffer?
+            ctx.emitter.instruction(&format!("jz {ok}"));                       // keep the random string
+        }
+    }
+    super::super::super::exceptions::emit_exception(ctx, RANDOM_BYTES_FAILURE_MESSAGE);
+    ctx.emitter.label(&ok);
+    store_if_result(ctx, inst)
+}
+
+/// php-src's `TypeError` wording for a `random_bytes()` length string that is not numeric.
+const RANDOM_BYTES_LENGTH_TYPE_MESSAGE: &str =
+    "random_bytes(): Argument #1 ($length) must be of type int, string given";
+
+/// Coerces a string `$length` the way PHP's weak-mode `int` parameter does: a numeric string
+/// (surrounding whitespace allowed, a float form truncated) becomes its integer, anything else
+/// raises the catchable `TypeError`. Leaves the length in the integer result register.
+fn load_numeric_string_length(ctx: &mut FunctionContext<'_>, length: ValueId) -> Result<()> {
+    ctx.load_value_to_result(length)?;
+    let invalid = ctx.next_label("random_bytes_length_not_numeric");
+    let ready = ctx.next_label("random_bytes_length_ready");
+    super::super::super::enums::emit_string_result_to_int_checked(ctx, &invalid);
+    abi::emit_jump(ctx.emitter, &ready);
+    ctx.emitter.label(&invalid);
+    // -- a non-numeric length string is php-src's TypeError --
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    super::super::super::exceptions::emit_type_error(ctx, RANDOM_BYTES_LENGTH_TYPE_MESSAGE);
+    ctx.emitter.label(&ready);
+    Ok(())
+}
+
 /// Lowers `random_int()` over an inclusive integer range.
 pub(crate) fn lower_random_int(
     ctx: &mut FunctionContext<'_>,
@@ -201,6 +265,11 @@ fn load_numeric_as_int(
         PhpType::Int | PhpType::Bool => Ok(()),
         PhpType::Void | PhpType::Never => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+            Ok(())
+        }
+        // A nullable int (`?int`) arrives as a tagged scalar; PHP's coercive mode reads null as 0.
+        PhpType::TaggedScalar => {
+            crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
             Ok(())
         }
         PhpType::Float => {

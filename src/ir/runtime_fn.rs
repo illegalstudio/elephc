@@ -406,6 +406,7 @@ pub enum RuntimeFnId {
     Pow,
     Rad2deg,
     Rand,
+    RandomBytes,
     RandomInt,
     Round,
     Sin,
@@ -741,6 +742,7 @@ pub enum RuntimeFnId {
     Trim,
     Ucfirst,
     Ucwords,
+    VersionCompare,
     Vprintf,
     Vsprintf,
     Wordwrap,
@@ -1377,6 +1379,7 @@ impl RuntimeFnId {
             | RuntimeFnId::Strripos
             | RuntimeFnId::Strrpos
             | RuntimeFnId::SubstrCount
+            | RuntimeFnId::VersionCompare
             | RuntimeFnId::BaseConvert
             | RuntimeFnId::ChunkSplit
             | RuntimeFnId::ParseUrl
@@ -1522,7 +1525,9 @@ impl RuntimeFnId {
             ),
             // `mt_rand()` and `random_int()` raise a catchable `ValueError` for an inverted
             // `[min, max]` range; `rand()` silently swaps the bounds instead.
-            RuntimeFnId::MtRand | RuntimeFnId::RandomInt => {
+            // `random_bytes()` reads the OS generator and raises a catchable `ValueError`
+            // for a length below 1.
+            RuntimeFnId::MtRand | RuntimeFnId::RandomInt | RuntimeFnId::RandomBytes => {
                 crate::ir::Effects::from_bits_retain(
                     crate::ir::Effects::READS_PROCESS.bits()
                         | crate::ir::Effects::WRITES_PROCESS.bits()
@@ -2526,6 +2531,8 @@ impl RuntimeFnId {
                 | RuntimeFnId::Explode
                 | RuntimeFnId::Fgetcsv
                 | RuntimeFnId::FileGetContents
+                // `__rt_random_bytes` allocates a new heap string for every call.
+                | RuntimeFnId::RandomBytes
                 // These mixed-return helpers always allocate a new result cell. Date
                 // decomposition boxes a newly allocated hash, `strtotime` boxes its scalar
                 // answer, `hrtime` boxes either a scalar or a new hash, and grapheme reversal
@@ -2618,6 +2625,9 @@ impl RuntimeFnId {
                 // temporary alive for the boxed result's whole lifetime, which leaked one
                 // block per iteration for `strstr($h, $cond ? "a" : "b")` in a loop.
                 | RuntimeFnId::Strstr
+                // `version_compare()` answers a scalar, boxed into a fresh Mixed cell only
+                // when the call site's result is `int|bool`; it never hands back an argument.
+                | RuntimeFnId::VersionCompare
                 // `tempnam(directory, prefix)` returns the generated path that `mkstemp()`
                 // wrote into a buffer `__rt_tempnam` allocated itself, then copied out with
                 // `__rt_str_persist` — it is neither of its two argument strings. This was the
@@ -2996,6 +3006,7 @@ impl RuntimeFnId {
             RuntimeFnId::Pow => "pow",
             RuntimeFnId::Rad2deg => "rad2deg",
             RuntimeFnId::Rand => "rand",
+            RuntimeFnId::RandomBytes => "random_bytes",
             RuntimeFnId::RandomInt => "random_int",
             RuntimeFnId::Round => "round",
             RuntimeFnId::Sin => "sin",
@@ -3257,6 +3268,7 @@ impl RuntimeFnId {
             RuntimeFnId::Trim => "trim",
             RuntimeFnId::Ucfirst => "ucfirst",
             RuntimeFnId::Ucwords => "ucwords",
+            RuntimeFnId::VersionCompare => "version_compare",
             RuntimeFnId::Vprintf => "vprintf",
             RuntimeFnId::Vsprintf => "vsprintf",
             RuntimeFnId::Wordwrap => "wordwrap",

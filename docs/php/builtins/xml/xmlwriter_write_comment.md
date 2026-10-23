@@ -2,7 +2,7 @@
 title: "xmlwriter_write_comment()"
 description: "Writes a complete comment."
 sidebar:
-  order: 1065
+  order: 1067
 ---
 
 ## xmlwriter_write_comment()

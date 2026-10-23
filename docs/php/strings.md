@@ -246,6 +246,7 @@ routing and web transport verification remain open.
 | `strrev()` | `strrev($str): string` | Reverse a string |
 | `grapheme_strrev()` | `grapheme_strrev($str): string\|false` | Reverse a UTF-8 string by grapheme clusters, preserving embedded NUL bytes and keeping combining marks, emoji modifiers, and ZWJ sequences with their base cluster. Returns `false` on malformed UTF-8. |
 | `strcmp()` | `strcmp($a, $b): int` | Binary-safe string comparison |
+| `version_compare()` | `version_compare($v1, $v2, $operator = null): int\|bool` | Compare two PHP-standardized version strings exactly like php-src (separators and digit/letter boundaries canonicalized, `dev` < `alpha`/`a` < `beta`/`b` < `RC`/`rc` < numbers < `pl`/`p`). Without an operator it returns -1/0/1; with `<`, `lt`, `<=`, `le`, `>`, `gt`, `>=`, `ge`, `==`, `=`, `eq`, `!=`, `<>` or `ne` it returns a bool. Any other operator throws `\ValueError` |
 | `strcasecmp()` | `strcasecmp($a, $b): int` | Case-insensitive comparison |
 | `str_contains()` | `str_contains($hay, $needle): bool` | Check if string contains substring |
 | `str_starts_with()` | `str_starts_with($hay, $prefix): bool` | Check prefix |

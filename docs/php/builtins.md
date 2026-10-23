@@ -606,6 +606,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`pow()`](./builtins/math/pow.md) | `(float $num, float $exponent): float` | `float` | ✓ | ✓ |
 | [`rad2deg()`](./builtins/math/rad2deg.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`rand()`](./builtins/math/rand.md) | `(int $min, int $max): int` | `int` | ✓ | ✓ |
+| [`random_bytes()`](./builtins/math/random_bytes.md) | `(int $length): string` | `string` | ✓ | ✓ |
 | [`random_int()`](./builtins/math/random_int.md) | `(int $min, int $max): int` | `int` | ✓ | ✓ |
 | [`round()`](./builtins/math/round.md) | `(float $num, int $precision = 0, int $mode = 1): float` | `float` | ✓ | ✓ |
 | [`sin()`](./builtins/math/sin.md) | `(float $num): float` | `float` | ✓ | ✓ |
@@ -958,6 +959,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`ucwords()`](./builtins/string/ucwords.md) | `(string $string, string $separators = " \t\r\n\x0C\x0B"): string` | `string` | ✓ | ✓ |
 | [`urldecode()`](./builtins/string/urldecode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`urlencode()`](./builtins/string/urlencode.md) | `(string $string): string` | `string` | ✓ | ✓ |
+| [`version_compare()`](./builtins/string/version_compare.md) | `(string $version1, string $version2, mixed $operator = null): mixed` | `mixed` | ✓ | ✓ |
 | [`vprintf()`](./builtins/string/vprintf.md) | `(string $format, array $values): int` | `int` | ✓ | ✓ |
 | [`vsprintf()`](./builtins/string/vsprintf.md) | `(string $format, array $values): string` | `string` | ✓ | ✓ |
 | [`wordwrap()`](./builtins/string/wordwrap.md) | `(string $string, int $width = 75, string $break = "\n", bool $cut_long_words = false): string` | `string` | ✓ | ✓ |

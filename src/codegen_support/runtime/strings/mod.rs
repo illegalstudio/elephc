@@ -70,6 +70,7 @@ mod chunk_split;
 mod count_chars;
 mod strtr;
 mod quotemeta;
+mod version_compare;
 mod quoted_printable_encode;
 mod wordwrap;
 mod bin2hex;
@@ -230,6 +231,8 @@ pub use count_chars::emit_count_chars;
 pub use strtr::emit_strtr;
 /// Emit the quotemeta regular-expression metacharacter escaper.
 pub use quotemeta::emit_quotemeta;
+/// Emit the version_compare canonicalizer and comparator.
+pub use version_compare::emit_version_compare;
 /// Emit the quoted_printable_encode MIME transfer encoder.
 pub use quoted_printable_encode::emit_quoted_printable_encode;
 /// Emit the str_word_count word scanner.

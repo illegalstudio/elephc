@@ -234,6 +234,9 @@ pub(super) fn lower(
                     crate::codegen::lower_inst::builtins::strings::StringPositionDirection::Reverse,
                 )
         }),
+        RuntimeFnId::VersionCompare => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_version_compare(ctx, inst)
+        }),
         RuntimeFnId::Strstr => Some({
             crate::codegen::lower_inst::builtins::strings::lower_strstr(ctx, inst)
         }),

@@ -13,6 +13,8 @@ mod bcmath;
 mod bcmath_number;
 #[path = "math/functions.rs"]
 mod functions;
+#[path = "math/random_bytes.rs"]
+mod random_bytes;
 #[path = "math/php_float_to_int.rs"]
 mod php_float_to_int;
 #[path = "math/rounding_modes.rs"]
