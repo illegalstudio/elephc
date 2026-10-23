@@ -456,6 +456,8 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
     }
 
     *pos = assign_pos + 1;
+    // `self::$x = require 'f.php';` needs no special case: the include is an ordinary
+    // expression, and `crate::resolver::value_include_hoist` binds it to a hidden local first.
     let rhs = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
     if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {

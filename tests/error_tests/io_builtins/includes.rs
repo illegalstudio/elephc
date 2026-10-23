@@ -149,3 +149,78 @@ fn test_error_include_property_path_is_explicitly_rejected() {
 
 // --- INF/NAN function errors ---
 
+
+/// Verifies a runtime-dynamic path keeps its diagnostic when the include is an EXPRESSION in
+/// any position (Laravel's `(fn () => require $path)()`, `tap(require $x, ...)`,
+/// `$cache[$p] ??= require $p`): the parser accepts them, the resolver refuses the path.
+#[test]
+fn test_error_include_expression_dynamic_path_is_rejected() {
+    for src in [
+        "<?php function load($path) { return (fn () => require $path)(); }",
+        "<?php function load($path) { return array_merge(require $path, []); }",
+        "<?php function load($path) { static $c = []; return $c[$path] ??= require $path; }",
+        "<?php function load($f) { return file_exists($f) ? (include $f) : false; }",
+    ] {
+        expect_runtime_dynamic_include_path_error(src, "is resolved at runtime");
+    }
+}
+
+/// Verifies a variable or property passed to a call before an include of the same call is a
+/// compile error: PHP binds it before the file runs, so a file that writes it
+/// must not change it, but the parameter may be by reference, so it cannot be copied either.
+/// A dimension whose index is computed (`$a[index()]`) is such a place too.
+#[test]
+fn test_error_place_argument_before_include_is_rejected() {
+    for src in [
+        "<?php function f($a, $b) { echo $a, $b; } $x = 1; f($x, require 'a.php');",
+        "<?php class K { public static $p = 1; } function f($a, $b) {} f(K::$p, require 'a.php');",
+        "<?php function f($a, $b) {} $x = 1; $c = true; f($x, $c ? require 'a.php' : 0);",
+        // A dimension with a computed index is as writable as one with a literal index.
+        "<?php function index() { return 0; } function f(&$v, $b) { $v = 9; } $a = [1]; f($a[index()], require 'a.php');",
+        "<?php function k() { return 'x'; } function f(&$v, $b) {} $o = new stdClass; $o->p = []; f($o->p[k()][0], require 'a.php');",
+    ] {
+        let err = resolve_files_error(&[("main.php", src), ("a.php", "<?php $x = 2; return 10;")], "main.php");
+        assert!(
+            err.message.contains("may be by reference"),
+            "{src}: unexpected error message: {}",
+            err.message
+        );
+    }
+}
+
+/// Verifies includes in positions whose statements cannot be expanded (a loop condition, an
+/// `elseif`, a nested `for` clause, a `match` arm) fail with a clear diagnostic instead of
+/// reaching the checker.
+#[test]
+fn test_error_include_expression_in_unsupported_position() {
+    for (src, expected) in [
+        ("<?php while (include 'a.php') { break; }", "not supported in this position yet"),
+        (
+            "<?php $c = 0; if ($c) {} elseif (require 'a.php') { echo 1; }",
+            "not supported in this position yet",
+        ),
+        ("<?php for ($i = 1 + include 'a.php'; false; ) {}", "not supported in this position yet"),
+        ("<?php $v = match (1) { 1 => require 'a.php', default => 0 };", "`match` arm"),
+    ] {
+        let err = resolve_files_error(&[("main.php", src), ("a.php", "<?php return 1;")], "main.php");
+        assert!(err.message.contains(expected), "{src}: unexpected error message: {}", err.message);
+    }
+}
+
+/// Verifies `static $x; $x ??= require F;` is refused: the conditional hoist leaves a `mixed`
+/// value, which elephc does not persist into an untyped `static` local.
+#[test]
+fn test_error_include_coalesce_into_static_local_is_rejected() {
+    let err = resolve_files_error(
+        &[
+            ("main.php", "<?php function p() { static $q; $q ??= require 'a.php'; return $q; } p();"),
+            ("a.php", "<?php return [1];"),
+        ],
+        "main.php",
+    );
+    assert!(
+        err.message.contains("assigned to `static $q`"),
+        "unexpected error message: {}",
+        err.message
+    );
+}

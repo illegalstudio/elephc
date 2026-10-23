@@ -79,7 +79,7 @@ Things that have a value:
 | `ClosureCall { var, args }` | `$fn(1, 2)` | Calling a closure stored in a variable |
 | `ExprCall { callee, args }` | `$arr[0](1, 2)` | Calling the result of an expression (e.g., array access returning a callable) |
 | `Spread(Expr)` | `...$arr` | Spread/unpack operator — expands an array into individual arguments or elements |
-| `IncludeValue { path, once, required }` | `$x = require 'f.php';`, `return include $p;` | Transient node for an `include`/`require` used in expression position. The resolver fully expands it (inlining the included file in the caller's scope and capturing its top-level `return`), so no later phase ever sees it. |
+| `IncludeValue { path, once, required }` | `$x = require 'f.php';`, `f(require __DIR__.'/en.php', [])`, `$x ??= include 'f.php'` | Transient node for an `include`/`require` in any expression position (a prefix operator with PHP's low precedence: its path is the whole following expression). The resolver fully expands it (inlining the included file in the caller's scope and capturing its top-level `return`): `resolver::value_include_hoist` first binds an include nested in a statement to a hidden local, or hoists a conditional holding one into an `if`, and refuses positions it cannot lower; no later phase ever sees the node. |
 | `ConstRef(Name)` | `MAX_RETRIES`, `Config\PORT`, `\App\Config\PORT` | Reference to a user-defined constant |
 | `NewObject { class_name, args }` | `new Point(1, 2)`, `new App\Model\User()` | Object instantiation |
 | `NewDynamic { name_expr, args }` | `new $cls(1, 2)` | Object instantiation where the class name comes from a runtime string expression. Resolved through the runtime class table at codegen time (`__rt_new_by_name`). |

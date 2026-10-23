@@ -1000,6 +1000,32 @@ pub(super) fn parse_new_object(
         ));
     }
 
+    // `new (expr)(args)`: PHP 8's `class_name_reference: '(' expr ')'`. The expression yields
+    // the class name at runtime, exactly like `new $var`, so it shares the dynamic `new`.
+    if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::LParen)) {
+        *pos += 1;
+        let name_expr = parse_expr(tokens, pos)?;
+        if !matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::RParen)) {
+            return Err(CompileError::new(
+                span,
+                "Expected ')' after the class-name expression of 'new'",
+            ));
+        }
+        *pos += 1;
+        let args = if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::LParen)) {
+            *pos += 1;
+            parse_args(tokens, pos, span)?
+        } else {
+            reject_dynamic_new_class_reference(tokens, *pos)?;
+            Vec::new()
+        };
+        let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
+        return Ok(Expr::new(
+            ExprKind::NewDynamic { name_expr: Box::new(name_expr), args },
+            span,
+        ));
+    }
+
     let (class_name, type_args) = crate::parser::stmt::parse_inherited_name(
         tokens,
         pos,

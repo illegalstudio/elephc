@@ -628,15 +628,11 @@ fn parse_for_clause(
 /// consumer treats as `unreachable!()` — `for ($v = include "f.php"; …)` reached that panic
 /// once the clause started going through the real statement parser.
 ///
-/// Only two shapes can reach it, which is why this is a match and not a tree walk.
-/// `ExprKind::IncludeValue` has exactly TWO construction sites, both calling
-/// `parser::stmt::simple::try_parse_value_include`: `parse_return`, whose `Return` is not on
-/// the clause allow-list, and `parse_simple_assign`, which builds a plain `StmtKind::Assign`
-/// and only for `AssignmentOperator::Assign`. That branch runs BEFORE
-/// `parse_assignment_value_expr`, so no typed, indexed, property or static-property
-/// assignment can carry one — `include` reaches those through the ordinary expression
-/// parser, which rejects it. `test_error_include_is_only_an_expression_in_an_assignment_rhs`
-/// pins that invariant, and fails here if it ever changes.
+/// This match only names the clause shapes that ARE an include (`include F`, `<target> = include
+/// F`, and their hoisted forms), so they get the for-clause diagnostic. An include NESTED in a
+/// clause (`for ($v = 1 + include F; …)`, `for (K::$s = include F; …)`) is also an expression
+/// now, and is rejected by the resolver's safety net (`resolver::exprs::resolve_expr`), which
+/// refuses any `ExprKind::IncludeValue` that `resolver::value_include_hoist` did not lower.
 ///
 /// A closure body is deliberately NOT inspected. Its include is DEFERRED: it runs when the
 /// closure is called, not while the clause is evaluated, so
@@ -645,7 +641,15 @@ fn parse_for_clause(
 fn clause_runs_an_include(stmt: &Stmt) -> bool {
     match &stmt.kind {
         StmtKind::Include { .. } => true,
-        StmtKind::Assign { value, .. } => matches!(value.kind, ExprKind::IncludeValue { .. }),
+        StmtKind::Assign { value, .. }
+        | StmtKind::TypedAssign { value, .. }
+        | StmtKind::ArrayAssign { value, .. }
+        | StmtKind::ArrayPush { value, .. }
+        | StmtKind::PropertyAssign { value, .. }
+        | StmtKind::StaticPropertyAssign { value, .. }
+        | StmtKind::StaticPropertyArrayAssign { value, .. }
+        | StmtKind::StaticPropertyArrayPush { value, .. }
+        | StmtKind::ExprStmt(value) => matches!(value.kind, ExprKind::IncludeValue { .. }),
         StmtKind::Synthetic(pieces) => pieces.iter().any(clause_runs_an_include),
         _ => false,
     }

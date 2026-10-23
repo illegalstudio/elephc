@@ -136,7 +136,7 @@ elephc also provides 91 symbols from PECL extensions php-src does not bundle, wh
 | [match expressions](./control-structures.md) ([PHP](https://www.php.net/manual/en/control-structures.match.php)) | ✅ Supported |  |
 | References (&) ([PHP](https://www.php.net/manual/en/language.references.php)) | ✅ Supported |  |
 | [Namespaces](./namespaces.md) ([PHP](https://www.php.net/manual/en/language.namespaces.php)) | ✅ Supported |  |
-| include / require ([PHP](https://www.php.net/manual/en/function.include.php)) | ✅ Supported | Static, compile-time resolved paths |
+| include / require ([PHP](https://www.php.net/manual/en/function.include.php)) | ✅ Supported | Static, compile-time resolved paths; usable as an expression (argument, operand, `??=`, ternary branch). An include in a loop condition or a `match` arm, or after a variable passed to the same call (it may be by reference), is a compile error |
 | [eval()](./eval.md) ([PHP](https://www.php.net/manual/en/function.eval.php)) | 🟡 Partial | Experimental; embeds an optional interpreter bridge when runtime parsing is required |
 
 ## Extensions

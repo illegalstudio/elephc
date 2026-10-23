@@ -205,7 +205,13 @@ pub(super) fn expand_value_include(
     )?;
 
     let mut out = Vec::new();
+    let mut value = Expr::new(ExprKind::Variable(tmp.clone()), span);
     match resolved {
+        // An `_once` include of a file that is still being included (it is on the include
+        // chain): PHP skips it and the expression is `true`.
+        None if once && include_target_exists(path, base_dir, state) => {
+            value = Expr::new(ExprKind::BoolLiteral(true), span);
+        }
         // Missing, non-required include: PHP evaluates the expression to `false`.
         None => {
             out.push(assign_temp(
@@ -216,21 +222,45 @@ pub(super) fn expand_value_include(
         }
         Some(mut wrapped) => {
             let captured_return = rewrite_first_include_return(&mut wrapped, &tmp);
-            // Pre-seed the default include value of `1` when the included body cannot set the
-            // temporary itself: either it has no top-level `return`, or it is an `_once` include
-            // whose guarded body may be skipped on a repeat include.
-            if !captured_return || once {
+            let one = || assign_temp(&tmp, Expr::new(ExprKind::IntLiteral(1), span), span);
+            if once {
+                // A repeat `_once` include skips the guarded body and evaluates to `true`
+                // (MEASURED: `var_dump(require_once F)` twice prints the value, then
+                // `bool(true)`). The guard sets a flag when it admits the file, and the value is
+                // `$flag ? $tmp : true`. The temporary itself keeps the file's own value type:
+                // elephc types a local from its assignments, so `$tmp = true` on the skip path
+                // would clash with an array or string the file returns.
+                let flag = format!("{tmp}_ran");
                 out.push(assign_temp(
-                    &tmp,
-                    Expr::new(ExprKind::IntLiteral(1), span),
+                    &flag,
+                    Expr::new(ExprKind::BoolLiteral(false), span),
                     span,
                 ));
+                let mut seed = vec![assign_temp(
+                    &flag,
+                    Expr::new(ExprKind::BoolLiteral(true), span),
+                    span,
+                )];
+                if !captured_return {
+                    seed.push(one());
+                }
+                seed_once_guard_body(&mut wrapped, seed);
+                value = Expr::new(
+                    ExprKind::Ternary {
+                        condition: Box::new(Expr::new(ExprKind::Variable(flag), span)),
+                        then_expr: Box::new(value),
+                        else_expr: Box::new(Expr::new(ExprKind::BoolLiteral(true), span)),
+                    },
+                    span,
+                );
+            } else if !captured_return {
+                // No top-level `return` the body is certain to run: the default value is `1`.
+                out.push(one());
             }
             out.extend(wrapped);
         }
     }
 
-    let value = Expr::new(ExprKind::Variable(tmp), span);
     match capture {
         IncludeValueCapture::Assign(name) => {
             out.push(Stmt::new(StmtKind::Assign { name, value }, span));
@@ -487,6 +517,25 @@ fn rewrite_scoped_returns(stmts: &mut [Stmt], depth: usize, temp: Option<&str>) 
             _ => {}
         }
     }
+}
+
+/// Puts `seed` first in the `IncludeOnceGuard` body `resolve_include_stmt` wraps an `_once`
+/// include in, so it runs only when the guard admits the file.
+fn seed_once_guard_body(wrapped: &mut [Stmt], seed: Vec<Stmt>) {
+    for stmt in wrapped.iter_mut() {
+        if let StmtKind::IncludeOnceGuard { body, .. } = &mut stmt.kind {
+            body.splice(0..0, seed);
+            return;
+        }
+    }
+    unreachable!("resolve_include_stmt wraps every resolved `_once` include in a guard");
+}
+
+/// Whether an include path names an existing file, folded the way `resolve_include_stmt` does.
+fn include_target_exists(path: &Expr, base_dir: &Path, state: &ResolveState) -> bool {
+    fold_include_path(path, state)
+        .map(|path_str| resolve_path(&path_str, base_dir).exists())
+        .unwrap_or(false)
 }
 
 /// Builds a `<temp> = <value>;` assignment statement for the hidden include temporary.

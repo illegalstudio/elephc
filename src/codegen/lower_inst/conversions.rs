@@ -457,7 +457,7 @@ fn emit_mixed_missing_tostring_error(ctx: &mut FunctionContext<'_>, receiver_reg
 }
 
 /// Prepends a static fragment to the active string result.
-fn emit_string_result_concat_prefix(ctx: &mut FunctionContext<'_>, prefix: &str) {
+pub(super) fn emit_string_result_concat_prefix(ctx: &mut FunctionContext<'_>, prefix: &str) {
     let (text_ptr, text_len) = abi::string_result_regs(ctx.emitter);
     let (right_ptr, right_len) = concat_right_operand_regs(ctx);
     let (prefix_label, prefix_len) = ctx.data.add_string(prefix.as_bytes());
@@ -469,7 +469,7 @@ fn emit_string_result_concat_prefix(ctx: &mut FunctionContext<'_>, prefix: &str)
 }
 
 /// Appends a static fragment to the active string result.
-fn emit_string_result_concat_suffix(ctx: &mut FunctionContext<'_>, suffix: &str) {
+pub(super) fn emit_string_result_concat_suffix(ctx: &mut FunctionContext<'_>, suffix: &str) {
     let (right_ptr, right_len) = concat_right_operand_regs(ctx);
     let (suffix_label, suffix_len) = ctx.data.add_string(suffix.as_bytes());
     abi::emit_symbol_address(ctx.emitter, right_ptr, &suffix_label);

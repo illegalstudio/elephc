@@ -191,3 +191,90 @@ fn test_assign_require_parses_as_include_value() {
         other => panic!("Expected Assign, got {:?}", other),
     }
 }
+
+/// Returns the value expression of a single `ExprStmt`/`Return`/`Assign` program.
+fn sole_value(src: &str) -> Expr {
+    let stmts = parse_source(src);
+    match &stmts[0].kind {
+        StmtKind::ExprStmt(value) | StmtKind::Return(Some(value)) | StmtKind::Assign { value, .. } => {
+            value.clone()
+        }
+        other => panic!("Expected an expression statement, got {:?}", other),
+    }
+}
+
+/// Verifies an include is an expression in argument position, the Carbon lang-file shape
+/// `array_replace_recursive(require __DIR__.'/en.php', [...])`, with the whole concatenation as
+/// its path and the comma ending it.
+#[test]
+fn test_require_parses_as_call_argument() {
+    let value = sole_value("<?php return array_replace_recursive(require __DIR__.'/en.php', ['a' => 1]);");
+    let ExprKind::FunctionCall { args, .. } = &value.kind else {
+        panic!("Expected FunctionCall, got {:?}", value.kind);
+    };
+    assert_eq!(args.len(), 2);
+    let ExprKind::IncludeValue { path, once, required } = &args[0].kind else {
+        panic!("Expected IncludeValue argument, got {:?}", args[0].kind);
+    };
+    assert!(!once && *required);
+    assert!(matches!(path.kind, ExprKind::BinaryOp { op: BinOp::Concat, .. }));
+}
+
+/// Verifies PHP's include precedence: the path is a whole expression, so
+/// `1 + require 'a' . 'b'` is `1 + (require ('a' . 'b'))`, and a parenthesized path is a grouped
+/// expression (`require ('a') . 'b'` includes `'ab'`).
+#[test]
+fn test_include_operand_takes_the_whole_following_expression() {
+    let value = sole_value("<?php $x = 1 + require 'a' . 'b';");
+    let ExprKind::BinaryOp { op: BinOp::Add, right, .. } = &value.kind else {
+        panic!("Expected Add, got {:?}", value.kind);
+    };
+    let ExprKind::IncludeValue { path, .. } = &right.kind else {
+        panic!("Expected IncludeValue, got {:?}", right.kind);
+    };
+    assert!(matches!(path.kind, ExprKind::BinaryOp { op: BinOp::Concat, .. }));
+
+    let value = sole_value("<?php $x = require ('a') . 'b';");
+    let ExprKind::IncludeValue { path, .. } = &value.kind else {
+        panic!("Expected IncludeValue, got {:?}", value.kind);
+    };
+    assert!(matches!(path.kind, ExprKind::BinaryOp { op: BinOp::Concat, .. }));
+}
+
+/// Verifies includes parse in every assignment target and operator position PHP allows,
+/// which used to be `Unexpected token: Include` (Carbon `static::$x ??= require ...`).
+#[test]
+fn test_include_parses_in_assignment_and_conditional_positions() {
+    for src in [
+        "<?php int $a = include 'f.php';",
+        "<?php $a = []; $a[0] = include 'f.php';",
+        "<?php $o = new stdClass(); $o->p = include 'f.php';",
+        "<?php class K { public static $s; } K::$s ??= require 'f.php';",
+        "<?php $x = $c ? require_once 'a.php' : require_once 'b.php';",
+        "<?php $x = (fn () => require 'f.php')();",
+        "<?php echo 1 + include 'f.php', 2;",
+    ] {
+        parse_source(src);
+    }
+}
+
+/// Verifies `new (expr)` parses as a dynamic `new` whose class-name expression is the
+/// parenthesized expression.
+#[test]
+fn test_new_with_expression_class_name_parses_as_dynamic_new() {
+    let value = sole_value("<?php $x = new ($this->getPivotClass())('a');");
+    let ExprKind::NewDynamic { name_expr, args } = &value.kind else {
+        panic!("Expected NewDynamic, got {:?}", value.kind);
+    };
+    assert!(matches!(name_expr.kind, ExprKind::MethodCall { .. }));
+    assert_eq!(args.len(), 1);
+}
+
+/// Verifies a reserved word is a method name after a dynamic `::` receiver (`$factory::new()`).
+#[test]
+fn test_reserved_word_method_after_dynamic_scope_receiver_parses() {
+    for src in ["<?php $factory::new();", "<?php $o::match(1);"] {
+        parse_source(src);
+    }
+    assert!(parse_fails("<?php $factory::;"));
+}

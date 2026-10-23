@@ -28,6 +28,7 @@ pub(crate) use include_once::include_once_label;
 mod include_path;
 mod state;
 mod stmt_exprs;
+mod value_include_hoist;
 
 use crate::errors::CompileError;
 use crate::parser::ast::{Program, Stmt, StmtKind};
