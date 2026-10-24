@@ -9,6 +9,8 @@
 
 use super::*;
 
+mod native_xml_reads;
+
 /// Lowers an object property read.
 pub(super) fn lower_property_get(
     ctx: &mut LoweringContext<'_, '_>,
@@ -357,14 +359,28 @@ pub(crate) fn lower_property_get_from_value(
     op: Op,
     expr: &Expr,
 ) -> LoweredValue {
+    let ty = ctx.builder.value_php_type(object.value);
+    if matches!(op, Op::PropGet | Op::NullsafePropGet)
+        && !property.starts_with("__elephc_")
+        && matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        && ctx.classes.contains_key("SimpleXMLElement")
+    {
+        return native_xml_reads::lower(ctx, object, property, op, expr);
+    }
+    lower_property_get_without_native_dispatch(ctx, object, property, op, expr)
+}
+
+/// Lowers one property read after optional native-object dispatch has been selected.
+fn lower_property_get_without_native_dispatch(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, op: Op, expr: &Expr,
+) -> LoweredValue {
     if op == Op::NullsafePropGet && value_is_definitely_null(ctx, object.value) {
         return lower_boxed_null(ctx, expr);
     }
     let object_type = ctx.builder.value_php_type(object.value);
     let native_xml_getter = singular_object_class(&object_type).is_some_and(|(class, _)| {
         crate::types::builtin_classes::has_native_dimensions(class, ctx.classes)
-            && ctx.classes.get(class.trim_start_matches('\\'))
-                .is_some_and(|info| info.visible_property(property).is_none())
+            && !property.starts_with("__elephc_")
     });
     if matches!(op, Op::PropGet | Op::NullsafePropGet) && native_xml_getter {
         // XML child selection creates a fresh wrapper. Keep that ownership visible as a call.

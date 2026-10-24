@@ -243,6 +243,11 @@ impl Checker {
             return Ok(PhpType::Mixed);
         }
         if let Some(class_info) = self.classes.get(class_name) {
+            if !property.starts_with("__elephc_")
+                && crate::types::builtin_classes::has_native_dimensions(class_name, &self.classes)
+            {
+                return Ok(PhpType::Object(class_name.to_string()));
+            }
             if let Some(visibility) = class_info.property_visibilities.get(property) {
                 // `property_visibilities` answers for the PHYSICAL slot table, which still carries
                 // a strict ancestor's private slot under its plain name. php 7.4 removed shadow

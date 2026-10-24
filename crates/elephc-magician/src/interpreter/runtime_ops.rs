@@ -20,6 +20,7 @@ use crate::value::RuntimeCellHandle;
 
 mod builtins;
 pub(in crate::interpreter) mod object_operators;
+pub(in crate::interpreter) mod simplexml_properties;
 pub(crate) use builtins::default_builtin_call;
 
 thread_local! {

@@ -3,7 +3,7 @@
 //! `elephc-xml` bridge links, and retains libxml2's complete public header set.
 //!
 //! Called from:
-//! - `crate::native_deps::recipe::CuratedRecipes` for libxml2 recipe revision 2.
+//! - `crate::native_deps::recipe::CuratedRecipes` for libxml2 recipe revision 3.
 //!
 //! Key details:
 //! - Out-of-tree autoconf build, static/PIC only. Python bindings, zlib, ICU, readline/history
@@ -35,6 +35,7 @@
 //!   the artifact non-reproducible and leaking that path. gcc >= 8, clang >= 10 and Apple
 //!   clang all accept `-ffile-prefix-map`. The shim is compiled by hand with the same flags.
 //! - Recipe revision 2 adds the SimpleXML tree, namespace, XPath, and document-copy shim.
+//!   Revision 3 adds the parsing base URL needed for relative external subsets and entities.
 
 use std::ffi::OsString;
 use std::fs;

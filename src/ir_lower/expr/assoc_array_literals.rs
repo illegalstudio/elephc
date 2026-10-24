@@ -433,7 +433,7 @@ pub(in crate::ir_lower) fn property_access_expr_type_for_ir(
         return Some(normalize_value_php_type(property_ty));
     }
     let class_info = ctx.classes.get(normalized)?;
-    if class_info.visible_property(property).is_none()
+    if !property.starts_with("__elephc_")
         && crate::types::builtin_classes::has_native_dimensions(normalized, ctx.classes)
     {
         return Some(PhpType::Object(normalized.to_string()));

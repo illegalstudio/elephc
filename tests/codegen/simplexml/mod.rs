@@ -128,6 +128,21 @@ if ($x instanceof CatalogElement) {
     assert_eq!(out, "CatalogElement:CatalogElement:a\nCatalogElement\n");
 }
 
+/// XML property views take precedence over subclass slots while ordinary objects keep their storage.
+#[test]
+fn test_simplexml_mixed_property_reads() {
+    if skip_without_xml_native("test_simplexml_mixed_property_reads") { return; }
+    let out = compile_and_run(r###"<?php
+class DeclaredPropertyXml extends SimpleXMLElement { public string $child = 'declared'; }
+function readSimpleXmlChild(mixed $node): void { echo (string)$node->child, '|'; }
+readSimpleXmlChild(new SimpleXMLElement('<r><child>native</child></r>'));
+readSimpleXmlChild(new DeclaredPropertyXml('<r><child>hidden</child></r>'));
+$ordinary = new stdClass(); $ordinary->child = 'ordinary';
+readSimpleXmlChild($ordinary);
+"###);
+    assert_eq!(out, "native|hidden|ordinary|");
+}
+
 /// Verifies SimpleXML parse errors and options against PHP's observable output.
 #[test]
 fn test_simplexml_parse_errors_and_options() {

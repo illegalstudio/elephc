@@ -30,6 +30,9 @@ pub(in crate::interpreter) fn eval_property_get_result_with_ownership(
     let Ok(identity) = values.object_identity(object) else {
         return values.property_get(object, property_name);
     };
+    if let Some(value) = super::super::runtime_ops::simplexml_properties::invoke(
+        values, object, property_name, "__get", None,
+    )? { return Ok(value); }
     let Some(class) = context.dynamic_object_class(identity) else {
         let class_name = eval_runtime_object_class_name(object, values)?;
         if let Some((declaring_class, visibility, _, is_static)) =
@@ -187,6 +190,9 @@ pub(crate) fn eval_property_set_result(
     let Ok(identity) = values.object_identity(object) else {
         return values.property_set(object, property_name, value);
     };
+    if let Some(result) = super::super::runtime_ops::simplexml_properties::invoke(
+        values, object, property_name, "__set", Some(value),
+    )? { return values.release(result); }
     let Some(class) = context.dynamic_object_class(identity) else {
         let class_name = eval_runtime_object_class_name(object, values)?;
         if let Some((declaring_class, visibility, write_visibility, is_static)) =
@@ -794,6 +800,13 @@ pub(in crate::interpreter) fn eval_property_isset_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
+    if let Some(result) = super::super::runtime_ops::simplexml_properties::invoke(
+        values, object, property_name, "__isset", None,
+    )? {
+        let truthy = values.truthy(result);
+        let released = values.release(result);
+        return truthy.and_then(|value| released.map(|()| value));
+    }
     let Ok(identity) = values.object_identity(object) else {
         let value = values.property_get(object, property_name)?;
         return Ok(!values.is_null(value)?);
@@ -877,6 +890,9 @@ pub(in crate::interpreter) fn eval_property_unset_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    if let Some(result) = super::super::runtime_ops::simplexml_properties::invoke(
+        values, object, property_name, "__unset", None,
+    )? { return values.release(result); }
     let Ok(identity) = values.object_identity(object) else {
         return Ok(());
     };

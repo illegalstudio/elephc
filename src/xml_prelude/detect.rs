@@ -1,7 +1,6 @@
 //! Purpose:
-//! Decides whether a parsed program references PHP's `ext/xml` or `ext/xmlwriter`
-//! surface — any of the `xml_*` / `xmlwriter_*` functions or the `XMLParser` /
-//! `XMLWriter` classes — so the xml prelude is injected only for programs that use it.
+//! Decides whether a parsed program references PHP's XML, XMLWriter, or SimpleXML
+//! functions and classes, so the XML prelude is injected only for programs that use it.
 //!
 //! Called from:
 //! - `crate::xml_prelude::inject_if_used`.
@@ -13,9 +12,9 @@
 //!   prelude: `namespace App; xml_parser_create()` falls back to the global function, while
 //!   `\App\xml_parse()`, an imported user function, and a namespace-local declaration remain
 //!   unrelated user symbols.
-//! - TWO KINDS OF POSITION trigger injection: (a) a *function call* naming one of the 64
+//! - TWO KINDS OF POSITION trigger injection: (a) a *function call* naming a catalog
 //!   functions (including `xml_parse_into_struct`, a registry builtin whose lowering calls
-//!   the prelude's helpers); (b) a *class-name* position naming `XMLParser` or `XMLWriter`
+//!   the prelude's helpers); (b) a *class-name* position naming a class from these modules
 //!   (new, static receivers, `instanceof`, `catch`, `extends`/`implements`, type hints,
 //!   trait uses, `use` imports). `XML_*` constants are NOT a trigger: they resolve from the
 //!   shared constant catalog whether or not the prelude is injected.
@@ -56,7 +55,7 @@ fn xml_functions() -> &'static [&'static str] {
     })
 }
 
-/// The `XMLParser` and `XMLWriter` classes, from the shared class catalog.
+/// The XMLParser, XMLWriter, SimpleXMLElement, and SimpleXMLIterator catalog classes.
 fn xml_classes() -> &'static [&'static str] {
     static NAMES: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
     NAMES.get_or_init(|| {
@@ -94,7 +93,7 @@ fn name_is_xml_function(name: &Name) -> bool {
         .any(|candidate| crate::name_resolver::is_additional_global_symbol(name, candidate))
 }
 
-/// Returns whether a resolved name is `XMLParser` or `XMLWriter`: the seeded global the
+/// Returns whether a resolved name is an XML module class: the seeded global the
 /// resolver bound it to, or the bare single-segment spelling at a class-name position the
 /// resolver leaves as written (a variadic parameter's element type, a `::class` or scoped
 /// constant receiver). Class names are case-insensitive, but a name with namespace segments

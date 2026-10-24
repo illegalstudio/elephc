@@ -121424,7 +121424,7 @@
       "checker_line": null,
       "codegen_file": "src/simplexml_prelude/surface.rs",
       "codegen_function": "simplexml_import_dom",
-      "codegen_line": 384,
+      "codegen_line": 385,
       "notes": [
         "Implemented by the compiler-injected xml prelude."
       ],
@@ -121571,7 +121571,7 @@
       "checker_line": null,
       "codegen_file": "src/simplexml_prelude/surface.rs",
       "codegen_function": "simplexml_load_file",
-      "codegen_line": 349,
+      "codegen_line": 350,
       "notes": [
         "Implemented by the compiler-injected xml prelude."
       ],
@@ -121739,7 +121739,7 @@
       "checker_line": null,
       "codegen_file": "src/simplexml_prelude/surface.rs",
       "codegen_function": "simplexml_load_string",
-      "codegen_line": 343,
+      "codegen_line": 344,
       "notes": [
         "Implemented by the compiler-injected xml prelude."
       ],
@@ -139716,7 +139716,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/types.rs",
       "codegen_function": "lower_unset_builtin",
-      "codegen_line": 141,
+      "codegen_line": 143,
       "notes": [
         "Rejects `unset()` calls that were not converted into direct EIR unbind operations.",
         "Reaching this lowering means `crate::ir_lower::expr` could not turn the target",
