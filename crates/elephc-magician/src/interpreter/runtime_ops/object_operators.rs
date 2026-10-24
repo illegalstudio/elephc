@@ -21,7 +21,11 @@ fn operator_class(
     let released = values.release(name);
     let bytes = bytes.and_then(|bytes| released.map(|()| bytes))?;
     let class = std::str::from_utf8(&bytes).ok().and_then(elephc_builtin_contract::lookup_class);
-    Ok(class.filter(|class| class.operators.is_some()))
+    if let Some(class) = class.filter(|class| class.operators.is_some()) { return Ok(Some(class)); }
+    for class in elephc_builtin_contract::classes().iter().filter(|class| class.operators.is_some()) {
+        if values.object_is_a(value, class.name, false)? { return Ok(Some(class)); }
+    }
+    Ok(None)
 }
 
 /// Calls a typed arithmetic adapter with operands in their original source order.
