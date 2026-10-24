@@ -51,7 +51,7 @@ document after the original root variable is released. String conversion reads
 direct text and CDATA. `asXML()` and its `saveXML()` alias return XML, or write
 to a filename and return success. Both classes support `count()`, `foreach`,
 and the `RecursiveIterator` methods. Integer and float casts read the selected
-node text. Array casts, `get_object_vars()`, and JSON encoding expose XML
+node text. Array casts, `get_object_vars()`, `__debugInfo()`, and JSON encoding expose XML
 properties, including `@attributes` and repeated children. DOM imports share
 their document, so edits through either API remain visible through the other.
 

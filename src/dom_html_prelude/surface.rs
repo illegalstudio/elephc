@@ -992,12 +992,13 @@ function __elephc_dom_make_node(DOMDocument $doc, mixed $tree): mixed {
     return $_el;
 }
 
-function __elephc_dom_collect(mixed $node, string $name): array {
+function __elephc_dom_collect(DOMNode $node, string $name): array {
     $_found = [];
-    if ($node->childNodes === null) {
+    $_children = $node->childNodes;
+    if (!($_children instanceof DOMNodeList)) {
         return $_found;
     }
-    foreach ($node->childNodes as $_child) {
+    foreach ($_children as $_child) {
         if ($_child instanceof DOMElement) {
             if ($name === "*" || $_child->nodeName === $name) {
                 $_found[] = $_child;

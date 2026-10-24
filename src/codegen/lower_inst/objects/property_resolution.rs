@@ -372,7 +372,7 @@ pub(super) fn resolve_property_runtime_action(
         PropertyNameResolution::Visible => {
             if matches!(kind, PropertyAccessKind::DirectUnset | PropertyAccessKind::RuntimeUnset)
                 && ctx.module.class_infos.get(class_name.trim_start_matches('\\'))
-                    .is_some_and(|info| info.property_hooks.contains_key(property))
+                    .and_then(|info| info.property_hooks.get(property)).is_some_and(|hooks| hooks.any())
             {
                 return Ok(PropertyRuntimeAction::Refuse {
                     message: format!("Cannot unset hooked property {}::${}",

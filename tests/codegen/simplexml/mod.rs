@@ -422,6 +422,18 @@ var_dump($x instanceof JsonSerializable);
     assert_eq!(out, "{\"@attributes\":{\"a\":\"v\"},\"item\":[\"one\",\"two\"],\"nested\":{\"leaf\":\"value\"},\"empty\":{}}\n{\"@attributes\":{\"a\":\"v\"},\"item\":[\"one\",\"two\"],\"nested\":{\"leaf\":\"value\"},\"empty\":{}}\n{\"0\":\"one\",\"1\":\"two\"}\n[\"one\",\"two\"]\n{\"@attributes\":{\"a\":\"v\"}}\n{\"0\":\"v\"}\nbool(false)\n");
 }
 
+/// The public debug projection matches PHP for element and attribute wrappers.
+#[test]
+fn test_simplexml_debug_info_projection() {
+    if skip_without_xml_native("test_simplexml_debug_info_projection") { return; }
+    let out = compile_and_run(r###"<?php
+$xml = new SimpleXMLElement('<r id="x"><a>v</a></r>');
+echo json_encode($xml->__debugInfo()), "\n";
+echo json_encode($xml['id']->__debugInfo()), "\n";
+"###);
+    assert_eq!(out, "{\"@attributes\":{\"id\":\"x\"},\"a\":\"v\"}\n[\"x\"]\n");
+}
+
 /// Repeated projections and child aliases release compiler-owned values under heap debugging.
 #[test]
 fn test_simplexml_projection_and_alias_heap_debug() {

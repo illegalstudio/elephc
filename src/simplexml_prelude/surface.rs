@@ -56,7 +56,6 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     private int $__elephc_position = -1;
     private mixed $__elephc_current = null;
     private mixed $__elephc_owner = null;
-
     public function __elephc_attach(int $handle): void {
         $this->__elephc_handle = $handle;
         $this->__elephc_owner = new __ElephcSimpleXMLLease($handle);
@@ -280,6 +279,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         return $result;
     }
     public function __elephc_json(): mixed { return (object)$this->__elephc_array(); }
+    public function __debugInfo(): ?array { return $this->__elephc_array(); }
     public function __elephc_dom_text(): string {
         $handle = $this->__elephc_handle;
         return elephc_xml_sx_string($handle, 3);
