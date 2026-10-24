@@ -10,6 +10,12 @@
 use std::ffi::{c_char, c_int, c_void};
 pub(super) type Node = *mut c_void;
 extern "C" {
+    /// Copies an entire libxml2 document for PHP clone semantics.
+    #[link_name = "elephc_libxml2_v1_sx_copy"]
+    pub(super) fn copy(doc: Node) -> Node;
+    /// Maps a source node into its document copy without exposing C structure layouts.
+    #[link_name = "elephc_libxml2_v1_sx_correspond"]
+    pub(super) fn correspond(source: Node, destination: Node, node: Node) -> Node;
     /// Calls the opaque shim parse operation.
     #[link_name = "elephc_libxml2_v1_sx_parse"]
     pub(super) fn parse(data: *const c_char, len: c_int, options: c_int) -> Node;
@@ -55,9 +61,6 @@ extern "C" {
     /// Calls the opaque shim node_free operation.
     #[link_name = "elephc_libxml2_v1_sx_node_free"]
     pub(super) fn node_free(node: Node) -> ();
-    /// Calls the opaque shim content operation.
-    #[link_name = "elephc_libxml2_v1_sx_content"]
-    pub(super) fn content(node: Node, value: *const c_char) -> ();
     /// Calls the opaque shim assign operation.
     #[link_name = "elephc_libxml2_v1_sx_assign"]
     pub(super) fn assign(node: Node, value: *const c_char) -> ();

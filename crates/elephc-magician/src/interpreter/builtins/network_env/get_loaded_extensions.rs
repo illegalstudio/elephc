@@ -41,7 +41,7 @@ const ZEND_LOADED_EXTENSIONS: &[&str] = &["Zend OPcache"];
 /// The extensions the xml bridge contributes, appended when the host linked it.
 ///
 /// KEEP IN SYNC with `src/linker/bridges.rs` (the `elephc_xml` bridge's `php_extensions`).
-const XML_BRIDGE_EXTENSIONS: &[&str] = &["xml", "xmlwriter"];
+const XML_BRIDGE_EXTENSIONS: &[&str] = &["xml", "xmlwriter", "SimpleXML"];
 
 eval_builtin! {
     contract: "get_loaded_extensions",

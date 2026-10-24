@@ -227,7 +227,7 @@ pub(super) fn check_property_array_assign(
             let (prop_ty, property_has_declared_type) =
                 resolve_object_array_property(checker, class_name, property, span)?;
             if let PhpType::Object(prop_class_name) = &prop_ty {
-                if checker.object_type_implements_interface(prop_class_name, "ArrayAccess") {
+                if checker.object_type_supports_dimensions(prop_class_name) {
                     return Ok(());
                 }
             }

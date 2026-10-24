@@ -78,7 +78,7 @@ pub(in crate::interpreter) fn eval_extension_is_loaded_in(
     name: &str,
     context: &ElephcEvalContext,
 ) -> bool {
-    if name.eq_ignore_ascii_case("xml") || name.eq_ignore_ascii_case("xmlwriter") {
+    if name.eq_ignore_ascii_case("xml") || name.eq_ignore_ascii_case("xmlwriter") || name.eq_ignore_ascii_case("simplexml") {
         return context.native_function("xml_parser_create").is_some();
     }
     eval_extension_is_loaded(name)

@@ -115,6 +115,25 @@ impl View {
         let filter = if kind <= 1 { Namespace { value: ns.into(), prefix } } else { self.ns.clone() };
         Self { scope, ns: filter, ..self.clone() }
     }
+    /// Copies the whole document and rebuilds selectors against that independent tree.
+    fn deep_clone(&self) -> Option<Self> {
+        let raw = unsafe { ffi::copy(self.doc.raw) };
+        if raw.is_null() { return None; }
+        let doc = Rc::new(Document { raw, detached: RefCell::new(vec![]) });
+        Some(self.remap(doc))
+    }
+    /// Preserves a lazy selector's shape and namespace filter across document cloning.
+    fn remap(&self, doc: Rc<Document>) -> Self {
+        let map = |node| unsafe { ffi::correspond(self.doc.raw, doc.raw, node) };
+        let scope = match &self.scope {
+            Scope::Node(node) => Scope::Node(map(*node)),
+            Scope::Nodes(nodes) => Scope::Nodes(nodes.iter().map(|n| map(*n)).filter(|n| !n.is_null()).collect()),
+            Scope::Children(parent, name) => Scope::Children(Rc::new(parent.remap(doc.clone())), name.clone()),
+            Scope::Attributes(parent, name) => Scope::Attributes(Rc::new(parent.remap(doc.clone())), name.clone()),
+            Scope::Index(parent, index) => Scope::Index(Rc::new(parent.remap(doc.clone())), *index),
+        };
+        Self { doc, scope, ns: self.ns.clone(), xpath_ns: Rc::new(RefCell::new(self.xpath_ns.borrow().clone())) }
+    }
     /// Detaches a node without freeing memory still visible to another wrapper.
     fn detach(&self, node: Node) {
         unsafe { ffi::unlink(node); }

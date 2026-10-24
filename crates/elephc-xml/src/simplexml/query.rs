@@ -11,7 +11,7 @@ use super::*;
 
 impl View {
     /// Evaluates XPath with in-scope prefixes followed by explicitly registered overrides.
-    fn xpath(&self, expression: &str) -> Option<Vec<Node>> {
+    pub(super) fn xpath(&self, expression: &str) -> Option<Vec<Node>> {
         let node = self.first()?;
         unsafe {
             let context = ffi::xpath_context(self.doc.raw, node);
@@ -37,7 +37,7 @@ impl View {
         }
     }
     /// Enumerates namespace declarations or namespace uses in PHP traversal order.
-    fn namespaces(&self, declared: bool, recursive: bool, from_root: bool) -> Vec<(String, String)> {
+    pub(super) fn namespaces(&self, declared: bool, recursive: bool, from_root: bool) -> Vec<(String, String)> {
         let start = if from_root { Some(unsafe { ffi::root(self.doc.raw) }) } else { self.first() };
         let Some(start) = start else { return vec![]; };
         let mut entries = Vec::new();

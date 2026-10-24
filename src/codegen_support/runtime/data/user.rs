@@ -622,10 +622,9 @@ pub(crate) fn emit_runtime_data_user(
                 let entry = class_info_by_id
                     .get(&class_id)
                     .filter(|class_info| {
-                        class_info
-                            .interfaces
-                            .iter()
-                            .any(|name| name.eq_ignore_ascii_case(interface))
+                        (class_info.interfaces.iter().any(|name| name.eq_ignore_ascii_case(interface))
+                            || (interface == "ArrayAccess" && class_name_by_id.get(&class_id)
+                                .is_some_and(|name| crate::types::builtin_classes::has_native_dimensions(name, classes))))
                             && class_info
                                 .methods
                                 .get(&method_key)

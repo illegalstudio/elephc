@@ -43,7 +43,7 @@ function __elephc_simplexml_class(?string $class): string {
     return $class;
 }
 
-class SimpleXMLElement implements Stringable, Countable, RecursiveIterator, ArrayAccess {
+class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     public int $__elephc_handle = 0;
     private int $__elephc_position = -1;
 

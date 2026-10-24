@@ -62,6 +62,21 @@ pub(crate) fn is_class_like_in_modules(name: &str, modules: &[PhpModule]) -> boo
     lookup_class(name).is_some_and(|class| !class.internal && modules.contains(&class.module))
 }
 
+/// Recognizes internal dimension handlers without declaring the PHP ArrayAccess interface.
+/// Subclasses inherit the native handler, while unrelated same-named user classes do not.
+pub(crate) fn has_native_dimensions(name: &str, classes: &HashMap<String, super::ClassInfo>) -> bool {
+    let mut current = Some(name.trim_start_matches('\\'));
+    for _ in 0..=classes.len() {
+        let Some(name) = current else { return false; };
+        let Some(info) = classes.get(name) else { return false; };
+        if info.is_internal && lookup_class(name).is_some_and(|class| class.module == PhpModule::Simplexml) {
+            return true;
+        }
+        current = info.parent.as_deref();
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;

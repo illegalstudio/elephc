@@ -258,7 +258,8 @@ pub(super) fn array_access_runtime_dispatch(
                     boxed_receiver: false,
                 });
             }
-            if class_implements_interface(ctx, normalized, "ArrayAccess") {
+            if class_implements_interface(ctx, normalized, "ArrayAccess")
+                || crate::types::builtin_classes::has_native_dimensions(normalized, ctx.classes) {
                 return Some(ArrayAccessRuntimeDispatch::Concrete(normalized.to_string()));
             }
             None

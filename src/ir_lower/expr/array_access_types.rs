@@ -16,7 +16,7 @@ pub(crate) fn type_satisfies_array_access_for_ir(
 ) -> bool {
     match ty {
         PhpType::Object(class_name) => {
-            object_name_satisfies_interface_for_ir(ctx, class_name, "ArrayAccess")
+            object_name_supports_dimensions_for_ir(ctx, class_name)
         }
         PhpType::Union(members) => {
             let mut saw_object = false;
@@ -33,6 +33,12 @@ pub(crate) fn type_satisfies_array_access_for_ir(
         }
         _ => false,
     }
+}
+
+/// Resolves array syntax independently of PHP-visible interface membership.
+pub(super) fn object_name_supports_dimensions_for_ir(ctx: &LoweringContext<'_, '_>, name: &str) -> bool {
+    crate::types::builtin_classes::has_native_dimensions(name, ctx.classes)
+        || object_name_satisfies_interface_for_ir(ctx, name, "ArrayAccess")
 }
 
 /// Returns true when a class or interface name satisfies the requested interface.

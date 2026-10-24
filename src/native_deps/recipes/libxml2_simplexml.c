@@ -132,3 +132,23 @@ void *elephc_libxml2_v1_sx_xpath_node(void *result, int index) {
 }
 void elephc_libxml2_v1_sx_xpath_free(void *result) { xmlXPathFreeObject(result); }
 void elephc_libxml2_v1_sx_xpath_context_free(void *ctx) { xmlXPathFreeContext(ctx); }
+
+/* Clone mappings walk matching document trees and attribute chains in lockstep. */
+void *elephc_libxml2_v1_sx_copy(void *doc) { return xmlCopyDoc(doc, 1); }
+static xmlNodePtr sx_correspond(xmlNodePtr source, xmlNodePtr destination, xmlNodePtr node) {
+    while (source && destination) {
+        if (source == node) return destination;
+        if (source->type == XML_ELEMENT_NODE) {
+            xmlNodePtr mapped = sx_correspond((xmlNodePtr)source->properties,
+                (xmlNodePtr)destination->properties, node);
+            if (mapped) return mapped;
+        }
+        xmlNodePtr mapped = sx_correspond(source->children, destination->children, node);
+        if (mapped) return mapped;
+        source = source->next; destination = destination->next;
+    }
+    return NULL;
+}
+void *elephc_libxml2_v1_sx_correspond(void *source, void *destination, void *node) {
+    return sx_correspond(((xmlDocPtr)source)->children, ((xmlDocPtr)destination)->children, node);
+}

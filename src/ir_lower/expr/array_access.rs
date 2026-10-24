@@ -633,7 +633,7 @@ pub(super) fn array_access_offset_get_return_type(
     ctx: &LoweringContext<'_, '_>,
     class_name: &str,
 ) -> Option<PhpType> {
-    if !object_name_satisfies_interface_for_ir(ctx, class_name, "ArrayAccess") {
+    if !object_name_supports_dimensions_for_ir(ctx, class_name) {
         return None;
     }
     let method_key = php_symbol_key("offsetGet");

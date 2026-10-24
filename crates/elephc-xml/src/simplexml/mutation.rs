@@ -20,7 +20,7 @@ impl View {
         }
     }
     /// Adds an element or attribute under the first selected element.
-    fn add(&self, name: &str, value: Option<&str>, namespace: Option<&str>, attribute: bool) -> Option<Node> {
+    pub(super) fn add(&self, name: &str, value: Option<&str>, namespace: Option<&str>, attribute: bool) -> Option<Node> {
         let parent = self.ensure_first()?;
         if unsafe { ffi::node_type(parent) } != 1 || name.is_empty() { return None; }
         let name = cstring(name);
@@ -45,7 +45,7 @@ impl View {
         }
     }
     /// Writes a named property/attribute or numeric offset, returning a PHP status code.
-    fn write(&self, kind: i64, key: &str, index: i64, value: &str) -> i64 {
+    pub(super) fn write(&self, kind: i64, key: &str, index: i64, value: &str) -> i64 {
         let target = self.select(kind, key, "", false, index.max(0) as usize);
         let nodes = target.nodes();
         if nodes.len() > 1 { return -2; }
@@ -65,7 +65,7 @@ impl View {
         0
     }
     /// Removes selected nodes while preserving all borrowed wrapper storage.
-    fn remove(&self, kind: i64, key: &str, index: i64) {
+    pub(super) fn remove(&self, kind: i64, key: &str, index: i64) {
         for node in self.select(kind, key, "", false, index.max(0) as usize).nodes() { self.detach(node); }
     }
 }

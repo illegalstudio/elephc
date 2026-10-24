@@ -175,7 +175,7 @@ pub(super) fn check_static_property_array_assign(
         return Ok(());
     }
     if let PhpType::Object(class_name) = &target.prop_ty {
-        if checker.object_type_implements_interface(class_name, "ArrayAccess") {
+        if checker.object_type_supports_dimensions(class_name) {
             return Ok(());
         }
     }

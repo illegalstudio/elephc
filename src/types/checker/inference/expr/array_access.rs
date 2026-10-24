@@ -75,7 +75,7 @@ impl Checker {
                 Ok(*value.clone())
             }
             PhpType::Object(class_name) => {
-                if self.object_type_implements_interface(class_name, "ArrayAccess") {
+                if self.object_type_supports_dimensions(class_name) {
                     Ok(self.array_access_offset_get_type(class_name))
                 } else {
                     Err(CompileError::new(expr.span, "Cannot index non-array"))

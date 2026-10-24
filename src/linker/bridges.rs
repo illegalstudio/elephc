@@ -258,7 +258,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         needs_libdl: true,
         // The libxml2-backed XML bridge implements PHP's `xml` (SAX parser) and
         // `xmlwriter` extensions; both surfaces are declared by the same injected prelude.
-        php_extensions: &["xml", "xmlwriter"],
+        php_extensions: &["xml", "xmlwriter", "SimpleXML"],
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
@@ -1732,7 +1732,7 @@ mod tests {
         assert!(!xml.whole_archive);
         assert!(xml.apple_frameworks.is_empty());
         assert_eq!(xml.apple_libraries, &["iconv"]);
-        assert_eq!(xml.php_extensions, &["xml", "xmlwriter"]);
+        assert_eq!(xml.php_extensions, &["xml", "xmlwriter", "SimpleXML"]);
 
         let magician = bridge_for_library("elephc_magician").expect("eval bridge");
         assert_eq!(magician.crate_name, "elephc-magician");

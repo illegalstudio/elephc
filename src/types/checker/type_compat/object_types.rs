@@ -106,6 +106,12 @@ impl Checker {
         false
     }
 
+    /// Accepts ordinary ArrayAccess objects and reviewed internal dimension handlers.
+    pub(crate) fn object_type_supports_dimensions(&self, type_name: &str) -> bool {
+        crate::types::builtin_classes::has_native_dimensions(type_name, &self.classes)
+            || self.object_type_implements_interface(type_name, "ArrayAccess")
+    }
+
     /// Returns true if `interface_name` is or transitively extends `ancestor_name`.
     /// Uses a DFS with cycle detection to walk interface parent chains.
     pub(crate) fn interface_extends_interface(

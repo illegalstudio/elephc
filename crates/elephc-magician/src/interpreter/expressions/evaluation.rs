@@ -131,6 +131,9 @@ pub(in crate::interpreter) fn eval_array_access_object_matches(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
+    if dynamic_object_is_a(value, "SimpleXMLElement", false, context, values)?
+        .map_or_else(|| values.object_is_a(value, "SimpleXMLElement", false), Ok)?
+    { return Ok(true); }
     dynamic_object_is_a(value, "ArrayAccess", false, context, values)?
         .map_or_else(|| values.object_is_a(value, "ArrayAccess", false), Ok)
 }

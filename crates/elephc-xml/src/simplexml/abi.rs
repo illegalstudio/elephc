@@ -47,11 +47,14 @@ pub unsafe extern "C" fn elephc_xml_sx_load(data: *const c_char, length: i64, op
 pub extern "C" fn elephc_xml_sx_free(handle: i64) { guard(|| REGISTRY.with(|r| { r.borrow_mut().views.remove(&handle); })); }
 /// Returns a fresh handle sharing the exact view, for cloning a PHP object.
 #[no_mangle]
-pub extern "C" fn elephc_xml_sx_clone(handle: i64) -> i64 { guard(|| view(handle).map(insert).unwrap_or(0)) }
+pub extern "C" fn elephc_xml_sx_clone(handle: i64) -> i64 { guard(|| view(handle).and_then(|v| v.deep_clone()).map(insert).unwrap_or(0)) }
 /// Selects children (0), attributes (1), a property (2), an attribute (3), or offset (4).
 #[no_mangle]
 pub unsafe extern "C" fn elephc_xml_sx_select(handle: i64, kind: i64, name: *const c_char, ns: *const c_char, prefix: i64, index: i64) -> i64 {
-    guard(|| view(handle).map(|v| insert(v.select(kind, &string(name), &string(ns), prefix != 0, index.max(0) as usize))).unwrap_or(0))
+    guard(|| view(handle).map(|v| {
+        if kind == 4 && index < 0 { return insert(v.with_scope(Scope::Nodes(vec![]))); }
+        insert(v.select(kind, &string(name), &string(ns), prefix != 0, index.max(0) as usize))
+    }).unwrap_or(0))
 }
 /// Reads count (0), presence (1), iteration count (2), truthiness (3), or node kind (4).
 #[no_mangle]
