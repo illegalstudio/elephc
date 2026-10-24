@@ -35,6 +35,7 @@ pub(super) fn abi_shape_size(abi_ty: ExternAbiType) -> usize {
         ExternAbiType::Bool => 1,
         ExternAbiType::Float64
         | ExternAbiType::CStr
+        | ExternAbiType::NullableCStr
         | ExternAbiType::Ptr
         | ExternAbiType::Callable
         | ExternAbiType::Void => 8,

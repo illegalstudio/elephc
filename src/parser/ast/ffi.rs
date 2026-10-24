@@ -75,6 +75,7 @@ pub enum CType {
     Float,                  // double, also spelled `f64`
     F32,                    // C float; widened to a PHP double at the call boundary
     Str,        // char* (null-terminated)
+    NullableStr,            // `?string`: a char* that may be NULL, PHP `?string` on the PHP side
     Bool,
     Void,
     Ptr,                    // opaque void*

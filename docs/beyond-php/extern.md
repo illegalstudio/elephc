@@ -38,6 +38,7 @@ extern "SDL2" {
 | `f32` | `float` | floating-point argument register |
 | `bool` | `bool` (`_Bool`, one byte) | integer argument register |
 | `string` | `char*` (auto null-terminated) | integer argument register |
+| `?string` | `char*` that may be `NULL` (parameters and returns only) | integer argument register |
 | `ptr` | `void*` | integer argument register |
 | `ptr<T>` | `T*` | integer argument register |
 | `void` | void (return only) | — |
@@ -146,6 +147,8 @@ the same callsite replaces the previous slot owner.
 ## String conversion
 - **Calling C**: elephc creates temporary null-terminated copy, frees after call
 - **C returns string**: elephc scans for `\0`, copies to owned storage
+- **`NULL`**: a `string` never passes `NULL` and reads a returned `NULL` as `""`; declare
+  `?string` where the C side allows `NULL` (see [Nullable strings](#nullable-strings))
 
 Extern calls support the declared parameter names:
 
@@ -165,6 +168,46 @@ Declared extern functions can also be selected by dynamic PHP string callbacks
 such as `call_user_func($cb, ...)` and `call_user_func_array($cb, $args)`.
 The runtime descriptor uses an extern invocation shape and a generated PHP-ABI
 wrapper; the wrapper performs the C ABI call after PHP argument normalization.
+
+## Nullable strings
+
+Many C APIs take a `const char*` that may be `NULL` (`SDL_CreateRenderer()`
+lets SDL pick the driver when the name is `NULL`) or return `NULL` instead of a
+string (`getenv()` for an unset variable). Declare those parameters and returns
+as `?string`:
+
+```php
+<?php
+extern "SDL3" {
+    function SDL_CreateRenderer(ptr $window, ?string $name): ptr;
+    function SDL_GetError(): ?string;
+}
+extern function getenv(string $name): ?string;
+
+$renderer = SDL_CreateRenderer($window, null);       // NULL: SDL picks the driver
+$software = SDL_CreateRenderer($window, "software"); // a temporary "software\0" copy
+var_dump(getenv("SURELY_UNSET_VARIABLE"));           // NULL
+```
+
+On the PHP side the type is `?string` (`string|null`):
+
+- **Arguments**: PHP `null` passes a `NULL` pointer. A string passes the same
+  temporary null-terminated copy a `string` parameter gets, freed after the
+  call. A `?string` value, such as a `?string` variable or
+  `$flag ? "a" : null`, is checked at runtime and passes whichever it holds.
+  A `mixed` value holding an int, float or bool passes its PHP string form;
+  one holding an array or an object is a fatal error, so convert it first
+  (`(string) $value`), because elephc does not run `__toString()` or an error
+  handler in the middle of building the C arguments.
+- **Returns**: a `NULL` return reads as PHP `null`; any other pointer is copied
+  up to its terminator into an owned string, exactly like a `string` return.
+
+A plain `string` keeps its conversions: it never passes `NULL`, and a `NULL`
+`char*` returned through it reads as `""`. Use `?string` whenever the C header
+says the pointer may be `NULL`. `?` applies to `string` only, since `ptr`
+already accepts `null` as the address 0, and `?string` is accepted on
+`extern function` parameters and returns but not on `extern class` fields or
+`extern global` declarations.
 
 ## Callbacks
 ```php
@@ -263,7 +306,7 @@ Fields take the same types as extern function parameters:
 | `ptr`, `ptr<T>` | `void*`, `T*` | 8 |
 | `string` | `char*` | 8 |
 
-`void` and `callable` fields are rejected.
+`void`, `callable` and `?string` fields are rejected.
 
 **Layout.** Fields are laid out like a C compiler does on every supported
 target: each field starts at the next multiple of its own size, and the struct

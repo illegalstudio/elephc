@@ -482,6 +482,76 @@ fn test_error_extern_global_void_type() {
     );
 }
 
+/// Verifies `?` is accepted only before `string` in extern declarations, with a diagnostic that
+/// points at `ptr` for nullable pointers.
+#[test]
+fn test_error_extern_nullable_non_string_type() {
+    expect_error(
+        "<?php extern function f(?int $x): int;",
+        "Only ?string can be nullable in an extern declaration (a ptr already accepts null)",
+    );
+    expect_error(
+        "<?php extern function f(): ?ptr;",
+        "Only ?string can be nullable in an extern declaration",
+    );
+}
+
+/// Verifies `?string` is refused on extern class fields, whose `char*` loads and stores do not
+/// model NULL, instead of being laid out silently.
+#[test]
+fn test_error_extern_class_nullable_string_field() {
+    expect_error(
+        "<?php extern class Named { public ?string $label; }",
+        "Extern class 'Named' field $label cannot be ?string",
+    );
+}
+
+/// Verifies `?string` is refused on extern globals, which keep the plain `string` conversion.
+#[test]
+fn test_error_extern_global_nullable_string() {
+    expect_error(
+        "<?php extern global ?string $name;",
+        "Extern global $name cannot be ?string",
+    );
+}
+
+/// Verifies a `?string` extern parameter still rejects a non-string, non-null argument.
+#[test]
+fn test_error_extern_nullable_string_param_rejects_int() {
+    expect_error(
+        "<?php extern function f(?string $s): int; f(123);",
+        "Extern function 'f' parameter $s expects string|null, got int",
+    );
+}
+
+/// Verifies a `?string` extern return must be checked for null before it reaches a plain
+/// `string` extern parameter, which cannot pass NULL.
+#[test]
+fn test_error_extern_nullable_string_return_needs_null_check_for_string_param() {
+    expect_error(
+        "<?php extern function getenv(string $name): ?string; extern function strlen(string $s): u64; strlen(getenv(\"HOME\"));",
+        "Extern function 'strlen' parameter $s expects string, got string|null",
+    );
+}
+
+/// Verifies `?string` extern parameters accept strings, `null`, and `?string` values, and that a
+/// `?string` return becomes a `string` through `??` like any PHP `?string` value.
+#[test]
+fn test_extern_nullable_string_accepts_string_null_and_nullable_values() {
+    expect_no_error(
+        r#"<?php
+extern function f(?string $s): ?string;
+extern function strlen(string $s): u64;
+$a = f("x");
+$b = f(null);
+$c = f($a);
+$d = f($argc > 1 ? "y" : null);
+echo strlen($b ?? "");
+echo f($c) ?? "none";
+"#,
+    );
+}
+
 /// Verifies extern callback string variables are rejected when they are not callable descriptors.
 #[test]
 fn test_error_extern_callable_requires_literal_function_name() {

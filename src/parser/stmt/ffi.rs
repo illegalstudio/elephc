@@ -18,14 +18,28 @@ use super::{expect_semicolon, expect_token, recover_to_statement_boundary};
 /// Parses a C type token and returns the corresponding CType variant.
 /// Handles primitive types (int, float, string, bool, void, callable), explicit C integer
 /// widths (`i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, `u64`), the C `float` width (`f32`,
-/// with `f64` an alias of `float`), and pointer types
-/// including ptr and ptr<TypeName>. Advances `pos` on success.
+/// with `f64` an alias of `float`), pointer types including ptr and ptr<TypeName>, and the
+/// nullable `?string` (a `char*` that may be NULL). `?` before any other type is rejected: a
+/// `ptr` already carries NULL as the address 0. Advances `pos` on success.
 fn parse_c_type(tokens: &[SpannedToken], pos: &mut usize) -> Result<CType, CompileError> {
     let span = if *pos < tokens.len() {
         tokens[*pos].1.span
     } else {
         Span::dummy()
     };
+    if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Question)) {
+        *pos += 1; // consume ?
+        return match tokens.get(*pos).map(|(t, _)| t) {
+            Some(Token::Identifier(name)) if name == "string" => {
+                *pos += 1;
+                Ok(CType::NullableStr)
+            }
+            _ => Err(CompileError::new(
+                span,
+                "Only ?string can be nullable in an extern declaration (a ptr already accepts null)",
+            )),
+        };
+    }
     match tokens.get(*pos).map(|(t, _)| t) {
         Some(Token::Identifier(name)) => {
             let name = name.clone();

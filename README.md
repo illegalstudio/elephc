@@ -481,6 +481,7 @@ Notes:
 - `extern function`, `extern "lib" { ... }`, `extern global`, and `extern class` are supported.
 - `string` arguments are copied to temporary null-terminated C strings for the duration of the native call.
 - `string` return values are copied back into owned elephc strings.
+- `?string` parameters and returns map PHP `null` to a NULL `char*` and back, for C APIs such as `SDL_CreateRenderer(window, NULL)` or `getenv()`.
 - `callable` parameters pass a user-defined elephc function by string name, for example `"on_signal"`.
 - Callback functions must stay C-compatible: use `int`, `float`, `bool`, `ptr`, or `void`-shaped values. String callbacks are not supported yet.
 - Raw C memory patterns are supported through ordinary extern declarations such as `malloc`, `free`, `memcpy`, and `memset`.
