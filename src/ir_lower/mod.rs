@@ -20,6 +20,7 @@ mod effect_refinement;
 mod effects_lookup;
 mod entry_locals;
 mod expr;
+pub(crate) use expr::expr_writes_local;
 mod fibers;
 mod function;
 mod loop_closures;
