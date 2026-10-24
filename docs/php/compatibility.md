@@ -63,7 +63,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `reflection` | - | 16 / 26 · 62% | - |
 | [`session`](./sessions.md#functions) | 23 / 23 · 100% | 4 / 4 · 100% | 3 / 3 · 100% |
 | `shmop` | 0 / 6 · 0% | 0 / 1 · 0% | - |
-| `simplexml` | 3 / 3 · 100% | 2 / 2 · 100% | - |
+| [`simplexml`](./xml.md#functions) | 3 / 3 · 100% | 2 / 2 · 100% | - |
 | `snmp` | 0 / 24 · 0% | 0 / 2 · 0% | 0 / 21 · 0% |
 | `soap` | 0 / 2 · 0% | 0 / 8 · 0% | 0 / 81 · 0% |
 | `sockets` | 0 / 37 · 0% | 0 / 2 · 0% | 0 / 243 · 0% |

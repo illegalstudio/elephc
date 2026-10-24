@@ -365,6 +365,16 @@ the neighboring XML builtin pages for individual signatures and backend support.
 
 Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py`; do not edit this section by hand. Each function links to its reference page.
 
+### simplexml
+
+| Function | Signature | Returns | AOT | eval() |
+|---|---|---|:-:|:-:|
+| [`simplexml_import_dom()`](./builtins/xml/simplexml_import_dom.md) | `(object $node, ?string $class_name = 'SimpleXMLElement'): mixed` | `mixed` | ✓ | ✓ |
+| [`simplexml_load_file()`](./builtins/xml/simplexml_load_file.md) | `(string $filename, ?string $class_name = 'SimpleXMLElement', int $options = 0, string $namespace_or_prefix = '', bool $is_prefix = false): mixed` | `mixed` | ✓ | ✓ |
+| [`simplexml_load_string()`](./builtins/xml/simplexml_load_string.md) | `(string $data, ?string $class_name = 'SimpleXMLElement', int $options = 0, string $namespace_or_prefix = '', bool $is_prefix = false): mixed` | `mixed` | ✓ | ✓ |
+
+Classes: `SimpleXMLElement`, `SimpleXMLIterator`.
+
 ### xml
 
 | Function | Signature | Returns | AOT | eval() |
