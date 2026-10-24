@@ -45,11 +45,11 @@ pub(super) fn lower(
     abi::emit_reserve_temporary_stack(ctx.emitter, 32);
     let (ptr, len) = abi::string_result_regs(ctx.emitter);
     ctx.load_string_value_to_regs(subject, ptr, len)?;
-    abi::emit_store_temporary_stack_slot(ctx.emitter, ptr, 0);
-    abi::emit_store_temporary_stack_slot(ctx.emitter, len, 8);
+    abi::emit_store_to_sp(ctx.emitter, ptr, 0);
+    abi::emit_store_to_sp(ctx.emitter, len, 8);
     if literal_flag.is_none() {
         predicates::emit_value_truthiness(ctx, flag.expect("runtime flag exists"), "is_a")?;
-        abi::emit_store_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
+        abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
     }
     for candidate in candidates {
         emit_match(ctx, &candidate, &matched);
