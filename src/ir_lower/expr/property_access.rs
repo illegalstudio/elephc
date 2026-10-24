@@ -450,6 +450,17 @@ fn lower_property_get_without_native_dispatch(
         };
         return lower_method_call_with_receiver(ctx, object, &accessor, &[], call_op, expr);
     }
+    // A base class can hold a derived object whose property has no slot on the base.
+    // Use runtime class dispatch rather than asking codegen for a nonexistent base slot.
+    if singular_object_class(&object_type).is_some_and(|(class, _)| {
+        ctx.classes.get(class).is_some_and(|info| {
+            !info.properties.iter().any(|(name, _)| name == property)
+                && !info.methods.contains_key("__get")
+        })
+    }) {
+        let boxed = ctx.box_value_as_mixed(object, PhpType::Mixed, Some(expr.span));
+        return lower_property_get_without_native_dispatch(ctx, boxed, property, op, expr);
+    }
     let data = ctx.intern_string(property);
     let result_type = property_get_result_type(ctx, object.value, property, op, expr);
     let reads_extern_cstr = op == Op::PropGet

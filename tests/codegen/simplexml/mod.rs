@@ -178,6 +178,10 @@ class NullableOrdinaryXmlPeer {
 function nullableOrdinaryXmlPeer(int $n): ?NullableOrdinaryXmlPeer {
     return $n > 0 ? new NullableOrdinaryXmlPeer() : null;
 }
+function unsetHookedXmlPeer(mixed $peer): void {
+    try { unset($peer->hooked); }
+    catch (Error $error) { echo 'blocked:'; }
+}
 $xml = new SimpleXMLElement('<r/>');
 $peer = nullableOrdinaryXmlPeer($argc);
 echo $peer->value, ':';
@@ -185,12 +189,13 @@ $peer->value = 'changed';
 echo $peer->value, ':';
 $peer->hooked = 'next';
 echo $peer->hooked, ':';
+unsetHookedXmlPeer($peer);
 var_dump(isset($peer->value));
 echo $peer->value ?? 'missing', ':';
 unset($peer->value);
 var_dump(isset($peer->value));
 "###);
-    assert_eq!(out, "plain:changed:set:get:next:bool(true)\nchanged:bool(false)\n");
+    assert_eq!(out, "plain:changed:set:get:next:blocked:bool(true)\nchanged:bool(false)\n");
 }
 
 /// Native XML properties bypass user slots and hooks in typed, boxed, and eval operations.

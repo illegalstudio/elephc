@@ -370,6 +370,15 @@ pub(super) fn resolve_property_runtime_action(
     }
     match resolution {
         PropertyNameResolution::Visible => {
+            if matches!(kind, PropertyAccessKind::DirectUnset | PropertyAccessKind::RuntimeUnset)
+                && ctx.module.class_infos.get(class_name.trim_start_matches('\\'))
+                    .is_some_and(|info| info.property_hooks.contains_key(property))
+            {
+                return Ok(PropertyRuntimeAction::Refuse {
+                    message: format!("Cannot unset hooked property {}::${}",
+                        class_name.trim_start_matches('\\'), property),
+                });
+            }
             resolve_property_slot_for_class(ctx, class_name, property, inst)
                 .map(PropertyRuntimeAction::Slot)
         }
