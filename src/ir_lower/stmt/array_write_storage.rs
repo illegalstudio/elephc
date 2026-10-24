@@ -75,6 +75,13 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
     } else {
         Op::RuntimeCall
     };
+    // A hash whose stamped value type cannot hold the appended value widens its storage first,
+    // like the indexed path does; PHP's untyped arrays keep the runtime value (#1951).
+    let (array_value, hash_storeback) = if op == Op::HashAppend {
+        prepare_hash_local_write(ctx, array, array_value, value, span)
+    } else {
+        (array_value, None)
+    };
     if op == Op::ArrayPush {
         let (array_value, updated_ty, needs_storeback) =
             if ref_bound_mixed_indexed_array_write(ctx, array, value) {
@@ -108,6 +115,7 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
         op.default_effects(),
         Some(span),
     );
+    finish_hash_local_write(ctx, array, array_value, hash_storeback, span);
     release_persisted_string_operand(ctx, value, span);
 }
 
@@ -196,6 +204,67 @@ pub(in crate::ir_lower) fn prepare_indexed_array_local_write(
         Some(span),
     );
     (converted, Some(updated_ty), true)
+}
+
+/// Returns the widened storage when a stamped hash value type cannot hold `value_ty`.
+///
+/// PHP's untyped arrays keep the runtime value, so a value the stamp cannot represent widens
+/// the storage to `Mixed` values — the hash analogue of `indexed_array_write_updated_type`.
+fn assoc_array_write_updated_type(storage: &PhpType, value_ty: &PhpType) -> Option<PhpType> {
+    let PhpType::AssocArray { key, value } = storage.codegen_repr() else {
+        return None;
+    };
+    if value.codegen_repr() == PhpType::Mixed || value.codegen_repr() == value_ty.codegen_repr() {
+        return None;
+    }
+    Some(PhpType::AssocArray {
+        key,
+        value: Box::new(PhpType::Mixed),
+    })
+}
+
+/// Converts a typed hash to Mixed values when a local write would make it heterogeneous.
+pub(in crate::ir_lower) fn prepare_hash_local_write(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &str,
+    array_value: LoweredValue,
+    value: LoweredValue,
+    span: Span,
+) -> (LoweredValue, Option<PhpType>) {
+    let current_ty = ctx.builder.value_php_type(array_value.value);
+    let value_ty = ctx.builder.value_php_type(value.value);
+    let Some(updated_ty) = assoc_array_write_updated_type(&current_ty, &value_ty) else {
+        return (array_value, None);
+    };
+    // `HashToMixed` consumes its input owner and a reference-bound local's load is borrowed,
+    // so acquire the shared cell first (mirrors the typed-foreach conversion).
+    let array_value = if ctx.is_ref_bound_local(array) {
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, array_value, Some(span))
+    } else {
+        array_value
+    };
+    let converted = ctx.emit_value(
+        Op::HashToMixed,
+        vec![array_value.value],
+        None,
+        updated_ty.clone(),
+        Op::HashToMixed.default_effects(),
+        Some(span),
+    );
+    (converted, Some(updated_ty))
+}
+
+/// Updates local type facts and emits explicit storeback for a converted hash write.
+pub(in crate::ir_lower) fn finish_hash_local_write(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &str,
+    array_value: LoweredValue,
+    updated_ty: Option<PhpType>,
+    span: Span,
+) {
+    if let Some(updated_ty) = updated_ty {
+        ctx.store_mutated_local(array, array_value, updated_ty, Some(span));
+    }
 }
 
 /// Updates local type facts and emits explicit storeback for converted array writes.

@@ -210,6 +210,13 @@ pub(crate) fn lower_array_assign_with_diagnosed_key(
         lower_write_key_and_value(ctx, index, value);
     let container_ty = ctx.builder.value_php_type(array_value.value);
     value_value = ctx.retype_value_for_container_element(&container_ty, value_value, Some(value.span));
+    // A hash whose stamped value type cannot hold the assigned value widens its storage first,
+    // like the indexed path does; PHP's untyped arrays keep the runtime value (#1951).
+    let (array_value, hash_storeback) = if op == Op::HashSet {
+        super::array_write_storage::prepare_hash_local_write(ctx, array, array_value, value_value, span)
+    } else {
+        (array_value, None)
+    };
     // Concrete string keys normally select associative storage. Ref-bound Mixed-slot
     // arrays instead use the shared writer, preserving invoker markers and keeping numeric
     // strings indexed. A boxed Mixed/Union index may hold either
@@ -351,6 +358,9 @@ pub(crate) fn lower_array_assign_with_diagnosed_key(
         index_pins,
         span,
         key_already_diagnosed,
+    );
+    super::array_write_storage::finish_hash_local_write(
+        ctx, array, array_value, hash_storeback, span,
     );
 }
 
