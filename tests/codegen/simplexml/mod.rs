@@ -194,8 +194,10 @@ if ($x instanceof SimpleXMLElement) {
  $child->nodeValue = 'from-dom'; $root->setAttribute('id', 'three');
  echo (string)$x->child, ':', (string)$x['id'], "\n";
  echo $dom->saveXML($root), "\n";
- $same = simplexml_import_dom($root);
- if ($same instanceof SimpleXMLElement) { echo (string)$same->child, "\n"; }
+ if ($root instanceof DOMNode) {
+  $same = simplexml_import_dom($root);
+  if ($same instanceof SimpleXMLElement) { echo (string)$same->child, "\n"; }
+ }
 }
 "###);
     assert_eq!(out, "after:two\nfrom-dom:three\n<root id=\"three\"><child>from-dom</child></root>\nfrom-dom\n");
