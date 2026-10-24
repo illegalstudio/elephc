@@ -11,6 +11,8 @@
 //! - C fills fields that PHP reads by name and checks fields PHP wrote, which pins both the
 //!   offsets and the per-width extension, truncation, `f32` rounding and one-byte `bool`.
 //! - The fixture is assembled into the test program itself, so no shared library is needed.
+//! - Values whose type is only known at run time are narrowed strictly into scalar fields, and
+//!   field reads keep their declared type inside array literals and branch merges.
 
 use super::*;
 
@@ -336,6 +338,66 @@ echo $r->x, "\n";
 "#,
     );
     assert_eq!(out, "Extern field Rect::$x must be of type int, float given\n1\n");
+}
+
+/// Verifies float and `bool` fields narrow a value whose type is only known at run time, like a
+/// packed field: float arithmetic over a loop counter (boxed in EIR although the checker types it
+/// `float`) reaches C memory as a float instead of failing to compile, a runtime int converts
+/// into a float field, and any other runtime value raises a `TypeError` before the field changes.
+#[test]
+fn test_ffi_extern_class_float_and_bool_fields_narrow_runtime_values() {
+    let out = run_struct_program(
+        r#"
+$f = elephc_test_frect_blank();
+for ($i = 0; $i < 3; $i++) {
+    $f->w = 1.5 * ($i + 1);
+    $f->h = 0.25 * ($i + 1);
+}
+echo $f->w, " ", $f->h, " ", elephc_test_describe_frect(), "\n";
+$a = elephc_test_all_blank();
+$a->f64 = json_decode("3");
+$a->f32 = json_decode("0.5");
+$a->flag = json_decode("true");
+var_dump($a->f64, $a->f32, $a->flag);
+try {
+    $a->f64 = json_decode("\"x\"");
+} catch (TypeError $e) {
+    echo $e->getMessage(), "\n";
+}
+try {
+    $a->flag = json_decode("1");
+} catch (TypeError $e) {
+    echo $e->getMessage(), "\n";
+}
+var_dump($a->f64, $a->flag);
+"#,
+    );
+    assert_eq!(
+        out,
+        "4.5 0.75 not-single other 4.50 0.75\nfloat(3)\nfloat(0.5)\nbool(true)\n\
+         Extern field All::$f64 must be of type float, string given\n\
+         Extern field All::$flag must be of type bool, int given\n\
+         float(3)\nbool(true)\n"
+    );
+}
+
+/// Verifies scalar extern field reads keep their type in array literals and branch merges, where
+/// the lowering used to type every property read `int`: floats truncated, a bool read as `1`
+/// and a `string` field as `0`.
+#[test]
+fn test_ffi_extern_class_field_reads_keep_their_type_in_literals_and_merges() {
+    let out = run_struct_program(
+        r#"
+$a = elephc_test_all_filled();
+var_dump([$a->f32, $a->f64, $a->flag, $a->u8, $a->name]);
+$picked = $argc > 5 ? 0 : $a->f64;
+var_dump($picked);
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(5) {\n  [0]=>\n  float(1.5)\n  [1]=>\n  float(2.25)\n  [2]=>\n  bool(true)\n  [3]=>\n  int(250)\n  [4]=>\n  string(3) \"sdl\"\n}\nfloat(2.25)\n"
+    );
 }
 
 /// Verifies a field read through a null `ptr<ExternClass>` aborts with the pointer extension's

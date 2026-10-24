@@ -13,6 +13,7 @@ mod buffers;
 mod buffer_ptr;
 mod buffer_arrays;
 mod packed_nested_fields;
+mod packed_field_narrowing;
 mod data_widths;
 mod generics;
 mod generics_review;

@@ -277,6 +277,7 @@ pub(super) fn emit_packed_field_store(
         | PhpType::Never
         | PhpType::Pointer(_)
         | PhpType::Resource(_) => {
+            ensure_packed_word_value_is_unboxed(ctx, value, slot)?;
             let int_reg = abi::int_result_reg(ctx.emitter);
             abi::emit_push_reg(ctx.emitter, base_reg);
             ctx.load_value_to_reg(value, int_reg)?;
@@ -299,6 +300,27 @@ pub(super) fn emit_packed_field_store(
     Ok(())
 }
 
+/// Refuses a boxed value at a packed field stored from the integer result register.
+///
+/// Lowering narrows every boxed value bound for a fixed-layout `int`, `bool` or integer-width
+/// field to its raw payload (`narrow_mixed_value_for_fixed_layout_field` in
+/// `ir_lower::stmt::instance_property_writes`), so a box reaching this store is a lowering bug.
+/// Loading it would write the cell's ADDRESS into the field, which is silent data corruption;
+/// failing the compile reports the bug instead.
+fn ensure_packed_word_value_is_unboxed(
+    ctx: &FunctionContext<'_>,
+    value: crate::ir::ValueId,
+    slot: &PropertySlot,
+) -> Result<()> {
+    if matches!(ctx.value_php_type(value)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        return Err(CodegenIrError::unsupported(format!(
+            "packed field {}::${} store of a boxed value that lowering did not narrow",
+            slot.class_name, slot.property
+        )));
+    }
+    Ok(())
+}
+
 /// Stores a value into a packed field declared with a C width name.
 ///
 /// The integer payload is loaded into the integer result register (a boxed `Mixed` was already
@@ -312,6 +334,9 @@ fn emit_packed_width_field_store(
     width: ScalarWidth,
     base_reg: &str,
 ) -> Result<()> {
+    if width != ScalarWidth::F32 {
+        ensure_packed_word_value_is_unboxed(ctx, value, slot)?;
+    }
     abi::emit_push_reg(ctx.emitter, base_reg);
     let payload_reg = match width {
         ScalarWidth::F32 => {

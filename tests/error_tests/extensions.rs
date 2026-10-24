@@ -535,6 +535,36 @@ fn test_error_packed_int_field_rejects_static_string() {
     );
 }
 
+/// A packed `ptr` field takes no value whose type is only known at run time: a pointer boxes
+/// under the int tag, so the runtime narrowing scalar fields get could not tell an address from
+/// an arbitrary integer.
+#[test]
+fn test_error_packed_ptr_field_rejects_mixed() {
+    expect_error(
+        "<?php
+        packed class Node { public ptr $next; }
+        function load(mixed $v) { return $v; }
+        $nodes = buffer_new<Node>(1);
+        $nodes[0]->next = load(1);
+        ",
+        "cannot assign mixed to packed field Node::next of type ptr",
+    );
+}
+
+/// A statically known int into a packed `bool` field stays a compile error: only a value whose
+/// type is decided at run time reaches the strict bool narrowing.
+#[test]
+fn test_error_packed_bool_field_rejects_static_int() {
+    expect_error(
+        "<?php
+        packed class Cell { public bool $live; }
+        $cells = buffer_new<Cell>(1);
+        $cells[0]->live = 1;
+        ",
+        "cannot assign int to packed field Cell::live of type bool",
+    );
+}
+
 /// A declared `array<int>` local is a contract: an element write that would widen it is a
 /// hard error, not the silent `array_to_mixed` conversion an INFERRED array gets.
 #[test]

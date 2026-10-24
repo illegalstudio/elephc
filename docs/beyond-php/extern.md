@@ -280,11 +280,16 @@ the plain 8-byte-per-field layout.
 widens exactly), and a `bool` reads any nonzero byte as `true`. A write stores
 only the field's width, so an out-of-range integer keeps its low bits like a C
 conversion (`300` in a `u8` is `44`), a float written to an `f32` field rounds
-to single precision, and an `int` written to a float field converts. Integer
-arithmetic results (`$r->w * 2`, `$r->x += 1`) are accepted into integer
-fields; a runtime value that turns out not to be an int raises a `TypeError`
-instead of reaching C memory. Statically wrong types (a string into an `f32`
-field, an int into a `bool` field) are compile errors.
+to single precision, and an `int` written to a float field converts. A value
+whose type is only known at run time (integer arithmetic such as `$r->w * 2`
+or `$r->x += 1`, float arithmetic over a loop counter such as
+`$f->w = 1.5 * ($i + 1)`, a `mixed` parameter) is accepted into an integer,
+float or `bool` field and checked as it is stored, with the rules
+[packed class fields](packed-classes.md#values-known-only-at-run-time) have:
+an integer field takes an int, a float field a float or an int, a `bool` field
+a bool, and any other value raises a `TypeError` instead of reaching C memory.
+Statically wrong types (a string into an `f32` field, an int into a `bool`
+field) are compile errors.
 
 **Pointer fields** chain: a `ptr<Node>` field reads as a typed pointer, so
 `$node->next->value` follows it. Inside a namespace, the class a `ptr<T>`

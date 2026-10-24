@@ -380,18 +380,19 @@ fn buffer_receiver_type_for_ir(ctx: &LoweringContext<'_, '_>, receiver: &Expr) -
     matches!(loaded.codegen_repr(), PhpType::Buffer(_)).then_some(loaded)
 }
 
-/// Returns the packed class whose record an expression addresses, if the lowering knows it.
+/// Returns the packed or extern class whose record an expression addresses, if the lowering
+/// knows it.
 ///
-/// Covers a packed buffer element, a nested packed field read, a call returning a `ptr<T>` to
-/// a packed record, and a local holding any of them.
-fn packed_record_class_of_expr(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> Option<String> {
+/// Covers a packed buffer element, a nested packed field read, a `ptr<T>` to a packed record or
+/// an extern struct returned by a call, and a local holding any of them.
+fn record_class_of_expr(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> Option<String> {
     let ty = match &expr.kind {
         ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array),
         ExprKind::PropertyAccess { object, property } => {
             property_access_expr_type_for_ir(ctx, object, property)
         }
         ExprKind::Variable(name) => ctx.local_types.get(name).cloned(),
-        // A call returning `ptr<T>` to a packed record (`first($b)->pos`).
+        // A call returning `ptr<T>` to a packed record or extern struct (`first($b)->pos`).
         ExprKind::FunctionCall { .. }
         | ExprKind::MethodCall { .. }
         | ExprKind::StaticMethodCall { .. } => {
@@ -404,7 +405,8 @@ fn packed_record_class_of_expr(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> Op
         _ => return None,
     };
     let normalized = class_name.trim_start_matches('\\');
-    ctx.packed_classes.contains_key(normalized).then(|| normalized.to_string())
+    (ctx.packed_classes.contains_key(normalized) || ctx.extern_classes.contains_key(normalized))
+        .then(|| normalized.to_string())
 }
 
 /// Returns the declared type for an object property expression used inside a literal.
@@ -413,16 +415,27 @@ pub(in crate::ir_lower) fn property_access_expr_type_for_ir(
     object: &Expr,
     property: &str,
 ) -> Option<PhpType> {
-    // A nested packed field reads as the address of the embedded record (`ptr<T>` to the
-    // checker) and a `ptr<T>` field as its pointer; scalar packed fields keep the previous
-    // syntactic answer.
-    if let Some(record) = packed_record_class_of_expr(ctx, object) {
-        let field = ctx.packed_classes.get(&record)?.fields.iter().find(|field| field.name == property)?;
-        return match field.php_type.codegen_repr() {
-            PhpType::Packed(inner) => Some(PhpType::Pointer(Some(inner))),
-            pointer @ PhpType::Pointer(_) => Some(pointer),
-            _ => None,
-        };
+    // A packed or extern record field reads as its value type: a nested packed record as the
+    // address of the embedded record (`ptr<T>` to the checker), a pointer field as its pointer,
+    // and a scalar field as `int` (every integer width), `float` (`f32` too), `bool` or, for an
+    // extern struct, `string`. The syntactic fallback answers `int` for every property read,
+    // which truncated a float field in a literal or a merge, stored its raw bits under the int
+    // tag in an associative literal, and read a string field as `0`.
+    if let Some(record) = record_class_of_expr(ctx, object) {
+        if let Some(info) = ctx.packed_classes.get(&record) {
+            let field = info.fields.iter().find(|field| field.name == property)?;
+            return match field.php_type.codegen_repr() {
+                PhpType::Packed(inner) => Some(PhpType::Pointer(Some(inner))),
+                value_ty => Some(value_ty),
+            };
+        }
+        return ctx
+            .extern_classes
+            .get(&record)?
+            .fields
+            .iter()
+            .find(|field| field.name == property)
+            .map(|field| field.php_type.codegen_repr());
     }
     let class_name = instance_callable_object_class(ctx, object)?;
     let normalized = class_name.trim_start_matches('\\');

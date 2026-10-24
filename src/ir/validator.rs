@@ -559,6 +559,8 @@ fn validate_instruction_immediate(
         | EnumBackingStringToInt
         | EnumBackingMixedToInt
         | PackedFieldMixedToInt
+        | PackedFieldMixedToFloat
+        | PackedFieldMixedToBool
         | ReturnBoundaryMixedToInt
         | PropInitialized
         | StaticPropInitialized

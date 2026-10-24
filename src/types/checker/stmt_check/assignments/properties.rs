@@ -738,21 +738,48 @@ fn merge_associative_property_slot_type(
 
 /// Returns whether a value of `val_ty` can be stored into an extern class field of `field_ty`.
 ///
-/// Integer fields of every width take an `int` (narrow widths keep its low bits, as C would),
-/// and also the `mixed` or `int|float` result of integer arithmetic, which lowering narrows with
-/// a strict runtime check exactly like a packed `int` field;
-/// float fields of either width also take an `int`, converted like PHP's int-to-float coercion;
-/// `bool` fields take a bool; pointer fields take any pointer or `null`; `string` fields take a
-/// string, copied into a fresh null-terminated buffer the struct then owns.
+/// Integer fields of every width take an `int` (narrow widths keep its low bits, as C would);
+/// float fields of either width take a `float` and also an `int`, converted like PHP's
+/// int-to-float coercion; `bool` fields take a bool. Each of them also takes a value whose type
+/// is only known at run time, which lowering narrows with the strict runtime check a packed
+/// field of the same type gets (`fixed_layout_field_accepts_runtime_value`). Pointer fields
+/// take any pointer or `null`; `string` fields take a string, copied into a fresh
+/// null-terminated buffer the struct then owns.
 fn extern_field_accepts(field_ty: &PhpType, val_ty: &PhpType) -> bool {
+    if fixed_layout_field_accepts_runtime_value(field_ty, val_ty) {
+        return true;
+    }
     match field_ty {
-        PhpType::Int => {
-            matches!(val_ty, PhpType::Int | PhpType::Mixed) || val_ty.is_int_float_union()
-        }
+        PhpType::Int => matches!(val_ty, PhpType::Int),
         PhpType::Float => matches!(val_ty, PhpType::Float | PhpType::Int),
         PhpType::Bool => matches!(val_ty, PhpType::Bool | PhpType::False),
         PhpType::Pointer(_) => matches!(val_ty, PhpType::Pointer(_) | PhpType::Void),
         PhpType::Str => matches!(val_ty, PhpType::Str),
+        _ => false,
+    }
+}
+
+/// Returns whether a fixed-layout scalar field of `field_ty` (a packed field, or an extern
+/// struct field) admits a value of `val_ty` whose concrete type is only decided at run time.
+///
+/// Lowering narrows such a value strictly before the store (`Op::PackedFieldMixedToInt`,
+/// `Op::PackedFieldMixedToFloat`, `Op::PackedFieldMixedToBool`): the field's own type passes,
+/// an int widens into a float field, and anything else throws a catchable `TypeError`, so the
+/// field never receives a box pointer or a silently coerced value. That is what lets arithmetic
+/// with an open result type feed these fields without a false compile error: integer
+/// arithmetic is `mixed` or `int|float` for its overflow-to-float promotion, and float
+/// arithmetic over a loop counter is `mixed` as well. `int|float` is the precise spelling of
+/// the same open result, so refusing it would make the narrower type the stricter one
+/// (`$i = 0; $i++; $thing->id = $i;` refused where `$i = $i + 1` is accepted). A `bool` field
+/// takes `mixed` but not `int|float`, which never holds a bool. A pointer field takes no
+/// runtime value: a pointer boxes under the int tag, so no runtime check could tell an address
+/// from an arbitrary integer.
+fn fixed_layout_field_accepts_runtime_value(field_ty: &PhpType, val_ty: &PhpType) -> bool {
+    match field_ty {
+        PhpType::Int | PhpType::Float => {
+            matches!(val_ty, PhpType::Mixed) || val_ty.is_int_float_union()
+        }
+        PhpType::Bool => matches!(val_ty, PhpType::Mixed),
         _ => false,
     }
 }
@@ -797,20 +824,12 @@ fn check_pointer_property_write(
             ));
         }
     } else if let Some(field_ty) = checker.packed_field_type(class_name, property) {
-        // A Mixed value is admitted into an `int` field because lowering emits a strict
-        // runtime narrowing there (int tag → raw payload, anything else → TypeError). This
-        // is what lets int arithmetic — typed Mixed for its overflow-to-float promotion —
-        // feed packed fields without either a false compile error or a silent truncation.
-        // `int|float` is admitted by the same reasoning and the same lowering: it IS "int
-        // arithmetic typed for its overflow-to-float promotion", now that the checker says so
-        // precisely instead of saying `mixed`. Leaving it out made the narrower type the
-        // stricter one — `$i = 0; $i++; $thing->id = $i;` was refused where `$i = $i + 1` was
-        // accepted, for two spellings of one value.
-        let guarded_mixed_int = field_ty == PhpType::Int
-            && (matches!(val_ty, PhpType::Mixed) || val_ty.is_int_float_union());
+        // A value whose type is only known at run time is admitted into a scalar field because
+        // lowering narrows it strictly before the store (see
+        // `fixed_layout_field_accepts_runtime_value`).
         if &field_ty != val_ty
             && !matches!((&field_ty, val_ty), (PhpType::Bool, PhpType::False))
-            && !guarded_mixed_int
+            && !fixed_layout_field_accepts_runtime_value(&field_ty, val_ty)
         {
             return Err(CompileError::new(
                 span,

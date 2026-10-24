@@ -45,7 +45,9 @@ $layers = [];
 for ($layer = 0; $layer < 3; $layer++) {
     $particles = buffer_new<Particle>($count);
     for ($i = 0; $i < $count; $i++) {
-        $particles[$i]->x = $i * 10.0 + 1.0 * $layer;
+        // A loop counter may overflow to float, so this sum is only a number at run time;
+        // the float field checks it as it is stored (a float, or an int converted).
+        $particles[$i]->x = $i * 10.0 + $layer;
         $particles[$i]->vx = 2.5;
     }
     $layers[] = $particles;
