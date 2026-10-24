@@ -392,7 +392,7 @@ mod tests {
         // differs by `$force` and the non-forced arm reads the cache's recorded mtime.
         //
         // None of the eleven is callable from eval'd code.
-        assert_eq!(eval_internal, 125);
+        assert_eq!(eval_internal, 126);
         // 28 registry builtins awaiting eval homes, plus the 325 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
         assert_eq!(eval_pending, 353);
@@ -401,7 +401,7 @@ mod tests {
         // `__elephc_opcache_rt_*` runtime script-cache helpers rolled through above add the rest.
         // The four float pointer builtins (`ptr_read_f32`, `ptr_write_f32`, `ptr_read_f64`,
         // `ptr_write_f64`) and `buffer_ptr` are ordinary registry builtins on both backends.
-        assert_eq!(aot_registry, 757);
+        assert_eq!(aot_registry, 758);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
         assert_eq!(aot_external, 412 + curl_surface);
@@ -456,7 +456,7 @@ mod tests {
         assert_eq!(interpreter_adapter, 604 + curl_surface);
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own.
-        assert_eq!(unsupported, 478);
+        assert_eq!(unsupported, 479);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

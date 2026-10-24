@@ -315,7 +315,8 @@ impl Scanner<'_> {
             "method_exists" => self.method_exists(args),
             "get_class_methods" => self.usage.hazards.dynamic_method = true,
             "class_exists" | "interface_exists" | "enum_exists" | "trait_exists" => self.literal_class_or_hazard(first),
-            "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" | "unserialize" => self.usage.hazards.dynamic_class = true,
+            "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" | "unserialize"
+            | "__elephc_simplexml_allocate" => self.usage.hazards.dynamic_class = true,
             "eval" => self.literal_eval_or_hazard(first),
             _ => {}
         }

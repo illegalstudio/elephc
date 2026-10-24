@@ -26,8 +26,7 @@ extern "elephc_xml" {
 }
 
 function __elephc_simplexml_wrap(int $handle, string $class): SimpleXMLElement {
-    $reflection = new ReflectionClass($class);
-    $object = $reflection->newInstanceWithoutConstructor();
+    $object = __elephc_simplexml_allocate($class);
     if ($object instanceof SimpleXMLElement) {
         $object->__elephc_attach($handle);
         return $object;
@@ -38,11 +37,6 @@ function __elephc_simplexml_wrap(int $handle, string $class): SimpleXMLElement {
 
 function __elephc_simplexml_class(?string $class): string {
     if ($class === null || $class === "") { return "SimpleXMLElement"; }
-    if (!class_exists($class)) { throw new TypeError("SimpleXML class must be a valid class name"); }
-    $reflection = new ReflectionClass($class);
-    if (strtolower($class) !== "simplexmlelement" && !$reflection->isSubclassOf("SimpleXMLElement")) {
-        throw new TypeError("SimpleXML class must be derived from SimpleXMLElement");
-    }
     return $class;
 }
 
@@ -291,10 +285,11 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     public function __elephc_dom_node(mixed $document, mixed $parent): DOMNode {
         $handle = $this->__elephc_handle;
         $kind = elephc_xml_sx_int($handle, 4);
-        $node = new DOMElement();
+        $node = null;
         if ($kind === 3 || $kind === 4) { $node = new DOMText(); }
         elseif ($kind === 8) { $node = new DOMComment(); }
         elseif ($kind === 7) { $node = new DOMProcessingInstruction($this->getName(), ""); }
+        else { $node = new DOMElement(); }
         $node->nodeName = $this->getName();
         if ($kind === 3 || $kind === 4) { $node->nodeName = "#text"; }
         if ($kind === 8) { $node->nodeName = "#comment"; }

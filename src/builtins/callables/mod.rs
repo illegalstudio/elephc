@@ -16,6 +16,7 @@
 //! - `function_exists`: delegates to `callables::check_function_exists` with `lazy_check: true`.
 
 pub(crate) mod support;
+pub mod __elephc_simplexml_allocate;
 
 // Group A — no check hook
 pub mod get_class;

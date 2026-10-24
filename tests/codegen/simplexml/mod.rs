@@ -291,3 +291,16 @@ for ($i = 0; $i < 2; $i++) {
     assert_eq!(out.stdout, "kept|kept|");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Nullable self returns are covariant while a class's interface schema is still being built.
+#[test]
+fn test_simplexml_nullable_self_interface_covariance() {
+    let out = compile_and_run(r###"<?php
+interface NullableNextNode { public function nextNode(): ?NullableNextNode; }
+class NullableSelfNode implements NullableNextNode {
+    public function nextNode(): ?NullableSelfNode { return null; }
+}
+$node = new NullableSelfNode(); var_dump($node->nextNode());
+"###);
+    assert_eq!(out, "NULL\n");
+}
