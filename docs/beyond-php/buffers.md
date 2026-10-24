@@ -87,9 +87,25 @@ echo $buf[3];           // direct load
 
 $enemies[0]->x = 100;  // packed class field access
 echo $enemies[0]->x;   // 100
+
+$counts[$cell]++;      // in-place element update
+echo $counts[$cell]--; // the old value, then the element is one lower
 ```
 
 Buffer indices may be statically typed as `int` or `mixed`. A `mixed` index is converted to `int` at runtime before bounds checking; a statically known non-integer index is rejected at compile time.
+
+`++` and `--` on an element of a scalar buffer (any integer or float width) read the element
+once, step it by one and write it back, with the same bounds and freed-buffer checks as any
+access. The update itself allocates nothing, so it suits counting and histogram loops; only the
+value of a prefix expression on an integer element (`$x = ++$counts[$i]`) is a boxed `mixed`,
+because it can be the promoted `float` described below. An integer element
+steps as a PHP `int`: an increment past `PHP_INT_MAX` (or a decrement past `PHP_INT_MIN`)
+promotes to `float` as in PHP, and the element then stores that float the way any float written
+to the buffer is stored, by PHP's float-to-int conversion (`PHP_INT_MAX` plus one stores
+`PHP_INT_MIN`); a narrow width then keeps the low bits. A float element adds or subtracts `1.0`,
+and an `f32` element rounds the result when it is stored. The postfix form yields the element's
+old value; the prefix form yields the new value before the store's width conversion, which for an
+integer element past the integer range is the promoted `float`.
 
 ## Buffers in class members
 

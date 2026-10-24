@@ -45,6 +45,7 @@ mod string_append;
 mod conditionals;
 mod loops;
 mod array_write_core;
+mod buffer_element_updates;
 mod nested_array_writes;
 mod nested_write_guards;
 mod nested_scalar_writes;
@@ -112,6 +113,7 @@ pub(crate) use array_write_core::{
     desugared_element_update, lower_array_assign_with_diagnosed_key, ElementUpdate,
 };
 pub(crate) use property_array_writes::lower_property_array_assign_with_diagnosed_key;
+pub(crate) use buffer_element_updates::{lower_buffer_expression_update, BufferExpressionUpdate};
 pub(crate) use static_property_writes::lower_static_property_array_assign_with_diagnosed_key;
 pub(crate) use nested_array_writes::lower_nested_array_assign_after_read;
 pub(super) use array_write_storage::{
