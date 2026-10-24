@@ -120,6 +120,7 @@ mod packed_builtin_args;
 mod method_metadata;
 mod static_method_calls;
 mod scoped_values;
+mod buffer_length;
 mod generators;
 mod instanceof_coercions;
 mod merge_temps;

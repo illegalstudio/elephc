@@ -36,6 +36,25 @@ fn test_error_buffer_new_rejects_union_element_type() {
     );
 }
 
+/// Verifies that a statically known float length is still rejected: only `int` lengths and the
+/// runtime-converted `mixed` / `int|float` lengths of int arithmetic size a buffer (task f9ea1d1e).
+#[test]
+fn test_error_buffer_new_rejects_static_float_length() {
+    expect_error(
+        "<?php function half(int $n): void { $values = buffer_new<int>($n / 2); } half(4);",
+        "buffer_new<T>() length must be integer",
+    );
+}
+
+/// Verifies that a statically known string length is still rejected, like a string buffer index.
+#[test]
+fn test_error_buffer_new_rejects_static_string_length() {
+    expect_error(
+        "<?php string $n = \"2\"; $values = buffer_new<int>($n);",
+        "buffer_new<T>() length must be integer",
+    );
+}
+
 /// Verifies a packed class reusing an ordinary class name (case-insensitively) is still a
 /// duplicate now that packed classes are registered before the class schema pass.
 #[test]
