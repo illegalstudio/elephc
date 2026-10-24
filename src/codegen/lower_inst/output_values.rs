@@ -66,7 +66,7 @@ pub(super) fn emit_owned_tostring_result_to_stdout(
     abi::emit_push_reg_pair(ctx.emitter, ptr, len);
     emit_loaded_value_to_stdout(ctx, ty)?;
     abi::emit_pop_reg_pair(ctx.emitter, ptr, len);
-    abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Str);
+    super::ownership::release_loaded_string(ctx);
     Ok(())
 }
 

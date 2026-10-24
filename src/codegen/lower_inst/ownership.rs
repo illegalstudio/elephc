@@ -359,7 +359,7 @@ pub(super) fn lower_forward(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 /// only frees plausible live heap blocks, so it safely handles the zero-length owned
 /// strings that `__rt_str_persist` now allocates as independent blocks. The previous
 /// `cbz len` guard skipped them and leaked every owned empty string on reassignment.
-fn release_loaded_string(ctx: &mut FunctionContext<'_>) {
+pub(super) fn release_loaded_string(ctx: &mut FunctionContext<'_>) {
     let (ptr_reg, _) = abi::string_result_regs(ctx.emitter);
     let result_reg = abi::int_result_reg(ctx.emitter);
     match ctx.emitter.target.arch {
