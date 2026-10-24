@@ -46,6 +46,14 @@ pub(crate) fn xml_declarations() -> Program {
     build::xml_declarations()
 }
 
+/// Whether `program` uses this prelude's surface: the same test `inject_if_used` applies.
+///
+/// Also run by `crate::autoload::prelude_probe` over the autoload closure, whose files are only
+/// loaded after this prelude has been decided.
+pub(crate) fn program_uses_surface(program: &[crate::parser::ast::Stmt]) -> bool {
+    detect::program_uses_xml(program)
+}
+
 /// Injects the XML prelude when the program references XML, XMLWriter, or SimpleXML's
 /// surface, leaving every other program untouched.
 ///

@@ -753,6 +753,21 @@ After successful checking, elephc also runs a warning pass over the AST (`src/ty
 
 Warnings are returned through `CheckResult` and printed by the CLI without failing the compilation.
 
+Checker errors and warnings carry only a `Span`. Each file the resolver or the autoload pass lexes gets its own source identity, and `Span::register_source_path` records which physical file that identity came from; `print_error` / `print_warning` prefer `Span::source_path` over an explicit file tag, so an entry-file tag cannot rename a position in another file. The pipeline registers the entry path before frontend processing, making positioned diagnostics print as `kind[file:line:col]`. Class schema errors (circular inheritance, extending a `final` class, duplicate or unknown parent classes) point at the class declaration.
+
+The discarded autoload prelude probe restores only thread-local source IDs and anonymous-class numbering. Synthetic spans and hidden value-include temporaries use monotonic process-global counters, so a probe cannot recycle identities allocated by another compiler thread. Gaps left by discarded work do not affect PHP values or name resolution.
+
+### Lookup indexes
+
+Large programs (thousands of classes) made several per-member scans of the whole class table dominate checking time. The checker keeps lazily built indexes for them, each stored with the `classes.len()` it was built for, so registering a class invalidates it:
+
+- `class_children_index`: direct subclasses per parent, used by `class_and_descendants` for late-bound `new static` targets.
+- `method_impl_users_index`: the classes whose method table dispatches a given `(implementing class, method, is_static)` to that implementation, to which each checked body's inferred return is copied.
+- `property_sharers_index`: the classes sharing a `(property, declaring class)` slot, retyped together by a constructor argument.
+- `loop_storage_scope_spans`: the loop spans `loop_storage_types` holds for each scope, so re-walking a scope clears only its own loop contracts.
+
+Builtin, function and folded-map lookups try the exact key before the case-insensitive scan.
+
 ## Where the checker sits in the optimizer pipeline
 
 The type checker sits between an early folding pass and four post-check cleanup passes in `src/optimize/`:

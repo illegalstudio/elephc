@@ -25,6 +25,7 @@ use super::include_path::fold_include_path;
 use super::state::ResolveState;
 
 /// Process-global counter producing unique hidden temporary names for value-position includes.
+/// Discarded probes consume names too, so concurrent compilations never recycle live temporaries.
 static VALUE_INCLUDE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 /// Where the value produced by an expression-position include must be delivered.

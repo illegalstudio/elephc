@@ -1035,3 +1035,30 @@ echo $ok ? "yes" : "no";
     );
     assert_eq!(out, "42|yes");
 }
+
+/// An untyped method variadic that a first-class callable promotes to the mixed collector stays
+/// mixed when a direct call later passes only strings. The direct string call used to narrow the
+/// collector back to `array<string>` while the callable path still stored mixed values into it,
+/// and the program aborted with "heap memory exhausted".
+#[test]
+fn test_promoted_method_variadic_is_not_narrowed_back_by_a_string_call() {
+    let out = compile_and_run(
+        r#"<?php
+class Req {
+    public function is(...$patterns) {
+        foreach ($patterns as $p) { echo gettype($p), ":", is_array($p) ? json_encode($p) : $p, " "; }
+        return count($patterns);
+    }
+}
+class Mw {
+    public function check(Req $r) {
+        $f = $r->is(...);
+        return $f("api/x", [1, 2], 3);
+    }
+}
+echo (new Req())->is('api/*'), "\n";
+echo (new Mw())->check(new Req()), "\n";
+"#,
+    );
+    assert_eq!(out, "string:api/* 1\nstring:api/x array:[1,2] integer:3 3\n");
+}

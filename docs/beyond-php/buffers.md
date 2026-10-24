@@ -28,6 +28,21 @@ buffer<Enemy> $enemies = buffer_new<Enemy>(256);
 
 Only POD scalar, pointer, packed-record, or C width element types are accepted. No union types (`buffer<int|string>`) or nullable (`buffer<?int>`).
 
+The length is an `int`. A length computed with int arithmetic, such as `$n + 1`, `$columns * $rows + 1`
+or `2 * buffer_len($old)`, is accepted even though PHP turns an overflowing result into a float, and so
+is a `mixed` or `int|float` value: the length is converted to `int` when the buffer is allocated, as a
+`mixed` index is. The converted length must be a whole number in the `int` range, so a fraction such as
+`2.5`, NaN, infinity, or an overflowed result aborts with the [length validation](#length-validation)
+error instead of being truncated. A statically known `float` length (such as `$n / 2`) or `string`
+length is rejected at compile time; use `intdiv()` or an `(int)` cast.
+
+```php
+<?php
+function grid(int $columns, int $rows): buffer<int> {
+    return buffer_new<int>($columns * $rows + 1);   // int arithmetic sizes the buffer directly
+}
+```
+
 ## Element widths
 
 A scalar element type may be one of the C width names, and the buffer then stores each
@@ -299,8 +314,12 @@ Always enabled. Out-of-bounds aborts: `Fatal error: buffer index out of bounds`
 
 ## Length validation
 
-`buffer_new<T>()` validates the requested length before allocating. A negative length, or a length
-whose `length * stride` payload size does not fit in a machine word, aborts with:
+`buffer_new<T>()` validates the requested length before allocating. A negative length, a length
+whose `length * stride` payload size does not fit in a machine word, or a length converted at runtime
+(int arithmetic, `mixed`, `int|float`) that is not a whole number in the `int` range, such as `2.5`,
+NaN or `PHP_INT_MAX + 1`, aborts with the error below. A `mixed` int keeps its exact value; any other
+converted value that comes out as `PHP_INT_MAX` also aborts, because PHP's conversion saturates an
+out-of-range numeric string at that value:
 
 ```
 Fatal error: buffer_new() length is negative or exceeds the maximum buffer size

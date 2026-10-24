@@ -11,7 +11,7 @@
 //!   the same switch the live spinner and `--timings` report use, so plain/piped/`--quiet`
 //!   runs keep byte-identical text to before.
 //! - A diagnostic whose span was lexed from an included or autoloaded file names that file
-//!   (`Span::source_path`), ahead of any entry-filename tag; entry-file positions keep their form.
+//!   (`Span::source_path`), ahead of any entry-filename tag. The pipeline also registers the entry.
 
 use super::{CompileError, CompileWarning};
 
@@ -20,8 +20,7 @@ use super::{CompileError, CompileWarning};
 /// Format varies based on available metadata:
 /// - With file, line, and column: `error[file:line:col]: message`
 /// - With file only: `error[file]: message`
-/// - With line and column only: `error[line:col]: message` (a position in the entry file, or a
-///   node with no registered source)
+/// - With line and column only: `error[line:col]: message` (a node with no registered source)
 /// - With no location metadata: `error: message`
 ///
 /// An error whose span was lexed from an included or autoloaded file names that file
@@ -49,7 +48,7 @@ pub fn print_error(error: &CompileError) {
 /// Prints a compiler warning to stderr with optional line and column.
 ///
 /// Format varies based on available metadata:
-/// - In an included or autoloaded file: `warning[file:line:col]: message`
+/// - With a registered source file: `warning[file:line:col]: message`
 /// - With line and column only: `warning[line:col]: message`
 /// - With no location metadata: `warning: message`
 pub fn print_warning(warning: &CompileWarning) {
@@ -74,7 +73,7 @@ pub fn print_warning(warning: &CompileWarning) {
 /// every lowering, export and `--emit-ir` refusal with the ENTRY filename: preferring that tag
 /// printed an included file's line and column under the entry file's name. A tag still names
 /// the file when the span has no position or no registered source, which covers every
-/// entry-file span (identity 0 is never registered) and keeps those diagnostics as they were.
+/// standalone span outside the pipeline. The pipeline registers the entry as identity 0.
 fn diagnostic_file(file: &Option<String>, span: crate::span::Span) -> Option<String> {
     if span.line != 0 {
         if let Some(path) = span.source_path() {

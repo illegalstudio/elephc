@@ -544,11 +544,11 @@ These standard PHP filesystem functions are intentionally absent from elephc bec
 
 ### Compiler diagnostics
 
-elephc reports errors with source spans. Example:
+elephc reports errors with the file, line and column they come from. Example:
 
 ```text
-error[3:5]: Undefined variable: $name
-error[8:1]: Function 'foo' declared return type string but returns int
+error[main.php:3:5]: Undefined variable: $name
+error[src/Helpers.php:8:1]: Function 'foo' declared return type string but returns int
 ```
 
 The compiler also emits non-fatal warnings (unused variables, unreachable code).

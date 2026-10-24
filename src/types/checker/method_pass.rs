@@ -218,8 +218,7 @@ impl Checker {
                     self.current_method_is_static = method.is_static;
                     self.current_by_ref_return = method.by_ref_return;
                     let loop_storage_scope = format!("{}::{}", class.name, method.name);
-                    self.loop_storage_types
-                        .retain(|(scope, _), _| scope != &loop_storage_scope);
+                    self.clear_loop_storage_scope(&loop_storage_scope);
                     let previous_loop_storage_scope = std::mem::replace(
                         &mut self.current_loop_storage_scope,
                         loop_storage_scope,
@@ -496,15 +495,14 @@ impl Checker {
         // A subclass copies the method signature before body inference runs. Calls through
         // that subclass must use the implementing method's return ABI, or a boxed result can
         // be read as a scalar even though both names dispatch to the same body.
-        for (name, ci) in &mut self.classes {
-            let implementation = if method.is_static {
-                ci.static_method_impl_classes.get(&method_key)
-            } else {
-                ci.method_impl_classes.get(&method_key)
-            };
-            if name != &class.name && implementation != Some(&class.name) {
+        let mut receivers = self.method_impl_users(&class.name, &method_key, method.is_static);
+        if !receivers.iter().any(|name| name == &class.name) {
+            receivers.push(class.name.clone());
+        }
+        for name in receivers {
+            let Some(ci) = self.classes.get_mut(&name) else {
                 continue;
-            }
+            };
             let sig = if method.is_static {
                 ci.static_methods.get_mut(&method_key)
             } else {
@@ -522,6 +520,47 @@ impl Checker {
             &callable_return_sigs,
             &callable_array_return_sigs,
         );
+    }
+
+    /// The classes whose `method_key` dispatches to `impl_class`'s body (see
+    /// `Checker::method_impl_users_index`).
+    fn method_impl_users(
+        &mut self,
+        impl_class: &str,
+        method_key: &str,
+        is_static: bool,
+    ) -> Vec<String> {
+        let class_count = self.classes.len();
+        if self
+            .method_impl_users_index
+            .as_ref()
+            .is_none_or(|(built_for, _)| *built_for != class_count)
+        {
+            let mut index: std::collections::HashMap<(String, String, bool), Vec<String>> =
+                std::collections::HashMap::new();
+            for (name, info) in &self.classes {
+                for (key, implementation) in &info.method_impl_classes {
+                    index
+                        .entry((implementation.clone(), key.clone(), false))
+                        .or_default()
+                        .push(name.clone());
+                }
+                for (key, implementation) in &info.static_method_impl_classes {
+                    index
+                        .entry((implementation.clone(), key.clone(), true))
+                        .or_default()
+                        .push(name.clone());
+                }
+            }
+            self.method_impl_users_index = Some((class_count, index));
+        }
+        self.method_impl_users_index
+            .as_ref()
+            .and_then(|(_, index)| {
+                index.get(&(impl_class.to_string(), method_key.to_string(), is_static))
+            })
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Resolves the return type of a method whose body contains `yield`.
@@ -573,15 +612,14 @@ impl Checker {
         let callable_array_sig = is_callable_array_return_type(return_type)
             .then(|| matching_callable_sig(callable_array_return_sigs))
             .flatten();
-        for (name, class_info) in &mut self.classes {
-            let implementation = if is_static {
-                class_info.static_method_impl_classes.get(method_key)
-            } else {
-                class_info.method_impl_classes.get(method_key)
-            };
-            if name != class_name && implementation.map(String::as_str) != Some(class_name) {
+        let mut receivers = self.method_impl_users(class_name, method_key, is_static);
+        if !receivers.iter().any(|name| name == class_name) {
+            receivers.push(class_name.to_string());
+        }
+        for name in receivers {
+            let Some(class_info) = self.classes.get_mut(&name) else {
                 continue;
-            }
+            };
             if let Some(sig) = &callable_sig {
                 class_info
                     .callable_method_return_sigs

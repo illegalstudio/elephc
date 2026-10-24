@@ -481,6 +481,7 @@ Notes:
 - `extern function`, `extern "lib" { ... }`, `extern global`, and `extern class` are supported.
 - `string` arguments are copied to temporary null-terminated C strings for the duration of the native call.
 - `string` return values are copied back into owned elephc strings.
+- `?string` parameters and returns map PHP `null` to a NULL `char*` and back, for C APIs such as `SDL_CreateRenderer(window, NULL)` or `getenv()`.
 - `callable` parameters pass a user-defined elephc function by string name, for example `"on_signal"`.
 - Callback functions must stay C-compatible: use `int`, `float`, `bool`, `ptr`, or `void`-shaped values. String callbacks are not supported yet.
 - Raw C memory patterns are supported through ordinary extern declarations such as `malloc`, `free`, `memcpy`, and `memset`.
@@ -657,18 +658,18 @@ A variable's type is set at first assignment. Compatible types (int/float/bool/n
 
 ## Error messages
 
-Errors include line and column numbers, and the compiler tries to recover far enough to report multiple independent syntax / semantic errors in one pass. Successful compilations may also emit non-fatal warnings such as unused variables / parameters or unreachable code:
+Errors name the file, line and column they come from (the entry file as given on the command line, or the included or autoloaded file that holds the statement), and the compiler tries to recover far enough to report multiple independent syntax / semantic errors in one pass. Successful compilations may also emit non-fatal warnings such as unused variables / parameters or unreachable code:
 
 ```
-error[3:1]: Undefined variable: $x
-error[5:7]: Type error: cannot reassign $x from int to string
-error[2:1]: Required file not found: 'missing.php'
-warning[6:1]: $a changes type from int to string; the previous value is discarded (compile with --strict-locals to make this an error)
-warning[9:5]: Unused variable: $tmp
-warning[14:9]: Unreachable code
+error[main.php:3:1]: Undefined variable: $x
+error[main.php:5:7]: Type error: cannot reassign $x from int to string
+error[main.php:2:1]: Required file not found: 'missing.php'
+warning[main.php:6:1]: $a changes type from int to string; the previous value is discarded (compile with --strict-locals to make this an error)
+warning[main.php:9:5]: Unused variable: $tmp
+warning[src/Helpers.php:14:9]: Unreachable code
 ```
 
-A diagnostic inside an included or autoloaded file also names that file, as in `error[/app/src/Broken.php:4:41]: Undefined class: App\Missing` (see [diagnostic locations](docs/compiling/output-and-diagnostics.md#diagnostic-locations)).
+A diagnostic with no source position (some whole-program checks) prints `error: message`. See [diagnostic locations](docs/compiling/output-and-diagnostics.md#diagnostic-locations).
 
 ## Project structure
 

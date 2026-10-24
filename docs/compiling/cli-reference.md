@@ -415,7 +415,7 @@ have run under:
 
 ```
 $ elephc --php-version 8.2 app.php
-error[3:5]: this program needs PHP 8.4 (property hooks), but --php-version selected 8.2; a binary built for 8.2 could not have run this source
+error[app.php:3:5]: this program needs PHP 8.4 (property hooks), but --php-version selected 8.2; a binary built for 8.2 could not have run this source
 ```
 
 Detected today: the pipe operator `|>` (8.5), property hooks and asymmetric

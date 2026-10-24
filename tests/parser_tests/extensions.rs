@@ -315,6 +315,49 @@ fn test_parse_extern_float_widths() {
     }
 }
 
+/// Parses `?string` on extern parameters and returns as `CType::NullableStr`, in a library
+/// block as SDL3 declares it, while the neighbouring `ptr` and plain `string` stay unchanged.
+#[test]
+fn test_parse_extern_nullable_string_param_and_return() {
+    use elephc::parser::ast::CType;
+    let stmts = parse_source(
+        r#"<?php extern "SDL3" { function SDL_CreateRenderer(ptr $window, ?string $name): ptr; function SDL_GetError(): ?string; function SDL_SetHint(string $name, ?string $value): bool; }"#,
+    );
+    assert_eq!(stmts.len(), 3);
+    match &stmts[0].kind {
+        StmtKind::ExternFunctionDecl { params, return_type, .. } => {
+            let types: Vec<&CType> = params.iter().map(|param| &param.c_type).collect();
+            assert_eq!(types, vec![&CType::Ptr, &CType::NullableStr]);
+            assert_eq!(return_type, &CType::Ptr);
+        }
+        _ => panic!("Expected ExternFunctionDecl"),
+    }
+    match &stmts[1].kind {
+        StmtKind::ExternFunctionDecl { params, return_type, .. } => {
+            assert!(params.is_empty());
+            assert_eq!(return_type, &CType::NullableStr);
+        }
+        _ => panic!("Expected ExternFunctionDecl"),
+    }
+    match &stmts[2].kind {
+        StmtKind::ExternFunctionDecl { params, .. } => {
+            let types: Vec<&CType> = params.iter().map(|param| &param.c_type).collect();
+            assert_eq!(types, vec![&CType::Str, &CType::NullableStr]);
+        }
+        _ => panic!("Expected ExternFunctionDecl"),
+    }
+}
+
+/// Rejects `?` before any extern type other than `string`, and a dangling `?`, because only a
+/// `char*` gains a NULL mapping (a `ptr` already carries NULL as the address 0).
+#[test]
+fn test_parse_extern_nullable_rejects_non_string_types() {
+    assert!(parse_fails("<?php extern function f(?int $x): int;"));
+    assert!(parse_fails("<?php extern function f(?ptr $x): int;"));
+    assert!(parse_fails("<?php extern function f(): ?ptr<Point>;"));
+    assert!(parse_fails("<?php extern function f(? $x): int;"));
+}
+
 /// Parses `extern "m" function sin(float $x): float;` as an `ExternFunctionDecl` with library `"m"`.
 /// Verifies name, library, param types, and return type are all captured correctly.
 #[test]

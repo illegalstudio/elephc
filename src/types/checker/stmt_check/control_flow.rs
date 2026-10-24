@@ -31,6 +31,17 @@ const FS_CURRENT_AS_PATHNAME: i64 = 32;
 const FS_CURRENT_MODE_MASK: i64 = 240;
 const FS_SKIP_DOTS: i64 = 4096;
 
+impl Checker {
+    /// Forgets every loop-storage contract recorded for `scope`, before its body is walked again.
+    pub(crate) fn clear_loop_storage_scope(&mut self, scope: &str) {
+        if let Some(spans) = self.loop_storage_scope_spans.remove(scope) {
+            for span in spans {
+                self.loop_storage_types.remove(&(scope.to_string(), span));
+            }
+        }
+    }
+}
+
 /// Computes and records fixed-point array storage contracts before checking a loop body.
 ///
 /// The shared analysis iterates over rebinds and growth sites with an evolving environment, so
@@ -86,7 +97,15 @@ fn stabilize_loop_storage(
             Some(inferred)
         },
     );
-    let recorded = checker.loop_storage_types.entry(key).or_default();
+    let (scope, span) = key;
+    if !checker.loop_storage_types.contains_key(&(scope.clone(), span)) {
+        checker
+            .loop_storage_scope_spans
+            .entry(scope.clone())
+            .or_default()
+            .push(span);
+    }
+    let recorded = checker.loop_storage_types.entry((scope, span)).or_default();
     for (name, storage_type) in contracts {
         recorded.insert(name.clone(), storage_type.clone());
         env.insert(name, storage_type);

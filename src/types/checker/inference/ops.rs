@@ -532,8 +532,7 @@ impl Checker {
             &previous_loop_storage_scope,
             expr.span,
         );
-        self.loop_storage_types
-            .retain(|(scope, _), _| scope != &loop_storage_scope);
+        self.clear_loop_storage_scope(&loop_storage_scope);
         self.current_loop_storage_scope = loop_storage_scope;
         // The storage this closure's frame ALREADY holds on entry: its by-VALUE captures, each
         // with the type it arrives with, read from the ENCLOSING environment. Deliberately not

@@ -15,6 +15,7 @@
 
 mod alias;
 mod dev_packages;
+pub mod prelude_probe;
 mod index;
 mod interpret;
 mod registry;

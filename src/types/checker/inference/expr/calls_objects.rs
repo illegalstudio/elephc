@@ -59,7 +59,13 @@ impl Checker {
             }
             ExprKind::BufferNew { element_type, len } => {
                 let len_ty = self.infer_type(len, env)?;
-                if len_ty != PhpType::Int {
+                // A length takes what a buffer index takes. Checked int arithmetic such as
+                // `$n + 1` infers `mixed` (PHP promotes an overflowing result to float), so a
+                // `mixed` or `int|float` length is converted at runtime, where a value that is
+                // not a whole number in range fails the allocation's length validation.
+                if !matches!(len_ty, PhpType::Int | PhpType::Mixed)
+                    && !len_ty.is_int_float_union()
+                {
                     return Err(CompileError::new(
                         expr.span,
                         "buffer_new<T>() length must be integer",

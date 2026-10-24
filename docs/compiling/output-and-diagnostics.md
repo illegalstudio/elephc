@@ -114,19 +114,22 @@ and `--quiet` keep the compact plain output without progress lines.
 
 ### Diagnostic locations
 
-Errors and warnings print as `error[line:col]: message` and
-`warning[line:col]: message`. A diagnostic raised inside a file other than the
-entry file (an `include`/`require` target, a Composer `autoload.files` entry, or
-a class file loaded through PSR-4 or an SPL autoload rule) names that file
-before the position, as the path it was loaded from:
+Errors and warnings name the physical file, line and column they come from:
 
 ```text
-error[3:1]: Undefined variable: $x
-error[/app/src/Broken.php:4:41]: Undefined class: App\Missing
-warning[/app/lib/helpers.php:9:5]: Unused variable: $tmp
+error[main.php:3:1]: Undefined variable: $x
+error[main.php:2:1]: Required file not found: 'missing.php'
+warning[src/Helpers.php:14:9]: Unreachable code
 ```
 
-Lexer and parser errors name their file in every case, the entry file included.
+The file is the entry file as given on the command line, or the included or
+autoloaded file that holds the statement, so a diagnostic in a large autoloaded
+tree points at the right file. The entry path is registered before frontend and
+autoload processing, so early autoload warnings name it too. A position whose
+source file is not known (a compiler-synthesized node) prints `kind[line:col]`,
+and a diagnostic with no source position at all (some whole-program checks)
+prints `kind: message`.
+Profile `note[…]` lines keep their `note[line:col]` form.
 
 ### `--quiet` / `-q`
 

@@ -424,21 +424,39 @@ pub const ECHO_HELPER: &str = "__elephc_var_export_echo";
 /// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): its usage scan walks the
 /// whole program, so an embedder calling it without the CLI driver's wrapper gets the same stack
 /// budget.
+#[allow(dead_code)] // The CLI calls the `_or_referenced_elsewhere` form; embedders and tests call this.
 pub fn inject_if_used(
     program: Program,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Program {
+    inject_if_used_or_referenced_elsewhere(program, false, inventory)
+}
+
+/// [`inject_if_used`], also injecting when `referenced_elsewhere` says a file the autoload pass
+/// loads later calls `var_export` (`crate::autoload::prelude_probe`). A program that declares
+/// its own `var_export` still gets nothing.
+pub fn inject_if_used_or_referenced_elsewhere(
+    program: Program,
+    referenced_elsewhere: bool,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> Program {
     crate::compiler_stack::with_compiler_stack(|| {
-        inject_if_used_on_compiler_stack(program, inventory)
+        inject_if_used_on_compiler_stack(program, referenced_elsewhere, inventory)
     })
+}
+
+/// Whether `program` calls `var_export` without declaring its own.
+pub(crate) fn program_uses_surface(program: &[crate::parser::ast::Stmt]) -> bool {
+    detect::program_references_var_export(program) && !detect::program_declares_var_export(program)
 }
 
 /// The body of [`inject_if_used`], run on the stack `with_compiler_stack` sized.
 fn inject_if_used_on_compiler_stack(
     program: Program,
+    referenced_elsewhere: bool,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Program {
-    if !detect::program_references_var_export(&program)
+    if !(referenced_elsewhere || detect::program_references_var_export(&program))
         || detect::program_declares_var_export(&program)
     {
         return program;
