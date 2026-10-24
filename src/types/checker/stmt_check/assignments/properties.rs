@@ -854,6 +854,9 @@ fn resolve_object_array_property(
         .classes
         .get(class_name)
         .ok_or_else(|| CompileError::new(span, &format!("Undefined class: {}", class_name)))?;
+    if crate::types::builtin_classes::native_property_method(class_name, property,
+        elephc_builtin_contract::ObjectProperty::Get, &checker.classes).is_some()
+    { return Ok((PhpType::Object(class_name.to_string()), true)); }
     if class_info.visible_property(property).is_none() {
         if crate::types::builtin_classes::has_native_dimensions(class_name, &checker.classes) {
             if let Some(sig) = class_info.methods.get("__get") {

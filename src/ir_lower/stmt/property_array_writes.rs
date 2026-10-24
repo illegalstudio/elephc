@@ -203,7 +203,10 @@ fn lower_native_dimension_property(
     let ty = ctx.builder.value_php_type(receiver.value);
     let (class, _) = crate::ir_lower::expr::singular_object_class(&ty)?;
     let info = ctx.classes.get(class.trim_start_matches('\\'))?;
-    let native = if let Some((_, (_, ty))) = info.visible_property(property) {
+    let native = if crate::types::builtin_classes::native_property_method(class, property,
+        elephc_builtin_contract::ObjectProperty::Get, ctx.classes).is_some() {
+        true
+    } else if let Some((_, (_, ty))) = info.visible_property(property) {
         crate::ir_lower::expr::singular_object_class(ty).is_some_and(|(name, _)|
             crate::types::builtin_classes::has_native_dimensions(name, ctx.classes))
     } else { crate::types::builtin_classes::has_native_dimensions(class, ctx.classes) };
