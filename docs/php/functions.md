@@ -19,6 +19,34 @@ Function lookup is case-insensitive like PHP. The declaration keeps its original
 name, but calls such as `ADD(3, 4)`, `Add(3, 4)`, and `add(3, 4)` resolve to the
 same function. Built-in function names follow the same rule.
 
+### Polyfill guards
+
+The polyfill idiom of framework `helpers.php` files is supported at top level:
+
+```php
+<?php
+if (!function_exists('helper')) {
+    function helper(): string { return 'ok'; }
+}
+echo helper(); // ok
+```
+
+In top-level code (in include order), a literal `function_exists('name')` for a user function
+is decided at compile time when every conditional declaration of that name is such a guard
+(directly in the `then` branch of a top-level `if (!function_exists('name'))` with no
+`elseif`/`else`). The guarded declaration then becomes an ordinary declaration, and a later
+repetition of the same guard (another helpers file) folds to `false` and does not redeclare.
+
+The fold does not apply, and the call stays a runtime query, in these cases:
+
+- inside function, method and closure bodies;
+- for a name with any other conditional declaration (inside a loop, a function body, another
+  condition or an `else` branch), a function discovered through an include, or an `extern`;
+- **when top-level code calls `eval()` anywhere**: `eval()` can declare functions at run time,
+  so a probe only folds when the function is already known to exist; a polyfill for a
+  missing function is not materialized and stays a conditional declaration, as without the
+  fold.
+
 ## Parameter and return type hints
 
 ```php

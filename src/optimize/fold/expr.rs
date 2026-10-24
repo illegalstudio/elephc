@@ -199,6 +199,13 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
                 .trim_start_matches('\\')
                 .eq_ignore_ascii_case("function_exists")
             {
+                if let [Expr { kind: ExprKind::StringLiteral(candidate), .. }] = args.as_slice() {
+                    if let Some(exists) =
+                        crate::optimize::user_guards::user_function_exists_value(candidate)
+                    {
+                        return Expr::new(ExprKind::BoolLiteral(exists), span);
+                    }
+                }
                 if let ([Expr { kind: ExprKind::StringLiteral(candidate), .. }], Some(target)) =
                     (args.as_slice(), active_fold_target())
                 {

@@ -103,6 +103,11 @@ pub(super) fn lower_prop_get_nonnull(
     object: ValueId,
     property: &str,
 ) -> Result<()> {
+    if union_receiver_names_enum_interface(ctx, object)? {
+        // `?BackedEnum`, `BackedEnum|string`: the object member is an interface with no slot
+        // layout, and the union is already a mixed cell, so read through runtime dispatch.
+        return lower_mixed_prop_get(ctx, inst, object, property);
+    }
     if let Some((class_name, true)) = nullable_object_receiver_class(ctx, object)? {
         return lower_nullable_prop_get_with_warning(ctx, inst, object, &class_name, property);
     }
@@ -917,4 +922,21 @@ pub(super) fn lower_runtime_allow_dynamic_prop_get(
     emit_boxed_null(ctx);
     ctx.emitter.label(&done_label);
     cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())
+}
+
+/// Whether a union receiver's object member is `UnitEnum`/`BackedEnum` (or extends them).
+fn union_receiver_names_enum_interface(ctx: &FunctionContext<'_>, object: ValueId) -> Result<bool> {
+    let PhpType::Union(members) = raw_value_php_type(ctx, object)? else {
+        return Ok(false);
+    };
+    Ok(members.iter().any(|member| match member {
+        PhpType::Object(name) => {
+            !ctx.module.class_infos.contains_key(name.trim_start_matches('\\'))
+                && crate::types::checker::builtin_interfaces::is_enum_contract_interface(
+                    &ctx.module.interface_infos,
+                    name,
+                )
+        }
+        _ => false,
+    }))
 }

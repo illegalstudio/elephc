@@ -18,12 +18,12 @@ pub(super) fn fold_callable_body<'a>(
     if active_fold_target().is_none() {
         return crate::optimize::generator_bodies::rewrite_preserving_yield(body, fold_block);
     }
-    with_fresh_reference_volatile(|| {
+    crate::optimize::user_guards::in_callable_body(|| with_fresh_reference_volatile(|| {
         for name in references {
             mark_reference_volatile(name);
         }
         crate::optimize::generator_bodies::rewrite_preserving_yield(body, fold_block)
-    })
+    }))
 }
 
 /// String facts established in execution order within one statement block.

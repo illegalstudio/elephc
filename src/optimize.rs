@@ -31,6 +31,7 @@ mod generator_bodies;
 mod namespace_fallbacks;
 mod propagate;
 mod target_guards;
+mod user_guards;
 pub mod reachability;
 
 use binding_decisions::{with_local_binding_decision_spans, with_mixed_storage_locals};
@@ -124,7 +125,7 @@ pub fn fold_constants_for_target(program: Program, target: Target) -> Program {
                 let user_functions = collect_top_level_user_functions(&program);
                 let previous_functions =
                     ACTIVE_FOLD_USER_FUNCTIONS.with(|functions| functions.replace(Some(user_functions)));
-                let folded = fold_constants(program);
+                let folded = user_guards::with_user_guard_state(program, fold_constants);
                 // A target guard can turn a conditional polyfill declaration into an unconditional
                 // declaration. Refresh the inventory so later probes see the retained function.
                 // Avoid `fold_constants` here, which would seed CLI superglobals twice.
