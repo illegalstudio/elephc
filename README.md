@@ -668,6 +668,8 @@ warning[9:5]: Unused variable: $tmp
 warning[14:9]: Unreachable code
 ```
 
+A diagnostic inside an included or autoloaded file also names that file, as in `error[/app/src/Broken.php:4:41]: Undefined class: App\Missing` (see [diagnostic locations](docs/compiling/output-and-diagnostics.md#diagnostic-locations)).
+
 ## Project structure
 
 High-level map of the source tree. The codebase contains more focused helper submodules than shown here; treat this as an orientation guide rather than a byte-for-byte file listing.
