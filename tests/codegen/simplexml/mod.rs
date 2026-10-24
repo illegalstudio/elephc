@@ -241,3 +241,16 @@ echo bin2hex((string)$x), "\n", bin2hex((string)$x->asXML()), "\n";
 "###);
     assert_eq!(out, "636166c3a9\n3c3f786d6c2076657273696f6e3d22312e302220656e636f64696e673d2249534f2d383835392d31223f3e0a3c723e636166e93c2f723e0a\n");
 }
+
+/// Attribute values count as scalar nodes and current() keeps a stable object until next().
+#[test]
+fn test_simplexml_attribute_counts_and_iterator_identity() {
+    if skip_without_xml_native("test_simplexml_attribute_counts_and_iterator_identity") { return; }
+    let out = compile_and_run(r###"<?php
+$x = new SimpleXMLElement('<r a="" b="0"><c/><d>text</d></r>');
+echo count($x['a']), ':', count($x->attributes()), ':', (int)(bool)$x['a'], "\n";
+$x->rewind(); var_dump($x->current() === $x->current());
+$x->getName(); echo $x->key(), "\n";
+"###);
+    assert_eq!(out, "0:2:1\nbool(true)\nc\n");
+}

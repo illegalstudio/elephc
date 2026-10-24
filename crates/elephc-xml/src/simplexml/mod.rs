@@ -73,6 +73,7 @@ impl View {
             Scope::Children(parent, name) | Scope::Attributes(parent, name) => {
                 let Some(node) = parent.first() else { return vec![]; };
                 let attrs = matches!(self.scope, Scope::Attributes(..));
+                if attrs && unsafe { ffi::node_type(node) } != 1 { return vec![]; }
                 let mut cursor = unsafe { if attrs { ffi::attrs(node) } else { ffi::child(node) } };
                 let mut out = Vec::new();
                 while !cursor.is_null() {
@@ -91,6 +92,7 @@ impl View {
     fn first(&self) -> Option<Node> { self.nodes().first().copied() }
     /// Returns nodes traversed by foreach and count for this wrapper kind.
     fn items(&self) -> Vec<Node> {
+        if matches!(self.scope, Scope::Attributes(_, Some(_))) { return vec![]; }
         if matches!(self.scope, Scope::Node(_) | Scope::Index(..)) {
             let view = self.select(0, "", "", false, 0);
             view.nodes()
@@ -106,7 +108,10 @@ impl View {
             1 => Scope::Attributes(parent, None),
             2 => if matches!(self.scope, Scope::Attributes(..)) {
                 Scope::Attributes(parent_for_attributes(self), Some(name.into()))
-            } else { Scope::Children(parent, Some(name.into())) },
+            } else {
+                let owner = if let Scope::Children(owner, None) = &self.scope { owner.clone() } else { parent };
+                Scope::Children(owner, Some(name.into()))
+            },
             6 => {
                 let mut nodes = Vec::new();
                 let mut next = self.first().map(|n| unsafe { ffi::child(n) }).unwrap_or(std::ptr::null_mut());
@@ -119,7 +124,7 @@ impl View {
             _ => Scope::Index(parent, index),
         };
         let filter = if kind <= 1 { Namespace { value: ns.into(), prefix } } else { self.ns.clone() };
-        Self { scope, ns: filter, ..self.clone() }
+        Self { scope, ns: filter, xpath_ns: Rc::new(RefCell::new(BTreeMap::new())), ..self.clone() }
     }
     /// Copies the whole document and rebuilds selectors against that independent tree.
     fn deep_clone(&self) -> Option<Self> {

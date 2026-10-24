@@ -1,8 +1,8 @@
 # SimpleXML
 
-- [ ] Implement document ownership, live selections, mutation, namespaces, and XPath in the existing XML bridge.
-- [ ] Expose the three functions and both classes through EIR-compatible prelude declarations and shared contracts.
-- [ ] Cover property/attribute access, iteration, conversions, DOM import, errors, and eval with focused tests.
+- [x] Implement document ownership, live selections, mutation, namespaces, and XPath in the existing XML bridge.
+- [x] Expose the three functions and both classes through EIR-compatible prelude declarations and shared contracts.
+- [x] Cover property/attribute access, iteration, conversions, DOM import, errors, and eval with focused tests.
 - [ ] Update generated coverage, user documentation, and a runnable example.
 - [ ] Open a draft PR and resolve CI failures without running local heavy builds or tests.
 

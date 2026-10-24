@@ -62,7 +62,7 @@ fn built_in_recipe(package: &str, revision: u32) -> Option<BuiltInRecipe> {
         ("nghttp2", 2) => Some(BuiltInRecipe::Nghttp2),
         ("libssh2", 2) => Some(BuiltInRecipe::Libssh2),
         ("curl", 4) => Some(BuiltInRecipe::Curl),
-        ("libxml2", 1) => Some(BuiltInRecipe::Libxml2),
+        ("libxml2", 2) => Some(BuiltInRecipe::Libxml2),
         _ => None,
     }
 }
@@ -148,10 +148,10 @@ mod tests {
     #[test]
     fn libxml2_recipe_revision_has_dispatcher() {
         assert!(
-            built_in_recipe("libxml2", 1).is_some(),
-            "missing built-in recipe for libxml2 revision 1"
+            built_in_recipe("libxml2", 2).is_some(),
+            "missing built-in recipe for libxml2 revision 2"
         );
-        assert!(built_in_recipe("libxml2", 2).is_none());
+        assert!(built_in_recipe("libxml2", 1).is_none());
     }
 
     /// Verifies the HTTP/1.1-only curl build (revision 1, no nghttp2/libssh2 and a wall of

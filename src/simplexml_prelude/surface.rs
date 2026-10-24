@@ -48,6 +48,7 @@ function __elephc_simplexml_class(?string $class): string {
 class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     private int $__elephc_handle = 0;
     private int $__elephc_position = -1;
+    private mixed $__elephc_current = null;
 
     public function __elephc_attach(int $handle): void { $this->__elephc_handle = $handle; }
     public function __elephc_handle_value(): int { return $this->__elephc_handle; }
@@ -254,18 +255,22 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $node->__elephc_simplexml = $this;
         return $node;
     }
-    public function rewind(): void { $this->__elephc_position = 0; }
-    public function next(): void { $this->__elephc_position = $this->__elephc_position + 1; }
+    public function rewind(): void { $this->__elephc_current = null; $this->__elephc_position = 0; }
+    public function next(): void { $this->__elephc_current = null; $this->__elephc_position = $this->__elephc_position + 1; }
     public function valid(): bool {
         $handle = $this->__elephc_handle;
         return $this->__elephc_position >= 0 && $this->__elephc_position < elephc_xml_sx_int($handle, 2);
     }
     public function current(): SimpleXMLElement {
         if (!$this->valid()) { throw new Error("Iterator not initialized or already finished"); }
+        $cached = $this->__elephc_current;
+        if ($cached instanceof SimpleXMLElement) { return $cached; }
         $handle = $this->__elephc_handle;
         $position = $this->__elephc_position;
         $child = elephc_xml_sx_item($handle, $position);
-        return __elephc_simplexml_wrap($child, get_class($this));
+        $current = __elephc_simplexml_wrap($child, get_class($this));
+        $this->__elephc_current = $current;
+        return $current;
     }
     public function key(): string { return $this->current()->getName(); }
     public function hasChildren(): bool { return $this->valid() && $this->current()->count() > 0; }

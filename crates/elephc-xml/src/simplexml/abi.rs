@@ -64,7 +64,8 @@ pub extern "C" fn elephc_xml_sx_int(handle: i64, operation: i64) -> i64 {
         1 => i64::from(v.first().is_some()),
         3 => if matches!(v.scope, Scope::Node(_) | Scope::Index(..)) {
             i64::from(!v.items().is_empty() || v.first().is_some_and(|n| unsafe {
-                !owned_string(ffi::text(n)).is_empty() || !ffi::attrs(n).is_null()
+                ffi::node_type(n) == 2 || !owned_string(ffi::text(n)).is_empty()
+                    || (ffi::node_type(n) == 1 && !ffi::attrs(n).is_null())
             }))
         } else { i64::from(!v.nodes().is_empty()) },
         4 => v.first().map(|n| unsafe { ffi::node_type(n) as i64 }).unwrap_or(0),
@@ -106,7 +107,17 @@ pub unsafe extern "C" fn elephc_xml_sx_mutate(handle: i64, operation: i64, key: 
 /// Registers an explicit prefix binding for this element's future XPath queries.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_xml_sx_register(handle: i64, prefix: *const c_char, uri: *const c_char) -> i64 {
-    guard(|| view(handle).map(|v| { v.xpath_ns.borrow_mut().insert(string(prefix), string(uri)); 1 }).unwrap_or(0))
+    guard(|| {
+        let Some(v) = view(handle) else { return 0; };
+        let Some(node) = v.first() else { return 0; };
+        let context = ffi::xpath_context(v.doc.raw, node);
+        if context.is_null() { return 0; }
+        let status = ffi::xpath_register(context, prefix, uri);
+        ffi::xpath_context_free(context);
+        if status != 0 { return 0; }
+        v.xpath_ns.borrow_mut().insert(string(prefix), string(uri));
+        1
+    })
 }
 /// Evaluates XPath into a temporary result-list handle; -1 means an invalid expression.
 #[no_mangle]
