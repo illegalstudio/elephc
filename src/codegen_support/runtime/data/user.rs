@@ -638,6 +638,21 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
+    // Native property projections retain PHP's own interface membership.
+    out.push_str(".globl _class_array_projection_ptrs\n_class_array_projection_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        let key = php_symbol_key("__elephc_array");
+        for class_id in 0..=max_class_id {
+            let entry = class_name_by_id.get(&class_id)
+                .filter(|name| crate::types::builtin_classes::has_native_dimensions(name, classes))
+                .and_then(|name| classes.get(*name))
+                .filter(|info| info.methods.contains_key(&key))
+                .map(|info| source_instance_method_entry(info, &key, classes))
+                .transpose()?.unwrap_or_else(|| "0".into());
+            out.push_str(&format!("    .quad {entry}\n"));
+        }
+    }
+
     // Per-class serialize-magic symbol tables — consulted by __rt_serialize_object
     // and __rt_unser_at_object. Each is a dense class_id-indexed table whose entry
     // resolves through the implementing class (so an inherited magic method
@@ -1186,10 +1201,11 @@ pub(crate) fn emit_runtime_data_user(
             .interfaces
             .iter()
             .any(|i| i == "JsonSerializable");
-        let flags: u64 = if implements_jsonserializable { 1 } else { 0 };
+        let native_projection = crate::types::builtin_classes::has_native_dimensions(class_name, classes);
+        let flags: u64 = if implements_jsonserializable || native_projection { 1 } else { 0 };
         out.push_str(&format!("    .quad {}\n", flags));
-        if implements_jsonserializable {
-            let key = php_symbol_key("jsonSerialize");
+        if implements_jsonserializable || native_projection {
+            let key = php_symbol_key(if implements_jsonserializable { "jsonSerialize" } else { "__elephc_json" });
             out.push_str(&format!(
                 "    .quad {}\n",
                 source_instance_method_entry(class_info, &key, classes)?,

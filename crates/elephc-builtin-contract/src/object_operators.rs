@@ -30,14 +30,16 @@ pub enum ObjectOrdering {
     Unordered = 2,
 }
 
-/// Native numeric conversion exposed by an internal object class.
+/// Native conversion exposed by an internal object class.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ObjectCast { Int, Float }
+pub enum ObjectCast { Int, Float, Array }
 
 /// Methods implementing an internal class's immutable value operators.
 #[derive(Clone, Copy, Debug)]
 pub struct ClassOperators {
-    /// Instance adapters implementing PHP numeric casts.
+    /// Native JSON projection without a PHP-visible JsonSerializable interface.
+    pub json: Option<&'static str>,
+    /// Instance adapters implementing PHP casts.
     pub casts: &'static [(ObjectCast, &'static str)],
     /// Public compiler adapters taking left and right operands in PHP evaluation order.
     pub arithmetic: &'static [(ObjectArithmetic, &'static str)],
@@ -48,7 +50,7 @@ pub struct ClassOperators {
 }
 
 impl ClassOperators {
-    /// Returns the reviewed instance adapter for a native numeric conversion.
+    /// Returns the reviewed instance adapter for a native conversion.
     pub fn cast_method(&self, cast: ObjectCast) -> Option<&'static str> {
         self.casts.iter().find_map(|(candidate, method)| (*candidate == cast).then_some(*method))
     }
@@ -61,6 +63,7 @@ impl ClassOperators {
 
 /// Number adapters compile through ordinary EIR calls with fresh immutable results.
 pub const BCMATH_NUMBER_OPERATORS: ClassOperators = ClassOperators {
+    json: None,
     casts: &[],
     arithmetic: &[
         (ObjectArithmetic::Add, "__elephc_add"),
@@ -76,7 +79,8 @@ pub const BCMATH_NUMBER_OPERATORS: ClassOperators = ClassOperators {
 
 /// SimpleXML uses native document truthiness rather than ordinary object truthiness.
 pub const SIMPLEXML_OPERATORS: ClassOperators = ClassOperators {
-    casts: &[(ObjectCast::Int, "__elephc_int"), (ObjectCast::Float, "__elephc_float")],
+    json: Some("__elephc_json"),
+    casts: &[(ObjectCast::Int, "__elephc_int"), (ObjectCast::Float, "__elephc_float"), (ObjectCast::Array, "__elephc_array")],
     arithmetic: &[], compare: None, boolean: Some("__elephc_bool"),
 };
 
@@ -88,6 +92,7 @@ mod tests {
     #[test]
     fn synthetic_operator_contract_resolves_only_declared_operations() {
         let operators = ClassOperators {
+            json: None,
             casts: &[],
             arithmetic: &[(ObjectArithmetic::Add, "synthetic_sum")],
             compare: None,

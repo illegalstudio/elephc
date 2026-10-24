@@ -15,6 +15,7 @@ extern "elephc_xml" {
     function elephc_xml_sx_alias(int $handle): int;
     function elephc_xml_sx_select(int $handle, int $kind, string $name, string $ns, int $prefix, int $index): int;
     function elephc_xml_sx_int(int $handle, int $operation): int;
+    function elephc_xml_sx_projection_base(int $handle): int;
     function elephc_xml_sx_string(int $handle, int $operation): string;
     function elephc_xml_sx_xml_hex(int $handle, int $whole): string;
     function elephc_xml_sx_item(int $handle, int $index): int;
@@ -209,6 +210,49 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         }
         return $namespaces;
     }
+    public function __elephc_array(): array<string, mixed> {
+        $handle = $this->__elephc_handle;
+        $mode = elephc_xml_sx_int($handle, 5);
+        $base = __elephc_simplexml_wrap(elephc_xml_sx_projection_base($handle), get_class($this));
+        $result = ["__elephc_projection_seed" => null];
+        unset($result["__elephc_projection_seed"]);
+        if ($mode === 4 || elephc_xml_sx_int($handle, 4) === 2) {
+            $result["0"] = (string)$this;
+            return $result;
+        }
+        $attributes = $base->attributes();
+        if ($attributes !== null && count($attributes) > 0) {
+            $values = ["__elephc_projection_seed" => ""];
+            unset($values["__elephc_projection_seed"]);
+            foreach ($attributes as $name => $attribute) { $values[$name] = (string)$attribute; }
+            $result["@attributes"] = $values;
+        }
+        if ($mode === 3) { return $result; }
+        if ($mode === 2 && elephc_xml_sx_int($handle, 6) !== 0) {
+            $i = 0;
+            foreach ($this as $element) { $result[(string)$i] = (string)$element; $i++; }
+            return $result;
+        }
+        $children = $base->children();
+        if ($children !== null && count($children) > 0) {
+            foreach ($children as $name => $child) {
+                $value = $child;
+                $raw = $child->__elephc_handle_value();
+                if (elephc_xml_sx_int($raw, 6) !== 0) { $value = (string)$child; }
+                if (array_key_exists($name, $result)) {
+                    $old = $result[$name];
+                    if (!is_array($old)) { $old = [$old]; }
+                    $old[] = $value;
+                    $result[$name] = $old;
+                } else { $result[$name] = $value; }
+            }
+        } else {
+            $text = (string)$base;
+            if ($text !== "") { $result["0"] = $text; }
+        }
+        return $result;
+    }
+    public function __elephc_json(): mixed { return (object)$this->__elephc_array(); }
     public function __elephc_dom_text(): string {
         $handle = $this->__elephc_handle;
         return elephc_xml_sx_string($handle, 3);

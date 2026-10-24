@@ -69,6 +69,10 @@ pub extern "C" fn elephc_xml_sx_int(handle: i64, operation: i64) -> i64 {
             }))
         } else { i64::from(!v.nodes().is_empty()) },
         4 => v.first().map(|n| unsafe { ffi::node_type(n) as i64 }).unwrap_or(0),
+        5 => match v.scope { Scope::Children(_, None) => 1, Scope::Children(_, Some(_)) => 2,
+            Scope::Attributes(_, None) => 3, Scope::Attributes(_, Some(_)) => 4, _ => 0 },
+        6 => v.first().map(|n| unsafe { let child = ffi::child(n);
+            i64::from(!child.is_null() && matches!(ffi::node_type(child), 3 | 4)) }).unwrap_or(0),
         _ => 0,
     }).unwrap_or(0))
 }
@@ -152,4 +156,16 @@ pub extern "C" fn elephc_xml_sx_xml_hex(handle: i64, whole: i64) -> *const c_cha
         ffi::string_free(raw.cast());
         hex
     })).unwrap_or_default()))
+}
+
+/// Returns the element underlying a children/attributes projection, retaining its namespace filter.
+#[no_mangle]
+pub extern "C" fn elephc_xml_sx_projection_base(handle: i64) -> i64 {
+    guard(|| view(handle).map(|v| {
+        let node = match &v.scope {
+            Scope::Children(parent, None) | Scope::Attributes(parent, _) => parent.first(),
+            _ => v.first(),
+        };
+        insert(v.with_scope(Scope::Node(node.unwrap_or(std::ptr::null_mut()))))
+    }).unwrap_or(0))
 }

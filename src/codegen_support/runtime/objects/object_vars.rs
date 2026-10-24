@@ -64,6 +64,15 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x10]");                                      // load the current object/descriptor operand for `ldr x10, [x10]`
     emitter.instruction("cmp x9, x10");                                         // evaluate `cmp x9, x10` before selecting the projection branch
     emitter.instruction("b.hs __rt_object_to_hash_empty");                      // use `__rt_object_to_hash_empty` when the object or metadata is absent
+    // -- dispatch reviewed native property projections --
+    abi::emit_symbol_address(emitter, "x11", "_class_array_projection_ptrs");
+    emitter.instruction("ldr x11, [x11, x9, lsl #3]");                          // find a native projection for this class
+    emitter.instruction("cbz x11, __rt_object_to_hash_regular");                // ordinary objects use their declared property metadata
+    emitter.instruction("ldr x0, [sp, #0]");                                    // borrow the receiver for its native projection
+    emitter.instruction("blr x11");                                             // obtain an owned PHP property hash
+    emitter.instruction("str x0, [sp, #16]");                                   // preserve the native result through the common epilogue
+    emitter.instruction("b __rt_object_to_hash_done");                          // return through the shared ownership boundary
+    emitter.label("__rt_object_to_hash_regular");
     abi::emit_symbol_address(emitter, "x11", "_class_reflection_parameter_cast_public_flags");
     emitter.instruction("ldr x11, [x11, x9, lsl #3]");                          // select ReflectionParameter cast projection policy
     emitter.instruction("str x11, [sp, #104]");                                 // retain the cast projection flag across property iteration
@@ -283,6 +292,16 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rip + _class_gc_desc_count]");     // load the current object/descriptor operand for `mov r10, QWORD PTR [rip + _class_gc_desc_count]`
     emitter.instruction("cmp r9, r10");                                         // evaluate `cmp r9, r10` before selecting the projection branch
     emitter.instruction("jae __rt_object_to_hash_empty_x");                     // use `__rt_object_to_hash_empty_x` when the object or metadata is absent
+    // -- dispatch reviewed native property projections --
+    emitter.instruction("lea r10, [rip + _class_array_projection_ptrs]");       // find the native projection table
+    emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");                   // resolve the receiver class's adapter
+    emitter.instruction("test r10, r10");                                       // detect ordinary property metadata dispatch
+    emitter.instruction("jz __rt_object_to_hash_regular_x");                    // preserve ordinary object projection
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // borrow the receiver for its native projection
+    emitter.instruction("call r10");                                            // obtain an owned PHP property hash
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // retain the native result through the common epilogue
+    emitter.instruction("jmp __rt_object_to_hash_done_x");                      // return through the shared ownership boundary
+    emitter.label("__rt_object_to_hash_regular_x");
     emitter.instruction("lea r10, [rip + _class_reflection_parameter_cast_public_flags]"); // materialize the ReflectionParameter cast-policy table
     emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");                   // select the ReflectionParameter cast projection policy
     emitter.instruction("mov QWORD PTR [rbp - 128], r10");                      // retain the cast projection flag across property iteration

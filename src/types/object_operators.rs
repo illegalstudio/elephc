@@ -65,6 +65,7 @@ mod tests {
     use elephc_builtin_contract::{BuiltinId, ClassKind, ClassOperators, ClassRoute, PhpModule};
 
     static OPERATORS: ClassOperators = ClassOperators {
+        json: None,
         casts: &[],
         arithmetic: &[(ObjectArithmetic::Add, "synthetic_sum")], compare: Some("synthetic_order"), boolean: None,
     };

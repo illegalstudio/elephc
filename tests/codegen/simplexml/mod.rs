@@ -254,3 +254,20 @@ $x->getName(); echo $x->key(), "\n";
 "###);
     assert_eq!(out, "0:2:1\nbool(true)\nc\n");
 }
+
+/// Native array and JSON projections expose XML data without adding PHP interfaces.
+#[test]
+fn test_simplexml_array_and_json_projections() {
+    if skip_without_xml_native("test_simplexml_array_and_json_projections") { return; }
+    let out = compile_and_run(r###"<?php
+$x = new SimpleXMLElement('<r a="v"><item>one</item><item>two</item><nested><leaf>value</leaf></nested><empty/></r>');
+echo json_encode($x), "\n";
+echo json_encode((array)$x), "\n";
+echo json_encode($x->item), "\n";
+echo json_encode((array)$x->item), "\n";
+echo json_encode($x->attributes()), "\n";
+echo json_encode($x['a']), "\n";
+var_dump($x instanceof JsonSerializable);
+"###);
+    assert_eq!(out, "{\"@attributes\":{\"a\":\"v\"},\"item\":[\"one\",\"two\"],\"nested\":{\"leaf\":\"value\"},\"empty\":{}}\n{\"@attributes\":{\"a\":\"v\"},\"item\":[\"one\",\"two\"],\"nested\":{\"leaf\":\"value\"},\"empty\":{}}\n{\"0\":\"one\",\"1\":\"two\"}\n[\"one\",\"two\"]\n{\"@attributes\":{\"a\":\"v\"}}\n{\"0\":\"v\"}\nbool(false)\n");
+}

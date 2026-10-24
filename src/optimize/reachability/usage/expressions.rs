@@ -1192,6 +1192,9 @@ impl Scanner<'_> {
             self.usage.fragment_classes.insert(key.clone());
         }
         if let Some(operators) = elephc_builtin_contract::lookup_class(&key).and_then(|class| class.operators) {
+            if let Some(method) = operators.json {
+                self.usage.methods.insert((key.clone(), php_symbol_key(method), false));
+            }
             for (_, method) in operators.casts {
                 self.usage.methods.insert((key.clone(), php_symbol_key(method), false));
             }
