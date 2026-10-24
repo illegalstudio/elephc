@@ -674,6 +674,9 @@ fn type_expr(ty: &TypeExpr) -> String {
         TypeExpr::Ptr(None) => "ptr".to_string(),
         TypeExpr::Named(name) => name_source(name),
         TypeExpr::Array(inner) => format!("array<{}>", type_expr(inner)),
+        TypeExpr::AssocArray { key, value } => {
+            format!("array<{}, {}>", type_expr(key), type_expr(value))
+        }
         // Rendered structurally so the round trip holds: `printing_round_trips` re-parses
         // everything this prints, and `Box<int>` parses back to the same type.
         TypeExpr::GenericClass { name, args } => format!(
@@ -1158,6 +1161,12 @@ mod tests {
     #[test]
     fn printing_round_trips_bcmath_number() {
         round_trip("bcmath", &crate::bcmath_prelude::bcmath_declarations());
+    }
+
+    /// Associative projections in the SimpleXML prelude preserve their key and value types.
+    #[test]
+    fn printing_round_trips_simplexml() {
+        round_trip("simplexml", &crate::simplexml_prelude::declarations());
     }
 
     /// Round-trips nested matches, grouped labels, missing defaults and the empty form.

@@ -310,10 +310,10 @@ $node = new NullableSelfNode(); var_dump($node->nextNode());
 fn test_simplexml_invalid_result_classes() {
     if skip_without_xml_native("test_simplexml_invalid_result_classes") { return; }
     let out = compile_and_run(r###"<?php
-foreach (['stdClass', 'MissingSimpleXmlClass'] as $class) {
+foreach (['stdClass', 'MissingSimpleXmlClass', ''] as $class) {
     try { simplexml_load_string('<r/>', $class); }
     catch (TypeError $error) { echo "type-error|"; }
 }
 "###);
-    assert_eq!(out, "type-error|type-error|");
+    assert_eq!(out, "type-error|type-error|type-error|");
 }
