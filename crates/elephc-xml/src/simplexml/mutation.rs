@@ -26,6 +26,18 @@ impl View {
     pub(super) fn add(&self, name: &str, value: Option<&str>, namespace: Option<&str>, attribute: bool) -> Option<Node> {
         let parent = self.first()?;
         if unsafe { ffi::node_type(parent) } != 1 || name.is_empty() { return None; }
+        if attribute {
+            let uri = namespace.unwrap_or("");
+            if !uri.is_empty() && !name.contains(':') { return None; }
+            let local = name.split_once(':').map(|(_, local)| local).unwrap_or(name);
+            let mut current = unsafe { ffi::attrs(parent) };
+            while !current.is_null() {
+                if unsafe { string(ffi::name(current)) == local && string(ffi::ns(current, 0)) == uri } {
+                    return None;
+                }
+                current = unsafe { ffi::next(current) };
+            }
+        }
         let name = cstring(name);
         if unsafe { crate::ffi::xmlValidateName(name.as_ptr().cast(), 0) } != 0 { return None; }
         let text = cstring(value.unwrap_or(""));

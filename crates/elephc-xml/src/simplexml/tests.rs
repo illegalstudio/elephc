@@ -84,3 +84,14 @@ fn simplexml_indexed_alias_survives_removal() {
     first.remove(4, "", 0);
     assert_eq!(first.doc.detached.borrow().len(), 1);
 }
+
+/// Rejected attribute additions preserve unique XML names and namespace prefixes.
+#[test]
+fn simplexml_attribute_addition_rejects_duplicates_and_missing_prefix() {
+    let root = parse(b"<r id='old'/>", 0, "", false).unwrap();
+    assert!(root.add("id", Some("new"), None, true).is_none());
+    assert!(root.add("other", Some("v"), Some("urn:p"), true).is_none());
+    assert!(root.add("p:other", Some("v"), Some("urn:p"), true).is_some());
+    assert_eq!(root.select(1, "", "", false, 0).nodes().len(), 1);
+    assert_eq!(root.select(1, "", "urn:p", false, 0).nodes().len(), 1);
+}
