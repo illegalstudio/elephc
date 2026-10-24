@@ -1,6 +1,6 @@
 ---
 title: "XML"
-description: "The ext/xml SAX parser (XMLParser, xml_* functions, XML_* constants) and ext/xmlwriter (XMLWriter, xmlwriter_* functions)."
+description: "XML parsing and writing with XMLParser, XMLWriter, SimpleXMLElement, and SimpleXMLIterator."
 sidebar:
   order: 24
 ---
@@ -17,6 +17,44 @@ uses — pinned at 2.15.3 and supplied by the managed native catalog as the
 still standalone binaries: the target machine needs neither PHP nor a system
 libxml2. Both surfaces behave the same inside `eval()`, which runs the very
 same compiled `XMLParser` / `XMLWriter` declarations as native code.
+
+## SimpleXML
+
+The same bridge exposes `simplexml_load_string()`, `simplexml_load_file()`,
+`simplexml_import_dom()`, `SimpleXMLElement`, and `SimpleXMLIterator`.
+SimpleXML uses the managed libxml2 package and is enabled automatically when
+one of these functions or classes is referenced. `--with-xml` also exposes it
+when XML source is only available to dynamic `eval()`.
+
+```php
+$catalog = new SimpleXMLElement('<catalog><product sku="A1">Notebook</product></catalog>');
+foreach ($catalog->product as $product) {
+    echo (string)$product['sku'], ': ', (string)$product, "\n";
+}
+$catalog->addChild('product', 'Pencil')->addAttribute('sku', 'B2');
+foreach ($catalog->xpath('//product[@sku="B2"]') as $product) {
+    echo (string)$product, "\n";
+}
+echo $catalog->asXML();
+```
+
+Element properties select children with the requested name. Integer offsets
+select repeated elements; string offsets select attributes. `children()` and
+`attributes()` accept either a namespace URI or a prefix, selected by their
+second argument. `registerXPathNamespace()` registers prefixes for XPath queries.
+`getNamespaces()` reports used namespaces and `getDocNamespaces()` reports
+namespace declarations. Both support recursive traversal.
+
+Assignments, `unset()`, `addChild()`, and `addAttribute()` modify the underlying
+document. Existing selections observe subsequent changes and retain their
+document after the original root variable is released. String conversion reads
+direct text and CDATA. `asXML()` and its `saveXML()` alias return XML, or write
+to a filename and return success. Both classes support `count()`, `foreach`,
+and the `RecursiveIterator` methods.
+
+The loading functions return `false` when parsing fails. A constructor with
+invalid XML throws `Exception`. The optional class name lets the loading
+functions return a subclass of `SimpleXMLElement`.
 
 ## Enabling xml
 

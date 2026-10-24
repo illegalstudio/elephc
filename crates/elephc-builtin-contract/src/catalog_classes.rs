@@ -246,6 +246,8 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("SessionHandlerInterface", "sessionhandlerinterface", Interface, Session, Prelude),
     class!("SessionIdInterface", "sessionidinterface", Interface, Session, Prelude),
     class!("SessionUpdateTimestampHandlerInterface", "sessionupdatetimestamphandlerinterface", Interface, Session, Prelude),
+    class!("SimpleXMLElement", "simplexmlelement", Class, Simplexml, Prelude, operators: &crate::object_operators::SIMPLEXML_OPERATORS),
+    class!("SimpleXMLIterator", "simplexmliterator", Class, Simplexml, Prelude, operators: &crate::object_operators::SIMPLEXML_OPERATORS),
     class!("SortDirection", "sortdirection", Enum, Core, CheckerInjected, since: Php86),
     class!("SplDoublyLinkedList", "spldoublylinkedlist", Class, Spl, CheckerInjected),
     class!("SplFileInfo", "splfileinfo", Class, Spl, CheckerInjected),

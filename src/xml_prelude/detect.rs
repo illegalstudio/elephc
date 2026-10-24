@@ -67,6 +67,9 @@ fn xml_classes() -> &'static [&'static str] {
         names.extend_from_slice(crate::types::builtin_classes::class_names_in_module(
             elephc_builtin_contract::PhpModule::Xmlwriter,
         ));
+        names.extend_from_slice(crate::types::builtin_classes::class_names_in_module(
+            elephc_builtin_contract::PhpModule::Simplexml,
+        ));
         names
     })
 }
@@ -630,10 +633,10 @@ mod tests {
     /// The catalog names both modules' functions and nothing else.
     #[test]
     fn the_function_set_is_the_catalog() {
-        assert_eq!(xml_functions().len(), 64);
+        assert_eq!(xml_functions().len(), 67);
         assert!(xml_functions().contains(&"xml_parse_into_struct"));
         assert!(xml_functions().contains(&"xmlwriter_flush"));
-        assert_eq!(xml_classes(), &["XMLParser", "XMLWriter"]);
+        assert_eq!(xml_classes(), &["XMLParser", "XMLWriter", "SimpleXMLElement", "SimpleXMLIterator"]);
     }
 
     /// Every enumerated function is detected on its own, so a helper that only consumes

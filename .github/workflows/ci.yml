@@ -2504,6 +2504,18 @@ jobs:
         # consistency; the committed page must come back byte-identical.
         run: python3 scripts/docs/gen_php_comparison.py
 
+      - name: Upload regenerated builtin documentation
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: regenerated-builtin-docs
+          retention-days: 3
+          path: |
+            docs/php/
+            docs/internals/builtins/
+            scripts/docs/builtin_registry.json
+            scripts/docs/symbol_registry.json
+
       - name: Fail if generated docs are out of sync
         run: |
           changes=$(git status --porcelain -- docs/php docs/internals/builtins scripts/docs/builtin_registry.json scripts/docs/symbol_registry.json)

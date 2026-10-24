@@ -141,7 +141,7 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
     TestBridgeStaticlib {
         lib_name: "elephc_xml",
         package: "elephc-xml",
-        php_extensions: &["xml", "xmlwriter"],
+        php_extensions: &["xml", "xmlwriter", "SimpleXML"],
     },
 ];
 

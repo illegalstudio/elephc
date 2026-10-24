@@ -62,6 +62,11 @@ pub const BCMATH_NUMBER_OPERATORS: ClassOperators = ClassOperators {
     boolean: Some("__elephc_bool"),
 };
 
+/// SimpleXML uses native document truthiness rather than ordinary object truthiness.
+pub const SIMPLEXML_OPERATORS: ClassOperators = ClassOperators {
+    arithmetic: &[], compare: None, boolean: Some("__elephc_bool"),
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;

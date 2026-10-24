@@ -85,7 +85,7 @@ const PARSE_INTO_STRUCT_PARAMS: &[&str] = &["parser", "data", "values", "index"]
 
 /// Returns whether `name` is one of the xml surface's PHP-visible builtins.
 pub(in crate::interpreter) fn eval_xml_builtin_name(name: &str) -> bool {
-    (name.starts_with("xml_") || name.starts_with("xmlwriter_"))
+    (name.starts_with("xml_") || name.starts_with("xmlwriter_") || name.starts_with("simplexml_"))
         && eval_php_visible_builtin_exists(name)
 }
 

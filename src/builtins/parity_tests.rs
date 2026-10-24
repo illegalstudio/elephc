@@ -68,6 +68,7 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
         ("image_prelude", crate::image_prelude::image_declarations()),
         ("curl_prelude", parsed_curl_prelude()),
         ("xml_prelude", crate::xml_prelude::xml_declarations()),
+        ("simplexml_prelude", crate::simplexml_prelude::declarations()),
         ("testing_prelude", crate::testing_prelude::testing_declarations()),
         (
             "version_prelude",

@@ -74,6 +74,7 @@ fn inject_if_used_on_compiler_stack(
         return program;
     }
     let mut combined = xml_declarations();
+    combined.extend(crate::simplexml_prelude::declarations());
     inventory.record_program("xml", &combined);
     combined.extend(program);
     combined

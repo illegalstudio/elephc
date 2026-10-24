@@ -117,6 +117,19 @@ macro_rules! xml_contract {
 
 /// The `ext/xml` and `ext/xmlwriter` function contracts, in PHP's stub order.
 pub(crate) static CONTRACTS: &[BuiltinContract] = &[
+    xml_contract!("simplexml_import_dom", Simplexml, PreludeProvided,
+        [param!("node", Object), param!("class_name", ?Str = DefaultSpec::Str("SimpleXMLElement"))],
+        TypeSpec::Nullable(&TypeSpec::Object), "Imports a DOM node as a SimpleXML element."),
+    xml_contract!("simplexml_load_file", Simplexml, PreludeProvided,
+        [param!("filename", Str), param!("class_name", ?Str = DefaultSpec::Str("SimpleXMLElement")),
+         param!("options", Int = DefaultSpec::Int(0)), param!("namespace_or_prefix", Str = DefaultSpec::Str("")),
+         param!("is_prefix", Bool = DefaultSpec::Bool(false))],
+        TypeSpec::Union(&[TypeSpec::Object, TypeSpec::False]), "Parses an XML file into a SimpleXML element."),
+    xml_contract!("simplexml_load_string", Simplexml, PreludeProvided,
+        [param!("data", Str), param!("class_name", ?Str = DefaultSpec::Str("SimpleXMLElement")),
+         param!("options", Int = DefaultSpec::Int(0)), param!("namespace_or_prefix", Str = DefaultSpec::Str("")),
+         param!("is_prefix", Bool = DefaultSpec::Bool(false))],
+        TypeSpec::Union(&[TypeSpec::Object, TypeSpec::False]), "Parses XML bytes into a SimpleXML element."),
     // -- ext/xml --
     xml_contract!(
         "xml_parser_create", Xml, PreludeProvided,

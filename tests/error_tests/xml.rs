@@ -217,3 +217,21 @@ fn xml_set_element_handler_rejects_handlers_inside_a_dynamic_unpack() {
         "xml_set_element_handler() takes exactly 3 arguments",
     );
 }
+
+/// SimpleXML rejects missing parsing input through the declared PHP signature.
+#[test]
+fn simplexml_load_string_requires_data() {
+    expect_xml_error("<?php simplexml_load_string();", "simplexml_load_string");
+}
+
+/// SimpleXML rejects arrays where its XML source requires a string.
+#[test]
+fn simplexml_load_string_rejects_array_data() {
+    expect_xml_error("<?php simplexml_load_string(['<r/>']);", "simplexml_load_string");
+}
+
+/// SimpleXML constructors validate their required source argument.
+#[test]
+fn simplexml_constructor_requires_data() {
+    expect_xml_error("<?php new SimpleXMLElement();", "__construct");
+}

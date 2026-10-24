@@ -594,7 +594,7 @@ PRELUDE_SOURCES: dict[str, tuple[str | tuple[str, ...], str, str]] = {
     # The xml surface keeps its own catalog module; the built prelude splits the parser
     # (`xml_*`) and writer (`xmlwriter_*`) declarations across two generated files.
     "xml": (
-        ("xml_prelude/build/parser.rs", "xml_prelude/build/writer.rs"),
+        ("xml_prelude/build/parser.rs", "xml_prelude/build/writer.rs", "simplexml_prelude/surface.rs"),
         "xml",
         "crates/elephc-builtin-contract/src/catalog_xml.rs",
     ),

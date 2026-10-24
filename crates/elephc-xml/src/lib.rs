@@ -25,6 +25,7 @@ pub mod abi;
 mod ffi;
 pub mod parser;
 pub mod writer;
+mod simplexml;
 
 #[cfg(all(test, elephc_xml_native))]
 mod native_tests {
