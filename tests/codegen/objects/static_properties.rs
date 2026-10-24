@@ -1882,3 +1882,20 @@ if ($o !== null) {
     );
     assert_eq!(out, "VVNV");
 }
+
+/// A static-property element write whose value reassigns the property lands in the array the
+/// property holds afterwards, like the instance form (#1950).
+#[test]
+fn test_static_property_element_write_after_value_reassigns_it() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public static $m = ["a" => "x"]; }
+function f(): string {
+    C::$m["k"] = (C::$m = ["y" => "z"]) ? "p" : "q";
+    return json_encode(C::$m);
+}
+echo f(), "\n";
+"#,
+    );
+    assert_eq!(out, "{\"y\":\"z\",\"k\":\"p\"}\n");
+}
