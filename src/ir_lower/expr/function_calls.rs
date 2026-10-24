@@ -197,14 +197,13 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
             Op::ExternCall.default_effects(),
             Some(expr.span),
         );
-        // Plain extern calls release owned argument temporaries the same way method
-        // and builtin calls do, so a fresh owned temporary passed as an argument is
-        // not leaked once per call. The alias guard keeps a pass-through result alive.
+        // Extern string results are copied into independent PHP storage by the C ABI
+        // adapter. Scalar and pointer results own no PHP argument storage either.
         release_owned_call_arg_temporaries(
             ctx,
             &operands,
             Some(call.value),
-            &ReturnArgAlias::Unknown,
+            &ReturnArgAlias::None,
             expr.span,
         );
         retire_call_argument_intermediates(ctx, &evaluation_intermediates);

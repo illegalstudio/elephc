@@ -109,17 +109,13 @@ pub(super) fn lower_static_callable_call(
                 Op::ExternCall.default_effects(),
                 Some(expr.span),
             );
-            // A statically resolved extern callable consumes its operands exactly like the
-            // direct extern call in `lower_function_call`, so a fresh owned argument, such
-            // as a string built for a `call_user_func('c_fn', ...)` or a first-class callable
-            // invocation, is released here instead of leaking once per call. The alias guard
-            // keeps a pass-through result alive, because an extern result may point into the
-            // very buffer this call passed in.
+            // The extern ABI copies returned C strings before freeing C argument copies,
+            // so the PHP result never borrows an owned PHP argument temporary.
             release_owned_call_arg_temporaries(
                 ctx,
                 &operands,
                 Some(call.value),
-                &ReturnArgAlias::Unknown,
+                &ReturnArgAlias::None,
                 expr.span,
             );
             retire_call_argument_intermediates(ctx, &evaluation_intermediates);
