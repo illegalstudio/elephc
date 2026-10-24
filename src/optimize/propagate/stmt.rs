@@ -30,7 +30,7 @@ use control::{
 };
 pub(crate) use declarations::propagate_params;
 use declarations::{propagate_enum_case, propagate_method, propagate_property};
-use env::{env_after_list_unpack, env_after_scalar_assign};
+use env::{env_after_list_unpack, env_after_scalar_assign, env_for_nested_append_read};
 
 thread_local! {
     /// Variables that are bound by reference (`$x = &…`) somewhere in the program being
@@ -216,7 +216,8 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
             (Stmt::new(StmtKind::Echo(expr), span), next_env)
         }
         StmtKind::Assign { name, value } => {
-            let value = propagate_expr(value, &env);
+            let read_env = env_for_nested_append_read(&name, &value, &env);
+            let value = propagate_expr(value, read_env.as_ref().unwrap_or(&env));
             let mut next_env = env_after_scalar_assign(env, &name, &value);
             (Stmt::new(StmtKind::Assign { name, value }, span), std::mem::take(&mut next_env))
         }

@@ -11,6 +11,20 @@
 
 use super::*;
 
+/// Keeps a parser-generated nested append read attached to its writable storage root.
+/// Replacing that root by a scalar literal breaks recognition of the read/push/writeback group.
+pub(super) fn env_for_nested_append_read(
+    name: &str, value: &Expr, env: &ConstantEnv,
+) -> Option<ConstantEnv> {
+    if !name.starts_with(crate::parser::ast::NESTED_APPEND_TEMP_PREFIX) { return None; }
+    let mut root = value;
+    while let ExprKind::ArrayAccess { array, .. } = &root.kind { root = array; }
+    let ExprKind::Variable(name) = &root.kind else { return None; };
+    let mut read_env = env.clone();
+    read_env.remove(name);
+    Some(read_env)
+}
+
 /// Updates the constant environment after a scalar variable assignment `$name = $value`.
 ///
 /// Clears the environment if `value` has side effects (preserving correctness across observable

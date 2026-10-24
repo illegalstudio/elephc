@@ -482,3 +482,67 @@ echo $first[1] . "|" . $second[0];
     );
     assert_eq!(out, "5|6");
 }
+
+/// A nested element write whose root is a scalar raises PHP's catchable `Error` instead of
+/// panicking in the compiler. Before this regression the emitted parent fetch passed the
+/// scalar to the array fetch-for-write helper, which also segfaulted at runtime (#1985).
+#[test]
+fn test_nested_write_on_scalar_root_raises_the_php_error() {
+    let out = compile_and_run(
+        r#"<?php
+function f(mixed $m): string {
+    $m["a"]["b"] = ($m = 42) ? 5 : 6;
+    return "after";
+}
+try { echo f(["a" => ["x" => 0]]), "\n"; } catch (Error $e) { echo "caught:", $e->getMessage(), "\n"; }
+function g(): string {
+    $x = 42;
+    $x["a"]["b"] = 5;
+    return "after";
+}
+try { echo g(), "\n"; } catch (Error $e) { echo "caught:", $e->getMessage(), "\n"; }
+function h(): string {
+    $a = 42;
+    $a[][] = 1;
+    return "after";
+}
+try { echo h(), "\n"; } catch (Error $e) { echo "caught:", $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "caught:Cannot use a scalar value as an array\ncaught:Cannot use a scalar value as an array\ncaught:Cannot use a scalar value as an array\n"
+    );
+}
+
+/// Computed keys and the RHS run in PHP order before rejecting a scalar write parent.
+#[test]
+fn test_nested_write_scalar_root_preserves_operand_order() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function scalar_key(string $label): string { echo $label, '|'; return $label; }
+function scalar_rhs(): int { echo 'rhs|'; return 9; }
+function first(): void {
+    $root = 42;
+    try { $root[scalar_key('outer')][scalar_key('inner')] = scalar_rhs(); }
+    catch (Error $e) { echo $e->getMessage(), "\n"; unset($e); }
+}
+function second(mixed $root): void {
+    try { $root[scalar_key('outer')][scalar_key('inner')] = ($root = scalar_rhs()) ? 5 : 6; }
+    catch (Error $e) { echo $e->getMessage(), "\n"; unset($e); }
+}
+function scalar_string_rhs(): string { echo 'owned-rhs|'; return str_repeat('x', 32); }
+function fourth(): void {
+    $root = 42;
+    try { $root[] = scalar_string_rhs(); }
+    catch (Error $e) { echo $e->getMessage(), "\n"; unset($e); }
+}
+first(); second(['outer' => ['before' => 1]]); fourth();
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, concat!(
+        "outer|inner|rhs|Cannot use a scalar value as an array\n",
+        "outer|inner|rhs|Cannot use a scalar value as an array\n",
+        "owned-rhs|Cannot use a scalar value as an array\n",
+    ));
+    assert!(out.stderr.contains("leak summary: clean"), "{}", out.stderr);
+}

@@ -102,3 +102,6 @@ mod tail_call;
 mod stack_numeric;
 #[path = "optimizer/numeric_continuation.rs"]
 mod numeric_continuation;
+
+#[path = "optimizer/nested_scalar_append.rs"]
+mod nested_scalar_append;

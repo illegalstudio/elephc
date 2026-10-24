@@ -467,3 +467,24 @@ fn test_list_unpack_from_array_fact() {
 
     assert_eq!(propagated[2], Stmt::echo(Expr::int_lit(9)));
 }
+
+/// A nested append's synthetic read must preserve the root needed by its later writeback.
+#[test]
+fn test_propagate_nested_append_keeps_scalar_storage_root() {
+    let tokens = crate::lexer::tokenize(r#"<?php
+function append_index(): string { return 'outer'; }
+$root = 42;
+$root[append_index()][] = 1;
+"#).unwrap();
+    let program = crate::parser::parse(&tokens).unwrap();
+    let propagated = propagate_constants(program);
+    let StmtKind::Synthetic(body) = &propagated[2].kind else { panic!("missing append group"); };
+    let value = body.iter().find_map(|stmt| match &stmt.kind {
+        StmtKind::Assign { name, value }
+            if name.starts_with(crate::parser::ast::NESTED_APPEND_TEMP_PREFIX) => Some(value),
+        _ => None,
+    }).expect("missing append storage read");
+    let ExprKind::ArrayAccess { array, .. } = &value.kind else { panic!("append read was folded"); };
+    assert!(matches!(&array.kind, ExprKind::Variable(name) if name == "root"),
+        "append root must stay addressable: {array:?}");
+}

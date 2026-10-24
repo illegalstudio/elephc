@@ -56,7 +56,10 @@ fn guard_nested_write_parent_with_string_cleanup(
     }
     if matches!(parent_ty, PhpType::Int | PhpType::Float | PhpType::Resource(_)) {
         release_error_string(ctx, error_string, error_string_pins, span);
-        lower_throw_access_error(ctx, "Cannot use a scalar value as an array", span);
+        // Keep expression continuations well-formed after the catchable scalar-write Error.
+        let _ = super::control_exit::lower_throw_access_error_expr(
+            ctx, "Cannot use a scalar value as an array", span,
+        );
         return false;
     }
     if !matches!(parent_ty, PhpType::Mixed | PhpType::Bool) {

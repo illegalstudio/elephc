@@ -186,7 +186,7 @@ pub(super) fn recognize<'a>(
     })
 }
 
-/// Fuses an array-root append whose parser-generated writeback matches the captured read.
+/// Fuses a nested append so writable arrays and rejected scalar roots keep operand order.
 pub(super) fn try_lower_array_root(
     ctx: &mut LoweringContext<'_, '_>, body: &[Stmt], span: Span,
 ) -> bool {
@@ -214,7 +214,9 @@ pub(super) fn try_lower_array_root(
     while let ExprKind::ArrayAccess { array, .. } = &root.kind { root = array; }
     let supported = match &root.kind {
         ExprKind::Variable(name) => ctx.has_local_slot(name) && matches!(
-            ctx.local_type(name).codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
+            ctx.local_type(name).codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
+                | PhpType::Int | PhpType::Float | PhpType::Resource(_)
         ),
         ExprKind::StaticPropertyAccess { .. } =>
             super::nested_array_writes::nested_target_has_static_array_root(ctx, target)
@@ -222,6 +224,8 @@ pub(super) fn try_lower_array_root(
                     || super::nested_array_writes::static_root_supports_attached_fetch(ctx, root)),
         _ => false,
     };
+    // Scalar roots use this same write-context path: the fallback read/push/writeback
+    // would emit a container fetch before the PHP scalar-write guard can reject them.
     if !supported { return false; }
     for stmt in prefix { super::lower_stmt(ctx, stmt); }
     super::nested_plain_writes::lower_append(ctx, target, value, span);

@@ -33,6 +33,11 @@ pub(super) fn lower_store(
         emit_store(ctx, parent, key, value, index, span);
     });
     emit_store(ctx, parent, key, value, index, span);
+    // Some guards terminate their error block. Do not emit unreachable operand
+    // retirement into a block that is already closed.
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
     retire_owner(ctx, key_owner, span);
     retire_owner(ctx, parent_owner, span);
     retire_owner(ctx, value_owner, span);
@@ -57,6 +62,10 @@ pub(super) fn lower_append(
         emit_append(ctx, parent, value, span);
     });
     emit_append(ctx, parent, value, span);
+    // See `lower_store`: a terminating guard leaves no block for operand retirement.
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
     retire_owner(ctx, parent_owner, span);
     retire_owner(ctx, value_owner, span);
     super::nested_write_sources::retire(ctx, sources, span);

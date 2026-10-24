@@ -663,6 +663,20 @@ fn lower_nested_assign_parent_with_diagnosed_key_inner(
         }
         return parent;
     }
+    // A statically scalar receiver cannot hold an element. PHP raises "Cannot use a scalar
+    // value as an array" after evaluating the operands. Hand the receiver itself to the
+    // write guard; fetching from a value that is not a
+    // container would dereference an integer as a container (#1985).
+    if matches!(
+        ctx.builder.value_php_type(receiver.value).codegen_repr(),
+        PhpType::Int | PhpType::Float | PhpType::Resource(_) | PhpType::Bool
+    ) {
+        // PHP still evaluates the subscript before raising the write Error on a scalar
+        // receiver, so its side effects have to happen (#1985 review).
+        let key = lower_expr(ctx, index);
+        crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
+        return receiver;
+    }
     // The receiver is already evaluated but not a boxed Mixed cell: finish as
     // the plain subscript read the pre-#555 lowering produced.
     lower_array_access_from_lowered_receiver(ctx, receiver, index, expr)
