@@ -573,6 +573,31 @@ and specialized entries, and probe/source/backtrace metadata keeps the original
 PHP name with the physical native symbol. The initial scalar family excludes the
 generated Array argument collector used for func-args/backtrace support.
 
+### The reserved nested-call register
+
+Method dispatch (direct, virtual, interface and nullsafe), closure and callable
+descriptor invocation, dynamic construction, `__set` dispatch, the boxed-Mixed
+`__toString` ladder and builtin callback dispatch hold a receiver or descriptor
+in one reserved register across their argument-lowering calls: `x19` on AArch64,
+`r12` on x86_64 (`abi::nested_call_reg`). It is callee-saved and outside the
+register allocator's pools, so `frame::layout_for_function` gives a frame a save
+slot for it, and the prologue and every epilogue save and restore it with the
+allocator's own callee-saved registers.
+
+The slot is the default. A frame skips it only when every local is a one-word
+scalar and every instruction is one of the register-neutral opcodes in
+`frame::op_is_nested_call_reg_neutral` (scalar constants, integer and float
+arithmetic, comparisons, int-to-float promotion, moves, `Nop` and
+`ConcatReset`), whose lowerings stay inline and make no call that returns to the
+frame. Calls into runtime helpers do not qualify: some x86_64 helpers use `r12`
+as scratch. Deciding it the other way round, by
+listing the users, missed a direct method call on a typed receiver: a destructor
+calling `$this->close()` while an exception unwound returned into
+`__rt_exception_cleanup_frames` and the frame cleanup callback with the register
+they keep their own state in overwritten, and the process died with SIGSEGV. The
+generator entry wrapper and native hosts keep state in the same register across
+calls into PHP code.
+
 ### Inline wrappers and branch reach
 
 Some lowerings emit a wrapper or invoker in the middle of the enclosing

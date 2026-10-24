@@ -206,15 +206,19 @@ pub(super) fn lower_conditional_non_local_null_coalesce_assignment(
     // defects hid each other.
     crate::ir_lower::ownership::release_if_owned(ctx, current, Some(expr.span));
     store_expr_into_temp(ctx, temp_name, result_type.clone(), default, expr.span);
-    let temp_value = Expr::new(ExprKind::Variable(temp_name.to_string()), expr.span);
-    // The write BORROWS the temporary: `array_set` takes its own reference by retaining, and
-    // the slot keeps hers for the merge below to hand to the consumer. One store, one owned
-    // load — the merge's — per execution.
-    // The insert converts a float key again: PHP's probe and its insert are separate accesses,
-    // and each reports the deprecation.
-    ctx.with_borrowed_write_operand(|ctx| {
-        lower_non_local_assignment_write(ctx, target, &temp_value, expr.span);
-    });
+    // A `throw` default of a buffer target (`$o->buf ??= throw ...`) ends the branch inside
+    // `store_expr_into_temp`: nothing is left to write, and nothing may be emitted after it.
+    if !ctx.builder.insertion_block_is_terminated() {
+        let temp_value = Expr::new(ExprKind::Variable(temp_name.to_string()), expr.span);
+        // The write BORROWS the temporary: `array_set` takes its own reference by retaining, and
+        // the slot keeps hers for the merge below to hand to the consumer. One store, one owned
+        // load (the merge's) per execution.
+        // The insert converts a float key again: PHP's probe and its insert are separate
+        // accesses, and each reports the deprecation.
+        ctx.with_borrowed_write_operand(|ctx| {
+            lower_non_local_assignment_write(ctx, target, &temp_value, expr.span);
+        });
+    }
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(keep_block);

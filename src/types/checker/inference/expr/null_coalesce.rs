@@ -17,12 +17,17 @@
 //!   extern results are left out because their checker types can omit a null they return.
 //! - A join where one arm is already an object/scalar union keeps a union instead of `mixed`,
 //!   with the object members meeting the way two object arms do.
+//! - A join that involves a `buffer<T>` arm keeps that buffer type, and a buffer beside an arm of
+//!   another type is rejected, through the shared buffer merge rule in `buffer_merges`.
 
+use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
+use crate::span::Span;
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
 use super::super::super::Checker;
+use super::buffer_merges::buffer_merge_result_type;
 use super::merge_null_coalesce_result_type;
 
 /// Types `value ?? default` from the left operand's type, the default's type and whether the
@@ -48,6 +53,37 @@ pub(super) fn null_coalesce_result_type(
         value_ty
     };
     merge_null_coalesce_result_type(checker, non_null_value, default_ty)
+}
+
+/// Types `value ?? default` when one of its reachable arms holds a buffer (see
+/// [`buffer_merge_result_type`]), or rejects it when the other arm has another type.
+///
+/// The value arm is the left type without its null member, and drops out when nothing else is
+/// left: a null value always takes the default. The default drops out when it is dead (the left
+/// operand is never null) or is itself null: `$b ?? null` keeps the buffer type, the way
+/// [`null_coalesce_result_type`] absorbs a null default. `Ok(None)` keeps the ordinary join.
+pub(super) fn null_coalesce_buffer_merge_type(
+    checker: &Checker,
+    value: &Expr,
+    value_ty: &PhpType,
+    value_is_never_null: bool,
+    default: &Expr,
+    default_ty: &PhpType,
+    span: Span,
+) -> Result<Option<PhpType>, CompileError> {
+    let non_null_value = if Checker::union_contains_void(value_ty) {
+        checker.strip_void_from_union(value_ty)
+    } else {
+        value_ty.clone()
+    };
+    let mut arms = Vec::with_capacity(2);
+    if !matches!(non_null_value, PhpType::Void | PhpType::Never) {
+        arms.push((value, non_null_value));
+    }
+    if !value_is_never_null && !matches!(default_ty, PhpType::Void | PhpType::Never) {
+        arms.push((default, default_ty.clone()));
+    }
+    buffer_merge_result_type("a `??`", &arms, span)
 }
 
 /// Returns whether the `??` left operand `value`, inferred as `value_ty` in `env`, always

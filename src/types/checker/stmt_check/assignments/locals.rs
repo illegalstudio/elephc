@@ -12,7 +12,8 @@ use crate::errors::CompileError;
 use crate::errors::CompileWarning;
 use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{
-    is_compound_assignment_self_read, CallableTarget, Expr, ExprKind, StaticReceiver, TypeExpr,
+    is_compound_assignment_self_read, BinOp, CallableTarget, Expr, ExprKind, StaticReceiver,
+    TypeExpr,
 };
 use crate::span::Span;
 use crate::types::{normalized_array_key_type, PhpType, TypeEnv};
@@ -215,7 +216,7 @@ pub(super) fn check_assign(
         return Err(error);
     }
     update_reflection_class_assignment_metadata(checker, name, reflection_class_target);
-    let merged = merge_local_assignment_type(checker, name, &ty, span, env, stmt_form);
+    let merged = merge_local_assignment_type(checker, name, &ty, value, span, env, stmt_form);
     if merged.is_ok() {
         // Whatever the environment holds for `name` from here on was put there by this store,
         // so a guard that narrowed the name no longer speaks for it. `merge_local_assignment_type`
@@ -865,10 +866,15 @@ fn resolve_class_name<'a>(checker: &'a Checker, class_name: &str) -> Option<&'a 
 /// value is simply dropped — and it is only safe where the store definitely runs and no
 /// reference can still reach the old cell, which is exactly
 /// [`Checker::local_binding_is_killable`].
+///
+/// A COMPATIBLE merge between two different numeric types may re-bind as well, silently and
+/// for storage alone: see [`splits_numeric_binding`]. `value` is the assigned expression,
+/// which that decision inspects.
 fn merge_local_assignment_type(
     checker: &mut Checker,
     name: &str,
     ty: &PhpType,
+    value: &Expr,
     span: Span,
     env: &mut TypeEnv,
     stmt_form: bool,
@@ -1054,6 +1060,25 @@ fn merge_local_assignment_type(
             ));
         }
         if let Some(merged_ty) = merged_ty {
+            // A storage-only re-bind (see `splits_numeric_binding`), at the eligibility the
+            // retype above uses. Nothing typing-visible changes: the environment still takes the
+            // merged type and no warning is filed, so the decision is only which frame slot the
+            // store writes. `--strict-locals` does not veto it for the same reason. A parameter
+            // keeps its one slot: backtrace frames read its current argument value by name from
+            // the first slot of that name (`debug_backtrace()[0]["args"]`).
+            if stmt_form
+                && span.identifies_a_node()
+                && splits_numeric_binding(existing, ty, value)
+                && checker.local_binding_is_killable(name)
+                && !checker.local_parameter_names.contains(name)
+                && !checker.top_level_binding_is_program_global(name)
+            {
+                checker
+                    .local_retype_sites
+                    .entry(span)
+                    .or_default()
+                    .insert(name.to_string());
+            }
             if &merged_ty != existing {
                 env.insert(name.to_string(), merged_ty);
             }
@@ -1069,6 +1094,45 @@ fn merge_local_assignment_type(
         env.insert(name.to_string(), ty.clone());
     }
     Ok(())
+}
+
+/// Returns whether a type-compatible reassignment should still start a FRESH binding, so two
+/// numeric bindings of one name get two frame slots instead of sharing one.
+///
+/// A slot is typed by everything ever stored into it. `for ($i = $n - 1; …; $i--)` stores a
+/// checked `int - int`, which is `mixed` until proven, so it used to widen the one slot an
+/// earlier `for ($i = 0; $i < $n; $i++)` also used, and the earlier loop, whose own updates are
+/// provably integer, ran boxed too. With a binding per assignment each loop keeps the storage
+/// its own stores need. PHP cannot observe the difference: the assignment drops the old value
+/// either way.
+///
+/// Only numeric bindings qualify (`int`, `float`, the `int|float` an increment leaves behind,
+/// and `mixed`), and only when the assigned type differs from the binding's (two `mixed`
+/// bindings would share a representation anyway). The re-bind releases the old occupant
+/// BEFORE the store retains the new value, so the value must not be able to borrow the old
+/// cell: it is either a raw `int`/`float` or a fresh arithmetic result. `$i = $c ? $i : 0`
+/// keeps the shared slot.
+fn splits_numeric_binding(existing: &PhpType, incoming: &PhpType, value: &Expr) -> bool {
+    let raw_scalar = |ty: &PhpType| matches!(ty, PhpType::Int | PhpType::Float);
+    let numeric = |ty: &PhpType| raw_scalar(ty) || ty.is_int_float_union() || *ty == PhpType::Mixed;
+    existing != incoming
+        && numeric(existing)
+        && numeric(incoming)
+        && (raw_scalar(incoming) || is_fresh_arithmetic_result(value))
+}
+
+/// Returns whether an expression evaluates to a freshly computed arithmetic result.
+///
+/// The arithmetic operators always produce a new value (an integer, a float, a boxed numeric
+/// result or an operator-overloaded object), never a view of one of their operands.
+fn is_fresh_arithmetic_result(value: &Expr) -> bool {
+    matches!(
+        &value.kind,
+        ExprKind::BinaryOp {
+            op: BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow,
+            ..
+        }
+    )
 }
 
 /// Type-checks a typed local variable declaration with a type hint (`Type $name = value`).

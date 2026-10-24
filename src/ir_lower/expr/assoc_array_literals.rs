@@ -352,6 +352,14 @@ pub(in crate::ir_lower) fn array_access_expr_value_type_for_ir(
         return array_access_offset_get_return_type(ctx, class_name);
     }
     match array_ty.codegen_repr() {
+        // A buffer element reads as its handle word, and a miss as the invalid handle 0 rather
+        // than null, so the read keeps the plain buffer type: a nullable union would box the
+        // handle in a merge or literal, where an element read of it answered null.
+        PhpType::Array(element) | PhpType::AssocArray { value: element, .. }
+            if matches!(element.codegen_repr(), PhpType::Buffer(_)) =>
+        {
+            Some(element.codegen_repr())
+        }
         PhpType::Array(element) | PhpType::AssocArray { value: element, .. } => Some(
             nullable_aware_branch_merge_type(&normalize_value_php_type(*element), &PhpType::Void),
         ),

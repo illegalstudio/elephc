@@ -356,6 +356,21 @@ impl PhpType {
     }
 }
 
+/// Merges the pointer types one local holds at different points into the type of its word.
+///
+/// Unlike an array element (`merge_pointer_elements`), a local keeps a typed target over an
+/// untyped `ptr`, as the checker's assignment merge does, so `$p = ptr_null();` followed by
+/// `$p = $buffer[0];` still reaches the record's fields. Two different targets share an untyped
+/// `ptr`. Both sides are expected to be `PhpType::Pointer`.
+pub(crate) fn merge_local_pointer_targets(a: &PhpType, b: &PhpType) -> PhpType {
+    match (a, b) {
+        _ if a == b => a.clone(),
+        (PhpType::Pointer(None), PhpType::Pointer(Some(_))) => b.clone(),
+        (PhpType::Pointer(Some(_)), PhpType::Pointer(None)) => a.clone(),
+        _ => PhpType::Pointer(None),
+    }
+}
+
 /// Merges two array element types that are pointers, `?ptr<T>` or `null` into one pointer element.
 ///
 /// Every pointer is one raw word, so pointers with different target tags share an untyped `ptr`

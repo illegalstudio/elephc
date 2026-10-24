@@ -14,8 +14,9 @@
 //! - Same-buffer length proofs cover EIR flags, runtime parity, fatal preservation, and Linux
 //!   AArch64/x86_64 assembly without the proven descriptor-length comparison.
 //! - The non-faulting runtime resolver is checked on all five targets' runtime assembly.
-//! - Linux assembly keeps immutable float inputs and packed-field temporaries in registers, while
-//!   a whole-record copy from `ptr<T>` preserves a float that remains live across its null guard.
+//! - Linux assembly keeps immutable float inputs and packed-field temporaries in registers on both
+//!   architectures (the preheader resolves the buffer before the hoisted `$dt` load), while a
+//!   whole-record copy from `ptr<T>` preserves a float that remains live across its null guard.
 
 use super::*;
 
@@ -208,13 +209,16 @@ fn aarch64_block_has_float_frame_traffic(block: &str) -> bool {
     false
 }
 
-/// Returns whether an x86_64 block stores a float through `rbp`.
-fn x86_64_block_has_float_frame_store(block: &str) -> bool {
-    block.lines().map(str::trim).any(|line| {
-        line.strip_prefix("movsd ")
-            .and_then(|operands| operands.split_once(','))
-            .is_some_and(|(destination, _)| destination.contains("[rbp"))
-    })
+/// Returns whether an x86_64 block loads or stores a float through `rbp`.
+///
+/// Every SSE scalar instruction names an `xmm` register, so a line that also addresses `[rbp`
+/// moves a float between a register and a frame slot. The loop before the resolver placement fix
+/// reloaded `$dt` this way (`movsd xmm0, QWORD PTR [rbp - 96]`) on every iteration.
+fn x86_64_block_has_float_frame_traffic(block: &str) -> bool {
+    block
+        .lines()
+        .map(str::trim)
+        .any(|line| line.contains("xmm") && line.contains("[rbp"))
 }
 
 /// Compiles and runs one PHP program with the EIR optimizer on or off and returns stdout.
@@ -451,10 +455,10 @@ fn test_packed_accesses_of_one_iteration_share_one_record_address() {
     assert_eq!(run_variant(INTEGRATE_SOURCE, true), INTEGRATE_OUTPUT);
 }
 
-/// Linux AArch64 keeps `$dt` and the integration loop's float temporaries out of frame slots.
-/// SysV x86_64 has no callee-saved XMM register, so `$dt` is reloaded once per iteration because
-/// its immutable load crosses the late preheader buffer-resolver call; its loop temporaries still
-/// remain in registers instead of spilling back to the frame.
+/// Linux AArch64 and x86_64 both keep `$dt` and the integration loop's float temporaries out of
+/// frame slots. The preheader resolves the buffer before the `$dt` load LICM hoisted there, so
+/// `$dt` never lives across the resolver call and SysV x86_64, which has no callee-saved XMM
+/// register, keeps it in a caller-saved one instead of reloading it on every iteration.
 #[test]
 fn test_packed_float_loop_keeps_live_values_in_registers() {
     let loop_blocks = ["for.cond", "for.body", "for.update", "if.then", "if.else"];
@@ -464,8 +468,28 @@ fn test_packed_float_loop_keeps_live_values_in_registers() {
         let arm_block = named_assembly_block(&arm, name);
         assert!(!aarch64_block_has_float_frame_traffic(arm_block), "{name}: {arm_block}");
         let x86_block = named_assembly_block(&x86, name);
-        assert!(!x86_64_block_has_float_frame_store(x86_block), "{name}: {x86_block}");
+        assert!(!x86_64_block_has_float_frame_traffic(x86_block), "{name}: {x86_block}");
     }
+}
+
+/// The hoisted resolver opens the preheader instead of closing it: it precedes the `$dt` load LICM
+/// moved there, so no loop-invariant float is live across the `__rt_buffer_try_resolve` call, and
+/// both optimizer modes still print the same result.
+#[test]
+fn test_buffer_resolver_precedes_hoisted_float_loads() {
+    let ir = function_ir(INTEGRATE_SOURCE, true, "step");
+    let preheader: Vec<&str> = ir.split("for.cond(").next().expect("loop preheader").lines().collect();
+    let resolve = preheader
+        .iter()
+        .position(|line| line.contains("= buffer_resolve "))
+        .unwrap_or_else(|| panic!("preheader resolves the buffer: {ir}"));
+    let float_load = preheader
+        .iter()
+        .position(|line| line.contains("F64 php=float = load_local "))
+        .unwrap_or_else(|| panic!("LICM hoists the $dt load into the preheader: {ir}"));
+    assert!(resolve < float_load, "{ir}");
+    assert_eq!(run_variant(INTEGRATE_SOURCE, true), INTEGRATE_OUTPUT);
+    assert_eq!(run_variant(INTEGRATE_SOURCE, false), INTEGRATE_OUTPUT);
 }
 
 /// The hoisted resolution never faults: a stale handle still dies at the first access with the

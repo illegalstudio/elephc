@@ -26,6 +26,12 @@
 //!   back always passes the preheader, which resolves again.
 //! - The buffer operand must be loop-invariant: an SSA value defined outside the loop, or a
 //!   `load_local` of a slot nothing in the loop writes and no by-reference alias can reach.
+//! - The resolver (and the slot load it reads) goes at the EARLIEST preheader position with the
+//!   answer the preheader's end would give: after the handle's definition and after the last
+//!   preheader instruction that could free, allocate or rebind a buffer or write the handle slot.
+//!   The pass runs after LICM has filled the preheader with loop-invariant loads, so resolving at
+//!   the end would keep a hoisted float such as a `float $dt` parameter live across the resolver
+//!   call, and SysV x86_64 (no callee-saved XMM register) would reload it on every iteration.
 //! - Inside a rewritten loop, packed `buffer_get_resolved` instructions with the same
 //!   descriptor and index compute the same record address, so a dominated one is replaced by
 //!   its dominator. Scalar element reads are left alone: a `buffer_set_resolved` between two of
@@ -182,22 +188,29 @@ fn hoist_loop(
     }
 
     let mut rewritten = Vec::new();
+    // Each later group resolves after the previous one, keeping the descriptors in group order.
+    let mut floor = 0;
     for (source, accesses) in groups {
+        let mut position = resolver_position(function, preheader, source, floor);
         let handle = match source {
             HandleSource::Value(value) => value,
             HandleSource::Slot(slot) => {
                 let template = function.instructions[accesses[0].as_raw() as usize].operands[0];
-                append_slot_load(function, preheader, slot, template)
+                let load = insert_slot_load(function, preheader, position, slot, template);
+                position += 1;
+                load
             }
         };
-        let descriptor = append_instruction(
+        let descriptor = insert_instruction(
             function,
             preheader,
+            position,
             Op::BufferResolve,
             vec![handle],
             IrType::I64,
             PhpType::Int,
         );
+        floor = position + 1;
         for inst_id in accesses {
             let access_block = function
                 .blocks
@@ -482,10 +495,43 @@ fn handle_source(
     }
 }
 
-/// Appends a copy of an in-loop handle load to the preheader and returns its value.
-fn append_slot_load(
+/// Returns the earliest preheader position at which resolving `source` yields the descriptor the
+/// end of the preheader would.
+///
+/// The position follows the handle's own definition and every preheader instruction from `floor`
+/// on that could free, allocate or rebind a buffer (the loop-body allowlist) or name the handle
+/// slot as storage. The instructions after it preserve every buffer, so moving the resolution
+/// ahead of them cannot change its answer, while values they define (the loads LICM hoisted into
+/// the preheader) no longer live across the resolver call.
+fn resolver_position(
+    function: &Function,
+    preheader: BlockId,
+    source: HandleSource,
+    floor: usize,
+) -> usize {
+    let block = &function.blocks[preheader.as_raw() as usize];
+    let mut position = floor;
+    for (index, &inst_id) in block.instructions.iter().enumerate().skip(floor) {
+        let inst = &function.instructions[inst_id.as_raw() as usize];
+        let pinned = match source {
+            HandleSource::Value(value) => inst.result == Some(value),
+            HandleSource::Slot(slot) => {
+                slots_named_as_storage(std::iter::once(inst)).contains(&slot)
+            }
+        };
+        if pinned || !instruction_preserves_buffers(function, inst) {
+            position = index + 1;
+        }
+    }
+    position
+}
+
+/// Inserts a copy of an in-loop handle load into the preheader at `position` and returns its
+/// value.
+fn insert_slot_load(
     function: &mut Function,
     preheader: BlockId,
+    position: usize,
     slot: LocalSlotId,
     template: ValueId,
 ) -> ValueId {
@@ -497,10 +543,18 @@ fn append_slot_load(
         let load = &function.instructions[inst.as_raw() as usize];
         (value.ir_type, value.php_type.clone(), value.ownership, load.effects)
     };
-    let result = append_instruction(function, preheader, Op::LoadLocal, Vec::new(), ir_type, php_type);
+    let result = insert_instruction(
+        function,
+        preheader,
+        position,
+        Op::LoadLocal,
+        Vec::new(),
+        ir_type,
+        php_type,
+    );
     function.values[result.as_raw() as usize].ownership = ownership;
     let ValueDef::Instruction { inst, .. } = function.values[result.as_raw() as usize].def else {
-        unreachable!("appended instructions define their result");
+        unreachable!("inserted instructions define their result");
     };
     let load = &mut function.instructions[inst.as_raw() as usize];
     load.immediate = Some(Immediate::LocalSlot(slot));
@@ -509,10 +563,14 @@ fn append_slot_load(
     result
 }
 
-/// Appends a result-producing instruction to a block before its terminator.
-fn append_instruction(
+/// Inserts a result-producing instruction into a block at `position` and returns its value.
+///
+/// The instructions from `position` on move one slot down, so the recorded definition index of
+/// each of their results is refreshed to keep the value table in step with the block layout.
+fn insert_instruction(
     function: &mut Function,
     block: BlockId,
+    position: usize,
     op: Op,
     operands: Vec<ValueId>,
     ir_type: IrType,
@@ -520,7 +578,6 @@ fn append_instruction(
 ) -> ValueId {
     let inst_id = InstId::from_raw(function.instructions.len() as u32);
     let result = ValueId::from_raw(function.values.len() as u32);
-    let position = function.blocks[block.as_raw() as usize].instructions.len();
     function.values.push(Value {
         ir_type,
         php_type: php_type.clone(),
@@ -540,7 +597,18 @@ fn append_instruction(
     );
     inst.origin = Some(PassOrigin::BufferAccess);
     function.instructions.push(inst);
-    function.blocks[block.as_raw() as usize].instructions.push(inst_id);
+    function.blocks[block.as_raw() as usize].instructions.insert(position, inst_id);
+    let shifted: Vec<InstId> =
+        function.blocks[block.as_raw() as usize].instructions[position + 1..].to_vec();
+    for (offset, shifted_id) in shifted.into_iter().enumerate() {
+        if let Some(value) = function.instructions[shifted_id.as_raw() as usize].result {
+            function.values[value.as_raw() as usize].def = ValueDef::Instruction {
+                block,
+                index: (position + 1 + offset) as u32,
+                inst: shifted_id,
+            };
+        }
+    }
     result
 }
 

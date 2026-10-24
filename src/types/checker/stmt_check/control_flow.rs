@@ -849,7 +849,19 @@ impl Checker {
                 body,
             } => {
                 if let Some(s) = init {
-                    self.check_stmt(s, env)?;
+                    // The initializer runs exactly once, unconditionally, whenever the `for`
+                    // statement itself runs: `for ($i = 0; …)` binds `$i` exactly like `$i = 0;`
+                    // written before the loop. It is therefore checked at the depth of the
+                    // statement, not at the depth of the conditional group `check_stmt` opened
+                    // for the whole loop, so its bindings are unconditional ones (a later
+                    // straight-line `unset` or retype may end them) and it may itself retype or
+                    // re-bind an unconditional binding. The provenance bracket of that group is
+                    // kept: only the binding depth changes. `mixed_storage_scan` mirrors this.
+                    let loop_depth = self.local_conditional_depth;
+                    self.local_conditional_depth = loop_depth.saturating_sub(1);
+                    let checked = self.check_stmt(s, env);
+                    self.local_conditional_depth = loop_depth;
+                    checked?;
                 }
                 self.boxed_ref_aliased_locals.clear();
                 // A `for ($i = 0; …; $i++)` counter is the one index a still-empty array can be

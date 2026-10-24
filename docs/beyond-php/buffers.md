@@ -134,6 +134,63 @@ Packed element fields and whole scalar elements can be written through a
 buffer-typed property, as in `moveX()` and `setId()` above. A static property
 cannot hold a buffer yet.
 
+## Choosing a buffer
+
+A ternary, `?:`, `match` or `??` whose arms are buffers of the same type gives the chosen buffer
+back: the result is the buffer's handle, not a copy, so element reads and writes and packed field
+access through it, or through a local, property or return value that holds it, reach the chosen
+buffer. That is how double-buffered state flips between two buffers:
+
+```php
+<?php
+packed class Body { public float $x; public float $vx; }
+
+final class World {
+    public buffer<Body> $front;
+    public buffer<Body> $back;
+    public int $frame = 0;
+
+    public function __construct(int $n) {
+        $this->front = buffer_new<Body>($n);
+        $this->back = buffer_new<Body>($n);
+    }
+
+    public function current(): buffer<Body> {
+        return $this->frame % 2 === 0 ? $this->front : $this->back;
+    }
+
+    public function next(): buffer<Body> {
+        return match ($this->frame % 2) {
+            0 => $this->back,
+            1 => $this->front,
+            default => throw new LogicException("a frame parity is 0 or 1"),
+        };
+    }
+}
+
+$world = new World(64);
+$next = $world->next();
+$next[0]->x = $world->current()[0]->x + 1.0;   // writes into $world->back
+($world->frame % 2 === 0 ? $world->front : $world->back)[0]->vx = 0.0;
+```
+
+A `throw` arm can sit beside the buffer arms. Every other arm must have the same buffer type: a
+`buffer<float>` beside a `buffer<int>`, `null`, or any other value is rejected at compile time
+(`every arm of a ternary must have the same buffer type`), because a buffer has no null and no
+`mixed` form that could still be indexed. As in PHP, an element of the merge itself cannot be
+assigned (`($a ? $b : $c)[0] = 1.0` is rejected): assign the merge to a local and write through
+the local, or write a packed field (`(...)[0]->x = 1.0`) as above. `examples/buffer-double-buffering`
+runs this pattern. One gap remains: a `??` whose left side is a `buffer<T>` property reads that
+property through the probe that keeps an uninitialized property from raising, and the probe still
+boxes the handle, so an element read through `$o->a ?? $o->b` answers null. Pick between buffer
+properties with a ternary or `match`, or copy the property into a local first.
+
+A buffer in a condition (`if ($buf)`, `$buf ?: $other`, `!$buf`, `(bool) $buf`) tests its handle,
+not its length or its contents: every buffer `buffer_new<T>()` returns is true, while the invalid
+handle 0 that a missed element of an [array of buffers](#arrays-of-buffers) reads as, and a local
+that `buffer_free()` cleared, are false, the same answer `empty()` and `??` give. A stale alias of
+a freed buffer keeps its handle and stays true.
+
 ## Arrays of buffers
 
 Indexed arrays and hashes can hold buffer handles. Literals, appends, index and key writes,
@@ -307,5 +364,8 @@ for ($i = 0; $i < buffer_len($particles); $i++) {
 - No copy-on-write semantics
 - No `foreach` iteration
 - No mixed element types
+- No null and no `mixed` form: every arm of a ternary, `?:`, `match` or `??` that holds a buffer
+  must have the same buffer type, and a buffer passed as `mixed` (or stored in an `array<mixed>`)
+  is only its integer handle, which cannot be indexed as a buffer
 - Payload is zero-initialized by `buffer_new`
 - At most 4096 buffers can be live simultaneously; descriptor slots are recycled after `buffer_free()`

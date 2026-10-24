@@ -98,21 +98,11 @@ fn mixed_string_site_count(module: &Module, mode: &MixedStringContextMode) -> us
         .sum()
 }
 
-/// Returns whether an instruction reaches the `__toString` ladder in either mode.
-///
-/// The ladder holds its receiver in the reserved nested-call register, so a function
-/// containing one of these must reserve a save slot for it — see
-/// `frame::function_uses_nested_call_reg`, whose own test only knows about Mixed-receiver
-/// METHOD calls and therefore missed every string context.
-pub(super) fn instruction_uses_mixed_string_ladder(
-    function: &Function,
-    inst: &crate::ir::Instruction,
-) -> bool {
-    instruction_is_mixed_string_site(function, inst, &MixedStringContextMode::Result)
-        || instruction_is_mixed_string_site(function, inst, &MixedStringContextMode::Stdout)
-}
-
 /// Returns whether one instruction is a boxed-Mixed string context of the given mode.
+///
+/// An inline ladder holds its receiver in the reserved nested-call register. Neither `Cast`
+/// nor `EchoValue` is register-neutral in `frame::function_may_use_nested_call_reg`, so every
+/// frame containing such a site saves that register.
 fn instruction_is_mixed_string_site(
     function: &Function,
     inst: &crate::ir::Instruction,

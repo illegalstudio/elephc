@@ -13,6 +13,10 @@
 //!   null-pointer dereference fatal (task 6da89f60).
 //! - Also covers boxing into `mixed` (globals, yields, arrays, hashes, dynamic properties,
 //!   iterators, interface wrappers and the eval bridges), where address 0 must be PHP null.
+//! - Undeclared locals that hold `null` and packed record addresses or pointers (in sequence,
+//!   across `if` arms, around loops that start from `null`, and bound to `?ptr<T>` by-reference
+//!   parameters) get the same pointer-word storage (task 1af74866). The branch fixtures read the
+//!   local after a second `if`, so DCE does not copy the read into the arm that holds `null`.
 
 use crate::support::*;
 
@@ -502,23 +506,86 @@ echo $z === null ? "null" : $z->x, "\n";
     assert_eq!(out, "null|null|live|null|filled6|6|set|6\n");
 }
 
-/// Verifies a local whose frame slot is not a pointer word is refused for a `?ptr<T>`
-/// by-reference parameter: one that only holds `null`, and one that holds `null` before a pointer
-/// (in sequence or across branches, which boxes the slot). The callee writes a raw pointer word
-/// back, which the caller would misread in both.
+/// Verifies plain locals bind to a `?ptr<T>` by-reference parameter once they are pointer words
+/// (task 1af74866): one that holds only `null` (it reads as `?ptr<T>` after the call, so a later
+/// clear is seen too), one that holds `null` and then a pointer, one that holds `null` in one
+/// branch and a pointer in the other, a named argument, and one holding a packed record address.
+/// Each sees the callee's write after the call, in functions and at top level; PR #2019 refused
+/// all of them because their slots were boxed or held the null sentinel.
+#[test]
+fn test_nullable_pointer_by_ref_parameters_accept_null_and_pointer_locals() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function fill(?ptr<Vec2> &$p, buffer<Vec2> $v): void { $p = $v[0]; }
+function clear(?ptr<Vec2> &$p): void { $p = null; }
+function first(buffer<Vec2> $v): ptr<Vec2> { return $v[0]; }
+function only_null(buffer<Vec2> $v): string {
+    $a = null;
+    fill($a, $v);
+    $out = $a === null ? "null" : "x" . $a->x;
+    clear($a);
+    return $out . ($a === null ? ":null" : ":set");
+}
+function null_then_pointer(buffer<Vec2> $v): string {
+    $b = null;
+    $b = first($v);
+    fill($b, $v);
+    return "x" . $b->x;
+}
+function branches(buffer<Vec2> $v, bool $ok): string {
+    if ($ok) { $c = null; } else { $c = first($v); }
+    fill($c, $v);
+    return $c === null ? "null" : "x" . $c->x;
+}
+function named(buffer<Vec2> $v): string {
+    $d = null;
+    fill(p: $d, v: $v);
+    return is_null($d) ? "null" : "x" . $d->x;
+}
+function record(buffer<Vec2> $v): string {
+    $e = $v[0];
+    fill($e, $v);
+    return "x" . $e->x;
+}
+$v = buffer_new<Vec2>(1);
+$v[0]->x = 7;
+echo only_null($v), "|", null_then_pointer($v), "|", branches($v, true), "|";
+echo branches($v, false), "|", named($v), "|", record($v), "\n";
+$a = null;
+fill($a, $v);
+echo $a === null ? "null" : "x" . $a->x, "|";
+$b = null;
+$b = first($v);
+fill($b, $v);
+echo "x", $b->x, "|";
+$d = null;
+fill(p: $d, v: $v);
+echo is_null($d) ? "null" : "x" . $d->x, "|";
+if (count($argv) > 5) { $c = null; } else { $c = first($v); }
+fill($c, $v);
+echo $c === null ? "null" : "x" . $c->x, "\n";
+"#,
+    );
+    assert_eq!(out, "x7:null|x7|x7|x7|x7|x7\nx7|x7|x7|x7\n");
+}
+
+/// Verifies a local whose frame slot is still not a pointer word is refused for a `?ptr<T>`
+/// by-reference parameter: one that a reference aliases (at top level and in a function) and
+/// one that a `global` statement makes program-global. Both keep boxed storage, which would
+/// misread the raw pointer word the callee writes back. The function with the `global`
+/// statement is called and has an observable body, so reachability pruning keeps it.
 #[test]
 fn test_nullable_pointer_by_ref_parameters_reject_non_pointer_storage() {
     let prelude = r#"<?php
 packed class Vec2 { public int $x; public int $y; }
 function fill(?ptr<Vec2> &$p, buffer<Vec2> $v): void { $p = $v[0]; }
-function first(buffer<Vec2> $v): ptr<Vec2> { return $v[0]; }
 $v = buffer_new<Vec2>(1);
 "#;
     for body in [
-        "$x = null; fill($x, $v);",
-        "$x = null; $x = first($v); fill($x, $v);",
-        "if (count($argv) > 5) { $x = null; } else { $x = first($v); } fill($x, $v);",
-        "$x = null; fill(p: $x, v: $v);",
+        "$x = null; $r = &$x; fill($x, $v);",
+        "function k(buffer<Vec2> $v): void { $x = null; $r = &$x; fill($x, $v); } k($v);",
+        "function g(): void { global $x; echo $x; } $x = null; g(); fill($x, $v);",
     ] {
         let error = compile_cli_file_with_flags_expect_failure(&format!("{prelude}{body}"), &[]);
         assert!(
@@ -908,4 +975,248 @@ $c->setStaticPropertyValue('sp', mixnull());
     assert_eq!(written.stdout, "true\n", "{}", written.stderr);
     assert!(summary(&baseline.stderr).is_some(), "{}", baseline.stderr);
     assert_eq!(summary(&written.stderr), summary(&baseline.stderr), "{}", written.stderr);
+}
+
+/// Verifies a local assigned `null` and then a packed record address or a `ptr<T>` keeps one
+/// pointer word, in a function and at top level, and that a record local later assigned `null`
+/// reads as null (task 1af74866: the slot used to widen to boxed `mixed`, and the record load
+/// from it failed in codegen).
+#[test]
+fn test_null_then_record_locals_keep_pointer_word_storage() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function first(buffer<Vec2> $v): ptr<Vec2> { return $v[0]; }
+function seq(buffer<Vec2> $v): int { $x = null; $x = $v[1]; return $x->x; }
+function seq_ptr(buffer<Vec2> $v): int { $x = null; $x = first($v); return $x->x; }
+function back_to_null(buffer<Vec2> $v): string { $x = $v[1]; $x = null; return $x === null ? "null" : "set"; }
+$v = buffer_new<Vec2>(2);
+$v[0]->x = 5;
+$v[1]->x = 6;
+$x = null;
+$x = $v[0];
+echo $x->x, "|", seq($v), "|", seq_ptr($v), "|", back_to_null($v), "\n";
+"#,
+    );
+    assert_eq!(out, "5|6|5|null\n");
+}
+
+/// Verifies a local holding `null` in one `if` arm and a record address or pointer in the other
+/// (in both orders, with an implicit `else`, and at top level) is a `?ptr<T>` after the merge,
+/// so `=== null`, `!== null` and `is_null()` test the address and fields read through it.
+#[test]
+fn test_null_or_record_branches_join_to_nullable_pointer() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function first(buffer<Vec2> $v): ptr<Vec2> { return $v[0]; }
+function record_or_null(buffer<Vec2> $v, bool $ok): string {
+    if ($ok) { $x = $v[1]; } else { $x = null; }
+    if ($x === null) { return "null"; }
+    return "x" . $x->x;
+}
+function null_or_record(buffer<Vec2> $v, bool $ok): string {
+    if ($ok) { $x = null; } else { $x = $v[1]; }
+    if ($x !== null) { return "x" . $x->x; }
+    return "null";
+}
+function null_then_pointer(buffer<Vec2> $v, bool $ok): string {
+    $x = null;
+    if ($ok) { $x = first($v); }
+    if (is_null($x)) { return "null"; }
+    return "x" . $x->x;
+}
+$v = buffer_new<Vec2>(2);
+$v[0]->x = 3;
+$v[1]->x = 4;
+echo record_or_null($v, true), record_or_null($v, false), "|";
+echo null_or_record($v, true), null_or_record($v, false), "|";
+echo null_then_pointer($v, true), null_then_pointer($v, false), "|";
+if ($argc > 5) { $y = null; } else { $y = $v[1]; }
+if ($y !== null) { echo "x", $y->x; } else { echo "null"; }
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "x4null|nullx4|x3null|x4\n");
+}
+
+/// Verifies the record search Ivory writes (`$best = null;` before a loop that stores
+/// `$best = $buf[$i];`) keeps the record addresses: `for`, `foreach` and `while` loops in
+/// functions and at top level, a loop that finds nothing, and one that never runs, all read
+/// `null` or the last stored record after the loop.
+#[test]
+fn test_null_entering_loops_keep_record_addresses() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function widest(buffer<Vec2> $v): string {
+    $best = null;
+    for ($i = 0; $i < 4; $i++) {
+        if ($best === null || $v[$i]->x > $best->x) { $best = $v[$i]; }
+    }
+    if ($best !== null) { return "x" . $best->x; }
+    return "none";
+}
+function over(buffer<Vec2> $v, int $limit): string {
+    $hit = null;
+    foreach ([0, 1, 2, 3] as $i) {
+        if ($v[$i]->x > $limit) { $hit = $v[$i]; }
+    }
+    return $hit === null ? "none" : "x" . $hit->x;
+}
+function first_over(buffer<Vec2> $v, int $limit): string {
+    $hit = null;
+    $i = 0;
+    while ($hit === null && $i < 4) {
+        if ($v[$i]->x > $limit) { $hit = $v[$i]; }
+        $i++;
+    }
+    return isset($hit) ? "x" . $hit->x : "none";
+}
+function never_runs(buffer<Vec2> $v, int $n): string {
+    $hit = null;
+    for ($i = 0; $i < $n; $i++) { $hit = $v[$i]; }
+    return $hit === null ? "none" : "x" . $hit->x;
+}
+$v = buffer_new<Vec2>(4);
+$v[0]->x = 3;
+$v[1]->x = 9;
+$v[2]->x = 4;
+$v[3]->x = 1;
+echo widest($v), "|", over($v, 5), "|", over($v, 20), "|", first_over($v, 3), "|";
+echo first_over($v, 20), "|", never_runs($v, 0), "|", never_runs($v, 2), "\n";
+$best = null;
+for ($i = 0; $i < 4; $i++) {
+    if ($best === null || $v[$i]->x < $best->x) { $best = $v[$i]; }
+}
+if ($best !== null) { echo "min x", $best->x, "\n"; }
+"#,
+    );
+    assert_eq!(out, "x9|x9|none|x9|none|none|x9\nmin x1\n");
+}
+
+/// Verifies `=== null`, `is_null()`, `isset()`, `!== null`, `(string)`, concatenation and `echo`
+/// on a local that holds `null` or a record address answer by the address after the merge.
+#[test]
+fn test_null_or_record_locals_answer_null_predicates_and_conversions() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function probe(buffer<Vec2> $v, bool $ok): string {
+    $x = null;
+    if ($ok) { $x = $v[0]; }
+    $tests = "";
+    if ($x === null) { $tests .= "n"; } else { $tests .= "s"; }
+    $tests .= (is_null($x) ? "n" : "s") . (isset($x) ? "s" : "n") . ($x !== null ? "s" : "n");
+    return $tests . ":" . (strlen((string) $x) > 2 ? "addr" : "[" . $x . "]");
+}
+$v = buffer_new<Vec2>(1);
+echo probe($v, false), "|", probe($v, true), "|";
+$z = null;
+if ($argc > 5) { $z = $v[0]; }
+if ($z === null) { echo "[", $z, "]"; }
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "nnnn:[]|ssss:addr|[]\n");
+}
+
+/// Verifies a local that holds `null` or a record address passes to `?ptr<T>` and (after a null
+/// guard) `ptr<T>` parameters, including an extern one, and returns from a `?ptr<T>` function.
+#[test]
+fn test_null_or_record_locals_pass_and_return_as_pointers() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+extern function memset(ptr<Vec2> $target, int $byte, u64 $size): ptr;
+function take(?ptr<Vec2> $p): string { return $p === null ? "null" : "x" . $p->x; }
+function field(ptr<Vec2> $p): int { return $p->x; }
+function back(buffer<Vec2> $v, bool $ok): ?ptr<Vec2> {
+    $x = null;
+    if ($ok) { $x = $v[1]; }
+    return $x;
+}
+function pass(buffer<Vec2> $v, bool $ok): string {
+    $x = null;
+    if ($ok) { $x = $v[1]; }
+    $out = take($x);
+    if ($x !== null) { $out .= ":" . field($x); }
+    return $out;
+}
+function clear(buffer<Vec2> $v): void {
+    $x = null;
+    $x = $v[0];
+    memset($x, 0, 16);
+}
+function clear_guarded(buffer<Vec2> $v, bool $ok): void {
+    $x = null;
+    if ($ok) { $x = $v[1]; }
+    if ($x !== null) { memset($x, 0, 16); }
+}
+$v = buffer_new<Vec2>(2);
+$v[0]->x = 3;
+$v[1]->x = 4;
+echo take(back($v, true)), "|", take(back($v, false)), "|", pass($v, true), "|", pass($v, false), "|";
+clear($v);
+clear_guarded($v, false);
+echo $v[0]->x, ":", $v[1]->x, "|";
+clear_guarded($v, true);
+echo $v[1]->x, "\n";
+"#,
+    );
+    assert_eq!(out, "x4|null|x4:4|null|0:4|0\n");
+}
+
+/// Verifies a by-value capture of a `null` local that the closure body assigns pointers in a
+/// loop starts as address 0. The capture is a hidden `null` parameter with no ABI value, so a
+/// call whose loop never runs, made right after one that stored a pointer in the same frame,
+/// must still read PHP null rather than the stale slot.
+#[test]
+fn test_null_capture_assigned_pointers_in_a_loop_starts_null() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function first(buffer<Vec2> $v): ptr<Vec2> { return $v[0]; }
+$v = buffer_new<Vec2>(1);
+$v[0]->x = 7;
+$c = null;
+$f = function (buffer<Vec2> $v, int $n) use ($c): string {
+    for ($i = 0; $i < $n; $i++) { $c = first($v); }
+    return $c === null ? "null" : "x" . $c->x;
+};
+echo $f($v, 1), "|", $f($v, 0), "|", $f($v, 2), "|", $f($v, 0), "\n";
+"#,
+    );
+    assert_eq!(out, "x7|null|x7|null\n");
+}
+
+/// Verifies a local that a reference aliases keeps reading PHP null when it is also assigned
+/// pointers: after a zero-trip loop that starts from `null`, and after an `if` whose taken arm
+/// stores `null`, through the local and through the alias. The pointer-word retype applies only
+/// to ordinary frame slots, because the reference cell keeps the `null` it was given.
+#[test]
+fn test_reference_aliased_null_locals_keep_reading_null() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function first(buffer<Vec2> $v): ptr<Vec2> { return $v[0]; }
+function probe(buffer<Vec2> $v, int $n): string {
+    $p = null;
+    $alias = &$p;
+    $p = null;
+    for ($i = 0; $i < $n; $i++) { $p = first($v); }
+    return (is_null($p) ? "null" : "set") . (is_null($alias) ? ":null" : ":set");
+}
+function branch(buffer<Vec2> $v, bool $ok): string {
+    $p = null;
+    $alias = &$p;
+    if ($ok) { $p = first($v); } else { $p = null; }
+    if ($p === null) { return "null"; }
+    return "set";
+}
+$v = buffer_new<Vec2>(1);
+echo probe($v, 0), "|", branch($v, false), "\n";
+"#,
+    );
+    assert_eq!(out, "null:null|null\n");
 }

@@ -181,7 +181,7 @@ impl<'f> Builder<'f> {
     /// Widens an existing local slot so its frame storage can hold the incoming PHP type.
     pub fn widen_local_storage_type(&mut self, slot: LocalSlotId, php_type: PhpType) {
         let local = &mut self.func.locals[slot.as_raw() as usize];
-        let storage_type = widened_local_storage_type(&local.php_type, &php_type);
+        let storage_type = widened_slot_storage_type(local.kind, &local.php_type, &php_type);
         local.ir_type = local_storage_ir_type(&storage_type);
         local.php_type = storage_type;
     }
@@ -192,7 +192,8 @@ impl<'f> Builder<'f> {
     /// emits that release before the widening lands, so the release is still analysed against
     /// what the slot currently holds.
     pub fn widened_local_php_type(&self, slot: LocalSlotId, php_type: &PhpType) -> PhpType {
-        widened_local_storage_type(&self.func.locals[slot.as_raw() as usize].php_type, php_type)
+        let local = &self.func.locals[slot.as_raw() as usize];
+        widened_slot_storage_type(local.kind, &local.php_type, php_type)
     }
 
     /// Returns the current frame storage PHP type for a local slot.
@@ -712,6 +713,53 @@ impl<'f> Builder<'f> {
     }
 }
 
+/// Returns the frame storage a local slot of `kind` needs to hold both observed types.
+///
+/// A PHP local that holds `null`, packed record addresses and pointers at different points keeps
+/// one pointer word (see `pointer_word_storage`); every other combination, and every other slot
+/// role, widens through `widened_local_storage_type`.
+fn widened_slot_storage_type(kind: LocalKind, current: &PhpType, incoming: &PhpType) -> PhpType {
+    if kind == LocalKind::PhpLocal {
+        if let Some(pointer) =
+            pointer_word_storage(&current.codegen_repr(), &incoming.codegen_repr())
+        {
+            return pointer;
+        }
+    }
+    widened_local_storage_type(current, incoming)
+}
+
+/// Returns the pointer word shared by a mix of `null`, packed record addresses and pointers.
+///
+/// A `?ptr<T>` is one raw pointer word where address 0 is PHP null (decision for task 6da89f60),
+/// and a packed record address is the word a `ptr<T>` holds, so a local that receives any mix of
+/// them stays one pointer word instead of widening to boxed `mixed`. Codegen writes a `null`
+/// stored into such a slot as address 0, and reads the slot back as the null sentinel where
+/// lowering knows the local holds `null`. Two pointer targets merge through
+/// `merge_local_pointer_targets`. Returns `None` for two equal types (which keep their own
+/// storage) and unless both sides are one of these shapes with at least one of them not `null`.
+fn pointer_word_storage(current: &PhpType, incoming: &PhpType) -> Option<PhpType> {
+    /// Splits a storage shape into its pointer word (`None` for `null`), or `None` otherwise.
+    fn pointer_word(ty: &PhpType) -> Option<Option<PhpType>> {
+        match ty {
+            PhpType::Void | PhpType::Never => Some(None),
+            PhpType::Pointer(_) => Some(Some(ty.clone())),
+            PhpType::Packed(class) => Some(Some(PhpType::Pointer(Some(class.clone())))),
+            _ => None,
+        }
+    }
+    if current == incoming {
+        return None;
+    }
+    match (pointer_word(current)?, pointer_word(incoming)?) {
+        (None, None) => None,
+        (Some(pointer), None) | (None, Some(pointer)) => Some(pointer),
+        (Some(left), Some(right)) => {
+            Some(crate::types::merge_local_pointer_targets(&left, &right))
+        }
+    }
+}
+
 /// Returns the local frame PHP representation that can store both observed types.
 fn widened_local_storage_type(current: &PhpType, incoming: &PhpType) -> PhpType {
     let current = current.codegen_repr();
@@ -738,6 +786,8 @@ fn widened_local_storage_type(current: &PhpType, incoming: &PhpType) -> PhpType 
 /// Indexed arrays and associative hashes are both one-word container pointers. A flow-local
 /// `ArrayToHash` conversion can therefore keep the established frame slot while later loads use
 /// the associative logical type; cleanup remains safe because array decref dispatches by heap kind.
+/// Pointers and packed record addresses are one raw address word too, so a pointer-word slot
+/// (see `pointer_word_storage`) reads as a record address or as another pointer type as is.
 ///
 /// Codegen consumes this predicate too, so its no-coercion path and EIR release
 /// pruning cannot classify an ordinary borrowed local view differently.
@@ -754,6 +804,8 @@ pub(crate) fn local_load_types_share_storage(source_ty: &PhpType, result_ty: &Ph
             | (PhpType::AssocArray { .. }, PhpType::AssocArray { .. })
             | (PhpType::Array(_), PhpType::AssocArray { .. })
             | (PhpType::AssocArray { .. }, PhpType::Array(_))
+            | (PhpType::Pointer(_), PhpType::Pointer(_) | PhpType::Packed(_))
+            | (PhpType::Packed(_), PhpType::Pointer(_))
     )
 }
 

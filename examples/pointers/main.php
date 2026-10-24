@@ -102,3 +102,15 @@ echo "Third element is null? ", $picked[2] === null ? "yes" : "no", "\n";
 $byName = ["origin" => $points[0], "far" => $points[2]];
 $byName["far"]->y = 7;
 echo "far.y = ", $points[2]->y, ", missing key is null? ", ($byName["nope"] ?? null) === null ? "yes" : "no", "\n";
+
+// A local that starts as null and later holds a record is one pointer word (null is address 0)
+$points[1]->x = 25;
+$widest = null;
+for ($i = 0; $i < buffer_len($points); $i++) {
+    if ($widest === null || $points[$i]->x > $widest->x) {
+        $widest = $points[$i];
+    }
+}
+if ($widest !== null) {
+    echo "Largest x = ", $widest->x, "\n";
+}

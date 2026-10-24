@@ -166,7 +166,9 @@ The fifth registered pass specializes a boxed checked-arithmetic operation
 every use of its result observes only the integer payload, removing the
 transient boxed `Mixed` allocation without changing overflow semantics.
 The same proof removes numeric local-slot retirement immediately before an
-overwrite. Retirement remains intact when a read, reference alias, or a value
+overwrite, or at the end of a binding when no later access to the slot is
+reachable (a counter whose name a later straight-line assignment re-binds).
+Retirement remains intact when a read, reference alias, or a value
 with a possible destructor prevents proving that the clear is unobservable.
 
 ### Bounded mixed counters
@@ -455,7 +457,11 @@ See `examples/tail-recursion/main.php` for Euclid and a deep mutual countdown.
 
 With `--ir-opt` enabled, a loop over `buffer<T>` elements resolves the buffer
 handle once in front of the loop instead of at every `$b[$i]`, and the packed
-field accesses of one iteration share a single bounds-checked record address:
+field accesses of one iteration share a single bounds-checked record address.
+The resolution runs before the loop-invariant values the optimizer moved in
+front of the loop are loaded, so a value such as `$dt` below stays in a
+register through the loop on every target, including Linux x86_64, whose ABI
+has no float register that survives a call:
 
 ```php
 function step(buffer<Particle> $p, int $count, float $dt): void {

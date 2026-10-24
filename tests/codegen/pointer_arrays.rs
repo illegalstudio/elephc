@@ -15,6 +15,8 @@
 //!   array readers show a null element as PHP null and a live one as an integer address.
 //! - Arrays reaching a pointer-array parameter through runtime bridges (callable invoker, eval)
 //!   are converted to pointer words on entry.
+//! - A local read from an element is a `?ptr<T>` pointer word, so it binds to a `?ptr<T>`
+//!   by-reference parameter and passes to an extern `ptr<T>` parameter after a null guard.
 
 use crate::support::*;
 
@@ -999,4 +1001,71 @@ $ps = [$w[0]];
     assert_eq!(called.stdout, "NLNuLsN\n", "{}", called.stderr);
     assert!(summary(&baseline.stderr).is_some(), "{}", baseline.stderr);
     assert_eq!(summary(&called.stderr), summary(&baseline.stderr), "{}", called.stderr);
+}
+
+/// Verifies a local read from an element of an array or a hash of pointers binds to a `?ptr<T>`
+/// by-reference parameter, in a function and at top level: the callee's write is seen in the
+/// local after the call (a `null` element included), while the container keeps its own element
+/// (task 6da89f60, the case PR #2019 had to refuse before element reads were `?ptr<T>`).
+#[test]
+fn test_pointer_array_element_local_binds_to_nullable_pointer_reference() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function fill(?ptr<Vec2> &$p, buffer<Vec2> $v): void { $p = $v[2]; }
+function run(buffer<Vec2> $v): string {
+    $points = [$v[0], null];
+    $y = $points[0];
+    $before = $y === null ? "null" : "x" . $y->x;
+    fill($y, $v);
+    $z = $points[1];
+    fill($z, $v);
+    $h = ["a" => $v[1], "b" => null];
+    $k = $h["b"];
+    fill($k, $v);
+    $after = $points[1] === null ? "null" : "set";
+    return $before . ":" . $y->x . ":" . $z->x . ":" . $k->x . ":" . $points[0]->x . ":" . $after;
+}
+$v = buffer_new<Vec2>(3);
+$v[0]->x = 10;
+$v[1]->x = 11;
+$v[2]->x = 12;
+$points = [$v[0], $v[1]];
+$y = $points[1];
+fill($y, $v);
+echo run($v), "|", $y === null ? "null" : $y->x, "|", $points[1]->x, "\n";
+"#,
+    );
+    assert_eq!(out, "x10:12:12:12:10:null|12|11\n");
+}
+
+/// Verifies a local read from an element of an array of pointers passes, after a null guard,
+/// to an extern `ptr<T>` parameter as the address of the element's record.
+#[test]
+fn test_pointer_array_element_local_passes_to_extern_pointer_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+extern function memset(ptr<Vec2> $target, int $byte, u64 $size): ptr;
+function clear_at(buffer<Vec2> $v, int $i): string {
+    $points = [$v[0], null, $v[2]];
+    $p = $points[$i];
+    if ($p !== null) {
+        memset($p, 0, 16);
+        return "cleared";
+    }
+    return "null";
+}
+$v = buffer_new<Vec2>(3);
+$v[0]->x = 10;
+$v[1]->x = 11;
+$v[2]->x = 12;
+echo clear_at($v, 2), "|", clear_at($v, 1), "|", $v[0]->x, ":", $v[1]->x, ":", $v[2]->x, "|";
+$all = [$v[0], $v[1]];
+$q = $all[0];
+if ($q !== null) { memset($q, 0, 16); }
+echo $v[0]->x, "\n";
+"#,
+    );
+    assert_eq!(out, "cleared|null|10:11:0|0\n");
 }

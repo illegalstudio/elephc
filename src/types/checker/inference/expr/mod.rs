@@ -15,6 +15,7 @@ use crate::types::{PhpType, TypeEnv};
 mod assignments;
 mod array_access;
 mod basic;
+mod buffer_merges;
 mod class_refs;
 mod effects;
 mod calls_objects;

@@ -294,6 +294,8 @@ mod core_symbols;
 mod type_system;
 #[path = "error_tests/reference_detach.rs"]
 mod reference_detach;
+#[path = "error_tests/loop_counter_bindings.rs"]
+mod loop_counter_bindings;
 #[path = "error_tests/exceptions_enums_magic.rs"]
 mod exceptions_enums_magic;
 #[path = "error_tests/classes_traits.rs"]
@@ -304,6 +306,8 @@ mod property_default_scope;
 mod generics_review;
 #[path = "error_tests/extensions.rs"]
 mod extensions;
+#[path = "error_tests/buffer_merges.rs"]
+mod buffer_merges;
 #[path = "error_tests/data_widths.rs"]
 mod data_widths;
 #[path = "error_tests/strict_php.rs"]

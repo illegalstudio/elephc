@@ -609,9 +609,20 @@ after tail recursion), then the scalar passes run again. Every `buffer_get` and
 `buffer_set` normally resolves its generation-safe handle through
 `__rt_buffer_resolve` before the bounds check. In a loop whose natural body
 cannot free, allocate or rebind a buffer, that answer cannot change between
-iterations, so the pass appends one `buffer_resolve` to the preheader and turns
+iterations, so the pass inserts one `buffer_resolve` into the preheader and turns
 each access with a loop-invariant handle into `buffer_get_resolved` or
 `buffer_set_resolved`.
+
+The resolution (with the handle slot load it reads, for a local handle) goes at
+the earliest preheader position that gives the answer the end of the preheader
+would: after the handle's own definition and after the last preheader
+instruction that fails the loop-body allowlist below or names the handle slot as
+storage. The pass runs after LICM has moved the loop-invariant loads into the
+preheader, so appending the call at the end would keep a hoisted float, such as
+a `float $dt` parameter, live across `__rt_buffer_try_resolve`. SysV x86_64 has
+no callee-saved XMM register, so the allocator would leave that float in a frame
+slot and reload it on every iteration; resolving first leaves it call-free and
+eligible for a caller-saved XMM register.
 
 The pass also recognizes a zero-initialized, unit-step induction parameter whose
 loop continuation is a strict signed comparison against `buffer_len` of that

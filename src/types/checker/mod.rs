@@ -501,6 +501,10 @@ pub(crate) struct Checker {
     /// Names declared `static` in the current body. Their storage outlives the call, so the
     /// binding is never killable.
     pub static_local_names: HashSet<String>,
+    /// Every parameter name of the current body (empty at top level). The storage-only numeric
+    /// re-bind skips these: backtrace frames read a parameter's argument value from the FIRST
+    /// slot of that name, so splitting a parameter's binding would report a stale argument.
+    pub local_parameter_names: HashSet<String>,
     /// Names whose type was DECLARED in the current body by a `TypedAssign` local
     /// (`int $x = …`), and what each was declared AS. A declaration is a programmer contract
     /// and stays strict in both permissive and `--strict-locals` mode.
@@ -643,6 +647,7 @@ pub(crate) struct SavedLocalBindingScope {
     boxed_ref_aliased: HashSet<String>,
     boxed_ref_invalidations: Vec<HashSet<String>>,
     statics: HashSet<String>,
+    parameters: HashSet<String>,
     typed: HashMap<String, PhpType>,
     mixed_storage: HashSet<String>,
     guarded_unions: HashMap<String, PhpType>,
@@ -839,6 +844,7 @@ impl Checker {
                 &mut self.conditional_boxed_ref_invalidations,
             ),
             statics: std::mem::take(&mut self.static_local_names),
+            parameters: std::mem::take(&mut self.local_parameter_names),
             typed: std::mem::take(&mut self.typed_local_names),
             // The mixed-storage marking describes ONE frame: a name boxed in the caller says
             // nothing about a same-named local in the callee, and leaking the set inward would
@@ -848,6 +854,7 @@ impl Checker {
             contains_eval: self.body_contains_eval,
         };
         self.local_conditional_depth = 0;
+        self.local_parameter_names = param_names.iter().cloned().collect();
         self.local_binding_depth = param_names.into_iter().map(|name| (name, 0)).collect();
         self.typed_local_names = HashMap::new();
         // Cleared rather than inherited: a caller that runs `eval` says nothing about the body
@@ -868,6 +875,7 @@ impl Checker {
         self.boxed_ref_aliased_locals = saved.boxed_ref_aliased;
         self.conditional_boxed_ref_invalidations = saved.boxed_ref_invalidations;
         self.static_local_names = saved.statics;
+        self.local_parameter_names = saved.parameters;
         self.typed_local_names = saved.typed;
         self.mixed_storage_locals = saved.mixed_storage;
         self.guarded_union_types = saved.guarded_unions;

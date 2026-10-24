@@ -7,6 +7,8 @@
 //!
 //! Key details:
 //! - Included-file diagnostics are tagged with the target file and original include span.
+//! - Each parse registers the path of its fresh source identity (`Span::register_source_path`),
+//!   so a later diagnostic that carries only a span still names the included file.
 
 use std::path::{Path, PathBuf};
 
@@ -50,6 +52,8 @@ pub(super) fn parse_file(
 
     let mode = SourceMode::from_path(path);
     let source_id = Span::fresh_source_id();
+    // Names this file in a later checker or lowering diagnostic, which carries only a span.
+    Span::register_source_path(source_id, file.clone());
     let tokens = lexer::tokenize_with_mode_and_source_id(&source, mode, source_id)
         .map_err(|e| e.with_file(file.clone()))?;
 

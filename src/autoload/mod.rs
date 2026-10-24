@@ -10,6 +10,8 @@
 //! - Composer files execute before the entry program while class-triggered files splice before first use.
 //! - `run_collecting_included` additionally surfaces the canonical path of every file the pass
 //!   loaded, which `crate::opcache_prelude` bakes into the OPcache script manifest.
+//! - Every loaded file is lexed with a fresh source identity that continues the compile's
+//!   counter (its includes too), so its spans never equal another file's in span-keyed maps.
 
 mod alias;
 mod dev_packages;
@@ -212,13 +214,23 @@ fn load_autoloaded_file(
     })?;
     let file_label = path.display().to_string();
     let source_mode = crate::source::SourceMode::from_path(path);
-    let tokens = crate::lexer::tokenize_with_mode(&content, source_mode)
-        .map_err(|e| e.with_file(file_label.clone()))?;
+    // Its own source identity, continuing the compile's counter. Lexed with the entry file's
+    // identity 0, a statement here shared its span with the statement at the same line and
+    // column of the entry and of every other autoloaded file, so span-keyed checker results (a
+    // readonly write guard, a builtin call type, a binding decision) leaked between them: one
+    // class got another class's readonly guard (issue #1445).
+    let source_id = Span::fresh_source_id();
+    Span::register_source_path(source_id, file_label.clone());
+    let tokens =
+        crate::lexer::tokenize_with_mode_and_source_id(&content, source_mode, source_id)
+            .map_err(|e| e.with_file(file_label.clone()))?;
     let parsed = crate::parser::parse_with_mode(&tokens, source_mode)
         .map_err(|e| e.with_file(file_label.clone()))?;
     let parsed =
         crate::source::finalize_physical_program(parsed, &content, path, source_mode, defines)?;
-    let (resolved, nested_includes) = crate::resolver::resolve_collecting_includes_with_defines(
+    // `continuing`, not the root entry: the root one rewinds the source identities, which handed
+    // this file's includes the identities of the entry program's includes.
+    let (resolved, nested_includes) = crate::resolver::resolve_collecting_includes_continuing(
         parsed,
         path.parent().unwrap_or(base_dir),
         defines,

@@ -119,7 +119,10 @@ PHP call surfaces.
 
 ## Scope behavior
 
-Variables from the caller's local scope are visible in the fragment.
+Variables from the caller's local scope are visible in the fragment, except
+locals stored as a native pointer word or handle: `ptr<T>` and `?ptr<T>` locals,
+packed record addresses, buffers, and locals that hold `null` and pointers (see
+[Pointers](../beyond-php/pointers.md)). The fragment reads those as undefined.
 Assignments and `unset()` are reflected back into that scope, variables created
 by the fragment remain visible after `eval()`, and `return expr;` returns from
 the `eval()` call itself.

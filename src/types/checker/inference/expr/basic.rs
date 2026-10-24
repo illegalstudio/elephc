@@ -6,7 +6,10 @@
 //!
 //! Key details:
 //! - Preserves PHP array widening, nullability, match joins, and string-offset validation.
+//! - Ternary, `?:` and `match` arms that hold a buffer keep its exact `buffer<T>` type or are
+//!   rejected (`buffer_merges`), since a boxed buffer can no longer be indexed.
 
+use super::buffer_merges::buffer_merge_result_type;
 use super::{merge_match_arm_result_type, Checker};
 use crate::errors::CompileError;
 use crate::parser::ast::{ArrayEntry, Expr, ExprKind};
@@ -196,11 +199,13 @@ impl Checker {
             } => {
                 self.infer_type(subject, env)?;
                 let mut result_ty: Option<PhpType> = None;
+                let mut arm_types: Vec<(&Expr, PhpType)> = Vec::new();
                 for (conditions, result) in arms {
                     for c in conditions {
                         self.infer_type(c, env)?;
                     }
                     let ty = self.match_arm_result_type(result, env)?;
+                    arm_types.push((result, ty.clone()));
                     result_ty = Some(match result_ty {
                         Some(acc) => merge_match_arm_result_type(self, acc, ty),
                         None => ty,
@@ -208,10 +213,14 @@ impl Checker {
                 }
                 if let Some(d) = default {
                     let ty = self.match_arm_result_type(d, env)?;
+                    arm_types.push((&**d, ty.clone()));
                     result_ty = Some(match result_ty {
                         Some(acc) => merge_match_arm_result_type(self, acc, ty),
                         None => ty,
                     });
+                }
+                if let Some(buffer) = buffer_merge_result_type("a match", &arm_types, expr.span)? {
+                    return Ok(buffer);
                 }
                 Ok(result_ty.unwrap_or(PhpType::Void))
             }
@@ -276,6 +285,11 @@ impl Checker {
                         self.match_arm_result_type(else_expr, env)?,
                     )
                 };
+                let arms = [(&**then_expr, then_ty), (&**else_expr, else_ty)];
+                if let Some(buffer) = buffer_merge_result_type("a ternary", &arms, expr.span)? {
+                    return Ok(buffer);
+                }
+                let [(_, then_ty), (_, else_ty)] = arms;
                 // Same Mixed/nullable merge as match arms: heterogeneous heap
                 // types must not collapse through the Str-absorbing syntactic join.
                 Ok(merge_match_arm_result_type(self, then_ty, else_ty))
@@ -283,6 +297,11 @@ impl Checker {
             ExprKind::ShortTernary { value, default } => {
                 let value_ty = self.match_arm_result_type(value, env)?;
                 let default_ty = self.match_arm_result_type(default, env)?;
+                let arms = [(&**value, value_ty), (&**default, default_ty)];
+                if let Some(buffer) = buffer_merge_result_type("a `?:`", &arms, expr.span)? {
+                    return Ok(buffer);
+                }
+                let [(_, value_ty), (_, default_ty)] = arms;
                 Ok(merge_match_arm_result_type(self, value_ty, default_ty))
             }
             ExprKind::Throw(inner) => {

@@ -135,11 +135,14 @@ cannot embed itself, directly or through other packed classes, because the recor
 no finite size.
 
 Reading a nested record (`$bodies[0]->pos`) yields the record's address, like reading a
-buffer element: a local holding it writes through to the buffer. Assigning a whole record
-to a nested field copies its bytes (including the odd tail of a record of width-declared
-fields), and the source must be a record of the same packed class: a buffer element, another
-nested field, or a `ptr<T>` typed pointer. Like C struct assignment, the copy assumes the
-source and the destination do not partially overlap.
+buffer element: a local holding it writes through to the buffer. A local that also holds
+`null` at some point (`$hit = null;` before a loop that stores `$hit = $bodies[$i];`) keeps
+that address as one pointer word with `null` as address 0, so it compares with `null` and
+reaches the fields like a `?ptr<T>` (see [Pointers](pointers.md#null-safety)). Assigning a
+whole record to a nested field copies its bytes (including the odd tail of a record of
+width-declared fields), and the source must be a record of the same packed class: a buffer
+element, another nested field, or a `ptr<T>` typed pointer. Like C struct assignment, the copy
+assumes the source and the destination do not partially overlap.
 
 ```php
 <?php
