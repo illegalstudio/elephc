@@ -9,6 +9,8 @@
 
 use super::*;
 
+mod native_xml;
+
 /// Lowers an object property write.
 pub(super) fn lower_property_assign(
     ctx: &mut LoweringContext<'_, '_>,
@@ -234,6 +236,18 @@ fn lower_property_assign_value(
     lowered_value: LoweredValue,
     preserve_property_operand: bool,
     span: Span,
+) {
+    if native_xml::lower(ctx, object, property, value_expr, lowered_value, preserve_property_operand, span) {
+        return;
+    }
+    lower_property_assign_without_native(ctx, object, property, value_expr, lowered_value,
+        preserve_property_operand, span);
+}
+
+/// Writes an ordinary slot, hook, or magic property after native XML dispatch is excluded.
+fn lower_property_assign_without_native(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str,
+    value_expr: &Expr, lowered_value: LoweredValue, preserve_property_operand: bool, span: Span,
 ) {
     let value = contextualize_property_array_assignment(
         ctx,

@@ -162,7 +162,7 @@ fn box_operand(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Spa
 }
 
 /// Uses the ordinary argument collector contract for adapters retained by eval/introspection.
-fn append_hidden_arguments(
+pub(crate) fn append_hidden_arguments(
     ctx: &mut LoweringContext<'_, '_>, signature: Option<&FunctionSig>, operands: &mut Vec<ValueId>,
     actual_count: usize, expr: &Expr,
 ) -> Vec<LoweredValue> {

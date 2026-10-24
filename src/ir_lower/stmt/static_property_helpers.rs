@@ -132,6 +132,9 @@ pub(super) fn object_property_type(
 ) -> Option<PhpType> {
     let object_ty = ctx.builder.value_php_type(object);
     let (class_name, _) = crate::ir_lower::expr::singular_object_class(&object_ty)?;
+    if crate::types::builtin_classes::native_property_method(class_name, property,
+        elephc_builtin_contract::ObjectProperty::Set, ctx.classes).is_some()
+    { return None; }
     ctx.classes
         .get(class_name.trim_start_matches('\\'))?
         .visible_property(property)

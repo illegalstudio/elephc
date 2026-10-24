@@ -13,7 +13,7 @@ use super::*;
 /// Dispatches a native XML property operation, or returns None for an ordinary object.
 pub(in crate::interpreter) fn invoke(
     values: &mut impl RuntimeValueOps, object: RuntimeCellHandle, property: &str,
-    method: &str, assigned: Option<RuntimeCellHandle>,
+    operation: elephc_builtin_contract::ObjectProperty, assigned: Option<RuntimeCellHandle>,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     if property.starts_with("__elephc_") { return Ok(None); }
     match values.object_is_a(object, "SimpleXMLElement", false) {
@@ -21,6 +21,9 @@ pub(in crate::interpreter) fn invoke(
         Ok(false) | Err(EvalStatus::UnsupportedConstruct) => return Ok(None),
         Err(status) => return Err(status),
     }
+    let method = elephc_builtin_contract::lookup_class("SimpleXMLElement")
+        .and_then(|class| class.operators).and_then(|operators| operators.property_method(operation))
+        .ok_or(EvalStatus::RuntimeFatal)?;
     let name = values.string(property)?;
     let mut arguments = vec![name];
     arguments.extend(assigned);

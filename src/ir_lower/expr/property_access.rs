@@ -11,6 +11,35 @@ use super::*;
 
 mod native_xml_reads;
 
+/// Tests whether a boxed receiver may require the native XML property protocol.
+pub(super) fn needs_native_xml_property_dispatch(
+    ctx: &LoweringContext<'_, '_>, object: &Expr, property: &str,
+) -> bool {
+    !property.starts_with("__elephc_") && ctx.classes.contains_key("SimpleXMLElement")
+        && matches!(super::array_cast_source::array_cast_source_type_for_ir(ctx, object).codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_))
+}
+
+/// Performs a native-aware isset probe after receiver evaluation.
+pub(super) fn lower_boxed_xml_property_isset(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, expr: &Expr,
+) -> LoweredValue { native_xml_reads::isset(ctx, object, property, expr) }
+
+/// Removes a boxed native XML property or an ordinary runtime object property.
+pub(super) fn lower_boxed_xml_property_unset(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, expr: &Expr,
+) { native_xml_reads::unset(ctx, object, property, expr); }
+
+/// Resolves a native property method from a lowered receiver's precise class.
+pub(super) fn native_property_method_for_value(
+    ctx: &LoweringContext<'_, '_>, value: ValueId, property: &str,
+    operation: elephc_builtin_contract::ObjectProperty,
+) -> Option<&'static str> {
+    let ty = ctx.builder.value_php_type(value);
+    let (class, _) = singular_object_class(&ty)?;
+    crate::types::builtin_classes::native_property_method(class, property, operation, ctx.classes)
+}
+
 /// Lowers an object property read.
 pub(super) fn lower_property_get(
     ctx: &mut LoweringContext<'_, '_>,
@@ -378,15 +407,15 @@ fn lower_property_get_without_native_dispatch(
         return lower_boxed_null(ctx, expr);
     }
     let object_type = ctx.builder.value_php_type(object.value);
-    let native_xml_getter = singular_object_class(&object_type).is_some_and(|(class, _)| {
-        crate::types::builtin_classes::has_native_dimensions(class, ctx.classes)
-            && !property.starts_with("__elephc_")
+    let native_getter = singular_object_class(&object_type).and_then(|(class, _)| {
+        crate::types::builtin_classes::native_property_method(class, property,
+            elephc_builtin_contract::ObjectProperty::Get, ctx.classes)
     });
-    if matches!(op, Op::PropGet | Op::NullsafePropGet) && native_xml_getter {
+    if let Some(method) = native_getter.filter(|_| matches!(op, Op::PropGet | Op::NullsafePropGet)) {
         // XML child selection creates a fresh wrapper. Keep that ownership visible as a call.
         let name = Expr::new(ExprKind::StringLiteral(property.into()), expr.span);
         let call = if op == Op::NullsafePropGet { Op::NullsafeMethodCall } else { Op::MethodCall };
-        return lower_method_call_with_receiver(ctx, object, "__get", &[name], call, expr);
+        return lower_method_call_with_receiver(ctx, object, method, &[name], call, expr);
     }
     // Route a read of a get-hooked property to its synthetic accessor, except inside that property's
     // own accessor, where `$this->prop` must read the raw backing slot to avoid infinite recursion.
@@ -962,6 +991,22 @@ pub(super) fn lower_property_probe_from_value(
     object: LoweredValue,
     property: &str,
     expr: &Expr,
+) -> LoweredValue {
+    if let Some(method) = native_property_method_for_value(ctx, object.value, property,
+        elephc_builtin_contract::ObjectProperty::Probe)
+    {
+        let name = Expr::new(ExprKind::StringLiteral(property.into()), expr.span);
+        return lower_method_call_with_receiver(ctx, object, method, &[name], Op::MethodCall, expr);
+    }
+    if !property.starts_with("__elephc_") && ctx.classes.contains_key("SimpleXMLElement")
+        && matches!(ctx.builder.value_php_type(object.value).codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+    { return native_xml_reads::probe(ctx, object, property, expr); }
+    lower_property_probe_without_native(ctx, object, property, expr)
+}
+
+/// Probes ordinary property storage without re-entering a native XML presence branch.
+fn lower_property_probe_without_native(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, expr: &Expr,
 ) -> LoweredValue {
     // Runtime-name probes must suppress typed uninitialized reads just like coalesce.
     // In particular, isset() on the C|false receiver after a rejected readonly fallback

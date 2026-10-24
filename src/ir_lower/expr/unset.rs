@@ -248,6 +248,7 @@ pub(super) fn unset_property_access_has_direct_lowering(
     object: &Expr,
     property: &str,
 ) -> bool {
+    if needs_native_xml_property_dispatch(ctx, object, property) { return true; }
     matches!(
         property_unset_action(ctx, object, property),
         Some(
@@ -267,6 +268,11 @@ pub(super) fn lower_unset_property_access(
     property: &str,
     expr: &Expr,
 ) {
+    if needs_native_xml_property_dispatch(ctx, object, property) {
+        let object = lower_expr(ctx, object);
+        lower_boxed_xml_property_unset(ctx, object, property, expr);
+        return;
+    }
     let action = property_unset_action(ctx, object, property);
     match action {
         Some(UnsetPropertyAction::Magic) => {
@@ -479,6 +485,9 @@ pub(super) fn property_unset_action(
         return Some(UnsetPropertyAction::RemoveDynamic);
     }
     let class_info = ctx.classes.get(class_name.as_str())?;
+    if crate::types::builtin_classes::native_property_method(&class_name, property,
+        elephc_builtin_contract::ObjectProperty::Unset, ctx.classes).is_some()
+    { return Some(UnsetPropertyAction::Magic); }
     // php 7.4 removed shadow properties: a strict ancestor's `private $p` is not in this class's
     // by-name table, so `unset($child->p)` removes the DISTINCT dynamic entry of that name and
     // leaves the ancestor's slot alone. The accessibility ladder below still answers for that
@@ -530,7 +539,9 @@ pub(super) fn lower_magic_property_unset(
         ExprKind::StringLiteral(property.to_string()),
         expr.span,
     )];
-    lower_method_call_with_receiver(ctx, object, "__unset", &args, Op::MethodCall, expr);
+    let method = native_property_method_for_value(ctx, object.value, property,
+        elephc_builtin_contract::ObjectProperty::Unset).unwrap_or("__unset");
+    lower_method_call_with_receiver(ctx, object, method, &args, Op::MethodCall, expr);
 }
 
 /// Lowers `__unset` for nullable receivers, doing nothing when the receiver is null.
@@ -573,7 +584,9 @@ pub(super) fn lower_nullable_magic_property_unset(
         ExprKind::StringLiteral(property.to_string()),
         expr.span,
     )];
-    lower_method_call_with_receiver(ctx, object, "__unset", &args, Op::MethodCall, expr);
+    let method = native_property_method_for_value(ctx, object.value, property,
+        elephc_builtin_contract::ObjectProperty::Unset).unwrap_or("__unset");
+    lower_method_call_with_receiver(ctx, object, method, &args, Op::MethodCall, expr);
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);

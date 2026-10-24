@@ -34,9 +34,15 @@ pub enum ObjectOrdering {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ObjectCast { Int, Float, Array }
 
+/// Native property operation that takes precedence over PHP slots and magic methods.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ObjectProperty { Get, Set, Isset, Unset, Probe }
+
 /// Methods implementing an internal class's native operators and clone protocol.
 #[derive(Clone, Copy, Debug)]
 pub struct ClassOperators {
+    /// Native property adapters, independent of userland magic-method overrides.
+    pub properties: &'static [(ObjectProperty, &'static str)],
     /// Native clone handler after a shallow copy; replaces the userland clone callback.
     pub native_clone: Option<&'static str>,
     /// Native JSON projection without a PHP-visible JsonSerializable interface.
@@ -52,6 +58,10 @@ pub struct ClassOperators {
 }
 
 impl ClassOperators {
+    /// Resolves a native property operation without selecting a user magic method.
+    pub fn property_method(&self, operation: ObjectProperty) -> Option<&'static str> {
+        self.properties.iter().find_map(|(op, method)| (*op == operation).then_some(*method))
+    }
     /// Returns the reviewed instance adapter for a native conversion.
     pub fn cast_method(&self, cast: ObjectCast) -> Option<&'static str> {
         self.casts.iter().find_map(|(candidate, method)| (*candidate == cast).then_some(*method))
@@ -65,6 +75,7 @@ impl ClassOperators {
 
 /// Number adapters compile through ordinary EIR calls with fresh immutable results.
 pub const BCMATH_NUMBER_OPERATORS: ClassOperators = ClassOperators {
+    properties: &[],
     native_clone: None,
     json: None,
     casts: &[],
@@ -82,6 +93,11 @@ pub const BCMATH_NUMBER_OPERATORS: ClassOperators = ClassOperators {
 
 /// SimpleXML uses native document truthiness rather than ordinary object truthiness.
 pub const SIMPLEXML_OPERATORS: ClassOperators = ClassOperators {
+    properties: &[(ObjectProperty::Get, "__elephc_property_get"),
+        (ObjectProperty::Set, "__elephc_property_set"),
+        (ObjectProperty::Isset, "__elephc_property_isset"),
+        (ObjectProperty::Unset, "__elephc_property_unset"),
+        (ObjectProperty::Probe, "__elephc_property_probe")],
     native_clone: Some("__elephc_clone_initialize"),
     json: Some("__elephc_json"),
     casts: &[(ObjectCast::Int, "__elephc_int"), (ObjectCast::Float, "__elephc_float"), (ObjectCast::Array, "__elephc_array")],
@@ -96,6 +112,7 @@ mod tests {
     #[test]
     fn synthetic_operator_contract_resolves_only_declared_operations() {
         let operators = ClassOperators {
+            properties: &[],
             native_clone: None,
             json: None,
             casts: &[],

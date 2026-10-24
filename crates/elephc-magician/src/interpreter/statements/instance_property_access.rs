@@ -31,7 +31,7 @@ pub(in crate::interpreter) fn eval_property_get_result_with_ownership(
         return values.property_get(object, property_name);
     };
     if let Some(value) = super::super::runtime_ops::simplexml_properties::invoke(
-        values, object, property_name, "__get", None,
+        values, object, property_name, elephc_builtin_contract::ObjectProperty::Get, None,
     )? { return Ok(value); }
     let Some(class) = context.dynamic_object_class(identity) else {
         let class_name = eval_runtime_object_class_name(object, values)?;
@@ -191,7 +191,7 @@ pub(crate) fn eval_property_set_result(
         return values.property_set(object, property_name, value);
     };
     if let Some(result) = super::super::runtime_ops::simplexml_properties::invoke(
-        values, object, property_name, "__set", Some(value),
+        values, object, property_name, elephc_builtin_contract::ObjectProperty::Set, Some(value),
     )? { return values.release(result); }
     let Some(class) = context.dynamic_object_class(identity) else {
         let class_name = eval_runtime_object_class_name(object, values)?;
@@ -801,7 +801,7 @@ pub(in crate::interpreter) fn eval_property_isset_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     if let Some(result) = super::super::runtime_ops::simplexml_properties::invoke(
-        values, object, property_name, "__isset", None,
+        values, object, property_name, elephc_builtin_contract::ObjectProperty::Isset, None,
     )? {
         let truthy = values.truthy(result);
         let released = values.release(result);
@@ -891,7 +891,7 @@ pub(in crate::interpreter) fn eval_property_unset_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     if let Some(result) = super::super::runtime_ops::simplexml_properties::invoke(
-        values, object, property_name, "__unset", None,
+        values, object, property_name, elephc_builtin_contract::ObjectProperty::Unset, None,
     )? { return values.release(result); }
     let Ok(identity) = values.object_identity(object) else {
         return Ok(());

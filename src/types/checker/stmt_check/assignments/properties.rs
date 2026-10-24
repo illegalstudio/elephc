@@ -310,6 +310,9 @@ fn check_object_property_write(
     if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
         return Ok(());
     }
+    if crate::types::builtin_classes::native_property_method(class_name, property,
+        elephc_builtin_contract::ObjectProperty::Set, &checker.classes).is_some()
+    { return Ok(()); }
     // php 7.4 removed shadow properties. A strict ancestor's `private $p` lives under a mangled
     // key and the child's by-name table does not contain it at all, so a write outside the
     // declaring class CREATES a distinct dynamic property rather than being an access error.

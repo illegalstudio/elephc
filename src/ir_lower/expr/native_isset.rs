@@ -187,6 +187,10 @@ pub(super) fn lower_lazy_property_isset_operand(
     property: &str,
     arg: &Expr,
 ) -> Option<LoweredValue> {
+    if needs_native_xml_property_dispatch(ctx, object, property) {
+        let object = lower_expr(ctx, object);
+        return Some(lower_boxed_xml_property_isset(ctx, object, property, arg));
+    }
     match property_isset_action(ctx, object, property)? {
         IssetPropertyAction::Fallback => None,
         IssetPropertyAction::Magic => {
@@ -225,6 +229,9 @@ pub(super) fn property_isset_action(
         return Some(IssetPropertyAction::Fallback);
     }
     let class_info = ctx.classes.get(class_name.as_str())?;
+    if crate::types::builtin_classes::native_property_method(&class_name, property,
+        elephc_builtin_contract::ObjectProperty::Isset, ctx.classes).is_some()
+    { return Some(IssetPropertyAction::Magic); }
     if class_info.allow_dynamic_properties {
         return Some(IssetPropertyAction::Fallback);
     }
@@ -327,8 +334,9 @@ pub(super) fn lower_magic_property_isset(
         ExprKind::StringLiteral(property.to_string()),
         arg.span,
     )];
-    let result =
-        lower_method_call_with_receiver(ctx, object, "__isset", &args, Op::MethodCall, arg);
+    let method = native_property_method_for_value(ctx, object.value, property,
+        elephc_builtin_contract::ObjectProperty::Isset).unwrap_or("__isset");
+    let result = lower_method_call_with_receiver(ctx, object, method, &args, Op::MethodCall, arg);
     ctx.truthy_consuming(result, Some(arg.span))
 }
 
@@ -375,8 +383,9 @@ pub(super) fn lower_nullable_magic_property_isset(
         ExprKind::StringLiteral(property.to_string()),
         arg.span,
     )];
-    let result =
-        lower_method_call_with_receiver(ctx, object, "__isset", &args, Op::MethodCall, arg);
+    let method = native_property_method_for_value(ctx, object.value, property,
+        elephc_builtin_contract::ObjectProperty::Isset).unwrap_or("__isset");
+    let result = lower_method_call_with_receiver(ctx, object, method, &args, Op::MethodCall, arg);
     let result = ctx.truthy_consuming(result, Some(arg.span));
     store_value_into_temp(ctx, &temp_name, PhpType::Bool, result, arg.span);
     branch_to(ctx, merge);

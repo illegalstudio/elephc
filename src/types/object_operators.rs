@@ -65,6 +65,7 @@ mod tests {
     use elephc_builtin_contract::{BuiltinId, ClassKind, ClassOperators, ClassRoute, PhpModule};
 
     static OPERATORS: ClassOperators = ClassOperators {
+        properties: &[],
         native_clone: None,
         json: None,
         casts: &[],

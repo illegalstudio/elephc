@@ -143,6 +143,35 @@ readSimpleXmlChild($ordinary);
     assert_eq!(out, "native|hidden|ordinary|");
 }
 
+/// Native XML properties bypass user slots and hooks in typed, boxed, and eval operations.
+#[test]
+fn test_simplexml_native_properties_ignore_user_hooks() {
+    if skip_without_xml_native("test_simplexml_native_properties_ignore_user_hooks") { return; }
+    let out = compile_and_run(r###"<?php
+class HookedPropertyXml extends SimpleXMLElement {
+    public string $a = 'slot';
+    public function __get(string $name): mixed { echo 'get-hook|'; return 'wrong'; }
+    public function __set(string $name, mixed $value): void { echo 'set-hook|'; }
+    public function __isset(string $name): bool { echo 'isset-hook|'; return false; }
+    public function __unset(string $name): void { echo 'unset-hook|'; }
+}
+$xml = new HookedPropertyXml('<r><a>native</a></r>');
+echo (string)$xml->a, '|';
+$xml->a = 'typed'; echo (string)$xml->a, '|';
+var_dump(isset($xml->a), isset($xml->missing));
+echo $xml->missing ?? 'fallback', '|';
+function mutateNativePropertyMixed(mixed $node): void {
+    $node->a = 'mixed'; echo (string)$node->a, '|';
+    var_dump(isset($node->a), isset($node->missing));
+    echo $node->missing ?? 'boxed-fallback', '|';
+    unset($node->a); var_dump(isset($node->a));
+}
+mutateNativePropertyMixed($xml);
+eval('$xml->a = "eval"; echo (string)$xml->a, "|"; var_dump(isset($xml->a)); unset($xml->a); var_dump(isset($xml->a));');
+"###);
+    assert_eq!(out, "native|typed|bool(true)\nbool(false)\nfallback|mixed|bool(true)\nbool(false)\nboxed-fallback|bool(false)\neval|bool(true)\nbool(false)\n");
+}
+
 /// Verifies SimpleXML parse errors and options against PHP's observable output.
 #[test]
 fn test_simplexml_parse_errors_and_options() {

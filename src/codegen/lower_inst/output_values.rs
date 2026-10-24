@@ -55,7 +55,19 @@ pub(super) fn lower_object_echo_value(
         return Ok(());
     }
     let return_ty = emit_object_tostring_call(ctx, value, normalized)?;
-    emit_loaded_value_to_stdout(ctx, &return_ty.codegen_repr())
+    emit_owned_tostring_result_to_stdout(ctx, &return_ty.codegen_repr())
+}
+
+/// Writes an owned method string while preserving its pointer for the matching release.
+pub(super) fn emit_owned_tostring_result_to_stdout(
+    ctx: &mut FunctionContext<'_>, ty: &PhpType,
+) -> Result<()> {
+    let (ptr, len) = abi::string_result_regs(ctx.emitter);
+    abi::emit_push_reg_pair(ctx.emitter, ptr, len);
+    emit_loaded_value_to_stdout(ctx, ty)?;
+    abi::emit_pop_reg_pair(ctx.emitter, ptr, len);
+    abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Str);
+    Ok(())
 }
 
 /// Emits the zero-argument `__toString()` method call for an object value.

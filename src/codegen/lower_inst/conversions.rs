@@ -336,7 +336,7 @@ pub(in crate::codegen) fn emit_mixed_string_dispatch_from_result(
         let return_ty = emit_mixed_tostring_candidate_call(ctx, value, receiver_reg, candidate)?;
         coerce_tostring_return_to_string_result(ctx, &return_ty)?;
         if matches!(mode, MixedStringContextMode::Stdout) {
-            abi::emit_write_stdout(ctx.emitter, &PhpType::Str);
+            super::output_values::emit_owned_tostring_result_to_stdout(ctx, &PhpType::Str)?;
         }
         abi::emit_jump(ctx.emitter, &done_label);
     }

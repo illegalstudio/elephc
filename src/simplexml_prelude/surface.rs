@@ -92,22 +92,36 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $handle = $this->__elephc_handle;
         return elephc_xml_sx_int($handle, 3) !== 0;
     }
-    public function __get(string $name): static {
+    public function __get(string $name): mixed { return $this->__elephc_property_get($name); }
+    final public function __elephc_property_get(string $name): static {
         $handle = $this->__elephc_handle;
         $selected = elephc_xml_sx_select($handle, 2, $name, "", 0, 0);
         return __elephc_simplexml_wrap($selected, get_class($this));
     }
     public function __set(string $name, mixed $value): void {
+        $this->__elephc_property_set($name, $value);
+    }
+    final public function __elephc_property_set(string $name, mixed $value): void {
         $handle = $this->__elephc_handle;
         $status = elephc_xml_sx_mutate($handle, 2, $name, (string)$value, "", 0, 0);
         if ($status === -2) { trigger_error("Cannot assign to an array of nodes (duplicate subnodes or attr detected)", E_USER_WARNING); }
     }
     public function __isset(string $name): bool {
-        $node = $this->__get($name);
+        return $this->__elephc_property_isset($name);
+    }
+    final public function __elephc_property_isset(string $name): bool {
+        $node = $this->__elephc_property_get($name);
         $handle = $node->__elephc_handle;
         return elephc_xml_sx_int($handle, 1) !== 0;
     }
+    final public function __elephc_property_probe(string $name): mixed {
+        if (!$this->__elephc_property_isset($name)) { return null; }
+        return $this->__elephc_property_get($name);
+    }
     public function __unset(string $name): void {
+        $this->__elephc_property_unset($name);
+    }
+    final public function __elephc_property_unset(string $name): void {
         $handle = $this->__elephc_handle;
         elephc_xml_sx_mutate($handle, 12, $name, "", "", 0, 0);
     }

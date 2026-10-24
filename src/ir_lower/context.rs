@@ -3841,7 +3841,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.builder.value_defining_op(value) == Some(Op::MixedUnbox)
     }
 
-    /// Returns whether a generic cast owns a detached string copy of a Mixed operand.
+    /// Returns whether a generic cast owns a detached Mixed string or an object method result.
     fn value_is_owning_mixed_string_cast(&self, value: ValueId) -> bool {
         let Some(inst) = self.builder.value_defining_instruction(value) else {
             return false;
@@ -3854,7 +3854,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         };
         matches!(
             self.builder.value_php_type(source).codegen_repr(),
-            PhpType::Mixed | PhpType::Union(_)
+            PhpType::Mixed | PhpType::Union(_) | PhpType::Object(_)
         )
     }
 

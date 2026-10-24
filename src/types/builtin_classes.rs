@@ -77,6 +77,25 @@ pub(crate) fn has_native_dimensions(name: &str, classes: &HashMap<String, super:
     false
 }
 
+/// Resolves a native property adapter while reserving the prelude's own storage names.
+pub(crate) fn native_property_method(
+    name: &str, property: &str, operation: elephc_builtin_contract::ObjectProperty,
+    classes: &HashMap<String, super::ClassInfo>,
+) -> Option<&'static str> {
+    if property.starts_with("__elephc_") { return None; }
+    let mut current = Some(name.trim_start_matches('\\'));
+    for _ in 0..=classes.len() {
+        let info = classes.get(current?)?;
+        if info.is_internal {
+            if let Some(method) = lookup_class(current?).and_then(|class| class.operators)
+                .and_then(|operators| operators.property_method(operation))
+            { return Some(method); }
+        }
+        current = info.parent.as_deref();
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
