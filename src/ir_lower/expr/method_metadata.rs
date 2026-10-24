@@ -223,7 +223,12 @@ pub(super) fn method_call_result_type_for_receiver_type(
     let Some(return_ty) = method_signature_for_receiver_type(ctx, object_ty, method)
         .map(|signature| normalize_value_php_type(signature.return_type))
     else {
-        if dynamic_method_receiver_needs_mixed_fallback(object_ty) {
+        // A named receiver lacks the method only when the checker narrowed it to a class that
+        // has it (`if ($animal instanceof Dog)`). Codegen dispatches that call on the runtime
+        // class, which hands back a boxed result, as for an untyped receiver.
+        if dynamic_method_receiver_needs_mixed_fallback(object_ty)
+            || singular_object_class(object_ty).is_some()
+        {
             return PhpType::Mixed;
         }
         return fallback_expr_type(expr);

@@ -9,6 +9,30 @@
 
 use super::*;
 
+/// Reports whether the receiver's static class or interface declares the method, or a class
+/// handles undeclared calls through `__call`.
+///
+/// A narrowed receiver keeps its declared type in EIR, so a method only its narrowed class has
+/// is absent here and must dispatch on the runtime class instead.
+fn static_receiver_declares_method(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    method_name: &str,
+) -> bool {
+    let normalized = class_name.trim_start_matches('\\');
+    let method_key = php_symbol_key(method_name);
+    if let Some(interface_info) = ctx.module.interface_infos.get(normalized) {
+        return interface_info.methods.contains_key(&method_key);
+    }
+    match ctx.module.class_infos.get(normalized) {
+        Some(class_info) => {
+            class_info.methods.contains_key(&method_key)
+                || class_info.methods.contains_key(&php_symbol_key("__call"))
+        }
+        None => true,
+    }
+}
+
 /// Lowers a direct instance-method call on a statically known object receiver.
 ///
 /// Overridable methods check literal `false` and `null` parameters on the runtime
@@ -64,6 +88,12 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     }
     if is_throwable_standard_method_call(ctx, &class_name, &method_name) {
         return lower_throwable_standard_method(ctx, inst, object, &method_name);
+    }
+    if !static_receiver_declares_method(ctx, &class_name, &method_name) {
+        // The checker accepted a method the receiver's static type does not declare, so the
+        // receiver was narrowed (`if ($shape instanceof Square)`). Lowering keeps the slot's
+        // declared type, so dispatch on the runtime class, as for an untyped receiver.
+        return lower_mixed_method_call(ctx, inst, object, &method_name);
     }
     if ctx
         .module
