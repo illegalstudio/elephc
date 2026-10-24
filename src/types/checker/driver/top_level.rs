@@ -186,6 +186,10 @@ impl Checker {
             "Array index must be integer"
                 | "Cannot index non-array"
                 | "Property access requires an object or typed pointer"
+                // A nullsafe receiver typed by a method whose return the method pass has not
+                // inferred yet (`$m->next()?->push($v)`) still reads the `Int` placeholder.
+                | "Nullsafe method call requires an object or null"
+                | "Nullsafe property access requires an object or null"
         ) || message.starts_with("Undefined property: ")
             || (message.starts_with("Cannot call $") && message.contains("not a callable"))
             // Spelled as the diagnostic reads, which is PHP's own vocabulary: this branch of the

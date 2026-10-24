@@ -74,7 +74,15 @@ pub(crate) fn build_method_sig(
             method.span,
             &format!("Method '{}'", method.name),
         )?,
-        None => super::super::infer_return_type_syntactic(&method.body),
+        // The syntactic pass types `return $this;` and `return new static;` as an object of no
+        // class: it sees the body, not its owner. That provisional return is what every call
+        // site checked before the method pass reads, so a fluent chain `$m->a()->b($v)` found no
+        // `b` on a nameless class, typed the call as the `Int` placeholder and taught `b`'s
+        // untyped parameters nothing. The owner is known here.
+        None => owner_relative_object_return(
+            super::super::infer_return_type_syntactic(&method.body),
+            declaring_type,
+        ),
     };
     if method.variadic.is_some() {
         ref_params.push(method.variadic_by_ref);
@@ -128,6 +136,22 @@ pub(crate) fn build_method_sig(
         }
     }
     Ok(sig)
+}
+
+/// Names the owner in a syntactic return type that holds an object of no class.
+fn owner_relative_object_return(return_type: PhpType, owner: &str) -> PhpType {
+    match return_type {
+        PhpType::Object(name) if name.is_empty() && !owner.is_empty() => {
+            PhpType::Object(owner.to_string())
+        }
+        PhpType::Union(members) => PhpType::Union(
+            members
+                .into_iter()
+                .map(|member| owner_relative_object_return(member, owner))
+                .collect(),
+        ),
+        other => other,
+    }
 }
 
 /// Returns `Some(reason)` when the attribute list contains a `#[\Deprecated]`
