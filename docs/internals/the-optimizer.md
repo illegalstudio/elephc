@@ -609,9 +609,20 @@ after tail recursion), then the scalar passes run again. Every `buffer_get` and
 `buffer_set` normally resolves its generation-safe handle through
 `__rt_buffer_resolve` before the bounds check. In a loop whose natural body
 cannot free, allocate or rebind a buffer, that answer cannot change between
-iterations, so the pass appends one `buffer_resolve` to the preheader and turns
+iterations, so the pass inserts one `buffer_resolve` into the preheader and turns
 each access with a loop-invariant handle into `buffer_get_resolved` or
 `buffer_set_resolved`.
+
+The resolution (with the handle slot load it reads, for a local handle) goes at
+the earliest preheader position that gives the answer the end of the preheader
+would: after the handle's own definition and after the last preheader
+instruction that fails the loop-body allowlist below or names the handle slot as
+storage. The pass runs after LICM has moved the loop-invariant loads into the
+preheader, so appending the call at the end would keep a hoisted float, such as
+a `float $dt` parameter, live across `__rt_buffer_try_resolve`. SysV x86_64 has
+no callee-saved XMM register, so the allocator would leave that float in a frame
+slot and reload it on every iteration; resolving first leaves it call-free and
+eligible for a caller-saved XMM register.
 
 The pass also recognizes a zero-initialized, unit-step induction parameter whose
 loop continuation is a strict signed comparison against `buffer_len` of that
@@ -657,6 +668,48 @@ length load and unsigned comparison only for the true-immediate form. Every
 other resolved or unresolved access uses one unsigned `index < length`
 comparison; a negative signed index has a large unsigned representation and
 therefore reaches the same bounds fatal without a separate signed test.
+
+### Straight-line reuse of buffer property reads
+
+After the loops, `src/ir_passes/buffer_property_reuse.rs` handles the repeated
+`$this->slots[$i]` accesses of straight-line code, which the loop rewrite never
+sees because their handle is a property read inside the body. Each such access
+reads the property, calls `__rt_buffer_resolve` and recomputes the record
+address. Three rewrites share that work, each only across a clean region: every
+instruction on any path from the earliest instruction either access depends on
+to the later one must keep buffers, buffer-typed properties and the matched
+local slots unchanged. The classifier is default-deny: the loop allowlist minus
+every opcode that can run user code (even a call whose effect summary is
+read-only, since summaries drop the callee's local effects and matched slots are
+not proven free of address escapes), plus
+the no-op `acquire` and `release` of a buffer handle and named property reads of
+`$this` refined to `reads_heap, may_throw`. Only the method receiver is trusted,
+as a candidate and inside a region: effect refinement drops the null-receiver
+warning of any other receiver (a nullable one, or a non-nullable parameter a
+dynamic call passed `null`), and that warning can run a user error handler.
+Modules where a class declares `__get`, or where the eval bridge can declare one,
+skip the phase, so no trusted read dispatches to user code. A property store or
+`unset` on any object
+(another reference may alias the receiver), `buffer_free()`, a call, a release,
+an allocation, a warning or output ends the region.
+
+1. A dominated buffer-typed `prop_get` of the same property on a matching
+   receiver is replaced by the dominating read. A read that did not throw first
+   cannot throw the second time, because nothing changed the property.
+2. A dominated packed `buffer_get` of the same property-read handle and a
+   matching index reuses the dominating record address.
+3. The remaining accesses of one property-read handle that a leading access
+   dominates share one `buffer_resolve` inserted right before that leader and
+   become `buffer_get_resolved` or `buffer_set_resolved`. A stale handle still
+   dies with the use-after-free fatal at the leader.
+
+Receivers and indexes match when they are one SSA value (seen through block
+parameters that every edge feeds the same value), equal integer constants, or
+loads of one stable slot: a by-value PHP local that only `load_local` and
+`store_local` name, which the region does not write. With no user code in the
+region, nothing can reach such a slot through a by-reference alias. A buffer
+`acquire` left with nothing but its `release` is dropped with it. Local buffer
+handles in straight-line code keep their per-access form.
 
 Packed field reads and writes (`prop_get`/`prop_set` on a packed record) also get
 their exact effects during effect refinement (`reads_heap` for a read;

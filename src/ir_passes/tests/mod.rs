@@ -12,6 +12,7 @@ mod branch_simplify_test;
 mod boxed_narrowing_test;
 mod bounded_mixed_counter_test;
 mod buffer_access_test;
+mod buffer_property_reuse_test;
 mod checked_int_sink_test;
 mod checked_numeric_chain_test;
 mod clobber_test;
