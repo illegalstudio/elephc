@@ -139,7 +139,7 @@ pub(super) fn lower_lazy_isset_operand(
 }
 
 /// Reduces a probed property value to php's `isset()` answer: set means "not null".
-fn probe_value_is_set(
+pub(super) fn probe_value_is_set(
     ctx: &mut LoweringContext<'_, '_>,
     probed: LoweredValue,
     arg: &Expr,
