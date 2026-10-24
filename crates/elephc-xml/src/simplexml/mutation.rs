@@ -53,6 +53,13 @@ impl View {
     }
     /// Writes a named property/attribute or numeric offset, returning a PHP status code.
     pub(super) fn write(&self, kind: i64, key: &str, index: i64, value: &str) -> i64 {
+        if kind == 4 && index < 0 { return 0; }
+        if kind == 5 {
+            if let Scope::Children(parent, Some(name)) = &self.scope {
+                return parent.add(name, None, None, false).map(|node| { self.assign_node(node, value); 1 }).unwrap_or(0);
+            }
+            return 0;
+        }
         let target = self.select(kind, key, "", false, index.max(0) as usize);
         let nodes = target.nodes();
         if nodes.len() > 1 { return -2; }
