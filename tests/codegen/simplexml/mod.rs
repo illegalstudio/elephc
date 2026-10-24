@@ -574,6 +574,22 @@ echo count($xml->item), ':', (string)$xml->item[2], "\n";
     assert_eq!(out, "v:2:changed:added\n3:third\n");
 }
 
+/// A dynamic property expression can replace the variable before PHP fetches its receiver.
+#[test]
+fn test_simplexml_dynamic_property_receiver_evaluation_order() {
+    if skip_without_xml_native("test_simplexml_dynamic_property_receiver_evaluation_order") { return; }
+    let out = compile_and_run(r###"<?php
+$receiver = new SimpleXMLElement('<r><a>old</a></r>');
+function alterXmlReceiver(): string {
+    global $receiver;
+    $receiver = new SimpleXMLElement('<r><a>new</a></r>');
+    return 'a';
+}
+echo (string)$receiver->{alterXmlReceiver()}, ':', (string)$receiver->a;
+"###);
+    assert_eq!(out, "new:new");
+}
+
 /// Native document leases survive overrides of the PHP destructor and release independently.
 #[test]
 fn test_simplexml_subclass_destructor_owns_native_lease() {

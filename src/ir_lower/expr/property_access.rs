@@ -955,6 +955,14 @@ pub(super) fn lower_dynamic_property_fetch(
     mode: PropertyFetchMode,
     expr: &Expr,
 ) -> LoweredValue {
+    if matches!(object.kind, ExprKind::Variable(_)) {
+        // PHP fetches a variable receiver after the property expression has evaluated.
+        let name = lower_expr(ctx, property);
+        let name = coerce_runtime_property_name(ctx, name, expr.span);
+        let object = lower_expr(ctx, object);
+        let result_type = dynamic_property_get_result_type(ctx, object.value, property, expr);
+        return lower_dynamic_property_fetch_from_operands(ctx, object, name, result_type, mode, expr);
+    }
     let object = lower_expr(ctx, object);
     lower_dynamic_property_fetch_from_value(ctx, object, property, mode, expr)
 }
