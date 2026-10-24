@@ -106,7 +106,7 @@ pub(super) fn unset_array_access_has_object_receiver(
     ctx: &LoweringContext<'_, '_>,
     array: &Expr,
 ) -> bool {
-    let ty = array_cast_source_type_for_ir(ctx, array);
+    let ty = super::array_cast_source::array_cast_source_type_for_ir(ctx, array);
     type_satisfies_array_access_for_ir(ctx, &ty)
 }
 
