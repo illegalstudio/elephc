@@ -205,3 +205,4 @@ mod tagged_scalar_boxing;
 mod gc_incoming_cache;
 #[path = "runtime_gc/unshift_reference_cow.rs"]
 mod unshift_reference_cow;
+mod native_callback_results;

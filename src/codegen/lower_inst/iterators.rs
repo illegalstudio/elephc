@@ -1803,7 +1803,19 @@ fn box_iterator_method_result_if_needed(
     let result_ty = ctx.value_php_type(result)?;
     if result_ty == PhpType::Mixed && return_ty.codegen_repr() != PhpType::Mixed {
         // A `?ptr<T>` result keeps its union, so address 0 is PHP null.
-        emit_box_current_owned_value_as_mixed(ctx.emitter, &crate::types::mixed_box_php_type(return_ty));
+        let box_ty = crate::types::mixed_box_php_type(return_ty);
+        if return_ty.codegen_repr() == PhpType::Str {
+            let owned = ctx.next_label("iterator_string_owned");
+            let done = ctx.next_label("iterator_string_boxed");
+            crate::codegen::return_ownership::emit_branch_if_owned(ctx.emitter, &owned);
+            emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&owned);
+            emit_box_current_owned_value_as_mixed(ctx.emitter, &box_ty);
+            ctx.emitter.label(&done);
+        } else {
+            emit_box_current_owned_value_as_mixed(ctx.emitter, &box_ty);
+        }
     }
     Ok(())
 }
