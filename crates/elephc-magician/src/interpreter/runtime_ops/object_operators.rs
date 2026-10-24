@@ -2,7 +2,7 @@
 //! Applies shared internal-class operator contracts to evaluated runtime cells.
 //!
 //! Called from:
-//! - RuntimeValueOps arithmetic, comparison, boolean, and cast entry points.
+//! - RuntimeValueOps arithmetic, comparison, boolean, cast, and clone entry points.
 //!
 //! Key details:
 //! - Native method bridges borrow operands and transfer an owned result cell.
@@ -26,6 +26,26 @@ fn operator_class(
         if values.object_is_a(value, class.name, false)? { return Ok(Some(class)); }
     }
     Ok(None)
+}
+
+/// Runs a native clone handler and reports whether it replaces userland clone dispatch.
+pub(in crate::interpreter) fn clone_native_storage(
+    values: &mut (impl RuntimeValueOps + ?Sized), value: RuntimeCellHandle,
+) -> Result<bool, EvalStatus> {
+    for class in elephc_builtin_contract::classes() {
+        let Some(method) = class.operators.and_then(|ops| ops.native_clone) else { continue; };
+        match values.object_is_a(value, class.name, false) {
+            Ok(true) => {
+                let result = values.operator_method_call(value, method, vec![])?;
+                return values.release(result).map(|()| true);
+            }
+            Ok(false) => (),
+            // Embedders without native class capabilities retain ordinary user-object cloning.
+            Err(EvalStatus::UnsupportedConstruct) => return Ok(false),
+            Err(status) => return Err(status),
+        }
+    }
+    Ok(false)
 }
 
 /// Calls a typed arithmetic adapter with operands in their original source order.

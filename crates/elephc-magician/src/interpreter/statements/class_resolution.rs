@@ -261,7 +261,7 @@ pub(in crate::interpreter) fn eval_object_clone_result(
     eval_object_clone_with_properties_result(object, None, None, context, values)
 }
 
-/// Creates a shallow clone, invokes `__clone()`, then applies PHP 8.5 property overrides.
+/// Copies an object, runs its native clone handler or `__clone()`, then applies property overrides.
 pub(crate) fn eval_object_clone_with_properties_result(
     object: RuntimeCellHandle,
     with_properties: Option<RuntimeCellHandle>,
@@ -311,21 +311,38 @@ pub(crate) fn eval_object_clone_with_properties_result(
     };
     context.begin_clone_initialization(clone_identity);
     let initialization = (|| {
-        if let Some(class_name) = dynamic_class_name {
-            context.register_dynamic_object(clone_identity, &class_name);
+        if let Some(class_name) = dynamic_class_name.as_deref() {
+            context.register_dynamic_object(clone_identity, class_name);
             context.clone_dynamic_property_aliases(identity, clone_identity);
-            if let Some((declaring_class, method)) = clone_method {
-                let result = eval_dynamic_method_with_values(
-                    &declaring_class,
-                    &class_name,
-                    &method,
-                    clone,
-                    Vec::new(),
-                    context,
-                    values,
-                )?;
-                eval_release_value(context, values, result)?;
-            } else if let Some(hook) = dynamic_native_clone_hook {
+        }
+        let native_cloned = super::super::runtime_ops::object_operators::clone_native_storage(values, clone)?;
+        if !native_cloned {
+            if let Some(class_name) = dynamic_class_name {
+                if let Some((declaring_class, method)) = clone_method {
+                    let result = eval_dynamic_method_with_values(
+                        &declaring_class,
+                        &class_name,
+                        &method,
+                        clone,
+                        Vec::new(),
+                        context,
+                        values,
+                    )?;
+                    eval_release_value(context, values, result)?;
+                } else if let Some(hook) = dynamic_native_clone_hook {
+                    let result = eval_native_method_with_positional_values_unchecked_bridge_scope(
+                        clone,
+                        &hook.called_class,
+                        "__clone",
+                        Vec::new(),
+                        Some(&hook.declaring_class),
+                        Some(&hook.called_class),
+                        context,
+                        values,
+                    )?;
+                    values.release(result)?;
+                }
+            } else if let Some(hook) = aot_clone_hook {
                 let result = eval_native_method_with_positional_values_unchecked_bridge_scope(
                     clone,
                     &hook.called_class,
@@ -338,18 +355,6 @@ pub(crate) fn eval_object_clone_with_properties_result(
                 )?;
                 values.release(result)?;
             }
-        } else if let Some(hook) = aot_clone_hook {
-            let result = eval_native_method_with_positional_values_unchecked_bridge_scope(
-                clone,
-                &hook.called_class,
-                "__clone",
-                Vec::new(),
-                Some(&hook.declaring_class),
-                Some(&hook.called_class),
-                context,
-                values,
-            )?;
-            values.release(result)?;
         }
 
         context.restart_clone_initialization(clone_identity);

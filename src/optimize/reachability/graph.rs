@@ -505,6 +505,7 @@ impl GraphState {
                             operators.arithmetic.iter().any(|(_, adapter)| *adapter == method)
                                 || operators.compare == Some(method.as_str())
                         } else { operators.boolean == Some(method.as_str()) || operators.json == Some(method.as_str())
+                            || operators.native_clone == Some(method.as_str())
                             || operators.casts.iter().any(|(_, adapter)| *adapter == method) }
                     })
                     || matches!(method.as_str(), "__call" | "__callstatic")

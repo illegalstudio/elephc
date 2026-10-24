@@ -51,6 +51,7 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("__ElephcPDOSqliteBlobStream", "__elephcpdosqliteblobstream", Class, Elephc, Prelude, internal: true),
     class!("__ElephcPDOStatementIterator", "__elephcpdostatementiterator", Class, Elephc, Prelude, internal: true),
     class!("__ElephcSessionState", "__elephcsessionstate", Class, Elephc, Prelude, internal: true),
+    class!("__ElephcSimpleXMLLease", "__elephcsimplexmllease", Class, Elephc, Prelude, internal: true),
     class!("__ElephcWeakMapIterator", "__elephcweakmapiterator", Class, Elephc, Prelude, internal: true),
     class!("AllowDynamicProperties", "allowdynamicproperties", Class, Core, Prelude, since: Php82),
     class!("AppendIterator", "appenditerator", Class, Spl, CheckerInjected),

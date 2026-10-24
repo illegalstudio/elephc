@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Ordinary PHP methods share one native engine between compiled code and eval.
+//! - Owned leases release native handles even when subclasses override PHP destructors.
 
 pub(super) const SOURCE: &str = r###"<?php
 extern "elephc_xml" {
@@ -43,12 +44,22 @@ function __elephc_simplexml_class(?string $class): string {
     return (string)$class;
 }
 
+final class __ElephcSimpleXMLLease {
+    private int $handle;
+    public function __construct(int $handle) { $this->handle = $handle; }
+    public function __destruct() { $handle = $this->handle; elephc_xml_sx_free($handle); }
+}
+
 class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     private int $__elephc_handle = 0;
     private int $__elephc_position = -1;
     private mixed $__elephc_current = null;
+    private mixed $__elephc_owner = null;
 
-    public function __elephc_attach(int $handle): void { $this->__elephc_handle = $handle; }
+    public function __elephc_attach(int $handle): void {
+        $this->__elephc_handle = $handle;
+        $this->__elephc_owner = new __ElephcSimpleXMLLease($handle);
+    }
     public function __elephc_handle_value(): int { return $this->__elephc_handle; }
     public function __construct(string $data, int $options = 0, bool $dataIsURL = false, string $namespaceOrPrefix = "", bool $isPrefix = false) {
         $url = "";
@@ -60,20 +71,13 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         }
         $handle = elephc_xml_sx_load($data, strlen($data), $options, $namespaceOrPrefix, (int)$isPrefix, $url);
         if ($handle === 0) { throw new Exception("String could not be parsed as XML"); }
-        $old = $this->__elephc_handle;
-        $this->__elephc_handle = $handle;
+        $this->__elephc_attach($handle);
         $this->__elephc_current = null;
         $this->__elephc_position = -1;
-        if ($old !== 0) { elephc_xml_sx_free($old); }
     }
-    public function __destruct() {
+    final public function __elephc_clone_initialize(): void {
         $handle = $this->__elephc_handle;
-        $this->__elephc_handle = 0;
-        elephc_xml_sx_free($handle);
-    }
-    public function __clone(): void {
-        $handle = $this->__elephc_handle;
-        $this->__elephc_handle = elephc_xml_sx_clone($handle);
+        $this->__elephc_attach(elephc_xml_sx_clone($handle));
         $this->__elephc_current = null;
         $this->__elephc_position = -1;
     }

@@ -34,9 +34,11 @@ pub enum ObjectOrdering {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ObjectCast { Int, Float, Array }
 
-/// Methods implementing an internal class's immutable value operators.
+/// Methods implementing an internal class's native operators and clone protocol.
 #[derive(Clone, Copy, Debug)]
 pub struct ClassOperators {
+    /// Native clone handler after a shallow copy; replaces the userland clone callback.
+    pub native_clone: Option<&'static str>,
     /// Native JSON projection without a PHP-visible JsonSerializable interface.
     pub json: Option<&'static str>,
     /// Instance adapters implementing PHP casts.
@@ -63,6 +65,7 @@ impl ClassOperators {
 
 /// Number adapters compile through ordinary EIR calls with fresh immutable results.
 pub const BCMATH_NUMBER_OPERATORS: ClassOperators = ClassOperators {
+    native_clone: None,
     json: None,
     casts: &[],
     arithmetic: &[
@@ -79,6 +82,7 @@ pub const BCMATH_NUMBER_OPERATORS: ClassOperators = ClassOperators {
 
 /// SimpleXML uses native document truthiness rather than ordinary object truthiness.
 pub const SIMPLEXML_OPERATORS: ClassOperators = ClassOperators {
+    native_clone: Some("__elephc_clone_initialize"),
     json: Some("__elephc_json"),
     casts: &[(ObjectCast::Int, "__elephc_int"), (ObjectCast::Float, "__elephc_float"), (ObjectCast::Array, "__elephc_array")],
     arithmetic: &[], compare: None, boolean: Some("__elephc_bool"),
@@ -92,6 +96,7 @@ mod tests {
     #[test]
     fn synthetic_operator_contract_resolves_only_declared_operations() {
         let operators = ClassOperators {
+            native_clone: None,
             json: None,
             casts: &[],
             arithmetic: &[(ObjectArithmetic::Add, "synthetic_sum")],

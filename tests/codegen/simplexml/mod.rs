@@ -215,8 +215,15 @@ $iterator = new SimpleXMLIterator('<r><a/><b/></r>');
 $iterator->rewind(); $iterator->next();
 $clonedIterator = clone $iterator;
 var_dump($clonedIterator->valid());
+class CloneHookXml extends SimpleXMLElement { public function __clone(): void { $this->v = 'copy'; } }
+function cloneXmlMixed(mixed $value): mixed { return clone $value; }
+$original = new CloneHookXml('<r><v>original</v></r>');
+$customCopy = cloneXmlMixed($original);
+echo (string)$original->v, ':', (string)$customCopy->v, "\n";
+$customCopy->v = 'changed';
+echo (string)$original->v, ':', (string)$customCopy->v, "\n";
 "###);
-    assert_eq!(out, "one:changed\nbool(false)\nbool(true)\nbool(true)\nbool(true)\nbool(false)\n");
+    assert_eq!(out, "one:changed\nbool(false)\nbool(true)\nbool(true)\nbool(true)\nbool(false)\noriginal:original\noriginal:changed\n");
 }
 
 /// Verifies SimpleXML entities and cdata options using PHP's expected output.
@@ -364,4 +371,21 @@ $holder->xml[] = 'third';
 echo count($xml->item), ':', (string)$xml->item[2], "\n";
 "###);
     assert_eq!(out, "v:2:changed:added\n3:third\n");
+}
+
+/// Native document leases survive overrides of the PHP destructor and release independently.
+#[test]
+fn test_simplexml_subclass_destructor_owns_native_lease() {
+    if skip_without_xml_native("test_simplexml_subclass_destructor_owns_native_lease") { return; }
+    let out = compile_and_run_with_heap_debug(r###"<?php
+class DestructXml extends SimpleXMLElement { public function __destruct() { echo "drop|"; } }
+$root = new DestructXml('<r><child>kept</child></r>');
+$child = $root->child;
+unset($root);
+echo (string)$child, "|";
+unset($child);
+"###);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "drop|kept|drop|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
