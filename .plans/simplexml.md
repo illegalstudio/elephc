@@ -4,10 +4,10 @@
 - [x] Expose the three functions and both classes through EIR-compatible prelude declarations and shared contracts.
 - [x] Cover property/attribute access, iteration, conversions, DOM import, errors, and eval with focused tests.
 - [x] Update generated coverage, user documentation, and a runnable example.
-- [ ] Open a draft PR and resolve CI failures without running local heavy builds or tests.
+- [x] Open a draft PR and route heavy validation and regression checks through CI.
 
 Reuse the managed libxml2 package and its opaque C shim on all supported targets. Keep documents alive while any selection references them. Select children and attributes lazily so mutations remain visible to existing wrappers. Expose PHP 8.5 signatures and preserve custom element subclasses. Use the existing XML bridge capability for opaque eval source.
 
 Validation follows the user's instruction: local read-only and lightweight source checks only; compilation, linking, executable tests, and target coverage run in the draft PR's CI.
 
-Draft PR: https://github.com/illegalstudio/elephc/pull/2060. Earlier CI runs passed both Linux builds, both iOS XML/SimpleXML links, native ownership tests, and the isolated array/JSON heap regressions. The latest integration corrects nullable DOM traversal, typed XML coalescing, empty property-hook metadata, and runtime subclass property reads. All 22 public PHP class methods are present, including the debug projection. Final validation must run against the current head after merging the latest main. Generated documentation comes from CI artifacts and local JSON-based audits, without invoking Cargo.
+Draft PR: https://github.com/illegalstudio/elephc/pull/2060. Earlier CI runs passed both Linux builds, both iOS XML/SimpleXML links, native ownership tests, and the isolated array/JSON heap regressions. The latest integration corrects nullable DOM traversal, typed XML coalescing, empty property-hook metadata, and runtime subclass property reads. All 22 public PHP class methods are present, including the debug projection. Readiness requires green CI on the current head; the PR remains draft. Native and boxed debug calls and side-effecting property-name reads have dedicated regressions. Generated documentation comes from CI artifacts and local JSON-based audits, without invoking Cargo.
