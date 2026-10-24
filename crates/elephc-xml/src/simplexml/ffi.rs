@@ -10,6 +10,9 @@
 use std::ffi::{c_char, c_int, c_void};
 pub(super) type Node = *mut c_void;
 extern "C" {
+    /// Deep-copies one detached node into another document using libxml2's public opaque API.
+    #[link_name = "xmlDocCopyNode"]
+    pub(super) fn copy_node(node: Node, doc: Node, extended: c_int) -> Node;
     /// Returns encoded XML bytes and their explicit length.
     #[link_name = "elephc_libxml2_v1_sx_dump_bytes"]
     pub(super) fn dump_bytes(doc: Node, node: Node, whole: c_int, length: *mut c_int) -> *mut c_char;

@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/simplexml_prelude/surface.rs`:385](https://github.com/illegalstudio/elephc/blob/main/src/simplexml_prelude/surface.rs#L385) (`simplexml_import_dom`)
+- **Lowering**: [`src/simplexml_prelude/surface.rs`:399](https://github.com/illegalstudio/elephc/blob/main/src/simplexml_prelude/surface.rs#L399) (`simplexml_import_dom`)
 - **Function symbol**: `simplexml_import_dom()`
 
 

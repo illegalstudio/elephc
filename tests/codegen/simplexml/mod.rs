@@ -449,6 +449,22 @@ unset($first[0]); unset($first[0]);
     assert_eq!(out, "2:a:b\n");
 }
 
+/// Removed element and attribute aliases retain their data and clone into independent storage.
+#[test]
+fn test_simplexml_clone_removed_aliases() {
+    if skip_without_xml_native("test_simplexml_clone_removed_aliases") { return; }
+    let out = compile_and_run(r###"<?php
+$xml = new SimpleXMLElement('<r id="old"><a>one</a></r>');
+$element = $xml->a[0]; $attribute = $xml['id'];
+unset($xml->a, $xml['id']);
+$copy = clone $element; $copy[0] = 'two';
+echo (string)$element, ':', (string)$copy, "\n";
+$attributeCopy = clone $attribute;
+echo (string)$attribute, ':', (string)$attributeCopy, "\n";
+"###);
+    assert_eq!(out, "one:two\nold:old\n");
+}
+
 /// Indirect child writes use the XML getter and native dimensions on inherited classes.
 #[test]
 fn test_simplexml_child_dimensions_and_append() {

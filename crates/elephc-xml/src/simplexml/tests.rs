@@ -48,6 +48,23 @@ fn simplexml_detached_selection_keeps_storage_alive() {
     assert_eq!(unsafe { string(ffi::name(selected.first().unwrap())) }, "a");
 }
 
+/// Concrete node and attribute aliases remain clonable after their removal from the live tree.
+#[test]
+fn simplexml_clone_preserves_detached_nodes_and_attributes() {
+    let root = parse(b"<r id='old'><a>one</a></r>", 0, "", false).unwrap();
+    let selected = root.select(2, "a", "", false, 0).select(4, "", "", false, 0);
+    let attribute = root.select(3, "id", "", false, 0);
+    let attribute = attribute.with_scope(Scope::Node(attribute.first().unwrap()));
+    root.remove(2, "a", 0);
+    root.remove(3, "id", 0);
+    let copied = selected.deep_clone().unwrap();
+    let copied_attribute = attribute.deep_clone().unwrap();
+    assert_eq!(copied.write(4, "", 0, "two"), 1);
+    assert_eq!(unsafe { owned_string(ffi::text(selected.first().unwrap())) }, "one");
+    assert_eq!(unsafe { owned_string(ffi::text(copied.first().unwrap())) }, "two");
+    assert_eq!(unsafe { owned_string(ffi::text(copied_attribute.first().unwrap())) }, "old");
+}
+
 /// XPath binds in-scope namespaces and text results map to their containing element.
 #[test]
 fn simplexml_xpath_namespace_and_text_nodes() {
