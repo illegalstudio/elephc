@@ -34,6 +34,13 @@ pub(super) fn lower_property_array_push(
         (receiver, value)
     };
     receiver.narrow_for_array(ctx, property, &[value.value], span);
+    if let Some(child) = lower_native_dimension_property(ctx, receiver.value, object, property, span) {
+        let null = lower_expr(ctx, &Expr::new(ExprKind::Null, span));
+        array_write_core::lower_boxed_array_set_values(ctx, child, null, value, span, false);
+        receiver.finish(ctx, span);
+        retire_property_write_roots(ctx, roots, span);
+        return;
+    }
     lower_property_array_push_value(ctx, receiver.value, property, value, span);
     receiver.finish(ctx, span);
     retire_property_write_roots(ctx, roots, span);
@@ -174,9 +181,40 @@ pub(crate) fn lower_property_array_assign_with_diagnosed_key(
         (receiver, index, value)
     };
     receiver.narrow_for_array(ctx, property, &[index.value, value.value], span);
+    if let Some(child) = lower_native_dimension_property(ctx, receiver.value, object, property, span) {
+        array_write_core::lower_boxed_array_set_values(
+            ctx, child, index, value, span, key_already_diagnosed,
+        );
+        receiver.finish(ctx, span);
+        retire_property_write_roots(ctx, roots, span);
+        return;
+    }
     lower_property_array_assign_value(ctx, receiver.value, property, index, value, span, key_already_diagnosed);
     receiver.finish(ctx, span);
     retire_property_write_roots(ctx, roots, span);
+}
+
+/// Reads a native XML child through its getter while the parent lease protects the receiver.
+fn lower_native_dimension_property(
+    ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, object: &Expr, property: &str, span: Span,
+) -> Option<LoweredValue> {
+    let ty = ctx.builder.value_php_type(receiver.value);
+    let (class, _) = crate::ir_lower::expr::singular_object_class(&ty)?;
+    let info = ctx.classes.get(class.trim_start_matches('\\'))?;
+    let native = if let Some((_, (_, ty))) = info.visible_property(property) {
+        crate::ir_lower::expr::singular_object_class(ty).is_some_and(|(name, _)|
+            crate::types::builtin_classes::has_native_dimensions(name, ctx.classes))
+    } else { crate::types::builtin_classes::has_native_dimensions(class, ctx.classes) };
+    if !native { return None; }
+    let borrowed = ctx.emit_value(Op::Borrow, vec![receiver.value], None, ty,
+        Op::Borrow.default_effects(), Some(span));
+    ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+    let expression = Expr::new(ExprKind::PropertyAccess {
+        object: Box::new(object.clone()), property: property.into(),
+    }, span);
+    Some(crate::ir_lower::expr::lower_property_get_from_value(
+        ctx, borrowed, property, Op::PropGet, &expression,
+    ))
 }
 
 /// Lowers one operand into an unwind-visible owner and lends a borrowed view to the writer.

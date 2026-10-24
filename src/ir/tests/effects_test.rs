@@ -177,6 +177,14 @@ fn instance_call_opcodes_default_to_may_throw() {
     assert_eq!(Op::NullsafeMethodCall.default_effects(), expected);
 }
 
+/// Constructorless factories allocate owning objects and must survive effect-based pruning.
+#[test]
+fn constructorless_object_allocation_preserves_heap_effects() {
+    let effects = Op::DynamicObjectNewWithoutConstructorMixed.default_effects();
+    assert!(effects.contains(Effects::READS_HEAP | Effects::WRITES_HEAP | Effects::ALLOC_HEAP
+        | Effects::REFCOUNT_OP | Effects::MAY_THROW | Effects::MAY_FATAL));
+}
+
 /// Read-only runtime probes avoid the former all-effects fallback.
 #[test]
 fn runtime_function_probes_expose_targeted_effects() {

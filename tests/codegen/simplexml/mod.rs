@@ -330,6 +330,25 @@ unset($first[0]); unset($first[0]);
 "###);
     assert_eq!(out, "2:a:b\n");
 }
+
+/// Indirect child writes use the XML getter and native dimensions on inherited classes.
+#[test]
+fn test_simplexml_child_dimensions_and_append() {
+    if skip_without_xml_native("test_simplexml_child_dimensions_and_append") { return; }
+    let out = compile_and_run(r###"<?php
+class DimensionXml extends SimpleXMLIterator {}
+$xml = new DimensionXml('<r><item>a</item></r>');
+$xml->item['id'] = 'v';
+$xml->item[0] = 'changed';
+$xml->item[] = 'added';
+echo (string)$xml->item['id'], ':', count($xml->item), ':', (string)$xml->item[0], ':', (string)$xml->item[1], "\n";
+class DimensionHolder { public SimpleXMLElement $xml; public function __construct(SimpleXMLElement $xml) { $this->xml = $xml; } }
+$holder = new DimensionHolder($xml->item);
+$holder->xml[] = 'third';
+echo count($xml->item), ':', (string)$xml->item[2], "\n";
+"###);
+    assert_eq!(out, "v:2:changed:added\n3:third\n");
+}
 "###);
     assert_eq!(out, "type-error|type-error|type-error|");
 }

@@ -350,7 +350,7 @@ pub(crate) fn lower_owned_ref_assign_array_elem(
 
 
 /// Lowers a named property read once the receiver is already evaluated.
-pub(super) fn lower_property_get_from_value(
+pub(crate) fn lower_property_get_from_value(
     ctx: &mut LoweringContext<'_, '_>,
     object: LoweredValue,
     property: &str,

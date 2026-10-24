@@ -1488,8 +1488,11 @@ impl Op {
             IterStart | IterCurrentKey | IterCurrentValue | IterNext | IteratorMethodCall => {
                 E::all()
             }
+            // Constructorless allocation still creates default storage and a boxed owning result.
+            DynamicObjectNewWithoutConstructorMixed => E::READS_HEAP | E::WRITES_HEAP
+                | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_THROW | E::MAY_FATAL | E::MAY_DEOPT,
             SplRuntimeCall | DynamicObjectNew | DynamicObjectNewMixed
-            | DynamicObjectNewWithoutConstructorMixed | MethodLookup | StaticMethodCall
+            | MethodLookup | StaticMethodCall
             | InstanceOfDynamic | MixedNumericBinop | LooseEq | LooseNotEq | PhpRelCmp
             | Spaceship => {
                 E::READS_HEAP | E::MAY_DEOPT

@@ -83,7 +83,9 @@ pub(super) fn check_property_array_push(
             refuse_scope_dynamic_element_write(checker, class_name, property, span)?;
             let (prop_ty, property_has_declared_type) =
                 resolve_object_array_property(checker, class_name, property, span)?;
-            if matches!(&prop_ty, PhpType::Object(name) if name.eq_ignore_ascii_case("WeakMap")) {
+            if matches!(&prop_ty, PhpType::Object(name)
+                if name.eq_ignore_ascii_case("WeakMap")
+                    || crate::types::builtin_classes::has_native_dimensions(name, &checker.classes)) {
                 return Ok(());
             }
             let updated_prop_ty = updated_array_property_push_type(
@@ -850,6 +852,11 @@ fn resolve_object_array_property(
         .get(class_name)
         .ok_or_else(|| CompileError::new(span, &format!("Undefined class: {}", class_name)))?;
     if class_info.visible_property(property).is_none() {
+        if crate::types::builtin_classes::has_native_dimensions(class_name, &checker.classes) {
+            if let Some(sig) = class_info.methods.get("__get") {
+                return Ok((sig.return_type.clone(), true));
+            }
+        }
         return Err(CompileError::new(
             span,
             &format!("Undefined property: {}::{}", class_name, property),

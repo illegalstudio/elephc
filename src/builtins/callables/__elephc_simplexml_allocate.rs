@@ -37,7 +37,6 @@ builtin! {
 /// Models allocation, refcounts, and dynamic class lookup failures conservatively.
 fn effects(_: &crate::builtins::semantics::BuiltinSemanticInput<'_>) -> Effects {
     Op::DynamicObjectNewWithoutConstructorMixed.default_effects()
-        | Effects::ALLOC_HEAP | Effects::WRITES_HEAP | Effects::REFCOUNT_OP | Effects::MAY_THROW
 }
 
 /// Emits the shared constructorless allocation operation with an owned boxed result.
@@ -46,7 +45,6 @@ fn lower(ctx: &mut dyn BuiltinLoweringContext, call: &NormalizedBuiltinCall<'_>)
 {
     if call.operands.len() != 1 { return Err(BuiltinLoweringError::new("XML allocation requires a class name")); }
     Ok(ctx.emit_value(Op::DynamicObjectNewWithoutConstructorMixed, call.operands.to_vec(), None,
-        PhpType::Mixed, Op::DynamicObjectNewWithoutConstructorMixed.default_effects()
-            | Effects::ALLOC_HEAP | Effects::WRITES_HEAP | Effects::REFCOUNT_OP | Effects::MAY_THROW,
+        PhpType::Mixed, Op::DynamicObjectNewWithoutConstructorMixed.default_effects(),
         Some(call.span)))
 }
