@@ -347,9 +347,11 @@ pub(in crate::ir_lower) fn array_access_expr_value_type_for_ir(
         // Any other receiver that loads a buffer (`make()[0]`, `($b ?? $c)[0]`) is typed from
         // what its own lowering loads; other receivers keep the previous syntactic answer.
         _ => buffer_receiver_type_for_ir(ctx, array),
-    }?
-    .codegen_repr();
-    match array_ty {
+    }?;
+    if let Some((class_name, _)) = singular_object_class(&array_ty) {
+        return array_access_offset_get_return_type(ctx, class_name);
+    }
+    match array_ty.codegen_repr() {
         PhpType::Array(element) | PhpType::AssocArray { value: element, .. } => Some(
             nullable_aware_branch_merge_type(&normalize_value_php_type(*element), &PhpType::Void),
         ),

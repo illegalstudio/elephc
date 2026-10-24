@@ -1110,7 +1110,7 @@ class DOMNodeList implements IteratorAggregate, Countable {
         $this->length = count($_list);
     }
 
-    public function item(int $index): mixed {
+    public function item(int $index): ?DOMNode {
         if ($index < 0 || $index >= $this->length) {
             return null;
         }
@@ -1118,7 +1118,9 @@ class DOMNodeList implements IteratorAggregate, Countable {
         if (!is_array($_items)) {
             return null;
         }
-        return $_items[$index];
+        $_node = $_items[$index];
+        if ($_node instanceof DOMNode) { return $_node; }
+        return null;
     }
 
     public function getIterator(): Iterator {

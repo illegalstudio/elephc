@@ -151,15 +151,12 @@ pub(super) fn lower_unset_array_access(
             _ => {}
         }
     }
-    let synthetic = Expr::new(
-        ExprKind::MethodCall {
-            object: Box::new(array.clone()),
-            method: "offsetUnset".to_string(),
-            args: vec![index.clone()],
-        },
-        expr.span,
-    );
-    lower_expr(ctx, &synthetic);
+    let object = lower_expr(ctx, array);
+    let op = if value_is_nullable(ctx, object.value) {
+        Op::NullsafeMethodCall
+    } else { Op::MethodCall };
+    // Lower the key before the backend's null guard: PHP evaluates it even for null.
+    lower_method_call_with_receiver(ctx, object, "offsetUnset", &[index.clone()], op, expr);
 }
 
 /// Detaches the declared array cell before sparse removal and roots an owned key across callbacks.
@@ -334,19 +331,9 @@ pub(super) fn unset_dynamic_property_access_has_direct_lowering(
     )
 }
 
-/// Returns an unset operand's inferred type, reading a local's checked type when there is one.
-///
-/// Same shape as `unset_array_access_has_object_receiver`: the checker's local type is the
-/// authority when the operand is a plain variable, and the syntactic answer is the fallback.
+/// Predicts an unset operand's materialized type, including function and property results.
 fn unset_operand_type(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> PhpType {
-    match &expr.kind {
-        ExprKind::Variable(name) => ctx
-            .local_types
-            .get(name)
-            .cloned()
-            .unwrap_or_else(|| infer_expr_type_syntactic(expr)),
-        _ => infer_expr_type_syntactic(expr),
-    }
+    super::array_cast_source::array_cast_source_type_for_ir(ctx, expr)
 }
 
 /// Lowers `unset($object->{$name})` for a property name only known at run time.

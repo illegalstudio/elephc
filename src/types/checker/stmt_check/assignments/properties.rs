@@ -181,6 +181,9 @@ fn refuse_scope_dynamic_element_write(
     property: &str,
     span: Span,
 ) -> Result<(), CompileError> {
+    if crate::types::builtin_classes::native_property_method(class_name, property,
+        elephc_builtin_contract::ObjectProperty::Get, &checker.classes).is_some()
+    { return Ok(()); }
     if !scope_dynamic_storage::mutation_targets_scope_dynamic_name(checker, class_name, property) {
         return Ok(());
     }
@@ -614,6 +617,9 @@ fn refine_object_property_type(
     property: &str,
     val_ty: &PhpType,
 ) {
+    if crate::types::builtin_classes::native_property_method(class_name, property,
+        elephc_builtin_contract::ObjectProperty::Set, &checker.classes).is_some()
+    { return; }
     // A name php resolves to a DYNAMIC property never reaches the physical slot
     // `visible_property_index` finds for it, so widening that slot would restamp an ancestor's
     // private storage from a write that only ever creates a distinct dynamic property. The

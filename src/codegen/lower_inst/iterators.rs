@@ -1803,7 +1803,7 @@ fn box_iterator_method_result_if_needed(
     let result_ty = ctx.value_php_type(result)?;
     if result_ty == PhpType::Mixed && return_ty.codegen_repr() != PhpType::Mixed {
         // A `?ptr<T>` result keeps its union, so address 0 is PHP null.
-        emit_box_current_value_as_mixed(ctx.emitter, &crate::types::mixed_box_php_type(return_ty));
+        emit_box_current_owned_value_as_mixed(ctx.emitter, &crate::types::mixed_box_php_type(return_ty));
     }
     Ok(())
 }

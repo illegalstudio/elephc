@@ -620,9 +620,12 @@ pub(super) fn array_access_runtime_call_result_type(
     array: crate::ir::ValueId,
     expr: &Expr,
 ) -> PhpType {
-    match ctx.builder.value_php_type(array).codegen_repr() {
-        PhpType::Object(class_name) => array_access_offset_get_return_type(ctx, &class_name)
-            .unwrap_or_else(|| fallback_expr_type(expr)),
+    let array_ty = ctx.builder.value_php_type(array);
+    if let Some((class_name, _)) = singular_object_class(&array_ty) {
+        return array_access_offset_get_return_type(ctx, class_name)
+            .unwrap_or_else(|| fallback_expr_type(expr));
+    }
+    match array_ty.codegen_repr() {
         PhpType::Mixed => PhpType::Mixed,
         _ => fallback_expr_type(expr),
     }
@@ -633,6 +636,9 @@ pub(super) fn array_access_offset_get_return_type(
     ctx: &LoweringContext<'_, '_>,
     class_name: &str,
 ) -> Option<PhpType> {
+    if crate::types::builtin_classes::has_native_dimensions(class_name, ctx.classes) {
+        return Some(nullable_result_type(PhpType::Object(class_name.to_string())));
+    }
     if !object_name_supports_dimensions_for_ir(ctx, class_name) {
         return None;
     }
@@ -647,13 +653,6 @@ pub(super) fn array_access_expr_satisfies_array_access(
     ctx: &LoweringContext<'_, '_>,
     array: &Expr,
 ) -> bool {
-    let ty = match &array.kind {
-        ExprKind::Variable(name) => ctx
-            .local_types
-            .get(name)
-            .cloned()
-            .unwrap_or_else(|| infer_expr_type_syntactic(array)),
-        _ => infer_expr_type_syntactic(array),
-    };
+    let ty = super::array_cast_source::array_cast_source_type_for_ir(ctx, array);
     type_satisfies_array_access_for_ir(ctx, &ty)
 }

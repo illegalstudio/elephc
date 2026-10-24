@@ -50,6 +50,7 @@ pub extern "C" fn elephc_xml_sx_free(handle: i64) { guard(|| REGISTRY.with(|r| {
 #[no_mangle]
 pub extern "C" fn elephc_xml_sx_clone(handle: i64) -> i64 { guard(|| view(handle).and_then(|v| v.deep_clone()).map(insert).unwrap_or(0)) }
 /// Selects children (0), attributes (1), a property (2), an attribute (3), or offset (4).
+/// Internal modes 7/8 preserve the existing namespace filter for projections and iteration.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_xml_sx_select(handle: i64, kind: i64, name: *const c_char, ns: *const c_char, prefix: i64, index: i64) -> i64 {
     guard(|| view(handle).map(|v| {

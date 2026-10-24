@@ -95,7 +95,7 @@ impl View {
     fn items(&self) -> Vec<Node> {
         if matches!(self.scope, Scope::Attributes(_, Some(_))) { return vec![]; }
         if matches!(self.scope, Scope::Node(_) | Scope::Index(..)) {
-            let view = self.select(0, "", "", false, 0);
+            let view = self.select(7, "", "", false, 0);
             view.nodes()
         } else { self.nodes() }
     }
@@ -105,8 +105,8 @@ impl View {
     fn select(&self, kind: i64, name: &str, ns: &str, prefix: bool, index: usize) -> Self {
         let parent = Rc::new(self.clone());
         let scope = match kind {
-            0 => Scope::Children(parent, None),
-            1 => Scope::Attributes(parent, None),
+            0 | 7 => Scope::Children(parent, None),
+            1 | 8 => Scope::Attributes(parent, None),
             2 => if matches!(self.scope, Scope::Attributes(..)) {
                 Scope::Attributes(parent_for_attributes(self), Some(name.into()))
             } else {

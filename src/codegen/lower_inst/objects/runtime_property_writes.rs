@@ -1850,7 +1850,9 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_prop_unset_runtime(
 ) -> Result<()> {
     let object = expect_operand(inst, 0)?;
     let property_value = expect_operand(inst, 1)?;
-    if let Some(property) = const_string_operand(ctx, property_value)? {
+    if let Some(property) = const_string_operand(ctx, property_value)?
+        .filter(|_| matches!(ctx.value_php_type(object), Ok(PhpType::Object(_))))
+    {
         let property = property.to_string();
         return lower_named_prop_unset(ctx, object, &property, inst);
     }

@@ -76,6 +76,19 @@ fn simplexml_xpath_namespace_and_text_nodes() {
     assert!(root.xpath("count(//a)").is_none());
 }
 
+/// Root and indexed-node iteration retain explicit namespace filters independently of public children().
+#[test]
+fn simplexml_iteration_retains_namespace_filter() {
+    let root = parse(b"<r xmlns:p='urn:p'><p:a><p:b>value</p:b><b>plain</b></p:a><p:a/><a/></r>",
+        0, "urn:p", false).unwrap();
+    assert_eq!(root.items().len(), 2);
+    let node = root.select(2, "a", "", false, 0).select(4, "", "", false, 0);
+    let children = node.items();
+    assert_eq!(children.len(), 1);
+    assert_eq!(unsafe { owned_string(ffi::text(children[0])) }, "value");
+    assert_eq!(node.select(0, "", "", false, 0).items().len(), 1);
+}
+
 /// Missing named ancestors are materialized once for a chained assignment.
 #[test]
 fn simplexml_materializes_missing_ancestors() {

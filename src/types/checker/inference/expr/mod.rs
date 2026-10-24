@@ -147,6 +147,9 @@ impl Checker {
     /// to the `ArrayAccess` interface. Used when indexing an `Object` that
     /// implements `ArrayAccess`.
     fn array_access_offset_get_type(&self, class_name: &str) -> PhpType {
+        if crate::types::builtin_classes::has_native_dimensions(class_name, &self.classes) {
+            return PhpType::Union(vec![PhpType::Object(class_name.to_string()), PhpType::Void]);
+        }
         self.classes
             .get(class_name)
             .and_then(|class_info| class_info.methods.get("offsetget"))

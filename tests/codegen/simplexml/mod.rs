@@ -57,6 +57,26 @@ echo json_encode($x->getDocNamespaces(true)), ':', json_encode($x->getNamespaces
     assert_eq!(out, "1:1:one\n7\nitem:one\n{\"p\":\"urn:p\"}:{\"p\":\"urn:p\"}\n");
 }
 
+/// Native iteration and projections retain the namespace selected by constructors or children().
+#[test]
+fn test_simplexml_namespace_projection_and_indexed_iteration() {
+    if skip_without_xml_native("test_simplexml_namespace_projection_and_indexed_iteration") { return; }
+    let out = compile_and_run(r###"<?php
+$source = '<r xmlns:p="urn:p" id="plain" p:id="ns"><p:a id="plain-a" p:id="ns-a"><p:b>value</p:b><b>plain</b></p:a><a>other</a></r>';
+$xml = new SimpleXMLElement($source);
+$namespaced = $xml->children('urn:p');
+echo json_encode($namespaced), "\n", json_encode((array)$namespaced), "\n";
+echo json_encode($namespaced->a), "\n";
+foreach ($namespaced->a[0] as $child) { echo (string)$child, '|'; }
+foreach ($namespaced->a->children() as $child) { echo (string)$child, '|'; }
+echo "\n";
+$filtered = new SimpleXMLElement($source, 0, false, 'urn:p');
+echo json_encode($filtered), "\n";
+echo (string)$namespaced->a['id'], ':', (string)$namespaced->a->attributes()['id'], "\n";
+"###);
+    assert_eq!(out, "{\"a\":{\"@attributes\":{\"id\":\"ns-a\"},\"b\":\"value\"}}\n{\"a\":{\"@attributes\":{\"id\":\"ns-a\"},\"b\":\"value\"}}\n{\"@attributes\":{\"id\":\"ns-a\"},\"b\":\"value\"}\nvalue|plain|\n{\"@attributes\":{\"id\":\"ns\"},\"a\":{\"@attributes\":{\"id\":\"ns-a\"},\"b\":\"value\"}}\nns-a:plain-a\n");
+}
+
 /// Verifies SimpleXML iteration and recursive iterator against PHP's observable output.
 #[test]
 fn test_simplexml_iteration_and_recursive_iterator() {
@@ -387,24 +407,42 @@ for ($i = 0; $i < 2; $i++) {
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// Native wrapper construction, selection, and each projection retire their own heap values.
+/// Compiles one isolated ownership stage so each CI test has its own timeout and heap counters.
+fn assert_simplexml_heap_stage(label: &str, action: &str) {
+    if skip_without_xml_native(label) { return; }
+    let source = format!("<?php $x = new SimpleXMLElement('<r id=\"x\"><child>kept</child></r>'); {action} unset($x); echo 'done';");
+    let out = compile_and_run_with_heap_debug(&source);
+    assert!(out.success, "{label}: stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "done", "{label}: {}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{label}: {}", out.stderr);
+}
+
+/// A native root and its lease release their heap storage independently.
 #[test]
-fn test_simplexml_heap_ownership_stages() {
-    if skip_without_xml_native("test_simplexml_heap_ownership_stages") { return; }
-    let mut failures = Vec::new();
-    for (label, action) in [
-        ("root", ""),
-        ("alias", "$child = $x->child[0]; unset($child);"),
-        ("array", "$properties = (array)$x; unset($properties);"),
-        ("json", "$json = json_encode($x); unset($json);"),
-    ] {
-        let source = format!("<?php $x = new SimpleXMLElement('<r id=\"x\"><child>kept</child></r>'); {action} unset($x); echo 'done';");
-        let out = compile_and_run_with_heap_debug(&source);
-        if !out.success || out.stdout != "done" || !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
-            failures.push(format!("{label}: stdout={} stderr={}", out.stdout, out.stderr));
-        }
-    }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+fn test_simplexml_heap_root() { assert_simplexml_heap_stage("root", ""); }
+
+/// Child aliases retire both the wrapper and its independent native lease.
+#[test]
+fn test_simplexml_heap_alias() {
+    assert_simplexml_heap_stage("alias", "$child = $x->child[0]; unset($child);");
+}
+
+/// XML writes do not restamp the storage of an ignored PHP subclass property.
+#[test]
+fn test_simplexml_heap_declared_slot() {
+    assert_simplexml_heap_stage("declared", "class HeapStorageXml extends SimpleXMLElement { public $a = []; } $x = new HeapStorageXml('<r/>'); $x->a = 'text';");
+}
+
+/// The array projection releases its temporary wrappers, keys, and result hash.
+#[test]
+fn test_simplexml_heap_array_projection() {
+    assert_simplexml_heap_stage("array", "$properties = (array)$x; unset($properties);");
+}
+
+/// The JSON projection releases its temporary wrappers, keys, and encoded string.
+#[test]
+fn test_simplexml_heap_json_projection() {
+    assert_simplexml_heap_stage("json", "$json = json_encode($x); unset($json);");
 }
 
 /// Nullable self returns are covariant while a class's interface schema is still being built.
@@ -445,8 +483,11 @@ echo count($xml->i), ':';
 unset($xml->i[0]);
 echo (string)$first, ':', (string)$xml->i[0], "\n";
 unset($first[0]); unset($first[0]);
+$missing = $xml->absent[0];
+function missingXmlKey(): int { echo 'key'; return 0; }
+unset($missing[missingXmlKey()]);
 "###);
-    assert_eq!(out, "2:a:b\n");
+    assert_eq!(out, "2:a:b\nkey");
 }
 
 /// Removed element and attribute aliases retain their data and clone into independent storage.

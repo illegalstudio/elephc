@@ -16,6 +16,7 @@ pub(in crate::interpreter) fn invoke(
     operation: elephc_builtin_contract::ObjectProperty, assigned: Option<RuntimeCellHandle>,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     if property.starts_with("__elephc_") { return Ok(None); }
+    if values.type_tag(object)? != EVAL_TAG_OBJECT { return Ok(None); }
     match values.object_is_a(object, "SimpleXMLElement", false) {
         Ok(true) => (),
         Ok(false) | Err(EvalStatus::UnsupportedConstruct) => return Ok(None),
