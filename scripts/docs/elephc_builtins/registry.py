@@ -316,6 +316,7 @@ REGISTRY_AREA_OVERRIDES: Dict[str, Tuple[str, str]] = {
 #   - `None` — leave whatever the parser produced alone (skip refinement).
 ParamSpec = object  # str | Tuple[str, str] | None — kept loose for legibility
 PARAM_TYPES: Dict[str, List[Optional[ParamSpec]]] = {
+    'simplexml_import_dom': ['DOMNode|Dom\\Node', '?string'],
     '__elephc_gmmktime_raw': ['int', 'int', 'int', 'int', 'int', 'int'],
     '__elephc_mktime_raw': ['int', 'int', 'int', 'int', 'int', 'int'],
     '__elephc_strtotime_raw': ['string', 'int'],
@@ -849,6 +850,9 @@ def slug(name: str) -> str:
 # `check_builtin()` arms (which sometimes narrow to the wrong type, e.g.
 # `array_shift` returns `mixed`, not the array element type).
 RETURN_TYPE_OVERRIDES: Dict[str, str] = {
+    "simplexml_import_dom": "?SimpleXMLElement",
+    "simplexml_load_file": "SimpleXMLElement|false",
+    "simplexml_load_string": "SimpleXMLElement|false",
     # Numeric aggregates preserve integer overflow and floating-point values.
     # Their neutral Mixed contract covers this union because TypeSpec has no union variant.
     "array_sum": "int|float",

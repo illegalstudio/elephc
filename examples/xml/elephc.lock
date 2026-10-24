@@ -4,7 +4,7 @@ schema = 1
 [[package]]
 name = "libxml2"
 version = "2.15.3"
-recipe = 1
+recipe = 2
 dependencies = []
 provides = ["libxml2"]
 

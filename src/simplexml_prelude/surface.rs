@@ -28,7 +28,7 @@ function __elephc_simplexml_wrap(int $handle, string $class): SimpleXMLElement {
     $reflection = new ReflectionClass($class);
     $object = $reflection->newInstanceWithoutConstructor();
     if ($object instanceof SimpleXMLElement) {
-        $object->__elephc_handle = $handle;
+        $object->__elephc_attach($handle);
         return $object;
     }
     elephc_xml_sx_free($handle);
@@ -46,9 +46,11 @@ function __elephc_simplexml_class(?string $class): string {
 }
 
 class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
-    public int $__elephc_handle = 0;
+    private int $__elephc_handle = 0;
     private int $__elephc_position = -1;
 
+    public function __elephc_attach(int $handle): void { $this->__elephc_handle = $handle; }
+    public function __elephc_handle_value(): int { return $this->__elephc_handle; }
     public function __construct(string $data, int $options = 0, bool $dataIsURL = false, string $namespaceOrPrefix = "", bool $isPrefix = false) {
         if ($dataIsURL) {
             $contents = file_get_contents($data);
@@ -315,7 +317,7 @@ function simplexml_import_dom(object $node, ?string $class_name = "SimpleXMLElem
     if (!($node instanceof DOMDocument) && !($node instanceof DOMElement)) { return null; }
     $bound = $node->__elephc_simplexml;
     if ($bound instanceof SimpleXMLElement) {
-        $handle = $bound->__elephc_handle;
+        $handle = $bound->__elephc_handle_value();
         return __elephc_simplexml_wrap(elephc_xml_sx_alias($handle), $class);
     }
     $document = $node->ownerDocument;
@@ -326,7 +328,7 @@ function simplexml_import_dom(object $node, ?string $class_name = "SimpleXMLElem
     __elephc_simplexml_bind_dom($document, $result);
     $bound = $node->__elephc_simplexml;
     if ($bound instanceof SimpleXMLElement) {
-        $handle = $bound->__elephc_handle;
+        $handle = $bound->__elephc_handle_value();
         return __elephc_simplexml_wrap(elephc_xml_sx_alias($handle), $class);
     }
     return null;

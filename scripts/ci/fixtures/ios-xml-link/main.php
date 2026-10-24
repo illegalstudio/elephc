@@ -49,6 +49,15 @@ if (xml_parse($parser, $xml, true) !== 1) {
 
 echo "titles: ", implode(' / ', $titles), "\n";
 
+// SimpleXML must use the same bridge and managed shim on both iOS targets.
+$tree = new SimpleXMLIterator($xml);
+$tree->registerXPathNamespace('catalog', 'urn:catalog');
+foreach ($tree->xpath('//book/title') as $title) {
+    echo 'simplexml: ', (string)$title, "\n";
+}
+$tree->book['verified'] = 'yes';
+echo $tree->asXML();
+
 #[Export]
 function ios_xml_link_smoke(): int
 {
