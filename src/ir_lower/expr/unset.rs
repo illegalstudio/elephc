@@ -106,14 +106,7 @@ pub(super) fn unset_array_access_has_object_receiver(
     ctx: &LoweringContext<'_, '_>,
     array: &Expr,
 ) -> bool {
-    let ty = match &array.kind {
-        ExprKind::Variable(name) => ctx
-            .local_types
-            .get(name)
-            .cloned()
-            .unwrap_or_else(|| infer_expr_type_syntactic(array)),
-        _ => infer_expr_type_syntactic(array),
-    };
+    let ty = array_cast_source_type_for_ir(ctx, array);
     type_satisfies_array_access_for_ir(ctx, &ty)
 }
 

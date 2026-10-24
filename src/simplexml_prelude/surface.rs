@@ -92,7 +92,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $handle = $this->__elephc_handle;
         return elephc_xml_sx_int($handle, 3) !== 0;
     }
-    public function __get(string $name): SimpleXMLElement {
+    public function __get(string $name): static {
         $handle = $this->__elephc_handle;
         $selected = elephc_xml_sx_select($handle, 2, $name, "", 0, 0);
         return __elephc_simplexml_wrap($selected, get_class($this));
@@ -225,7 +225,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $base = __elephc_simplexml_wrap(elephc_xml_sx_projection_base($handle), get_class($this));
         $result = ["__elephc_projection_seed" => null];
         unset($result["__elephc_projection_seed"]);
-        if ($mode === 4 || elephc_xml_sx_int($handle, 4) === 2) {
+        if ($mode === 4 || ($mode !== 3 && elephc_xml_sx_int($handle, 4) === 2)) {
             $result["0"] = (string)$this;
             return $result;
         }

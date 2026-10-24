@@ -290,6 +290,9 @@ impl Checker {
                 return Ok(PhpType::Mixed);
             }
             if let Some(sig) = class_info.methods.get("__get") {
+                if crate::types::builtin_classes::has_native_dimensions(class_name, &self.classes) {
+                    return Ok(PhpType::Object(class_name.to_string()));
+                }
                 return Ok(sig.return_type.clone());
             }
             if class_info.allow_dynamic_properties {
