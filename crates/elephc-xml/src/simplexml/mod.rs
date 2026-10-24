@@ -171,3 +171,6 @@ fn parse(data: &[u8], options: i64, namespace: &str, prefix: bool) -> Option<Vie
     Some(View { doc, scope: Scope::Node(root), ns: Namespace { value: namespace.into(), prefix },
         xpath_ns: Rc::new(RefCell::new(BTreeMap::new())) })
 }
+
+#[cfg(all(test, elephc_xml_native))]
+mod tests;

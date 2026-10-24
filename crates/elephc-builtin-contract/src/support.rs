@@ -374,7 +374,7 @@ mod tests {
         // through forwarding homes (see `eval_support`).
         // Plus the four `ptr_read_f32`/`ptr_write_f32`/`ptr_read_f64`/`ptr_write_f64`
         // raw-memory builtins and `buffer_ptr`, bound in eval through their own registry homes.
-        assert_eq!(eval_registry, 688 + curl_surface);
+        assert_eq!(eval_registry, 691 + curl_surface);
         // 83 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use, plus the ELEVEN
         // `__elephc_opcache_rt_*` runtime script-cache helpers this branch adds.
@@ -404,7 +404,7 @@ mod tests {
         assert_eq!(aot_registry, 757);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
-        assert_eq!(aot_external, 409 + curl_surface);
+        assert_eq!(aot_external, 412 + curl_surface);
     }
 
     /// Verifies representative exceptional routes are attached to their contracts.

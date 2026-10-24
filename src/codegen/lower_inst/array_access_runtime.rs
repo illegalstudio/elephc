@@ -259,7 +259,7 @@ pub(super) fn array_access_runtime_dispatch(
                 });
             }
             if class_implements_interface(ctx, normalized, "ArrayAccess")
-                || crate::types::builtin_classes::has_native_dimensions(normalized, ctx.classes) {
+                || crate::types::builtin_classes::has_native_dimensions(normalized, &ctx.module.class_infos) {
                 return Some(ArrayAccessRuntimeDispatch::Concrete(normalized.to_string()));
             }
             None
