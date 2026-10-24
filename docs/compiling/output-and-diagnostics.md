@@ -112,6 +112,23 @@ the phase finishes, elephc keeps its action-oriented label with a checkmark and
 elapsed time, then starts the next phase on a new line. Non-interactive output
 and `--quiet` keep the compact plain output without progress lines.
 
+### Diagnostic format
+
+Errors and warnings name the physical file, line and column they come from:
+
+```text
+error[main.php:3:1]: Undefined variable: $x
+error[main.php:2:1]: Required file not found: 'missing.php'
+warning[src/Helpers.php:14:9]: Unreachable code
+```
+
+The file is the entry file as given on the command line, or the included or
+autoloaded file that holds the statement, so a diagnostic in a large autoloaded
+tree points at the right file. A position whose source file is not known (a
+compiler-synthesized node) prints `kind[line:col]`, and a diagnostic with no
+source position at all (some whole-program checks) prints `kind: message`.
+Profile `note[…]` lines keep their `note[line:col]` form.
+
 ### `--quiet` / `-q`
 
 Disables live and completed progress lines and forces unstyled plain output. It

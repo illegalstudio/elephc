@@ -138,8 +138,7 @@ impl Checker {
             .collect();
         let prev_by_ref_return = self.current_by_ref_return;
         self.current_by_ref_return = decl.by_ref_return;
-        self.loop_storage_types
-            .retain(|(scope, _), _| scope != &function_key);
+        self.clear_loop_storage_scope(&function_key);
         let previous_loop_storage_scope =
             std::mem::replace(&mut self.current_loop_storage_scope, function_key.clone());
         self.resolving_functions.insert(function_key.clone());

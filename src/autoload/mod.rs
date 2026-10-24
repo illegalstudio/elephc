@@ -13,6 +13,7 @@
 
 mod alias;
 mod dev_packages;
+pub mod prelude_probe;
 mod index;
 mod interpret;
 mod registry;
@@ -212,13 +213,18 @@ fn load_autoloaded_file(
     })?;
     let file_label = path.display().to_string();
     let source_mode = crate::source::SourceMode::from_path(path);
-    let tokens = crate::lexer::tokenize_with_mode(&content, source_mode)
-        .map_err(|e| e.with_file(file_label.clone()))?;
+    // Its own source identity, so its spans differ from every other file's and a diagnostic
+    // raised anywhere in it can name it (`Span::source_path`).
+    let source_id = Span::fresh_source_id();
+    Span::register_source_path(source_id, file_label.clone());
+    let tokens =
+        crate::lexer::tokenize_with_mode_and_source_id(&content, source_mode, source_id)
+            .map_err(|e| e.with_file(file_label.clone()))?;
     let parsed = crate::parser::parse_with_mode(&tokens, source_mode)
         .map_err(|e| e.with_file(file_label.clone()))?;
     let parsed =
         crate::source::finalize_physical_program(parsed, &content, path, source_mode, defines)?;
-    let (resolved, nested_includes) = crate::resolver::resolve_collecting_includes_with_defines(
+    let (resolved, nested_includes) = crate::resolver::resolve_collecting_includes_continuing(
         parsed,
         path.parent().unwrap_or(base_dir),
         defines,

@@ -115,6 +115,42 @@ pub fn resolve_collecting_includes_with_defines(
     defines: &HashSet<String>,
 ) -> Result<(Program, Vec<PathBuf>), CompileError> {
     crate::compiler_stack::with_compiler_stack(|| {
+        Span::reset_source_ids();
+        resolve_collecting_includes_with_defines_inner(program, base_dir, defines)
+    })
+}
+
+/// The resolver's hidden-temporary counters at one moment; see [`counters_checkpoint`].
+#[derive(Debug, Clone, Copy)]
+pub struct ResolverCounters([usize; 1]);
+
+/// Captures the counters that name the resolver's hidden temporaries, to hand back to
+/// [`restore_counters`] after a resolution whose result is discarded (the autoload prelude
+/// probe), so the real resolution names its temporaries exactly as without it.
+pub fn counters_checkpoint() -> ResolverCounters {
+    use std::sync::atomic::Ordering::SeqCst;
+    ResolverCounters([engine_includes::VALUE_INCLUDE_COUNTER.load(SeqCst)])
+}
+
+/// Rewinds the resolver's hidden-temporary counters to a [`counters_checkpoint`].
+pub fn restore_counters(checkpoint: ResolverCounters) {
+    use std::sync::atomic::Ordering::SeqCst;
+    let [value_include] = checkpoint.0;
+    engine_includes::VALUE_INCLUDE_COUNTER.store(value_include, SeqCst);
+}
+
+/// Resolves the includes of a file loaded INTO an ongoing compile (an autoloaded class file).
+///
+/// Unlike [`resolve_collecting_includes_with_defines`] it keeps the source identities the
+/// compile already handed out, so a file this pulls in never reuses the identity of another
+/// file of the same program: spans of different files stay distinct, and each diagnostic can
+/// name its own file.
+pub fn resolve_collecting_includes_continuing(
+    program: Program,
+    base_dir: &Path,
+    defines: &HashSet<String>,
+) -> Result<(Program, Vec<PathBuf>), CompileError> {
+    crate::compiler_stack::with_compiler_stack(|| {
         resolve_collecting_includes_with_defines_inner(program, base_dir, defines)
     })
 }
@@ -125,7 +161,6 @@ fn resolve_collecting_includes_with_defines_inner(
     base_dir: &Path,
     defines: &HashSet<String>,
 ) -> Result<(Program, Vec<PathBuf>), CompileError> {
-    Span::reset_source_ids();
     if !has_includes(&program) {
         return Ok((program, Vec::new()));
     }

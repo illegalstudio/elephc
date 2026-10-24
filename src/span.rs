@@ -98,6 +98,22 @@ std::thread_local! {
     /// one resolution unit, which is pathological).
     static NEXT_SYNTHETIC_SOURCE_ID: std::cell::Cell<u32> =
         const { std::cell::Cell::new(SOURCE_ID_MASK + 1) };
+    /// The physical file each source identity was lexed from, for diagnostics.
+    ///
+    /// A checker error carries only a span; without this a diagnostic from an included or
+    /// autoloaded file printed `error[line:col]` with no way to tell which of thousands of files
+    /// it came from. Entries are overwritten when an identity is handed out again after
+    /// [`Span::reset_source_ids`], so a lookup always names the latest file lexed with that id.
+    static SOURCE_PATHS: std::cell::RefCell<std::collections::HashMap<u32, String>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// The span counters at one moment; see [`Span::counters_checkpoint`].
+#[derive(Debug, Clone, Copy)]
+pub struct SpanCounters {
+    next_source_id: u32,
+    next_synthetic_source_id: u32,
+    next_synthetic_line: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -168,9 +184,44 @@ impl Span {
         })
     }
 
+    /// Records the physical file a source identity was lexed from.
+    pub fn register_source_path(source_id: u32, path: impl Into<String>) {
+        let path = path.into();
+        SOURCE_PATHS.with(|paths| {
+            paths.borrow_mut().insert(source_id, path);
+        });
+    }
+
+    /// Returns the physical file this span was lexed from, when one was registered.
+    pub fn source_path(self) -> Option<String> {
+        let source_id = self.source_id();
+        SOURCE_PATHS.with(|paths| paths.borrow().get(&source_id).cloned())
+    }
+
     /// Resets source identities at the beginning of a new include-resolution unit.
     pub fn reset_source_ids() {
         NEXT_SOURCE_ID.with(|next| next.set(1));
+    }
+
+    /// Captures every span counter (include and synthetic source identities, synthetic lines),
+    /// to hand back to [`Span::restore_counters`] after work whose spans are discarded.
+    pub fn counters_checkpoint() -> SpanCounters {
+        SpanCounters {
+            next_source_id: NEXT_SOURCE_ID.with(|next| next.get()),
+            next_synthetic_source_id: NEXT_SYNTHETIC_SOURCE_ID.with(|next| next.get()),
+            next_synthetic_line: NEXT_SYNTHETIC_LINE.load(std::sync::atomic::Ordering::Relaxed),
+        }
+    }
+
+    /// Rewinds the span counters to a [`Span::counters_checkpoint`], so a discarded trial parse
+    /// (the autoload prelude probe) leaves the numbering the real pass will use.
+    pub fn restore_counters(checkpoint: SpanCounters) {
+        NEXT_SOURCE_ID.with(|next| next.set(checkpoint.next_source_id));
+        NEXT_SYNTHETIC_SOURCE_ID.with(|next| next.set(checkpoint.next_synthetic_source_id));
+        NEXT_SYNTHETIC_LINE.store(
+            checkpoint.next_synthetic_line,
+            std::sync::atomic::Ordering::Relaxed,
+        );
     }
 
     /// Returns a source identity for a synthetic parse that [`Span::reset_source_ids`] must not

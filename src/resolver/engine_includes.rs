@@ -25,7 +25,7 @@ use super::include_path::fold_include_path;
 use super::state::ResolveState;
 
 /// Process-global counter producing unique hidden temporary names for value-position includes.
-static VALUE_INCLUDE_COUNTER: AtomicUsize = AtomicUsize::new(0);
+pub(super) static VALUE_INCLUDE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 /// Where the value produced by an expression-position include must be delivered.
 pub(super) enum IncludeValueCapture {

@@ -359,6 +359,34 @@ impl Checker {
         None
     }
 
+    /// The classes whose `prop_name` slot is the one `declaring_class` declares (see
+    /// `Checker::property_sharers_index`).
+    fn property_sharers(&mut self, prop_name: &str, declaring_class: &str) -> Vec<String> {
+        let class_count = self.classes.len();
+        if self
+            .property_sharers_index
+            .as_ref()
+            .is_none_or(|(built_for, _)| *built_for != class_count)
+        {
+            let mut index: std::collections::HashMap<(String, String), Vec<String>> =
+                std::collections::HashMap::new();
+            for (name, info) in &self.classes {
+                for (property, owner) in &info.property_declaring_classes {
+                    index
+                        .entry((property.clone(), owner.clone()))
+                        .or_default()
+                        .push(name.clone());
+                }
+            }
+            self.property_sharers_index = Some((class_count, index));
+        }
+        self.property_sharers_index
+            .as_ref()
+            .and_then(|(_, index)| index.get(&(prop_name.to_string(), declaring_class.to_string())))
+            .cloned()
+            .unwrap_or_default()
+    }
+
     /// Propagates a resolved constructor argument type into the corresponding constructor
     /// parameter and property slot for all classes that share an inherited property from
     /// `declaring_class`. Used to sharpen types across an inheritance hierarchy after
@@ -396,15 +424,10 @@ impl Checker {
             return;
         };
 
-        for class_info in self.classes.values_mut() {
-            let shares_inherited_property = class_info
-                .property_declaring_classes
-                .get(&prop_name)
-                .is_some_and(|owner| owner == &declaring_class);
-
-            if !shares_inherited_property {
+        for sharer in self.property_sharers(&prop_name, &declaring_class) {
+            let Some(class_info) = self.classes.get_mut(&sharer) else {
                 continue;
-            }
+            };
 
             let property_has_declared_type = class_info.visible_property_is_declared(&prop_name);
             if !property_has_declared_type {

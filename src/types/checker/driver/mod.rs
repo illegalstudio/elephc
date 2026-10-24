@@ -135,7 +135,7 @@ pub(super) fn check_types_impl(
         let key = php_symbol_key(&class.name);
         if !seen_classes.insert(key) {
             errors.push(CompileError::new(
-                crate::span::Span::dummy(),
+                class.span,
                 &format!("Duplicate class declaration: {}", class.name),
             ));
             continue;
@@ -615,6 +615,57 @@ mod tests {
             assert_eq!(class.static_methods[name].params[0].1, crate::types::PhpType::Int);
             assert!(!class.method_decls.iter().any(|decl| decl.name.eq_ignore_ascii_case(name)));
         }
+    }
+
+    /// The outer method/function/top-level fixpoint must converge when a method's untyped
+    /// variadic is both promoted to the descriptor container (a first-class callable inside a
+    /// method body) and called with a string from the top level.
+    ///
+    /// The method pass promoted `is`'s collector to `array<mixed>`, the top-level re-check joined
+    /// the `'api/*'` call site back into `array<string>` (`Str` absorbs `Mixed` in the coercion
+    /// join), and the two alternated until the round budget ran out; on Laravel that budget is
+    /// thousands of rounds. The collector must end as the wider `array<mixed>`, the only type the
+    /// descriptor invoker and both call sites agree on.
+    #[test]
+    fn promoted_method_variadic_is_not_narrowed_back_by_a_top_level_call() {
+        let source = r#"<?php
+class Req {
+    public function is(...$patterns) {
+        foreach ($patterns as $p) { if ($p === "api/x") return true; }
+        return false;
+    }
+}
+class Mw {
+    public function check(Req $r) {
+        $f = $r->is(...);
+        return $f("api/x");
+    }
+}
+$g = fn (Req $r) => $r->is('api/*');
+var_dump($g(new Req()));
+var_dump((new Mw())->check(new Req()));
+"#;
+        let tokens = crate::lexer::tokenize(source).expect("tokenize");
+        let program = crate::parser::parse(&tokens).expect("parse");
+        let program = crate::name_resolver::resolve(program).expect("name resolve");
+        let checked = crate::types::checker::check_types(
+            &program,
+            crate::codegen_support::platform::Target::new(
+                crate::codegen_support::platform::Platform::MacOS,
+                crate::codegen_support::platform::Arch::AArch64,
+            ),
+        )
+        .expect("check");
+        let is_sig = checked
+            .classes
+            .get("Req")
+            .and_then(|class| class.methods.get("is"))
+            .expect("Req::is signature");
+        assert_eq!(
+            is_sig.params.last().map(|(_, ty)| ty.clone()),
+            Some(crate::types::PhpType::Array(Box::new(crate::types::PhpType::Mixed))),
+            "the promoted collector must stay array<mixed>"
+        );
     }
 
     /// Class ids must not depend on HashMap iteration order.

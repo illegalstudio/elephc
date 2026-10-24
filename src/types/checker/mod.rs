@@ -133,6 +133,25 @@ pub(crate) struct Checker {
     /// widen the parameter to `Mixed` (so e.g. a parameter called with both an int
     /// and a string is `Mixed`, not collapsed to one type).
     pub param_specialization_seen: HashSet<(String, usize)>,
+    /// Direct subclasses of every class, keyed by parent name, plus the `classes.len()` it was
+    /// built for. Rebuilt whenever a class is registered, so it never answers for a stale table.
+    ///
+    /// `class_and_descendants` answers subclass queries from it (the late-bound `new static`
+    /// target validation), which used to walk the parent chain from every registered class.
+    pub class_children_index: Option<(usize, HashMap<String, Vec<String>>)>,
+    /// The classes whose method table dispatches each `(implementing class, method key,
+    /// is_static)` to that implementation, plus the `classes.len()` it was built for.
+    ///
+    /// Every method body's inferred return is copied to those classes after the body is
+    /// checked. That used to scan the whole class table once per method body (methods ×
+    /// classes per pass). Implementation maps are only written while classes are registered,
+    /// which also changes the table's size, so the length is a sound staleness check.
+    pub method_impl_users_index: Option<(usize, HashMap<(String, String, bool), Vec<String>>)>,
+    /// The classes sharing each `(property, declaring class)` slot, plus the `classes.len()` it
+    /// was built for; the same staleness rule as `method_impl_users_index`. A constructor
+    /// argument retypes that slot in every class sharing it, which used to scan the whole class
+    /// table per argument of every `new`.
+    pub property_sharers_index: Option<(usize, HashMap<(String, String), Vec<String>>)>,
     /// Untyped interface positions whose implementation uses a stable boxed ABI.
     pub interface_method_boxed_params: HashSet<(String, usize)>,
     /// Every generic instantiation a call site asked for, as (template name, type arguments).
@@ -443,6 +462,10 @@ pub(crate) struct Checker {
     pub first_class_builtin_call_types: HashMap<Span, PhpType>,
     /// Fixed-point storage contracts keyed by function-like scope and loop span.
     pub loop_storage_types: crate::types::LoopStorageTypes,
+    /// The loop spans `loop_storage_types` holds for each scope, so a re-walk clears its scope
+    /// in time proportional to that scope's loops. Clearing used to `retain` over the whole map
+    /// once per method, function and closure body, which on Laravel was quadratic.
+    pub loop_storage_scope_spans: HashMap<String, Vec<crate::span::Span>>,
     /// `(scope, local)` pairs for `string` locals used as a `++`/`--` target.
     ///
     /// PHP's string increment can change the value's type (`"9"++` is `int(10)`), so EIR

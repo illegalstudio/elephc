@@ -91,6 +91,17 @@ pub(crate) fn next_anonymous_class_name() -> String {
     format!("class@anonymous#{}", id)
 }
 
+/// Returns the next anonymous-class number, for [`restore_anonymous_class_counter`].
+pub(crate) fn anonymous_class_counter() -> usize {
+    ANONYMOUS_CLASS_COUNTER.with(|counter| counter.get())
+}
+
+/// Rewinds the anonymous-class numbering after a parse whose result is discarded (the autoload
+/// prelude probe), so the real parse names its anonymous classes exactly as without it.
+pub(crate) fn restore_anonymous_class_counter(next: usize) {
+    ANONYMOUS_CLASS_COUNTER.with(|counter| counter.set(next));
+}
+
 /// Returns whether `name` is a synthetic anonymous-class name from `next_anonymous_class_name`.
 pub(crate) fn is_anonymous_class_name(name: &str) -> bool {
     name.trim_start_matches('\\').starts_with("class@anonymous#")
