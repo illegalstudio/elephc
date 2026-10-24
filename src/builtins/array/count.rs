@@ -73,7 +73,8 @@ pub(super) fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     match &ty {
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed => Ok(PhpType::Int),
-        PhpType::Union(members) if members.iter().any(union_member_is_countable_array) => {
+        PhpType::Union(members) if members.iter().any(|member|
+            union_member_is_countable_array(member) || matches!(member, PhpType::Object(_))) => {
             Ok(PhpType::Int)
         }
         // A non-Countable object is accepted here and REFUSED AT RUN TIME, the way PHP does it.

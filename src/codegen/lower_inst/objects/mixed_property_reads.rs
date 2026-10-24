@@ -17,6 +17,9 @@ pub(super) fn lower_union_object_prop_get(
     class_name: &str,
     property: &str,
 ) -> Result<()> {
+    if ctx.module.class_infos.get(class_name).is_some_and(|info| info.visible_property(property).is_none()) {
+        return lower_mixed_prop_get(ctx, inst, object, property);
+    }
     let slot = resolve_property_slot_for_class(ctx, class_name, property, inst)?;
     let object_label = ctx.next_label("union_prop_object");
     let done_label = ctx.next_label("union_prop_done");

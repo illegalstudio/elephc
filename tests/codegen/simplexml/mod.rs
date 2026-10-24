@@ -312,6 +312,26 @@ for ($i = 0; $i < 2; $i++) {
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Native wrapper construction, selection, and each projection retire their own heap values.
+#[test]
+fn test_simplexml_heap_ownership_stages() {
+    if skip_without_xml_native("test_simplexml_heap_ownership_stages") { return; }
+    let mut failures = Vec::new();
+    for (label, action) in [
+        ("root", ""),
+        ("alias", "$child = $x->child[0]; unset($child);"),
+        ("array", "$properties = (array)$x; unset($properties);"),
+        ("json", "$json = json_encode($x); unset($json);"),
+    ] {
+        let source = format!("<?php $x = new SimpleXMLElement('<r id=\"x\"><child>kept</child></r>'); {action} unset($x); echo 'done';");
+        let out = compile_and_run_with_heap_debug(&source);
+        if !out.success || out.stdout != "done" || !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
+            failures.push(format!("{label}: stdout={} stderr={}", out.stdout, out.stderr));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 /// Nullable self returns are covariant while a class's interface schema is still being built.
 #[test]
 fn test_simplexml_nullable_self_interface_covariance() {

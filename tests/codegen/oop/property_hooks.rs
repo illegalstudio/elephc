@@ -12,6 +12,25 @@
 
 use super::*;
 
+/// Camel-case inherited backed hooks read initialized raw storage within their own accessor.
+#[test]
+fn test_camel_case_inherited_backed_property_hooks() {
+    let out = compile_and_run(r#"<?php
+class CamelHookBase {
+    public mixed $childNodes = null {
+        get { return $this->childNodes; }
+        set { $this->childNodes = $value; }
+    }
+}
+class CamelHookChild extends CamelHookBase {}
+$node = new CamelHookChild();
+var_dump($node->childNodes);
+$node->childNodes = "ready";
+var_dump($node->childNodes);
+"#);
+    assert_eq!(out, "NULL\nstring(5) \"ready\"\n");
+}
+
 /// Verifies a virtual get-only hook computes its value from other properties on read.
 #[test]
 fn test_get_only_virtual_property() {

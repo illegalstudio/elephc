@@ -227,9 +227,7 @@ fn lower_dynamic_truthiness(
     ctx.builder.terminate(Terminator::CondBr { cond: condition.value,
         then_target: object, then_args: vec![], else_target: fallback, else_args: vec![] });
     ctx.builder.position_at_end(object);
-    let method = ctx.intern_string(method);
-    let value = ctx.emit_value(Op::MethodCall, vec![input.value], Some(Immediate::Data(method)),
-        PhpType::Bool, Op::MethodCall.default_effects(), span);
+    let value = emit_guarded_adapter(ctx, input, class, method, PhpType::Bool, span);
     store_value_into_temp(ctx, &temp, PhpType::Bool, value, at);
     branch_to(ctx, merge);
     let object_initialized = ctx.initialized_slots_snapshot();
@@ -273,9 +271,15 @@ fn lower_dynamic_numeric_cast(
     span: Option<Span>, handlers: &[(&str, &str)],
 ) -> LoweredValue {
     let Some((class, method)) = handlers.first() else {
-        return ctx.emit_value(Op::Cast, vec![input.value],
+        let at = span.unwrap_or_else(Span::dummy);
+        let operand = if matches!(ctx.builder.value_php_type(input.value), PhpType::Object(_)) {
+            box_operand(ctx, input, at)
+        } else { input };
+        let result = ctx.emit_value(Op::Cast, vec![operand.value],
             Some(Immediate::CastTarget(value_ir_type(&result_type))), result_type,
             Op::Cast.default_effects(), span);
+        if operand.value != input.value { release_binary_operand_temporary(ctx, operand, at); }
+        return result;
     };
     let at = span.unwrap_or_else(Span::dummy);
     let data = ctx.intern_class_name(class);
@@ -289,9 +293,7 @@ fn lower_dynamic_numeric_cast(
     ctx.builder.terminate(Terminator::CondBr { cond: condition.value,
         then_target: object, then_args: vec![], else_target: fallback, else_args: vec![] });
     ctx.builder.position_at_end(object);
-    let method = ctx.intern_string(method);
-    let value = ctx.emit_value(Op::MethodCall, vec![input.value], Some(Immediate::Data(method)),
-        result_type.clone(), Op::MethodCall.default_effects(), span);
+    let value = emit_guarded_adapter(ctx, input, class, method, result_type.clone(), span);
     store_value_into_temp(ctx, &temp, result_type.clone(), value, at);
     branch_to(ctx, merge);
     let object_initialized = ctx.initialized_slots_snapshot();
@@ -305,4 +307,28 @@ fn lower_dynamic_numeric_cast(
     ctx.restore_initialized_slots(merge_initialized_slots_for_expr(&initialized,
         object_initialized, true, fallback_initialized, true));
     take_owned_temp(ctx, &temp, at)
+}
+
+/// Narrows a raw object receiver after an instanceof guard and preserves hidden call arguments.
+fn emit_guarded_adapter(
+    ctx: &mut LoweringContext<'_, '_>, input: LoweredValue, class: &str, method: &str,
+    result_type: PhpType, span: Option<Span>,
+) -> LoweredValue {
+    let receiver = if matches!(ctx.builder.value_php_type(input.value), PhpType::Object(_)) {
+        let value = ctx.emit_value(Op::Borrow, vec![input.value], None,
+            PhpType::Object(class.to_string()), Op::Borrow.default_effects(), span);
+        ctx.builder.set_value_ownership(value.value, Ownership::Borrowed);
+        value
+    } else { input };
+    let signature = ctx.classes.get(class).and_then(|info| info.methods.get(method)).cloned();
+    let expr = Expr::new(ExprKind::Null, span.unwrap_or_else(Span::dummy));
+    let mut operands = vec![receiver.value];
+    let extra = append_hidden_arguments(ctx, signature.as_ref(), &mut operands, 0, &expr);
+    let pins = pin_in_flight_owners(ctx, &operands, expr.span);
+    let data = ctx.intern_string(method);
+    let result = ctx.emit_value(Op::MethodCall, operands, Some(Immediate::Data(data)),
+        result_type, Op::MethodCall.default_effects(), span);
+    unpin_in_flight_owners(ctx, pins, expr.span);
+    for value in extra { release_binary_operand_temporary(ctx, value, expr.span); }
+    result
 }

@@ -1856,7 +1856,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let Some((_, method)) = self.owner_name.split_once("::") else {
             return false;
         };
-        method == property_hook_get_method(property) || method == property_hook_set_method(property)
+        method.eq_ignore_ascii_case(&property_hook_get_method(property))
+            || method.eq_ignore_ascii_case(&property_hook_set_method(property))
     }
 
     /// Appends closure functions discovered while lowering expressions in this body.

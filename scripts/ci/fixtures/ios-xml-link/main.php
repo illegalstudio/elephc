@@ -51,6 +51,8 @@ echo "titles: ", implode(' / ', $titles), "\n";
 
 // SimpleXML must use the same bridge and managed shim on both iOS targets.
 $tree = new SimpleXMLIterator($xml);
+$clonedTree = clone $tree;
+echo 'clone: ', $clonedTree->getName(), "\n";
 $tree->registerXPathNamespace('catalog', 'urn:catalog');
 foreach ($tree->xpath('//book/title') as $title) {
     echo 'simplexml: ', (string)$title, "\n";

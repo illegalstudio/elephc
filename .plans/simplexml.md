@@ -10,4 +10,4 @@ Reuse the managed libxml2 package and its opaque C shim on all supported targets
 
 Validation follows the user's instruction: local read-only and lightweight source checks only; compilation, linking, executable tests, and target coverage run in the draft PR's CI.
 
-Draft PR: https://github.com/illegalstudio/elephc/pull/2060. CI has built both Linux Rust test archives. Native execution and iOS linking are being unblocked by correcting prelude type errors; generated documentation is imported from the CI artifact and audited locally without invoking Cargo.
+Draft PR: https://github.com/illegalstudio/elephc/pull/2060. CI on implementation commit `155251cf9c` passed managed-native smoke tests on both Linux targets and XML/SimpleXML links for both iOS targets. Later changes give subclasses independent native leases and the shared native clone handler. The full executable matrix and added clone link coverage are being verified in CI. Generated documentation comes from CI artifacts and passes local JSON-based audits without invoking Cargo.

@@ -13,6 +13,9 @@ fn verify_simplexml_target(target: &str) {
 $xml = new SimpleXMLIterator('<r id="a"><item>42</item><item>3</item></r>');
 $xml->item[0] = '7';
 $xml['id'] = 'b';
+$cloned = clone $xml;
+$cloned->item[0] = 'copy';
+echo (string)$xml->item[0], ':', (string)$cloned->item[0];
 $xml->addChild('p:child', 'value', 'urn:p');
 foreach ($xml->item as $key => $node) { echo $key, (string)$node, (int)$node, (float)$node; }
 var_dump((bool)$xml->missing);
@@ -28,6 +31,8 @@ echo $doc->saveXML();
     assert!(assembly.contains("elephc_xml_sx_mutate"), "{target}: document mutation boundary");
     assert!(assembly.contains(&crate::names::method_symbol("SimpleXMLElement", "__elephc_array")),
         "{target}: native property projection body");
+    assert!(assembly.contains(&crate::names::method_symbol("SimpleXMLElement", "__elephc_clone_initialize")),
+        "{target}: native clone handler body");
 }
 
 /// Schedules target-sensitive SimpleXML fixtures independently under CI's ordinary timeout.

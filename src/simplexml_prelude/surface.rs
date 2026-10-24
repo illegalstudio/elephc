@@ -38,10 +38,11 @@ function __elephc_simplexml_wrap(int $handle, string $class): SimpleXMLElement {
 
 function __elephc_simplexml_class(?string $class): string {
     if ($class === null) { return "SimpleXMLElement"; }
-    if (!is_a($class, "SimpleXMLElement", true)) {
+    $name = (string)$class;
+    if (!is_a($name, "SimpleXMLElement", true)) {
         throw new TypeError("SimpleXML class must be derived from SimpleXMLElement");
     }
-    return (string)$class;
+    return $name;
 }
 
 final class __ElephcSimpleXMLLease {

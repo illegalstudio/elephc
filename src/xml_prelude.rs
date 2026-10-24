@@ -161,8 +161,14 @@ mod oracle_tests {
             .filter(|contract| contract.kind == elephc_builtin_contract::BuiltinKind::PreludeProvided)
             .map(|contract| contract.name)
             .collect();
+        let simplexml_functions = crate::simplexml_prelude::declarations().into_iter()
+            .filter_map(|stmt| match stmt.kind {
+                StmtKind::FunctionDecl { name, .. } => Some(name),
+                _ => None,
+            }).collect::<Vec<_>>();
         let declared: std::collections::BTreeSet<&str> = functions
             .iter()
+            .chain(simplexml_functions.iter())
             .map(String::as_str)
             .filter(|name| !name.starts_with("__elephc_"))
             .collect();

@@ -140,6 +140,24 @@
       "internal": true,
       "kind": "class",
       "module": "elephc",
+      "name": "__ElephcSimpleXMLLease",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": false,
+      "eval": {
+        "reason": "internal-compiler-surface",
+        "supported": false
+      },
+      "extension": false,
+      "internal": true,
+      "kind": "class",
+      "module": "elephc",
       "name": "__ElephcWeakMapIterator",
       "php_manual": null,
       "since": null

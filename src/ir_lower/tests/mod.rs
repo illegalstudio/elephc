@@ -196,6 +196,8 @@ fn try_lower_source_at_for_target(
     .expect("autoload failed");
     let ast = crate::dom_html_prelude::inject_after_autoload(ast, &mut prelude_inventory)
         .expect("autoload DOM prelude injection failed");
+    let ast = crate::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory)
+        .expect("object-cast prelude injection failed");
     // Mirrors `pipeline::compile`, which desugars the `func_get_args()` family between
     // `autoload::run` and constant folding. Without it an example using those functions
     // reaches the checker as an undefined call, so the corpus would fail on valid PHP.

@@ -67,7 +67,7 @@ echo "==> building compiler and materializing libxml2 for $ELEPHC_TARGET"
 # zlib/bzip2) exactly as the Linux managed-native smoke documents. Neither bridge is
 # whole-archived, so both are plain archive inputs below.
 echo "==> cross-building the Rust xml and phar bridges for $RUST_TARGET"
-(cd "$PROJECT_DIR" && cargo build -p elephc-xml -p elephc-phar --target "$RUST_TARGET")
+(cd "$PROJECT_DIR" && cargo build -p elephc-xml -p elephc-phar -p elephc-magician --target "$RUST_TARGET")
 BRIDGE_ARCHIVE="$PROJECT_DIR/target/$RUST_TARGET/debug/libelephc_xml.a"
 PHAR_ARCHIVE="$PROJECT_DIR/target/$RUST_TARGET/debug/libelephc_phar.a"
 test -s "$BRIDGE_ARCHIVE"

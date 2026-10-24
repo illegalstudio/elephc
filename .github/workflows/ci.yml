@@ -2849,6 +2849,17 @@ jobs:
           grep -F 'titles: The Pragmatic Programmer / Design Patterns  / & /  Friends' "$RUNNER_TEMP/xml.out"
           grep -F 'tags: 10, price entries at 3,7' "$RUNNER_TEMP/xml.out"
 
+      - name: Compile and run SimpleXML through the production resolver
+        shell: bash
+        run: |
+          ./target/debug/elephc \
+            --target "${{ matrix.target }}" \
+            examples/simplexml/main.php
+          ./examples/simplexml/main > "$RUNNER_TEMP/simplexml.out"
+          grep -F 'A1: Notebook EUR 4.50' "$RUNNER_TEMP/simplexml.out"
+          grep -F 'B2: Pencil EUR 1.20' "$RUNNER_TEMP/simplexml.out"
+          grep -F 'Under EUR 2: Pencil' "$RUNNER_TEMP/simplexml.out"
+
       - name: Reinstall locked state offline
         shell: bash
         run: |
@@ -2867,6 +2878,11 @@ jobs:
             --offline \
             --target "${{ matrix.target }}" \
             --manifest-path examples/xml/elephc.toml
+          ./target/debug/elephc native install \
+            --locked \
+            --offline \
+            --target "${{ matrix.target }}" \
+            --manifest-path examples/simplexml/elephc.toml
 
   frame-assertions-release:
     name: Frame assertions (release)

@@ -1014,33 +1014,31 @@ function __elephc_dom_collect(mixed $node, string $name): array {
 class DOMNode {
     public string $nodeName = "";
     public mixed $__elephc_simplexml = null;
-    private mixed $__elephc_dom_value = null;
-    private mixed $__elephc_dom_children = null;
-    public mixed $nodeValue {
+    public mixed $nodeValue = null {
         get {
             $bound = $this->__elephc_simplexml;
             if (is_object($bound) && !($this instanceof DOMDocument)) { return $bound->__elephc_dom_text(); }
-            return $this->__elephc_dom_value;
+            return $this->nodeValue;
         }
         set {
-            $this->__elephc_dom_value = $value;
+            $this->nodeValue = $value;
             $bound = $this->__elephc_simplexml;
             if (is_object($bound) && !($this instanceof DOMDocument)) { $bound->__elephc_dom_set_text((string)$value); }
         }
     }
-    public mixed $textContent {
+    public $textContent {
         get { return $this->nodeValue; }
         set { $this->nodeValue = $value; }
     }
-    public mixed $childNodes {
+    public mixed $childNodes = null {
         get {
             $bound = $this->__elephc_simplexml;
             if (is_object($bound) && !($this instanceof DOMDocument)) {
                 return $bound->__elephc_dom_children($this->ownerDocument, $this);
             }
-            return $this->__elephc_dom_children;
+            return $this->childNodes;
         }
-        set { $this->__elephc_dom_children = $value; }
+        set { $this->childNodes = $value; }
     }
     public mixed $previousSibling = null;
     public mixed $nextSibling = null;
