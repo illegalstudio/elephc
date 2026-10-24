@@ -314,6 +314,9 @@ foreach (['stdClass', 'MissingSimpleXmlClass', ''] as $class) {
     try { simplexml_load_string('<r/>', $class); }
     catch (TypeError $error) { echo "type-error|"; }
 }
+"###);
+    assert_eq!(out, "type-error|type-error|type-error|");
+}
 
 /// Numeric aliases remain bound to the same native node when siblings are removed.
 #[test]
@@ -348,7 +351,4 @@ $holder->xml[] = 'third';
 echo count($xml->item), ':', (string)$xml->item[2], "\n";
 "###);
     assert_eq!(out, "v:2:changed:added\n3:third\n");
-}
-"###);
-    assert_eq!(out, "type-error|type-error|type-error|");
 }

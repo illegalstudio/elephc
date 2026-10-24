@@ -360,6 +360,18 @@ pub(crate) fn lower_property_get_from_value(
     if op == Op::NullsafePropGet && value_is_definitely_null(ctx, object.value) {
         return lower_boxed_null(ctx, expr);
     }
+    let object_type = ctx.builder.value_php_type(object.value);
+    let native_xml_getter = singular_object_class(&object_type).is_some_and(|(class, _)| {
+        crate::types::builtin_classes::has_native_dimensions(class, ctx.classes)
+            && ctx.classes.get(class.trim_start_matches('\\'))
+                .is_some_and(|info| info.visible_property(property).is_none())
+    });
+    if matches!(op, Op::PropGet | Op::NullsafePropGet) && native_xml_getter {
+        // XML child selection creates a fresh wrapper. Keep that ownership visible as a call.
+        let name = Expr::new(ExprKind::StringLiteral(property.into()), expr.span);
+        let call = if op == Op::NullsafePropGet { Op::NullsafeMethodCall } else { Op::MethodCall };
+        return lower_method_call_with_receiver(ctx, object, "__get", &[name], call, expr);
+    }
     // Route a read of a get-hooked property to its synthetic accessor, except inside that property's
     // own accessor, where `$this->prop` must read the raw backing slot to avoid infinite recursion.
     // A nullsafe read (`$obj?->prop`) routes to a nullsafe call so the null short-circuit is kept.
