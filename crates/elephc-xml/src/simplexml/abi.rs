@@ -76,7 +76,9 @@ pub extern "C" fn elephc_xml_sx_int(handle: i64, operation: i64) -> i64 {
 pub extern "C" fn elephc_xml_sx_string(handle: i64, operation: i64) -> *const c_char {
     guard(|| output(view(handle).and_then(|v| v.first().map(|n| unsafe { match operation {
         0 => owned_string(ffi::text(n)), 1 => string(ffi::name(n)),
-        2 => owned_string(ffi::dump(v.doc.raw, n)), _ => String::new(),
+        2 => owned_string(ffi::dump(v.doc.raw, n)),
+        3 => owned_string(ffi::full_text(n)), 4 => owned_string(ffi::dump_node(v.doc.raw, n)),
+        _ => String::new(),
     } })).unwrap_or_default()))
 }
 /// Returns the indexed child visited by foreach and explicit iterator methods.
@@ -96,6 +98,7 @@ pub unsafe extern "C" fn elephc_xml_sx_mutate(handle: i64, operation: i64, key: 
             20 | 21 => v.add(&key, (flags & 1 != 0).then_some(text.as_str()),
                 (flags & 2 != 0).then_some(uri.as_str()), operation == 21)
                 .map(|n| insert(v.with_scope(Scope::Node(n)))).unwrap_or(0),
+            22 => v.first().map(|n| { v.assign_node(n, &text); 1 }).unwrap_or(0),
             _ => 0,
         }
     })
@@ -119,3 +122,7 @@ pub extern "C" fn elephc_xml_sx_namespace(handle: i64, declared: i64, recursive:
         entries.get(index as usize).map(|(prefix, uri)| if field == 0 { prefix.clone() } else { uri.clone() }).unwrap_or_default()
     }).unwrap_or_default()))
 }
+
+/// Creates another wrapper over the same native selection, without PHP clone's deep copy.
+#[no_mangle]
+pub extern "C" fn elephc_xml_sx_alias(handle: i64) -> i64 { guard(|| view(handle).map(insert).unwrap_or(0)) }

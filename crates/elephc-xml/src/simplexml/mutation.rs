@@ -32,8 +32,12 @@ impl View {
         (!raw.is_null()).then_some(raw)
     }
     /// Replaces direct content without freeing child wrappers that remain in user storage.
-    fn assign_node(&self, node: Node, value: &str) {
+    pub(super) fn assign_node(&self, node: Node, value: &str) {
         unsafe {
+            if !matches!(ffi::node_type(node), 1 | 2) {
+                ffi::content(node, cstring(value).as_ptr());
+                return;
+            }
             let mut cursor = ffi::child(node);
             while !cursor.is_null() {
                 let next = ffi::next(cursor);

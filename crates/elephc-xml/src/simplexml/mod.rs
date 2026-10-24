@@ -107,6 +107,12 @@ impl View {
             2 => if matches!(self.scope, Scope::Attributes(..)) {
                 Scope::Attributes(parent_for_attributes(self), Some(name.into()))
             } else { Scope::Children(parent, Some(name.into())) },
+            6 => {
+                let mut nodes = Vec::new();
+                let mut next = self.first().map(|n| unsafe { ffi::child(n) }).unwrap_or(std::ptr::null_mut());
+                while !next.is_null() { nodes.push(next); next = unsafe { ffi::next(next) }; }
+                Scope::Nodes(nodes)
+            }
             3 => Scope::Attributes(if matches!(self.scope, Scope::Attributes(..)) {
                 parent_for_attributes(self)
             } else { parent }, Some(name.into())),

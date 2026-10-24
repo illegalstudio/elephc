@@ -453,7 +453,7 @@ mod tests {
         assert_eq!(hybrid_adapter, 2);
         // Includes the four float pointer builtins and `buffer_ptr`, which eval runs through
         // interpreter adapters.
-        assert_eq!(interpreter_adapter, 601 + curl_surface);
+        assert_eq!(interpreter_adapter, 604 + curl_surface);
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own.
         assert_eq!(unsupported, 478);

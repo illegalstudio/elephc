@@ -832,6 +832,10 @@ function __elephc_dom_escape_attr_non_ascii(string $s): string {
 }
 
 function __elephc_dom_serialize_node(mixed $node): string {
+    if ($node instanceof DOMNode) {
+        $bound = $node->__elephc_simplexml;
+        if (is_object($bound) && !($node instanceof DOMDocument)) { return $bound->__elephc_dom_xml(); }
+    }
     if ($node instanceof DOMText) {
         if ($node->__elephc_raw_text) {
             return "<![CDATA[" . str_replace("]]>", "]]]]><![CDATA[>", (string) $node->nodeValue) . "]]>";
@@ -1009,8 +1013,35 @@ function __elephc_dom_collect(mixed $node, string $name): array {
 
 class DOMNode {
     public string $nodeName = "";
-    public mixed $nodeValue = null;
-    public mixed $childNodes = null;
+    public mixed $__elephc_simplexml = null;
+    private mixed $__elephc_dom_value = null;
+    private mixed $__elephc_dom_children = null;
+    public mixed $nodeValue {
+        get {
+            $bound = $this->__elephc_simplexml;
+            if (is_object($bound) && !($this instanceof DOMDocument)) { return $bound->__elephc_dom_text(); }
+            return $this->__elephc_dom_value;
+        }
+        set {
+            $this->__elephc_dom_value = $value;
+            $bound = $this->__elephc_simplexml;
+            if (is_object($bound) && !($this instanceof DOMDocument)) { $bound->__elephc_dom_set_text((string)$value); }
+        }
+    }
+    public mixed $textContent {
+        get { return $this->nodeValue; }
+        set { $this->nodeValue = $value; }
+    }
+    public mixed $childNodes {
+        get {
+            $bound = $this->__elephc_simplexml;
+            if (is_object($bound) && !($this instanceof DOMDocument)) {
+                return $bound->__elephc_dom_children($this->ownerDocument, $this);
+            }
+            return $this->__elephc_dom_children;
+        }
+        set { $this->__elephc_dom_children = $value; }
+    }
     public mixed $previousSibling = null;
     public mixed $nextSibling = null;
     public mixed $parentNode = null;
@@ -1018,7 +1049,27 @@ class DOMNode {
     public mixed $__attrs = [];
 
     public function getAttribute(string $name): string {
+        $bound = $this->__elephc_simplexml;
+        if (is_object($bound)) { return (string)$bound[$name]; }
         return __elephc_dom_attr_get($this->__attrs, $name);
+    }
+
+    public function setAttribute(string $qualifiedName, string $value): bool {
+        $bound = $this->__elephc_simplexml;
+        if (is_object($bound)) { $bound[$qualifiedName] = $value; return true; }
+        $attrs = $this->__attrs;
+        $updated = [];
+        $found = false;
+        if (is_array($attrs)) {
+            foreach ($attrs as $pair) {
+                if (is_array($pair) && (string)$pair[0] === $qualifiedName) {
+                    $updated[] = [$qualifiedName, $value]; $found = true;
+                } else { $updated[] = $pair; }
+            }
+        }
+        if (!$found) { $updated[] = [$qualifiedName, $value]; }
+        $this->__attrs = $updated;
+        return true;
     }
 
     public function getElementsByTagName(string $qualifiedName): DOMNodeList {
@@ -1083,6 +1134,15 @@ class DOMNodeList implements IteratorAggregate, Countable {
 
 class DOMDocument extends DOMNode {
     public int $__elephc_flags = 0;
+    public mixed $documentElement {
+        get {
+            $children = $this->childNodes;
+            if ($children instanceof DOMNodeList) {
+                foreach ($children as $child) { if ($child instanceof DOMElement) { return $child; } }
+            }
+            return null;
+        }
+    }
 
     public function __construct(string $version = "1.0", string $encoding = "") {
         $_unused_version = $version;
@@ -1104,9 +1164,21 @@ class DOMDocument extends DOMNode {
         return true;
     }
 
+    public function loadXML(string $source, int $options = 0): bool {
+        $load = "simplexml_load_string";
+        $view = $load($source, null, $options);
+        if (!is_object($view)) { return false; }
+        $this->__elephc_simplexml = $view;
+        $root = $view->__elephc_dom_node($this, $this);
+        $this->childNodes = new DOMNodeList([$root]);
+        return true;
+    }
+
     public function saveXML(mixed $node = null): string {
         $_unused_flags = $this->__elephc_flags;
         if ($node === null) {
+            $bound = $this->__elephc_simplexml;
+            if (is_object($bound)) { return (string)$bound->asXML(); }
             return __elephc_dom_serialize_node($this);
         }
         return __elephc_dom_serialize_node($node);

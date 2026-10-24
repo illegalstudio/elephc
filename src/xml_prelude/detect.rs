@@ -355,9 +355,9 @@ fn expr_refs_xml(expr: &Expr) -> bool {
             expr_refs_xml(object) || expr_refs_xml(property)
         }
         ExprKind::StaticPropertyAccess { receiver, .. } => receiver_refs_xml(receiver),
-        ExprKind::MethodCall { object, args, .. }
-        | ExprKind::NullsafeMethodCall { object, args, .. } => {
-            expr_refs_xml(object) || args.iter().any(expr_refs_xml)
+        ExprKind::MethodCall { object, method, args, .. }
+        | ExprKind::NullsafeMethodCall { object, method, args, .. } => {
+            method.eq_ignore_ascii_case("loadXML") || expr_refs_xml(object) || args.iter().any(expr_refs_xml)
         }
         ExprKind::NullsafeDynamicMethodCall {
             object,

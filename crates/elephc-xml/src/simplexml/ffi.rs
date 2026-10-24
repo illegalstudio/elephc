@@ -10,6 +10,15 @@
 use std::ffi::{c_char, c_int, c_void};
 pub(super) type Node = *mut c_void;
 extern "C" {
+    /// Sets scalar node content for DOM text, comment, and processing instruction nodes.
+    #[link_name = "elephc_libxml2_v1_sx_content"]
+    pub(super) fn content(node: Node, value: *const c_char);
+    /// Returns all descendant text for DOM nodeValue/textContent.
+    #[link_name = "elephc_libxml2_v1_sx_full_text"]
+    pub(super) fn full_text(node: Node) -> *mut c_char;
+    /// Serializes one node without a document declaration.
+    #[link_name = "elephc_libxml2_v1_sx_dump_node"]
+    pub(super) fn dump_node(doc: Node, node: Node) -> *mut c_char;
     /// Copies an entire libxml2 document for PHP clone semantics.
     #[link_name = "elephc_libxml2_v1_sx_copy"]
     pub(super) fn copy(doc: Node) -> Node;

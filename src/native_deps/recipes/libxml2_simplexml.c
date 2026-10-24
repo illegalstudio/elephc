@@ -83,7 +83,7 @@ void *elephc_libxml2_v1_sx_add(void *raw, const char *qualified, const char *val
         ns = xmlSearchNsByHref(parent->doc, parent, (const xmlChar *)uri);
         if (ns && prefix && (!ns->prefix || xmlStrcmp(prefix, ns->prefix))) ns = NULL;
     } else if (!has_uri) {
-        ns = parent->ns;
+        ns = attribute ? NULL : parent->ns;
     }
     xmlNodePtr result;
     if (attribute) {
@@ -151,4 +151,14 @@ static xmlNodePtr sx_correspond(xmlNodePtr source, xmlNodePtr destination, xmlNo
 }
 void *elephc_libxml2_v1_sx_correspond(void *source, void *destination, void *node) {
     return sx_correspond(((xmlDocPtr)source)->children, ((xmlDocPtr)destination)->children, node);
+}
+
+char *elephc_libxml2_v1_sx_full_text(void *node) { return (char *)xmlNodeGetContent(node); }
+char *elephc_libxml2_v1_sx_dump_node(void *rawdoc, void *rawnode) {
+    xmlBufferPtr out = xmlBufferCreate();
+    if (!out) return NULL;
+    xmlNodeDump(out, rawdoc, rawnode, 0, 0);
+    xmlChar *result = xmlStrdup(xmlBufferContent(out));
+    xmlBufferFree(out);
+    return (char *)result;
 }

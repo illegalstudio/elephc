@@ -168,3 +168,52 @@ $a['id'] = 'ok'; echo $a->asXML(), "\n";
 "###);
     assert_eq!(out, "kept:a\n<a id=\"ok\">kept</a>\n");
 }
+
+/// Verifies SimpleXML dom import shares mutations using PHP's expected output.
+#[test]
+fn test_simplexml_dom_import_shares_mutations() {
+    if skip_without_xml_native("test_simplexml_dom_import_shares_mutations") { return; }
+    let out = compile_and_run(r###"<?php
+$dom = new DOMDocument();
+$dom->loadXML('<root id="one"><child>before</child></root>');
+$root = $dom->documentElement;
+$child = $dom->getElementsByTagName('child')->item(0);
+$x = simplexml_import_dom($dom);
+if ($x instanceof SimpleXMLElement) {
+ $x->child = 'after'; $x['id'] = 'two';
+ echo $child->nodeValue, ':', $root->getAttribute('id'), "\n";
+ $child->nodeValue = 'from-dom'; $root->setAttribute('id', 'three');
+ echo (string)$x->child, ':', (string)$x['id'], "\n";
+ echo $dom->saveXML($root), "\n";
+ $same = simplexml_import_dom($root);
+ if ($same instanceof SimpleXMLElement) { echo (string)$same->child, "\n"; }
+}
+"###);
+    assert_eq!(out, "after:two\nfrom-dom:three\n<root id=\"three\"><child>from-dom</child></root>\nfrom-dom\n");
+}
+
+/// Verifies SimpleXML clone and interfaces using PHP's expected output.
+#[test]
+fn test_simplexml_clone_and_interfaces() {
+    if skip_without_xml_native("test_simplexml_clone_and_interfaces") { return; }
+    let out = compile_and_run(r###"<?php
+$x = new SimpleXMLElement('<root><a>one</a><a>two</a></root>');
+$copy = clone $x;
+$copy->a[0] = 'changed';
+echo (string)$x->a[0], ':', (string)$copy->a[0], "\n";
+var_dump($x instanceof ArrayAccess, $x instanceof RecursiveIterator, $x instanceof Countable, extension_loaded('SimpleXML'));
+"###);
+    assert_eq!(out, "one:changed\nbool(false)\nbool(true)\nbool(true)\nbool(true)\n");
+}
+
+/// Verifies SimpleXML entities and cdata options using PHP's expected output.
+#[test]
+fn test_simplexml_entities_and_cdata_options() {
+    if skip_without_xml_native("test_simplexml_entities_and_cdata_options") { return; }
+    let out = compile_and_run(r###"<?php
+$x = new SimpleXMLElement('<!DOCTYPE r [<!ENTITY word "value">]><r><a><![CDATA[raw<text>]]>&word;</a></r>', LIBXML_NOCDATA | LIBXML_NOENT);
+echo (string)$x->a, "\n";
+echo (string)$x->a->asXML(), "\n";
+"###);
+    assert_eq!(out, "raw<text>value\n<a>raw&lt;text&gt;value</a>\n");
+}

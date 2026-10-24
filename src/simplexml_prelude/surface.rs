@@ -12,6 +12,7 @@ extern "elephc_xml" {
     function elephc_xml_sx_load(string $data, int $length, int $options, string $ns, int $prefix): int;
     function elephc_xml_sx_free(int $handle): void;
     function elephc_xml_sx_clone(int $handle): int;
+    function elephc_xml_sx_alias(int $handle): int;
     function elephc_xml_sx_select(int $handle, int $kind, string $name, string $ns, int $prefix, int $index): int;
     function elephc_xml_sx_int(int $handle, int $operation): int;
     function elephc_xml_sx_string(int $handle, int $operation): string;
@@ -118,6 +119,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         else { $key = (string)$offset; }
         elephc_xml_sx_mutate($handle, $kind, $key, (string)$value, "", 0, $index);
     }
+    public function __elephc_append(mixed $value): void { $this->offsetSet(null, $value); }
     public function offsetUnset(mixed $offset): void {
         $handle = $this->__elephc_handle;
         if (is_int($offset)) { elephc_xml_sx_mutate($handle, 14, "", "", "", 0, $offset); }
@@ -201,6 +203,52 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         }
         return $namespaces;
     }
+    public function __elephc_dom_text(): string {
+        $handle = $this->__elephc_handle;
+        return elephc_xml_sx_string($handle, 3);
+    }
+    public function __elephc_dom_xml(): string {
+        $handle = $this->__elephc_handle;
+        return elephc_xml_sx_string($handle, 4);
+    }
+    public function __elephc_dom_set_text(string $text): void {
+        $handle = $this->__elephc_handle;
+        elephc_xml_sx_mutate($handle, 22, "", $text, "", 0, 0);
+    }
+    public function __elephc_dom_selections(): array {
+        $handle = $this->__elephc_handle;
+        $all = elephc_xml_sx_select($handle, 6, "", "", 0, 0);
+        $length = elephc_xml_sx_int($all, 2);
+        $nodes = [];
+        for ($i = 0; $i < $length; $i++) {
+            $child = elephc_xml_sx_item($all, $i);
+            $nodes[] = __elephc_simplexml_wrap($child, get_class($this));
+        }
+        elephc_xml_sx_free($all);
+        return $nodes;
+    }
+    public function __elephc_dom_children(mixed $document, mixed $parent): DOMNodeList {
+        $children = [];
+        foreach ($this->__elephc_dom_selections() as $view) {
+            if ($view instanceof SimpleXMLElement) { $children[] = $view->__elephc_dom_node($document, $parent); }
+        }
+        return new DOMNodeList($children);
+    }
+    public function __elephc_dom_node(mixed $document, mixed $parent): DOMNode {
+        $handle = $this->__elephc_handle;
+        $kind = elephc_xml_sx_int($handle, 4);
+        $node = new DOMElement();
+        if ($kind === 3 || $kind === 4) { $node = new DOMText(); }
+        elseif ($kind === 8) { $node = new DOMComment(); }
+        elseif ($kind === 7) { $node = new DOMProcessingInstruction($this->getName(), ""); }
+        $node->nodeName = $this->getName();
+        if ($kind === 3 || $kind === 4) { $node->nodeName = "#text"; }
+        if ($kind === 8) { $node->nodeName = "#comment"; }
+        $node->ownerDocument = $document;
+        $node->parentNode = $parent;
+        $node->__elephc_simplexml = $this;
+        return $node;
+    }
     public function rewind(): void { $this->__elephc_position = 0; }
     public function next(): void { $this->__elephc_position = $this->__elephc_position + 1; }
     public function valid(): bool {
@@ -233,15 +281,51 @@ function simplexml_load_file(string $filename, ?string $class_name = "SimpleXMLE
     if ($data === false) { return false; }
     return simplexml_load_string($data, $class, $options, $namespace_or_prefix, $is_prefix);
 }
+function __elephc_simplexml_bind_dom(DOMNode $node, SimpleXMLElement $view): void {
+    $children = $node->childNodes;
+    if ($node instanceof DOMDocument) {
+        $node->__elephc_simplexml = $view;
+        if ($children instanceof DOMNodeList) {
+            foreach ($children as $child) {
+                if ($child instanceof DOMElement) { __elephc_simplexml_bind_dom($child, $view); break; }
+            }
+        }
+        return;
+    }
+    $selections = $view->__elephc_dom_selections();
+    $node->__elephc_simplexml = $view;
+    $i = 0;
+    if ($children instanceof DOMNodeList) {
+        foreach ($children as $child) {
+            if ($child instanceof DOMNode && isset($selections[$i])) {
+                $selected = $selections[$i];
+                if ($selected instanceof SimpleXMLElement) { __elephc_simplexml_bind_dom($child, $selected); }
+            }
+            $i++;
+        }
+    }
+}
+
 function simplexml_import_dom(object $node, ?string $class_name = "SimpleXMLElement"): ?SimpleXMLElement {
     $class = __elephc_simplexml_class($class_name);
     if (!($node instanceof DOMNode)) { throw new TypeError("simplexml_import_dom(): Argument #1 ($node) must be of type DOMNode"); }
     if (!($node instanceof DOMDocument) && !($node instanceof DOMElement)) { return null; }
+    $bound = $node->__elephc_simplexml;
+    if ($bound instanceof SimpleXMLElement) {
+        $handle = $bound->__elephc_handle;
+        return __elephc_simplexml_wrap(elephc_xml_sx_alias($handle), $class);
+    }
     $document = $node->ownerDocument;
     if ($node instanceof DOMDocument) { $document = $node; }
     if (!($document instanceof DOMDocument)) { return null; }
-    $result = simplexml_load_string($document->saveXML($node), $class);
+    $result = simplexml_load_string($document->saveXML(), $class);
     if ($result === false) { return null; }
-    return $result;
+    __elephc_simplexml_bind_dom($document, $result);
+    $bound = $node->__elephc_simplexml;
+    if ($bound instanceof SimpleXMLElement) {
+        $handle = $bound->__elephc_handle;
+        return __elephc_simplexml_wrap(elephc_xml_sx_alias($handle), $class);
+    }
+    return null;
 }
 "###;
