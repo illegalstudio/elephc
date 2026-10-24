@@ -8,56 +8,152 @@
 //! - Trials are discarded; successful proofs only authorize another ordinary AST lowering.
 //! - By-value call positions are supplied by authoritative lowering signatures.
 //! - Unknown aliases, handlers, eval, undefined reads and unproven updates fail closed.
+//! - A slot whose checked seed reads another counter is retried jointly with that counter, and
+//!   the proven incrementing slots that needed such a seed are reported separately, because
+//!   lowering has to type that seed as an integer before the slot can read as one.
 
 use super::*;
 
-/// Finds counters whose entire recurrence remains integer, independently of their observers.
-pub(crate) fn proven_integer_slots(
+/// Integer-proven counter slots, plus those whose proof also needed a checked seed.
+#[derive(Default)]
+pub(crate) struct ProvenSlots {
+    /// Every slot whose recurrence, seeds included, was proven to stay integer.
+    pub(crate) slots: HashSet<LocalSlotId>,
+    /// The proven slots an incrementing counter seeds with checked arithmetic (`$j = $i + 1`).
+    /// Their seed only reads as the integer it always is once lowering is told so; the update
+    /// alone already widens the slot to the boxed storage the replay starts from.
+    pub(crate) seeded: HashSet<LocalSlotId>,
+}
+
+/// Finds counters whose entire recurrence remains integer, independently of their observers,
+/// and reports which of those proofs needed a checked seed.
+pub(crate) fn prove_integer_slots(
     function: &Function,
     data: &mut DataPool,
     readonly_calls: &HashMap<InstId, HashSet<usize>>,
-) -> HashSet<LocalSlotId> {
+) -> ProvenSlots {
+    let mut result = ProvenSlots::default();
     if function.instructions.len() > 4096
         || function.flags.is_generator || function.flags.is_fiber_wrapper
         || super::super::cfg::has_exception_handlers(function)
         || super::super::local_scope::has_dynamic_eval(function)
         || function.locals.iter().any(|local| matches!(local.kind,
             LocalKind::EvalContext | LocalKind::EvalScope | LocalKind::EvalGlobalScope | LocalKind::GeneratorState))
-    { return HashSet::new(); }
+    { return result; }
     let candidates: Vec<_> = function.locals.iter().filter(|local| {
         local.kind == LocalKind::PhpLocal && local.php_type == PhpType::Mixed
             && local.ir_type == IrType::Heap(IrHeapKind::Mixed)
             && local.id.as_raw() as usize >= function.params.len()
             && !function.no_epilogue_cleanup_slots.contains(&local.id)
     }).map(|local| local.id).collect();
-    // Mutually observed counters cannot assume each other's tags independently.
-    // A joint trial proves all updates before retaining any of their scalar slots.
-    let group: HashSet<_> = candidates.iter().copied().filter(|&slot| {
+    let incrementing: HashSet<_> = candidates.iter().copied().filter(|&slot| {
         function.instructions.iter().any(|inst| {
             inst.op == Op::StoreLocal && inst.immediate == Some(Immediate::LocalSlot(slot))
                 && inst.operands.first().is_some_and(|&value| increment_writer(function, value))
         })
-    }).take(16).collect();
+    }).collect();
+    // Mutually observed counters cannot assume each other's tags independently.
+    // A joint trial proves all updates before retaining any of their scalar slots.
+    let group: HashSet<_> = candidates.iter().copied()
+        .filter(|slot| incrementing.contains(slot)).take(16).collect();
     if group.len() > 1 {
         if let Some(proof) = CounterProof::for_slots(
             function, &group, &BoundedMixedCounter::default(), data, Some(readonly_calls),
         ) {
-            if trial_safe(function, &group, &proof, data) { return group; }
+            if trial_safe(function, &group, &proof, data) {
+                result.record(&group, &proof, &incrementing);
+                return result;
+            }
         }
     }
-    let mut proven = HashSet::new();
     let mut trials = 0;
-    for slot in candidates {
+    for &slot in &candidates {
         let Some(proof) = CounterProof::with_readonly_calls(
             function, slot, &BoundedMixedCounter::default(), data, Some(readonly_calls),
         ) else { continue; };
         if trials == 16 { break; }
         trials += 1;
-        if trial_safe(function, &HashSet::from([slot]), &proof, data) {
-            proven.insert(slot);
+        let slots = HashSet::from([slot]);
+        if trial_safe(function, &slots, &proof, data) {
+            result.record(&slots, &proof, &incrementing);
         }
     }
-    proven
+    // A seed that reads another counter (`$j = $i + 1` in the body of the `$i` loop) is provable
+    // only together with that counter. Alone, the other counter's boxed reads carry no range;
+    // and a counter proven in an earlier round keeps boxed stores until the optimizer narrows
+    // them, so mem2reg cannot promote it inside a later trial either.
+    let mut joint_trials = 0;
+    for &slot in &candidates {
+        if joint_trials == 8 { break; }
+        if result.slots.contains(&slot) { continue; }
+        let mut slots = seed_dependencies(function, slot, &candidates);
+        if slots.is_empty() { continue; }
+        slots.insert(slot);
+        let Some(proof) = CounterProof::for_slots(
+            function, &slots, &BoundedMixedCounter::default(), data, Some(readonly_calls),
+        ) else { continue; };
+        joint_trials += 1;
+        if trial_safe(function, &slots, &proof, data) {
+            result.record(&slots, &proof, &incrementing);
+        }
+    }
+    result
+}
+
+impl ProvenSlots {
+    /// Adds one successful trial: all of its slots, and the incrementing ones it seeded.
+    fn record(
+        &mut self,
+        slots: &HashSet<LocalSlotId>,
+        proof: &CounterProof,
+        incrementing: &HashSet<LocalSlotId>,
+    ) {
+        self.slots.extend(slots.iter().copied());
+        self.seeded.extend(proof.seeded_slots.iter().copied()
+            .filter(|slot| slots.contains(slot) && incrementing.contains(slot)));
+    }
+}
+
+/// Returns the other candidate counters whose values a checked seed of `slot` reads.
+fn seed_dependencies(
+    function: &Function,
+    slot: LocalSlotId,
+    candidates: &[LocalSlotId],
+) -> HashSet<LocalSlotId> {
+    let mut dependencies = HashSet::new();
+    for inst in &function.instructions {
+        if inst.op != Op::StoreLocal || inst.immediate != Some(Immediate::LocalSlot(slot)) {
+            continue;
+        }
+        let Some(producer) = inst.operands.first().and_then(|&value| owner_source(function, value))
+        else { continue; };
+        if seed_op(producer).is_none() { continue; }
+        for &operand in &producer.operands {
+            let Some(load) = owner_source(function, operand) else { continue; };
+            if let (Op::LoadLocal, Some(Immediate::LocalSlot(source))) =
+                (load.op, load.immediate.as_ref())
+            {
+                if *source != slot && candidates.contains(source) {
+                    dependencies.insert(*source);
+                }
+            }
+        }
+    }
+    dependencies
+}
+
+/// Follows acquire, clone, move and borrow wrappers back to the instruction that made a value.
+fn owner_source(function: &Function, mut value: ValueId) -> Option<&Instruction> {
+    for _ in 0..8 {
+        let inst = super::defining_instruction(function, value)?;
+        match inst.op {
+            Op::Acquire | Op::MixedClone | Op::Move | Op::Borrow | Op::EnsureOwned => {
+                value = *inst.operands.first()?;
+            }
+            _ => return Some(inst),
+        }
+    }
+    None
 }
 
 /// Follows ownership wrappers only; another local's increment is not this slot's recurrence.
@@ -97,9 +193,7 @@ fn trial_safe(function: &Function, slots: &HashSet<LocalSlotId>, proof: &Counter
         if !super::super::loop_optimize::LoopOptimize.run(&mut trial, data) && !changed { break; }
     }
     super::super::integer_range::IntegerRange.run(&mut trial, data);
-    proof.updates.iter().all(|id| trial.instruction(*id)
-        .is_some_and(|inst| matches!(inst.op, Op::IAdd | Op::ISub)))
-        && crate::ir::validate_function(&trial).is_ok()
+    proof.proven_unchecked(&trial) && crate::ir::validate_function(&trial).is_ok()
 }
 
 /// Removes unchanged scalar joins only on the discarded trial before induction recognition.

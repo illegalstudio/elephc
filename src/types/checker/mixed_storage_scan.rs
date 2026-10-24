@@ -816,7 +816,8 @@ fn guarded_variable_name(expr: &Expr) -> Option<&str> {
 ///
 /// `depth` mirrors `Checker::local_conditional_depth`, which `check_stmt` raises for the WHOLE of
 /// `If`/`IfDef`/`Switch`/`While`/`DoWhile`/`For`/`Foreach`/`Try`/`Throw`/`IncludeOnceGuard`
-/// (conditions, `for` init/update and loop subjects included).
+/// (conditions, `for` update and loop subjects included). The one exception is a `for`
+/// initializer, which runs unconditionally and is checked at the statement's own depth.
 fn collect_stmt(checker: &Checker, stmt: &Stmt, depth: u32, facts: &mut Facts) {
     crate::strict_php::with_source_mode(stmt.source_mode, || {
         collect_stmt_in_current_source_mode(checker, stmt, depth, facts);
@@ -965,10 +966,12 @@ fn collect_stmt_in_current_source_mode(checker: &Checker, stmt: &Stmt, depth: u3
             collect_block(checker, body, depth + 1, facts);
         }
         StmtKind::For { init, condition, update, body } => {
-            // `check_stmt` puts the ENTIRE `for` — init and update included — in one conditional
-            // scope, so an assignment in the header is at the body's depth, not the outer one.
+            // `check_stmt` puts the `for` in one conditional scope, but the checker lowers the
+            // depth back for the INITIALIZER, which runs exactly once whenever the statement
+            // does: an assignment there is at the statement's depth. The condition and the
+            // update repeat with the body and stay at the body's depth.
             if let Some(init) = init {
-                collect_stmt(checker, init, depth + 1, facts);
+                collect_stmt(checker, init, depth, facts);
             }
             if let Some(condition) = condition {
                 collect_expr(checker, condition, depth + 1, facts);

@@ -7,11 +7,13 @@
 //! Key details:
 //! - A checked arithmetic store can carry a float around a backedge despite an integer entry seed.
 //! - Discovery changes no instructions; replay emits ordinary Mixed reads and preserves PHP tags.
+//! - A counter whose checked seed (`$j = $i + 1`) was proven integer replays with that seed
+//!   recorded as `int` (`LoweringContext::int_seed_bindings`), like an ordinary `$j = 0` seed.
 
 use std::collections::{HashMap, HashSet};
 
-use crate::ir::{BlockId, Function, Immediate, InstId, IrType, LocalKind, LocalSlotId, Op,
-    RuntimeCallTarget, RuntimeFnId, ValueDef, ValueId};
+use crate::ir::{BlockId, Function, Immediate, InstId, IrType, LocalKind, LocalSlotId,
+    MixedNumericOp, Op, RuntimeCallTarget, RuntimeFnId, ValueDef, ValueId};
 use crate::parser::ast::Stmt;
 use crate::types::PhpType;
 use super::context::LoweringContext;
@@ -163,33 +165,72 @@ pub(crate) fn lower_body(
         return;
     }
     let mut final_force = if suppress { scalar_force } else { force };
+    let mut int_seeds: HashMap<String, HashSet<usize>> = HashMap::new();
     ctx.restore(checkpoint.clone());
-    replay(ctx, body, &sites, suppress, &final_force);
+    replay(ctx, body, &sites, suppress, &final_force, &int_seeds);
     // Every trial sees all not-yet-proven recurrences widened. A promoted float bound
     // cannot masquerade as integer. Removing proven constraints can expose a copied
     // counter's integer seed or a surrounding loop, so repeat to a bounded fixed point.
+    // A counter proven only together with its checked seed (`$j = $i + 1`) also needs that
+    // seed recorded as `int`, or its first store would type every read of the counter `mixed`.
     for _ in 0..16 {
         let calls = readonly_calls(ctx);
-        let proven = crate::ir_passes::proven_integer_slots(ctx.builder.function(), ctx.data, &calls);
-        let safe_bindings: Vec<_> = proven.into_iter().filter_map(|slot| binding(ctx, slot)).collect();
+        let proven = crate::ir_passes::prove_integer_slots(ctx.builder.function(), ctx.data, &calls);
+        let seeded: Vec<_> = proven.seeded.iter().filter_map(|&slot| binding(ctx, slot)).collect();
+        let safe_bindings: Vec<_> = proven.slots.into_iter().filter_map(|slot| binding(ctx, slot)).collect();
         let mut changed = false;
         for (name, ordinal) in safe_bindings {
             if let Some(bindings) = final_force.get_mut(&name) {
                 changed |= bindings.remove(&ordinal);
             }
         }
+        for (name, ordinal) in seeded {
+            changed |= int_seeds.entry(name).or_default().insert(ordinal);
+        }
         if !changed { break; }
         ctx.restore(checkpoint.clone());
-        replay(ctx, body, &sites, suppress, &final_force);
+        replay(ctx, body, &sites, suppress, &final_force, &int_seeds);
     }
 }
 
+/// Returns whether a lowered value is checked or mixed integer arithmetic, the seed shape the
+/// storage proof accepts (`bounded_mixed_counter::CounterProof::accept_seed`), possibly behind
+/// the acquire, clone, move or borrow an assignment adds.
+pub(crate) fn is_checked_int_seed(ctx: &LoweringContext<'_, '_>, mut value: ValueId) -> bool {
+    let function = ctx.builder.function();
+    for _ in 0..8 {
+        let Some(ValueDef::Instruction { inst, .. }) = function.value(value).map(|value| value.def) else {
+            return false;
+        };
+        let inst = &function.instructions[inst.as_raw() as usize];
+        match inst.op {
+            Op::Acquire | Op::MixedClone | Op::Move | Op::Borrow if inst.immediate.is_none() => {
+                let Some(&source) = inst.operands.first() else {
+                    return false;
+                };
+                value = source;
+            }
+            Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul => return true,
+            Op::MixedNumericBinop => {
+                return matches!(inst.immediate, Some(Immediate::MixedNumericOp(
+                    MixedNumericOp::Add | MixedNumericOp::Sub | MixedNumericOp::Mul)));
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
 /// Replays one body with a binding-scoped storage contract and the original call-site proofs.
+///
+/// `int_seeds` names the counters whose checked seed the previous trial proved integer.
 fn replay(
     ctx: &mut LoweringContext<'_, '_>, body: &[Stmt], sites: &HashSet<crate::span::Span>,
     suppress: bool, force: &HashMap<String, HashSet<usize>>,
+    int_seeds: &HashMap<String, HashSet<usize>>,
 ) {
     ctx.numeric_proof_sealed = true;
+    ctx.int_seed_bindings = int_seeds.clone();
     if !suppress {
         ctx.numeric_closure_sites = sites.clone();
     }

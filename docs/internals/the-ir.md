@@ -1543,6 +1543,16 @@ an integer cast/store whose value traces through transparent acquires to checked
 arithmetic. The pass also returns before building its use graph when a function
 contains no checked-arithmetic candidate.
 
+A final phase (`src/ir_passes/checked_int_sink/bound_comparisons.rs`) rewrites
+`php_rel_cmp(L, ichecked_sub(X, c)) Slt` (or the mirrored `Sgt` with the bound on
+the left) to `icmp` against a cast-mode `ichecked_sub_to_int` when `L` is an
+integer, `c` is a literal in `1..=1024` and every other use of the bound is a
+release. PHP evaluates an overflowing `X - c` as `(double)X - (double)c`, which for
+such `c` rounds to exactly -2^63, and the cast mode converts that to
+`PHP_INT_MIN`; `L < PHP_INT_MIN` and PHP's `(double)L < -2^63` are both false for
+every integer. A non-strict comparison is left alone: `(double)L <= -2^63` holds
+for every `L` within 512 of `PHP_INT_MIN`.
+
 Codegen keeps the in-range path in scalar registers. On signed overflow it
 recomputes the operation as a double and applies the shared PHP float-to-int
 conversion, so removing the box does not change PHP's overflow semantics. The
@@ -1554,7 +1564,13 @@ ownership rewrite cannot hand the sink a new integer-only use graph. See
 ### Bounded Mixed Counters
 
 `src/ir_passes/bounded_mixed_counter.rs` considers ordinary Mixed locals updated
-only by increment/decrement and seeded with concrete PHP integers. A complete
+by increment/decrement and seeded with concrete PHP integers, or with checked or
+mixed `+`, `-`, `*` of raw integers and of the counters proven with them
+(`$j = $i + 1`). A seed producer becomes the matching `ichecked_*_to_int` on the
+trial and, like an update, must be rewritten to unchecked arithmetic. A comparison
+of a counter with a checked `+`/`-` of raw integers (`$i < $n - 1`) stays a
+`php_rel_cmp`, since the bound may be an overflowed float; IntegerRange bounds the
+counter through it only on the outcome the overflow direction cannot produce. A complete
 storage/use scan excludes aliases, other types, pointer escapes, parameters,
 static/global storage, eval, suspension and exceptional CFGs. Direct-call
 consumers are accepted only at physical, by-value `mixed` parameter positions

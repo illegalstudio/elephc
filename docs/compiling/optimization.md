@@ -166,8 +166,17 @@ The fifth registered pass specializes a boxed checked-arithmetic operation
 every use of its result observes only the integer payload, removing the
 transient boxed `Mixed` allocation without changing overflow semantics.
 The same proof removes numeric local-slot retirement immediately before an
-overwrite. Retirement remains intact when a read, reference alias, or a value
+overwrite, or at the end of a binding when no later access to the slot is
+reachable (a counter whose name a later straight-line assignment re-binds).
+Retirement remains intact when a read, reference alias, or a value
 with a possible destructor prevents proving that the clear is unobservable.
+
+It also unboxes a loop bound written as `$n - c` with a literal `c` from 1 to 1024
+when its only uses are strict `$i < $n - c` comparisons against an integer. An
+overflowing `$n - c` is the float -2^63 in PHP, below every integer; the unboxed
+form yields `PHP_INT_MIN` there, which every integer also fails to be below. A
+non-strict `<=` keeps the PHP comparison, because PHP's `$i <= -2^63` holds for the
+513 integers from `PHP_INT_MIN` to `PHP_INT_MIN + 512`.
 
 ### Bounded mixed counters
 
@@ -181,6 +190,16 @@ call parameters can participate. References, escaping values, dynamic `eval`,
 suspension, exception handlers, uncertain type changes and unproven overflow
 keep their existing representation. Call targets and ABIs are unchanged. See
 `examples/bounded-closure-counter/main.php`.
+
+Two shapes that PHP code uses for pair loops are proven as well. A counter
+compared with a checked difference (`for ($i = 0; $i < $n - 1; $i++)`, also with
+`<=`) keeps PHP's comparison for the bound, which may be the float an overflow
+produced, while the counter itself becomes an integer: the bound can only overflow
+below every integer, so the counter stays at most `PHP_INT_MAX - 1` inside the loop.
+A counter seeded by checked arithmetic (`for ($j = $i + 1; $j < $n; $j++)` inside
+the `$i` loop) is proven together with the counter its seed reads, and only when
+range analysis shows the seed itself never overflows. Lowering then records that
+seed as an integer, exactly as for `$j = 0`. See `examples/pair-loops/main.php`.
 
 ### Canonical loop optimization
 
@@ -201,7 +220,10 @@ generators are conservatively excluded. See `examples/loop-optimization/main.php
 ### Integer range and induction-variable analysis
 
 The eighth registered pass propagates signed 64-bit integer intervals through
-constants, branch comparisons, block parameters, and arithmetic. Constant-step
+constants, branch comparisons, block parameters, and arithmetic. A PHP comparison
+of an integer with a checked `X - c` or `X + c` bound also bounds the integer by
+one step on the edge where the bound's one-sided overflow cannot be the reason the
+test holds. Constant-step
 loop counters can inherit bounds from their initial values and loop conditions.
 When every possible result stays within the integer range, checked addition,
 subtraction, and multiplication become ordinary scalar operations.

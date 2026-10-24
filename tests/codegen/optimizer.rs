@@ -102,3 +102,7 @@ mod tail_call;
 mod stack_numeric;
 #[path = "optimizer/numeric_continuation.rs"]
 mod numeric_continuation;
+#[path = "optimizer/reused_loop_counters.rs"]
+mod reused_loop_counters;
+#[path = "optimizer/loop_counter_checked_bounds.rs"]
+mod loop_counter_checked_bounds;

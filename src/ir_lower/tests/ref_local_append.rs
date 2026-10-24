@@ -105,7 +105,7 @@ function appendReplaced(): void {
 class AppendTarget {
     public function build(int $n): void {
         $items = [];
-        for ($i = 0; $i < $n; $i++) { $items[] = $i; }
+        for ($i = 0; $i < $n; $i++) { $items[] = $i * $n; }
         $this->touch($items);
         for ($i = $n; $i < $n + 1; $i++) { $items[] = $i; }
         echo count($items);
@@ -136,7 +136,7 @@ touchUnknown($items); echo count($items);
                     "{target}: appending after reference promotion must not clone the boxed array");
                 let conversion = function.instructions.iter().find(|inst| {
                     inst.op == Op::ArrayToMixed
-                }).expect("the reused loop counter widens the array element layout");
+                }).expect("the checked product widens the array element layout");
                 let source = function.value(conversion.operands[0]).unwrap();
                 let crate::ir::ValueDef::Instruction { block, index, inst } = source.def else {
                     panic!("{target}: conversion source must load the local");

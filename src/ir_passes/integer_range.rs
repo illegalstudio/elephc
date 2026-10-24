@@ -6,7 +6,9 @@
 //! - The EIR fixed-point pass driver after `mem2reg` and checked integer sink specialization.
 //!
 //! Key details:
-//! - Forward dataflow is edge-sensitive for signed integer comparisons.
+//! - Forward dataflow is edge-sensitive for signed integer comparisons, and for PHP comparisons
+//!   of an integer against a checked `+`/`-` that can overflow in one direction only
+//!   (`checked_bound`).
 //! - CFG states omit implicit scalar top/literal facts; availability uses dominator-tree intervals.
 //! - Natural-loop block parameters with constant-step recurrences receive bounded induction
 //!   ranges, preventing abstract interpretation from unrolling loops one iteration at a time.
@@ -28,6 +30,8 @@ use super::loops::compute_loops;
 
 /// Maximum number of block transfers before a malformed or unexpectedly complex CFG fails closed.
 const MAX_DATAFLOW_STEPS: usize = 100_000;
+
+mod checked_bound;
 
 #[cfg(test)]
 #[path = "tests/integer_range_domain_test.rs"]
@@ -642,6 +646,9 @@ fn negate_range(value: IntRange) -> Option<IntRange> {
 }
 
 /// Refines both operands of a signed integer comparison on one outgoing edge.
+///
+/// A PHP comparison (`php_rel_cmp`) refines only its integer operand, and only against a checked
+/// bound with one-sided overflow (see `checked_bound`); it never prunes an edge.
 fn refine_comparison_edge(
     function: &Function,
     condition: ValueId,
@@ -652,6 +659,10 @@ fn refine_comparison_edge(
         return Some(());
     };
     let compare = function.instruction(inst)?;
+    if compare.op == Op::PhpRelCmp {
+        checked_bound::refine_php_comparison_edge(function, compare, taken, state);
+        return Some(());
+    }
     if compare.op != Op::ICmp || compare.operands.len() != 2 {
         return Some(());
     }

@@ -176,7 +176,11 @@ add/subtract/multiply and increment inputs preserve an existing float tag on lat
 iterations. Counters retain scalar lowering only after a discarded SSA/range trial
 proves every update safe; mutually observed counters are proved together, and nested
 loop invariants are simplified before the range check. Unknown aliases and dynamic
-scope access reject the proof.
+scope access reject the proof. The proof is per frame slot, and a slot is per
+binding: a straight-line reassignment between two different numeric types starts a
+new binding (see [Local retyping](the-type-checker.md#local-retyping-and-strict-locals-mode)),
+so a counter name reused by a later loop with a boxed seed does not widen the slot of
+an earlier, provably integer loop.
 
 These frame cells have no heap header and cannot own children. Proven retains and
 releases of their SSA pointers emit no refcount calls. A selected local may still

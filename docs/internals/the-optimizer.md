@@ -583,7 +583,11 @@ The backend's [frame-local checked numeric cells](the-codegen.md#frame-local-che
 are a separate storage optimization and do not require this pass to run.
 
 Lowering also uses a discarded trial to decide whether a potentially promoting
-local can retain scalar storage when the body is lowered again. For instance
+local can retain scalar storage when the body is lowered again. A counter whose
+seed is checked arithmetic on another counter (`$j = $i + 1`) is retried jointly
+with that counter when it fails alone, and a proven seeded counter is replayed
+with its seed recorded as an `int` (`LoweringContext::int_seed_bindings`), so its
+loop reads it as an integer exactly as after `$j = 0`. For instance
 methods, `src/ir_lower/numeric_storage.rs::readonly_calls()` uses the ordinary
 method-signature resolver and accepts only a concrete user-class receiver with a
 final class or final method. Variadic, generator and by-reference-return methods
@@ -1031,7 +1035,12 @@ float local loads pure and replace transient boxed Mixed arithmetic with
 allocation-free `ichecked_*_to_int` operations only when every use observes an
 integer. `IntegerRange` then propagates inclusive signed 64-bit intervals through
 constants, branch comparisons, block arguments, masks, shifts, and integer
-arithmetic. It recognizes constant-step loop-carried parameters in natural loops
+arithmetic. A `php_rel_cmp` of an integer against a checked `X - c` (`c >= 1`)
+leaves the integer at most `PHP_INT_MAX - 1` on the edges where it is below the
+bound (`src/ir_passes/integer_range/checked_bound.rs`): the bound overflows only to
+a float at or below -2^63, which no converted integer is below. The mirrored
+`X + c` bound leaves the integer at least `PHP_INT_MIN + 1` when it is above it.
+Nothing tighter is claimed and no edge is pruned. It recognizes constant-step loop-carried parameters in natural loops
 and combines their initial value, comparison bound, and update step to constrain
 induction variables on the loop body and back edge. Basic recurrence recognition
 is shared with canonical loop optimization, which exposes invariant header values,
