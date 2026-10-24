@@ -14,7 +14,8 @@ use super::*;
 pub(super) fn lower(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, op: Op, expr: &Expr,
 ) -> LoweredValue {
-    dispatch(ctx, object, property, expr, PhpType::Mixed, "__elephc_property_get", |ctx, receiver| {
+    let name = Expr::new(ExprKind::StringLiteral(property.into()), expr.span);
+    dispatch(ctx, object, &name, expr, PhpType::Mixed, "__elephc_property_get", |ctx, receiver| {
         lower_property_get_without_native_dispatch(ctx, receiver, property, op, expr)
     })
 }
@@ -23,7 +24,8 @@ pub(super) fn lower(
 pub(super) fn isset(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, expr: &Expr,
 ) -> LoweredValue {
-    dispatch(ctx, object, property, expr, PhpType::Bool, "__elephc_property_isset", |ctx, receiver| {
+    let name = Expr::new(ExprKind::StringLiteral(property.into()), expr.span);
+    dispatch(ctx, object, &name, expr, PhpType::Bool, "__elephc_property_isset", |ctx, receiver| {
         let value = lower_property_probe_without_native(ctx, receiver, property, expr);
         probe_value_is_set(ctx, value, expr)
     })
@@ -33,14 +35,37 @@ pub(super) fn isset(
 pub(super) fn probe(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, expr: &Expr,
 ) -> LoweredValue {
-    dispatch(ctx, object, property, expr, PhpType::Mixed, "__elephc_property_probe", |ctx, receiver| {
+    let name = Expr::new(ExprKind::StringLiteral(property.into()), expr.span);
+    dispatch(ctx, object, &name, expr, PhpType::Mixed, "__elephc_property_probe", |ctx, receiver| {
         lower_property_probe_without_native(ctx, receiver, property, expr)
     })
 }
 
+/// Retains an already evaluated dynamic name while either receiver protocol reads it.
+pub(super) fn dynamic(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: LoweredValue,
+    mode: PropertyFetchMode, expr: &Expr,
+) -> LoweredValue {
+    let temp = ctx.declare_owned_hidden_temp(PhpType::Str);
+    store_value_into_temp(ctx, &temp, PhpType::Str, property, expr.span);
+    let slot = ctx.local_slots[&temp];
+    register_owned_call_operand(ctx, slot, expr.span);
+    let name = Expr::new(ExprKind::Variable(temp.clone()), expr.span);
+    let method = if mode == PropertyFetchMode::Read { "__elephc_property_get" }
+        else { "__elephc_property_probe" };
+    let result = dispatch(ctx, object, &name, expr, PhpType::Mixed, method, |ctx, receiver| {
+        let property = ctx.load_local(&temp, Some(expr.span));
+        lower_dynamic_property_fetch_without_native(ctx, receiver, property, PhpType::Mixed, mode, expr)
+    });
+    unregister_owned_call_operand(ctx, slot, expr.span);
+    let name = take_owned_temp(ctx, &temp, expr.span);
+    crate::ir_lower::ownership::release_if_owned(ctx, name, Some(expr.span));
+    result
+}
+
 /// Joins the native getter or presence adapter with an ordinary-object fallback.
 fn dispatch(
-    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, expr: &Expr,
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, name: &Expr, expr: &Expr,
     result_type: PhpType, method: &str,
     fallback: impl FnOnce(&mut LoweringContext<'_, '_>, LoweredValue) -> LoweredValue,
 ) -> LoweredValue {
@@ -58,8 +83,7 @@ fn dispatch(
         then_target: native, then_args: vec![], else_target: regular, else_args: vec![] });
     ctx.builder.position_at_end(native);
     let receiver = borrow_receiver(ctx, object, expr.span);
-    let name = Expr::new(ExprKind::StringLiteral(property.into()), expr.span);
-    let value = lower_method_call_with_receiver(ctx, receiver, method, &[name], Op::MethodCall, expr);
+    let value = lower_method_call_with_receiver(ctx, receiver, method, &[name.clone()], Op::MethodCall, expr);
     let value = if result_type == PhpType::Bool { ctx.truthy_consuming(value, Some(expr.span)) } else { value };
     store_value_into_temp(ctx, &temp, result_type.clone(), value, expr.span);
     branch_to(ctx, merge);
@@ -84,6 +108,29 @@ fn dispatch(
 pub(super) fn unset(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, expr: &Expr,
 ) {
+    let name = Expr::new(ExprKind::StringLiteral(property.into()), expr.span);
+    unset_name(ctx, object, &name, expr);
+}
+
+/// Protects a runtime property name across native or ordinary object removal.
+pub(super) fn dynamic_unset(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: LoweredValue, expr: &Expr,
+) {
+    let temp = ctx.declare_owned_hidden_temp(PhpType::Str);
+    store_value_into_temp(ctx, &temp, PhpType::Str, property, expr.span);
+    let slot = ctx.local_slots[&temp];
+    register_owned_call_operand(ctx, slot, expr.span);
+    let name = Expr::new(ExprKind::Variable(temp.clone()), expr.span);
+    unset_name(ctx, object, &name, expr);
+    unregister_owned_call_operand(ctx, slot, expr.span);
+    let name = take_owned_temp(ctx, &temp, expr.span);
+    crate::ir_lower::ownership::release_if_owned(ctx, name, Some(expr.span));
+}
+
+/// Removes one evaluated property name while keeping the common receiver lease balanced.
+fn unset_name(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, name: &Expr, expr: &Expr,
+) {
     let (object, owner) = root_owned_call_operand(ctx, object, expr.span);
     let class = ctx.intern_class_name("SimpleXMLElement");
     let condition = ctx.emit_value(Op::InstanceOf, vec![object.value], Some(Immediate::Data(class)),
@@ -96,14 +143,13 @@ pub(super) fn unset(
         then_target: native, then_args: vec![], else_target: regular, else_args: vec![] });
     ctx.builder.position_at_end(native);
     let receiver = borrow_receiver(ctx, object, expr.span);
-    let name = Expr::new(ExprKind::StringLiteral(property.into()), expr.span);
-    let result = lower_method_call_with_receiver(ctx, receiver, "__elephc_property_unset", &[name], Op::MethodCall, expr);
+    let result = lower_method_call_with_receiver(ctx, receiver, "__elephc_property_unset", &[name.clone()], Op::MethodCall, expr);
     crate::ir_lower::ownership::release_if_owned(ctx, result, Some(expr.span));
     branch_to(ctx, merge);
     let native_initialized = ctx.initialized_slots_snapshot();
     ctx.builder.position_at_end(regular);
     ctx.restore_initialized_slots(initial.clone());
-    let name = lower_expr(ctx, &name);
+    let name = lower_expr(ctx, name);
     ctx.emit_void(Op::DynamicPropUnset, vec![object.value, name.value], None,
         Op::DynamicPropUnset.default_effects(), Some(expr.span));
     branch_to(ctx, merge);

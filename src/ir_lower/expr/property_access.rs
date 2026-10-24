@@ -30,6 +30,11 @@ pub(super) fn lower_boxed_xml_property_unset(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, expr: &Expr,
 ) { native_xml_reads::unset(ctx, object, property, expr); }
 
+/// Removes a native XML property selected by an already evaluated runtime name.
+pub(super) fn lower_boxed_xml_dynamic_property_unset(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: LoweredValue, expr: &Expr,
+) { native_xml_reads::dynamic_unset(ctx, object, property, expr); }
+
 /// Resolves a native property method from a lowered receiver's precise class.
 pub(super) fn native_property_method_for_value(
     ctx: &LoweringContext<'_, '_>, value: ValueId, property: &str,
@@ -968,6 +973,21 @@ pub(super) fn lower_dynamic_property_fetch_from_operands(
     mode: PropertyFetchMode,
     expr: &Expr,
 ) -> LoweredValue {
+    let ty = ctx.builder.value_php_type(object.value);
+    let may_be_native = matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        || singular_object_class(&ty).is_some_and(|(class, _)|
+            crate::types::builtin_classes::has_native_dimensions(class, ctx.classes));
+    if ctx.classes.contains_key("SimpleXMLElement") && may_be_native {
+        return native_xml_reads::dynamic(ctx, object, property, mode, expr);
+    }
+    lower_dynamic_property_fetch_without_native(ctx, object, property, result_type, mode, expr)
+}
+
+/// Emits the existing runtime-name property operation after native XML dispatch is excluded.
+fn lower_dynamic_property_fetch_without_native(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: LoweredValue,
+    result_type: PhpType, mode: PropertyFetchMode, expr: &Expr,
+) -> LoweredValue {
     let result = ctx.emit_value(
         Op::DynamicPropGet,
         vec![object.value, property.value],
@@ -1016,7 +1036,9 @@ fn lower_property_probe_without_native(
         return lower_initialized_property_value(ctx, object, property, expr);
     }
     let name = Expr::new(ExprKind::StringLiteral(property.to_string()), expr.span);
-    lower_dynamic_property_fetch_from_value(ctx, object, &name, PropertyFetchMode::Probe, expr)
+    let result_type = dynamic_property_get_result_type(ctx, object.value, &name, expr);
+    let name = lower_expr(ctx, &name);
+    lower_dynamic_property_fetch_without_native(ctx, object, name, result_type, PropertyFetchMode::Probe, expr)
 }
 
 /// Returns whether `$object->name` must be probed through the runtime-name form.

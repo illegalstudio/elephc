@@ -100,6 +100,7 @@ pub(crate) use control_exit::terminate_return;
 // for `__unset` that the write path needs for `__set`.
 pub(crate) use instance_property_writes::{
     borrow_receiver_as_runtime_class, emit_receiver_instanceof, magic_accessor_subclasses,
+    lower_native_dynamic_property_set,
 };
 pub(super) use typed_foreach::coerce_typed_assign_value;
 pub(crate) use typed_foreach::promote_by_ref_foreach_source;

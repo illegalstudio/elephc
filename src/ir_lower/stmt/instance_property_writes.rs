@@ -11,6 +11,12 @@ use super::*;
 
 mod native_xml;
 
+/// Routes a runtime-name XML write while preserving the caller's common operand owners.
+pub(crate) fn lower_native_dynamic_property_set(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: LoweredValue,
+    value: LoweredValue, span: Span,
+) -> bool { native_xml::lower_dynamic(ctx, object, property, value, span) }
+
 /// Lowers an object property write.
 pub(super) fn lower_property_assign(
     ctx: &mut LoweringContext<'_, '_>,

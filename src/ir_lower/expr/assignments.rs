@@ -537,13 +537,15 @@ pub(super) fn lower_dynamic_property_assign(
         ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
         borrowed
     } else { value };
-    ctx.emit_void(
-        Op::DynamicPropSet,
-        vec![object.value, property.value, store_value.value],
-        None,
-        Op::DynamicPropSet.default_effects(),
-        Some(span),
-    );
+    if !crate::ir_lower::stmt::lower_native_dynamic_property_set(ctx, object, property, store_value, span) {
+        ctx.emit_void(
+            Op::DynamicPropSet,
+            vec![object.value, property.value, store_value.value],
+            None,
+            Op::DynamicPropSet.default_effects(),
+            Some(span),
+        );
+    }
     crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
     if owns_value { crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span)); }
     if ctx.value_is_owning_temporary(property) {

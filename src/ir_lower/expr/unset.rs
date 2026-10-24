@@ -365,6 +365,15 @@ pub(super) fn lower_unset_dynamic_property_access(
     let property = crate::ir_lower::expr::property_access::coerce_runtime_property_name(
         ctx, property, expr.span,
     );
+    let ty = ctx.builder.value_php_type(object.value);
+    if ctx.classes.contains_key("SimpleXMLElement")
+        && (matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+            || singular_object_class(&ty).is_some_and(|(class, _)|
+                crate::types::builtin_classes::has_native_dimensions(class, ctx.classes)))
+    {
+        lower_boxed_xml_dynamic_property_unset(ctx, object, property, expr);
+        return;
+    }
     // The removal CAN THROW: a name this scope may not reach raises php's catchable access
     // `Error`. Retiring the owning temporaries only afterwards meant a caught refusal skipped
     // both releases and leaked the receiver and the key. Pinning parks them for the window the
