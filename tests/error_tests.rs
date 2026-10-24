@@ -304,6 +304,8 @@ mod property_default_scope;
 mod generics_review;
 #[path = "error_tests/extensions.rs"]
 mod extensions;
+#[path = "error_tests/buffer_merges.rs"]
+mod buffer_merges;
 #[path = "error_tests/data_widths.rs"]
 mod data_widths;
 #[path = "error_tests/strict_php.rs"]

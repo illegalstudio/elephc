@@ -434,6 +434,19 @@ as null, and the checker has no definite-assignment analysis to rule those out. 
 not qualify either, since a body that falls off its end returns an implicit `null` its inferred
 type omits, and neither do builtin and extern results.
 
+### Buffer merges
+
+**Files:** `src/types/checker/inference/expr/buffer_merges.rs`
+
+A ternary, `?:`, `match` or `??` with an arm that holds a `buffer<T>` is typed by its own rule
+before the joins above: every arm that completes must have that same buffer type, and the merge
+is then that buffer. A `throw` arm is skipped by its shape (it is typed `never` by `infer_type`
+and `null` by the assignment-effects walk), and so are a dead or `null` default of `??` and a
+`null` left operand. Any other arm (another buffer type, `null`, `mixed`, a scalar) is a compile
+error: a buffer has no null and no `mixed` form, and the boxed handle a `mixed` merge would hold
+reads its elements back as null. The EIR merge typing in `src/ir_lower/expr/merge_temps.rs`
+(`shared_buffer_merge_type`) keeps the same handle word for the same arms.
+
 ## User-defined function checking
 
 **Files:** `src/types/checker/functions.rs`, `src/types/checker/functions/`

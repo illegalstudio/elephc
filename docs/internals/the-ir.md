@@ -2139,7 +2139,7 @@ instructions, but they must be represented in metadata or consumed by lowering.
 | `ArrayLiteralAssoc` | Allocate hash table and insert key/value pairs in source order; empty hash keeps mixed key/value metadata. |
 | `Match` | Lower subject once; build strict-comparison arm CFG; default absence may `Fatal` via match-unhandled runtime. |
 | `ArrayAccess` | Lower base/index; dispatch to array/hash/mixed/object ArrayAccess/buffer access as type requires. |
-| `Ternary` | Lower condition, then branch CFG; result block joins branch values. |
+| `Ternary` | Lower condition, then branch CFG; result block joins branch values through a hidden merge temp typed from the arms. Arms of one `buffer<T>` type keep the handle word instead of a boxed `mixed` temp, and a `throw` arm of such a merge ends its branch with `Unreachable` (`ShortTernary`, `Match` and `NullCoalesce` merge the same way). |
 | `ShortTernary` | Lower value once; truthy path reuses value; false path lowers default. |
 | `Cast` | Lower expression then emit `Cast`/specific conversion op. |
 | `Closure` | Emit callable descriptor, capture metadata, and deferred closure function body. |

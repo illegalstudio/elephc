@@ -7,7 +7,9 @@
 //! Key details:
 //! - Retains constructor, visibility, eval-barrier, callable, and late-static-binding checks.
 
-use super::null_coalesce::{null_coalesce_result_type, operand_is_never_null};
+use super::null_coalesce::{
+    null_coalesce_buffer_merge_type, null_coalesce_result_type, operand_is_never_null,
+};
 use super::{body_must_not_use_this, Checker};
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
@@ -91,6 +93,17 @@ impl Checker {
                 let vt = self.infer_null_probe_operand(value, operand_env)?;
                 let value_is_never_null = operand_is_never_null(self, value, &vt, operand_env);
                 let dt = self.infer_type(default, env)?;
+                if let Some(buffer) = null_coalesce_buffer_merge_type(
+                    self,
+                    value,
+                    &vt,
+                    value_is_never_null,
+                    default,
+                    &dt,
+                    expr.span,
+                )? {
+                    return Ok(buffer);
+                }
                 Ok(null_coalesce_result_type(self, value_is_never_null, vt, dt))
             }
             ExprKind::Pipe { value, callable } => {

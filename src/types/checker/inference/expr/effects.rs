@@ -15,8 +15,11 @@ use crate::types::{PhpType, TypeEnv};
 
 use super::super::super::null_probe;
 use super::super::super::Checker;
+use super::buffer_merges::buffer_merge_result_type;
 use super::merge_match_arm_result_type;
-use super::null_coalesce::{null_coalesce_result_type, operand_is_never_null};
+use super::null_coalesce::{
+    null_coalesce_buffer_merge_type, null_coalesce_result_type, operand_is_never_null,
+};
 
 /// Returns what a local holds after `++`/`--`, or `None` when the update cannot retype it.
 ///
@@ -147,12 +150,23 @@ impl Checker {
                     merge_array_storage_effects(env, &default_env);
                     default_ty
                 };
-                Ok(null_coalesce_result_type(
+                match null_coalesce_buffer_merge_type(
                     self,
+                    value,
+                    &value_ty,
                     value_is_never_null,
-                    value_ty,
-                    default_ty,
-                ))
+                    default,
+                    &default_ty,
+                    expr.span,
+                )? {
+                    Some(buffer) => Ok(buffer),
+                    None => Ok(null_coalesce_result_type(
+                        self,
+                        value_is_never_null,
+                        value_ty,
+                        default_ty,
+                    )),
+                }
             }
             ExprKind::ShortTernary { value, default } => {
                 let value_ty = self.infer_type_with_assignment_effects(value, env)?;
@@ -187,7 +201,16 @@ impl Checker {
                 merge_array_storage_effects(&mut else_env, &then_env);
                 let else_ty = self.infer_type_with_assignment_effects(else_expr, &mut else_env)?;
                 merge_array_storage_effects(env, &else_env);
-                Ok(merge_match_arm_result_type(self, then_ty, else_ty))
+                // A `throw` arm types as `null` here, so the buffer merge skips it by its shape,
+                // as `infer_type` does through `match_arm_result_type`.
+                let arms = [(&**then_expr, then_ty), (&**else_expr, else_ty)];
+                match buffer_merge_result_type("a ternary", &arms, expr.span)? {
+                    Some(buffer) => Ok(buffer),
+                    None => {
+                        let [(_, then_ty), (_, else_ty)] = arms;
+                        Ok(merge_match_arm_result_type(self, then_ty, else_ty))
+                    }
+                }
             }
             ExprKind::ArrayLiteral(elems) => {
                 for elem in elems {

@@ -36,10 +36,17 @@ pub(in crate::codegen::lower_inst) fn emit_value_truthiness(
 ) -> Result<()> {
     match ctx.raw_value_php_type(value)? {
         // A packed record address (buffer element or nested record) is one pointer word, and so
-        // is a `?ptr<T>` (null is 0); its union must not reach the Mixed cell arm below.
+        // is a `?ptr<T>` (null is 0); its union must not reach the Mixed cell arm below. A buffer
+        // handle is one word too: every issued handle is nonzero, and the invalid handle 0 that a
+        // missed array read answers is falsy, as `empty()` and `??` already treat it.
         ty if matches!(
             ty,
-            PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Pointer(_) | PhpType::Packed(_)
+            PhpType::Bool
+                | PhpType::False
+                | PhpType::Int
+                | PhpType::Pointer(_)
+                | PhpType::Packed(_)
+                | PhpType::Buffer(_)
         ) || crate::types::is_nullable_pointer_type(&ty) => {
             ctx.load_value_to_result(value)?;
             emit_int_result_nonzero_bool(ctx);

@@ -12,6 +12,7 @@ mod fibers;
 mod buffers;
 mod buffer_ptr;
 mod buffer_arrays;
+mod buffer_merges;
 mod packed_nested_fields;
 mod data_widths;
 mod generics;

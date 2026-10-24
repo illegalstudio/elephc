@@ -351,11 +351,17 @@ pub(super) fn lower_short_ternary(
 }
 
 /// Releases a lowered value that a lazy branch tested but did not forward.
+///
+/// A branch that already ended (the `throw` default of a buffer merge) has no successor to emit
+/// the release into, and its exception never reaches the merge.
 pub(super) fn release_discarded_branch_value(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     span: Span,
 ) {
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
     if ctx.value_needs_release_after_retaining_store(value) {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     }
