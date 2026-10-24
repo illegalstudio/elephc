@@ -1218,7 +1218,18 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     ///
     /// The bound `$this` of a method frame is excluded for the separate, PHP-semantic reason
     /// spelled out at the filter below, and only here.
+    ///
+    /// PHP lists a variable at the position of its FIRST binding: reassigning it at another type,
+    /// or unsetting and assigning it again, never moves it. Ending a binding gives the name a
+    /// newer slot (a retype, an `unset` kill, a storage-only numeric re-bind), so the order key is
+    /// the first slot that ever carried the name rather than the one it holds now.
     pub(crate) fn visible_local_names(&self) -> Vec<String> {
+        let mut first_slots: HashMap<&str, u32> = HashMap::new();
+        for local in &self.builder.function().locals {
+            if let Some(name) = local.name.as_deref() {
+                first_slots.entry(name).or_insert(local.id.as_raw());
+            }
+        }
         let mut locals = self
             .local_slots
             .iter()
@@ -1242,7 +1253,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 (kind == LocalKind::PhpLocal
                     && self.initialized_slots.contains(slot)
                     && !matches!(self.local_types.get(name), Some(PhpType::Void | PhpType::Never)))
-                .then_some((slot.as_raw(), name.clone()))
+                .then(|| {
+                    let position = first_slots.get(name.as_str()).copied();
+                    (position.unwrap_or(slot.as_raw()), name.clone())
+                })
             })
             .collect::<Vec<_>>();
         locals.sort_by_key(|(slot, _)| *slot);
@@ -2151,19 +2165,24 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// `__rt_mixed_unbox` + retain whose release cancelled only that retain and never freed the
     /// BOX. Retiring the slot at its final storage type frees the box and the payload it pins,
     /// in and out of loops alike, which is why no loop or widenability guard is needed here.
+    ///
+    /// Returns whether a `release_local_slot` was emitted. Its backend retirement stores zero
+    /// over a boxed `Mixed` slot before dropping the reference, which is what lets an abandoned
+    /// numeric binding skip its separate `zero_local_slot` (see
+    /// `release_and_abandon_local_binding`).
     fn release_stored_local_value_before_overwrite(
         &mut self,
         name: &str,
         slot: LocalSlotId,
         storage_type: &PhpType,
         span: Option<Span>,
-    ) {
+    ) -> bool {
         let storage_type = storage_type.clone();
         // A ref-bound slot stores an alias, not the payload owner being replaced.
         // StoreRefCell publishes the replacement through that alias before it retires
         // the previous payload, so generic slot cleanup must never release it first.
         if self.is_ref_bound_local(name) {
-            return;
+            return false;
         }
         let tracked = Ownership::php_type_needs_lifetime_tracking(&storage_type);
         let eval_may_have_reloaded_slot = self.eval_barrier_active
@@ -2172,7 +2191,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             // Outside loops no back-edge can execute a later widening store before
             // this one, and no eval reload can have populated it, so the untracked
             // storage type is final for this path.
-            return;
+            return false;
         }
         self.emit_void(
             Op::ReleaseLocalSlot,
@@ -2181,6 +2200,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             Op::ReleaseLocalSlot.default_effects(),
             span,
         );
+        true
     }
 
     /// Emits a store to a PHP local slot, updates type facts, and returns the stored value.
@@ -2990,6 +3010,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// uses, replicated here because there is no value to store: the previous occupant is released
     /// when the slot is live on this path (definitely initialized, or reachable through a loop
     /// back-edge), and the per-name lowering facts that describe the dead binding are cleared.
+    ///
+    /// A numeric slot skips the zero where it is redundant (see `abandoned_slot_needs_zeroing`),
+    /// whichever way its binding ends. Every numeric proof (checked-integer sinking, bounded
+    /// counters, scalar promotion, numeric frame cells) refuses a slot that any other opcode
+    /// names, so a needless `zero_local_slot` would keep the old binding boxed for the rest of
+    /// the function. That matters most for the storage-only re-bind the checker also records in
+    /// `retype_sites`: a compatible `int` / `int|float` / `float` / `mixed` reassignment, so two
+    /// loops reusing one counter name keep two slots.
     fn release_and_abandon_local_binding(&mut self, name: &str, span: Option<Span>) {
         let Some(slot) = self.local_slots.get(name).copied() else {
             return;
@@ -3002,19 +3030,31 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.clear_reflection_arg_array_local(name);
         self.clear_fiber_start_sig(name);
         self.reset_array_pointer_cursor(name);
+        let storage = self.builder.local_php_type(slot);
         // The same liveness test `store_local` applies before overwriting a slot: release the
         // occupant when this path definitely wrote it, and also when a loop back-edge can carry a
         // previous iteration's value into a slot straight-line flow has not initialized yet.
-        if self.initialized_slots.contains(&slot) || !self.loop_stack.is_empty() {
-            self.release_stored_local_value_before_overwrite(name, slot, &self.builder.local_php_type(slot), span);
+        let released = (self.initialized_slots.contains(&slot) || !self.loop_stack.is_empty())
+            && self.release_stored_local_value_before_overwrite(name, slot, &storage, span);
+        // The zero also carries the frame's OWNERSHIP claim on a slot no `store_local` writes
+        // (`codegen::local_analysis` counts it as a store, so an incoming parameter's prologue
+        // retains what the release drops). Only a released slot an ordinary store already
+        // claims may go without it.
+        let function = self.builder.function();
+        let released_store_owner = released
+            && slot.as_raw() as usize >= function.params.len()
+            && function.instructions.iter().any(|inst| {
+                inst.op == Op::StoreLocal && inst.immediate == Some(Immediate::LocalSlot(slot))
+            });
+        if abandoned_slot_needs_zeroing(&storage, released_store_owner) {
+            self.emit_void(
+                Op::ZeroLocalSlot,
+                Vec::new(),
+                Some(Immediate::LocalSlot(slot)),
+                Op::ZeroLocalSlot.default_effects(),
+                span,
+            );
         }
-        self.emit_void(
-            Op::ZeroLocalSlot,
-            Vec::new(),
-            Some(Immediate::LocalSlot(slot)),
-            Op::ZeroLocalSlot.default_effects(),
-            span,
-        );
         self.initialized_slots.insert(slot);
         self.abandon_local_binding(name);
     }
@@ -5099,6 +5139,25 @@ impl LoweringContext<'_, '_> {
             ) => self.data.global_names.get(data.as_raw() as usize).cloned(),
             _ => None,
         }
+    }
+}
+
+/// Returns whether an abandoned slot still needs `ZeroLocalSlot` after its occupant's release.
+///
+/// The zero exists for the frame epilogue, which cleans every slot whose storage type is
+/// refcounted, the abandoned one included. Two numeric storage shapes do not need it:
+/// - raw `int`, `float` and `bool` storage, which no cleanup path ever releases; and
+/// - a boxed `mixed` slot whose occupant `release_local_slot` has just retired
+///   (`released_store_owner`, which also requires an ordinary store to own the slot), because
+///   that retirement stores zero over the slot before it drops the reference, on every target,
+///   for heap cells and numeric frame cells alike.
+///
+/// Every other storage keeps the zero it always had, including a `mixed` slot nothing released.
+fn abandoned_slot_needs_zeroing(storage: &PhpType, released_store_owner: bool) -> bool {
+    match storage.codegen_repr() {
+        PhpType::Int | PhpType::Float | PhpType::Bool => false,
+        PhpType::Mixed => !released_store_owner,
+        _ => true,
     }
 }
 

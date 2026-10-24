@@ -166,7 +166,9 @@ The fifth registered pass specializes a boxed checked-arithmetic operation
 every use of its result observes only the integer payload, removing the
 transient boxed `Mixed` allocation without changing overflow semantics.
 The same proof removes numeric local-slot retirement immediately before an
-overwrite. Retirement remains intact when a read, reference alias, or a value
+overwrite, or at the end of a binding when no later access to the slot is
+reachable (a counter whose name a later straight-line assignment re-binds).
+Retirement remains intact when a read, reference alias, or a value
 with a possible destructor prevents proving that the clear is unobservable.
 
 ### Bounded mixed counters

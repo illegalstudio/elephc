@@ -589,7 +589,9 @@ compile error:
 - **`unset()` kill.** `unset($a)` KILLS the binding when BOTH the binding's
   creating assignment and the `unset($a)` call itself sit at conditional depth
   0 — each a straight-line statement, not nested inside any
-  `if`/loop/`try`/`switch`/…. The creating assignment can occur anywhere in
+  `if`/loop/`try`/`switch`/…. A `for` loop's initializer counts as a
+  statement at the depth of the `for` itself, since it runs exactly once
+  whenever the loop does. The creating assignment can occur anywhere in
   the body, not only as its first statement; a CONDITIONAL `unset($a)` (one
   itself nested inside a branch or loop) does not kill, since the branch may
   never run. The name must also be never reference-aliased. A later read of a
@@ -603,6 +605,14 @@ compile error:
   ```text
   $a changes type from int to string; the previous value is discarded (compile with --strict-locals to make this an error)
   ```
+  At the same eligibility, a COMPATIBLE reassignment between two different
+  numeric types (`int`, `float`, `int|float`, `mixed`) also starts a fresh
+  slot, with no warning, when the assigned value is a raw `int`/`float` or a
+  fresh arithmetic result and the name is not a parameter: a counter name
+  reused by a later loop
+  (`for ($i = $n - 1; …)` after `for ($i = 0; …)`) then keeps one slot per
+  loop. This is a storage decision with no typing effect, so `--strict-locals`
+  does not change it.
 - **Branch-divergent assignment.** `if (…) { $a = 0; } else { $a = "ciao"; }`
   — and the same shape for a single-branch retype of an outer binding, or a
   heterogeneous loop-carried local — compiles instead of failing, as

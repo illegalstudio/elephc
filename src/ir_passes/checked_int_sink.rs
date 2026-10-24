@@ -19,7 +19,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ir::{
-    DataPool, Function, Immediate, InstId, Instruction, IrHeapKind, IrType, LocalKind,
+    BlockId, DataPool, Function, Immediate, InstId, Instruction, IrHeapKind, IrType, LocalKind,
     LocalSlotId, Op, Ownership, ValueDef, ValueId,
 };
 use crate::types::PhpType;
@@ -407,10 +407,14 @@ fn plan_slot_specialization(
             Op::LoadLocal => {
                 accept_slot_reader(function, inst, inst_id, uses, terminator_uses, &mut plan)?
             }
-            Op::ReleaseLocalSlot if retirement_precedes_overwrite(function, inst_id, slot) => {
+            Op::ReleaseLocalSlot
+                if retirement_precedes_overwrite(function, inst_id, slot)
+                    || retirement_ends_binding(function, inst_id, slot) =>
+            {
                 // The complete slot proof excludes objects, aliases, and boxed readers.
-                // Its numeric owner cannot run a destructor, and the next store makes
-                // clearing the old slot unobservable once storage becomes a raw int.
+                // Its numeric owner cannot run a destructor, and the next store (or, at the end
+                // of the binding, the absence of any later access) makes clearing the old slot
+                // unobservable once storage becomes a raw int.
                 plan.neutralize.insert(inst_id);
             }
             // `unset`, ref-cell promotion, by-ref exposure, and every future slot-naming
@@ -434,6 +438,65 @@ fn retirement_precedes_overwrite(function: &Function, retirement: InstId, slot: 
                 inst.op == Op::StoreLocal
                     && inst.immediate == Some(Immediate::LocalSlot(slot))
             })
+    })
+}
+
+/// Requires a retirement that ENDS the slot's binding: no path from it reaches another access.
+///
+/// A straight-line re-bind or `unset` kill releases the old binding's occupant and then maps the
+/// name to a fresh slot, so nothing reads the old slot again. Exceptional edges are absent from
+/// the explicit CFG, so a function with handlers keeps the retirement and the boxed slot.
+fn retirement_ends_binding(function: &Function, retirement: InstId, slot: LocalSlotId) -> bool {
+    if super::cfg::has_exception_handlers(function) {
+        return false;
+    }
+    let Some((block, position)) = function.blocks.iter().find_map(|block| {
+        block
+            .instructions
+            .iter()
+            .position(|id| *id == retirement)
+            .map(|position| (block, position))
+    }) else {
+        return false;
+    };
+    if instructions_name_slot(function, &block.instructions[position + 1..], slot) {
+        return false;
+    }
+    // The retiring block itself is only revisited through a cycle, and then every one of its
+    // instructions (the retirement included) counts as a later access.
+    let mut pending: Vec<BlockId> = block
+        .terminator
+        .as_ref()
+        .map(super::cfg::successors)
+        .unwrap_or_default();
+    let mut seen = HashSet::new();
+    while let Some(next) = pending.pop() {
+        if !seen.insert(next) {
+            continue;
+        }
+        let Some(reached) = function.block(next) else {
+            return false;
+        };
+        if instructions_name_slot(function, &reached.instructions, slot) {
+            return false;
+        }
+        pending.extend(
+            reached
+                .terminator
+                .as_ref()
+                .map(super::cfg::successors)
+                .unwrap_or_default(),
+        );
+    }
+    true
+}
+
+/// Returns true when any of `instructions` names `slot`.
+fn instructions_name_slot(function: &Function, instructions: &[InstId], slot: LocalSlotId) -> bool {
+    instructions.iter().any(|id| {
+        function
+            .instruction(*id)
+            .is_some_and(|inst| instruction_mentions_slot(inst, slot))
     })
 }
 
