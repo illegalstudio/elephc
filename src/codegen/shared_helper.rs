@@ -14,8 +14,8 @@
 //!   what makes moving a sequence out of its original frame a MOVE and not a rewrite.
 //! - The frame saves the reserved nested-call register unconditionally. Only the string ladder
 //!   uses it, but it is callee-saved and outside the allocator's tracking, so a helper that
-//!   might reach one must save it itself: the frame layout only reserves a slot for functions
-//!   containing a Mixed-receiver METHOD call, and no helper is one.
+//!   might reach one must save it itself: the frame layout reserves a slot from the function's
+//!   EIR instructions, and a helper's synthetic function has none.
 //! - A helper body may THROW. Every raise ends in a jump to `__rt_throw_current`, which unwinds
 //!   through this frame to the caller's handler — pinned by
 //!   `test_a_throw_inside_the_shared_string_ladder_is_still_catchable`, because the extra frame

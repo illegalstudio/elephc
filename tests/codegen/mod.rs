@@ -97,6 +97,7 @@ mod serialize;
 mod regressions;
 mod objects;
 mod destructors;
+mod destructor_unwind_calls;
 mod reference_property_payload;
 mod references;
 mod runtime_gc;

@@ -449,7 +449,8 @@ pub(super) fn lower_nullsafe_method_call(ctx: &mut FunctionContext<'_>, inst: &I
     // whatever the last helper left there as `$this`. Every other receiver-register dispatch
     // (`lower_mixed_method_call`, callable dispatch, the array-access and intrinsic paths)
     // already uses this register for the same reason, and `crate::codegen::frame` reserves
-    // its save slot for exactly the `NullsafeMethodCall` receivers this lowering handles.
+    // its save slot in every frame containing a `NullsafeMethodCall`, which is never
+    // register-neutral.
     let object_reg = abi::nested_call_reg(ctx.emitter);
     objects::emit_nullable_receiver_object_payload(ctx, object, &null_label, object_reg)?;
     let receiver_ty = PhpType::Object(class_name);
