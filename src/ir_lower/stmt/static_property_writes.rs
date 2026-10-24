@@ -387,6 +387,29 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
         );
         return;
     }
+    if let Some(buffer_ty) = static_property_type(ctx, receiver, property)
+        .filter(|ty| matches!(ty.codegen_repr(), PhpType::Buffer(_)))
+    {
+        // The slot holds the buffer handle, so the element write goes through the handle it
+        // holds once the key and value are evaluated, exactly as a buffer property does. The
+        // slot itself is not written back: a buffer has no copy-on-write storage to publish.
+        let buffer = load_static_property_as(ctx, receiver, property, buffer_ty.clone(), span);
+        crate::ir_lower::expr::unpin_in_flight_owners(
+            ctx,
+            std::mem::take(&mut index_pins),
+            span,
+        );
+        let index = coerce_to_int_at_span(ctx, index, Some(span));
+        let value = coerce_buffer_set_value(ctx, &buffer_ty, value, Some(span));
+        ctx.emit_void(
+            Op::BufferSet,
+            vec![buffer.value, index.value, value.value],
+            None,
+            Op::BufferSet.default_effects(),
+            Some(span),
+        );
+        return;
+    }
     if let Some(property_ty) =
         static_property_type(ctx, receiver, property).filter(is_indexed_array_type)
     {

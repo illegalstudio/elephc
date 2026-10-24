@@ -7,6 +7,7 @@
 //! Key details:
 //! - All five targets must skip uninitialized slots and detach inherited owners once.
 //! - Destructor boundaries must finish remaining slots before propagating exceptions.
+//! - Buffer and pointer slots own nothing, so they receive no shutdown cleanup.
 
 /// Verifies mixed static roots use storage-aware hash writes and captured prefix results.
 fn assert_mixed_static_update_storage(name: &str) {
@@ -162,5 +163,59 @@ echo isset(ShutdownEmitterChild::$uninitialized);
         }
         let tail = asm.rsplit_once("retire the static property").unwrap().1;
         assert!(tail.find("__rt_cleanup_preserve_exception").unwrap() < tail.find("__rt_throw_current").unwrap(), "{name}");
+    }
+}
+
+/// Regression test for task 231f2338: static `buffer<T>` and `ptr<T>` slots emit on every
+/// target. An element write lowers to `buffer_set` on the loaded handle without writing the slot
+/// back, a `ptr` slot with a `= null` default starts as the initialized zero word, a typed slot
+/// without a default starts uninitialized, and no slot gets shutdown cleanup.
+#[test]
+fn static_buffer_and_pointer_slots_emit_on_all_targets() {
+    let source = r#"<?php
+packed class StaticSlotVec { public float $x; public float $y; }
+final class StaticSlots {
+    public static buffer<int> $ids;
+    public static buffer<StaticSlotVec> $points;
+    public static ptr $raw = null;
+    public static ptr<StaticSlotVec> $at;
+}
+function fillStaticSlots(int $i): void {
+    StaticSlots::$ids[$i] = 7;
+}
+StaticSlots::$ids = buffer_new<int>(2);
+StaticSlots::$points = buffer_new<StaticSlotVec>(1);
+fillStaticSlots(1);
+StaticSlots::$points[0]->x = 1.5;
+StaticSlots::$at = StaticSlots::$points[0];
+StaticSlots::$raw = buffer_ptr(StaticSlots::$ids);
+echo StaticSlots::$ids[1], StaticSlots::$at->x, ptr_is_null(StaticSlots::$raw) ? "n" : "s";
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = crate::codegen::platform::Target::parse(name).unwrap();
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."), target,
+        );
+        let function = module.functions.iter().find(|function| function.name == "fillStaticSlots").unwrap();
+        let set = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::BufferSet)
+            .unwrap_or_else(|| panic!("{name}: the element write must lower to buffer_set"));
+        let handle = function.value(function.instructions[set].operands[0]).unwrap();
+        let crate::ir::ValueDef::Instruction { inst, .. } = handle.def else {
+            panic!("{name}: the buffer operand must be the loaded static slot");
+        };
+        assert_eq!(function.instruction(inst).unwrap().op, crate::ir::Op::LoadStaticProperty, "{name}");
+        assert!(
+            !function.instructions.iter().any(|inst| inst.op == crate::ir::Op::StoreStaticProperty),
+            "{name}: an element write must not write the static slot back"
+        );
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(asm.contains("initialize static property StaticSlots::$raw to the null word"), "{name}");
+        assert!(!asm.contains("mark static property StaticSlots::$raw uninitialized"), "{name}");
+        assert!(asm.contains("mark static property StaticSlots::$at uninitialized"), "{name}");
+        assert!(asm.contains("mark static property StaticSlots::$ids uninitialized"), "{name}");
+        for property in ["ids", "points", "raw", "at"] {
+            let symbol = crate::names::static_property_symbol("StaticSlots", property);
+            assert!(!asm.contains(&format!("epilogue cleanup static property {symbol}")), "{name}: {property}");
+        }
     }
 }

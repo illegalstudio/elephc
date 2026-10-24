@@ -150,6 +150,8 @@ pub(super) fn check_static_property_array_push(
 /// Infers the index and value types, resolves the property target, validates integer index,
 /// validates element-type compatibility against declared types, merges element types when the
 /// property is untyped, and updates the property type. Short-circuits for `ArrayAccess` objects.
+/// A `buffer<T>` property takes the whole-element write rules of a local or instance-property
+/// buffer and keeps its type.
 pub(super) fn check_static_property_array_assign(
     checker: &mut Checker,
     receiver: &StaticReceiver,
@@ -160,7 +162,7 @@ pub(super) fn check_static_property_array_assign(
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
     let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
-    let normalized_idx_ty = normalized_array_key_type(index, idx_ty);
+    let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone());
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     let target = resolve_static_property_assignment_target(checker, receiver, property, span)?;
     let mixed_elements = match target.prop_ty.codegen_repr() {
@@ -178,6 +180,10 @@ pub(super) fn check_static_property_array_assign(
         if checker.object_type_implements_interface(class_name, "ArrayAccess") {
             return Ok(());
         }
+    }
+    if let PhpType::Buffer(elem_ty) = &target.prop_ty {
+        super::arrays::validate_buffer_element_write(elem_ty, &idx_ty, &val_ty, span)?;
+        return Ok(());
     }
     // See `is_php_array_key_type` in the property path: a boxed index has no `array_set`
     // lowering — `array_set index PHP type Mixed`, which is what a genuinely `mixed` index gets

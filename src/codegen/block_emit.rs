@@ -1060,6 +1060,7 @@ fn is_main(function: &Function) -> bool {
 pub(super) fn emit_static_property_initializers(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let mut default_initializers = Vec::new();
     let mut uninitialized_static_properties = Vec::new();
+    let mut null_word_static_properties = Vec::new();
     let mut referenced = super::runtime_referenced_class_names(ctx.module);
     // The eval bridge's static-property helpers (`eval_static_property_helpers`) cover every
     // compiled class, so a fragment can read a static property of a class no native code
@@ -1086,17 +1087,14 @@ pub(super) fn emit_static_property_initializers(ctx: &mut FunctionContext<'_>) -
             if declaring_class != class_name {
                 continue;
             }
-            let default = class_info
-                .static_defaults
-                .get(index)
-                .and_then(Option::as_ref)
-                // A null default whose slot cannot represent null (a scalar slot
-                // rebound by later type refinement) is skipped; the slot is always
-                // written before an observable read on those paths.
-                .filter(|default_expr| {
-                    !matches!(default_expr.kind, crate::parser::ast::ExprKind::Null)
-                        || php_type.null_property_default_required()
-                });
+            let written_default = class_info.static_defaults.get(index).and_then(Option::as_ref);
+            // A null default whose slot cannot represent null (a scalar slot
+            // rebound by later type refinement) is skipped; the slot is always
+            // written before an observable read on those paths.
+            let default = written_default.filter(|default_expr| {
+                !matches!(default_expr.kind, crate::parser::ast::ExprKind::Null)
+                    || php_type.null_property_default_required()
+            });
             if let Some(default_expr) = default {
                 default_initializers.push((
                     class_name.clone(),
@@ -1105,12 +1103,24 @@ pub(super) fn emit_static_property_initializers(ctx: &mut FunctionContext<'_>) -
                     default_expr.kind.clone(),
                 ));
             } else if class_info.declared_static_properties.contains(property) {
-                uninitialized_static_properties.push((class_name.clone(), property.clone()));
+                if written_default.is_some()
+                    && matches!(php_type.codegen_repr(), PhpType::Pointer(_))
+                {
+                    // A pointer slot whose null default was skipped above, such as
+                    // `public static ptr $p = null;`, holds null as the zero word: it is
+                    // initialized, not waiting for its first write.
+                    null_word_static_properties.push((class_name.clone(), property.clone()));
+                } else {
+                    uninitialized_static_properties.push((class_name.clone(), property.clone()));
+                }
             }
         }
     }
     for (class_name, property) in uninitialized_static_properties {
         emit_static_property_sentinel(ctx, &class_name, &property);
+    }
+    for (class_name, property) in null_word_static_properties {
+        emit_static_property_null_word(ctx, &class_name, &property);
     }
     for (class_name, property, php_type, expr) in default_initializers {
         emit_static_property_default(ctx, &class_name, &property, &php_type, &expr)?;
@@ -1132,6 +1142,22 @@ fn emit_static_property_sentinel(ctx: &mut FunctionContext<'_>, class_name: &str
     );
     let symbol = static_property_symbol(class_name, property);
     abi::emit_store_reg_to_symbol(ctx.emitter, marker_reg, &symbol, 8);
+}
+
+/// Initializes one typed static property whose null default is the zero word.
+///
+/// A `ptr` slot reads address 0 as its null pointer, so `public static ptr $p = null;` needs
+/// no literal: both storage words are zeroed, the value word to the null address and the
+/// high word to the initialized marker. The store is explicit rather than relying on the
+/// zero-filled symbol so a web request starts from the default again.
+fn emit_static_property_null_word(ctx: &mut FunctionContext<'_>, class_name: &str, property: &str) {
+    ctx.emitter.comment(&format!(
+        "initialize static property {}::${} to the null word",
+        class_name, property
+    ));
+    let symbol = static_property_symbol(class_name, property);
+    abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 0);
+    abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 8);
 }
 
 /// Writes a supported literal static-property default into its symbol storage.

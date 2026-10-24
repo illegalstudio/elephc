@@ -6,7 +6,8 @@
 //! - `crate::codegen::lower_inst::lower_instruction()`.
 //!
 //! Key details:
-//! - Scalar, string, array, object and inferred callable slots share typed storage helpers.
+//! - Scalar, string, array, object, buffer, pointer and inferred callable slots share typed
+//!   storage helpers; buffer handles and pointers are plain words that own nothing.
 //! - Named, lexical `self` and lexical `parent` receivers resolve declaring-class symbols.
 //! - `static::` receivers use native class-id branches for generated classes and
 //!   the eval native-frame override when late static scope points at an eval class.
@@ -765,6 +766,10 @@ fn static_property_is_visible(
 /// declared type whose method-body writes settle on a closure/first-class callable). This does
 /// not introduce a PHP callable-typed static property syntax; it only lets a settled Callable
 /// slot lower its symbol-backed load/store through the descriptor-aware paths.
+///
+/// `buffer<T>` handles and `ptr`/`ptr<T>` addresses are one plain word that owns nothing, as in
+/// an instance property slot: a store overwrites the word without releasing or freeing the
+/// previous buffer, and a read copies the word out.
 fn ensure_static_property_type_supported(php_type: &PhpType, inst: &Instruction) -> Result<()> {
     match php_type {
         PhpType::Bool
@@ -777,6 +782,8 @@ fn ensure_static_property_type_supported(php_type: &PhpType, inst: &Instruction)
         | PhpType::Union(_)
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }
+        | PhpType::Buffer(_)
+        | PhpType::Pointer(_)
         | PhpType::Callable
         | PhpType::Object(_) => Ok(()),
         _ => Err(CodegenIrError::unsupported(format!(
