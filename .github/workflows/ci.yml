@@ -223,7 +223,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
-          key: libxml2-native-macos-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          key: libxml2-native-macos-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             libxml2-native-macos-aarch64-
 
@@ -390,7 +390,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
-          key: libxml2-native-linux-x86_64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          key: libxml2-native-linux-x86_64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             libxml2-native-linux-x86_64-
 
@@ -549,7 +549,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
-          key: libxml2-native-linux-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          key: libxml2-native-linux-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             libxml2-native-linux-aarch64-
 
@@ -1173,7 +1173,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
-          key: libxml2-native-macos-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          key: libxml2-native-macos-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             libxml2-native-macos-aarch64-
 
@@ -1259,7 +1259,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
-          key: libxml2-native-linux-x86_64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          key: libxml2-native-linux-x86_64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             libxml2-native-linux-x86_64-
 
@@ -1345,7 +1345,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
-          key: libxml2-native-linux-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          key: libxml2-native-linux-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             libxml2-native-linux-aarch64-
 
@@ -2143,7 +2143,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/elephc-native
-          key: xml-native-${{ matrix.elephc_target }}-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          key: xml-native-${{ matrix.elephc_target }}-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             xml-native-${{ matrix.elephc_target }}-
 
