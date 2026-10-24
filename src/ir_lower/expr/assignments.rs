@@ -119,6 +119,13 @@ pub(super) fn lower_assignment_expr(
         let (lowered, php_type) =
             crate::ir_lower::stmt::retype_value_for_pointer_local(ctx, name, lowered, expr.span)
                 .unwrap_or((lowered, php_type));
+        // The checker recorded this assignment expression as an incompatible RE-BINDING of
+        // `$name`: end the old binding here (after the value owns its reference and after the
+        // pointer retype read the old slot type) so the store below mints a fresh slot at the
+        // new type instead of widening one the program never reads at the old type again.
+        if ctx.is_recorded_retype_site(expr.span, name) {
+            ctx.rebind_local_for_retype(name, Some(expr.span));
+        }
         ctx.store_local(name, lowered, php_type, Some(expr.span));
         result = ctx.load_local(name, Some(expr.span));
         let static_callable = callable_array

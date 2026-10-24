@@ -90,7 +90,10 @@ impl Checker {
                 let operand_env = probed_env.as_ref().unwrap_or(env);
                 let vt = self.infer_null_probe_operand(value, operand_env)?;
                 let value_is_never_null = operand_is_never_null(self, value, &vt, operand_env);
-                let dt = self.infer_type(default, env)?;
+                self.local_conditional_depth += 1;
+                let dt = self.infer_type(default, env);
+                self.local_conditional_depth -= 1;
+                let dt = dt?;
                 Ok(null_coalesce_result_type(self, value_is_never_null, vt, dt))
             }
             ExprKind::Pipe { value, callable } => {

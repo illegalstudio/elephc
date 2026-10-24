@@ -35,7 +35,16 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let lt = self.infer_type(left, env)?;
-        let rt = self.infer_type(right, env)?;
+        // The right operand of a short-circuit operator only runs when the left one does not
+        // decide the result, so a re-bind inside it is not definitely executed (#1995).
+        if matches!(op, BinOp::And | BinOp::Or) {
+            self.local_conditional_depth += 1;
+        }
+        let rt = self.infer_type(right, env);
+        if matches!(op, BinOp::And | BinOp::Or) {
+            self.local_conditional_depth -= 1;
+        }
+        let rt = rt?;
         if let Some(plan) = crate::types::object_operators::binary_plan(op, &lt, &rt) {
             return Ok(plan.result_type(op));
         }

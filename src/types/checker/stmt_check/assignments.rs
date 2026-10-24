@@ -141,7 +141,7 @@ impl Checker {
                 // The one statement-form local assignment: `stmt_form: true` makes an
                 // incompatible reassignment eligible for the permissive retype (warn and
                 // re-bind) instead of the hard `cannot reassign` error.
-                locals::check_assign(self, name, value, stmt.span, env, true)
+                locals::check_assign(self, name, value, stmt.span, env).map(|_| ())
             }
             StmtKind::RefAssign { target, source } => {
                 locals::check_ref_assign(self, target, source, stmt.span, env)

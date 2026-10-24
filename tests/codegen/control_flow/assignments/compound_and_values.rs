@@ -535,3 +535,32 @@ fn test_undefined_var_star_equals() {
     let out = compile_and_run(r#"<?php $w *= 5; echo $w;"#);
     assert_eq!(out, "0");
 }
+
+/// An assignment expression's value comes from the assigned expression, not from the local's
+/// declared type: `$x = null ? "T" : "F"` assigns the ternary's `"F"`, so the expression is a
+/// string even though `$x` is `int|string` (#1995).
+#[test]
+fn test_union_local_assignment_expression_takes_the_assigned_value_type() {
+    let out = compile_and_run(
+        r#"<?php
+function f(int|string $x): string { return $x = null ? "T" : "F"; }
+function g(int|string $x): string { $y = $x = 5; return gettype($y) . ":" . $y; }
+echo f(1), "|", g(1), "\n";
+"#,
+    );
+    assert_eq!(out, "F|integer:5\n");
+}
+
+/// Assigning `null` to a union-typed local is legal PHP, in statement and expression position
+/// alike; the expression's value is that null (#1995).
+#[test]
+fn test_union_local_accepts_a_null_assignment_expression() {
+    let out = compile_and_run(
+        r#"<?php
+function f(int|string $x): string { $y = ($x = null) ? "T" : "F"; return $y; }
+function g(int|string $x): string { $x = null; return gettype($x); }
+echo f(1), "|", g(1), "\n";
+"#,
+    );
+    assert_eq!(out, "F|NULL\n");
+}

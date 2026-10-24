@@ -103,19 +103,20 @@ fn null_coalesce_assignment_type(
 /// On success, updates `env` with the resolved type for `name`. On error, returns a
 /// type mismatch diagnostic.
 ///
-/// `stmt_form` is `true` only when this assignment IS a statement (`StmtKind::Assign`).
-/// An assignment used as an expression (`f($x = "s")`, `$y = ($x = "s")`) yields the
-/// assigned value to its enclosing expression, so re-binding `$x` to a fresh slot of a
-/// different type there has no single well-defined result value to hand back — only the
-/// statement form is eligible for the permissive retype below.
+/// Returns the assigned value's own type: an assignment used as an expression
+/// (`f($x = "s")`, `$y = ($x = "s")`) yields the value it stored, never the local's
+/// declared type (there is no assignment coercion to justify one).
+///
+/// The permissive re-bind below is gated on the store being definitely executed
+/// (`local_binding_is_killable`), not on the syntactic statement form: a condition or a
+/// straight-line expression is eligible, an arm of `?:`, `match`, `??`, `&&` or `||` is not.
 pub(super) fn check_assign(
     checker: &mut Checker,
     name: &str,
     value: &Expr,
     span: Span,
     env: &mut TypeEnv,
-    stmt_form: bool,
-) -> Result<(), CompileError> {
+) -> Result<PhpType, CompileError> {
     // A direct reassignment (`$k = ...`) makes `$k` an ordinary local: it is no
     // longer the boxed `Mixed` `foreach` iteration key. Drop the foreach-key
     // marker so a subsequent `$dst[$k] = $v` is routed by `$k`'s real type (e.g.
@@ -215,14 +216,14 @@ pub(super) fn check_assign(
         return Err(error);
     }
     update_reflection_class_assignment_metadata(checker, name, reflection_class_target);
-    let merged = merge_local_assignment_type(checker, name, &ty, span, env, stmt_form);
+    let merged = merge_local_assignment_type(checker, name, &ty, span, env);
     if merged.is_ok() {
         // Whatever the environment holds for `name` from here on was put there by this store,
         // so a guard that narrowed the name no longer speaks for it. `merge_local_assignment_type`
         // has already consulted the guard view, which is why this runs after it and not before.
         checker.record_store_over_flow_narrowing(name);
     }
-    merged
+    merged.map(|()| ty)
 }
 
 /// Type-checks a reference alias assignment (`$target =& <source>`).
@@ -410,8 +411,8 @@ impl Checker {
     /// Used by the checker when processing assignment expressions to propagate the
     /// assigned type back to the caller.
     ///
-    /// This is the EXPRESSION form of an assignment, so it passes `stmt_form: false`: an
-    /// incompatible retype here keeps the hard error in both modes.
+    /// The expression's value is the assigned value, so an incompatible retype hands that
+    /// value back after re-binding the name (or keeps the hard error under `--strict-locals`).
     pub(crate) fn check_local_assignment_expression(
         &mut self,
         name: &str,
@@ -419,10 +420,7 @@ impl Checker {
         span: Span,
         env: &mut TypeEnv,
     ) -> Result<PhpType, CompileError> {
-        check_assign(self, name, value, span, env, false)?;
-        env.get(name).cloned().ok_or_else(|| {
-            CompileError::new(span, &format!("Undefined variable: ${}", name))
-        })
+        check_assign(self, name, value, span, env)
     }
 }
 
@@ -871,7 +869,6 @@ fn merge_local_assignment_type(
     ty: &PhpType,
     span: Span,
     env: &mut TypeEnv,
-    stmt_form: bool,
 ) -> Result<(), CompileError> {
     // This visit RE-DECIDES the site, so any decision a superseded walk recorded for it is
     // dropped first. The checker walks a body more than once (top level twice, method bodies
@@ -988,7 +985,7 @@ fn merge_local_assignment_type(
                     return Ok(());
                 }
             }
-            if !checker.strict_locals && stmt_form && checker.local_binding_is_killable(name) {
+            if !checker.strict_locals && checker.local_binding_is_killable(name) {
                 let message = format!(
                     "${} changes type from {} to {}; the previous value is discarded (compile with --strict-locals to make this an error)",
                     name, existing, ty

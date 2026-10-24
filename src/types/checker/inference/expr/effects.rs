@@ -122,7 +122,11 @@ impl Checker {
                 self.infer_type_with_assignment_effects(left, env)?;
                 if matches!(op, BinOp::And | BinOp::Or) {
                     let mut right_env = env.clone();
-                    self.infer_type_with_assignment_effects(right, &mut right_env)?;
+                    self.local_conditional_depth += 1;
+                    let right_result =
+                        self.infer_type_with_assignment_effects(right, &mut right_env);
+                    self.local_conditional_depth -= 1;
+                    right_result?;
                     merge_array_storage_effects(env, &right_env);
                     Ok(PhpType::Bool)
                 } else {
@@ -138,15 +142,20 @@ impl Checker {
                 null_probe::end_null_probe_root(probe, env);
                 let value_ty = value_ty?;
                 let value_is_never_null = operand_is_never_null(self, value, &value_ty, env);
+                self.local_conditional_depth += 1;
                 let default_ty = if value_ty == PhpType::Void {
-                    self.infer_type_with_assignment_effects(default, env)?
+                    self.infer_type_with_assignment_effects(default, env)
                 } else {
                     let mut default_env = env.clone();
                     let default_ty =
-                        self.infer_type_with_assignment_effects(default, &mut default_env)?;
-                    merge_array_storage_effects(env, &default_env);
+                        self.infer_type_with_assignment_effects(default, &mut default_env);
+                    if default_ty.is_ok() {
+                        merge_array_storage_effects(env, &default_env);
+                    }
                     default_ty
                 };
+                self.local_conditional_depth -= 1;
+                let default_ty = default_ty?;
                 Ok(null_coalesce_result_type(
                     self,
                     value_is_never_null,
@@ -156,13 +165,20 @@ impl Checker {
             }
             ExprKind::ShortTernary { value, default } => {
                 let value_ty = self.infer_type_with_assignment_effects(value, env)?;
-                if value_ty == PhpType::Void {
-                    self.infer_type_with_assignment_effects(default, env)?;
+                self.local_conditional_depth += 1;
+                let default_result = if value_ty == PhpType::Void {
+                    self.infer_type_with_assignment_effects(default, env)
                 } else {
                     let mut default_env = env.clone();
-                    self.infer_type_with_assignment_effects(default, &mut default_env)?;
-                    merge_array_storage_effects(env, &default_env);
-                }
+                    let result =
+                        self.infer_type_with_assignment_effects(default, &mut default_env);
+                    if result.is_ok() {
+                        merge_array_storage_effects(env, &default_env);
+                    }
+                    result
+                };
+                self.local_conditional_depth -= 1;
+                default_result?;
                 // Result type comes from the Mixed-aware short-ternary merge in `infer_type`.
                 self.infer_type(expr, env)
             }
@@ -182,10 +198,16 @@ impl Checker {
                     then_env.insert(guard.var.clone(), guard.then_ty);
                     else_env.insert(guard.var, guard.else_ty);
                 }
-                let then_ty = self.infer_type_with_assignment_effects(then_expr, &mut then_env)?;
+                self.local_conditional_depth += 1;
+                let then_ty = self.infer_type_with_assignment_effects(then_expr, &mut then_env);
+                self.local_conditional_depth -= 1;
+                let then_ty = then_ty?;
                 merge_array_storage_effects(env, &then_env);
                 merge_array_storage_effects(&mut else_env, &then_env);
-                let else_ty = self.infer_type_with_assignment_effects(else_expr, &mut else_env)?;
+                self.local_conditional_depth += 1;
+                let else_ty = self.infer_type_with_assignment_effects(else_expr, &mut else_env);
+                self.local_conditional_depth -= 1;
+                let else_ty = else_ty?;
                 merge_array_storage_effects(env, &else_env);
                 Ok(merge_match_arm_result_type(self, then_ty, else_ty))
             }
@@ -218,15 +240,24 @@ impl Checker {
                 self.infer_type_with_assignment_effects(subject, env)?;
                 for (conditions, result) in arms {
                     let mut arm_env = env.clone();
-                    for condition in conditions {
-                        self.infer_type_with_assignment_effects(condition, &mut arm_env)?;
-                    }
-                    self.infer_type_with_assignment_effects(result, &mut arm_env)?;
+                    self.local_conditional_depth += 1;
+                    let arm_result = (|| {
+                        for condition in conditions {
+                            self.infer_type_with_assignment_effects(condition, &mut arm_env)?;
+                        }
+                        self.infer_type_with_assignment_effects(result, &mut arm_env)
+                    })();
+                    self.local_conditional_depth -= 1;
+                    arm_result?;
                     merge_array_storage_effects(env, &arm_env);
                 }
                 if let Some(default) = default {
                     let mut default_env = env.clone();
-                    self.infer_type_with_assignment_effects(default, &mut default_env)?;
+                    self.local_conditional_depth += 1;
+                    let default_result =
+                        self.infer_type_with_assignment_effects(default, &mut default_env);
+                    self.local_conditional_depth -= 1;
+                    default_result?;
                     merge_array_storage_effects(env, &default_env);
                 }
                 // Result type comes from the Mixed-aware match merge in `infer_type`

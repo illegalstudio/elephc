@@ -283,6 +283,10 @@ impl Checker {
             ExprKind::ShortTernary { value, default } => {
                 let value_ty = self.match_arm_result_type(value, env)?;
                 let default_ty = self.match_arm_result_type(default, env)?;
+                // A value that is statically null is falsy, so `?:` answers the default alone.
+                if matches!(value_ty, PhpType::Void | PhpType::Never) {
+                    return Ok(default_ty);
+                }
                 Ok(merge_match_arm_result_type(self, value_ty, default_ty))
             }
             ExprKind::Throw(inner) => {

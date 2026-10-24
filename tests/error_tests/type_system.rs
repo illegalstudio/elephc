@@ -1974,7 +1974,8 @@ fn test_unset_inside_try_leaves_the_pre_feature_error() {
         "<?php $a = 1; try { unset($a); } finally { echo \"f\"; } if ($argc > 1) { $a = \"s\"; } echo $a;",
         "cannot reassign $a from int to string",
     );
-    expect_error(
+    // The expression form now follows the statement form: non-strict re-binds, strict refuses.
+    expect_error_strict(
         "<?php $a = 1; try { unset($a); } finally { echo \"f\"; } $b = ($a = \"s\"); echo $b;",
         "cannot reassign $a from int to string",
     );

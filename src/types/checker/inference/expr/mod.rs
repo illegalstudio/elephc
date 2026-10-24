@@ -169,7 +169,12 @@ impl Checker {
         result: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
-        let ty = self.infer_type(result, env)?;
+        // A result operand only runs when its branch is selected, so an assignment inside it
+        // must not be eligible for the permissive local re-bind (#1995).
+        self.local_conditional_depth += 1;
+        let ty = self.infer_type(result, env);
+        self.local_conditional_depth -= 1;
+        let ty = ty?;
         if matches!(result.kind, ExprKind::Throw(_)) {
             return Ok(PhpType::Never);
         }
