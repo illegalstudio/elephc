@@ -455,7 +455,11 @@ See `examples/tail-recursion/main.php` for Euclid and a deep mutual countdown.
 
 With `--ir-opt` enabled, a loop over `buffer<T>` elements resolves the buffer
 handle once in front of the loop instead of at every `$b[$i]`, and the packed
-field accesses of one iteration share a single bounds-checked record address:
+field accesses of one iteration share a single bounds-checked record address.
+The resolution runs before the loop-invariant values the optimizer moved in
+front of the loop are loaded, so a value such as `$dt` below stays in a
+register through the loop on every target, including Linux x86_64, whose ABI
+has no float register that survives a call:
 
 ```php
 function step(buffer<Particle> $p, int $count, float $dt): void {
