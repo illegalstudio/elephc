@@ -221,6 +221,16 @@ pub(in crate::codegen) fn coerce_loaded_local_to_result_type(
             );
             Ok(())
         }
+        // A pointer-word local that lowering knows holds `null` here (address 0 in the slot)
+        // reads as the ordinary null value every `null` consumer expects.
+        (PhpType::Pointer(_), PhpType::Void) => {
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                crate::codegen::sentinels::NULL_SENTINEL,
+            );
+            Ok(())
+        }
         (_, PhpType::TaggedScalar) => {
             coerce_loaded_value_to_tagged_scalar(ctx, &source_ty)?;
             Ok(())

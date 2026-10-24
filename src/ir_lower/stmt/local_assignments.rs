@@ -283,7 +283,10 @@ pub(super) fn contextualize_local_assignment(
 /// the local stays a `?ptr<T>`: the raw-word slot must not hold the null sentinel, which a
 /// later `=== null` or by-reference binding would read as a live address. A packed record
 /// address is that pointer word too, so the slot keeps one raw-word representation instead of
-/// widening to a boxed `mixed`. Statement and expression assignments share this rule.
+/// widening to a boxed `mixed`. A pointer stored into a local whose loop-carried contract is
+/// `?ptr<T>` (it enters a loop holding `null`) keeps that type: the loop can also exit with the
+/// `null` it entered with, when the body never runs. Statement and expression assignments share
+/// this rule.
 pub(in crate::ir_lower) fn retype_value_for_pointer_local(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
@@ -308,6 +311,12 @@ pub(in crate::ir_lower) fn retype_value_for_pointer_local(
     if matches!(source_repr, PhpType::Packed(_)) {
         let retyped = ctx.retype_packed_address_for_pointer_sink(lowered, &local_ty, Some(span));
         return Some((retyped, local_ty));
+    }
+    if matches!(source_repr, PhpType::Pointer(_))
+        && crate::types::is_nullable_pointer_type(&local_ty)
+        && local_has_loop_storage_contract(ctx, name, &local_ty)
+    {
+        return Some((lowered, local_ty));
     }
     None
 }

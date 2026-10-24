@@ -511,6 +511,15 @@ pub(super) fn emit_function_prologue_with_label(
         if param.by_ref && crate::types::is_nullable_pointer_type(&param.php_type) {
             normalize_nullable_pointer_ref_param(ctx, offset);
         }
+        // A `null` parameter (such as a by-value capture of a `null` local) carries no ABI
+        // value, so nothing above wrote its slot. When the body also stores pointers or packed
+        // record addresses into it, the slot is a pointer word and must start as address 0.
+        if !param.by_ref
+            && matches!(param.php_type.codegen_repr(), PhpType::Void | PhpType::Never)
+            && matches!(local_ty.codegen_repr(), PhpType::Pointer(_))
+        {
+            abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+        }
         if converted_to_owned_mixed {
             abi::emit_load(ctx.emitter, &param.php_type.codegen_repr(), offset);
             // The declared type, so a `?ptr<T>` parameter boxes address 0 as PHP null.

@@ -97,8 +97,36 @@ fn record_pointer_reference_argument(
         place = value;
     }
     if let ExprKind::Variable(name) = &place.kind {
+        retype_local_for_pointer_reference(ctx, name, param_ty);
         ctx.record_pointer_reference_binding(name, place.span, param_ty);
     }
+}
+
+/// Gives a plain frame local bound to a pointer by-reference parameter a pointer-word type.
+///
+/// The callee reads and writes a raw pointer word through the reference. A local that holds only
+/// `null` leaves the call as the parameter's `?ptr<T>` (the callee may store an address, which
+/// is also the type the checker records for it), and one that holds a packed record address
+/// becomes that record's `ptr<T>`. The retype widens the frame slot to a pointer word, where a
+/// `null` already stored is address 0 (`pointer_word_storage` in `crate::ir::builder`). Pointer
+/// locals keep their own type, and a global, static or reference-bound name keeps its storage,
+/// which `LoweringContext::refuse_pointer_reference_bindings` then refuses.
+fn retype_local_for_pointer_reference(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    param_ty: &PhpType,
+) {
+    if !ctx.local_is_plain_frame_slot(name) {
+        return;
+    }
+    let retyped = match ctx.local_type(name) {
+        PhpType::Void | PhpType::Never if crate::types::is_nullable_pointer_type(param_ty) => {
+            param_ty.clone()
+        }
+        PhpType::Packed(class) => PhpType::Pointer(Some(class)),
+        _ => return,
+    };
+    ctx.set_local_type(name, retyped);
 }
 
 /// Captures a by-value runtime-parser argument while preserving by-reference places.

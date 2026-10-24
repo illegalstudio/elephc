@@ -1803,11 +1803,22 @@ fn reject_multiword_ref_cell_local(ty: &PhpType, action: &str) -> Result<()> {
 }
 
 /// Coerces the currently loaded result registers before storing into a typed local slot.
+///
+/// A `null` stored into a pointer-word slot (a local that also holds packed record addresses or
+/// pointers, see `crate::ir::builder::pointer_word_storage`) is written as address 0, the null of
+/// a `?ptr<T>`: the slot's final storage is only known once the whole body is lowered, so the
+/// store that ran first still carries the plain `null` value.
 fn coerce_current_result_for_target_store(
     emitter: &mut Emitter,
     source_ty: &PhpType,
     target_ty: &PhpType,
 ) -> Result<()> {
+    if matches!(target_ty.codegen_repr(), PhpType::Pointer(_))
+        && matches!(source_ty.codegen_repr(), PhpType::Void | PhpType::Never)
+    {
+        abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
+        return Ok(());
+    }
     if target_ty.codegen_repr() != PhpType::TaggedScalar {
         return Ok(());
     }

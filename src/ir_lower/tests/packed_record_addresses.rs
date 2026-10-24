@@ -166,3 +166,44 @@ function step(buffer<Body> $b, int $n, float $dt): void {
         );
     }
 }
+
+/// Verifies a local that holds `null` and packed record addresses gets one pointer-word frame
+/// slot, in sequence and around a loop that starts from `null` (task 1af74866: both used to widen
+/// to boxed `mixed`), while a record-only local keeps its record storage.
+#[test]
+fn null_and_record_locals_get_pointer_word_slots() {
+    let module = super::lower_source(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function seq(buffer<Vec2> $v): int { $x = null; $x = $v[0]; $y = $v[1]; return $x->x + $y->x; }
+function search(buffer<Vec2> $v): int {
+    $best = null;
+    for ($i = 0; $i < 2; $i++) {
+        if ($best === null || $v[$i]->x > $best->x) { $best = $v[$i]; }
+    }
+    return $best === null ? 0 : $best->x;
+}
+$v = buffer_new<Vec2>(2);
+echo seq($v), search($v);
+"#,
+    );
+    let slot = |function: &str, name: &str| {
+        module
+            .functions
+            .iter()
+            .find(|candidate| candidate.name == function)
+            .unwrap_or_else(|| panic!("{function} function"))
+            .locals
+            .iter()
+            .find(|local| local.name.as_deref() == Some(name))
+            .map(|local| (local.php_type.clone(), local.ir_type))
+            .unwrap_or_else(|| panic!("{function} local {name}"))
+    };
+    let pointer = PhpType::Pointer(Some("Vec2".to_string()));
+    assert_eq!(slot("seq", "x"), (pointer.clone(), IrType::I64));
+    assert_eq!(
+        slot("seq", "y"),
+        (PhpType::Packed("Vec2".to_string()), IrType::Heap(IrHeapKind::Object)),
+    );
+    assert_eq!(slot("search", "best"), (pointer, IrType::I64));
+}

@@ -122,14 +122,44 @@ it to an `extern` function that takes `ptr<T>`. Object introspection (`var_dump`
 `var_export`, `json_encode`, `serialize`) shows a pointer property as its integer address,
 so a null `?ptr<T>` property appears there as `0`.
 
+A local that holds `null` at one point and a pointer or a packed record address at another
+is stored the same way, without a declaration: one pointer word where `null` is address 0.
+That covers assignments in sequence, the two arms of an `if`, and a loop that starts from
+`null`, such as a search over a buffer of records (a local that a reference or a `global`
+statement aliases keeps its boxed storage):
+
+```php
+<?php
+packed class Vec2 { public int $x; public int $y; }
+
+$items = buffer_new<Vec2>(4);
+$best = null;
+for ($i = 0; $i < buffer_len($items); $i++) {
+    if ($best === null || $items[$i]->x > $best->x) {
+        $best = $items[$i];
+    }
+}
+if ($best !== null) {
+    echo $best->x;            // field access through the record the loop kept
+}
+```
+
+Where such a local can be `null` it behaves as a `?ptr<T>`: `=== null`, `is_null()`,
+`isset()` and `echo` test the address. Narrow it with `!== null` before passing it to an
+`extern` function that takes `ptr<T>`, as for any `?ptr<T>`. Like every pointer local, it is
+not part of the local scope that `eval()` code sees.
+
 A `?ptr<T> &$p` (or `ptr<T> &$p`) by-reference parameter writes the pointer word back
-through the caller's variable, so that variable must hold a pointer word everywhere in its
-scope: a pointer value (`$p = $buffer[0];`), a declared `?ptr<T> $p = null;`, or a pointer
-parameter. A variable that holds only `null`, or `null` and a pointer at different points, is
-rejected at compile time (declare it `?ptr<T> $p = null;` instead), and so is an array
-element. A `?ptr<T>` variable that a `=== null` guard narrowed can still be passed, and reads
-as `?ptr<T>` again after the call. A plain `ptr<T>` variable stays a plain pointer after the
-call: if the callee stored `null`, it is address 0, not PHP `null`.
+through the caller's variable, so that variable must be stored as a pointer word: a pointer
+value (`$p = $buffer[0];`), a declared `?ptr<T> $p = null;`, a pointer parameter, a local
+that holds only `null` (it reads as `?ptr<T>` after the call), or one that holds `null` and
+pointers at different points. A variable that a reference (`$r = &$p;`) or a `global`
+statement aliases, or that also holds a value of another type, is rejected at compile time
+(declare it `?ptr<T> $p = null;` instead), and so is an array element. A local read from an
+element of an array of pointers can be passed. A `?ptr<T>` variable that a `=== null` guard
+narrowed can still be passed, and reads as `?ptr<T>` again after the call. A plain `ptr<T>`
+variable stays a plain pointer after the call: if the callee stored `null`, it is address 0,
+not PHP `null`.
 
 ## Arrays of pointers
 
