@@ -1160,7 +1160,7 @@ The `json_encode` implementation uses **type-aware dispatch** — the codegen ca
 | `__rt_json_encode_assoc` | Encode an associative array as a JSON object, while tracking PHP list-shape keys during the same hash walk and compacting to JSON array form when applicable | `x0` = hash ptr | `x1`/`x2` = JSON string |
 | `__rt_json_encode_float` | Encode finite floats and record `JSON_ERROR_INF_OR_NAN` for `INF`/`NAN`, honoring throw and partial-output flags | `d0` = float | `x1`/`x2` = JSON string |
 | `__rt_json_encode_mixed` | Encode a boxed mixed payload by unboxing its runtime tag and dispatching to the concrete JSON encoder | `x0` = mixed ptr | `x1`/`x2` = JSON string |
-| `__rt_json_encode_object` | Encode class objects by consulting per-class JSON descriptors; dispatches `JsonSerializable::jsonSerialize()` when present, otherwise walks public properties | `x0` = object ptr | `x1`/`x2` = JSON string |
+| `__rt_json_encode_object` | Encode class objects through JSON descriptors, including JsonSerializable callbacks and native SimpleXML projections | `x0` = object ptr | `x1`/`x2` = JSON string |
 | `__rt_json_encode_stdclass` | Encode the dynamic-property hash backing `stdClass`, preserving `{}` for empty instances | `x0` = stdClass hash ptr | `x1`/`x2` = JSON string |
 | `__rt_json_decode` | String-only compatibility helper used by string decode paths; trims outer whitespace and unescapes quoted JSON strings including surrogate-aware `\uXXXX` sequences | `x1`/`x2` = JSON string | `x1`/`x2` = decoded string |
 | `__rt_json_decode_mixed` | Checked structural recursive decoder that returns boxed `Mixed` cells for null, bool, int, float, string, indexed arrays, associative arrays, and stdClass objects depending on `_json_decode_assoc`; records syntax/depth/UTF-8/UTF-16 errors plus source offsets and returns 0 on malformed input | `x1`/`x2` = JSON string | `x0` = Mixed* or 0 |
@@ -1525,7 +1525,7 @@ These helpers support `stdClass`, `json_decode()` object results, boxed Mixed pr
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
-| `__rt_object_to_hash` | Project an object's properties into a string-keyed hash — backs `get_object_vars()` and `(array)` object casts through serialize descriptors, with declaring-class protected/private filtering and `__PHP_Incomplete_Class` handling | object pointer + mode | hash pointer |
+| `__rt_object_to_hash` | Project object properties through a native adapter or serialize descriptors. Backs `get_object_vars()` and `(array)`, with lexical visibility and incomplete-object handling | object pointer + mode | owned hash pointer |
 | `__rt_throw_object_not_array` | Raise PHP's catchable `Cannot use object of type X as array` | object pointer | does not return |
 | `__rt_throw_object_not_array_name` | Raise the same catchable Error for a Closure without reading an object header | class name pointer/length (`x1`/`x2` on AArch64, `rax`/`rdx` on x86_64) | does not return |
 | `__rt_new_by_name` | Instantiate a class by its textual name through the `_classes_by_name` table (case-insensitive `__rt_strcasecmp` lookup), allocating and zeroing the object payload | class name string | object pointer, or 0 (null) on miss |

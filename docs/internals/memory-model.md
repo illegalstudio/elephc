@@ -1126,6 +1126,7 @@ The runtime data layer is split into fixed shared data, user-program data, and d
 - `_generator_class_id` — per-program class id used to recognize Generator frames during object deep-free
 - `_json_exception_class_id`, `_stdclass_class_id` — per-program class ids used by JSON throw paths and stdClass dynamic-property helpers
 - `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_gc_desc_<id>` — per-class property traversal descriptors used by object deep-free and cycle collection
+- `_class_array_projection_ptrs`: native property projection callbacks for SimpleXML objects and subclasses. Both `get_object_vars()` and `(array)` call the adapter with a borrowed receiver and receive an owned hash.
 - `_class_json_desc_ptrs`, `_class_json_desc_<id>`, `_class_json_pname_<id>_<slot>` — per-class JSON descriptors used by object encoding and JsonSerializable dispatch
 - `_class_tostring_count`, `_class_tostring_ptrs` — dense per-class `__toString` method table used by runtime string coercions of boxed `mixed` objects
 - `_class_iface_method_count` (plus per-interface method tables), `_class_serprop_declaring_ptrs`, `_class_serprop_declaring_missing`, `_class_serprop_declaring_<id>` — interface-method ordering and property declaring-class tables used by `get_object_vars()` visibility filtering and object-to-array projection

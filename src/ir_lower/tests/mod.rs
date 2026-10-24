@@ -87,6 +87,7 @@ mod synthetic_arrays;
 mod throwable_constructors;
 mod mixed_throw_errors;
 mod xml_parser_arguments;
+mod simplexml_targets;
 
 /// Runs frontend, type checking, optimization, and EIR lowering for a source string.
 fn lower_source(source: &str) -> crate::ir::Module {

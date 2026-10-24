@@ -50,7 +50,10 @@ document. Existing selections observe subsequent changes and retain their
 document after the original root variable is released. String conversion reads
 direct text and CDATA. `asXML()` and its `saveXML()` alias return XML, or write
 to a filename and return success. Both classes support `count()`, `foreach`,
-and the `RecursiveIterator` methods.
+and the `RecursiveIterator` methods. Integer and float casts read the selected
+node text. Array casts, `get_object_vars()`, and JSON encoding expose XML
+properties, including `@attributes` and repeated children. DOM imports share
+their document, so edits through either API remain visible through the other.
 
 The loading functions return `false` when parsing fails. A constructor with
 invalid XML throws `Exception`. The optional class name lets the loading

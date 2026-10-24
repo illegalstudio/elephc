@@ -271,3 +271,23 @@ var_dump($x instanceof JsonSerializable);
 "###);
     assert_eq!(out, "{\"@attributes\":{\"a\":\"v\"},\"item\":[\"one\",\"two\"],\"nested\":{\"leaf\":\"value\"},\"empty\":{}}\n{\"@attributes\":{\"a\":\"v\"},\"item\":[\"one\",\"two\"],\"nested\":{\"leaf\":\"value\"},\"empty\":{}}\n{\"0\":\"one\",\"1\":\"two\"}\n[\"one\",\"two\"]\n{\"@attributes\":{\"a\":\"v\"}}\n{\"0\":\"v\"}\nbool(false)\n");
 }
+
+/// Repeated projections and child aliases release compiler-owned values under heap debugging.
+#[test]
+fn test_simplexml_projection_and_alias_heap_debug() {
+    if skip_without_xml_native("test_simplexml_projection_and_alias_heap_debug") { return; }
+    let out = compile_and_run_with_heap_debug(r###"<?php
+for ($i = 0; $i < 2; $i++) {
+    $x = new SimpleXMLElement('<r id="x"><child>kept</child></r>');
+    $child = $x->child[0];
+    $json = json_encode($x);
+    $properties = (array)$x;
+    unset($x);
+    echo (string)$child, "|";
+    unset($child, $json, $properties);
+}
+"###);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "kept|kept|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
