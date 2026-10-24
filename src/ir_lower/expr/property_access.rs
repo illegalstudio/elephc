@@ -955,7 +955,9 @@ pub(super) fn lower_dynamic_property_fetch(
     mode: PropertyFetchMode,
     expr: &Expr,
 ) -> LoweredValue {
-    if matches!(object.kind, ExprKind::Variable(_)) {
+    if matches!(object.kind, ExprKind::Variable(_))
+        && !matches!(property.kind, ExprKind::StringLiteral(_))
+    {
         // PHP fetches a variable receiver after the property expression has evaluated.
         let name = lower_expr(ctx, property);
         let name = coerce_runtime_property_name(ctx, name, expr.span);
