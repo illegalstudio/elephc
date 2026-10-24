@@ -37,6 +37,9 @@ function __elephc_simplexml_wrap(int $handle, string $class): SimpleXMLElement {
 
 function __elephc_simplexml_class(?string $class): string {
     if ($class === null || $class === "") { return "SimpleXMLElement"; }
+    if (!is_a($class, "SimpleXMLElement", true)) {
+        throw new TypeError("SimpleXML class must be derived from SimpleXMLElement");
+    }
     return $class;
 }
 
@@ -234,9 +237,8 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $children = $base->children();
         if ($children !== null && count($children) > 0) {
             foreach ($children as $name => $child) {
-                $value = $child;
                 $raw = $child->__elephc_handle_value();
-                if (elephc_xml_sx_int($raw, 6) !== 0) { $value = (string)$child; }
+                $value = elephc_xml_sx_int($raw, 6) !== 0 ? (string)$child : $child;
                 if (array_key_exists($name, $result)) {
                     $old = $result[$name];
                     if (!is_array($old)) { $old = [$old]; }
