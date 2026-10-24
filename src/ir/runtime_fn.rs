@@ -2320,10 +2320,12 @@ impl RuntimeFnId {
             return BuiltinResultOwnership::NonHeap;
         }
         // Every other iconv entry point boxes a freshly built string, integer, or array,
-        // so its result never aliases an argument.
+        // so its result never aliases an argument. `zval_unpack` builds a new Elephc value
+        // from a C zval its only argument points to, which is not refcounted storage.
         if matches!(
             self,
-            RuntimeFnId::Iconv
+            RuntimeFnId::ZvalUnpack
+                | RuntimeFnId::Iconv
                 | RuntimeFnId::IconvGetEncoding
                 | RuntimeFnId::IconvMimeDecode
                 | RuntimeFnId::IconvMimeDecodeHeaders
@@ -2682,6 +2684,12 @@ impl RuntimeFnId {
                 // Wire bytes occupy concat storage, never an operand's allocation. This also
                 // keeps temporary inputs pinned while serialization hooks can unwind.
                 | RuntimeFnId::Serialize
+                // A digest is formatted into its own concat reservation, never into or over
+                // the subject. The default `MayAliasArguments` bucket suppressed the release
+                // of an owned subject temporary, so `md5(str_repeat("x", 70000))` leaked the
+                // 70 KB subject on every call.
+                | RuntimeFnId::Md5
+                | RuntimeFnId::Sha1
         ) {
             BuiltinResultOwnership::Independent
         } else {

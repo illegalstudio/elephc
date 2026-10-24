@@ -318,7 +318,7 @@ mod tests {
         emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false, None);
         let asm = emitter.output();
         assert!(asm.contains("_roundtrip:"));
-        assert!(asm.contains("bl _setjmp"));
+        assert!(asm.contains("bl __setjmp"));
         assert!(asm.contains("bl __rt_heap_alloc"));
         assert!(asm.contains("add x9, x9, #1"));
         assert!(asm.contains("sub x9, x9, #1"));
@@ -326,7 +326,7 @@ mod tests {
         assert!(asm.contains("bl __rt_stack_limit_init"));
         let saved_host_args = asm.find("stur x3, [x29, #-32]").unwrap();
         let lazy_init = asm.find("bl __rt_stack_limit_init").unwrap();
-        let boundary_push = asm.find("bl _setjmp").unwrap();
+        let boundary_push = asm.find("bl __setjmp").unwrap();
         assert!(
             saved_host_args < lazy_init && lazy_init < boundary_push,
             "lazy stack init must follow host-argument preservation and precede boundary entry:\n{asm}"
@@ -450,7 +450,9 @@ mod tests {
             let lazy_init = asm.find("__rt_stack_limit_init").unwrap();
             let configure = asm.find("__rt_mbstring_startup_status").unwrap();
             let call = if target.arch == Arch::AArch64 { "bl" } else { "call" };
-            let handler = asm.find(&format!("{call} {}", target.extern_symbol("setjmp"))).unwrap();
+            // Darwin targets call `_setjmp`, which keeps no signal mask (`Emitter::bl_c`).
+            let setjmp = if target.platform == Platform::MacOS { "__setjmp".to_string() } else { target.extern_symbol("setjmp") };
+            let handler = asm.find(&format!("{call} {setjmp}")).unwrap();
             assert!(lazy_init < configure && configure < handler,
                 "{target:?} must initialize before installing the PHP handler:\n{asm}");
             let first_output_load = match target.arch {

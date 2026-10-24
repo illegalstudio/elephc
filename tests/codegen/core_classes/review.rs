@@ -109,7 +109,18 @@ fn test_core_review_error_exception_uncaught_creation_line() {
     let out = compile_and_run_capture(source);
     assert!(!out.success);
     assert!(out.stdout.contains("Fatal error: Uncaught ReportError: uncaught in "), "{}", out.stdout);
-    assert!(out.stdout.ends_with(&format!(":{line}\n")), "{}", out.stdout);
+    // The report continues with `Stack trace:` and `thrown in`, as PHP's does.
+    let header = uncaught_header(&out.stdout);
+    assert!(header.ends_with(&format!(":{line}")), "{}", out.stdout);
+    assert!(out.stdout.ends_with(&format!(" on line {line}\n")), "{}", out.stdout);
+}
+
+/// The first line of an uncaught report: `Fatal error: Uncaught <Class>: <message> in <file>:<line>`.
+fn uncaught_header(stdout: &str) -> &str {
+    stdout
+        .lines()
+        .find(|line| line.starts_with("Fatal error: Uncaught "))
+        .unwrap_or_else(|| panic!("no uncaught report in {stdout:?}"))
 }
 
 /// Fatal locations match getters for independent overrides, explicit zero, and an empty filename.
@@ -127,7 +138,7 @@ fn test_core_review_error_exception_uncaught_location_overrides() {
         let expected = out.stdout.lines().next().unwrap().strip_prefix("expected:").unwrap();
         if let Some(suffix) = oracle_suffix { assert_eq!(expected, suffix, "{arguments}"); }
         assert!(out.stdout.contains("Fatal error: Uncaught LocatedReport: located in "), "{arguments}: {}", out.stdout);
-        assert!(out.stdout.ends_with(&format!(" in {expected}\n")), "{arguments}: {}", out.stdout);
+        assert!(uncaught_header(&out.stdout).ends_with(&format!(" in {expected}")), "{arguments}: {}", out.stdout);
     }
 }
 

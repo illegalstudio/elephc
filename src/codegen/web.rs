@@ -33,7 +33,7 @@ use crate::codegen::platform::Arch;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::ir::Module;
 use crate::names::ir_global_symbol;
-use super::runtime_metadata::refcounted_static_properties;
+use super::runtime_metadata::static_properties_hosting_last;
 use crate::superglobals;
 use crate::types::PhpType;
 
@@ -97,7 +97,8 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     for record in data.static_locals() {
         emit_static_local_reset(emitter, record, &mut labels);
     }
-    for (symbol, php_type) in refcounted_static_properties(module) {
+    let (static_properties, hosting_tables) = static_properties_hosting_last(module);
+    for (symbol, php_type) in static_properties {
         emit_static_property_release(emitter, &symbol, &php_type, &mut labels);
     }
     for name in &module.data.global_names {
@@ -110,6 +111,21 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     // so stale request arrays are gone before the next prelude builds replacements.
     for name in superglobals::SUPERGLOBALS {
         emit_superglobal_reset(emitter, &ir_global_symbol(name), &mut labels);
+    }
+    // Last owner teardown, as in the main epilogue: a destructor above may still reach C code
+    // that calls a saved callback.
+    if super::frame::module_binds_extern_callbacks(module) {
+        abi::emit_call_label(emitter, super::frame::EXTERN_CALLBACK_RELEASE_LABEL);
+    }
+    // A hosted extension ends the previous request (RSHUTDOWN) once its destructors have run,
+    // while the tables it may still call back into are alive; they go right after, as php-src
+    // frees request memory after RSHUTDOWN.
+    if super::block_emit::module_hosts_php_ext(module) {
+        let symbol = emitter.target.extern_symbol(super::block_emit::HOSTED_REQUEST_SHUTDOWN);
+        abi::emit_call_label(emitter, &symbol);
+    }
+    for (symbol, php_type) in hosting_tables {
+        emit_static_property_release(emitter, &symbol, &php_type, &mut labels);
     }
 
     // Clear every lazy enum case slot so request N+1 re-materializes its cases on
@@ -345,7 +361,7 @@ fn emit_gc_state_reset(emitter: &mut Emitter) {
 }
 
 /// Resets the PHP heap arena to a pristine bump-only state: `_heap_off = 0`, an empty
-/// ordered free list, and empty small-bin caches. Emitted as the final step of the
+/// ordered free list, and empty exact size-class bins. Emitted as the final step of the
 /// per-request `__rt_web_reset`, so the whole arena is reclaimed at once after every
 /// refcounted per-request value has already been released above. Valid only under
 /// `--web` full-reset semantics — nothing in the PHP arena legitimately survives a
@@ -355,11 +371,9 @@ fn emit_heap_arena_reset(emitter: &mut Emitter) {
     emitter.comment("reset the PHP heap arena to pure-bump allocation for the next request");
     crate::codegen_support::runtime::emit_heap_live_bases_reset(emitter);
     abi::emit_store_zero_to_symbol(emitter, "_heap_off", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_heap_off_peak", 0);
     abi::emit_store_zero_to_symbol(emitter, "_heap_free_list", 0);
-    abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 0);
-    abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 8);
-    abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 16);
-    abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 24);
+    abi::emit_call_label(emitter, "__rt_heap_bins_clear");
     // Bulk reclamation also retires every block that remained after typed cleanup.
     // Keep cumulative allocation totals, but do not carry their live footprint into a new arena.
     let value = abi::int_result_reg(emitter);
@@ -380,7 +394,7 @@ mod handler_reset_tests {
             let mut emitter = Emitter::new(Target::parse(name).unwrap());
             emit_heap_arena_reset(&mut emitter);
             let asm = emitter.output();
-            let heap_reset = asm.rfind("_heap_small_bins").unwrap();
+            let heap_reset = asm.rfind("__rt_heap_bins_clear").unwrap();
             let bases = asm.find("_heap_live_bases").unwrap();
             let extent_reset = asm.rfind("_heap_off").unwrap();
             let allocs = asm.find("_gc_allocs").unwrap();
@@ -390,6 +404,36 @@ mod handler_reset_tests {
             assert!(bases < extent_reset, "{name}: live bases must retire before the extent resets");
             assert!(!asm.contains("__rt_heap_alloc") && !asm.contains("_gc_peak"), "{name}");
         }
+    }
+
+    /// Saved C callbacks are released after the static and global owners, whose destructors may
+    /// still reach C code that calls one, and before the heap arena is reset.
+    #[test]
+    fn web_reset_releases_extern_callbacks_after_global_destructors() {
+        let target = Target::new(Platform::MacOS, Arch::AArch64);
+        let mut module = Module::new(target);
+        module.extern_decls.push(crate::ir::ExternDecl {
+            name: "signal".into(),
+            params: vec![crate::ir::ExternParamDecl {
+                name: "handler".into(),
+                ir_type: crate::ir::IrType::I64,
+                php_type: PhpType::Callable,
+                abi: crate::types::ExternAbiType::Callable,
+            }],
+            return_type: crate::ir::IrType::I64,
+            return_php_type: PhpType::Int,
+            return_abi: crate::types::ExternAbiType::INT64,
+            link_libs: vec![],
+        });
+        module.data.global_names.push("probe".into());
+        let mut emitter = Emitter::new(target);
+        emit_web_reset(&mut emitter, &module, &DataSection::new());
+        let asm = emitter.output();
+        let release = asm.find(crate::codegen::frame::EXTERN_CALLBACK_RELEASE_LABEL).unwrap();
+        let global = asm.rfind(&ir_global_symbol("probe")).unwrap();
+        let superglobal = asm.rfind(&ir_global_symbol("_SERVER")).unwrap();
+        let heap = asm.find("__rt_heap_bins_clear").unwrap();
+        assert!(global < release && superglobal < release && release < heap, "{asm}");
     }
 
     /// Every target releases handlers before inventory cleanup and before resetting the heap.

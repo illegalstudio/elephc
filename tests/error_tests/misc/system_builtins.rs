@@ -845,6 +845,18 @@ fn test_error_core_parity_builtin_arity_contracts() {
             "gc_mem_caches() takes no arguments",
         ),
         (
+            "<?php memory_get_usage(true, true);",
+            "memory_get_usage() takes at most 1 argument",
+        ),
+        (
+            "<?php memory_get_peak_usage(true, true);",
+            "memory_get_peak_usage() takes at most 1 argument",
+        ),
+        (
+            "<?php memory_reset_peak_usage(1);",
+            "memory_reset_peak_usage() takes no arguments",
+        ),
+        (
             "<?php get_called_class(1);",
             "get_called_class() takes no arguments",
         ),

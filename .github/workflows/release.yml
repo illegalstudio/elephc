@@ -208,7 +208,7 @@ jobs:
       # `every_bridge_staticlib_ships_in_the_release_tarball` fails the build
       # rather than letting the two lists drift again.
       - name: Build release bridge staticlibs
-        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-mbstring -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-probe -p elephc-instr -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-magician -p elephc-curl
+        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-mbstring -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-probe -p elephc-instr -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-magician -p elephc-curl -p elephc-zend
 
       - name: Build curl-aware Magician staticlib
         run: |
@@ -263,6 +263,7 @@ jobs:
             libelephc_magician.a \
             libelephc_curl.a \
             libelephc_magician_curl.a \
+            libelephc_zend.a \
             mbstring-notices
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum "$TARBALL" > "$TARBALL.sha256"
@@ -460,6 +461,7 @@ jobs:
               lib.install "libelephc_magician.a"
               lib.install "libelephc_curl.a"
               lib.install "libelephc_magician_curl.a"
+              lib.install "libelephc_zend.a"
               pkgshare.install "mbstring-notices"
             end
 

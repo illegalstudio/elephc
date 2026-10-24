@@ -39,6 +39,10 @@ pub struct Emitter {
     /// Only set for the macOS executable runtime object; Linux uses per-section
     /// `--gc-sections` and cdylibs never dead-strip.
     pub dead_strip: bool,
+    /// The platform-mangled symbol of the hosted-extension shutdown routine, when this module
+    /// hosts PHP extensions. Every process-exit sequence calls it after flushing output, which
+    /// is where php-src runs request shutdown (RSHUTDOWN) and then module shutdown (MSHUTDOWN).
+    pub exit_hook: Option<String>,
     /// Names of internal (`label()`) labels recorded while `dead_strip` is set,
     /// used by `localize_internal_labels` to rewrite them `L`-prefixed.
     internal_labels: HashSet<String>,
@@ -67,6 +71,7 @@ impl Emitter {
             pic_data_refs: false,
             cdylib_boundary: false,
             dead_strip: false,
+            exit_hook: None,
             internal_labels: HashSet::new(),
             out_of_line: String::new(),
         }
@@ -362,6 +367,12 @@ impl Emitter {
     /// Emit `bl _func` (macOS) or `bl func` (Linux) for C library calls.
     pub fn bl_c(&mut self, func: &str) {
         match (self.platform, self.target.arch) {
+            // Darwin's `setjmp` saves the signal mask, two system calls on every `try` and
+            // protected destructor; `_setjmp` does not, which is glibc's `setjmp`. Every jump
+            // buffer is filled and consumed here, so `longjmp` follows.
+            (Platform::MacOS, Arch::AArch64) if matches!(func, "setjmp" | "longjmp") => {
+                self.instruction(&format!("bl __{}", func))
+            }
             (Platform::MacOS, Arch::AArch64) => self.instruction(&format!("bl _{}", func)),
             (Platform::Linux, Arch::AArch64) => self.instruction(&format!("bl {}", func)),
             (Platform::Linux, Arch::X86_64) => self.instruction(&format!("call {}", func)),

@@ -146,6 +146,18 @@ pub(crate) const STR_REPEAT_TIMES_MSG: &str =
     "Fatal error: str_repeat(): Argument #2 ($times) must be greater than or equal to 0\n";
 /// Catchable TypeError for a magic serializer that returns a non-array value.
 pub(crate) const SERIALIZE_RETURN_ARRAY_MSG: &str = "__serialize() must return an array";
+/// Uncatchable fatal for a `__debugInfo()` that returns a non-array, non-null value.
+///
+/// The text stops before the ` in <file> on line <n>` suffix and the newline, which
+/// `__rt_debuginfo_fatal_text` appends from the dump call site recorded in `_debuginfo_call_line`.
+pub(crate) const DEBUGINFO_FATAL_MSG: &str = "\nFatal error: __debuginfo() must return an array";
+/// Prefix of the report PHP prints for an exception escaping `__debugInfo()`, before the fatal.
+pub(crate) const DEBUGINFO_WARNING_PREFIX: &str = "\nWarning: Uncaught ";
+/// Deprecation prefix for a `__debugInfo()` that returns null; the class name follows.
+pub(crate) const DEBUGINFO_NULL_PREFIX: &str = "Deprecated: Returning null from ";
+/// Deprecation suffix for a `__debugInfo()` that returns null, following the class name.
+pub(crate) const DEBUGINFO_NULL_SUFFIX: &str =
+    "::__debugInfo() is deprecated, return an empty array instead\n";
 /// Runtime warning prefix for legacy serializer return validation.
 pub(crate) const SLEEP_WARNING_PREFIX: &str = "Warning: serialize(): ";
 /// Class-qualified warning suffix for invalid legacy serializer property names.

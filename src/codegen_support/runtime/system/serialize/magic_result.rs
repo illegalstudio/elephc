@@ -15,7 +15,7 @@ use crate::codegen_support::runtime::{data::SERIALIZE_RETURN_ARRAY_MSG, exceptio
 const FRAME: usize = 80;
 const OWNER: usize = 8;
 const PENDING: usize = 16;
-const CONCAT_END: usize = 24;
+const CONCAT_END: usize = 24; // parked `_ser_stream` across the releases
 const OBJECT: usize = 32;
 const NAMES: usize = 40;
 const NAME_STRING: usize = 48;
@@ -51,8 +51,12 @@ pub(super) fn emit_owned_result_boundary(
         abi::emit_frame_slot_address(emitter, result, PREFIX_START);
     }
     exceptions::emit_guarded_cleanup_call(emitter, body, result, PENDING);
-    abi::emit_load_symbol_to_reg(emitter, result, "_concat_off", 0);
-    abi::store_at_offset(emitter, result, CONCAT_END);
+    // The releases below can run destructors, which may call serialize() and use the concat
+    // scratch: park the active stream and move `_concat_off` past a scratch-backed stream.
+    let desc = abi::int_arg_reg_name(emitter.target, 0);
+    abi::emit_load_symbol_to_reg(emitter, desc, "_ser_stream", 0);
+    abi::store_at_offset(emitter, desc, CONCAT_END);
+    abi::emit_call_label(emitter, "__rt_strbuf_sync");
     if sleep {
         abi::load_at_offset(emitter, result, NAME_STRING);
         exceptions::emit_guarded_cleanup_call(emitter, "__rt_decref_any", result, PENDING);
@@ -60,7 +64,7 @@ pub(super) fn emit_owned_result_boundary(
     abi::load_at_offset(emitter, result, OWNER);
     exceptions::emit_guarded_cleanup_call(emitter, "__rt_decref_any", result, PENDING);
     abi::load_at_offset(emitter, result, CONCAT_END);
-    abi::emit_store_reg_to_symbol(emitter, result, "_concat_off", 0);
+    abi::emit_store_reg_to_symbol(emitter, result, "_ser_stream", 0);
     abi::load_at_offset(emitter, result, PENDING);
     let return_label = format!("{entry}_return");
     abi::emit_branch_if_int_result_zero(emitter, &return_label);

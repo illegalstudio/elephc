@@ -589,6 +589,40 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
+    // Dense class-id-indexed `__debugInfo()` table consulted by the var_dump / print_r object
+    // walkers. An entry is filled only for user classes whose `__debugInfo()` the static fold above
+    // could not reduce to descriptor rows (see `runtime_debug_info_entry`); `0` keeps the walkers
+    // on the descriptor rows, so classes without the method pay one table probe and nothing else.
+    out.push_str(".globl _class_debuginfo_ptrs\n_class_debuginfo_ptrs:\n");
+    let mut any_runtime_debug_info = false;
+    let mut void_debug_info = Vec::new();
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let (entry, returns_nothing) = match class_info_by_id.get(&class_id) {
+                Some(class_info) => runtime_debug_info_entry(class_info, classes)?,
+                None => ("0".to_string(), false),
+            };
+            any_runtime_debug_info |= entry != "0";
+            void_debug_info.push(u8::from(returns_nothing));
+            out.push_str(&format!("    .quad {}\n", entry));
+        }
+    }
+    // Parallel byte table: 1 when that `__debugInfo()` returns nothing (an untyped body that only
+    // throws, or falls off its end). Its result register then holds no value, and the fetch reads
+    // it as PHP's null instead.
+    out.push_str(".globl _class_debuginfo_void\n_class_debuginfo_void:\n");
+    for flag in &void_debug_info {
+        out.push_str(&format!("    .byte {}\n", flag));
+    }
+    out.push_str("    .p2align 3\n");
+    // Program-wide fact for `print_r`: when any class computes `__debugInfo()` at run time, an echo
+    // `print_r` renders into the capture buffer first (a fatal inside the walk then discards the
+    // partial text, like PHP's smart_str). Programs without such a class keep streaming.
+    out.push_str(&format!(
+        ".globl _debuginfo_any\n_debuginfo_any:\n    .quad {}\n",
+        u8::from(any_runtime_debug_info)
+    ));
+
     // Dense class-id-indexed interface-method tables for the runtime helpers that meet an object
     // only as a boxed `Mixed` and so cannot know its class during EIR lowering: `count($m)` reaches
     // `__rt_mixed_count` and `$m[$k]` reaches `__rt_mixed_array_get`. Both answered for a short
@@ -3405,6 +3439,67 @@ fn source_instance_method_entry(
     )
 }
 
+/// Returns whether `class_info` wraps a hosted extension object: every such wrapper, and
+/// every subclass of one, implements the prelude's marker interface.
+fn is_hosted_extension_class(class_info: &ClassInfo) -> bool {
+    class_info.interfaces.iter().any(|interface| {
+        interface.trim_start_matches('\\').eq_ignore_ascii_case(crate::php_ext::prelude::OBJECT_INTERFACE)
+    })
+}
+
+/// Returns the `_class_debuginfo_ptrs` entry for a class: the `__debugInfo()` symbol the
+/// var_dump / print_r walkers call at run time, or `"0"` when they should keep walking the
+/// descriptor rows.
+///
+/// WHY A RUN-TIME CALL. PHP dumps whatever array `__debugInfo()` returns, so a body that
+/// COMPUTES its entries (`'n' => count($this->items)`) cannot be reduced to descriptor rows by
+/// `var_dump_debug_info_projection`. Those classes get a real call instead; a body the fold
+/// already handles keeps its static rows and costs nothing at run time.
+///
+/// An entry is emitted only when ALL hold, otherwise `"0"`:
+/// - neither the class nor the class implementing the method is compiler-internal: the SPL
+///   containers' synthetic `__debugInfo()` bodies build NUL-mangled keys the walkers do not
+///   decode, and they must keep their descriptor presentation. A hosted extension's wrapper
+///   is internal too (a prelude declares it) but is let through: its protected
+///   `DEBUG_INFO_METHOD` returns the engine object's debug table, which is what PHP dumps for
+///   that object;
+/// - the static fold does not apply (the fold wins where it can: no call, no allocation);
+/// - the method's return REPRESENTATION is an indexed array, a hash or a boxed `Mixed`, the
+///   shapes `__rt_obj_debuginfo_fetch` classifies. A statically scalar/string return keeps the
+///   declared-property fallback instead of reading a payload it cannot interpret (PHP would
+///   raise `__debuginfo() must return an array` there).
+fn runtime_debug_info_entry(
+    class_info: &ClassInfo,
+    classes: &HashMap<String, ClassInfo>,
+) -> Result<(String, bool), String> {
+    let none = Ok(("0".to_string(), false));
+    let hosted = is_hosted_extension_class(class_info);
+    // A hosted wrapper dumps through its protected engine-table method, not a user-callable
+    // `__debugInfo()` (PHP's internal classes have none).
+    let key = php_symbol_key(if hosted { crate::php_ext::prelude::DEBUG_INFO_METHOD } else { "__debugInfo" });
+    if (class_info.is_internal && !hosted) || var_dump_debug_info_projection(class_info).is_some() {
+        return none;
+    }
+    let Some(impl_class) = class_info.method_impl_classes.get(&key) else {
+        return none;
+    };
+    if classes.get(impl_class).map_or(true, |owner| owner.is_internal && !is_hosted_extension_class(owner)) {
+        return none;
+    }
+    let Some(return_type) = class_info.methods.get(&key).map(|sig| sig.return_type.codegen_repr()) else {
+        return none;
+    };
+    // An array result is walked; a method inferred `void`/`never` (an untyped body that only
+    // throws) still runs, so its exception reaches PHP's `Warning: Uncaught` report.
+    let returns_nothing = matches!(return_type, PhpType::Void | PhpType::Never);
+    if !returns_nothing
+        && !matches!(return_type, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed)
+    {
+        return none;
+    }
+    Ok((source_instance_method_entry(class_info, &key, classes)?, returns_nothing))
+}
+
 /// Selects the source vtable entry without adapting a physical source-variadic slot.
 ///
 /// A plain source variadic already has the same entry ABI. If it also carries hidden argc,
@@ -3679,7 +3774,13 @@ fn var_dump_descriptor_rows(
 /// `:private` annotation — rather than the instance class, so an instance of a user
 /// subclass of a Reflection class still hides the slots it inherits. `class_name` is only
 /// the fallback when the declaring class is unknown.
+///
+/// A hosted extension object's wrapper keeps the engine handle in a protected property
+/// too; PHP's object has no such property, so no renderer shows it.
 fn is_reflection_backing_slot(class_info: &ClassInfo, class_name: &str, prop_name: &str) -> bool {
+    if prop_name == crate::php_ext::prelude::HANDLE_PROPERTY && is_hosted_extension_class(class_info) {
+        return true;
+    }
     if !prop_name.starts_with("__")
         || !matches!(
             class_info.property_visibilities.get(prop_name),
@@ -3751,8 +3852,10 @@ fn physical_property_slot_metadata<'a>(
 /// span several statements cannot be reduced to a property slot. Before this
 /// function existed elephc ignored `__debugInfo()` for every class, so falling back
 /// to the declared-property list preserves that behaviour exactly and turns no
-/// currently-compiling program into an error. It is a KNOWN DIVERGENCE from PHP,
-/// not parity — `tests/var_dump_object_tests.rs` pins it as such.
+/// currently-compiling program into an error. For USER classes that fallback is no
+/// longer the end of the road: `runtime_debug_info_entry` registers those methods in
+/// `_class_debuginfo_ptrs` and the walkers call them at run time. The fold remains the
+/// fast path for projections, and the only path for compiler-internal classes.
 fn var_dump_debug_info_projection(class_info: &ClassInfo) -> Option<Vec<(String, String)>> {
     use crate::parser::ast::{ExprKind, StmtKind};
 

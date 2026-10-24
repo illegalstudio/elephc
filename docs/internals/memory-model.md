@@ -18,7 +18,7 @@ This page explains where every value lives in memory at runtime.
 ├─────────────────────────────┤
 │         (unused)             │
 ├─────────────────────────────┤
-│       Heap buffer            │  _heap_buf: 8MB default (--heap-size)
+│       Heap buffer            │  _heap_buf: 128MB default (--heap-size)
 │  (arrays, hash tables,       │  Free-list + bump allocator
 │   objects, persisted strings) │
 ├─────────────────────────────┤
@@ -406,10 +406,12 @@ This is a bounds check, not an optimization. A producer that skips it writes str
 ## The heap
 
 ```asm
-.comm _heap_buf, 8388608    ; 8MB buffer (configurable via --heap-size)
+.comm _heap_buf, 134217728  ; 128MB buffer (configurable via --heap-size)
 .comm _heap_off, 8          ; current bump allocation offset
 .comm _heap_free_list, 8    ; head of the general free block linked list
-.comm _heap_small_bins, 32  ; 4 x 8-byte heads for <=8/16/32/64-byte cached blocks
+.comm _heap_small_bins, 2048 ; 256 x 8-byte heads, one per exact payload size 8..2048
+.comm _heap_bin_marks, N     ; heap/16 + 2 bytes: one "parked in a bin" byte per granule
+.comm _heap_consolidated_frees, 8 ; _gc_frees at the end of the last allocator consolidation
 .comm _heap_debug_enabled, 8 ; heap-debug toggle
 .comm _gc_collecting, 8     ; cycle collector re-entry guard
 .comm _gc_release_suppressed, 8 ; suppress nested collection during deep free
@@ -417,9 +419,12 @@ This is a bounds check, not an optimization. A producer that skips it writes str
 .comm _gc_frees, 8          ; free counter
 .comm _gc_live, 8           ; current live heap footprint in bytes
 .comm _gc_peak, 8           ; heap high-water mark
+.comm _heap_off_peak, 8     ; bump-offset high-water mark (updated only on the bump path)
 ```
 
-The heap (`_heap_buf`) is an 8MB region (by default) for dynamically-sized data — arrays, hash tables, objects, and persisted strings. It uses a **free-list + bump hybrid allocator** with segregated small-block bins for the hottest tiny allocations.
+`memory_get_usage()` / `memory_get_peak_usage()` read these counters through `__rt_gc_status_metric`: `$real_usage = false` reports `_gc_live` / `_gc_peak`, and `true` reports `_heap_off` / `_heap_off_peak` (bytes carved from the arena). `memory_reset_peak_usage()` copies the current values into both peaks. Eval calls read the same counters.
+
+The heap (`_heap_buf`) is a 128 MB region by default (PHP's default `memory_limit`) for dynamically-sized data — arrays, hash tables, objects, and persisted strings. It uses a **free-list + bump hybrid allocator** with segregated small-block bins for the hottest tiny allocations.
 
 ### How heap allocation works
 
@@ -779,12 +784,22 @@ call, even when the return-alias summary is conservative. Returning a raw
 
 The runtime routine `__rt_heap_alloc`:
 
-1. **Probe the segregated small bins** — requests up to 64 bytes first check `_heap_small_bins` (`<=8`, `<=16`, `<=32`, `<=64`) and reuse a cached block from the smallest fitting class available.
-2. **Walk the general free list** — if no cached small block fits, check the address-ordered free list (first-fit). If a block with `size >= requested` is found, either unlink it whole or split it. A split remainder with payload up to 64 bytes enters the same small-bin class as an ordinary freed block; a larger remainder stays in address order on the general free list. Then reset the allocated block's refcount to 1 and return it.
+1. **Pop the exact size-class bin** — `_heap_small_bins` holds one chain head per 8-byte payload class from 8 to 2048 bytes (`HEAP_BIN_MAX`); the head for payload `n` sits at offset `n - 8`. A request up to 2048 bytes pops the head of its own class: one load, no scan.
+2. **Walk the general free list** — if the bin is empty, or the request is larger, check the address-ordered free list (first-fit). If a block with `size >= requested` is found, either unlink it whole or split it. A split remainder with payload up to 2048 bytes enters its exact bin, like an ordinary freed block; a larger remainder stays in address order on the general free list. Then reset the allocated block's refcount to 1 and return it.
 3. **Bump allocate** — if neither free path fits, allocate from the end of the heap: write size and refcount=1 to the header, advance `_heap_off`, return user pointer.
-4. **Bounds check** — if the bump would exceed `_heap_max`, print a fatal error and exit.
+4. **Split a larger binned block** — if the bump would exceed `_heap_max`, the bins above the request are searched (at most one load per class) and the first valid block is split like a free-list block. Exact bins never split on their own, so without this step free memory parked in other size classes could not serve the request.
+5. **Consolidate and retry** — if no larger binned block exists, `__rt_heap_consolidate` merges every free block (see below) and the allocation is retried from step 1. The pass is skipped when `_gc_frees` still equals `_heap_consolidated_frees` (nothing freed since the previous pass, so nothing to merge). Only a skipped pass, or one that changes nothing, ends in the fatal "heap memory exhausted" error.
 
-Minimum allocation is 8 bytes (to fit the next pointer when the block is later freed). A split requires room for a new 16-byte header and at least eight payload bytes. Its free header has reference count and kind zero and belongs to exactly one chain. Moving that already-free remainder into a bin does not count as an allocation or free and does not change live bytes. `gc_mem_caches()` drains these entries through the existing coalescing path, including tail trimming, without adding free events.
+Minimum allocation is 8 bytes (to fit the next pointer when the block is later freed). A split requires room for a new 16-byte header and at least eight payload bytes. Its free header has reference count and kind zero and belongs to exactly one chain. Moving that already-free remainder into a bin does not count as an allocation or free and does not change live bytes.
+
+### Consolidation
+
+Binned blocks are not coalesced when they are freed, which is what keeps allocation and free O(1) however many blocks are free. `__rt_heap_consolidate` merges them later, in one pass linear in the heap:
+
+1. Every block reachable from a bin or the ordered list is marked free (a sentinel in its kind word), and the bins and the list are emptied.
+2. One walk over the tiled heap, from `_heap_buf` to the bump end, merges each maximal run of marked blocks under one header. A run reaching the bump end lowers `_heap_off`; any other run goes back to its exact bin (on an allocation retry) or onto the address-ordered list.
+
+Only blocks reached from the bins or the list are merged. A live block whose refcount is momentarily zero during a release is never marked, so it is never touched. `gc_mem_caches()` runs the same pass, listing every run so the bins end up empty, and returns the bytes it took out of the bins; it adds no free events.
 
 ### How heap freeing works
 
@@ -792,8 +807,8 @@ The runtime routine `__rt_heap_free`:
 
 1. Read the block size (32-bit) from the 16-byte header at `user_pointer - 16`
 2. If the block is exactly at the bump tail, shrink `_heap_off` immediately
-3. Otherwise, payloads up to 64 bytes are cached into one of four segregated small-bin heads (`<=8`, `<=16`, `<=32`, `<=64`) so later tiny allocations can reuse them without scanning the larger free list
-4. Larger non-tail blocks are inserted into the general free list in address order and merged with adjacent free neighbors. Only a merged block ending at the bump frontier starts a tail search; other insertions skip that scan. Direct bump-tail frees still search for and repeatedly reclaim newly exposed free tail blocks. Cache draining uses the same merged-end check, so a cached block that now touches the tail is reclaimed without adding a free event.
+3. Otherwise, payloads up to 2048 bytes are pushed onto the exact bin for their size, so a later allocation of the same size reuses them without scanning anything
+4. Larger non-tail blocks are inserted into the general free list in address order and merged with adjacent free neighbors. Only a merged block ending at the bump frontier starts a tail search, which repeatedly trims the now-free tail chain back into `_heap_off`; other insertions skip that scan
 5. Free blocks reuse the same 16-byte header, clear the kind back to `0`, and then store the next pointer immediately after it: `[size:4][refcnt:4][kind:8][next_ptr:8][...unused...]`
 
 The variant `__rt_heap_free_safe` validates that the pointer is within `_heap_buf` range before freeing — safe to call with garbage, null, or `.data` section pointers.
@@ -802,9 +817,9 @@ The variant `__rt_heap_free_safe` validates that the pointer is within `_heap_bu
 
 Passing `--heap-debug` enables additional runtime verification without changing normal ownership behavior:
 
-- `__rt_heap_free` rejects duplicate insertion of the same block into the free list (`double free`)
+- `__rt_heap_free` rejects duplicate insertion of the same block into the free list (`double free`). For a binned size this check is O(1): `_heap_bin_marks` keeps one byte per 16-byte heap granule, set when a guarded free parks a block in a bin and cleared when the block leaves it (allocation, consolidation, the `--web` reset). The bin is scanned only when the mark is already set, which a double free and a rare stale mark both explain. The `--web` heap guard uses the same check.
 - `__rt_incref` / `__rt_decref_*` reject zero-refcount heap blocks before mutating them (`bad refcount`)
-- `__rt_heap_alloc` / `__rt_heap_free` validate the ordered free list plus the segregated small-bin chains and trap on out-of-range, overlapping, cyclic, mis-sized, or merely-adjacent free blocks (`free-list corruption`)
+- `__rt_heap_alloc` / `__rt_heap_free` validate the ordered free list plus every exact size-class bin chain and trap on out-of-range, overlapping, cyclic, mis-sized, or merely-adjacent free blocks (`free-list corruption`)
 - `__rt_heap_free` poisons freed payload bytes with `0xA5`, so stale raw reads stand out immediately in debug repros
 - process exit prints a heap-debug summary with alloc/free counts, live blocks, live bytes, a leak summary line, and the peak live-byte watermark
 - non-clean summaries also report up to 64 live block headers: heap-relative offset, total bytes, heap kind, and reference count, without printing payload contents
@@ -842,7 +857,7 @@ partial result: those remain that helper's responsibility.
 
 ### Configurable heap size
 
-The default heap is 8MB. For programs that need more (or less), use:
+The default heap is 128 MB (134217728 bytes, PHP's default `memory_limit`). For programs that need more (or less), use:
 
 ```bash
 elephc --heap-size=16777216 heavy.php    # 16MB heap
@@ -1112,6 +1127,7 @@ The runtime data layer is split into fixed shared data, user-program data, and d
 - `_web_heap_guard_enabled` — enables per-request live-block accounting for persistent `--web` workers
 - `_resource_id_keys`, `_resource_id_vals` — open-addressed native-resource-to-PHP-id map; resource ids and object handles deliberately use separate numbering spaces
 - `_vd_indent`, `_vd_seen`, `_vd_seen_n` — current `var_dump()` indentation and its bounded recursion-detection stack
+- `_debuginfo_guard`, `_debuginfo_pad` — set around a run-time `__debugInfo()` call made by `var_dump()`/`print_r()`. `_debuginfo_guard` holds the exception-handler top at the call (tagged with bit 0): a throw that reaches it without a newer handler is reported as PHP's uncaught warning, then `__debuginfo() must return an array`, exit 255, as in PHP. `_debuginfo_pad` says whether `var_dump()` had already written the value's indent before that report. `__rt_obj_debuginfo_fetch` saves both, with `_debuginfo_call_line`, in its frame and restores them after the call, so a dump nested inside `__debugInfo()` does not leak its values into the enclosing one.
 - `_callable_strict_profile` — selects the strict-PHP callable builtin table when `--strict-php` is active
 - `_php_uname_mode_len_msg`, `_php_uname_mode_value_msg` — fatal `php_uname()` diagnostics for invalid mode arguments
 - `_filetype_*`, `_stat_key_*`, `_dirname_*`, `_pathinfo_key_*`, `_tmpfile_template` — file metadata, path, stat-array, and temporary-file lookup strings used by I/O helpers
@@ -1282,9 +1298,9 @@ read the same uniform heap header, including on the iOS targets.
 | Output-buffer (`ob_*`) stack | `_ob_level`, `_ob_in_handler`, `_ob_flushing`, `_ob_implicit_flush` = 8 bytes each; `_ob_ptrs`, `_ob_lens`, `_ob_caps`, `_ob_handler_stubs`, `_ob_handler_envs`, `_ob_name_ptrs`, `_ob_name_lens`, `_ob_chunk_sizes`, `_ob_flags`, `_ob_started` = 512 bytes each (64 slots) | Up to 64 nested `ob_start()` levels; the buffer bodies themselves are heap-allocated (16KB default capacity, page-aligned chunk size + 1 when a chunk size is set, grown by doubling) |
 | Web capture flag | `elephc_web_capture` = 8 bytes | `--web` bridge output-capture flag read by `__rt_stdout_write`; zero selects the plain `write(1, ...)` syscall path |
 | Eval bridge hook slots | `_elephc_eval_ob_handler_fn`, `_elephc_eval_dynamic_object_destruct_fn`, `_elephc_eval_closure_bind_fn`, `_elephc_eval_wrap_callback_fn`, `_elephc_eval_object_gc_child_fn`, `_elephc_eval_object_release_fn`, `_elephc_eval_array_reference_retire_fn`, `_elephc_eval_object_clone_fn` = 8 bytes each | Late-bound Magician callbacks for eval-managed handlers, closures, callbacks, objects, references, and cloning |
-| Heap | 8MB (configurable) | Fatal error: "heap memory exhausted" |
-| Heap and GC metadata | `_heap_off`, `_heap_free_list`, `_heap_debug_enabled`, `_heap_max`, and each `_gc_*` flag, counter, pointer, or timer = 8 bytes each; `_heap_small_bins` = 32 bytes | Fixed-size allocator, cycle-collector, destructor, pin, and timing bookkeeping |
-| Weak-reference identity index | `_obj_weak_reference_index` = `(heap_size / 16 + 2) * 8` bytes, or 4 MiB plus 16 bytes for the default 8 MiB heap | One non-owning wrapper pointer per heap granule; it neither keeps keys alive nor acts as a collector root |
+| Heap | 128 MB (configurable) | Fatal error: "heap memory exhausted" |
+| Heap and GC metadata | `_heap_off`, `_heap_free_list`, `_heap_debug_enabled`, `_heap_max`, and each `_gc_*` flag, counter, pointer, or timer = 8 bytes each; `_heap_small_bins` = 2048 bytes; `_heap_bin_marks` = heap size / 16 + 2 bytes | Fixed-size allocator, cycle-collector, destructor, pin, and timing bookkeeping |
+| Weak-reference identity index | `_obj_weak_reference_index` = `(heap_size / 16 + 2) * 8` bytes, or 64 MiB plus 16 bytes for the default 128 MiB heap | One non-owning wrapper pointer per heap granule; it neither keeps keys alive nor acts as a collector root |
 | Buffer descriptors | `_buffer_registry` = 196656 bytes (4097 descriptors × 48 bytes), `_buffer_registry_free` = 8 bytes, `_buffer_registry_next` = 8 bytes | Up to 4096 live buffers; freed descriptors are recycled with a new generation, while exhaustion aborts with `Fatal error: buffer registry exhausted` (an invalid requested size aborts earlier with `Fatal error: buffer_new() length is negative or exceeds the maximum buffer size`) |
 | Exception and user-handler state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value`, `_magic_set_guard_head`, and every `_php_error_handler_*` / `_php_exception_handler_*` slot = 8 bytes each | Active exception state and current user handlers; nested handler registrations use heap-backed linked stacks |
 | Fiber scheduler state | `_fiber_current`, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, `_fiber_main_saved_call_frame`, `_fiber_main_saved_magic_set_guard` = 40 bytes total | Current-fiber and main-frame resume bookkeeping, including the magic-set recursion guard |

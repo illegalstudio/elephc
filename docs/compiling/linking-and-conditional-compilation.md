@@ -355,8 +355,9 @@ curl-aware variant above is the one name it does not print.
 
 ## Heap size
 
-The compiled program uses a fixed-size runtime heap, **8 MB** by default. Programs
-that allocate a lot of arrays, strings, or objects may need more.
+The compiled program uses a fixed-size runtime heap, **128 MB** by default, the same
+as PHP's default `memory_limit`. It is reserved as zero-filled memory, so the pages a
+program never touches cost nothing. Programs that keep more live data need more.
 
 ### `--heap-size`
 
@@ -400,8 +401,10 @@ second changes only what the file says about itself.
 A linked **executable** is stripped of its symbol table. Runtime introspection
 uses compiler-emitted descriptors rather than linker symbol names.
 `Throwable::getTrace()` and `getTraceAsString()` currently return an empty array
-and string, and the uncaught-exception report prints no stack trace. The linker
-names are unnecessary at run time and are roughly a quarter of the file:
+and string; the uncaught-exception report walks the live activation chain
+instead of the symbol table, so it prints its stack trace from a stripped binary
+too. The linker names are unnecessary at run time and are roughly a quarter of
+the file:
 
 | program | linked | stripped |
 |---|--:|--:|

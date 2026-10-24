@@ -1098,3 +1098,36 @@ echo run_iterable(new Range(), $namedArgs);
     );
     assert_eq!(out, "BB2:BB2:NN2:NN2");
 }
+
+/// Verifies that iterator_count(), iterator_to_array() and iterator_apply()
+/// release the iterator an IteratorAggregate's getIterator() returned once
+/// they drained it, as PHP does: its destructor runs before the next line.
+#[test]
+fn test_iterator_helpers_release_aggregate_iterators() {
+    let out = compile_and_run(
+        r#"<?php
+final class Steps implements Iterator {
+    private int $i = 0;
+    public function __construct(private int $id) {}
+    public function __destruct() { echo "[closed {$this->id}]"; }
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < 2; }
+    public function current(): mixed { return $this->i; }
+    public function key(): mixed { return $this->i; }
+    public function next(): void { $this->i++; }
+}
+class Steps2 implements IteratorAggregate {
+    private int $made = 0;
+    public function getIterator(): Iterator {
+        $this->made++;
+        return new Steps($this->made);
+    }
+}
+$s = new Steps2();
+echo iterator_count($s), ";";
+echo count(iterator_to_array($s)), ";";
+echo iterator_apply($s, function (): bool { return true; }), ";";
+"#,
+    );
+    assert_eq!(out, "[closed 1]2;[closed 2]2;[closed 3]2;");
+}

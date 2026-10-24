@@ -65,6 +65,10 @@ macro_rules! impl_fake_lifecycle_scalar_ops {
         Ok(match metric {
             7 => self.gc_runs,
             8 => self.gc_collected,
+            14 => 4096,
+            15 => 8192,
+            16 => 5000,
+            17 => 9000,
             _ => 0,
         })
     }

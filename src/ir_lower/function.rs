@@ -1568,6 +1568,7 @@ fn lower_closure_function_with_signature(
     );
     function.lexical_class = parent.current_class.clone();
     function.callable_default = callable_default;
+    function.display_name = parent.take_closure_display_name(name);
     function.flags = FunctionFlags {
         is_closure: true,
         is_synthetic: function.callable_default.is_some(),
@@ -1601,6 +1602,8 @@ fn lower_closure_function_with_signature(
                 .map(|(name, hint, _, _)| (name.as_str(), hint.as_ref())),
             None,
             signature.by_ref_return,
+            // Closures keep the conservative summary.
+            None,
             body,
         ),
     });

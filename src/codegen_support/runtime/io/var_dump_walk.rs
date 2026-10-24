@@ -1176,12 +1176,16 @@ pub fn emit_var_dump_value(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
     emitter.instruction("bl __rt_vd_seen_push");                                // mark the object as being walked
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
+    emitter.instruction("bl __rt_vd_debuginfo_object");                         // render through a run-time __debugInfo() when the class has one
+    emitter.instruction("cbnz x0, __rt_vd_val_obj_walked");                     // the whole block was written; only the guard pop remains
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
     emitter.instruction("bl __rt_var_dump_open_object");                        // write `<indent>object(NAME) (N) {\n`
     emitter.instruction("bl __rt_vd_indent_push");                              // properties sit one level deeper
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
     emitter.instruction("bl __rt_var_dump_object");                             // recurse into the property walker
     emitter.instruction("bl __rt_vd_indent_pop");                               // back to the value-line indent
     emitter.instruction("bl __rt_var_dump_close_container");                    // write `<indent>}\n`
+    emitter.label("__rt_vd_val_obj_walked");
     emitter.instruction("bl __rt_vd_seen_pop");                                 // the object is no longer on the walk stack
     emitter.instruction("b __rt_vd_val_done");                                  // value rendered
 
@@ -1310,12 +1314,17 @@ fn emit_var_dump_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
     emitter.instruction("call __rt_vd_seen_push");                              // mark the object as being walked
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
+    emitter.instruction("call __rt_vd_debuginfo_object");                       // render through a run-time __debugInfo() when the class has one
+    emitter.instruction("test rax, rax");                                       // was the whole block written?
+    emitter.instruction("jnz __rt_vd_val_obj_walked_x86");                      // only the guard pop remains
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
     emitter.instruction("call __rt_var_dump_open_object");                      // write `<indent>object(NAME) (N) {\n`
     emitter.instruction("call __rt_vd_indent_push");                            // properties sit one level deeper
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
     emitter.instruction("call __rt_var_dump_object");                           // recurse into the property walker
     emitter.instruction("call __rt_vd_indent_pop");                             // back to the value-line indent
     emitter.instruction("call __rt_var_dump_close_container");                  // write `<indent>}\n`
+    emitter.label("__rt_vd_val_obj_walked_x86");
     emitter.instruction("call __rt_vd_seen_pop");                               // the object is no longer on the walk stack
     emitter.instruction("jmp __rt_vd_val_done_x86");                            // value rendered
 

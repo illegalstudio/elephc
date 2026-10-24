@@ -51,6 +51,26 @@ use super::lower_term;
 use super::shared_state::SharedCodegenState;
 use super::{CodegenIrError, Result};
 
+/// The hosted-extension engine's process-exit routine (RSHUTDOWN, then MSHUTDOWN), called by
+/// every exit sequence of a program that declares it.
+const HOSTED_EXIT_HOOK: &str = "elephc_php_ext_exit_hook";
+/// The hosted-extension engine's request shutdown (RSHUTDOWN), called by the `--web` reset after
+/// the previous request's destructors and before its hosting tables are released.
+pub(super) const HOSTED_REQUEST_SHUTDOWN: &str = "elephc_php_ext_request_shutdown";
+/// The hosted-extension engine's request startup (RINIT), called at the start of every `--web`
+/// request once the reset is done.
+pub(super) const HOSTED_REQUEST_STARTUP: &str = "elephc_php_ext_request_startup";
+
+/// Returns whether the program calls into a hosted PHP extension: reachability keeps an
+/// `elephc_php_ext_*` engine extern only when a call that reaches the engine survives. The
+/// lifecycle routines themselves are never called from PHP, so their own declarations are pruned.
+pub(super) fn module_hosts_php_ext(module: &Module) -> bool {
+    module
+        .extern_decls
+        .iter()
+        .any(|decl| decl.name.trim_start_matches('\\').starts_with("elephc_php_ext_"))
+}
+
 
 /// Emits EIR bodies and the process entry, retaining shared state for deferred helper emission.
 ///
@@ -75,6 +95,12 @@ pub(super) fn emit_module(
     web_isolation: WebIsolation,
 ) -> Result<SharedCodegenState> {
     let mut shared = SharedCodegenState::default();
+    // A program hosting PHP extensions declares the engine's shutdown routine; every
+    // process-exit sequence emitted below then runs it (RSHUTDOWN, MSHUTDOWN) after output
+    // is flushed, as php-src does. Executables only: a library never exits the process.
+    if emit == Emit::Executable && module_hosts_php_ext(module) {
+        emitter.exit_hook = Some(emitter.target.extern_symbol(HOSTED_EXIT_HOOK));
+    }
     // Folding compares isolated emissions built with diagnostics off, so it must only run when
     // the FINAL emission is diagnostics-off too (captured before `instrument` moves into the
     // shared state below).
@@ -196,6 +222,9 @@ pub(super) fn emit_module(
     // handler body is emitted so every function static local (including any in the
     // main body) has been recorded into `data`. The handler prologue's
     // `bl __rt_web_reset` forward-references the label emitted here.
+    if super::frame::module_binds_extern_callbacks(module) {
+        super::frame::emit_extern_callback_release_routine(emitter, data);
+    }
     if web {
         super::web::emit_web_reset(emitter, module, data);
     }

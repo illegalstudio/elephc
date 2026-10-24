@@ -182,6 +182,8 @@ mod unserialize_hydration_data;
 mod serialize_magic_results;
 #[path = "runtime_gc/growth.rs"]
 mod growth;
+#[path = "runtime_gc/allocator_bins.rs"]
+mod allocator_bins;
 #[path = "runtime_gc/heap.rs"]
 mod heap;
 mod split_remainders;

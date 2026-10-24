@@ -33,6 +33,15 @@ use crate::codegen_support::runtime::data::ALLOC_OVERFLOW_MSG;
 /// Byte capacity of the shared `_concat_buf` scratch buffer declared in `runtime::data::fixed`.
 pub(crate) const CONCAT_BUF_CAPACITY: usize = 65536;
 
+/// Bytes a float formatter may write at its destination: `snprintf`'s 48-byte cap plus headroom.
+pub(crate) const FLOAT_WINDOW_BYTES: usize = 64;
+
+/// Number of `FLOAT_WINDOW_BYTES` slots in `_float_spill_ring`; a power of two so the cursor wraps
+/// with a mask.
+pub(crate) const FLOAT_SPILL_SLOTS: usize = 4;
+
+const _: () = assert!(CONCAT_BUF_CAPACITY % 4096 == 0, "the AArch64 window probe encodes the capacity as a shifted immediate");
+
 /// Emits `__rt_concat_reserve`, `__rt_concat_publish`, `__rt_concat_grow`, and
 /// `__rt_alloc_overflow`.
 ///
@@ -67,6 +76,7 @@ pub fn emit_concat_scratch(emitter: &mut Emitter) {
 
     emit_concat_reserve_aarch64(emitter);
     emit_concat_publish_aarch64(emitter);
+    emit_float_window_aarch64(emitter);
     emit_concat_grow_aarch64(emitter);
     emit_alloc_overflow_aarch64(emitter);
 }
@@ -134,6 +144,66 @@ fn emit_concat_publish_aarch64(emitter: &mut Emitter) {
 
     emitter.label("__rt_concat_publish_done");
     emitter.instruction("ret");                                                 // return with the result pointer/length pair untouched
+}
+
+/// Emits the AArch64 `__rt_float_window` helper.
+///
+/// Hands a float formatter a `FLOAT_WINDOW_BYTES` destination it may write without a bound check:
+/// the scratch tail while that many bytes are still free, otherwise the next slot of
+/// `_float_spill_ring`, exactly like `__rt_itoa` does for integers. Writing at `_concat_off`
+/// unconditionally ran past the end of `_concat_buf` into the adjacent runtime globals when a float
+/// was converted a few dozen bytes before the scratch filled. The formatters publish their length
+/// with `__rt_concat_publish`, which advances `_concat_off` only for scratch-backed results.
+///
+/// - Output: `x0` = window pointer. Clobbers `x9`-`x11` only. Leaf.
+fn emit_float_window_aarch64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: float_window ---");
+    emitter.label_global("__rt_float_window");
+    abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    emitter.instruction("ldr x10, [x9]");                                       // load the current concat scratch write offset
+    emitter.instruction(&format!("add x11, x10, #{}", FLOAT_WINDOW_BYTES));     // offset after reserving the formatter window
+    emitter.instruction(&format!("cmp x11, #{}, lsl #12", CONCAT_BUF_CAPACITY >> 12)); // would the window cross the end of _concat_buf (capacity as a shifted immediate)?
+    emitter.instruction("b.hi __rt_float_window_spill");                        // a full scratch formats into the spill ring instead
+    abi::emit_symbol_address(emitter, "x9", "_concat_buf");
+    emitter.instruction("add x0, x9, x10");                                     // the window starts at the scratch write offset
+    emitter.instruction("ret");                                                 // return the scratch-backed window
+    emitter.label("__rt_float_window_spill");
+    abi::emit_symbol_address(emitter, "x9", "_float_spill_index");
+    emitter.instruction("ldr x10, [x9]");                                       // load the next spill slot index
+    emitter.instruction("add x11, x10, #1");                                    // advance the ring cursor
+    emitter.instruction(&format!("and x11, x11, #{}", FLOAT_SPILL_SLOTS - 1));  // wrap the cursor inside the ring
+    emitter.instruction("str x11, [x9]");                                       // publish the cursor for the next spill
+    abi::emit_symbol_address(emitter, "x9", "_float_spill_ring");
+    emitter.instruction("lsl x10, x10, #6");                                    // each spill slot is FLOAT_WINDOW_BYTES (64) bytes
+    emitter.instruction("add x0, x9, x10");                                     // the window is the selected ring slot
+    emitter.instruction("ret");                                                 // return the spill window; _concat_off stays untouched
+}
+
+/// Emits the x86_64 `__rt_float_window` helper.
+///
+/// Same contract as the AArch64 helper, with the window pointer returned in `r10`. Clobbers
+/// `r9` and `r11`. Leaf.
+fn emit_float_window_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: float_window ---");
+    emitter.label_global("__rt_float_window");
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);
+    emitter.instruction(&format!("lea r11, [r10 + {}]", FLOAT_WINDOW_BYTES));   // offset after reserving the formatter window
+    emitter.instruction(&format!("cmp r11, {}", CONCAT_BUF_CAPACITY));          // would the window cross the end of _concat_buf?
+    emitter.instruction("ja __rt_float_window_spill_x86");                      // a full scratch formats into the spill ring instead
+    abi::emit_symbol_address(emitter, "r9", "_concat_buf");
+    emitter.instruction("add r10, r9");                                         // the window starts at the scratch write offset
+    emitter.instruction("ret");                                                 // return the scratch-backed window
+    emitter.label("__rt_float_window_spill_x86");
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_float_spill_index", 0);
+    emitter.instruction("lea r11, [r10 + 1]");                                  // advance the ring cursor
+    emitter.instruction(&format!("and r11, {}", FLOAT_SPILL_SLOTS - 1));        // wrap the cursor inside the ring
+    abi::emit_store_reg_to_symbol(emitter, "r11", "_float_spill_index", 0);
+    emitter.instruction("shl r10, 6");                                          // each spill slot is FLOAT_WINDOW_BYTES (64) bytes
+    abi::emit_symbol_address(emitter, "r9", "_float_spill_ring");
+    emitter.instruction("add r10, r9");                                         // the window is the selected ring slot
+    emitter.instruction("ret");                                                 // return the spill window; _concat_off stays untouched
 }
 
 /// Emits the AArch64 `__rt_concat_grow` helper.
@@ -268,6 +338,8 @@ fn emit_concat_scratch_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_concat_publish_done_x86");
     emitter.instruction("ret");                                                 // return with the result pointer/length pair untouched
 
+    emit_float_window_x86_64(emitter);
+
     emitter.blank();
     emitter.comment("--- runtime: concat_grow ---");
     emitter.label_global("__rt_concat_grow");
@@ -380,6 +452,26 @@ fn emit_cdylib_allocation_escape(emitter: &mut Emitter) {
 mod tests {
     use super::*;
     use crate::codegen_support::platform::{Platform, Target};
+
+    /// Float formatters get a bounded window: the scratch tail while 64 bytes remain, otherwise a
+    /// slot of `_float_spill_ring`, and the spill never moves `_concat_off`.
+    #[test]
+    fn float_window_spills_to_a_ring_when_the_scratch_is_nearly_full() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emit_concat_scratch(&mut emitter);
+            let asm = emitter.output();
+            let window = asm.split("__rt_float_window:").nth(1).unwrap();
+            let window = window.split("--- runtime:").next().unwrap();
+            assert!(window.contains("_float_spill_ring"), "{:?}", target.arch);
+            assert!(window.contains("_float_spill_index"), "{:?}", target.arch);
+            assert!(window.contains("_concat_off"), "{:?}", target.arch);
+            assert!(!window.contains("mov QWORD PTR [r8], "), "{:?}: the window only reads _concat_off", target.arch);
+        }
+    }
 
     /// The shared grow helper returns a transient string on both ABIs, while exact reservations
     /// remain ordinary owned strings. This lets `__rt_str_persist` adopt grown results in place.

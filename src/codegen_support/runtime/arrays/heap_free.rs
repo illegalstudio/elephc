@@ -10,6 +10,7 @@
 //! - Enabled mbstring hooks retire native string identity leases before storage can be reused.
 //! - Mixed wrappers cannot own string identity leases; their string children retire separately.
 
+use super::heap_consolidate::HEAP_BIN_MAX;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -27,7 +28,10 @@ mod tail_scan_tests;
 /// exposed ordered free-list tail blocks. Other insertions start that tail search
 /// only when their merged endpoint reaches the bump frontier.
 ///
-/// Otherwise, small blocks (≤64 bytes payload) go into segregated size-class bins.
+/// Otherwise, blocks up to `HEAP_BIN_MAX` payload bytes go to the exact size-class bin for their
+/// payload (one push, no coalescing until `__rt_heap_consolidate`). Under `--heap-debug` or the
+/// `--web` heap guard, the header's byte in `_heap_bin_marks` catches a double free in O(1); the
+/// bin is scanned only when the mark is already set, which a stale mark can also explain.
 /// Larger blocks join the ordered coalescing free list.
 ///
 /// Input: `x0` = user pointer (as returned by `heap_alloc`)
@@ -143,27 +147,28 @@ pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) 
 
     // -- small non-tail blocks go through segregated bins first --
     emitter.label("__rt_heap_free_cache_small");
-    emitter.instruction("cmp x11, #64");                                        // does this payload fit in the segregated small-bin cache?
+    emitter.instruction(&format!("cmp x11, #{}", HEAP_BIN_MAX));                // does this payload have an exact size-class bin?
     emitter.instruction("b.hi __rt_heap_free_insert");                          // no — keep using the general coalescing free list
     crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_small_bins");
-    emitter.instruction("mov x12, #0");                                         // default to the <=8-byte bin offset
-    emitter.instruction("cmp x11, #8");                                         // does the freed payload fit in the smallest class?
-    emitter.instruction("b.ls __rt_heap_free_cache_small_ready");               // yes — keep the <=8-byte bin offset
-    emitter.instruction("mov x12, #8");                                         // otherwise target the <=16-byte bin
-    emitter.instruction("cmp x11, #16");                                        // does the freed payload fit in the <=16-byte class?
-    emitter.instruction("b.ls __rt_heap_free_cache_small_ready");               // yes — keep the <=16-byte bin offset
-    emitter.instruction("mov x12, #16");                                        // otherwise target the <=32-byte bin
-    emitter.instruction("cmp x11, #32");                                        // does the freed payload fit in the <=32-byte class?
-    emitter.instruction("b.ls __rt_heap_free_cache_small_ready");               // yes — keep the <=32-byte bin offset
-    emitter.instruction("mov x12, #24");                                        // the remaining cached case is the <=64-byte bin
-    emitter.label("__rt_heap_free_cache_small_ready");
-    emitter.instruction("add x10, x10, x12");                                   // x10 = address of the chosen small-bin head slot
+    emitter.instruction("add x10, x10, x11");                                   // the head for payload n lives at offset n - 8
+    emitter.instruction("sub x10, x10, #8");                                    // x10 = address of this size class's bin head
     crate::codegen_support::abi::emit_symbol_address(emitter, "x16", "_heap_debug_enabled");
     emitter.instruction("ldr x16, [x16]");                                      // load the heap-debug enabled flag
-    emitter.instruction("cbnz x16, __rt_heap_free_cache_small_dupscan");        // heap-debug mode active, scan the bin for a double free
+    emitter.instruction("cbnz x16, __rt_heap_free_cache_small_guarded");        // heap-debug mode active, check the bin mark for a double free
     crate::codegen_support::abi::emit_symbol_address(emitter, "x16", "_web_heap_guard_enabled");
     emitter.instruction("ldr x16, [x16]");                                      // load the web heap-guard enabled flag
     emitter.instruction("cbz x16, __rt_heap_free_cache_small_insert");          // neither guard active, skip duplicate detection
+    emitter.label("__rt_heap_free_cache_small_guarded");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_heap_buf");
+    emitter.instruction("sub x13, x9, x12");                                    // x13 = header offset from the heap base
+    emitter.instruction("lsr x13, x13, #4");                                    // x13 = 16-byte granule index of the header
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_heap_bin_marks");
+    emitter.instruction("add x12, x12, x13");                                   // x12 = this header's bin mark
+    emitter.instruction("ldrb w13, [x12]");                                     // is the header already marked as binned?
+    emitter.instruction("cbnz w13, __rt_heap_free_cache_small_dupscan");        // marked: only a scan of the bin can tell a double free from a stale mark
+    emitter.instruction("mov w13, #1");                                         // unmarked: the block cannot already sit in a bin
+    emitter.instruction("strb w13, [x12]");                                     // mark the header as binned
+    emitter.instruction("b __rt_heap_free_cache_small_insert");                 // no scan needed
     emitter.label("__rt_heap_free_cache_small_dupscan");
     emitter.instruction("ldr x12, [x10]");                                      // x12 = current cached block while checking for duplicates
     emitter.label("__rt_heap_free_cache_small_scan");
@@ -185,8 +190,6 @@ pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) 
     emitter.instruction("b __rt_heap_free_post_validate");                      // finish through the common debug validation and free counting path
 
     // -- larger blocks still use the ordered free list for coalescing --
-    emitter.label_shared("__rt_heap_free_insert_cached");
-    emitter.instruction("b __rt_heap_free_insert");                             // enter coalescing from gc_mem_caches through an unconditional cross-atom target
     emitter.label("__rt_heap_free_insert");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_free_list");
     emitter.instruction("ldr x12, [x10]");                                      // x12 = current free block while scanning for insertion point
@@ -348,7 +351,7 @@ pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) 
 /// Mirrors the ARM64 `emit_heap_free` logic for the x86_64 SYSV ABI:
 /// - Validates pointer is a live heap block via the `crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32` marker
 /// - Bump-reset for tail blocks (O(1))
-/// - Segregated small-bin cache for ≤64-byte payloads
+/// - Exact size-class bins for payloads up to `HEAP_BIN_MAX` bytes
 /// - Ordered coalescing free list for larger blocks
 /// - Optional payload poisoning and debug validation when `_heap_debug_enabled`
 ///
@@ -466,29 +469,29 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool, mbstrin
 
     // -- small non-tail blocks go through segregated bins first --
     emitter.label("__rt_heap_free_cache_small");
-    emitter.instruction("cmp r11, 64");                                         // does the freed payload fit in the segregated small-bin cache?
+    emitter.instruction(&format!("cmp r11, {}", HEAP_BIN_MAX));                 // does the freed payload have an exact size-class bin?
     emitter.instruction("ja __rt_heap_free_insert");                            // larger payloads still use the ordered coalescing free list
     crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_small_bins");
-    emitter.instruction("xor rcx, rcx");                                        // default to the <=8-byte bin offset
-    emitter.instruction("cmp r11, 8");                                          // does the freed payload fit in the smallest cached class?
-    emitter.instruction("jbe __rt_heap_free_cache_small_ready");                // yes — keep the <=8-byte bin offset
-    emitter.instruction("mov rcx, 8");                                          // otherwise target the <=16-byte bin offset
-    emitter.instruction("cmp r11, 16");                                         // does the freed payload fit in the <=16-byte class?
-    emitter.instruction("jbe __rt_heap_free_cache_small_ready");                // yes — keep the <=16-byte bin offset
-    emitter.instruction("mov rcx, 16");                                         // otherwise target the <=32-byte bin offset
-    emitter.instruction("cmp r11, 32");                                         // does the freed payload fit in the <=32-byte class?
-    emitter.instruction("jbe __rt_heap_free_cache_small_ready");                // yes — keep the <=32-byte bin offset
-    emitter.instruction("mov rcx, 24");                                         // remaining cached payloads belong to the <=64-byte bin offset
-    emitter.label("__rt_heap_free_cache_small_ready");
-    emitter.instruction("add r10, rcx");                                        // r10 = address of the selected small-bin head slot
+    emitter.instruction("lea r10, [r10 + r11 - 8]");                            // r10 = this size class's bin head (payload n at offset n - 8)
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_debug_enabled");
     emitter.instruction("mov r8, QWORD PTR [r8]");                              // reload the heap-debug enabled flag before checking cached-bin duplicates
     emitter.instruction("test r8, r8");                                         // is heap-debug duplicate detection enabled?
-    emitter.instruction("jnz __rt_heap_free_cache_small_dupscan");              // heap-debug mode active, scan the bin for a double free
+    emitter.instruction("jnz __rt_heap_free_cache_small_guarded");              // heap-debug mode active, check the bin mark for a double free
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_web_heap_guard_enabled");
     emitter.instruction("mov r8, QWORD PTR [r8]");                              // reload the web heap-guard enabled flag
     emitter.instruction("test r8, r8");                                         // is the web heap-guard double-free detection enabled?
     emitter.instruction("jz __rt_heap_free_cache_small_insert");                // neither guard active, skip duplicate detection
+    emitter.label("__rt_heap_free_cache_small_guarded");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_buf");
+    emitter.instruction("mov rdx, r9");                                         // rdx = header address
+    emitter.instruction("sub rdx, r8");                                         // rdx = header offset from the heap base
+    emitter.instruction("shr rdx, 4");                                          // rdx = 16-byte granule index of the header
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_bin_marks");
+    emitter.instruction("add r8, rdx");                                         // r8 = this header's bin mark
+    emitter.instruction("cmp BYTE PTR [r8], 0");                                // is the header already marked as binned?
+    emitter.instruction("jne __rt_heap_free_cache_small_dupscan");              // marked: only a scan of the bin can tell a double free from a stale mark
+    emitter.instruction("mov BYTE PTR [r8], 1");                                // unmarked: the block cannot already sit in a bin, mark it
+    emitter.instruction("jmp __rt_heap_free_cache_small_insert");               // no scan needed
     emitter.label("__rt_heap_free_cache_small_dupscan");
     emitter.instruction("mov rdx, QWORD PTR [r10]");                            // start scanning the cached small-bin chain for duplicate headers
     emitter.label("__rt_heap_free_cache_small_scan");
@@ -509,8 +512,6 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool, mbstrin
     emitter.instruction("jmp __rt_heap_free_post_validate");                    // finish through the shared post-mutation validation and free-counting path
 
     // -- larger blocks still use the ordered free list for coalescing --
-    emitter.label_shared("__rt_heap_free_insert_cached");
-    emitter.instruction("jmp __rt_heap_free_insert");                           // enter coalescing from gc_mem_caches through a cross-section relocation
     emitter.label("__rt_heap_free_insert");
     crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_free_list");
     emitter.instruction("mov rdx, QWORD PTR [r10]");                            // load the current free-list head while scanning for the insertion point

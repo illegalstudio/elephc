@@ -10,6 +10,7 @@
 //! - Every successful allocation marks its exact payload base in `_heap_live_bases`, allowing
 //!   runtime consumers to validate candidate bases without scanning unrelated blocks.
 
+use super::heap_consolidate::{HEAP_BIN_MAX, HEAP_BIN_TABLE_BYTES, HEAP_CONSOLIDATE_REBIN};
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -17,11 +18,16 @@ use crate::codegen_support::platform::Arch;
 mod split_remainder_tests;
 
 
-/// Emits the `__rt_heap_alloc` runtime helper: a free-list allocator with size-segregated
-/// small-bin caching and a bump-pointer fallback.
+/// Emits the `__rt_heap_alloc` runtime helper: a free-list allocator with exact size-class
+/// bins and a bump-pointer fallback.
 /// Split remainders use the same payload classes as freed blocks, without free accounting.
 ///
-/// Allocation path (ARM64): small bins (≤64 bytes) → ordered free list → bump pointer.
+/// Allocation path (ARM64): the exact bin for the payload (≤`HEAP_BIN_MAX` bytes, one pop) →
+/// ordered free list (first fit) → bump pointer → split a block from a larger bin →
+/// `__rt_heap_consolidate` and retry → fatal. The larger-bin search runs only once the bump end is
+/// full, so the hot path never scans bins. The consolidation pass is skipped when
+/// `_gc_frees` still equals `_heap_consolidated_frees`: with nothing freed since the previous pass
+/// there is nothing to merge, so a heap that stays near full does not walk the heap per allocation.
 /// Allocation path (x86_64): identical logic via `emit_heap_alloc_linux_x86_64`.
 ///
 /// Each block carries a 16-byte header `[size:4][refcount:4][kind:8]` before the user pointer.
@@ -74,27 +80,16 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("ldp x0, x30, [sp], #16");                              // restore allocation size and return address after validation
     emitter.label("__rt_heap_alloc_debug_checked");
 
-    // -- try small segregated bins before walking the general free list --
-    emitter.instruction("cmp x0, #64");                                         // do we fit in the small-block cache classes?
-    emitter.instruction("b.hi __rt_heap_alloc_fl_start");                       // larger requests still use the general free list
-    emitter.instruction("mov x13, #0");                                         // default to the <=8-byte bin
-    emitter.instruction("cmp x0, #8");                                          // does the request fit in the smallest payload class?
-    emitter.instruction("b.ls __rt_heap_alloc_small_bins");                     // yes — start searching at the <=8-byte bin
-    emitter.instruction("mov x13, #8");                                         // otherwise start at the <=16-byte bin
-    emitter.instruction("cmp x0, #16");                                         // does the request fit in the <=16-byte class?
-    emitter.instruction("b.ls __rt_heap_alloc_small_bins");                     // yes — search from the <=16-byte bin upward
-    emitter.instruction("mov x13, #16");                                        // otherwise start at the <=32-byte bin
-    emitter.instruction("cmp x0, #32");                                         // does the request fit in the <=32-byte class?
-    emitter.instruction("b.ls __rt_heap_alloc_small_bins");                     // yes — search from the <=32-byte bin upward
-    emitter.instruction("mov x13, #24");                                        // requests up to 64 bytes start at the largest small-bin class
-    emitter.label("__rt_heap_alloc_small_bins");
+    // -- an exact size-class bin holds blocks of exactly this payload: pop its head --
+    emitter.instruction(&format!("cmp x0, #{}", HEAP_BIN_MAX));                 // does the request have an exact size-class bin?
+    emitter.instruction("b.hi __rt_heap_alloc_fl_start");                       // larger requests use the ordered free list
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_small_bins");
-    emitter.instruction("add x9, x9, x13");                                     // x9 = address of the first candidate bin head
-    emitter.label("__rt_heap_alloc_small_bin_loop");
+    emitter.instruction("add x9, x9, x0");                                      // the head for payload n lives at offset n - 8
+    emitter.instruction("sub x9, x9, #8");                                      // x9 = address of this size class's bin head
     emitter.instruction("mov x16, x9");                                         // x16 tracks the previous next-pointer slot while scanning this bin
     emitter.label("__rt_heap_alloc_small_bin_scan");
     emitter.instruction("ldr x10, [x16]");                                      // x10 = current cached block header or null when this bin is exhausted
-    emitter.instruction("cbz x10, __rt_heap_alloc_small_bin_next_class");       // try the next larger bin when this bin has no fitting block
+    emitter.instruction("cbz x10, __rt_heap_alloc_fl_start");                   // an empty bin falls back to the ordered free list
     // -- reject cached entries that escaped the live heap window before dereferencing them --
     crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_heap_buf");
     emitter.instruction("cmp x10, x12");                                        // does the cached block point below the heap buffer base?
@@ -120,16 +115,10 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("b.hs __rt_heap_alloc_small_bin_found");                // yes — reuse this cached block safely
     emitter.instruction("add x16, x10, #16");                                   // advance the previous next-pointer slot to current->next
     emitter.instruction("b __rt_heap_alloc_small_bin_scan");                    // keep searching this bin for a large-enough cached block
-    emitter.label("__rt_heap_alloc_small_bin_next_class");
-    emitter.instruction("cmp x13, #24");                                        // have we already checked the <=64-byte bin?
-    emitter.instruction("b.eq __rt_heap_alloc_fl_start");                       // yes — fall back to the general free list
-    emitter.instruction("add x13, x13, #8");                                    // advance to the next larger small-bin class
-    emitter.instruction("add x9, x9, #8");                                      // move to the next bin-head slot
-    emitter.instruction("b __rt_heap_alloc_small_bin_loop");                    // keep searching the remaining small bins
 
     emitter.label("__rt_heap_alloc_small_bin_drop_tail");
     emitter.instruction("str xzr, [x16]");                                      // drop the unreachable tail so no later scan follows the wild pointer
-    emitter.instruction("b __rt_heap_alloc_small_bin_next_class");              // this bin is exhausted from the truncation point, try the next class
+    emitter.instruction("b __rt_heap_alloc_fl_start");                          // this bin is exhausted from the truncation point
     emitter.label("__rt_heap_alloc_small_bin_unlink_invalid");
     emitter.instruction("ldr x15, [x10, #16]");                                 // the poisoned block is in-heap, so its next link is a safe load
     emitter.instruction("str x15, [x16]");                                      // unlink the poisoned block from this size-class chain
@@ -138,6 +127,13 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.label("__rt_heap_alloc_small_bin_found");
     emitter.instruction("ldr x11, [x10, #16]");                                 // x11 = cached_small_block->next within this size class
     emitter.instruction("str x11, [x16]");                                      // unlink the cached block from its segregated small-bin chain
+    emitter.instruction("sub x13, x10, x12");                                   // x13 = header offset from the heap base (x12 still holds _heap_buf)
+    emitter.instruction("lsr x13, x13, #4");                                    // x13 = 16-byte granule index of the header
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_heap_bin_marks");
+    emitter.instruction("ldrb w14, [x15, x13]");                                // was this header marked as binned by a guarded free?
+    emitter.instruction("cbz w14, __rt_heap_alloc_small_bin_unmarked");         // no — leave the mark table page untouched
+    emitter.instruction("strb wzr, [x15, x13]");                                // the block leaves its bin, so it is no longer marked
+    emitter.label("__rt_heap_alloc_small_bin_unmarked");
     emitter.instruction("mov w13, #1");                                         // initial refcount = 1 for the reused block
     emitter.instruction("str w13, [x10, #4]");                                  // restore the live refcount in the reused header
     emitter.instruction("str xzr, [x10, #8]");                                  // reset heap kind to raw until a typed constructor overwrites it
@@ -205,22 +201,12 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("str wzr, [x13, #4]");                                  // free remainder keeps refcount cleared while on the free list
     emitter.instruction("str xzr, [x13, #8]");                                  // free remainder has no heap kind while on the free list
     emitter.instruction("ldr x14, [x10, #16]");                                 // x14 = current->next before splitting
-    emitter.instruction("cmp x12, #64");                                        // small split payloads belong in the existing size-segregated bins
+    emitter.instruction(&format!("cmp x12, #{}", HEAP_BIN_MAX));                // binned split payloads go to their exact size class
     emitter.instruction("b.hi __rt_heap_alloc_split_large");                    // retain ordered-list placement for larger remainders
     emitter.instruction("str x14, [x9]");                                       // unlink the allocated block before publishing its remainder in one bin
     crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_heap_small_bins");
-    emitter.instruction("mov x16, #0");                                         // default to the eight-byte payload class
-    emitter.instruction("cmp x12, #8");                                         // classify the actual aligned remainder payload
-    emitter.instruction("b.ls __rt_heap_alloc_split_bin_ready");                // use the first size class that contains this remainder
-    emitter.instruction("mov x16, #8");                                         // advance to the next existing bin head offset
-    emitter.instruction("cmp x12, #16");                                        // classify the actual aligned remainder payload
-    emitter.instruction("b.ls __rt_heap_alloc_split_bin_ready");                // use the first size class that contains this remainder
-    emitter.instruction("mov x16, #16");                                        // advance to the next existing bin head offset
-    emitter.instruction("cmp x12, #32");                                        // classify the actual aligned remainder payload
-    emitter.instruction("b.ls __rt_heap_alloc_split_bin_ready");                // use the first size class that contains this remainder
-    emitter.instruction("mov x16, #24");                                        // advance to the next existing bin head offset
-    emitter.label("__rt_heap_alloc_split_bin_ready");
-    emitter.instruction("add x15, x15, x16");                                   // address the selected size-class head
+    emitter.instruction("add x15, x15, x12");                                   // the head for payload n lives at offset n - 8
+    emitter.instruction("sub x15, x15, #8");                                    // address the remainder's size-class head
     emitter.instruction("ldr x14, [x15]");                                      // preserve the old small-bin chain
     emitter.instruction("str x14, [x13, #16]");                                 // link the remainder only into its size class
     emitter.instruction("str x13, [x15]");                                      // publish the free remainder without altering live or free counters
@@ -278,7 +264,7 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "x13", "_heap_max");
     emitter.instruction("ldr x13, [x13]");                                      // x13 = heap max size in bytes
     emitter.instruction("cmp x12, x13");                                        // does the allocation fit (unsigned, so a wrapped size stays above the limit)?
-    emitter.instruction("b.hi __rt_heap_exhausted");                            // no — fatal error
+    emitter.instruction("b.hi __rt_heap_alloc_larger_bin");                     // no — reuse a larger binned block, else coalesce, before giving up
 
     // -- compute base address of heap buffer --
     crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_heap_buf");
@@ -292,9 +278,78 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("add x10, x10, x0");                                    // advance offset by requested size
     emitter.instruction("add x10, x10, #16");                                   // advance offset by header size
     emitter.instruction("str x10, [x9]");                                       // store updated offset to _heap_off
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_heap_off_peak");
+    emitter.instruction("ldr x13, [x12]");                                      // load the previous arena-offset high watermark
+    emitter.instruction("cmp x10, x13");                                        // did this bump raise the arena-offset peak?
+    emitter.instruction("csel x13, x10, x13, hi");                              // keep the larger of the new offset and the previous peak
+    emitter.instruction("str x13, [x12]");                                      // store the updated arena-offset peak
     emitter.instruction("add x0, x14, #16");                                    // return user pointer = header + 16
     emitter.instruction("mov x10, x14");                                        // reuse the common allocation-accounting path with the new block header pointer
     emitter.instruction("b __rt_heap_alloc_count");                             // count alloc/live/peak stats and return
+
+    // -- no larger binned block fits either: binned blocks never coalesce on their own, so merge
+    //    every free block and retry; a pass that changes nothing means the heap really is full --
+    emitter.label("__rt_heap_alloc_consolidate");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_frees");
+    emitter.instruction("ldr x9, [x9]");                                        // x9 = frees so far
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_consolidated_frees");
+    emitter.instruction("ldr x10, [x10]");                                      // x10 = frees at the end of the previous pass
+    emitter.instruction("cmp x9, x10");                                         // was anything freed since then?
+    emitter.instruction("b.eq __rt_heap_exhausted");                            // no — a new pass would merge nothing: the heap is exhausted
+    emitter.instruction("stp x0, x30, [sp, #-16]!");                            // preserve the request size and return address across the pass
+    emitter.instruction(&format!("mov x0, #{}", HEAP_CONSOLIDATE_REBIN));       // park merged runs back in their bins so the ordered list stays short
+    emitter.instruction("bl __rt_heap_consolidate");                            // merge every free block, x1 = whether anything changed
+    emitter.instruction("mov x9, x1");                                          // keep the progress flag past the restore
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_gc_frees");
+    emitter.instruction("ldr x10, [x10]");                                      // x10 = frees so far
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_heap_consolidated_frees");
+    emitter.instruction("str x10, [x11]");                                      // remember them: the next pass is useless until another free
+    emitter.instruction("ldp x0, x30, [sp], #16");                              // restore the request size and return address
+    emitter.instruction("cbz x9, __rt_heap_exhausted");                         // nothing merged: the heap is exhausted
+    emitter.instruction("b __rt_heap_alloc_debug_checked");                     // retry the bins, the rebuilt free list and the bump end
+
+    // -- the bump end is full: try a free block parked in a LARGER bin. Exact bins never split, so
+    //    without this a heap whose free memory sits in other size classes would report exhaustion
+    //    while it still has room. At most one load per class, and only on this cold path, before
+    //    the heap walk of a consolidation pass --
+    emitter.label("__rt_heap_alloc_larger_bin");
+    emitter.instruction(&format!("cmp x0, #{}", HEAP_BIN_MAX));         // is there any bin above the request?
+    emitter.instruction("b.hs __rt_heap_alloc_consolidate");                    // no — try merging the free blocks
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_heap_buf");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x13", "_heap_off");
+    emitter.instruction("ldr x13, [x13]");                                      // load the bump offset
+    emitter.instruction("add x13, x12, x13");                                   // x13 = current live heap end
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_small_bins");
+    emitter.instruction(&format!("add x15, x9, #{}", HEAP_BIN_TABLE_BYTES));    // x15 = end of the bin-head table
+    emitter.instruction("add x9, x9, x0");                                      // x9 = head of the class one step above the request (payload n + 8 at offset n)
+    emitter.label("__rt_heap_alloc_larger_bin_loop");
+    emitter.instruction("cmp x9, x15");                                         // have all larger bins been searched?
+    emitter.instruction("b.hs __rt_heap_alloc_consolidate");                    // no larger block: try merging the free blocks
+    emitter.instruction("ldr x10, [x9]");                                       // x10 = this bin's first block
+    emitter.instruction("cbz x10, __rt_heap_alloc_larger_bin_next");            // an empty bin, try the next class
+    emitter.instruction("cmp x10, x12");                                        // does the head point below the heap?
+    emitter.instruction("b.lo __rt_heap_alloc_larger_bin_next");                // a wild head: leave this bin alone
+    emitter.instruction("cmp x10, x13");                                        // does the head point past the live heap end?
+    emitter.instruction("b.hs __rt_heap_alloc_larger_bin_next");                // a wild head: leave this bin alone
+    emitter.instruction("ldr w14, [x10, #4]");                                  // a parked block must have refcount zero
+    emitter.instruction("cbnz w14, __rt_heap_alloc_larger_bin_next");           // poison: leave this bin alone
+    emitter.instruction("ldr x14, [x10, #8]");                                  // a parked block must have no heap kind
+    emitter.instruction("cbnz x14, __rt_heap_alloc_larger_bin_next");           // poison: leave this bin alone
+    emitter.instruction("ldr w11, [x10]");                                      // x11 = the parked block payload size
+    emitter.instruction("cmp x11, x0");                                         // is it larger than the request?
+    emitter.instruction("b.ls __rt_heap_alloc_larger_bin_next");                // a mis-sized block: leave this bin alone
+    emitter.instruction("add x14, x10, #16");                                   // x14 = the parked block payload
+    emitter.instruction("add x14, x14, x11");                                   // x14 = the parked block end
+    emitter.instruction("cmp x14, x13");                                        // does it stay inside the live heap?
+    emitter.instruction("b.hi __rt_heap_alloc_larger_bin_next");                // a mis-sized block: leave this bin alone
+    emitter.instruction("sub x14, x10, x12");                                   // x14 = header offset from the heap base
+    emitter.instruction("lsr x14, x14, #4");                                    // x14 = 16-byte granule index of the header
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x16", "_heap_bin_marks");
+    emitter.instruction("strb wzr, [x16, x14]");                                // the block leaves its bin, so clear its bin mark
+    emitter.instruction("b __rt_heap_alloc_fl_found");                          // split it (the bin head is the unlink slot) or take it whole
+    emitter.label("__rt_heap_alloc_larger_bin_next");
+    emitter.instruction("add x9, x9, #8");                                      // advance to the next larger class
+    emitter.instruction("b __rt_heap_alloc_larger_bin_loop");                   // keep searching
 
     // -- fatal error: heap memory exhausted --
     // Cross-helper callers use the shared entry; allocator conditionals stay local.
@@ -370,28 +425,16 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 16");                                         // release the temporary validator spill slot
     emitter.label("__rt_heap_alloc_debug_checked");
 
-    // -- try small segregated bins before walking the general free list --
-    emitter.instruction("cmp rax, 64");                                         // does this request fit within the cached small-bin size classes?
-    emitter.instruction("ja __rt_heap_alloc_fl_start");                         // larger payloads still use the general ordered free list
-    emitter.instruction("xor r8, r8");                                          // default to the <=8-byte bin offset
-    emitter.instruction("cmp rax, 8");                                          // does the request fit in the smallest cached payload class?
-    emitter.instruction("jbe __rt_heap_alloc_small_bins");                      // yes — start searching at the <=8-byte bin
-    emitter.instruction("mov r8, 8");                                           // otherwise start at the <=16-byte bin offset
-    emitter.instruction("cmp rax, 16");                                         // does the request fit in the <=16-byte class?
-    emitter.instruction("jbe __rt_heap_alloc_small_bins");                      // yes — search from the <=16-byte bin upward
-    emitter.instruction("mov r8, 16");                                          // otherwise start at the <=32-byte bin offset
-    emitter.instruction("cmp rax, 32");                                         // does the request fit in the <=32-byte class?
-    emitter.instruction("jbe __rt_heap_alloc_small_bins");                      // yes — search from the <=32-byte bin upward
-    emitter.instruction("mov r8, 24");                                          // remaining cached requests start at the <=64-byte bin offset
-    emitter.label("__rt_heap_alloc_small_bins");
+    // -- an exact size-class bin holds blocks of exactly this payload: pop its head --
+    emitter.instruction(&format!("cmp rax, {}", HEAP_BIN_MAX));                 // does the request have an exact size-class bin?
+    emitter.instruction("ja __rt_heap_alloc_fl_start");                         // larger payloads use the ordered free list
     crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_heap_small_bins");
-    emitter.instruction("add r9, r8");                                          // r9 = address of the first candidate small-bin head slot
-    emitter.label("__rt_heap_alloc_small_bin_loop");
+    emitter.instruction("lea r9, [r9 + rax - 8]");                              // r9 = this size class's bin head (payload n at offset n - 8)
     emitter.instruction("mov rcx, r9");                                         // rcx tracks the previous next-pointer slot while scanning this bin
     emitter.label("__rt_heap_alloc_small_bin_scan");
     emitter.instruction("mov r10, QWORD PTR [rcx]");                            // r10 = current cached block header or null when this bin is exhausted
     emitter.instruction("test r10, r10");                                       // did this bin scan run out of cached blocks?
-    emitter.instruction("jz __rt_heap_alloc_small_bin_next_class");             // try the next larger bin when this bin has no fitting block
+    emitter.instruction("jz __rt_heap_alloc_fl_start");                         // an empty bin falls back to the ordered free list
     // -- reject cached entries that escaped the live heap window before dereferencing them --
     crate::codegen_support::abi::emit_symbol_address(emitter, "rdx", "_heap_buf");
     emitter.instruction("cmp r10, rdx");                                        // does the cached block point below the heap buffer base?
@@ -418,16 +461,10 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jae __rt_heap_alloc_small_bin_found");                 // yes — reuse this cached block safely
     emitter.instruction("lea rcx, [r10 + 16]");                                 // advance the previous next-pointer slot to current->next
     emitter.instruction("jmp __rt_heap_alloc_small_bin_scan");                  // keep searching this bin for a large-enough cached block
-    emitter.label("__rt_heap_alloc_small_bin_next_class");
-    emitter.instruction("cmp r8, 24");                                          // have we already checked the largest <=64-byte cache bin?
-    emitter.instruction("je __rt_heap_alloc_fl_start");                         // yes — fall back to the general free list
-    emitter.instruction("add r8, 8");                                           // advance to the next larger small-bin class offset
-    emitter.instruction("add r9, 8");                                           // move to the next small-bin head slot
-    emitter.instruction("jmp __rt_heap_alloc_small_bin_loop");                  // keep scanning the remaining small bins
 
     emitter.label("__rt_heap_alloc_small_bin_drop_tail");
     emitter.instruction("mov QWORD PTR [rcx], 0");                              // drop the unreachable tail so no later scan follows the wild pointer
-    emitter.instruction("jmp __rt_heap_alloc_small_bin_next_class");            // this bin is exhausted from the truncation point, try the next class
+    emitter.instruction("jmp __rt_heap_alloc_fl_start");                        // this bin is exhausted from the truncation point
     emitter.label("__rt_heap_alloc_small_bin_unlink_invalid");
     emitter.instruction("mov rdx, QWORD PTR [r10 + 16]");                       // the poisoned block is in-heap, so its next link is a safe load
     emitter.instruction("mov QWORD PTR [rcx], rdx");                            // unlink the poisoned block from this size-class chain
@@ -436,6 +473,15 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_heap_alloc_small_bin_found");
     emitter.instruction("mov r11, QWORD PTR [r10 + 16]");                       // load the cached block's next pointer within this size class
     emitter.instruction("mov QWORD PTR [rcx], r11");                            // unlink the cached block from its segregated small-bin chain
+    crate::codegen_support::abi::emit_symbol_address(emitter, "rdx", "_heap_buf");
+    emitter.instruction("mov rcx, r10");                                        // rcx = header address
+    emitter.instruction("sub rcx, rdx");                                        // rcx = header offset from the heap base
+    emitter.instruction("shr rcx, 4");                                          // rcx = 16-byte granule index of the header
+    crate::codegen_support::abi::emit_symbol_address(emitter, "rdx", "_heap_bin_marks");
+    emitter.instruction("cmp BYTE PTR [rdx + rcx], 0");                         // was this header marked as binned by a guarded free?
+    emitter.instruction("je __rt_heap_alloc_small_bin_unmarked");               // no — leave the mark table page untouched
+    emitter.instruction("mov BYTE PTR [rdx + rcx], 0");                         // the block leaves its bin, so it is no longer marked
+    emitter.label("__rt_heap_alloc_small_bin_unmarked");
     emitter.instruction("mov DWORD PTR [r10 + 4], 1");                          // restore a live refcount of one in the reused heap header
     emitter.instruction(&format!("mov r11, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(0))); // materialize the x86_64 heap marker while leaving the low kind bits clear
     emitter.instruction("mov QWORD PTR [r10 + 8], r11");                        // stamp the reused heap header as an owned raw heap allocation
@@ -500,22 +546,11 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov DWORD PTR [r8 + 4], 0");                           // free-list blocks keep refcount zero while they remain unowned
     emitter.instruction("mov QWORD PTR [r8 + 8], 0");                           // free-list blocks clear the heap kind until a typed allocation reuses them
     emitter.instruction("mov rdx, QWORD PTR [r10 + 16]");                       // preserve the original successor before rewriting the free-list links
-    emitter.instruction("cmp rcx, 64");                                         // small split payloads belong in the existing size-segregated bins
+    emitter.instruction(&format!("cmp rcx, {}", HEAP_BIN_MAX));                 // binned split payloads go to their exact size class
     emitter.instruction("ja __rt_heap_alloc_split_large");                      // retain ordered-list placement for larger remainders
     emitter.instruction("mov QWORD PTR [r9], rdx");                             // unlink the allocated block before publishing its remainder in one bin
     crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_heap_small_bins");
-    emitter.instruction("xor edx, edx");                                        // default to the eight-byte payload class
-    emitter.instruction("cmp rcx, 8");                                          // classify the actual aligned remainder payload
-    emitter.instruction("jbe __rt_heap_alloc_split_bin_ready");                 // use the first size class that contains this remainder
-    emitter.instruction("mov edx, 8");                                          // advance to the next existing bin head offset
-    emitter.instruction("cmp rcx, 16");                                         // classify the actual aligned remainder payload
-    emitter.instruction("jbe __rt_heap_alloc_split_bin_ready");                 // use the first size class that contains this remainder
-    emitter.instruction("mov edx, 16");                                         // advance to the next existing bin head offset
-    emitter.instruction("cmp rcx, 32");                                         // classify the actual aligned remainder payload
-    emitter.instruction("jbe __rt_heap_alloc_split_bin_ready");                 // use the first size class that contains this remainder
-    emitter.instruction("mov edx, 24");                                         // advance to the next existing bin head offset
-    emitter.label("__rt_heap_alloc_split_bin_ready");
-    emitter.instruction("add r11, rdx");                                        // address the selected size-class head
+    emitter.instruction("lea r11, [r11 + rcx - 8]");                            // address the remainder's size-class head (payload n at offset n - 8)
     emitter.instruction("mov rdx, QWORD PTR [r11]");                            // preserve the old small-bin chain
     emitter.instruction("mov QWORD PTR [r8 + 16], rdx");                        // link the remainder only into its size class
     emitter.instruction("mov QWORD PTR [r11], r8");                             // publish the free remainder without altering live or free counters
@@ -568,7 +603,7 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_max");
     emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the configured heap capacity in bytes
     emitter.instruction("cmp rcx, r8");                                         // does the bump allocation still fit inside the configured heap capacity?
-    emitter.instruction("ja __rt_heap_exhausted");                              // no — report heap exhaustion and terminate
+    emitter.instruction("ja __rt_heap_alloc_larger_bin");                       // no — reuse a larger binned block, else coalesce, before giving up
     crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_heap_buf");
     emitter.instruction("lea r10, [r11 + r10]");                                // compute the new block header address inside the heap buffer
     emitter.instruction("mov DWORD PTR [r10], eax");                            // write the requested payload size into the new block header
@@ -576,8 +611,76 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov r8, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(0))); // materialize the x86_64 heap marker for the freshly bumped block
     emitter.instruction("mov QWORD PTR [r10 + 8], r8");                         // stamp the new block as an owned raw heap allocation
     emitter.instruction("mov QWORD PTR [r9], rcx");                             // persist the advanced bump offset after carving out this block
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_off_peak");
+    emitter.instruction("mov r11, QWORD PTR [r8]");                             // load the previous arena-offset high watermark
+    emitter.instruction("cmp rcx, r11");                                        // did this bump raise the arena-offset peak?
+    emitter.instruction("cmova r11, rcx");                                      // keep the larger of the new offset and the previous peak
+    emitter.instruction("mov QWORD PTR [r8], r11");                             // store the updated arena-offset peak
     emitter.instruction("lea rax, [r10 + 16]");                                 // return the user payload pointer instead of the header address
     emitter.instruction("jmp __rt_heap_alloc_count");                           // reuse the shared allocation-accounting path for bumped blocks
+
+    // -- no larger binned block fits either: binned blocks never coalesce on their own, so merge
+    //    every free block and retry; a pass that changes nothing means the heap really is full --
+    emitter.label("__rt_heap_alloc_consolidate");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_frees");
+    emitter.instruction("mov r8, QWORD PTR [r8]");                              // r8 = frees so far
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_heap_consolidated_frees");
+    emitter.instruction("cmp r8, QWORD PTR [r9]");                              // was anything freed since the previous pass?
+    emitter.instruction("je __rt_heap_exhausted");                              // no — a new pass would merge nothing: the heap is exhausted
+    emitter.instruction("sub rsp, 16");                                         // reserve an aligned slot for the request size
+    emitter.instruction("mov QWORD PTR [rsp], rax");                            // preserve the request size across the pass
+    emitter.instruction(&format!("mov eax, {}", HEAP_CONSOLIDATE_REBIN));       // park merged runs back in their bins so the ordered list stays short
+    emitter.instruction("call __rt_heap_consolidate");                          // merge every free block, rdx = whether anything changed
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_frees");
+    emitter.instruction("mov r8, QWORD PTR [r8]");                              // r8 = frees so far
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_heap_consolidated_frees");
+    emitter.instruction("mov QWORD PTR [r9], r8");                              // remember them: the next pass is useless until another free
+    emitter.instruction("mov rax, QWORD PTR [rsp]");                            // restore the request size
+    emitter.instruction("add rsp, 16");                                         // release the spill slot
+    emitter.instruction("test rdx, rdx");                                       // did the pass change anything?
+    emitter.instruction("jz __rt_heap_exhausted");                              // no — the heap is exhausted
+    emitter.instruction("jmp __rt_heap_alloc_debug_checked");                   // retry the bins, the rebuilt free list and the bump end
+
+    // -- the bump end is full: try a free block parked in a LARGER bin (see the AArch64 path) --
+    emitter.label("__rt_heap_alloc_larger_bin");
+    emitter.instruction(&format!("cmp rax, {}", HEAP_BIN_MAX));         // is there any bin above the request?
+    emitter.instruction("jae __rt_heap_alloc_consolidate");                     // no — try merging the free blocks
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_buf");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "rcx", "_heap_off");
+    emitter.instruction("mov rcx, QWORD PTR [rcx]");                            // load the bump offset
+    emitter.instruction("add rcx, r8");                                         // rcx = current live heap end
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_heap_small_bins");
+    emitter.instruction(&format!("lea rsi, [r9 + {}]", HEAP_BIN_TABLE_BYTES));  // rsi = end of the bin-head table
+    emitter.instruction("add r9, rax");                                         // r9 = head of the class one step above the request (payload n + 8 at offset n)
+    emitter.label("__rt_heap_alloc_larger_bin_loop");
+    emitter.instruction("cmp r9, rsi");                                         // have all larger bins been searched?
+    emitter.instruction("jae __rt_heap_alloc_consolidate");                     // no larger block: try merging the free blocks
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // r10 = this bin's first block
+    emitter.instruction("test r10, r10");                                       // is the bin empty?
+    emitter.instruction("jz __rt_heap_alloc_larger_bin_next");                  // yes — try the next class
+    emitter.instruction("cmp r10, r8");                                         // does the head point below the heap?
+    emitter.instruction("jb __rt_heap_alloc_larger_bin_next");                  // a wild head: leave this bin alone
+    emitter.instruction("cmp r10, rcx");                                        // does the head point past the live heap end?
+    emitter.instruction("jae __rt_heap_alloc_larger_bin_next");                 // a wild head: leave this bin alone
+    emitter.instruction("cmp DWORD PTR [r10 + 4], 0");                          // a parked block must have refcount zero
+    emitter.instruction("jne __rt_heap_alloc_larger_bin_next");                 // poison: leave this bin alone
+    emitter.instruction("cmp QWORD PTR [r10 + 8], 0");                          // a parked block must have no heap kind
+    emitter.instruction("jne __rt_heap_alloc_larger_bin_next");                 // poison: leave this bin alone
+    emitter.instruction("mov r11d, DWORD PTR [r10]");                           // r11 = the parked block payload size
+    emitter.instruction("cmp r11, rax");                                        // is it larger than the request?
+    emitter.instruction("jbe __rt_heap_alloc_larger_bin_next");                 // a mis-sized block: leave this bin alone
+    emitter.instruction("lea rdx, [r10 + r11 + 16]");                           // rdx = the parked block end
+    emitter.instruction("cmp rdx, rcx");                                        // does it stay inside the live heap?
+    emitter.instruction("ja __rt_heap_alloc_larger_bin_next");                  // a mis-sized block: leave this bin alone
+    emitter.instruction("mov rdx, r10");                                        // rdx = header address
+    emitter.instruction("sub rdx, r8");                                         // rdx = header offset from the heap base
+    emitter.instruction("shr rdx, 4");                                          // rdx = 16-byte granule index of the header
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_bin_marks");
+    emitter.instruction("mov BYTE PTR [r8 + rdx], 0");                          // the block leaves its bin, so clear its bin mark
+    emitter.instruction("jmp __rt_heap_alloc_fl_found");                        // split it (the bin head is the unlink slot) or take it whole
+    emitter.label("__rt_heap_alloc_larger_bin_next");
+    emitter.instruction("add r9, 8");                                           // advance to the next larger class
+    emitter.instruction("jmp __rt_heap_alloc_larger_bin_loop");                 // keep searching
 
     // -- fatal error: heap memory exhausted --
     // Keep the same non-returning recovery entry on every target.

@@ -2,7 +2,7 @@
 title: "mb_ereg_replace()"
 description: "Replaces multibyte regex matches using numbered and named capture references."
 sidebar:
-  order: 848
+  order: 851
 ---
 
 ## mb_ereg_replace()

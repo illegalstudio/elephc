@@ -2,7 +2,7 @@
 title: "ptr_read_f64()"
 description: "Reads one IEEE 754 double-precision value through a raw pointer and returns it as a float."
 sidebar:
-  order: 740
+  order: 743
 ---
 
 ## ptr_read_f64()

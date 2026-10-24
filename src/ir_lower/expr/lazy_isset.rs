@@ -103,14 +103,14 @@ pub(super) fn lower_lazy_isset_operand(
                 return None;
             }
             let object = lower_expr(ctx, object);
-            let probed = lower_property_probe_from_value(ctx, object, property, arg);
+            let probed = lower_property_isset_probe_from_value(ctx, object, property, arg);
             Some(probe_value_is_set(ctx, probed, arg))
         }
         ExprKind::DynamicPropertyAccess { object, property } => {
             // `isset($o->{$k})` must not raise for a name php refuses, and must not warn for one
             // it has never created, so the read carries php's probe fetch mode.
             let probed =
-                lower_dynamic_property_fetch(ctx, object, property, PropertyFetchMode::Probe, arg);
+                lower_dynamic_property_fetch(ctx, object, property, PropertyFetchMode::Isset, arg);
             Some(probe_value_is_set(ctx, probed, arg))
         }
         // `$o?->{$k}` is a nullsafe CHAIN, so its short-circuit belongs to the chain lowering.
@@ -236,13 +236,22 @@ pub(super) fn lower_lazy_empty(
         // never-created name answers `true` instead of raising.
         if property_probe_needs_runtime_name_form(ctx, object) {
             let object = lower_expr(ctx, object);
-            let probed = lower_property_probe_from_value(ctx, object, property, &args[0]);
+            let probed = lower_property_empty_probe_from_value(ctx, object, property, &args[0]);
+            return Some(lower_empty_of_probed_value(ctx, probed, name, expr));
+        }
+        // A class with `__get` but no `__isset`: php finds no property and never calls
+        // `__get`, so the probe below answers from the dynamic hash or null.
+        if property_existence_magic_class(ctx, object, property, "__get").is_some()
+            && property_existence_magic_class(ctx, object, property, "__isset").is_none()
+        {
+            let object = lower_expr(ctx, object);
+            let probed = lower_property_empty_probe_from_value(ctx, object, property, &args[0]);
             return Some(lower_empty_of_probed_value(ctx, probed, name, expr));
         }
     }
     if let ExprKind::DynamicPropertyAccess { object, property } = &args[0].kind {
         let probed =
-            lower_dynamic_property_fetch(ctx, object, property, PropertyFetchMode::Probe, &args[0]);
+            lower_dynamic_property_fetch(ctx, object, property, PropertyFetchMode::Empty, &args[0]);
         return Some(lower_empty_of_probed_value(ctx, probed, name, expr));
     }
     // A `?->` operand is a nullsafe CHAIN. Its segments only learn they are in a silent probe
@@ -360,7 +369,7 @@ fn lower_nullable_receiver_empty(
 /// which the caller hands to `release_evaluated_once` as soon as both reads are done. A hidden
 /// temp, not a one-shot owned temp: its loads borrow from the slot, so the `offsetExists` and
 /// `offsetGet` calls can both name it without consuming its reference.
-fn evaluate_once(
+pub(super) fn evaluate_once(
     ctx: &mut LoweringContext<'_, '_>,
     expr: &Expr,
     arg: &Expr,
@@ -391,7 +400,7 @@ fn evaluate_once(
 /// extra reference kept an object alive past its last `unset()` and delayed `__destruct()`.
 /// `ReleaseLocalSlot` clears the slot before releasing its occupant, so the epilogue finds it
 /// empty and a throwing destructor cannot revisit it.
-fn release_evaluated_once(ctx: &mut LoweringContext<'_, '_>, temp: Option<String>, span: Span) {
+pub(super) fn release_evaluated_once(ctx: &mut LoweringContext<'_, '_>, temp: Option<String>, span: Span) {
     let Some(temp_name) = temp else {
         return;
     };

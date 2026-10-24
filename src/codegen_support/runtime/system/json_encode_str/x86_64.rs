@@ -64,10 +64,12 @@ pub(super) fn emit(emitter: &mut Emitter) {
     // -- numeric raw-copy path --
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the source length
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // load the current concat-buffer offset
-    abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // materialize the concat-buffer base
-    emitter.instruction("add r11, r10");                                        // compute the write pointer
+    emitter.instruction("mov rax, rdx");                                        // the copy needs exactly the source length
+    emitter.instruction("call __rt_strbuf_reserve_temp");                       // scratch when it fits, a transient heap block otherwise
+    emitter.instruction("mov r11, rax");                                        // write pointer = the reservation
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the output start pointer for the return slice
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source pointer after the reservation
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the source length after the reservation
     emitter.instruction("xor rcx, rcx");                                        // initialize the copy index
     emitter.label("__rt_json_str_numeric_copy_x");
     emitter.instruction("cmp rcx, rdx");                                        // have we copied every byte?
@@ -77,9 +79,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("add rcx, 1");                                          // advance the copy index
     emitter.instruction("jmp __rt_json_str_numeric_copy_x");                    // continue copying
     emitter.label("__rt_json_str_numeric_done_x");
-    emitter.instruction("add r10, rdx");                                        // advance the concat-buffer offset by the copied length
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_concat_off", 0);            // republish the concat-buffer offset
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // rax = output start (the copied slice)
+    emitter.instruction("call __rt_concat_publish");                            // advance _concat_off past a scratch-backed slice (rax/rdx preserved)
     // rdx already holds the source length; reuse it as the result length.
     emitter.instruction("mov r15, QWORD PTR [rbp - 80]");                       // restore the callee-saved register
     emitter.instruction("mov rsp, rbp");                                        // unwind the scratch frame
@@ -87,9 +88,44 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the unquoted numeric slice
 
     emitter.label("__rt_json_str_quoted_x");
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // load the current concat-buffer absolute offset before appending the JSON string
-    abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // materialize the concat-buffer base pointer for the current JSON append
-    emitter.instruction("add r11, r10");                                        // compute the current concat-buffer write pointer from the base plus offset
+    // Size the output in a first pass: plain printable ASCII copies as one byte.
+    // Every other byte (an escapable ASCII character, a control byte, DEL, or
+    // any UTF-8 byte) is budgeted at the 6-byte worst case of a \u00XX escape,
+    // so the reservation never overruns while a long plain string reserves
+    // its own length instead of six times it.
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // reload the source pointer for the sizing pass
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the source length for the sizing pass
+    emitter.instruction("mov rax, 2");                                          // start the budget with the two quotes
+    emitter.instruction("xor ecx, ecx");                                        // initialize the sizing index
+    emitter.label("__rt_json_str_size_loop_x");
+    emitter.instruction("cmp rcx, rdx");                                        // has every source byte been sized?
+    emitter.instruction("jge __rt_json_str_size_done_x");                       // yes: reserve the computed budget
+    emitter.instruction("movzx r8d, BYTE PTR [rsi + rcx]");                     // load the next source byte
+    emitter.instruction("add rcx, 1");                                          // advance the sizing index
+    emitter.instruction("add rax, 1");                                          // every byte costs at least one output byte
+    emitter.instruction("lea r9d, [r8 - 32]");                                  // rebase printable ASCII 0x20..0x7E onto 0..94
+    emitter.instruction("cmp r9d, 95");                                         // control bytes wrap high, DEL and UTF-8 bytes land above 94
+    emitter.instruction("jae __rt_json_str_size_wide_x");                       // budget the worst-case escape for them
+    emitter.instruction("cmp r8d, 34");                                         // double quote escapes
+    emitter.instruction("je __rt_json_str_size_wide_x");                        // budget the worst-case escape
+    emitter.instruction("cmp r8d, 92");                                         // backslash escapes
+    emitter.instruction("je __rt_json_str_size_wide_x");                        // budget the worst-case escape
+    emitter.instruction("cmp r8d, 47");                                         // slash may escape
+    emitter.instruction("je __rt_json_str_size_wide_x");                        // budget the worst-case escape
+    emitter.instruction("cmp r8d, 60");                                         // '<' may become a hex escape
+    emitter.instruction("je __rt_json_str_size_wide_x");                        // budget the worst-case escape
+    emitter.instruction("cmp r8d, 62");                                         // '>' may become a hex escape
+    emitter.instruction("je __rt_json_str_size_wide_x");                        // budget the worst-case escape
+    emitter.instruction("cmp r8d, 38");                                         // '&' may become a hex escape
+    emitter.instruction("je __rt_json_str_size_wide_x");                        // budget the worst-case escape
+    emitter.instruction("cmp r8d, 39");                                         // '\'' may become a hex escape
+    emitter.instruction("jne __rt_json_str_size_loop_x");                       // any other printable byte copies as one byte
+    emitter.label("__rt_json_str_size_wide_x");
+    emitter.instruction("add rax, 5");                                          // raise this byte's budget to the 6-byte worst case
+    emitter.instruction("jmp __rt_json_str_size_loop_x");                       // size the next byte
+    emitter.label("__rt_json_str_size_done_x");
+    emitter.instruction("call __rt_strbuf_reserve_temp");                       // scratch when it fits, a transient heap block otherwise
+    emitter.instruction("mov r11, rax");                                        // output position = the reservation
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the encoded-string start pointer for the final result slice
     emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // save the current concat-buffer write pointer for the escape loop
     emitter.instruction("mov BYTE PTR [r11], 34");                              // write the opening JSON quote before any escaped payload bytes
@@ -674,10 +710,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the encoded-string start pointer in the leading x86_64 string result register
     emitter.instruction("mov rdx, r11");                                        // copy the final concat-buffer write pointer before turning it into a slice length
     emitter.instruction("sub rdx, rax");                                        // compute the final encoded-string length from write_end - write_start
-    abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // materialize the concat-buffer base pointer for the global offset update
-    emitter.instruction("mov rcx, r11");                                        // copy the final concat-buffer write pointer before converting it into an absolute offset
-    emitter.instruction("sub rcx, r10");                                        // compute the new absolute concat-buffer offset after the encoded JSON string
-    abi::emit_store_reg_to_symbol(emitter, "rcx", "_concat_off", 0);            // publish the updated concat-buffer offset so nested writers append after this JSON string
+    emitter.instruction("call __rt_concat_publish");                            // advance _concat_off past a scratch-backed result (rax/rdx preserved)
     emitter.instruction("mov r15, QWORD PTR [rbp - 80]");                       // restore the callee-saved register
     emitter.instruction("add rsp, 80");                                         // release the local JSON-string scratch frame before returning to generated code
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code

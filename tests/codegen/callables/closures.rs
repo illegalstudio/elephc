@@ -2582,3 +2582,45 @@ echo $a, "|", $b, "|", strlen($a), strlen($b);
     );
     let _ = fs::remove_dir_all(dir);
 }
+
+/// Verifies an untyped arrow fn passed to a `callable` parameter accepts a string argument and
+/// feeds it to a string builtin: an untyped parameter is `mixed`, never an `int` placeholder.
+#[test]
+fn test_untyped_arrow_fn_callable_param_string_arg() {
+    let out = compile_and_run(
+        r#"<?php
+function apply_cb(callable $cb, string $key): mixed {
+    return $cb($key);
+}
+echo apply_cb(fn($key) => strlen($key), "abcd"), "\n";
+"#,
+    );
+    assert_eq!(out, "4\n");
+}
+
+/// Verifies an untyped closure stored in a variable can be called with a string and with an int.
+#[test]
+fn test_untyped_closure_variable_string_and_int_args() {
+    let out = compile_and_run(
+        r#"<?php
+function apply_cb(callable $cb, string $key): mixed {
+    return $cb($key);
+}
+$f = function ($k) { return strtoupper($k) . "!"; };
+echo apply_cb($f, "ab"), "\n";
+echo $f(12), "\n";
+"#,
+    );
+    assert_eq!(out, "AB!\n12!\n");
+}
+
+/// Verifies array_map with an untyped arrow fn over strings keeps working with string builtins.
+#[test]
+fn test_untyped_arrow_fn_array_map_over_strings() {
+    let out = compile_and_run(
+        r#"<?php
+echo implode(",", array_map(fn($s) => str_pad($s, 3, "*"), ["a", "bb"])), "\n";
+"#,
+    );
+    assert_eq!(out, "a**,bb*\n");
+}

@@ -34,7 +34,7 @@ pub(super) fn publish_scoped_value_local(ctx: &mut LoweringContext<'_, '_>, name
     ctx.call_argument_evaluation_scopes.last_mut().expect("operand evaluation scope")
         .owners.push(crate::ir_lower::context::CallArgumentEvaluationOwner {
             value: None, borrow: None, temp_name: name.to_string(), slot, span,
-            ref_cell_payload: None, scoped_receiver_alias: false,
+            ref_cell_payload: None, scoped_receiver_alias: false, pins_borrowed_source: false,
         });
 }
 
@@ -67,6 +67,7 @@ pub(super) fn publish_scoped_ref_receiver_alias(
             span,
             ref_cell_payload: Some(PhpType::Mixed),
             scoped_receiver_alias: true,
+            pins_borrowed_source: false,
         });
     true
 }
@@ -161,6 +162,9 @@ pub(super) fn root_evaluated_call_argument(
     let temp_name = ctx.declare_owned_hidden_temp(ty.clone());
     let rooted =
         crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, value, Some(span));
+    // A source the expression did not own (a loaded parameter or local) is pinned only so a
+    // later argument cannot free it mid-evaluation; the call must keep borrowing it.
+    let source_owned = ctx.value_is_owning_temporary(value);
     ctx.store_local(&temp_name, rooted, ty, Some(span));
     let slot = ctx.local_slots[&temp_name];
     register_owned_call_operand(ctx, slot, span);
@@ -193,6 +197,7 @@ pub(super) fn root_evaluated_call_argument(
             span,
             ref_cell_payload: None,
             scoped_receiver_alias: false,
+            pins_borrowed_source: !source_owned,
         });
     LoweredValue {
         value: borrowed,
@@ -221,6 +226,26 @@ pub(super) fn finish_call_argument_evaluation(
     ctx: &mut LoweringContext<'_, '_>,
     operands: &mut [crate::ir::ValueId],
 ) -> Vec<CallArgumentIntermediate> {
+    finish_call_argument_evaluation_with(ctx, operands, false)
+}
+
+/// `finish_call_argument_evaluation` for a user function call: a pin taken on a borrowed source
+/// stays a root released after the call while the operand keeps borrowing. Handed to the call,
+/// it became an owned operand that a conservative return-alias summary (`f($name, 0)` returning
+/// `mixed`) never released, leaking one reference per call.
+pub(super) fn finish_user_call_argument_evaluation(
+    ctx: &mut LoweringContext<'_, '_>,
+    operands: &mut [crate::ir::ValueId],
+) -> Vec<CallArgumentIntermediate> {
+    finish_call_argument_evaluation_with(ctx, operands, true)
+}
+
+/// Shared body of the two `finish_*` entries.
+fn finish_call_argument_evaluation_with(
+    ctx: &mut LoweringContext<'_, '_>,
+    operands: &mut [crate::ir::ValueId],
+    keep_borrowed_pins: bool,
+) -> Vec<CallArgumentIntermediate> {
     let scope = ctx
         .call_argument_evaluation_scopes
         .pop()
@@ -229,7 +254,10 @@ pub(super) fn finish_call_argument_evaluation(
     let mut intermediates = Vec::new();
     for owner in scope.owners.into_iter().rev() {
         unregister_owned_call_operand(ctx, owner.slot, owner.span);
-        if owner.ref_cell_payload.is_some() || owner.value.is_none() {
+        if owner.ref_cell_payload.is_some()
+            || owner.value.is_none()
+            || (keep_borrowed_pins && owner.pins_borrowed_source)
+        {
             // Keep the Borrow marker on the call operand. It tells codegen that the
             // surrounding EIR ledger, rather than the ABI materializer, retires this
             // already-acquired managed cell after the call.
@@ -369,6 +397,7 @@ pub(super) fn lease_managed_call_argument_ref_cell(
             span,
             ref_cell_payload: Some(PhpType::Mixed),
             scoped_receiver_alias: false,
+            pins_borrowed_source: false,
         });
     LoweredValue {
         value: borrowed,

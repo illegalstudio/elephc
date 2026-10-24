@@ -159,6 +159,13 @@ pub(crate) fn bridges_in(
     bridges::bridges_in(link_libraries)
 }
 
+/// The archive of the bridge named `lib_name` (`libelephc_<name>.a`), auto-built in a
+/// source checkout. Hosted PHP extensions link the `elephc_zend` engine through it, after
+/// their own archives.
+pub(crate) fn bridge_archive(lib_name: &str) -> Result<std::path::PathBuf, LinkError> {
+    bridges::locate_archive(lib_name)
+}
+
 /// Maps one bridge library name to the PHP extensions identified by linking that bridge.
 pub(crate) fn php_extensions_for_lib(lib_name: &str) -> &'static [&'static str] {
     bridges::php_extensions_for_lib(lib_name)

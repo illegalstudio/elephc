@@ -919,6 +919,11 @@ pub(super) fn lower_dynamic_property_fetch_from_operands(
         Op::DynamicPropGet.default_effects(),
         Some(expr.span),
     );
+    // A name computed for this read (`$o->{(string) $mixed}`) is a temporary the
+    // lookup only reads; the result borrows from the object, never from it.
+    if ctx.value_is_owning_temporary(property) {
+        crate::ir_lower::ownership::release_if_owned(ctx, property, Some(expr.span));
+    }
     stabilize_borrowed_result_and_release_receiver(ctx, object, result, expr.span)
 }
 
@@ -944,6 +949,39 @@ pub(super) fn lower_property_probe_from_value(
     }
     let name = Expr::new(ExprKind::StringLiteral(property.to_string()), expr.span);
     lower_dynamic_property_fetch_from_value(ctx, object, &name, PropertyFetchMode::Probe, expr)
+}
+
+/// Like `lower_property_probe_from_value`, for `empty()`: a receiver with `__get` but no
+/// `__isset` reports the name absent without calling `__get` (`PropertyFetchMode::Empty`).
+pub(super) fn lower_property_empty_probe_from_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: &str,
+    expr: &Expr,
+) -> LoweredValue {
+    if property_can_be_uninitialized(ctx, object.value, property)
+        || union_hook_probe_class(ctx, object.value, property).is_some() {
+        return lower_initialized_property_value(ctx, object, property, expr);
+    }
+    let name = Expr::new(ExprKind::StringLiteral(property.to_string()), expr.span);
+    lower_dynamic_property_fetch_from_value(ctx, object, &name, PropertyFetchMode::Empty, expr)
+}
+
+/// Like `lower_property_probe_from_value`, for `isset()`: only the answer's nullness is used,
+/// so a receiver answering through magic is asked `__isset` alone (`PropertyFetchMode::Isset`).
+pub(super) fn lower_property_isset_probe_from_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: &str,
+    expr: &Expr,
+) -> LoweredValue {
+    // As for `??`: a typed slot that may still be uninitialized is probed, never read.
+    if property_can_be_uninitialized(ctx, object.value, property)
+        || union_hook_probe_class(ctx, object.value, property).is_some() {
+        return lower_initialized_property_value(ctx, object, property, expr);
+    }
+    let name = Expr::new(ExprKind::StringLiteral(property.to_string()), expr.span);
+    lower_dynamic_property_fetch_from_value(ctx, object, &name, PropertyFetchMode::Isset, expr)
 }
 
 /// Returns whether `$object->name` must be probed through the runtime-name form.

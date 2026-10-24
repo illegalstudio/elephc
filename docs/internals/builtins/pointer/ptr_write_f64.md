@@ -2,7 +2,7 @@
 title: "ptr_write_f64() - internals"
 description: "Compiler internals for ptr_write_f64(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 748
+  order: 751
 ---
 
 ## `ptr_write_f64()` - internals

@@ -8,7 +8,8 @@
 //! Key details:
 //! - An actual extension succeeds only when the block ends exactly at `_heap_buf + _heap_off`.
 //! - Failed probes leave allocator metadata and GC accounting unchanged.
-//! - Successful growth updates the 32-bit payload size, live bytes, and peak bytes.
+//! - Successful growth updates the 32-bit payload size, live bytes, and both peaks (live bytes
+//!   and the arena offset `memory_get_peak_usage(true)` reads).
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -58,6 +59,11 @@ pub fn emit_heap_grow_tail(emitter: &mut Emitter) {
 
     // -- publish the extension and update live-byte accounting --
     emitter.instruction("str x14, [x12]");                                      // publish the advanced bump offset after every guard has passed
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_heap_off_peak");
+    emitter.instruction("ldr x13, [x15]");                                      // load the previous arena-offset high watermark
+    emitter.instruction("cmp x14, x13");                                        // did the extension raise the arena-offset peak?
+    emitter.instruction("csel x13, x14, x13, hi");                              // keep the larger of the new offset and the previous peak
+    emitter.instruction("str x13, [x15]");                                      // publish the arena-offset peak memory_get_peak_usage(true) reads
     emitter.instruction("str w1, [x0, #-16]");                                  // publish the extended payload size in the existing block header
     crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_gc_live");
     emitter.instruction("ldr x13, [x12]");                                      // load live-byte accounting before adding only the extension delta
@@ -116,6 +122,11 @@ fn emit_heap_grow_tail_x86_64(emitter: &mut Emitter) {
 
     // -- publish the extension and update live-byte accounting --
     emitter.instruction("mov QWORD PTR [r9], rcx");                             // publish the advanced bump offset after every guard has passed
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_off_peak");
+    emitter.instruction("mov r11, QWORD PTR [r8]");                             // load the previous arena-offset high watermark
+    emitter.instruction("cmp rcx, r11");                                        // did the extension raise the arena-offset peak?
+    emitter.instruction("cmova r11, rcx");                                      // keep the larger of the new offset and the previous peak
+    emitter.instruction("mov QWORD PTR [r8], r11");                             // publish the arena-offset peak memory_get_peak_usage(true) reads
     emitter.instruction("mov DWORD PTR [rdi - 16], eax");                       // publish the extended payload size in the existing block header
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_live");
     emitter.instruction("mov r9, QWORD PTR [r8]");                              // load live-byte accounting before adding only the extension delta
@@ -203,6 +214,7 @@ mod tests {
                 assert!(assembly.contains("_heap_max"), "{name}, pic={pic}");
                 assert!(assembly.contains("_gc_live"), "{name}, pic={pic}");
                 assert!(assembly.contains("_gc_peak"), "{name}, pic={pic}");
+                assert!(assembly.contains("_heap_off_peak"), "{name}, pic={pic}");
                 assert!(!assembly.contains("_gc_allocs"), "{name}, pic={pic}");
                 assert!(!assembly.contains("_gc_frees"), "{name}, pic={pic}");
                 if target.arch == Arch::X86_64 {

@@ -7,9 +7,15 @@
 //!
 //! Key details:
 //! - The digest is deterministic, includes ordered Rust source paths and bytes, and emits rerun directives.
+//! - Also generates `elephc_zend_abi.h`, the C header hosted PHP extensions compile
+//!   against, from the elephc-zend crate's Rust source with that crate's own generator,
+//!   so `elephc` embeds it without linking the engine.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+#[path = "crates/elephc-zend/abi_header.rs"]
+mod abi_header;
 
 /// Recursively hashes Rust source files in lexical path order and asks Cargo to rerun for each one.
 fn hash_rust_sources(root: &Path, state: &mut u64) {
@@ -58,4 +64,11 @@ fn main() {
     println!("cargo:rerun-if-changed=src");
     hash_rust_sources(Path::new("src"), &mut state);
     println!("cargo:rustc-env=ELEPHC_RUNTIME_BUILD_ID={state:016x}");
+
+    println!("cargo:rerun-if-changed=crates/elephc-zend/src");
+    println!("cargo:rerun-if-changed=crates/elephc-zend/abi_header.rs");
+    let header = abi_header::generate(Path::new("crates/elephc-zend/src"))
+        .unwrap_or_else(|message| panic!("elephc-zend ABI header: {message}"));
+    let out = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
+    fs::write(out.join("elephc_zend_abi.h"), header).expect("write elephc_zend_abi.h");
 }

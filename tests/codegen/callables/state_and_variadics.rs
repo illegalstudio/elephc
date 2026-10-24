@@ -1035,3 +1035,68 @@ echo $ok ? "yes" : "no";
     );
     assert_eq!(out, "42|yes");
 }
+
+/// A by-reference variadic slot holds a marker to the caller's variable, and only a value
+/// boxed by the write itself was checked for one. A Mixed operand (a call's `mixed` result)
+/// went straight to the runtime setter and overwrote the marker, so the caller never saw the
+/// write: `$flag` stayed `false` and `$found` stayed `null`. This is the shape hosted
+/// extensions use to write their optional by-reference parameters back.
+#[test]
+fn test_mixed_result_written_into_a_by_ref_variadic_reaches_the_caller() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function rebuild(int $n): mixed {
+    return $n > 100;
+}
+function inc(int $n, mixed &...$rest): int {
+    if (array_key_exists(0, $rest)) {
+        $rest[0] = rebuild($n);
+    }
+    return $n + 1;
+}
+$flag = false;
+echo inc(41, $flag), " ", var_export($flag, true), "\n";
+echo inc(500, $flag), " ", var_export($flag, true), "\n";
+$found = null;
+echo inc(500, $found), " ", var_export($found, true), "\n";
+"#,
+    );
+    assert!(out.success, "stderr: {}", out.stderr);
+    assert_eq!(out.stdout, "42 false\n501 true\n501 true\n");
+    assert!(out.stderr.contains("leak summary: clean"), "{}", out.stderr);
+}
+
+/// Named arguments to a by-reference variadic travel in a hash, and the call hands the
+/// callee an `array<mixed>` reference cell for it. The cell only retained a container of
+/// the very same shape, so the hash went in unretained: releasing the cell and then the
+/// argument freed it twice on every `f(name: $v)`, whether or not the callee wrote back.
+#[test]
+fn test_named_argument_into_a_by_ref_variadic_releases_its_container_once() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function rebuild(int $n): mixed {
+    return $n > 100;
+}
+function inc(int $n, mixed &...$rest): int {
+    if (array_key_exists("success", $rest)) {
+        $rest["success"] = rebuild($n);
+    }
+    return $n + 1;
+}
+function touch_only(mixed &...$rest): int {
+    return count($rest);
+}
+$total = 0;
+for ($i = 0; $i < 20; $i++) {
+    $named = false;
+    $total += inc(500, success: $named) + ($named ? 1 : 0);
+    $other = 1;
+    $total += touch_only(x: $other);
+}
+echo $total, "\n";
+"#,
+    );
+    assert!(out.success, "stderr: {}", out.stderr);
+    assert_eq!(out.stdout, "10060\n");
+    assert!(out.stderr.contains("leak summary: clean"), "{}", out.stderr);
+}

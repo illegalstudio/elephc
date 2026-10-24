@@ -473,6 +473,13 @@ pub enum PropertyFetchMode {
     Read,
     /// A silent existence probe: an inaccessible or undefined name answers `null`.
     Probe,
+    /// The probe `isset()` makes: silent like `Probe`, and only the answer's nullness is used,
+    /// so a class answering through magic is asked `__isset` alone, never `__get`, as php does.
+    Isset,
+    /// The probe `empty()` makes: like `Probe`, except that a class with `__get` but no
+    /// `__isset` reports the name absent without calling `__get`, as php does. (`??` does call
+    /// `__get` there.)
+    Empty,
 }
 
 impl PropertyFetchMode {
@@ -481,7 +488,15 @@ impl PropertyFetchMode {
         match self {
             Self::Read => "read",
             Self::Probe => "probe",
+            Self::Isset => "isset",
+            Self::Empty => "empty",
         }
+    }
+
+    /// Returns whether a class with `__get` but no `__isset` answers this probe as absent
+    /// without calling `__get`: php's `isset()` and `empty()`, not `??`.
+    pub const fn skips_get_without_isset(self) -> bool {
+        matches!(self, Self::Isset | Self::Empty)
     }
 
     /// Returns whether this mode may raise or warn about the name it fetches.
@@ -591,6 +606,16 @@ pub enum GcControlOp {
     DestructorTime = 12,
     /// Reads cumulative graph-free time in seconds.
     FreeTime = 13,
+    /// Reads live managed-heap bytes (`memory_get_usage(false)`).
+    MemoryUsage = 14,
+    /// Reads bytes carved from the heap arena (`memory_get_usage(true)`); always `MemoryUsage + 1`.
+    MemoryUsageReal = 15,
+    /// Reads the live-byte high watermark (`memory_get_peak_usage(false)`).
+    MemoryPeak = 16,
+    /// Reads the arena-offset high watermark (`memory_get_peak_usage(true)`); always `MemoryPeak + 1`.
+    MemoryPeakReal = 17,
+    /// Resets both peak watermarks to current usage (`memory_reset_peak_usage()`).
+    MemoryResetPeak = 18,
 }
 
 impl GcControlOp {
@@ -616,6 +641,11 @@ impl GcControlOp {
             11 => Some(Self::CollectorTime),
             12 => Some(Self::DestructorTime),
             13 => Some(Self::FreeTime),
+            14 => Some(Self::MemoryUsage),
+            15 => Some(Self::MemoryUsageReal),
+            16 => Some(Self::MemoryPeak),
+            17 => Some(Self::MemoryPeakReal),
+            18 => Some(Self::MemoryResetPeak),
             _ => None,
         }
     }
@@ -628,6 +658,15 @@ impl GcControlOp {
             // lets AST pruning discard the catch around an explicit collection call.
             Self::Collect => E::all(),
             Self::Disable | Self::Enable => E::WRITES_GLOBAL,
+            Self::MemoryUsage
+            | Self::MemoryUsageReal
+            | Self::MemoryPeak
+            | Self::MemoryPeakReal => {
+                Effects::from_bits_retain(E::READS_GLOBAL.bits() | E::READS_HEAP.bits())
+            }
+            Self::MemoryResetPeak => {
+                Effects::from_bits_retain(E::WRITES_GLOBAL.bits() | E::READS_HEAP.bits())
+            }
             Self::Enabled
             | Self::Running
             | Self::Protected
@@ -1929,6 +1968,18 @@ impl Op {
 mod tests {
     use super::IterStartMetadata;
     use crate::ir::LocalSlotId;
+
+    /// The memory selectors are a cross-crate ABI: elephc-magician's `memory_get_usage()` and
+    /// `memory_get_peak_usage()` hardcode 14 and 16 and add 1 for `$real_usage`, because the eval
+    /// crate cannot name `GcControlOp`. Renumbering the enum must fail here, not in eval.
+    #[test]
+    fn memory_selectors_match_the_eval_interpreter() {
+        use super::GcControlOp;
+        assert_eq!(GcControlOp::MemoryUsage as u64, 14);
+        assert_eq!(GcControlOp::MemoryUsageReal as u64, 15);
+        assert_eq!(GcControlOp::MemoryPeak as u64, 16);
+        assert_eq!(GcControlOp::MemoryPeakReal as u64, 17);
+    }
 
     /// `Instruction` is built by value inside the recursive AST->EIR lowering
     /// paths, so its size feeds every lowering stack frame. Growing it past

@@ -6,9 +6,16 @@
 //!
 //! Key details:
 //! - The harness calls real runtime helpers and enables their free-list validator.
-//! - Boundary payloads exercise all four small bins and the ordered-list fallback.
+//! - Blocks above `BIN_MAX` take the ordered list, so splits are exercised there; remainders
+//!   on either side of `BIN_MAX` land in their exact bin or stay listed.
 
 use crate::support::*;
+
+/// Largest payload the allocator parks in an exact size-class bin (`HEAP_BIN_MAX`).
+const BIN_MAX: usize = 2048;
+
+/// A request larger than `BIN_MAX`, so the freed block it splits sits on the ordered list.
+const BASE: usize = BIN_MAX + 8;
 
 /// Selects an instruction using the same target as the compiled runtime harness.
 fn instruction(emitter: &mut String, arm: &str, x86: &str) {
@@ -40,7 +47,8 @@ fn expect_symbol(emitter: &mut String, symbol: &str, expected: usize) {
     let reg = if target().arch == Arch::AArch64 { "x9" } else { "r8" };
     symbol_address(emitter, reg, symbol);
     instruction(emitter, "ldr x9, [x9]", "mov r8, QWORD PTR [r8]");
-    instruction(emitter, &format!("cmp x9, #{expected}"), &format!("cmp r8, {expected}"));
+    instruction(emitter, &format!("mov x10, #{expected}"), "");
+    instruction(emitter, "cmp x9, x10", &format!("cmp r8, {expected}"));
     expect_equal(emitter);
 }
 
@@ -49,13 +57,13 @@ fn expect_symbol(emitter: &mut String, symbol: &str, expected: usize) {
 fn test_gc_small_split_remainder_classes_reuse_and_cache_drain() {
     let mut emitter = String::new();
     instruction(&mut emitter, "sub sp, sp, #64", "sub rsp, 64");
-    for remainder in [8, 16, 24, 32, 40, 64, 72] {
+    for remainder in [8, 16, 24, 32, 40, 64, 72, BIN_MAX, BIN_MAX + 8] {
         for symbol in ["_gc_allocs", "_gc_frees", "_gc_peak"] {
             let reg = if target().arch == Arch::AArch64 { "x9" } else { "r8" };
             symbol_address(&mut emitter, reg, symbol);
             instruction(&mut emitter, "str xzr, [x9]", "mov QWORD PTR [r8], 0");
         }
-        let payload = 80 + 16 + remainder;
+        let payload = BASE + 16 + remainder;
         instruction(&mut emitter, &format!("mov x0, #{payload}"), &format!("mov eax, {payload}"));
         call(&mut emitter, "__rt_heap_alloc");
         instruction(&mut emitter, "str x0, [sp]", "mov QWORD PTR [rsp], rax");
@@ -64,38 +72,36 @@ fn test_gc_small_split_remainder_classes_reuse_and_cache_drain() {
         instruction(&mut emitter, "str x0, [sp, #8]", "mov QWORD PTR [rsp + 8], rax");
         instruction(&mut emitter, "ldr x0, [sp]", "mov rax, QWORD PTR [rsp]");
         call(&mut emitter, "__rt_heap_free");
-        instruction(&mut emitter, "mov x0, #80", "mov eax, 80");
+        instruction(&mut emitter, &format!("mov x0, #{BASE}"), &format!("mov eax, {BASE}"));
         call(&mut emitter, "__rt_heap_alloc");
         instruction(&mut emitter, "ldr x9, [sp]", "mov r8, QWORD PTR [rsp]");
         instruction(&mut emitter, "cmp x0, x9", "cmp rax, r8");
         expect_equal(&mut emitter);
         expect_symbol(&mut emitter, "_gc_allocs", 3);
         expect_symbol(&mut emitter, "_gc_frees", 1);
-        expect_symbol(&mut emitter, "_gc_live", 120);
+        expect_symbol(&mut emitter, "_gc_live", BASE + 40);
         expect_symbol(&mut emitter, "_gc_peak", payload + 40);
         expect_symbol(&mut emitter, "_heap_off", payload + 40);
-        let bin = if remainder <= 8 { 0 } else if remainder <= 16 { 8 }
-            else if remainder <= 32 { 16 } else { 24 };
-        let symbol = if remainder <= 64 { "_heap_small_bins" } else { "_heap_free_list" };
-        let offset = if remainder <= 64 { bin } else { 0 };
+        let symbol = if remainder <= BIN_MAX { "_heap_small_bins" } else { "_heap_free_list" };
+        let offset = if remainder <= BIN_MAX { remainder - 8 } else { 0 };
         let reg = if target().arch == Arch::AArch64 { "x9" } else { "r8" };
         symbol_address(&mut emitter, reg, symbol);
         instruction(&mut emitter, &format!("ldr x10, [x9, #{offset}]"),
             &format!("mov r9, QWORD PTR [r8 + {offset}]"));
         instruction(&mut emitter, "ldr x11, [sp]", "mov r10, QWORD PTR [rsp]");
-        instruction(&mut emitter, "add x11, x11, #80", "add r10, 80");
+        instruction(&mut emitter, &format!("add x11, x11, #{BASE}"), &format!("add r10, {BASE}"));
         instruction(&mut emitter, "cmp x10, x11", "cmp r9, r10");
         expect_equal(&mut emitter);
         instruction(&mut emitter, "ldr w12, [x10]", "mov ecx, DWORD PTR [r9]");
         instruction(&mut emitter, &format!("cmp w12, #{remainder}"), &format!("cmp ecx, {remainder}"));
         expect_equal(&mut emitter);
-        if remainder <= 64 { expect_symbol(&mut emitter, "_heap_free_list", 0); }
+        if remainder <= BIN_MAX { expect_symbol(&mut emitter, "_heap_free_list", 0); }
         call(&mut emitter, "__rt_heap_debug_validate_free_list");
         instruction(&mut emitter, &format!("mov x0, #{remainder}"), &format!("mov eax, {remainder}"));
         call(&mut emitter, "__rt_heap_alloc");
         instruction(&mut emitter, "str x0, [sp, #16]", "mov QWORD PTR [rsp + 16], rax");
         instruction(&mut emitter, "ldr x9, [sp]", "mov r8, QWORD PTR [rsp]");
-        instruction(&mut emitter, "add x9, x9, #96", "add r8, 96");
+        instruction(&mut emitter, &format!("add x9, x9, #{}", BASE + 16), &format!("add r8, {}", BASE + 16));
         instruction(&mut emitter, "cmp x0, x9", "cmp rax, r8");
         expect_equal(&mut emitter);
         expect_symbol(&mut emitter, "_heap_off", payload + 40);
@@ -105,7 +111,7 @@ fn test_gc_small_split_remainder_classes_reuse_and_cache_drain() {
             call(&mut emitter, "__rt_heap_free");
         }
         call(&mut emitter, "__rt_gc_mem_caches");
-        let released = if remainder <= 64 { remainder + 16 } else { 0 };
+        let released = if remainder <= BIN_MAX { remainder + 16 } else { 0 };
         instruction(&mut emitter, &format!("cmp x0, #{released}"), &format!("cmp rax, {released}"));
         expect_equal(&mut emitter);
         call(&mut emitter, "__rt_gc_mem_caches");
@@ -140,14 +146,14 @@ fn test_gc_small_split_remainder_classes_reuse_and_cache_drain() {
 fn test_gc_small_split_remainder_drains_before_live_allocation_free() {
     let mut emitter = String::new();
     instruction(&mut emitter, "sub sp, sp, #64", "sub rsp, 64");
-    for remainder in [8, 16, 24, 32, 40, 64, 72] {
+    for remainder in [8, 16, 24, 32, 40, 64, 72, BIN_MAX, BIN_MAX + 8] {
         // -- create a split with a live allocation on each side --
         for symbol in ["_gc_allocs", "_gc_frees", "_gc_peak"] {
             let reg = if target().arch == Arch::AArch64 { "x9" } else { "r8" };
             symbol_address(&mut emitter, reg, symbol);
             instruction(&mut emitter, "str xzr, [x9]", "mov QWORD PTR [r8], 0");
         }
-        let payload = 80 + 16 + remainder;
+        let payload = BASE + 16 + remainder;
         instruction(&mut emitter, &format!("mov x0, #{payload}"), &format!("mov eax, {payload}"));
         call(&mut emitter, "__rt_heap_alloc");
         instruction(&mut emitter, "str x0, [sp]", "mov QWORD PTR [rsp], rax");
@@ -156,7 +162,7 @@ fn test_gc_small_split_remainder_drains_before_live_allocation_free() {
         instruction(&mut emitter, "str x0, [sp, #8]", "mov QWORD PTR [rsp + 8], rax");
         instruction(&mut emitter, "ldr x0, [sp]", "mov rax, QWORD PTR [rsp]");
         call(&mut emitter, "__rt_heap_free");
-        instruction(&mut emitter, "mov x0, #80", "mov eax, 80");
+        instruction(&mut emitter, &format!("mov x0, #{BASE}"), &format!("mov eax, {BASE}"));
         call(&mut emitter, "__rt_heap_alloc");
         instruction(&mut emitter, "ldr x9, [sp]", "mov r8, QWORD PTR [rsp]");
         instruction(&mut emitter, "cmp x0, x9", "cmp rax, r8");
@@ -166,22 +172,22 @@ fn test_gc_small_split_remainder_drains_before_live_allocation_free() {
         for pass in 0..2 {
             expect_symbol(&mut emitter, "_gc_allocs", 3);
             expect_symbol(&mut emitter, "_gc_frees", 1);
-            expect_symbol(&mut emitter, "_gc_live", 120);
+            expect_symbol(&mut emitter, "_gc_live", BASE + 40);
             expect_symbol(&mut emitter, "_gc_peak", payload + 40);
             expect_symbol(&mut emitter, "_heap_off", payload + 40);
             call(&mut emitter, "__rt_gc_mem_caches");
-            let released = if pass == 0 && remainder <= 64 { remainder + 16 } else { 0 };
+            let released = if pass == 0 && remainder <= BIN_MAX { remainder + 16 } else { 0 };
             instruction(&mut emitter, &format!("cmp x0, #{released}"), &format!("cmp rax, {released}"));
             expect_equal(&mut emitter);
         }
         expect_symbol(&mut emitter, "_gc_allocs", 3);
         expect_symbol(&mut emitter, "_gc_frees", 1);
-        expect_symbol(&mut emitter, "_gc_live", 120);
+        expect_symbol(&mut emitter, "_gc_live", BASE + 40);
         expect_symbol(&mut emitter, "_gc_peak", payload + 40);
         expect_symbol(&mut emitter, "_heap_off", payload + 40);
         let reg = if target().arch == Arch::AArch64 { "x9" } else { "r8" };
         symbol_address(&mut emitter, reg, "_heap_small_bins");
-        for offset in [0, 8, 16, 24] {
+        for offset in [0, 8, 16, 24, 56, BIN_MAX - 8].into_iter().chain((remainder <= BIN_MAX).then_some(remainder - 8)) {
             instruction(&mut emitter, &format!("ldr x10, [x9, #{offset}]"),
                 &format!("mov r9, QWORD PTR [r8 + {offset}]"));
             instruction(&mut emitter, "cmp x10, #0", "cmp r9, 0");
@@ -199,7 +205,8 @@ fn test_gc_small_split_remainder_drains_before_live_allocation_free() {
         instruction(&mut emitter, "cmp x10, x11", "cmp r9, r10");
         expect_equal(&mut emitter);
         instruction(&mut emitter, "ldr w12, [x10]", "mov ecx, DWORD PTR [r9]");
-        instruction(&mut emitter, &format!("cmp w12, #{payload}"), &format!("cmp ecx, {payload}"));
+        instruction(&mut emitter, &format!("mov w13, #{payload}"), "");
+        instruction(&mut emitter, "cmp w12, w13", &format!("cmp ecx, {payload}"));
         expect_equal(&mut emitter);
         expect_symbol(&mut emitter, "_gc_allocs", 3);
         expect_symbol(&mut emitter, "_gc_frees", 2);
@@ -259,7 +266,7 @@ fn test_gc_small_split_remainder_nested_json_php_and_optimizer_modes() {
 fn test_gc_small_split_remainder_preserves_both_existing_chains() {
     let mut emitter = String::new();
     instruction(&mut emitter, "sub sp, sp, #96", "sub rsp, 96");
-    for (slot, size) in [24, 8, 72, 8, 120, 8, 192, 8].into_iter().enumerate() {
+    for (slot, size) in [24, 8, BIN_MAX + 72, 8, BIN_MAX + 120, 8, BIN_MAX + 192, 8].into_iter().enumerate() {
         instruction(&mut emitter, &format!("mov x0, #{size}"), &format!("mov eax, {size}"));
         call(&mut emitter, "__rt_heap_alloc");
         let offset = slot * 8;
@@ -271,7 +278,7 @@ fn test_gc_small_split_remainder_preserves_both_existing_chains() {
             &format!("mov rax, QWORD PTR [rsp + {offset}]"));
         call(&mut emitter, "__rt_heap_free");
     }
-    instruction(&mut emitter, "mov x0, #80", "mov eax, 80");
+    instruction(&mut emitter, &format!("mov x0, #{}", BIN_MAX + 80), &format!("mov eax, {}", BIN_MAX + 80));
     call(&mut emitter, "__rt_heap_alloc");
     instruction(&mut emitter, "ldr x9, [sp, #32]", "mov r8, QWORD PTR [rsp + 32]");
     instruction(&mut emitter, "cmp x0, x9", "cmp rax, r8");
@@ -291,7 +298,7 @@ fn test_gc_small_split_remainder_preserves_both_existing_chains() {
     instruction(&mut emitter, "ldr x10, [x10, #16]", "mov r9, QWORD PTR [r9 + 16]");
     instruction(&mut emitter, "cmp x10, #0", "cmp r9, 0");
     expect_equal(&mut emitter);
-    for (offset, original_offset, delta) in [(64, 32, 96), (72, 0, 0)] {
+    for (offset, original_offset, delta) in [(64, 32, BIN_MAX + 96), (72, 0, 0)] {
         instruction(&mut emitter, "mov x0, #24", "mov eax, 24");
         call(&mut emitter, "__rt_heap_alloc");
         instruction(&mut emitter, &format!("str x0, [sp, #{offset}]"),

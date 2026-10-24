@@ -10,6 +10,9 @@
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
+/// Number of 32-byte slots in `_itoa_spill_ring`; a power of two so the cursor wraps with a mask.
+pub(crate) const ITOA_SPILL_SLOTS: usize = 8;
+
 /// Emits __rt_itoa_into, formatting a signed 64-bit integer inside a caller-provided 21-byte
 /// destination window. The result is right-aligned in that window so callers can copy the returned
 /// slice to its start without touching _concat_buf or changing _concat_off.
@@ -92,7 +95,12 @@ pub fn emit_itoa_into(emitter: &mut Emitter) {
 /// - x86_64 macOS uses `emit_itoa_linux_x86_64` with the same convention.
 ///
 /// # Side effects
-/// - Advances `_concat_off` by 21 to reserve the scratch area.
+/// - Advances `_concat_off` by 21 to reserve the scratch area. When the window would cross the end
+///   of the 64 KiB `_concat_buf`, the digits go to the next 32-byte slot of the `_itoa_spill_ring`
+///   instead and `_concat_off` is left alone. Writing past the buffer would corrupt the adjacent
+///   runtime globals, and wrapping to offset 0 overwrote live scratch bytes: a 65 520-byte scratch
+///   string concatenated with an int lost its bytes 18..20 to the digits. The ring keeps the last
+///   few spilled results apart, so the operands of one expression never share a slot.
 /// - Scratch area is written right-to-left starting 21 bytes past the current concat_buf offset.
 pub fn emit_itoa(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -112,8 +120,23 @@ pub fn emit_itoa(emitter: &mut Emitter) {
     // -- get concat_buf write position --
     crate::codegen_support::abi::emit_symbol_address(emitter, "x6", "_concat_off");
     emitter.instruction("ldr x8, [x6]");                                        // load current offset into concat_buf
+    emitter.instruction("add x12, x8, #21");                                    // offset after reserving the 21-byte scratch window
+    emitter.instruction("mov x13, #65536");                                     // concat scratch capacity in bytes
+    emitter.instruction("cmp x12, x13");                                        // would the window cross the end of _concat_buf?
+    emitter.instruction("b.hi __rt_itoa_spill");                                // a full scratch formats into the spill ring instead
     crate::codegen_support::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
     emitter.instruction("add x9, x7, x8");                                      // compute write position: buf + offset
+    emitter.instruction("b __rt_itoa_window_ready");                            // the scratch window is reserved
+    emitter.label("__rt_itoa_spill");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x7", "_itoa_spill_index");
+    emitter.instruction("ldr x12, [x7]");                                       // load the next spill slot index
+    emitter.instruction("add x13, x12, #1");                                    // advance the ring cursor
+    emitter.instruction(&format!("and x13, x13, #{}", ITOA_SPILL_SLOTS - 1));   // wrap the cursor inside the ring
+    emitter.instruction("str x13, [x7]");                                       // publish the cursor for the next spill
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x7", "_itoa_spill_ring");
+    emitter.instruction("add x9, x7, x12, lsl #5");                             // each spill slot is 32 bytes
+    emitter.instruction("sub x8, x8, #21");                                     // cancel the scratch advance below: the live scratch keeps its offset
+    emitter.label("__rt_itoa_window_ready");
     emitter.instruction("add x9, x9, #20");                                     // advance to end of 21-byte scratch area (digits written right-to-left)
 
     // -- initialize counters --
@@ -191,8 +214,23 @@ fn emit_itoa_linux_x86_64(emitter: &mut Emitter) {
     // -- get concat_buf write position --
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_off");
     emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current concat buffer offset
+    emitter.instruction("lea rsi, [r9 + 21]");                                  // offset after reserving the 21-byte scratch window
+    emitter.instruction("cmp rsi, 65536");                                      // would the window cross the end of _concat_buf?
+    emitter.instruction("ja __rt_itoa_spill");                                  // a full scratch formats into the spill ring instead
     crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_concat_buf");
     emitter.instruction("add r10, r9");                                         // compute the current concat buffer write position
+    emitter.instruction("jmp __rt_itoa_window_ready");                          // the scratch window is reserved
+    emitter.label("__rt_itoa_spill");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_itoa_spill_index");
+    emitter.instruction("mov rsi, QWORD PTR [r10]");                            // load the next spill slot index
+    emitter.instruction("lea rdx, [rsi + 1]");                                  // advance the ring cursor
+    emitter.instruction(&format!("and rdx, {}", ITOA_SPILL_SLOTS - 1));         // wrap the cursor inside the ring
+    emitter.instruction("mov QWORD PTR [r10], rdx");                            // publish the cursor for the next spill
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_itoa_spill_ring");
+    emitter.instruction("shl rsi, 5");                                          // each spill slot is 32 bytes
+    emitter.instruction("add r10, rsi");                                        // address the claimed spill slot
+    emitter.instruction("sub r9, 21");                                          // cancel the scratch advance below: the live scratch keeps its offset
+    emitter.label("__rt_itoa_window_ready");
     emitter.instruction("add r10, 20");                                         // advance to the end of the 21-byte scratch area for right-to-left digit writes
 
     // -- initialize counters --

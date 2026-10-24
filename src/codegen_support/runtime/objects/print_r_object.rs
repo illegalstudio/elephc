@@ -168,6 +168,10 @@ pub fn emit_print_r_object(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
     emitter.instruction("bl __rt_vd_seen_push");                                // mark the object as being walked
 
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
+    emitter.instruction("ldr x1, [sp, #8]");                                    // paren base indent → body renderer
+    emitter.instruction("bl __rt_pr_debuginfo_object");                         // render through a run-time __debugInfo() when the class has one
+    emitter.instruction("cbnz x0, __rt_pr_obj_walked");                         // the whole body was written; only the guard pop remains
     emitter.instruction("ldr x0, [sp, #8]");                                    // base → open helper argument
     emitter.instruction("bl __rt_print_r_open");                                // write `<base>(\n`
 
@@ -253,6 +257,7 @@ pub fn emit_print_r_object(emitter: &mut Emitter) {
     emitter.label("__rt_pr_obj_close");
     emitter.instruction("ldr x0, [sp, #8]");                                    // base → close helper argument
     emitter.instruction("bl __rt_print_r_close");                               // write `<base>)\n`
+    emitter.label("__rt_pr_obj_walked");
     emitter.instruction("bl __rt_vd_seen_pop");                                 // the object is no longer on the walk stack
     emitter.instruction("b __rt_pr_obj_exit");                                  // object rendered
 
@@ -346,6 +351,11 @@ fn emit_print_r_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
     emitter.instruction("call __rt_vd_seen_push");                              // mark the object as being walked
 
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // paren base indent → body renderer
+    emitter.instruction("call __rt_pr_debuginfo_object");                       // render through a run-time __debugInfo() when the class has one
+    emitter.instruction("test rax, rax");                                       // was the whole body written?
+    emitter.instruction("jnz __rt_pr_obj_walked_x86");                          // only the guard pop remains
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // base → open helper argument
     emitter.instruction("call __rt_print_r_open");                              // write `<base>(\n`
 
@@ -425,6 +435,7 @@ fn emit_print_r_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_pr_obj_close_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // base → close helper argument
     emitter.instruction("call __rt_print_r_close");                             // write `<base>)\n`
+    emitter.label("__rt_pr_obj_walked_x86");
     emitter.instruction("call __rt_vd_seen_pop");                               // the object is no longer on the walk stack
     emitter.instruction("jmp __rt_pr_obj_exit_x86");                            // object rendered
 

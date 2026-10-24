@@ -1,0 +1,56 @@
+---
+title: "memory_get_peak_usage() - internals"
+description: "Compiler internals for memory_get_peak_usage(): lowering path, type checks, and runtime helpers."
+sidebar:
+  order: 638
+---
+
+## `memory_get_peak_usage()` - internals
+
+## Where it lives
+
+- **Signature**: [`src/builtins/system/memory_get_peak_usage.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/memory_get_peak_usage.rs)
+- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
+
+
+### Lowering notes
+
+- Uses the `eir_primitive` strategy from the single-source builtin descriptor.
+- Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`.
+
+## Semantic descriptor
+
+- **Target strategy**: `eir_primitive`
+- **Validation**: `signature`
+- **Result type source**: `declared`
+- **Result ownership**: `non_heap`
+- **Effects**: `static (2 declared effects)`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `dynamic`
+- **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: descriptor-emitted EIR primitives or graph; no opaque builtin call remains.
+
+## Signature summary
+
+```php
+function memory_get_peak_usage(bool $real_usage = false): int
+```
+
+## What the type checker enforces
+
+- **Arity**: takes 0–1 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/core/memory_get_peak_usage.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/memory_get_peak_usage.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
+- **Dispatch hooks**: `direct`, `values`
+
+## Cross-references
+
+- [User reference for `memory_get_peak_usage()`](../../../php/builtins/misc/memory_get_peak_usage.md)

@@ -1568,3 +1568,32 @@ echo $result;
     );
     assert_eq!(out, "yoy");
 }
+
+/// Verifies that an owned string argument a callee returns as `mixed` is released.
+///
+/// Boxing a `string` parameter into a `mixed` result COPIES the payload, so the result never
+/// reuses the argument's storage. The return-alias summary used to claim it did, and every caller
+/// skipped releasing an owned argument (a call's string result): one string per call leaked.
+#[test]
+fn test_string_argument_returned_as_mixed_is_released() {
+    let source = r#"<?php
+function produce(int $i): string {
+    return str_repeat("a", $i % 3 + 1) . $i;
+}
+function boxed(string $value): mixed {
+    return $value;
+}
+$kept = [];
+for ($i = 0; $i < 40; $i++) {
+    $value = boxed(produce($i));
+    if ($i % 10 === 0) {
+        $kept[] = $value;
+    }
+}
+echo implode(",", $kept);
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "a0,aa10,aaa20,a30");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

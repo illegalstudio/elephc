@@ -18,6 +18,7 @@ exhaustive *what*.
 elephc [OPTIONS] <source-file>
 elephc --version
 elephc native <COMMAND> [OPTIONS]
+elephc extension <COMMAND> [OPTIONS]
 elephc monitor <PROGRAM> [OPTIONS]
 elephc repl [OPTIONS]
 elephc test [PATH] [OPTIONS] [COMPILE OPTIONS]
@@ -26,7 +27,7 @@ elephc test [PATH] [OPTIONS] [COMPILE OPTIONS]
 For compilation, except for `--help` and `--version`, exactly one positional argument is required:
 the path to tagged `.php` or tagless `.lfc` source. The binary is written next
 to it, named after the source without its extension.
-Only an exact first argument of `native`, `monitor`, `repl`, or `test` selects a
+Only an exact first argument of `native`, `extension`, `monitor`, `repl`, or `test` selects a
 subcommand family. Source files with those names must use an explicit path such as
 `./repl`.
 
@@ -108,6 +109,18 @@ only through the explicit `native prune` command.
 
 See [Native dependencies](native-dependencies.md) for project files, cache
 selection, toolchain overrides, and transactional behavior.
+
+## Hosted PHP extension commands
+
+| Command | Arguments and flags | Description |
+|---|---|---|
+| `extension add` | `<name>[@<version>] \| <vendor/package>[@<version>] \| <name> --path DIR` plus `[--target TARGET] [--offline] [--manifest-path FILE]` | Fetch a PECL release or PIE package (or use a local tree), pin its SHA-256, build it, and record its surface. |
+| `extension install` | `[--target TARGET] [--offline] [--manifest-path FILE]` | Build every declared extension that is not built yet, verifying pinned digests. |
+| `extension remove` | `<name> [--manifest-path FILE]` | Remove a declaration; built artifacts stay in the shared cache. |
+| `extension list` | `[--target TARGET] [--manifest-path FILE]` | Print each declared extension, whether it is built, and its surface. |
+
+A program whose project declares extensions is linked against them
+automatically; see [Hosting PHP extensions](../beyond-php/php-extensions.md).
 
 ## Performance monitoring command
 
@@ -511,7 +524,7 @@ See [Optimization and codegen controls](optimization.md).
 | `--link LIB` / `-l LIB` / `-lLIB` | library name | — | Link an extra native library (repeatable). |
 | `--link-path DIR` / `-L DIR` / `-LDIR` | directory | — | Add a library search path (repeatable). |
 | `--framework NAME` | framework name | — | Link a macOS framework (repeatable). |
-| `--with-NAME` | `pdo`, `tls`, `crypto`, `bcmath`, `mbstring`, `iconv`, `phar`, `tz`, `image`, `pcntl`, `xml`, `eval`, `regex`, `curl`, `mysqli`, `web` | - | Force-enable an optional bridge or runtime capability (repeatable). Bridge names force-link their staticlib and inject any PHP-surface prelude. `--with-bcmath` force-links exact decimal arithmetic and retains the `BcMath\Number` class for indirect calls and opaque eval source. `--with-mbstring`, `--with-iconv`, and `--with-pcntl` force-link their native support when static detection cannot see a call. `--with-xml` force-links the XML bridge and injects the `XMLParser`/`XMLWriter` prelude; the parser uses the managed `libxml2` package, so the project must declare it (`elephc native add libxml2`), exactly as auto-detected XML use does. `--with-regex` enables managed PCRE2 for opaque dynamic eval; the project must declare `pcre2`. `--with-eval` force-links Magician but is not required for normal `eval()` use. `--with-mysqli` force-injects the mysqli prelude (which links the shared `elephc_pdo` bridge); it does not inject the PDO classes. `--with-web` is an alias for `--web`. An unknown name is an error. Run `elephc --print-capabilities` for the list a given binary actually accepts. |
+| `--with-NAME` | `pdo`, `tls`, `crypto`, `bcmath`, `mbstring`, `iconv`, `phar`, `tz`, `image`, `pcntl`, `xml`, `eval`, `regex`, `curl`, `mysqli`, `zend`, `web` | - | Force-enable an optional bridge or runtime capability (repeatable). Bridge names force-link their staticlib and inject any PHP-surface prelude. `--with-bcmath` force-links exact decimal arithmetic and retains the `BcMath\Number` class for indirect calls and opaque eval source. `--with-mbstring`, `--with-iconv`, and `--with-pcntl` force-link their native support when static detection cannot see a call. `--with-xml` force-links the XML bridge and injects the `XMLParser`/`XMLWriter` prelude; the parser uses the managed `libxml2` package, so the project must declare it (`elephc native add libxml2`), exactly as auto-detected XML use does. `--with-regex` enables managed PCRE2 for opaque dynamic eval; the project must declare `pcre2`. `--with-eval` force-links Magician but is not required for normal `eval()` use. `--with-mysqli` force-injects the mysqli prelude (which links the shared `elephc_pdo` bridge); it does not inject the PDO classes. `--with-zend` force-links `libelephc_zend.a`, the engine [hosted PHP extensions](../beyond-php/php-extensions.md) run on; a project that declares extensions links it without the flag. `--with-web` is an alias for `--web`. An unknown name is an error. Run `elephc --print-capabilities` for the list a given binary actually accepts. |
 
 See [Linking, heap, and conditional compilation](linking-and-conditional-compilation.md).
 
@@ -519,7 +532,7 @@ See [Linking, heap, and conditional compilation](linking-and-conditional-compila
 
 | Flag | Values | Default | Description |
 |---|---|---|---|
-| `--heap-size=BYTES` | integer ≥ 65536 | `8388608` (8 MB) | Size of the program's runtime heap. |
+| `--heap-size=BYTES` | integer ≥ 65536 | `134217728` (128 MB, PHP's default `memory_limit`) | Size of the program's runtime heap. It is reserved as zero-filled memory, so pages the program never touches cost nothing. |
 | `--define SYMBOL` / `--define=SYMBOL` | symbol name | — | Define a compile-time symbol for `ifdef` (repeatable). |
 
 ## Strict PHP mode

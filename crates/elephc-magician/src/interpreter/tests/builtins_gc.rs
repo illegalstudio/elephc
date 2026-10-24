@@ -41,3 +41,21 @@ return function_exists("gc_status");"#,
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies eval memory builtins map `$real_usage` onto the adjacent runtime selectors.
+#[test]
+fn execute_program_dispatches_memory_usage_builtins() {
+    let program = parse_fragment(
+        br#"echo memory_get_usage(); echo ":"; echo memory_get_usage(true); echo ":";
+echo call_user_func("memory_get_peak_usage"); echo ":"; echo memory_get_peak_usage(true); echo ":";
+return memory_reset_peak_usage() === null;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "4096:8192:5000:9000:");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}

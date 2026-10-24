@@ -2,7 +2,7 @@
 title: "mb_strpos() - internals"
 description: "Compiler internals for mb_strpos(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 884
+  order: 887
 ---
 
 ## `mb_strpos()` - internals

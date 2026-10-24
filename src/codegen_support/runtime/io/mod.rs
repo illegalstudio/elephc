@@ -281,7 +281,10 @@ pub(crate) use print_r_walk::{
     emit_print_r_close, emit_print_r_hash, emit_print_r_indexed, emit_print_r_int_key,
     emit_print_r_open, emit_print_r_spaces, emit_print_r_str_key, emit_print_r_value,
 };
-pub(crate) use print_r_buffer::{emit_pr_append, emit_pr_finish, emit_pr_write};
+pub(crate) use print_r_buffer::{
+    emit_pr_append, emit_pr_base, emit_pr_finish, emit_pr_flush_deferred, emit_pr_release,
+    emit_pr_reserve, emit_pr_write,
+};
 pub(crate) use ob_buffer::{
     emit_ob_append, emit_ob_contents, emit_ob_flush_all, emit_ob_gated_ops, emit_ob_get_pop_ops,
     emit_ob_pop_free, emit_ob_process_and_write, emit_ob_queries, emit_ob_start,

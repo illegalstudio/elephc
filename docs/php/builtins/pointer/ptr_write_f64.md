@@ -2,7 +2,7 @@
 title: "ptr_write_f64()"
 description: "Writes one IEEE 754 double-precision value through a raw pointer."
 sidebar:
-  order: 748
+  order: 751
 ---
 
 ## ptr_write_f64()

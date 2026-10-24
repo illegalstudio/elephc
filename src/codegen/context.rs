@@ -566,6 +566,18 @@ impl<'a> FunctionContext<'a> {
         self.current_inst_promoted_ref_cells.clear();
     }
 
+    /// Returns the script file and source line of the instruction being lowered, when both are
+    /// known: where php locates an error an internal call raises.
+    pub(super) fn current_source_location(&self) -> Option<(String, u32)> {
+        let line = self
+            .current_inst
+            .and_then(|inst| self.function.instruction(inst))
+            .and_then(|inst| inst.span)
+            .map(|span| span.line)
+            .filter(|line| *line > 0)?;
+        Some((self.module.source_path.clone()?, line))
+    }
+
     /// Returns the frame flag that records whether this slot currently stores a cell pointer.
     pub(super) fn ref_cell_state_offset(&self, slot: LocalSlotId) -> Option<usize> {
         self.ref_cell_state_offsets.get(&slot).copied()

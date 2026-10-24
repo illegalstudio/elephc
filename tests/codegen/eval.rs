@@ -7650,6 +7650,22 @@ echo call_user_func("gc_mem_caches") >= 0 ? "cache" : "bad";');
     assert_eq!(out, "on:off:on:shape:unbuffered:timed:cache");
 }
 
+/// Verifies eval memory builtins read the generated-runtime heap counters.
+#[test]
+fn test_eval_memory_usage_builtins_read_runtime_counters() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$u = memory_get_usage(); $r = memory_get_usage(true); $p = memory_get_peak_usage();
+echo is_int($u) && $u > 0 ? "int" : "bad"; echo ":";
+echo $r >= $u ? "real" : "bad"; echo ":";
+echo $p >= $u && memory_get_peak_usage(true) >= $r ? "peak" : "bad"; echo ":";
+echo call_user_func("memory_get_usage", true) > 0 ? "callable" : "bad"; echo ":";
+echo memory_reset_peak_usage() === null ? "void" : "bad";');
+"#,
+    );
+    assert_eq!(out, "int:real:peak:callable:void");
+}
+
 /// Verifies eval realpath-cache builtins expose elephc's empty-cache convention.
 #[test]
 fn test_eval_dispatches_realpath_cache_builtin_calls() {
@@ -25706,7 +25722,7 @@ echo $typed->getValue($object);
     assert_eq!(
         out.stdout,
         "Ada:\nFatal error: Uncaught Error: Typed property \
-EvalAotReflectUninitializedGetTarget::$typed must not be accessed before initialization\n"
+EvalAotReflectUninitializedGetTarget::$typed must not be accessed before initialization\nStack trace:\n#0 {main}\n"
     );
     assert_eq!(out.stderr, "");
 }

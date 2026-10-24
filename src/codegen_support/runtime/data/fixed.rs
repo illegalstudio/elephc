@@ -71,6 +71,19 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".data\n");
     out.push_str(&comm_directive("_concat_buf", 65536, target));
     out.push_str(&comm_directive("_concat_off", 8, target));
+    out.push_str(&comm_directive(
+        "_itoa_spill_ring",
+        32 * crate::codegen_support::runtime::strings::itoa::ITOA_SPILL_SLOTS,
+        target,
+    ));
+    out.push_str(&comm_directive("_itoa_spill_index", 8, target));
+    out.push_str(&comm_directive(
+        "_float_spill_ring",
+        crate::codegen_support::runtime::strings::FLOAT_WINDOW_BYTES
+            * crate::codegen_support::runtime::strings::FLOAT_SPILL_SLOTS,
+        target,
+    ));
+    out.push_str(&comm_directive("_float_spill_index", 8, target));
     out.push_str(&comm_directive("_mbstring_catalog_array", 8, target));
     out.push_str(&comm_directive("_mbstring_deferred_capture_head", 8, target));
     out.push_str(&comm_directive("_mbstring_deferred_capture_tail", 8, target));
@@ -80,6 +93,17 @@ pub(crate) fn emit_runtime_data_fixed(
         ".globl _serialize_return_array_msg\n_serialize_return_array_msg:\n    .ascii \"{}\"\n",
         super::SERIALIZE_RETURN_ARRAY_MSG,
     ));
+    for (symbol, message) in [
+        ("_debuginfo_fatal_msg", super::DEBUGINFO_FATAL_MSG),
+        ("_debuginfo_warning_prefix", super::DEBUGINFO_WARNING_PREFIX),
+        ("_debuginfo_null_prefix", super::DEBUGINFO_NULL_PREFIX),
+        ("_debuginfo_null_suffix", super::DEBUGINFO_NULL_SUFFIX),
+    ] {
+        out.push_str(&format!(
+            ".globl {symbol}\n{symbol}:\n    .ascii \"{}\"\n",
+            message.replace('\n', "\\n"),
+        ));
+    }
     out.push_str(&comm_directive("_unser_depth", 8, target));
     for (symbol, message) in [
         ("_sleep_warning_prefix", super::SLEEP_WARNING_PREFIX),
@@ -211,6 +235,9 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_print_r_mode", 8, target));
     out.push_str(&comm_directive("_print_r_off", 8, target));
     out.push_str(&comm_directive("_print_r_buf", 65536, target));
+    // _print_r_base / _print_r_cap: the grown capture block (0 = the static buffer above, capacity 65536).
+    out.push_str(&comm_directive("_print_r_base", 8, target));
+    out.push_str(&comm_directive("_print_r_cap", 8, target));
     // Output-buffering (ob_*) stack state. _ob_level is the active nesting depth
     // (0 = no buffering) consulted by __rt_stdout_write and __rt_pr_write before
     // the terminal write syscall; _ob_ptrs/_ob_lens/_ob_caps are 64-slot parallel
@@ -312,6 +339,10 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_ser_value_counter", 8, target));
     out.push_str(&comm_directive("_ser_legacy_active", 8, target));
     out.push_str(&comm_directive("_unser_legacy_active", 8, target));
+    // The active serialize() output stream: a pointer to the `__rt_strbuf_*` descriptor in the
+    // frame of the innermost `__rt_serialize_call_value`, which saves and restores it around itself and
+    // every hook call that can re-enter serialize().
+    out.push_str(&comm_directive("_ser_stream", 8, target));
     out.push_str(&comm_directive("_ser_obj_count", 8, target));
     out.push_str(&comm_directive("_ser_obj_ptrs", 524288, target));
     out.push_str(&comm_directive("_ser_obj_idxs", 524288, target));
@@ -508,8 +539,21 @@ pub(crate) fn emit_runtime_data_fixed(
         target,
     ));
     out.push_str(&comm_directive("_heap_off", 8, target));
+    out.push_str(&comm_directive("_heap_off_peak", 8, target));
     out.push_str(&comm_directive("_heap_free_list", 8, target));
-    out.push_str(&comm_directive("_heap_small_bins", 32, target));
+    out.push_str(&comm_directive(
+        "_heap_small_bins",
+        super::super::arrays::HEAP_BIN_TABLE_BYTES as usize,
+        target,
+    ));
+    // One byte per heap granule: set while a guarded free parks the block in a bin.
+    out.push_str(&comm_directive(
+        "_heap_bin_marks",
+        super::super::arrays::heap_bin_mark_bytes(heap_size),
+        target,
+    ));
+    // `_gc_frees` at the end of the allocator's last consolidation pass (see `__rt_heap_alloc`).
+    out.push_str(&comm_directive("_heap_consolidated_frees", 8, target));
     out.push_str(&comm_directive("_heap_debug_enabled", 8, target));
     out.push_str(&comm_directive("_web_heap_guard_enabled", 8, target));
     // Generation-safe buffer descriptor registry. Public Buffer values are
@@ -830,6 +874,16 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _uncaught_exc_in\n_uncaught_exc_in:\n    .ascii \" in \"\n");
     out.push_str(".globl _uncaught_exc_colon\n_uncaught_exc_colon:\n    .ascii \":\"\n");
     out.push_str(".globl _uncaught_exc_nl\n_uncaught_exc_nl:\n    .ascii \"\\n\"\n");
+    for (symbol, text) in [
+        ("_uncaught_exc_stack_trace", "\\nStack trace:\\n"),
+        ("_uncaught_exc_next", "\\n\\nNext "),
+        ("_uncaught_exc_hash", "#"),
+        ("_uncaught_exc_main", " {main}"),
+        ("_uncaught_exc_thrown_in", "\\n  thrown in "),
+        ("_uncaught_exc_on_line", " on line "),
+    ] {
+        out.push_str(&format!(".globl {symbol}\n{symbol}:\n    .ascii \"{text}\"\n"));
+    }
     // Printed only when `__rt_exception_matches` walks into the "metadata never emitted"
     // sentinel, which no correct build should reach — see that helper for why it aborts there
     // instead of answering "no match".
@@ -1503,6 +1557,22 @@ pub(crate) fn emit_runtime_data_fixed(
     // a lookup that reaches the cap reports recursion, which is what bounds the walk.
     out.push_str(&comm_directive("_vd_seen", 2048, target));
     out.push_str(&comm_directive("_vd_seen_n", 8, target));
+    // _debuginfo_guard: `_exc_handler_top | 1` while a run-time `__debugInfo()` call is in
+    // flight (0 otherwise); a throw that finds no newer handler is reported as PHP's fatal.
+    out.push_str(&comm_directive("_debuginfo_guard", 8, target));
+    // _php_exit_hook: the hosted-extension shutdown routine (RSHUTDOWN, then MSHUTDOWN), stored
+    // by `main`'s prologue in a program that hosts PHP extensions, 0 otherwise. The runtime's own
+    // exit paths (the uncaught-exception report) call it; they cannot name the engine directly.
+    out.push_str(&comm_directive("_php_exit_hook", 8, target));
+    // _uncaught_report_mode: 1 once an exception escaping `__debugInfo()` selected the
+    // `Warning: Uncaught` + fatal flavour of the uncaught report.
+    out.push_str(&comm_directive("_uncaught_report_mode", 8, target));
+    // _debuginfo_call_line: source line of the dump call (var_dump/print_r/...) that fetched the
+    // `__debugInfo()` result in flight; PHP names it in the `__debuginfo() must return an array` fatal.
+    out.push_str(&comm_directive("_debuginfo_call_line", 8, target));
+    // _debuginfo_pad: 1 while a var_dump render is fetching `__debugInfo()` (PHP has already
+    // printed the nested value's indent when the fatal fires), 0 for print_r.
+    out.push_str(&comm_directive("_debuginfo_pad", 8, target));
     // print_r body literals (rodata): PHP's `Array\n(\n` header, `)\n` footer,
     // `[`/`] => ` key delimiters (unquoted keys, unlike var_dump), a lone
     // newline, the `1` rendered for boolean true, and a 64-space pad used by
@@ -1580,6 +1650,8 @@ pub(crate) fn emit_runtime_data_fixed(
         ("_bt_arg_object_open", "Object("),
         ("_bt_arg_close", ")"),
         ("_bt_arg_quote", "'"),
+        ("_bt_arg_ellipsis", "..."),
+        ("_bt_arg_zero_frac", ".0"),
         ("_bt_arg_escape_slash", "\\\\"),
         ("_bt_arg_escape_n", "\\n"),
         ("_bt_arg_escape_t", "\\t"),

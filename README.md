@@ -300,7 +300,7 @@ elephc test --junit report.xml --timeout 30
 elephc --version
 elephc -V
 
-# Custom heap size (default: 8MB)
+# Custom heap size (default: 128 MB)
 elephc --heap-size=16777216 heavy.php
 
 # Enable runtime heap verification while debugging ownership issues

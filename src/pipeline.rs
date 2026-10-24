@@ -579,6 +579,36 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
     );
     timings.record_since("version-prelude", phase_started);
 
+    // Declare the real PHP extensions the project hosts (`[extension]` in
+    // elephc.toml): each registered function becomes a PHP function calling it
+    // through the Zend engine archive. Injected whenever the project declares
+    // any — reachability prunes the wrappers a program never calls, and an
+    // archive nothing references contributes nothing to the link.
+    crate::progress::phase("extension-prelude");
+    let phase_started = Instant::now();
+    let hosted_php_ext = match crate::php_ext::install::resolve_hosted(Path::new(filename), target) {
+        Ok(hosted) => hosted,
+        Err(error) => {
+            crate::progress::clear();
+            eprintln!("{error}");
+            process::exit(1);
+        }
+    };
+    let ast = match &hosted_php_ext {
+        Some(hosted) => {
+            let mut combined = crate::php_ext::prelude::declarations(hosted);
+            prelude_inventory.record_program(crate::php_ext::prelude::PRELUDE_GROUP, &combined);
+            combined.extend(ast);
+            for extension in &hosted.extensions {
+                linked_php_surfaces.push(extension.surface.module.clone());
+            }
+            // The wrappers name their live instance by `WeakReference`.
+            crate::core_prelude::ensure_weak_reference(combined, &mut prelude_inventory)
+        }
+        None => ast,
+    };
+    timings.record_since("extension-prelude", phase_started);
+
     crate::progress::phase("name-resolve");
     let phase_started = Instant::now();
     let ast = match name_resolver::resolve(ast) {
@@ -965,6 +995,7 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
         with_crates: &with_crates,
         ini_overrides: &ini_overrides,
         linked_php_surfaces: &linked_php_surfaces,
+        hosted_php_ext: hosted_php_ext.as_ref(),
         ir_module,
         web,
         web_isolation,

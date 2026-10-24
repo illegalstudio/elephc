@@ -297,6 +297,9 @@ pub(crate) fn lower_array_assign_with_diagnosed_key(
         lower_mixed_key_array_set(
             ctx, array, array_value, index_value, value_value, span, key_already_diagnosed,
         );
+        // The helper only borrows the key cell: a call's fresh key (`$map[key()] = 1`) is
+        // released here, as the boxed scalar key above is; the backend skips a borrowed one.
+        crate::ir_lower::ownership::release_if_owned(ctx, index_value, Some(index.span));
         return;
     }
     if op == Op::ArraySet {
@@ -535,6 +538,9 @@ pub(super) fn lower_mixed_key_array_set(
         Some(span),
     );
     crate::ir_lower::expr::unpin_in_flight_owners(ctx, operand_pins, span);
+    // The backend retains a Mixed value before the helper stores it, so a call's fresh value cell
+    // is released here like any other Mixed-element write operand (`$map[$k] = value()`). The key
+    // cell is the caller's to release: the helper only borrows it.
     ctx.store_mutated_local(array, result, mixed_array_ty, Some(span));
     release_indexed_array_write_operand(ctx, Some(&PhpType::Mixed), value, span);
 }

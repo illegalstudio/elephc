@@ -27,7 +27,10 @@ HIDDEN uint64_t free_count __asm__("_gc_frees");
 HIDDEN uint64_t debug __asm__("_heap_debug_enabled");
 HIDDEN uint64_t guard __asm__("_web_heap_guard_enabled");
 HIDDEN void *free_list __asm__("_heap_free_list");
-HIDDEN void *bins[4] __asm__("_heap_small_bins");
+/* One head per exact 8-byte payload class up to HEAP_BIN_MAX (2048 bytes). */
+HIDDEN void *bins[256] __asm__("_heap_small_bins");
+/* One bin mark per 16-byte granule of the heap above. */
+HIDDEN unsigned char bin_marks[16384 / 16 + 2] __asm__("_heap_bin_marks");
 HIDDEN uint32_t object_handles[1024] __asm__("_obj_handle_index");
 HIDDEN void *array_reference_retire __asm__("_elephc_eval_array_reference_retire_fn");
 HIDDEN uint64_t active __asm__("_mbstring_ini_native_active");

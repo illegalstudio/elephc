@@ -92,6 +92,46 @@ pub(super) fn lower_gc_control(
             }
             abi::emit_call_label(ctx.emitter, "__rt_gc_status_metric");
         }
+        crate::ir::GcControlOp::MemoryUsage | crate::ir::GcControlOp::MemoryPeak => {
+            // The optional `$real_usage` bool selects the adjacent "real" selector (base + 1).
+            let selector_reg = match ctx.emitter.target.arch {
+                crate::codegen::platform::Arch::AArch64 => "x0",
+                crate::codegen::platform::Arch::X86_64 => "rdi",
+            };
+            match inst.operands.first() {
+                Some(&real_usage) => {
+                    ctx.load_value_to_reg(real_usage, selector_reg)?;
+                    match ctx.emitter.target.arch {
+                        crate::codegen::platform::Arch::AArch64 => {
+                            ctx.emitter.instruction("cmp x0, #0");              // test the coerced bool flag
+                            ctx.emitter.instruction("cset x0, ne");             // normalize any non-zero flag to 1
+                            ctx.emitter.instruction(&format!("add x0, x0, #{}", op.as_i64())); // pick the real variant when the flag is set
+                        }
+                        crate::codegen::platform::Arch::X86_64 => {
+                            ctx.emitter.instruction("test rdi, rdi");           // test the coerced bool flag
+                            ctx.emitter.instruction("setne dil");               // normalize any non-zero flag to 1
+                            ctx.emitter.instruction("movzx edi, dil");          // widen the normalized flag to the full selector register
+                            ctx.emitter.instruction(&format!("add rdi, {}", op.as_i64())); // pick the real variant when the flag is set
+                        }
+                    }
+                }
+                None => abi::emit_load_int_immediate(ctx.emitter, selector_reg, op.as_i64()),
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_gc_status_metric");
+        }
+        crate::ir::GcControlOp::MemoryUsageReal
+        | crate::ir::GcControlOp::MemoryPeakReal
+        | crate::ir::GcControlOp::MemoryResetPeak => {
+            match ctx.emitter.target.arch {
+                crate::codegen::platform::Arch::AArch64 => {
+                    abi::emit_load_int_immediate(ctx.emitter, "x0", op.as_i64());
+                }
+                crate::codegen::platform::Arch::X86_64 => {
+                    abi::emit_load_int_immediate(ctx.emitter, "rdi", op.as_i64());
+                }
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_gc_status_metric");
+        }
         crate::ir::GcControlOp::ApplicationTime
         | crate::ir::GcControlOp::CollectorTime
         | crate::ir::GcControlOp::DestructorTime

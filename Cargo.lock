@@ -711,6 +711,7 @@ dependencies = [
  "elephc-tls",
  "elephc-tz",
  "elephc-web",
+ "elephc-zend",
  "flate2",
  "fs2",
  "indicatif",
@@ -723,6 +724,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "stacker",
+ "syn 2.0.117",
  "tar",
  "toml",
  "toml_edit 0.25.12+spec-1.1.0",
@@ -923,6 +925,14 @@ dependencies = [
 [[package]]
 name = "elephc-xml"
 version = "0.1.0"
+
+[[package]]
+name = "elephc-zend"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "syn 2.0.117",
+]
 
 [[package]]
 name = "encode_unicode"

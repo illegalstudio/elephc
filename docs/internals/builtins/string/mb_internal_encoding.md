@@ -2,7 +2,7 @@
 title: "mb_internal_encoding() - internals"
 description: "Compiler internals for mb_internal_encoding(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 862
+  order: 865
 ---
 
 ## `mb_internal_encoding()` - internals

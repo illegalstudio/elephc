@@ -30,8 +30,8 @@ categories = ["compilers", "command-line-utilities"]
 # see crates/elephc-curl/build.rs for how its own gated tests opt into a real
 # link.
 [workspace]
-members = [".", "crates/elephc-builtin-contract", "crates/elephc-monitoring-contract", "crates/elephc-generics", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-iconv", "crates/elephc-mbstring", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-probe", "crates/elephc-instr", "crates/elephc-image", "crates/elephc-web", "crates/elephc-pcntl", "crates/elephc-magician", "crates/elephc-curl", "crates/elephc-xml"]
-default-members = [".", "crates/elephc-builtin-contract", "crates/elephc-monitoring-contract", "crates/elephc-generics", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-iconv", "crates/elephc-mbstring", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-probe", "crates/elephc-instr", "crates/elephc-image", "crates/elephc-web", "crates/elephc-pcntl", "crates/elephc-magician", "crates/elephc-curl", "crates/elephc-xml"]
+members = [".", "crates/elephc-builtin-contract", "crates/elephc-monitoring-contract", "crates/elephc-generics", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-iconv", "crates/elephc-mbstring", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-probe", "crates/elephc-instr", "crates/elephc-image", "crates/elephc-web", "crates/elephc-pcntl", "crates/elephc-magician", "crates/elephc-curl", "crates/elephc-xml", "crates/elephc-zend"]
+default-members = [".", "crates/elephc-builtin-contract", "crates/elephc-monitoring-contract", "crates/elephc-generics", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-iconv", "crates/elephc-mbstring", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-probe", "crates/elephc-instr", "crates/elephc-image", "crates/elephc-web", "crates/elephc-pcntl", "crates/elephc-magician", "crates/elephc-curl", "crates/elephc-xml", "crates/elephc-zend"]
 resolver = "2"
 
 [[bin]]
@@ -91,6 +91,11 @@ elephc-pcntl = { path = "crates/elephc-pcntl" }
 indicatif = "0.17"
 console = "0.15"
 
+# build.rs generates the hosted-extension C header from crates/elephc-zend's
+# Rust ABI definitions (see crates/elephc-zend/abi_header.rs).
+[build-dependencies]
+syn = { version = "2", features = ["full", "parsing", "extra-traits"] }
+
 # Bridge crates are runtime staticlibs, not used by the Rust compiler itself,
 # but codegen tests link their libelephc_*.a artifacts into compiled PHP
 # programs. They ship as dev-dependencies so `cargo test` / `cargo nextest run`
@@ -108,6 +113,7 @@ elephc-image = { path = "crates/elephc-image" }
 elephc-web = { path = "crates/elephc-web" }
 elephc-magician = { path = "crates/elephc-magician" }
 elephc-curl = { path = "crates/elephc-curl" }
+elephc-zend = { path = "crates/elephc-zend" }
 # flate2 lets the phar:// codegen tests build gzip (raw-DEFLATE) fixture entries
 # with the same encoder the compiler decodes, guaranteeing a version-stable
 # round-trip without shelling out to php.

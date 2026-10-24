@@ -408,11 +408,29 @@ pub fn emit_var_dump_open_object(emitter: &mut Emitter) {
     emitter.comment("--- runtime: var_dump_open_object ---");
     emitter.label_global("__rt_var_dump_open_object");
 
-    // Frame (48 bytes): [0] object ptr, [32] saved x29, [40] saved x30.
+    // Thin wrapper: count the initialized declared properties, then share the header
+    // writer with the `__debugInfo()` path, which supplies its own entry count.
+    emitter.instruction("sub sp, sp, #32");                                     // allocate the wrapper frame
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #16");                                    // establish the wrapper frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // keep the object pointer across the count call
+    emitter.instruction("bl __rt_vd_obj_count");                                // x0 = number of initialized properties
+    emitter.instruction("mov x1, x0");                                          // property count → header writer
+    emitter.instruction("ldr x0, [sp, #0]");                                    // object pointer → header writer
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the wrapper frame
+    emitter.instruction("b __rt_var_dump_open_object_n");                       // tail-call the shared header writer
+
+    emitter.blank();
+    emitter.comment("--- runtime: var_dump_open_object_n ---");
+    emitter.label_global("__rt_var_dump_open_object_n");
+
+    // Frame (48 bytes): [0] object ptr, [8] entry count, [32] saved x29, [40] saved x30.
     emitter.instruction("sub sp, sp, #48");                                     // allocate the object-header frame
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // establish the object-header frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the object pointer across the writes
+    emitter.instruction("str x1, [sp, #8]");                                    // save the entry count printed in the header
 
     emitter.instruction("bl __rt_vd_pad");                                      // indent the object header line
     abi::emit_symbol_address(emitter, "x1", "_vd_object_prefix");               // load the `object(` prefix
@@ -450,8 +468,7 @@ pub fn emit_var_dump_open_object(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #2");                                          // len(" (") = 2
     emitter.instruction("bl __rt_vd_write");                                    // write ` (`
 
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
-    emitter.instruction("bl __rt_vd_obj_count");                                // x0 = number of initialized properties
+    emitter.instruction("ldr x0, [sp, #8]");                                    // reload the entry count
     emitter.instruction("bl __rt_itoa");                                        // x1=digits ptr, x2=digits len
     emitter.instruction("bl __rt_vd_write");                                    // write the property count digits
 
@@ -470,11 +487,29 @@ fn emit_var_dump_open_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: var_dump_open_object ---");
     emitter.label_global("__rt_var_dump_open_object");
 
-    // rbp-relative frame: [-8] object ptr.
+    // Thin wrapper: count the initialized declared properties, then share the header
+    // writer with the `__debugInfo()` path, which supplies its own entry count.
+    emitter.instruction("push rbp");                                            // save caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the wrapper frame pointer
+    emitter.instruction("sub rsp, 16");                                         // allocate the wrapper frame
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // keep the object pointer across the count call
+    emitter.instruction("call __rt_vd_obj_count");                              // rax = number of initialized properties
+    emitter.instruction("mov rsi, rax");                                        // property count → header writer
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // object pointer → header writer
+    emitter.instruction("add rsp, 16");                                         // release the wrapper frame
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("jmp __rt_var_dump_open_object_n");                     // tail-call the shared header writer
+
+    emitter.blank();
+    emitter.comment("--- runtime: var_dump_open_object_n ---");
+    emitter.label_global("__rt_var_dump_open_object_n");
+
+    // rbp-relative frame: [-8] object ptr, [-16] entry count.
     emitter.instruction("push rbp");                                            // save caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the object-header frame pointer
     emitter.instruction("sub rsp, 16");                                         // allocate the object-header frame
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the object pointer across the writes
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the entry count printed in the header
 
     emitter.instruction("call __rt_vd_pad");                                    // indent the object header line
     abi::emit_symbol_address(emitter, "rsi", "_vd_object_prefix");              // load the `object(` prefix
@@ -513,8 +548,7 @@ fn emit_var_dump_open_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edx, 2");                                          // len(" (") = 2
     emitter.instruction("call __rt_vd_write");                                  // write ` (`
 
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
-    emitter.instruction("call __rt_vd_obj_count");                              // rax = number of initialized properties
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the entry count
     emitter.instruction("call __rt_itoa");                                      // rax=digits ptr, rdx=digits len
     emitter.instruction("mov rsi, rax");                                        // digits ptr → write buffer
     emitter.instruction("call __rt_vd_write");                                  // write the property count digits

@@ -29,6 +29,8 @@ pub struct ResolvedNativePackage {
     pub artifact_root: PathBuf,
     pub archives: Vec<PathBuf>,
     pub system_libraries: Vec<String>,
+    /// Directories searched for `system_libraries`, beyond the toolchain defaults.
+    pub library_paths: Vec<PathBuf>,
     pub frameworks: Vec<String>,
 }
 
@@ -221,7 +223,7 @@ pub(crate) fn resolve_for_compilation_with(
         }
         resolved.push(ResolvedNativePackage {
             package: name.clone(), artifact_root: root, archives,
-            system_libraries: target_plan.system_libraries.clone(), frameworks: target_plan.frameworks.clone(),
+            system_libraries: target_plan.system_libraries.clone(), library_paths: Vec::new(), frameworks: target_plan.frameworks.clone(),
         });
         for (offset, dependency) in locked.dependencies.iter().enumerate() {
             queue.insert(cursor + offset, dependency.clone());

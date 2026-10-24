@@ -2,7 +2,7 @@
 title: "mb_check_encoding()"
 description: "Checks encoded strings or array keys and values recursively for invalid byte sequences."
 sidebar:
-  order: 834
+  order: 837
 ---
 
 ## mb_check_encoding()

@@ -2,7 +2,7 @@
 title: "mb_ereg()"
 description: "Searches a multibyte string and optionally writes numeric and named captures by reference."
 sidebar:
-  order: 847
+  order: 850
 ---
 
 ## mb_ereg()

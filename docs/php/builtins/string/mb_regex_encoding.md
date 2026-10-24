@@ -2,7 +2,7 @@
 title: "mb_regex_encoding()"
 description: "Reads or changes the multibyte regex encoding independently of the internal text encoding."
 sidebar:
-  order: 871
+  order: 874
 ---
 
 ## mb_regex_encoding()

@@ -1004,6 +1004,8 @@ fn is_magic_method(method: &str) -> bool {
             | "__sleep"
             | "__wakeup"
             | "__debuginfo"
+            // A hosted extension wrapper's dump method, reached only through `_class_debuginfo_ptrs`.
+            | "__elephcdebuginfo"
             | "__set_state"
             | "__call"
             | "__callstatic"
