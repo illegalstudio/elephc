@@ -8,7 +8,7 @@ sidebar:
 ## simplexml_import_dom()
 
 ```php
-function simplexml_import_dom(object $node, ?string $class_name = 'SimpleXMLElement'): mixed
+function simplexml_import_dom(object $node, ?string $class_name = 'SimpleXMLElement'): ?SimpleXMLElement
 ```
 
 Imports a DOM node as a SimpleXML element.
@@ -17,7 +17,7 @@ Imports a DOM node as a SimpleXML element.
 - `$node` (`object`)
 - `$class_name` (`?string`), default `'SimpleXMLElement'`, optional
 
-**Returns**: `mixed`
+**Returns**: `?SimpleXMLElement`
 
 ## Availability
 

@@ -121325,7 +121325,7 @@
       "checker_line": null,
       "codegen_file": "src/simplexml_prelude/surface.rs",
       "codegen_function": "simplexml_import_dom",
-      "codegen_line": 312,
+      "codegen_line": 363,
       "notes": [
         "Implemented by the compiler-injected xml prelude."
       ],
@@ -121354,7 +121354,7 @@
           "type": "?string"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "?SimpleXMLElement",
       "variadic": null
     },
     "since": null,
@@ -121472,7 +121472,7 @@
       "checker_line": null,
       "codegen_file": "src/simplexml_prelude/surface.rs",
       "codegen_function": "simplexml_load_file",
-      "codegen_line": 281,
+      "codegen_line": 332,
       "notes": [
         "Implemented by the compiler-injected xml prelude."
       ],
@@ -121522,7 +121522,7 @@
           "type": "bool"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "SimpleXMLElement|false",
       "variadic": null
     },
     "since": null,
@@ -121640,7 +121640,7 @@
       "checker_line": null,
       "codegen_file": "src/simplexml_prelude/surface.rs",
       "codegen_function": "simplexml_load_string",
-      "codegen_line": 275,
+      "codegen_line": 326,
       "notes": [
         "Implemented by the compiler-injected xml prelude."
       ],
@@ -121690,7 +121690,7 @@
           "type": "bool"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "SimpleXMLElement|false",
       "variadic": null
     },
     "since": null,

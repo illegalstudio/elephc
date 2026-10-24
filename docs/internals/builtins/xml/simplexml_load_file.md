@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/simplexml_prelude/surface.rs`:281](https://github.com/illegalstudio/elephc/blob/main/src/simplexml_prelude/surface.rs#L281) (`simplexml_load_file`)
+- **Lowering**: [`src/simplexml_prelude/surface.rs`:332](https://github.com/illegalstudio/elephc/blob/main/src/simplexml_prelude/surface.rs#L332) (`simplexml_load_file`)
 - **Function symbol**: `simplexml_load_file()`
 
 
@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function simplexml_load_file(string $filename, ?string $class_name = 'SimpleXMLElement', int $options = 0, string $namespace_or_prefix = '', bool $is_prefix = false): mixed
+function simplexml_load_file(string $filename, ?string $class_name = 'SimpleXMLElement', int $options = 0, string $namespace_or_prefix = '', bool $is_prefix = false): SimpleXMLElement|false
 ```
 
 ## What the type checker enforces

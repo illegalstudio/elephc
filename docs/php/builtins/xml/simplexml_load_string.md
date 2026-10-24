@@ -8,7 +8,7 @@ sidebar:
 ## simplexml_load_string()
 
 ```php
-function simplexml_load_string(string $data, ?string $class_name = 'SimpleXMLElement', int $options = 0, string $namespace_or_prefix = '', bool $is_prefix = false): mixed
+function simplexml_load_string(string $data, ?string $class_name = 'SimpleXMLElement', int $options = 0, string $namespace_or_prefix = '', bool $is_prefix = false): SimpleXMLElement|false
 ```
 
 Parses XML bytes into a SimpleXML element.
@@ -20,7 +20,7 @@ Parses XML bytes into a SimpleXML element.
 - `$namespace_or_prefix` (`string`), default `''`, optional
 - `$is_prefix` (`bool`), default `false`, optional
 
-**Returns**: `mixed`
+**Returns**: `SimpleXMLElement|false`
 
 ## Availability
 

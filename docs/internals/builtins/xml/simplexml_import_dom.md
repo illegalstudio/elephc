@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/simplexml_prelude/surface.rs`:312](https://github.com/illegalstudio/elephc/blob/main/src/simplexml_prelude/surface.rs#L312) (`simplexml_import_dom`)
+- **Lowering**: [`src/simplexml_prelude/surface.rs`:363](https://github.com/illegalstudio/elephc/blob/main/src/simplexml_prelude/surface.rs#L363) (`simplexml_import_dom`)
 - **Function symbol**: `simplexml_import_dom()`
 
 
@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function simplexml_import_dom(object $node, ?string $class_name = 'SimpleXMLElement'): mixed
+function simplexml_import_dom(object $node, ?string $class_name = 'SimpleXMLElement'): ?SimpleXMLElement
 ```
 
 ## What the type checker enforces

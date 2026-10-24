@@ -369,9 +369,9 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
-| [`simplexml_import_dom()`](./builtins/xml/simplexml_import_dom.md) | `(object $node, ?string $class_name = 'SimpleXMLElement'): mixed` | `mixed` | ✓ | ✓ |
-| [`simplexml_load_file()`](./builtins/xml/simplexml_load_file.md) | `(string $filename, ?string $class_name = 'SimpleXMLElement', int $options = 0, string $namespace_or_prefix = '', bool $is_prefix = false): mixed` | `mixed` | ✓ | ✓ |
-| [`simplexml_load_string()`](./builtins/xml/simplexml_load_string.md) | `(string $data, ?string $class_name = 'SimpleXMLElement', int $options = 0, string $namespace_or_prefix = '', bool $is_prefix = false): mixed` | `mixed` | ✓ | ✓ |
+| [`simplexml_import_dom()`](./builtins/xml/simplexml_import_dom.md) | `(object $node, ?string $class_name = 'SimpleXMLElement'): ?SimpleXMLElement` | `?SimpleXMLElement` | ✓ | ✓ |
+| [`simplexml_load_file()`](./builtins/xml/simplexml_load_file.md) | `(string $filename, ?string $class_name = 'SimpleXMLElement', int $options = 0, string $namespace_or_prefix = '', bool $is_prefix = false): SimpleXMLElement|false` | `SimpleXMLElement|false` | ✓ | ✓ |
+| [`simplexml_load_string()`](./builtins/xml/simplexml_load_string.md) | `(string $data, ?string $class_name = 'SimpleXMLElement', int $options = 0, string $namespace_or_prefix = '', bool $is_prefix = false): SimpleXMLElement|false` | `SimpleXMLElement|false` | ✓ | ✓ |
 
 Classes: `SimpleXMLElement`, `SimpleXMLIterator`.
 

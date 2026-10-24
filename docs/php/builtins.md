@@ -1021,9 +1021,9 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`session_write_close()`](./builtins/web/session_write_close.md) | `(): bool` | `bool` | ✓ | - |
 | [`setcookie()`](./builtins/web/setcookie.md) | `(mixed $name, mixed $value = '', mixed $expires = 0, mixed $path = '', mixed $domain = '', mixed $secure = false, mixed $httponly = false): mixed` | `mixed` | ✓ | - |
 | [`setrawcookie()`](./builtins/web/setrawcookie.md) | `(mixed $name, mixed $value = '', mixed $expires = 0, mixed $path = '', mixed $domain = '', mixed $secure = false, mixed $httponly = false): mixed` | `mixed` | ✓ | - |
-| [`simplexml_import_dom()`](./builtins/xml/simplexml_import_dom.md) | `(object $node, ?string $class_name = 'SimpleXMLElement'): mixed` | `mixed` | ✓ | ✓ |
-| [`simplexml_load_file()`](./builtins/xml/simplexml_load_file.md) | `(string $filename, ?string $class_name = 'SimpleXMLElement', int $options = 0, string $namespace_or_prefix = '', bool $is_prefix = false): mixed` | `mixed` | ✓ | ✓ |
-| [`simplexml_load_string()`](./builtins/xml/simplexml_load_string.md) | `(string $data, ?string $class_name = 'SimpleXMLElement', int $options = 0, string $namespace_or_prefix = '', bool $is_prefix = false): mixed` | `mixed` | ✓ | ✓ |
+| [`simplexml_import_dom()`](./builtins/xml/simplexml_import_dom.md) | `(object $node, ?string $class_name = 'SimpleXMLElement'): ?SimpleXMLElement` | `?SimpleXMLElement` | ✓ | ✓ |
+| [`simplexml_load_file()`](./builtins/xml/simplexml_load_file.md) | `(string $filename, ?string $class_name = 'SimpleXMLElement', int $options = 0, string $namespace_or_prefix = '', bool $is_prefix = false): SimpleXMLElement|false` | `SimpleXMLElement|false` | ✓ | ✓ |
+| [`simplexml_load_string()`](./builtins/xml/simplexml_load_string.md) | `(string $data, ?string $class_name = 'SimpleXMLElement', int $options = 0, string $namespace_or_prefix = '', bool $is_prefix = false): SimpleXMLElement|false` | `SimpleXMLElement|false` | ✓ | ✓ |
 | [`xml_error_string()`](./builtins/xml/xml_error_string.md) | `(int $error_code): ?string` | `?string` | ✓ | ✓ |
 | [`xml_get_current_byte_index()`](./builtins/xml/xml_get_current_byte_index.md) | `(mixed $parser): int` | `int` | ✓ | ✓ |
 | [`xml_get_current_column_number()`](./builtins/xml/xml_get_current_column_number.md) | `(mixed $parser): int` | `int` | ✓ | ✓ |
