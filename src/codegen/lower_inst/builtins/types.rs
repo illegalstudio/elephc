@@ -589,7 +589,7 @@ pub(crate) fn emit_mangled_object_vars(
 
 /// Resolves the EIR function's lexical class id, using `-1` for global scopes.
 fn lexical_object_vars_scope_class_id(ctx: &FunctionContext<'_>) -> i64 {
-    let Some(class_name) = ctx.function.lexical_class.as_deref() else {
+    let Some(class_name) = ctx.lexical_class() else {
         return -1;
     };
     ctx.module

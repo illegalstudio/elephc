@@ -415,6 +415,55 @@ parameters (which alias caller storage) are therefore excluded, because a value-
 splice cannot reproduce their cleanup timing or aliasing. As with all EIR passes,
 inlining is gated by `--ir-opt` and changes only performance, never observable behavior.
 
+The same pass also inlines **instance-method calls it can bind statically**, so small
+accessors and predicates in hot loops cost what the inline code would:
+
+```php
+final class Table
+{
+    private buffer<Slot> $slots;
+    public function matches(int $index, int $components): bool
+    {
+        return $this->slots[$index]->alive
+            && ($this->slots[$index]->mask & $components) === $components;
+    }
+}
+
+function scan(Table $t, int $n): int
+{
+    $hits = 0;
+    for ($i = 0; $i < $n; $i++) {
+        if ($t->matches($i, 3)) { $hits++; }   // spliced: no call, no vtable load
+    }
+    return $hits;
+}
+```
+
+A `$receiver->method()` call is a candidate when the receiver's static type is a plain
+(non-nullable) user class and the call cannot reach a different body at run time: the
+class is `final`, the method is `final`, or the class has no vtable slot for it. The
+method body then has to pass the function rules above (the `$this` receiver is the one
+object they accept, as a borrowed argument) plus a few of its own:
+
+- it is not static, magic (`__*`), deprecated, by-reference-returning or variadic, and has
+  no by-reference parameter and no literal `false`/`null` parameter type (those carry a
+  call-site argument guard the splice would skip);
+- every instruction is **frame-independent**: constants, locals, scalar arithmetic and
+  comparisons, `buffer<T>` element reads, and property reads on `$this` or on a packed
+  record. Anything whose meaning depends on the method's own frame keeps the call:
+  `static::` and other late static binding, static variables, `func_get_args()`, nested
+  calls, closures, string building, writes;
+- the program does not observe PHP frames: when anything can call `debug_backtrace()` (or
+  the eval bridge is linked), every method call stays, so backtraces never lose a frame.
+
+The splice keeps what a real call does. A receiver that is null at run time still raises
+`Call to a member function m() on null` before the body runs (the check is omitted only
+for the host method's own `$this`). The spliced instructions still execute in the method's
+class scope, so private and protected property reads resolve exactly as inside the
+method, even from a free function or another class. The method's locals are renamed so
+they never show up in the caller's eval scope or `get_defined_vars()`. The receiver is
+only borrowed, so destructors run where the real call would have released the object.
+
 ### Tail recursion
 
 With `--ir-opt` enabled, direct tail calls in recursive free functions can reuse

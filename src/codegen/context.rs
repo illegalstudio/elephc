@@ -95,13 +95,28 @@ pub(crate) struct FunctionContext<'a> {
 }
 
 impl<'a> FunctionContext<'a> {
+    /// Returns the PHP lexical class scope the current instruction executes in.
+    ///
+    /// An instruction the inliner spliced in from a method body keeps that method's class
+    /// (`Function::inlined_scopes`); every other instruction runs in this function's own
+    /// `lexical_class`. Scope-sensitive lowering (property name resolution, visibility checks,
+    /// the callable invocation scope) must read the scope through this method, never from
+    /// `Function::lexical_class` directly.
+    pub(super) fn lexical_class(&self) -> Option<&'a str> {
+        let function: &'a Function = self.function;
+        match self.current_inst.and_then(|inst| function.inlined_scopes.get(&inst)) {
+            Some(scope) => Some(scope.as_str()),
+            None => function.lexical_class.as_deref(),
+        }
+    }
+
     /// Returns the dense id for this function's lexical class, or `-1` at global scope.
     ///
     /// Runtime callable dispatch transports this invocation-site value through a hidden ABI
     /// argument. It must never be inferred from the callable descriptor because an escaped
     /// first-class callable is checked in the scope where it is invoked, not where it was made.
     pub(super) fn lexical_class_id(&self) -> i64 {
-        let Some(class_name) = self.function.lexical_class.as_deref() else {
+        let Some(class_name) = self.lexical_class() else {
             return -1;
         };
         self.module
@@ -1748,11 +1763,11 @@ impl<'a> FunctionContext<'a> {
 
     /// Returns the lexical class scope used for `defined('Class::CONST')` visibility.
     ///
-    /// Prefers `Function::lexical_class` (methods and nested closures). Falls back
-    /// to the class prefix of the EIR function name, matching
-    /// `runtime_metadata::current_function_class`.
+    /// Prefers the current instruction's lexical class (`Self::lexical_class`: methods, nested
+    /// closures and spliced method bodies). Falls back to the class prefix of the EIR function
+    /// name, matching `runtime_metadata::current_function_class`.
     pub(super) fn defined_class_scope(&self) -> Option<&str> {
-        self.function.lexical_class.as_deref().or_else(|| {
+        self.lexical_class().or_else(|| {
             super::runtime_metadata::current_function_class(self.function)
         })
     }

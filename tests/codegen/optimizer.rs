@@ -80,6 +80,8 @@ mod fresh_mixed_transfer;
 mod release_local_slot;
 #[path = "optimizer/inline.rs"]
 mod inline;
+#[path = "optimizer/method_inline.rs"]
+mod method_inline;
 #[path = "optimizer/integer_range.rs"]
 mod integer_range;
 #[path = "optimizer/memory_model_propagation.rs"]

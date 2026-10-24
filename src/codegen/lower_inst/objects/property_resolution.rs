@@ -817,7 +817,7 @@ pub(super) fn resolve_property_name_in_current_scope(
         &ctx.module.class_infos,
         class_name,
         property,
-        ctx.function.lexical_class.as_deref(),
+        ctx.lexical_class(),
     )
 }
 
@@ -1058,7 +1058,7 @@ pub(super) fn property_name_is_scope_dynamic(
         &ctx.module.class_infos,
         class_name,
         property,
-        ctx.function.lexical_class.as_deref(),
+        ctx.lexical_class(),
     )
 }
 

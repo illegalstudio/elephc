@@ -311,7 +311,7 @@ fn emit_eval_clone_invocation_scope(
     invocation_scope: Option<ValueId>,
 ) -> Result<()> {
     let Some(invocation_scope) = invocation_scope else {
-        let Some(lexical_class) = ctx.function.lexical_class.clone() else {
+        let Some(lexical_class) = ctx.lexical_class().map(str::to_owned) else {
             return Ok(());
         };
         emit_store_eval_clone_scope_name(ctx, &lexical_class);
@@ -969,8 +969,8 @@ fn clone_hook_is_visible(ctx: &FunctionContext<'_>, candidate: &CloneHookCandida
     let declaring = candidate.declaring_class.as_str();
     match candidate.visibility {
         Visibility::Public => true,
-        Visibility::Private => ctx.function.lexical_class.as_deref() == Some(declaring),
-        Visibility::Protected => ctx.function.lexical_class.as_deref().is_some_and(|current| {
+        Visibility::Private => ctx.lexical_class() == Some(declaring),
+        Visibility::Protected => ctx.lexical_class().is_some_and(|current| {
             current == declaring
                 || class_is_subclass_of(ctx, current, declaring)
                 || class_is_subclass_of(ctx, declaring, current)
@@ -1003,9 +1003,7 @@ fn class_is_subclass_of(ctx: &FunctionContext<'_>, class_name: &str, ancestor: &
 /// PHP writes `from global scope` at the top level and `from scope Other` inside a class,
 /// so the phrase carries its own trailing word and callers must not append one.
 fn invocation_scope_phrase(ctx: &FunctionContext<'_>) -> String {
-    ctx.function
-        .lexical_class
-        .as_deref()
+    ctx.lexical_class()
         .map_or_else(|| "global scope".to_string(), |class| format!("scope {class}"))
 }
 
