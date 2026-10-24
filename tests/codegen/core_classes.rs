@@ -108,6 +108,40 @@ unset($error, $first, $second); gc_collect_cycles();
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// A user `get()` returning an object does not retype WeakMap's own `WeakReference::get()` call.
+#[test]
+fn test_core_classes_weak_map_with_user_object_get_method() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+final class ObjectGetBox {
+    public function __construct(public string $name) {}
+    public function get(): ObjectGetBox { return $this; }
+}
+$map = new WeakMap(); $key = new ObjectGetBox('box');
+$map[$key] = 'value';
+echo $key->get()->name, ':', count($map), ':';
+unset($key);
+echo count($map);
+unset($map);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "box:1:0");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A user `get()` returning a scalar does not retype WeakMap's own `WeakReference::get()` call.
+#[test]
+fn test_core_classes_weak_map_with_user_scalar_get_method() {
+    let out = compile_and_run(r#"<?php
+final class ScalarGetBox { public function get(): int { return 7; } }
+$map = new WeakMap(); $key = new ScalarGetBox();
+$map[$key] = 1;
+echo $key->get(), ':', count($map), ':';
+unset($key);
+echo count($map);
+"#);
+    assert_eq!(out, "7:1:0");
+}
+
 /// Delayed Core target errors surface when native and interpreted Reflection instantiate them.
 #[test]
 fn test_core_classes_delayed_attribute_validation() {

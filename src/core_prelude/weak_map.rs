@@ -108,6 +108,9 @@ pub(super) fn declarations() -> Program {
             s_typed_assign(t_array(), "__maps", e_static_call("WeakMap", "__elephc_array", vec![registry()])), remove(registry()),
             s_typed_assign(t_nullable(t_class("Throwable")), "__pending", e_null()),
             s_foreach(e_var("__maps"), None, "__weak", vec![
+                // The registry's elements read as mixed, and a call on a mixed receiver is typed
+                // by every class declaring the method, a user `get()` included: narrow first.
+                s_if(e_not(e_instanceof(e_var("__weak"), "WeakReference")), vec![s_continue(1)], vec![], None),
                 s_assign("__map", e_method_call(e_var("__weak"), "get", vec![])),
                 s_if(e_binop(e_var("__map"), BinOp::StrictNotEq, e_null()), vec![
                     s_try(vec![s_expr(e_method_call(e_var("__map"), "__elephc_forget", vec![e_var("__id")]))],
