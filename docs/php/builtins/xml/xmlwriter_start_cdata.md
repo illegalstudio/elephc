@@ -2,7 +2,7 @@
 title: "xmlwriter_start_cdata()"
 description: "Starts a CDATA section."
 sidebar:
-  order: 1052
+  order: 1055
 ---
 
 ## xmlwriter_start_cdata()

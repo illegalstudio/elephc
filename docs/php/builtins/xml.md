@@ -9,6 +9,9 @@ sidebar:
 
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
+| [`simplexml_import_dom()`](./xml/simplexml_import_dom.md) | `(object $node, ?string $class_name = 'SimpleXMLElement'): mixed` | `mixed` | ✓ | ✓ |
+| [`simplexml_load_file()`](./xml/simplexml_load_file.md) | `(string $filename, ?string $class_name = 'SimpleXMLElement', int $options = 0, string $namespace_or_prefix = '', bool $is_prefix = false): mixed` | `mixed` | ✓ | ✓ |
+| [`simplexml_load_string()`](./xml/simplexml_load_string.md) | `(string $data, ?string $class_name = 'SimpleXMLElement', int $options = 0, string $namespace_or_prefix = '', bool $is_prefix = false): mixed` | `mixed` | ✓ | ✓ |
 | [`xml_error_string()`](./xml/xml_error_string.md) | `(int $error_code): ?string` | `?string` | ✓ | ✓ |
 | [`xml_get_current_byte_index()`](./xml/xml_get_current_byte_index.md) | `(mixed $parser): int` | `int` | ✓ | ✓ |
 | [`xml_get_current_column_number()`](./xml/xml_get_current_column_number.md) | `(mixed $parser): int` | `int` | ✓ | ✓ |

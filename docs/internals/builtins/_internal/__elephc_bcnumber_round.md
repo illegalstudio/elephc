@@ -2,7 +2,7 @@
 title: "__elephc_bcnumber_round() - internals"
 description: "Compiler internals for __elephc_bcnumber_round(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1086
+  order: 1089
 ---
 
 ## `__elephc_bcnumber_round()` - internals

@@ -2,7 +2,7 @@
 title: "__elephc_bcnumber_mul() - internals"
 description: "Compiler internals for __elephc_bcnumber_mul(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1083
+  order: 1086
 ---
 
 ## `__elephc_bcnumber_mul()` - internals

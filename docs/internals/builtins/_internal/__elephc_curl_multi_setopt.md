@@ -2,7 +2,7 @@
 title: "__elephc_curl_multi_setopt() - internals"
 description: "Compiler internals for __elephc_curl_multi_setopt(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1123
+  order: 1126
 ---
 
 ## `__elephc_curl_multi_setopt()` - internals

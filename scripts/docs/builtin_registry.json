@@ -121258,6 +121258,447 @@
   },
   {
     "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "node",
+          "optional": false,
+          "type": "object"
+        },
+        {
+          "by_ref": false,
+          "default": "SimpleXMLElement",
+          "name": "class_name",
+          "optional": true,
+          "type": "?string"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "XML",
+    "canonical_name": "simplexml_import_dom",
+    "description": "Imports a DOM node as a SimpleXML element.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "xml",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/xml/simplexml_import_dom.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "node",
+          "optional": false,
+          "type": "object"
+        },
+        {
+          "by_ref": false,
+          "default": "\"SimpleXMLElement\"",
+          "name": "class_name",
+          "optional": true,
+          "type": "?string"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/simplexml_prelude/surface.rs",
+      "codegen_function": "simplexml_import_dom",
+      "codegen_line": 312,
+      "notes": [
+        "Implemented by the compiler-injected xml prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_xml.rs",
+      "sig_line": null
+    },
+    "module": "simplexml",
+    "name": "simplexml_import_dom",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "node",
+          "optional": false,
+          "type": "object"
+        },
+        {
+          "by_ref": false,
+          "default": "'SimpleXMLElement'",
+          "name": "class_name",
+          "optional": true,
+          "type": "?string"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "simplexml_import_dom",
+    "sub_area": "XML"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "filename",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "SimpleXMLElement",
+          "name": "class_name",
+          "optional": true,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "options",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "",
+          "name": "namespace_or_prefix",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": false,
+          "name": "is_prefix",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "XML",
+    "canonical_name": "simplexml_load_file",
+    "description": "Parses an XML file into a SimpleXML element.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "xml",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/xml/simplexml_load_file.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "filename",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "\"SimpleXMLElement\"",
+          "name": "class_name",
+          "optional": true,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "options",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "\"\"",
+          "name": "namespace_or_prefix",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "is_prefix",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/simplexml_prelude/surface.rs",
+      "codegen_function": "simplexml_load_file",
+      "codegen_line": 281,
+      "notes": [
+        "Implemented by the compiler-injected xml prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_xml.rs",
+      "sig_line": null
+    },
+    "module": "simplexml",
+    "name": "simplexml_load_file",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "filename",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "'SimpleXMLElement'",
+          "name": "class_name",
+          "optional": true,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "options",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "''",
+          "name": "namespace_or_prefix",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "is_prefix",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "simplexml_load_file",
+    "sub_area": "XML"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "data",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "SimpleXMLElement",
+          "name": "class_name",
+          "optional": true,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "options",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "",
+          "name": "namespace_or_prefix",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": false,
+          "name": "is_prefix",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "XML",
+    "canonical_name": "simplexml_load_string",
+    "description": "Parses XML bytes into a SimpleXML element.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "xml",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/xml/simplexml_load_string.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "data",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "\"SimpleXMLElement\"",
+          "name": "class_name",
+          "optional": true,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "options",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "\"\"",
+          "name": "namespace_or_prefix",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "is_prefix",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/simplexml_prelude/surface.rs",
+      "codegen_function": "simplexml_load_string",
+      "codegen_line": 275,
+      "notes": [
+        "Implemented by the compiler-injected xml prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_xml.rs",
+      "sig_line": null
+    },
+    "module": "simplexml",
+    "name": "simplexml_load_string",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "data",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "'SimpleXMLElement'",
+          "name": "class_name",
+          "optional": true,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "options",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "''",
+          "name": "namespace_or_prefix",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "is_prefix",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "simplexml_load_string",
+    "sub_area": "XML"
+  },
+  {
+    "aot": {
       "kind": "registry",
       "params": [
         {

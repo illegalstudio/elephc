@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3180 constants).
 
-Overall coverage: functions **983 / 2169** (45%), classes **171 / 329** (52%), constants **1173 / 3180** (37%).
+Overall coverage: functions **986 / 2169** (45%), classes **173 / 329** (53%), constants **1185 / 3180** (37%).
 
 ## Coverage by PHP module
 
@@ -41,7 +41,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `intl` | 0 / 187 · 0% | 0 / 22 · 0% | 0 / 170 · 0% |
 | `json` | 5 / 5 · 100% | 2 / 2 · 100% | 29 / 29 · 100% |
 | `ldap` | 0 / 55 · 0% | 0 / 3 · 0% | 0 / 92 · 0% |
-| `libxml` | 0 / 8 · 0% | 0 / 1 · 0% | 5 / 28 · 18% |
+| `libxml` | 0 / 8 · 0% | 0 / 1 · 0% | 17 / 28 · 61% |
 | `mbstring` | 65 / 65 · 100% | - | 9 / 9 · 100% |
 | [`mysqli`](./mysqli.md#functions) | 84 / 106 · 79% | 4 / 6 · 67% | 52 / 110 · 47% |
 | `odbc` | 0 / 48 · 0% | 0 / 2 · 0% | 0 / 57 · 0% |
@@ -63,7 +63,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `reflection` | - | 16 / 26 · 62% | - |
 | [`session`](./sessions.md#functions) | 23 / 23 · 100% | 4 / 4 · 100% | 3 / 3 · 100% |
 | `shmop` | 0 / 6 · 0% | 0 / 1 · 0% | - |
-| `simplexml` | 0 / 3 · 0% | 0 / 2 · 0% | - |
+| `simplexml` | 3 / 3 · 100% | 2 / 2 · 100% | - |
 | `snmp` | 0 / 24 · 0% | 0 / 2 · 0% | 0 / 21 · 0% |
 | `soap` | 0 / 2 · 0% | 0 / 8 · 0% | 0 / 81 · 0% |
 | `sockets` | 0 / 37 · 0% | 0 / 2 · 0% | 0 / 243 · 0% |
@@ -155,6 +155,7 @@ elephc also provides 91 symbols from PECL extensions php-src does not bundle, wh
 | [GD / image](./image.md) ([PHP](https://www.php.net/manual/en/book.image.php)) | 🟡 Partial | Enabled with --with-image |
 | [PCNTL](./pcntl.md) ([PHP](https://www.php.net/manual/en/book.pcntl.php)) | ✅ Supported | Target-aware Unix process control; auto-linked or forced with --with-pcntl |
 | [XML](./xml.md) ([PHP](https://www.php.net/manual/en/book.xml.php)) | ✅ Supported | ext/xml SAX parser (22 functions, XMLParser, 28 constants) and ext/xmlwriter (42 functions, XMLWriter) on a pinned static libxml2 2.15.3 from the native catalog (elephc native add libxml2); auto-linked or forced with --with-xml, identical inside eval(); the SURFACE INVENTORY is complete — every function, class and constant exists — which is not behavioural parity: see Differences from PHP in docs/php/xml.md, and Runtime limits there for the per-handler-invocation heap cost |
+| [SimpleXML](./xml.md) ([PHP](https://www.php.net/manual/en/book.simplexml.php)) | ✅ Supported | Three functions and two classes on the managed libxml2 bridge; supports element and attribute selections, mutation, namespace queries, XPath, and recursive iteration. Auto-linked or forced with --with-xml. |
 | [cURL](./curl.md) ([PHP](https://www.php.net/manual/en/book.curl.php)) | ✅ Supported | All 35 functions, 6 classes and 689 constants on a pinned static libcurl 8.21.0; declare the managed curl package (elephc native add curl). 260 of 271 CURLOPT_* implemented, the rest rejected with PHP's warning. eval() covers the easy, multi and share interfaces. The coverage row counts the 34 shared-contract functions; curl_file_create() is a plain prelude alias of the CURLFile constructor with no registry binding on either backend, so it carries no shared contract and is the one function the row does not count. |
 | OpenSSL ([PHP](https://www.php.net/manual/en/book.openssl.php)) | 🟡 Partial | Encrypt/decrypt subset |
 | [OPcache](./opcache.md) ([PHP](https://www.php.net/manual/en/book.opcache.php)) | 🟡 Partial | Compiled-script manifest plus a runtime parsed-script cache for dynamic include/require through eval(), with optional persistent file caching; ordinary code remains AOT-compiled and there is no tracing JIT |

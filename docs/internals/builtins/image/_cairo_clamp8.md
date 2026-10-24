@@ -2,7 +2,7 @@
 title: "_cairo_clamp8() - internals"
 description: "Compiler internals for _cairo_clamp8(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1184
+  order: 1187
 ---
 
 ## `_cairo_clamp8()` - internals
