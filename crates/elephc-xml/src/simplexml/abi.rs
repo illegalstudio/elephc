@@ -36,10 +36,11 @@ fn output(value: String) -> *const c_char {
 }
 /// Parses the full byte length, including embedded NULs, into a document-owned root.
 #[no_mangle]
-pub unsafe extern "C" fn elephc_xml_sx_load(data: *const c_char, length: i64, options: i64, ns: *const c_char, prefix: i64) -> i64 {
+pub unsafe extern "C" fn elephc_xml_sx_load(data: *const c_char, length: i64, options: i64, ns: *const c_char, prefix: i64, url: *const c_char) -> i64 {
     guard(|| {
         if data.is_null() || length <= 0 || length > i32::MAX as i64 { return 0; }
-        parse(std::slice::from_raw_parts(data.cast(), length as usize), options, &string(ns), prefix != 0).map(insert).unwrap_or(0)
+        parse_with_url(std::slice::from_raw_parts(data.cast(), length as usize), options,
+            &string(ns), prefix != 0, &string(url)).map(insert).unwrap_or(0)
     })
 }
 /// Releases one wrapper; the document dies only after its final selection is released.

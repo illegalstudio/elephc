@@ -100,8 +100,17 @@ $y->v = 'saved'; var_dump($y->asXML($file));
 $z = simplexml_load_file($file);
 if ($z instanceof SimpleXMLElement) { echo (string)$z->v, "\n"; }
 unlink($file);
+$directory = __DIR__ . '/simplexml-base';
+mkdir($directory);
+file_put_contents($directory . '/entity.dtd', '<!ENTITY word "relative">');
+file_put_contents($directory . '/data.xml', '<!DOCTYPE r SYSTEM "entity.dtd"><r>&word;</r>');
+$loaded = simplexml_load_file($directory . '/data.xml', options: LIBXML_DTDLOAD | LIBXML_NOENT);
+if ($loaded instanceof SimpleXMLElement) { echo (string)$loaded, "\n"; }
+$constructed = new SimpleXMLElement($directory . '/data.xml', LIBXML_DTDLOAD | LIBXML_NOENT, true);
+echo (string)$constructed, "\n";
+unlink($directory . '/entity.dtd'); unlink($directory . '/data.xml'); rmdir($directory);
 "###);
-    assert_eq!(out, "file\nbool(true)\nsaved\n");
+    assert_eq!(out, "file\nbool(true)\nsaved\nrelative\nrelative\n");
 }
 
 /// Verifies SimpleXML custom subclasses against PHP's observable output.
@@ -125,11 +134,11 @@ fn test_simplexml_parse_errors_and_options() {
     if skip_without_xml_native("test_simplexml_parse_errors_and_options") { return; }
     let out = compile_and_run(r###"<?php
 var_dump(@simplexml_load_string('<r>'), @simplexml_load_string(''));
-try { new SimpleXMLElement('<r>'); } catch (Exception $e) { echo $e->getMessage(), "\n"; }
+try { @(new SimpleXMLElement('<r>')); } catch (Exception $e) { echo $e->getMessage(), "\n"; }
 $x = new SimpleXMLElement('<r>  <a>text</a>  </r>', LIBXML_NOBLANKS);
 echo $x->asXML();
 "###);
-    assert_eq!(out, "bool(false)\nbool(false)\n\nWarning: SimpleXMLElement::__construct(): Entity: line 1: parser error : Premature end of data in tag r line 1 in Standard input code on line 3\n\nWarning: SimpleXMLElement::__construct(): <r> in Standard input code on line 3\n\nWarning: SimpleXMLElement::__construct():    ^ in Standard input code on line 3\nString could not be parsed as XML\n<?xml version=\"1.0\"?>\n<r><a>text</a></r>\n");
+    assert_eq!(out, "bool(false)\nbool(false)\nString could not be parsed as XML\n<?xml version=\"1.0\"?>\n<r><a>text</a></r>\n");
 }
 
 /// Verifies SimpleXML casts and empty selections against PHP's observable output.
@@ -202,8 +211,12 @@ $copy = clone $x;
 $copy->a[0] = 'changed';
 echo (string)$x->a[0], ':', (string)$copy->a[0], "\n";
 var_dump($x instanceof ArrayAccess, $x instanceof RecursiveIterator, $x instanceof Countable, extension_loaded('SimpleXML'));
+$iterator = new SimpleXMLIterator('<r><a/><b/></r>');
+$iterator->rewind(); $iterator->next();
+$clonedIterator = clone $iterator;
+var_dump($clonedIterator->valid());
 "###);
-    assert_eq!(out, "one:changed\nbool(false)\nbool(true)\nbool(true)\nbool(true)\n");
+    assert_eq!(out, "one:changed\nbool(false)\nbool(true)\nbool(true)\nbool(true)\nbool(false)\n");
 }
 
 /// Verifies SimpleXML entities and cdata options using PHP's expected output.

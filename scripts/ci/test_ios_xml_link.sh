@@ -94,8 +94,8 @@ find_native_archive() {
 
 # Shim first: it reaches into libxml2's parser-context structs on the bridge's behalf,
 # so it must precede libxml2.a (src/linker/bridges.rs LIBXML2_ARCHIVES).
-SHIM_ARCHIVE="$(find_native_archive libxml2 2.15.3 2 libelephc_libxml2_shim.a)"
-LIBXML2_ARCHIVE="$(find_native_archive libxml2 2.15.3 2 libxml2.a)"
+SHIM_ARCHIVE="$(find_native_archive libxml2 2.15.3 3 libelephc_libxml2_shim.a)"
+LIBXML2_ARCHIVE="$(find_native_archive libxml2 2.15.3 3 libxml2.a)"
 
 WORK_DIR="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/elephc-ios-xml-link.XXXXXX")"
 cleanup() {

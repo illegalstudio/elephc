@@ -10,8 +10,9 @@
 #include <string.h>
 
 /* Parse bytes without installing process-global error handlers. */
-void *elephc_libxml2_v1_sx_parse(const char *data, int len, int options) {
-    return xmlReadMemory(data, len, NULL, NULL, options | XML_PARSE_NOERROR | XML_PARSE_NOWARNING);
+void *elephc_libxml2_v1_sx_parse(const char *data, int len, int options, const char *url) {
+    return xmlReadMemory(data, len, url && *url ? url : NULL, NULL,
+        options | XML_PARSE_NOERROR | XML_PARSE_NOWARNING);
 }
 void elephc_libxml2_v1_sx_doc_free(void *doc) { xmlFreeDoc(doc); }
 void *elephc_libxml2_v1_sx_root(void *doc) { return xmlDocGetRootElement(doc); }

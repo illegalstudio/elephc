@@ -173,10 +173,17 @@ unsafe fn owned_string(raw: *mut c_char) -> String {
 fn cstring(value: &str) -> CString { CString::new(value.split('\0').next().unwrap_or("")).unwrap_or_default() }
 
 /// Parses exactly the supplied byte length and returns the document root wrapper.
+#[cfg(all(test, elephc_xml_native))]
 fn parse(data: &[u8], options: i64, namespace: &str, prefix: bool) -> Option<View> {
+    parse_with_url(data, options, namespace, prefix, "")
+}
+
+/// Retains a file's base URI while libxml2 resolves relative external subsets and entities.
+fn parse_with_url(data: &[u8], options: i64, namespace: &str, prefix: bool, url: &str) -> Option<View> {
     crate::ffi::init_library();
     let length = i32::try_from(data.len()).ok()?;
-    let raw = unsafe { ffi::parse(data.as_ptr().cast(), length, i32::try_from(options).ok()?) };
+    let url = cstring(url);
+    let raw = unsafe { ffi::parse(data.as_ptr().cast(), length, i32::try_from(options).ok()?, url.as_ptr()) };
     if raw.is_null() { return None; }
     let root = unsafe { ffi::root(raw) };
     let doc = Rc::new(Document { raw, detached: RefCell::new(vec![]) });

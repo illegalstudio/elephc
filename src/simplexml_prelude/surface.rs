@@ -9,7 +9,7 @@
 
 pub(super) const SOURCE: &str = r###"<?php
 extern "elephc_xml" {
-    function elephc_xml_sx_load(string $data, int $length, int $options, string $ns, int $prefix): int;
+    function elephc_xml_sx_load(string $data, int $length, int $options, string $ns, int $prefix, string $url): int;
     function elephc_xml_sx_free(int $handle): void;
     function elephc_xml_sx_clone(int $handle): int;
     function elephc_xml_sx_alias(int $handle): int;
@@ -51,12 +51,14 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     public function __elephc_attach(int $handle): void { $this->__elephc_handle = $handle; }
     public function __elephc_handle_value(): int { return $this->__elephc_handle; }
     public function __construct(string $data, int $options = 0, bool $dataIsURL = false, string $namespaceOrPrefix = "", bool $isPrefix = false) {
+        $url = "";
         if ($dataIsURL) {
+            $url = $data;
             $contents = file_get_contents($data);
             if ($contents === false) { throw new Exception("String could not be parsed as XML"); }
             $data = $contents;
         }
-        $handle = elephc_xml_sx_load($data, strlen($data), $options, $namespaceOrPrefix, (int)$isPrefix);
+        $handle = elephc_xml_sx_load($data, strlen($data), $options, $namespaceOrPrefix, (int)$isPrefix, $url);
         if ($handle === 0) { throw new Exception("String could not be parsed as XML"); }
         $old = $this->__elephc_handle;
         $this->__elephc_handle = $handle;
@@ -73,6 +75,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $handle = $this->__elephc_handle;
         $this->__elephc_handle = elephc_xml_sx_clone($handle);
         $this->__elephc_current = null;
+        $this->__elephc_position = -1;
     }
     public function __toString(): string {
         $handle = $this->__elephc_handle;
@@ -335,7 +338,7 @@ class SimpleXMLIterator extends SimpleXMLElement {}
 
 function simplexml_load_string(string $data, ?string $class_name = "SimpleXMLElement", int $options = 0, string $namespace_or_prefix = "", bool $is_prefix = false): SimpleXMLElement|false {
     $class = __elephc_simplexml_class($class_name);
-    $handle = elephc_xml_sx_load($data, strlen($data), $options, $namespace_or_prefix, (int)$is_prefix);
+    $handle = elephc_xml_sx_load($data, strlen($data), $options, $namespace_or_prefix, (int)$is_prefix, "");
     if ($handle === 0) { return false; }
     return __elephc_simplexml_wrap($handle, $class);
 }
@@ -343,7 +346,9 @@ function simplexml_load_file(string $filename, ?string $class_name = "SimpleXMLE
     $class = __elephc_simplexml_class($class_name);
     $data = file_get_contents($filename);
     if ($data === false) { return false; }
-    return simplexml_load_string($data, $class, $options, $namespace_or_prefix, $is_prefix);
+    $handle = elephc_xml_sx_load($data, strlen($data), $options, $namespace_or_prefix, (int)$is_prefix, $filename);
+    if ($handle === 0) { return false; }
+    return __elephc_simplexml_wrap($handle, $class);
 }
 function __elephc_simplexml_bind_dom(DOMNode $node, SimpleXMLElement $view): void {
     $children = $node->childNodes;
@@ -374,7 +379,10 @@ function __elephc_simplexml_bind_dom(DOMNode $node, SimpleXMLElement $view): voi
 
 function simplexml_import_dom(object $node, ?string $class_name = "SimpleXMLElement"): ?SimpleXMLElement {
     $class = __elephc_simplexml_class($class_name);
-    if (!($node instanceof DOMNode)) { throw new TypeError("simplexml_import_dom(): Argument #1 ($node) must be of type DOMNode"); }
+    if ($node instanceof DOMNode) { return __elephc_simplexml_import_node($node, $class); }
+    throw new TypeError("simplexml_import_dom(): Argument #1 ($node) must be of type DOMNode");
+}
+function __elephc_simplexml_import_node(DOMNode $node, string $class): ?SimpleXMLElement {
     if (!($node instanceof DOMDocument) && !($node instanceof DOMElement)) { return null; }
     $bound = $node->__elephc_simplexml;
     if ($bound instanceof SimpleXMLElement) {

@@ -1371,7 +1371,11 @@ fn emit_block(ctx: &mut FunctionContext<'_>, block: &BasicBlock) -> Result<()> {
     ctx.emitter.label(&block_label);
     for inst_id in &block.instructions {
         emit_instruction_source_marker(ctx, *inst_id)?;
-        lower_inst::lower_instruction(ctx, *inst_id)?;
+        lower_inst::lower_instruction(ctx, *inst_id).map_err(|error| {
+            CodegenIrError::invalid_module(format!(
+                "{error} (function {}, instruction {inst_id:?})", ctx.function.name,
+            ))
+        })?;
         if ctx.uses_pcntl_async_signals() {
             abi::emit_call_label(ctx.emitter, "__rt_pcntl_async_dispatch_preserving");
         }
