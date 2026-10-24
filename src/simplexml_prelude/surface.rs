@@ -63,6 +63,8 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         if ($handle === 0) { throw new Exception("String could not be parsed as XML"); }
         $old = $this->__elephc_handle;
         $this->__elephc_handle = $handle;
+        $this->__elephc_current = null;
+        $this->__elephc_position = -1;
         if ($old !== 0) { elephc_xml_sx_free($old); }
     }
     public function __destruct() {
@@ -73,6 +75,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     public function __clone(): void {
         $handle = $this->__elephc_handle;
         $this->__elephc_handle = elephc_xml_sx_clone($handle);
+        $this->__elephc_current = null;
     }
     public function __toString(): string {
         $handle = $this->__elephc_handle;
@@ -158,13 +161,13 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     public function saveXML(?string $filename = null): string|bool { return $this->asXML($filename); }
     public function attributes(?string $namespaceOrPrefix = null, bool $isPrefix = false): ?SimpleXMLElement {
         $handle = $this->__elephc_handle;
-        if (elephc_xml_sx_int($handle, 4) === 2) { return null; }
+        if (elephc_xml_sx_int($handle, 1) === 0 || elephc_xml_sx_int($handle, 4) === 2) { return null; }
         $selected = elephc_xml_sx_select($handle, 1, "", $namespaceOrPrefix ?? "", (int)$isPrefix, 0);
         return __elephc_simplexml_wrap($selected, get_class($this));
     }
     public function children(?string $namespaceOrPrefix = null, bool $isPrefix = false): ?SimpleXMLElement {
         $handle = $this->__elephc_handle;
-        if (elephc_xml_sx_int($handle, 4) === 2) { return null; }
+        if (elephc_xml_sx_int($handle, 1) === 0 || elephc_xml_sx_int($handle, 4) === 2) { return null; }
         $selected = elephc_xml_sx_select($handle, 0, "", $namespaceOrPrefix ?? "", (int)$isPrefix, 0);
         return __elephc_simplexml_wrap($selected, get_class($this));
     }
@@ -183,6 +186,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     public function xpath(string $expression): array|null|false {
         $handle = $this->__elephc_handle;
         $result = elephc_xml_sx_xpath($handle, $expression);
+        if ($result === 0) { return null; }
         if ($result < 0) { return false; }
         $nodes = [];
         $length = elephc_xml_sx_int($result, 2);

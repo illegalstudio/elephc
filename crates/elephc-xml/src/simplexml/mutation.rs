@@ -14,14 +14,17 @@ impl View {
     fn ensure_first(&self) -> Option<Node> {
         if let Some(node) = self.first() { return Some(node); }
         match &self.scope {
-            Scope::Children(parent, Some(name)) => parent.add(name, None, None, false),
+            Scope::Children(parent, Some(name)) => {
+                let node = parent.ensure_first()?;
+                parent.with_scope(Scope::Node(node)).add(name, None, None, false)
+            },
             Scope::Index(parent, 0) => parent.ensure_first(),
             _ => None,
         }
     }
     /// Adds an element or attribute under the first selected element.
     pub(super) fn add(&self, name: &str, value: Option<&str>, namespace: Option<&str>, attribute: bool) -> Option<Node> {
-        let parent = self.ensure_first()?;
+        let parent = self.first()?;
         if unsafe { ffi::node_type(parent) } != 1 || name.is_empty() { return None; }
         let name = cstring(name);
         if unsafe { crate::ffi::xmlValidateName(name.as_ptr().cast(), 0) } != 0 { return None; }
@@ -56,7 +59,9 @@ impl View {
         if let Some(node) = nodes.first() { self.assign_node(*node, value); return 1; }
         if kind == 3 || (kind == 2 && matches!(self.scope, Scope::Attributes(..))) {
             let owner = if matches!(self.scope, Scope::Attributes(..)) { parent_for_attributes(self) } else { Rc::new(self.clone()) };
-            return i64::from(owner.add(key, Some(value), None, true).is_some());
+            return i64::from(owner.ensure_first().and_then(|node| {
+                owner.with_scope(Scope::Node(node)).add(key, Some(value), None, true)
+            }).is_some());
         }
         if kind == 2 {
             if let Some(node) = target.ensure_first() { target.assign_node(node, value); return 1; }

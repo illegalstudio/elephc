@@ -126,7 +126,10 @@ pub unsafe extern "C" fn elephc_xml_sx_register(handle: i64, prefix: *const c_ch
 /// Evaluates XPath into a temporary result-list handle; -1 means an invalid expression.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_xml_sx_xpath(handle: i64, expression: *const c_char) -> i64 {
-    guard(|| view(handle).map(|v| v.xpath(&string(expression)).map(|nodes| insert(v.with_scope(Scope::Nodes(nodes)))).unwrap_or(-1)).unwrap_or(-1))
+    guard(|| view(handle).map(|v| {
+        if v.first().is_none() { return 0; }
+        v.xpath(&string(expression)).map(|nodes| insert(v.with_scope(Scope::Nodes(nodes)))).unwrap_or(-1)
+    }).unwrap_or(-1))
 }
 /// Reads one namespace prefix/URI or the entry count (index -1), encoded as a C string.
 #[no_mangle]
