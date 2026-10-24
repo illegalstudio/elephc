@@ -82,7 +82,7 @@ fn dispatch(
     ctx.builder.terminate(Terminator::CondBr { cond: condition.value,
         then_target: native, then_args: vec![], else_target: regular, else_args: vec![] });
     ctx.builder.position_at_end(native);
-    let receiver = borrow_receiver(ctx, object, expr.span);
+    let receiver = borrow_native_xml_property_receiver(ctx, object, expr.span);
     let value = lower_method_call_with_receiver(ctx, receiver, method, &[name.clone()], Op::MethodCall, expr);
     let value = if result_type == PhpType::Bool { ctx.truthy_consuming(value, Some(expr.span)) } else { value };
     store_value_into_temp(ctx, &temp, result_type.clone(), value, expr.span);
@@ -142,7 +142,7 @@ fn unset_name(
     ctx.builder.terminate(Terminator::CondBr { cond: condition.value,
         then_target: native, then_args: vec![], else_target: regular, else_args: vec![] });
     ctx.builder.position_at_end(native);
-    let receiver = borrow_receiver(ctx, object, expr.span);
+    let receiver = borrow_native_xml_property_receiver(ctx, object, expr.span);
     let result = lower_method_call_with_receiver(ctx, receiver, "__elephc_property_unset", &[name.clone()], Op::MethodCall, expr);
     crate::ir_lower::ownership::release_if_owned(ctx, result, Some(expr.span));
     branch_to(ctx, merge);

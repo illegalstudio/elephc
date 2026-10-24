@@ -746,7 +746,8 @@ pub(super) fn set_hook_receiver_has_accessor(
     object: crate::ir::ValueId,
     property: &str,
 ) -> bool {
-    let PhpType::Object(class_name) = ctx.builder.value_php_type(object).codegen_repr() else {
+    let object_ty = ctx.builder.value_php_type(object);
+    let Some((class_name, _)) = crate::ir_lower::expr::singular_object_class(&object_ty) else {
         return false;
     };
     let normalized = class_name.trim_start_matches('\\');

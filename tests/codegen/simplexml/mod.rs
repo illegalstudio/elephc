@@ -163,6 +163,36 @@ readSimpleXmlChild($ordinary);
     assert_eq!(out, "native|hidden|ordinary|");
 }
 
+/// Nullable ordinary objects retain their own property protocol when XML is enabled.
+#[test]
+fn test_simplexml_nullable_ordinary_property_dispatch() {
+    if skip_without_xml_native("test_simplexml_nullable_ordinary_property_dispatch") { return; }
+    let out = compile_and_run(r###"<?php
+class NullableOrdinaryXmlPeer {
+    public string $value = 'plain';
+    public string $hooked = 'seed' {
+        get { echo 'get:'; return $this->hooked; }
+        set { echo 'set:'; $this->hooked = $value; }
+    }
+}
+function nullableOrdinaryXmlPeer(int $n): ?NullableOrdinaryXmlPeer {
+    return $n > 0 ? new NullableOrdinaryXmlPeer() : null;
+}
+$xml = new SimpleXMLElement('<r/>');
+$peer = nullableOrdinaryXmlPeer($argc);
+echo $peer->value, ':';
+$peer->value = 'changed';
+echo $peer->value, ':';
+$peer->hooked = 'next';
+echo $peer->hooked, ':';
+var_dump(isset($peer->value));
+echo $peer->value ?? 'missing', ':';
+unset($peer->value);
+var_dump(isset($peer->value));
+"###);
+    assert_eq!(out, "plain:changed:set:get:next:bool(true)\nchanged:bool(false)\n");
+}
+
 /// Native XML properties bypass user slots and hooks in typed, boxed, and eval operations.
 #[test]
 fn test_simplexml_native_properties_ignore_user_hooks() {

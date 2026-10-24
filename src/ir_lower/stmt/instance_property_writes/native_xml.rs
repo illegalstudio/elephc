@@ -66,6 +66,7 @@ fn emit_set_name(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, name: LoweredValue,
     value: LoweredValue, method: &str, span: Span,
 ) {
+    let object = crate::ir_lower::expr::borrow_native_xml_property_receiver(ctx, object, span);
     let value = ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span));
     let signature = ctx.classes.get("SimpleXMLElement")
         .and_then(|info| info.methods.get(&php_symbol_key(method))).cloned();
