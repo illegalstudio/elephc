@@ -314,6 +314,22 @@ foreach (['stdClass', 'MissingSimpleXmlClass', ''] as $class) {
     try { simplexml_load_string('<r/>', $class); }
     catch (TypeError $error) { echo "type-error|"; }
 }
+
+/// Numeric aliases remain bound to the same native node when siblings are removed.
+#[test]
+fn test_simplexml_indexed_alias_after_unset() {
+    if skip_without_xml_native("test_simplexml_indexed_alias_after_unset") { return; }
+    let out = compile_and_run(r###"<?php
+$xml = new SimpleXMLElement('<r><i>a</i><i>b</i></r>');
+$first = $xml->i[0];
+unset($xml->i[-1]);
+echo count($xml->i), ':';
+unset($xml->i[0]);
+echo (string)$first, ':', (string)$xml->i[0], "\n";
+unset($first[0]); unset($first[0]);
+"###);
+    assert_eq!(out, "2:a:b\n");
+}
 "###);
     assert_eq!(out, "type-error|type-error|type-error|");
 }

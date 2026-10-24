@@ -248,9 +248,9 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
                         $old[] = $value;
                         $result[$name] = $old;
                     } else { $result[$name] = $value; }
-              }
-            return $result;
-          }
+                }
+                return $result;
+            }
         }
         $text = (string)$base;
         if ($text !== "") { $result["0"] = $text; }

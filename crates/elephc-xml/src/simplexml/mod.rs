@@ -121,7 +121,8 @@ impl View {
             3 => Scope::Attributes(if matches!(self.scope, Scope::Attributes(..)) {
                 parent_for_attributes(self)
             } else { parent }, Some(name.into())),
-            _ => Scope::Index(parent, index),
+            _ => self.nodes().get(index).copied().map(Scope::Node)
+                .unwrap_or_else(|| Scope::Index(parent, index)),
         };
         let filter = if kind <= 1 { Namespace { value: ns.into(), prefix } } else { self.ns.clone() };
         Self { scope, ns: filter, xpath_ns: Rc::new(RefCell::new(BTreeMap::new())), ..self.clone() }
@@ -147,6 +148,7 @@ impl View {
     }
     /// Detaches a node without freeing memory still visible to another wrapper.
     fn detach(&self, node: Node) {
+        if self.doc.detached.borrow().contains(&node) { return; }
         unsafe { ffi::unlink(node); }
         self.doc.detached.borrow_mut().push(node);
     }

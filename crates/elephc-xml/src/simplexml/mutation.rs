@@ -82,6 +82,7 @@ impl View {
     }
     /// Removes selected nodes while preserving all borrowed wrapper storage.
     pub(super) fn remove(&self, kind: i64, key: &str, index: i64) {
+        if kind == 4 && index < 0 { return; }
         for node in self.select(kind, key, "", false, index.max(0) as usize).nodes() { self.detach(node); }
     }
 }

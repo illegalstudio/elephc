@@ -68,3 +68,19 @@ fn simplexml_materializes_missing_ancestors() {
     assert_eq!(missing.nodes().len(), 1);
     assert_eq!(unsafe { owned_string(ffi::text(missing.select(2, "inner", "", false, 0).first().unwrap())) }, "value");
 }
+
+/// Indexed aliases keep their node after sibling removal and tolerate repeated unsets.
+#[test]
+fn simplexml_indexed_alias_survives_removal() {
+    let root = parse(b"<r><a>one</a><a>two</a></r>", 0, "", false).unwrap();
+    let items = root.select(2, "a", "", false, 0);
+    let first = items.select(4, "", "", false, 0);
+    items.remove(4, "", -1);
+    assert_eq!(items.nodes().len(), 2);
+    items.remove(4, "", 0);
+    assert_eq!(unsafe { owned_string(ffi::text(first.first().unwrap())) }, "one");
+    assert_eq!(unsafe { owned_string(ffi::text(items.first().unwrap())) }, "two");
+    first.remove(4, "", 0);
+    first.remove(4, "", 0);
+    assert_eq!(first.doc.detached.borrow().len(), 1);
+}
