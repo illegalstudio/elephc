@@ -10,6 +10,9 @@
 use std::ffi::{c_char, c_int, c_void};
 pub(super) type Node = *mut c_void;
 extern "C" {
+    /// Returns encoded XML bytes and their explicit length.
+    #[link_name = "elephc_libxml2_v1_sx_dump_bytes"]
+    pub(super) fn dump_bytes(doc: Node, node: Node, whole: c_int, length: *mut c_int) -> *mut c_char;
     /// Sets scalar node content for DOM text, comment, and processing instruction nodes.
     #[link_name = "elephc_libxml2_v1_sx_content"]
     pub(super) fn content(node: Node, value: *const c_char);

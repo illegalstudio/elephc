@@ -504,7 +504,8 @@ impl GraphState {
                         if *is_static {
                             operators.arithmetic.iter().any(|(_, adapter)| *adapter == method)
                                 || operators.compare == Some(method.as_str())
-                        } else { operators.boolean == Some(method.as_str()) }
+                        } else { operators.boolean == Some(method.as_str())
+                            || operators.casts.iter().any(|(_, adapter)| *adapter == method) }
                     })
                     || matches!(method.as_str(), "__call" | "__callstatic")
                     || self.behavioral.referenced_methods.contains(&reference)

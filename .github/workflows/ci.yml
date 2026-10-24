@@ -2474,14 +2474,14 @@ jobs:
       - name: Enforce builtin target architecture
         run: python3 scripts/audit_builtin_eir_boundary.py --enforce-target-architecture
 
-      - name: Test builtin contract documentation pipeline
-        run: python3 -m unittest discover -s scripts/docs/elephc_builtins -p 'test_*.py'
-
       - name: Regenerate builtins documentation
         # Re-run the generator; the committed Markdown pages and JSON registry
         # must come back byte-identical. A diff means someone changed a builtin
         # signature, lowering, or area assignment without regenerating docs.
         run: python3 scripts/docs/extract_builtins.py --render --force
+
+      - name: Test builtin contract documentation pipeline
+        run: python3 -m unittest discover -s scripts/docs/elephc_builtins -p 'test_*.py'
 
       - name: Audit generated builtins docs
         run: python3 scripts/docs/audit_builtins.py

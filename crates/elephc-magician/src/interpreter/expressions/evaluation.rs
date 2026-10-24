@@ -148,8 +148,14 @@ pub(super) fn eval_cast_expr(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     with_eval_operands(&[expr], context, scope, values, |args, context, _, values| {
         match target {
-            EvalCastType::Int => values.cast_int(args[0]),
-            EvalCastType::Float => values.cast_float(args[0]),
+            EvalCastType::Int => {
+                if let Some(result) = super::super::runtime_ops::object_operators::numeric_cast(values, args[0], elephc_builtin_contract::ObjectCast::Int)? { return Ok(result); }
+                values.cast_int(args[0])
+            }
+            EvalCastType::Float => {
+                if let Some(result) = super::super::runtime_ops::object_operators::numeric_cast(values, args[0], elephc_builtin_contract::ObjectCast::Float)? { return Ok(result); }
+                values.cast_float(args[0])
+            }
             EvalCastType::String => {
                 let value = eval_string_context_value(args[0], context, values)?;
                 let result = values.cast_string(value);

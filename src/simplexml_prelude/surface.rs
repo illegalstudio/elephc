@@ -16,6 +16,7 @@ extern "elephc_xml" {
     function elephc_xml_sx_select(int $handle, int $kind, string $name, string $ns, int $prefix, int $index): int;
     function elephc_xml_sx_int(int $handle, int $operation): int;
     function elephc_xml_sx_string(int $handle, int $operation): string;
+    function elephc_xml_sx_xml_hex(int $handle, int $whole): string;
     function elephc_xml_sx_item(int $handle, int $index): int;
     function elephc_xml_sx_mutate(int $handle, int $operation, string $key, string $value, string $ns, int $flags, int $index): int;
     function elephc_xml_sx_register(int $handle, string $prefix, string $uri): int;
@@ -73,6 +74,8 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $handle = $this->__elephc_handle;
         return elephc_xml_sx_string($handle, 0);
     }
+    public function __elephc_int(): int { return (int)(string)$this; }
+    public function __elephc_float(): float { return (float)(string)$this; }
     public function __elephc_bool(): bool {
         $handle = $this->__elephc_handle;
         return elephc_xml_sx_int($handle, 3) !== 0;
@@ -144,7 +147,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     public function asXML(?string $filename = null): string|bool {
         $handle = $this->__elephc_handle;
         if (elephc_xml_sx_int($handle, 1) === 0) { return false; }
-        $xml = elephc_xml_sx_string($handle, 2);
+        $xml = (string)hex2bin(elephc_xml_sx_xml_hex($handle, 1));
         if ($filename === null) { return $xml; }
         return file_put_contents($filename, $xml) !== false;
     }
@@ -209,7 +212,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     }
     public function __elephc_dom_xml(): string {
         $handle = $this->__elephc_handle;
-        return elephc_xml_sx_string($handle, 4);
+        return (string)hex2bin(elephc_xml_sx_xml_hex($handle, 0));
     }
     public function __elephc_dom_set_text(string $text): void {
         $handle = $this->__elephc_handle;

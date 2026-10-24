@@ -162,3 +162,22 @@ char *elephc_libxml2_v1_sx_dump_node(void *rawdoc, void *rawnode) {
     xmlBufferFree(out);
     return (char *)result;
 }
+
+/* Length-bearing serialization preserves legacy encodings and embedded NUL bytes. */
+char *elephc_libxml2_v1_sx_dump_bytes(void *rawdoc, void *rawnode, int whole, int *length) {
+    xmlDocPtr doc = rawdoc;
+    xmlNodePtr node = rawnode;
+    *length = 0;
+    if (whole && node == xmlDocGetRootElement(doc)) {
+        xmlChar *out = NULL;
+        xmlDocDumpMemory(doc, &out, length);
+        return (char *)out;
+    }
+    xmlBufferPtr out = xmlBufferCreate();
+    if (!out) return NULL;
+    if (xmlNodeDump(out, doc, node, 0, 0) < 0) { xmlBufferFree(out); return NULL; }
+    *length = xmlBufferLength(out);
+    xmlChar *result = xmlStrndup(xmlBufferContent(out), *length);
+    xmlBufferFree(out);
+    return (char *)result;
+}

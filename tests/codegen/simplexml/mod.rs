@@ -217,3 +217,27 @@ echo (string)$x->a->asXML(), "\n";
 "###);
     assert_eq!(out, "raw<text>value\n<a>raw&lt;text&gt;value</a>\n");
 }
+
+/// Numeric conversions parse the selected node text, including runtime-boxed offsets.
+#[test]
+fn test_simplexml_numeric_conversions() {
+    if skip_without_xml_native("test_simplexml_numeric_conversions") { return; }
+    let out = compile_and_run(r###"<?php
+$x = new SimpleXMLElement('<r><number>42.5</number><zero>0</zero></r>');
+echo (int)$x->number, ':', (float)$x->number, ':', (int)$x->number[0], ':', (int)$x->zero, "\n";
+eval('echo (int)$x->number, ":", (float)$x->number, "\n";');
+"###);
+    assert_eq!(out, "42:42.5:42:0\n42:42.5\n");
+}
+
+/// XML declarations and legacy document encodings survive C-string bridge serialization.
+#[test]
+fn test_simplexml_legacy_encoding_serialization() {
+    if skip_without_xml_native("test_simplexml_legacy_encoding_serialization") { return; }
+    let out = compile_and_run(r###"<?php
+$data = '<?xml version="1.0" encoding="ISO-8859-1"?><r>caf' . chr(233) . '</r>';
+$x = new SimpleXMLElement($data);
+echo bin2hex((string)$x), "\n", bin2hex((string)$x->asXML()), "\n";
+"###);
+    assert_eq!(out, "636166c3a9\n3c3f786d6c2076657273696f6e3d22312e302220656e636f64696e673d2249534f2d383835392d31223f3e0a3c723e636166e93c2f723e0a\n");
+}

@@ -126,3 +126,19 @@ pub extern "C" fn elephc_xml_sx_namespace(handle: i64, declared: i64, recursive:
 /// Creates another wrapper over the same native selection, without PHP clone's deep copy.
 #[no_mangle]
 pub extern "C" fn elephc_xml_sx_alias(handle: i64) -> i64 { guard(|| view(handle).map(insert).unwrap_or(0)) }
+
+/// Encodes serialized bytes as ASCII hex so the extern C-string ABI preserves all encodings.
+#[no_mangle]
+pub extern "C" fn elephc_xml_sx_xml_hex(handle: i64, whole: i64) -> *const c_char {
+    guard(|| output(view(handle).and_then(|v| v.first().map(|node| unsafe {
+        let mut length = 0;
+        let raw = ffi::dump_bytes(v.doc.raw, node, i32::from(whole != 0), &mut length);
+        if raw.is_null() { return String::new(); }
+        let bytes = std::slice::from_raw_parts(raw.cast::<u8>(), length.max(0) as usize);
+        let mut hex = String::with_capacity(bytes.len().saturating_mul(2));
+        const DIGITS: &[u8; 16] = b"0123456789abcdef";
+        for byte in bytes { hex.push(DIGITS[(byte >> 4) as usize] as char); hex.push(DIGITS[(byte & 15) as usize] as char); }
+        ffi::string_free(raw.cast());
+        hex
+    })).unwrap_or_default()))
+}

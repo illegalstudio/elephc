@@ -47,6 +47,16 @@ pub(super) fn truthy(
     truthy.and_then(|truthy| released.map(|()| Some(truthy)))
 }
 
+/// Applies an internal numeric conversion through the same instance adapter as AOT.
+pub(in crate::interpreter) fn numeric_cast(
+    values: &mut (impl RuntimeValueOps + ?Sized), value: RuntimeCellHandle,
+    cast: elephc_builtin_contract::ObjectCast,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let Some(class) = operator_class(values, value)? else { return Ok(None); };
+    let Some(method) = class.operators.and_then(|ops| ops.cast_method(cast)) else { return Ok(None); };
+    values.operator_method_call(value, method, vec![]).map(Some)
+}
+
 /// Compares values and materializes either a signed integer or a PHP boolean result.
 pub(super) fn comparison(
     values: &mut (impl RuntimeValueOps + ?Sized), op: EvalBinOp,

@@ -244,3 +244,65 @@ fn lower_dynamic_truthiness(
         object_initialized, true, fallback_initialized, true));
     take_owned_temp(ctx, &temp, at)
 }
+
+/// Applies a PHP internal-class numeric cast through target-independent method calls.
+pub(super) fn lower_object_numeric_cast(
+    ctx: &mut LoweringContext<'_, '_>, input: LoweredValue,
+    target: &CastType, span: Option<Span>,
+) -> Option<LoweredValue> {
+    let cast = match target {
+        CastType::Int => elephc_builtin_contract::ObjectCast::Int,
+        CastType::Float => elephc_builtin_contract::ObjectCast::Float,
+        _ => return None,
+    };
+    let ty = ctx.builder.value_php_type(input.value);
+    if !matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_) | PhpType::Object(_)) { return None; }
+    let result_type = if matches!(target, CastType::Int) { PhpType::Int } else { PhpType::Float };
+    let mut handlers = ctx.classes.keys().filter_map(|name| {
+        let class = elephc_builtin_contract::lookup_class(name)?;
+        Some((class.name, class.operators?.cast_method(cast)?))
+    }).collect::<Vec<_>>();
+    handlers.sort_unstable(); handlers.dedup();
+    if handlers.is_empty() { return None; }
+    Some(lower_dynamic_numeric_cast(ctx, input, result_type, span, &handlers))
+}
+
+/// Selects the applicable native cast while preserving ordinary scalar/object fallback casts.
+fn lower_dynamic_numeric_cast(
+    ctx: &mut LoweringContext<'_, '_>, input: LoweredValue, result_type: PhpType,
+    span: Option<Span>, handlers: &[(&str, &str)],
+) -> LoweredValue {
+    let Some((class, method)) = handlers.first() else {
+        return ctx.emit_value(Op::Cast, vec![input.value],
+            Some(Immediate::CastTarget(value_ir_type(&result_type))), result_type,
+            Op::Cast.default_effects(), span);
+    };
+    let at = span.unwrap_or_else(Span::dummy);
+    let data = ctx.intern_class_name(class);
+    let condition = ctx.emit_value(Op::InstanceOf, vec![input.value], Some(Immediate::Data(data)),
+        PhpType::Bool, Op::InstanceOf.default_effects(), span);
+    let temp = ctx.declare_owned_hidden_temp(result_type.clone());
+    let initialized = ctx.initialized_slots_snapshot();
+    let object = ctx.builder.create_named_block("object.cast", vec![]);
+    let fallback = ctx.builder.create_named_block("object.cast.fallback", vec![]);
+    let merge = ctx.builder.create_named_block("object.cast.merge", vec![]);
+    ctx.builder.terminate(Terminator::CondBr { cond: condition.value,
+        then_target: object, then_args: vec![], else_target: fallback, else_args: vec![] });
+    ctx.builder.position_at_end(object);
+    let method = ctx.intern_string(method);
+    let value = ctx.emit_value(Op::MethodCall, vec![input.value], Some(Immediate::Data(method)),
+        result_type.clone(), Op::MethodCall.default_effects(), span);
+    store_value_into_temp(ctx, &temp, result_type.clone(), value, at);
+    branch_to(ctx, merge);
+    let object_initialized = ctx.initialized_slots_snapshot();
+    ctx.builder.position_at_end(fallback);
+    ctx.restore_initialized_slots(initialized.clone());
+    let value = lower_dynamic_numeric_cast(ctx, input, result_type.clone(), span, &handlers[1..]);
+    store_value_into_temp(ctx, &temp, result_type, value, at);
+    branch_to(ctx, merge);
+    let fallback_initialized = ctx.initialized_slots_snapshot();
+    ctx.builder.position_at_end(merge);
+    ctx.restore_initialized_slots(merge_initialized_slots_for_expr(&initialized,
+        object_initialized, true, fallback_initialized, true));
+    take_owned_temp(ctx, &temp, at)
+}

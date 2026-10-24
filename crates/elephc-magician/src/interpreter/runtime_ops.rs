@@ -19,7 +19,7 @@ use crate::eval_ir::EvalBinOp;
 use crate::value::RuntimeCellHandle;
 
 mod builtins;
-mod object_operators;
+pub(in crate::interpreter) mod object_operators;
 pub(crate) use builtins::default_builtin_call;
 
 thread_local! {
