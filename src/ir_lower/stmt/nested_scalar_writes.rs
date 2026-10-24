@@ -27,7 +27,7 @@ pub(super) fn lower_nested_set(
     let initialized = ctx.initialized_slots_snapshot();
     branch(ctx, string, string_write, array_write);
     ctx.builder.position_at_end(string_write);
-    lower_string_write(ctx, parent, key, value, span);
+    lower_string_write(ctx, StringWriteTarget::Cell(parent), parent, key, value, span);
     ctx.builder.terminate(Terminator::Br { target: done, args: Vec::new() });
     ctx.builder.position_at_end(array_write);
     ctx.restore_initialized_slots(initialized.clone());
@@ -164,9 +164,27 @@ fn lower_pending_key_error(
     terminate_throw(ctx, escaped.value);
 }
 
-/// Rebuilds a single PHP string offset and publishes the owned result into the original child cell.
+/// Where a string-offset rewrite publishes its owned result.
+enum StringWriteTarget<'a> {
+    /// A nested parent's Mixed cell (`$m["a"]["b"] = v` through a mixed chain).
+    Cell(LoweredValue),
+    /// A top-level local whose receiver an operand retyped to a string
+    /// (`$a[0] = ($a = "abc") ? "Z" : "q"`).
+    Local(&'a str),
+}
+
+/// Rebuilds a string offset on a local whose receiver an element write's operand retyped to a
+/// string, storing the result back into that local.
+pub(super) fn lower_string_write_to_local(
+    ctx: &mut LoweringContext<'_, '_>, name: &str, parent: LoweredValue,
+    key: LoweredValue, value: LoweredValue, span: Span,
+) {
+    lower_string_write(ctx, StringWriteTarget::Local(name), parent, key, value, span);
+}
+
+/// Rebuilds a single PHP string offset and publishes the owned result into its target.
 fn lower_string_write(
-    ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue,
+    ctx: &mut LoweringContext<'_, '_>, target: StringWriteTarget<'_>, parent: LoweredValue,
     key: LoweredValue, value: LoweredValue, span: Span,
 ) {
     let mut owners = Vec::new();
@@ -236,7 +254,12 @@ fn lower_string_write(
             Op::StrConcat.default_effects(), Some(span));
         result = root_string(ctx, joined, &mut owners, span);
     }
-    replace_cell(ctx, parent, result, span);
+    match target {
+        StringWriteTarget::Cell(parent) => replace_cell(ctx, parent, result, span),
+        StringWriteTarget::Local(name) => {
+            ctx.store_local(name, result, PhpType::Str, Some(span));
+        }
+    }
     for owner in owners.drain(common_owners..).rev() {
         crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span);
     }

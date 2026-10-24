@@ -202,9 +202,10 @@ pub(crate) use callable_resolution::{
 pub(crate) use pending_owners::lower_with_pending_owners;
 pub(crate) use call_operand_owners::{
     pin_in_flight_owners, register_owned_call_operand, retire_owned_call_operand,
-    root_owned_call_operand, unpin_in_flight_owners, unregister_owned_call_operand,
-    PinnedInFlightOwner,
+    root_call_operand, root_owned_call_operand, unpin_in_flight_owners,
+    unregister_owned_call_operand, PinnedInFlightOwner,
 };
+pub(in crate::ir_lower) use closures::{expr_contains_eval_call, expr_writes_local};
 pub(crate) use property_access::singular_object_class;
 pub(crate) use property_access::packed_receiver_class;
 pub(crate) use property_access::extern_receiver_class;
