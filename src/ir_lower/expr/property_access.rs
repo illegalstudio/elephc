@@ -961,12 +961,22 @@ pub(super) fn lower_dynamic_property_fetch(
     if matches!(object.kind, ExprKind::Variable(_))
         && !matches!(property.kind, ExprKind::StringLiteral(_))
     {
+        let known_native = match &object.kind {
+            ExprKind::Variable(name) => {
+                let ty = ctx.local_type(name);
+                singular_object_class(&ty).is_some_and(|(class, nullable)| !nullable
+                    && crate::types::builtin_classes::has_native_dimensions(class, ctx.classes))
+            }
+            _ => false,
+        };
         // PHP fetches a variable receiver after the property expression has evaluated.
         let name = lower_expr(ctx, property);
         let name = coerce_runtime_property_name(ctx, name, expr.span);
         let object = lower_expr(ctx, object);
         let result_type = dynamic_property_get_result_type(ctx, object.value, property, expr);
-        return lower_dynamic_property_fetch_from_operands(ctx, object, name, result_type, mode, expr);
+        return lower_dynamic_property_fetch_from_operands(
+            ctx, object, name, result_type, mode, known_native, expr,
+        );
     }
     let object = lower_expr(ctx, object);
     lower_dynamic_property_fetch_from_value(ctx, object, property, mode, expr)
@@ -1002,16 +1012,22 @@ pub(super) fn lower_dynamic_property_fetch_from_value(
     let result_type = dynamic_property_get_result_type(ctx, object.value, property, expr);
     let property = lower_expr(ctx, property);
     let property = coerce_runtime_property_name(ctx, property, expr.span);
-    lower_dynamic_property_fetch_from_operands(ctx, object, property, result_type, mode, expr)
+    lower_dynamic_property_fetch_from_operands(
+        ctx, object, property, result_type, mode, false, expr,
+    )
 }
 
 /// Fetches a property with an already evaluated name, sharing ordinary getter and ownership rules.
+///
+/// `known_native` records a non-null native class fact from the source variable when its global
+/// storage is physically boxed and the lowered value can no longer carry that fact itself.
 pub(super) fn lower_dynamic_property_fetch_from_operands(
     ctx: &mut LoweringContext<'_, '_>,
     object: LoweredValue,
     property: LoweredValue,
     result_type: PhpType,
     mode: PropertyFetchMode,
+    known_native: bool,
     expr: &Expr,
 ) -> LoweredValue {
     let ty = ctx.builder.value_php_type(object.value);
@@ -1019,7 +1035,7 @@ pub(super) fn lower_dynamic_property_fetch_from_operands(
         || singular_object_class(&ty).is_some_and(|(class, _)|
             crate::types::builtin_classes::has_native_dimensions(class, ctx.classes));
     if ctx.classes.contains_key("SimpleXMLElement") && may_be_native {
-        return native_xml_reads::dynamic(ctx, object, property, mode, expr);
+        return native_xml_reads::dynamic(ctx, object, property, mode, known_native, expr);
     }
     lower_dynamic_property_fetch_without_native(ctx, object, property, result_type, mode, expr)
 }

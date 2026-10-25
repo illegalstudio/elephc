@@ -15,9 +15,10 @@ pub(super) fn lower(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, op: Op, expr: &Expr,
 ) -> LoweredValue {
     let name = Expr::new(ExprKind::StringLiteral(property.into()), expr.span);
-    dispatch(ctx, object, &name, expr, PhpType::Mixed, "__elephc_property_get", |ctx, receiver| {
-        lower_property_get_without_native_dispatch(ctx, receiver, property, op, expr)
-    })
+    dispatch(
+        ctx, object, &name, expr, PhpType::Mixed, "__elephc_property_get", false,
+        |ctx, receiver| lower_property_get_without_native_dispatch(ctx, receiver, property, op, expr),
+    )
 }
 
 /// Tests an XML property without materializing a phantom child selection.
@@ -25,10 +26,13 @@ pub(super) fn isset(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, expr: &Expr,
 ) -> LoweredValue {
     let name = Expr::new(ExprKind::StringLiteral(property.into()), expr.span);
-    dispatch(ctx, object, &name, expr, PhpType::Bool, "__elephc_property_isset", |ctx, receiver| {
-        let value = lower_property_probe_without_native(ctx, receiver, property, expr);
-        probe_value_is_set(ctx, value, expr)
-    })
+    dispatch(
+        ctx, object, &name, expr, PhpType::Bool, "__elephc_property_isset", false,
+        |ctx, receiver| {
+            let value = lower_property_probe_without_native(ctx, receiver, property, expr);
+            probe_value_is_set(ctx, value, expr)
+        },
+    )
 }
 
 /// Reads a native XML child for coalesce, returning PHP null when it does not exist.
@@ -36,15 +40,16 @@ pub(super) fn probe(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, expr: &Expr,
 ) -> LoweredValue {
     let name = Expr::new(ExprKind::StringLiteral(property.into()), expr.span);
-    dispatch(ctx, object, &name, expr, PhpType::Mixed, "__elephc_property_probe", |ctx, receiver| {
-        lower_property_probe_without_native(ctx, receiver, property, expr)
-    })
+    dispatch(
+        ctx, object, &name, expr, PhpType::Mixed, "__elephc_property_probe", false,
+        |ctx, receiver| lower_property_probe_without_native(ctx, receiver, property, expr),
+    )
 }
 
-/// Retains an already evaluated dynamic name while either receiver protocol reads it.
+/// Retains an evaluated dynamic name and preserves any non-null native source-type hint.
 pub(super) fn dynamic(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: LoweredValue,
-    mode: PropertyFetchMode, expr: &Expr,
+    mode: PropertyFetchMode, known_native: bool, expr: &Expr,
 ) -> LoweredValue {
     let temp = ctx.declare_owned_hidden_temp(PhpType::Str);
     store_value_into_temp(ctx, &temp, PhpType::Str, property, expr.span);
@@ -53,10 +58,15 @@ pub(super) fn dynamic(
     let name = Expr::new(ExprKind::Variable(temp.clone()), expr.span);
     let method = if mode == PropertyFetchMode::Read { "__elephc_property_get" }
         else { "__elephc_property_probe" };
-    let result = dispatch(ctx, object, &name, expr, PhpType::Mixed, method, |ctx, receiver| {
-        let property = ctx.load_local(&temp, Some(expr.span));
-        lower_dynamic_property_fetch_without_native(ctx, receiver, property, PhpType::Mixed, mode, expr)
-    });
+    let result = dispatch(
+        ctx, object, &name, expr, PhpType::Mixed, method, known_native,
+        |ctx, receiver| {
+            let property = ctx.load_local(&temp, Some(expr.span));
+            lower_dynamic_property_fetch_without_native(
+                ctx, receiver, property, PhpType::Mixed, mode, expr,
+            )
+        },
+    );
     unregister_owned_call_operand(ctx, slot, expr.span);
     let name = take_owned_temp(ctx, &temp, expr.span);
     crate::ir_lower::ownership::release_if_owned(ctx, name, Some(expr.span));
@@ -66,15 +76,15 @@ pub(super) fn dynamic(
 /// Joins the native getter or presence adapter with an ordinary-object fallback.
 fn dispatch(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, name: &Expr, expr: &Expr,
-    result_type: PhpType, method: &str,
+    result_type: PhpType, method: &str, known_native: bool,
     fallback: impl FnOnce(&mut LoweringContext<'_, '_>, LoweredValue) -> LoweredValue,
 ) -> LoweredValue {
     let object_type = ctx.builder.value_php_type(object.value);
     // A concrete XML receiver needs no runtime fallback. Keep the same direct call path as a
     // named property read so dynamic names do not add a second receiver ownership boundary.
-    let definitely_native = object_type.codegen_repr() != PhpType::Mixed
+    let definitely_native = known_native || (object_type.codegen_repr() != PhpType::Mixed
         && singular_object_class(&object_type).is_some_and(|(class, _)|
-            crate::types::builtin_classes::has_native_dimensions(class, ctx.classes));
+            crate::types::builtin_classes::has_native_dimensions(class, ctx.classes)));
     if definitely_native {
         let value = lower_method_call_with_receiver(
             ctx, object, method, &[name.clone()], Op::MethodCall, expr,

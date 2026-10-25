@@ -74,7 +74,7 @@ pub(crate) fn lower_static_property_write_chain_with_operands(
         ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
         let pins = pin_in_flight_owners(ctx, &[name.value], span);
         let child = property_access::lower_dynamic_property_fetch_from_operands(
-            ctx, borrowed, name, result_type, PropertyFetchMode::Read, expr,
+            ctx, borrowed, name, result_type, PropertyFetchMode::Read, false, expr,
         );
         unpin_in_flight_owners(ctx, pins, span);
         crate::ir_lower::ownership::release_if_owned(ctx, name, Some(span));
