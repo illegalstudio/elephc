@@ -242,6 +242,7 @@ pub(crate) use merge_temps::emit_bool_literal;
 pub(crate) use property_access::{
     borrow_native_xml_property_receiver,
     lower_property_get_from_value,
+    lower_native_xml_property_write_fetch,
     lower_owned_ref_assign_array_elem, lower_ref_assign_array_elem, lower_ref_assign_call,
     lower_ref_assign_property, lower_ref_assign_static_property,
     prepare_scoped_addressable_ref_array_receiver, static_property_result_type,

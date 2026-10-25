@@ -80,6 +80,7 @@ pub extern "C" fn elephc_xml_sx_int(handle: i64, operation: i64) -> i64 {
         6 => v.first().map(|n| unsafe { let child = ffi::child(n);
             i64::from(!child.is_null() && matches!(ffi::node_type(child), 3 | 4)) }).unwrap_or(0),
         7 => v.first().map(|n| unsafe { i64::from(ffi::empty(n) != 0) }).unwrap_or(1),
+        9 => i64::from(v.first().is_some_and(|node| node == unsafe { ffi::root(v.doc.raw) })),
         _ => 0,
     }).unwrap_or(0))
 }
@@ -117,6 +118,7 @@ pub unsafe extern "C" fn elephc_xml_sx_mutate(handle: i64, operation: i64, key: 
                     insert(child)
                 }).unwrap_or_else(|error| error as i64),
             22 => v.first().map(|n| { v.assign_node(n, &text); 1 }).unwrap_or(0),
+            23 => v.ensure_first().map(|node| insert(v.with_scope(Scope::Node(node)))).unwrap_or(0),
             _ => 0,
         }
     })

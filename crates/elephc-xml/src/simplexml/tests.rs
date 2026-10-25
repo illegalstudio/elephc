@@ -183,3 +183,21 @@ fn simplexml_checked_add_resolves_parent_and_reports_failures() {
     let child = root.select(0, "", "urn:p", false, 0).select(2, "child", "", false, 0);
     assert_eq!(unsafe { string(ffi::ns(child.first().unwrap(), 1)) }, "p");
 }
+
+/// Write-fetch creates a stable empty node, while ordinary absent selections stay lazy.
+#[test]
+fn simplexml_write_fetch_and_absent_read_views() {
+    let root = parse(b"<r/>", 0, "", false).unwrap();
+    let absent = root.select(2, "item", "", false, 0);
+    assert_eq!(absent.write(4, "", 0, "ignored"), 0);
+    assert_eq!(absent.write(5, "", 0, "ignored"), 0);
+    assert!(root.items().is_empty());
+    let created = absent.ensure_first().unwrap();
+    let node = absent.with_scope(Scope::Node(created));
+    assert_eq!(node.write(4, "", 1, "ignored"), 0);
+    assert_eq!(unsafe { owned_string(ffi::text(created)) }, "");
+    assert_eq!(node.write(5, "", 0, "stored"), 1);
+    assert_eq!(unsafe { owned_string(ffi::text(created)) }, "stored");
+    assert!(root.add_checked("1abc", Some("v"), None, false).is_ok());
+    assert!(root.add_checked("1abc", Some("a"), None, true).is_ok());
+}

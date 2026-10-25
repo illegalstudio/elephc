@@ -401,6 +401,14 @@ pub(crate) fn lower_owned_ref_assign_array_elem(
 }
 
 
+/// Materializes a missing XML property for an indirect write while preserving existing selections.
+pub(crate) fn lower_native_xml_property_write_fetch(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, expr: &Expr,
+) -> LoweredValue {
+    let name = Expr::new(ExprKind::StringLiteral(property.into()), expr.span);
+    lower_method_call_with_receiver(ctx, object, "__elephc_property_write_fetch", &[name], Op::MethodCall, expr)
+}
+
 /// Lowers a named property read once the receiver is already evaluated.
 pub(crate) fn lower_property_get_from_value(
     ctx: &mut LoweringContext<'_, '_>,

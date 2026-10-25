@@ -21,6 +21,11 @@ foreach ($xml->item as $key => $node) { echo $key, (string)$node, (int)$node, (f
 var_dump((bool)$xml->missing);
 var_dump(empty($xml->item), empty($xml['id']), empty($xml?->missing));
 var_dump(empty($xml?->item['id']), empty($xml?->item->missing));
+class XmlEmptyScalarPeer { public string $text = '0'; }
+$peer = new XmlEmptyScalarPeer();
+var_dump(empty($peer?->text[0]));
+function xmlEmptyObjectParameter(object $node): bool { return empty($node->item); }
+var_dump(xmlEmptyObjectParameter($xml));
 $xml->xpath('count(//item)');
 echo json_encode($xml), json_encode((array)$xml), $xml->asXML();
 $doc = new DOMDocument(); $doc->loadXML('<r><v>shared</v></r>');

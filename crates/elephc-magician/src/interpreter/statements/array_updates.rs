@@ -381,7 +381,12 @@ pub(super) fn eval_property_array_write_result(
 ) -> Result<(), EvalStatus> {
     let mut operands = Vec::new();
     let mut result = (|| {
-        let current = eval_property_get_result(object, property, context, values)?;
+        let current = match super::super::runtime_ops::simplexml_properties::invoke(
+            values, object, property, elephc_builtin_contract::ObjectProperty::WriteFetch, None,
+        )? {
+            Some(value) => value,
+            None => eval_property_get_result(object, property, context, values)?,
+        };
         let current = if current.is_borrowed() { values.retain(current)? } else { current };
         operands.push(current);
         if values.type_tag(current)? == EVAL_TAG_OBJECT {

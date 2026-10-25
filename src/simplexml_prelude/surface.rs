@@ -45,6 +45,13 @@ function __elephc_simplexml_class(?string $class): string {
     return $name;
 }
 
+function __elephc_simplexml_assigned_value(mixed $value, bool $attribute): string {
+    if ($value === null || is_scalar($value)) { return (string)$value; }
+    if (is_object($value) && get_class($value) === 'SimpleXMLElement') { return (string)$value; }
+    $target = $attribute ? 'attributes' : 'properties';
+    throw new TypeError("It's not possible to assign a complex type to " . $target . ', ' . get_debug_type($value) . ' given');
+}
+
 final class __ElephcSimpleXMLLease {
     private int $handle;
     public function __construct(int $handle) { $this->handle = $handle; }
@@ -97,12 +104,25 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $selected = elephc_xml_sx_select($handle, 2, $name, "", 0, 0);
         return __elephc_simplexml_wrap($selected, get_class($this));
     }
+    final public function __elephc_property_write_fetch(string $name): static {
+        if ($name === '') { throw new ValueError('Cannot create element with an empty name'); }
+        $selected = $this->__elephc_property_get($name);
+        $handle = $selected->__elephc_handle;
+        if (elephc_xml_sx_int($handle, 1) === 0) {
+            $created = elephc_xml_sx_mutate($handle, 23, '', '', '', 0, 0);
+            if ($created > 0) { return __elephc_simplexml_wrap($created, get_class($this)); }
+        }
+        return $selected;
+    }
     public function __set(string $name, mixed $value): void {
         $this->__elephc_property_set($name, $value);
     }
     final public function __elephc_property_set(string $name, mixed $value): void {
+        if ($name === '') { throw new ValueError('Cannot create element with an empty name'); }
         $handle = $this->__elephc_handle;
-        $status = elephc_xml_sx_mutate($handle, 2, $name, (string)$value, "", 0, 0);
+        $mode = elephc_xml_sx_int($handle, 5);
+        $text = __elephc_simplexml_assigned_value($value, $mode === 3 || $mode === 4);
+        $status = elephc_xml_sx_mutate($handle, 2, $name, $text, "", 0, 0);
         if ($status === -2) { __elephc_simplexml_warning("Warning: Cannot assign to an array of nodes (duplicate subnodes or attr detected)\n"); }
     }
     public function __isset(string $name): bool {
@@ -154,14 +174,37 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     }
     public function offsetSet(mixed $offset, mixed $value): void {
         $handle = $this->__elephc_handle;
+        $mode = elephc_xml_sx_int($handle, 5);
+        $attributes = $mode === 3 || $mode === 4;
         $kind = 3;
         $index = 0;
         $key = "";
         if ($offset === null) { $kind = 5; }
         elseif (is_int($offset)) { $kind = 4; $index = $offset; }
         else { $key = (string)$offset; }
-        $text = (string)$value;
-        if ($kind === 4 && elephc_xml_sx_int($handle, 5) === 2) {
+        if ($kind === 5 && $attributes) { throw new Error('Cannot append to an attribute list'); }
+        if ($kind === 5 && $mode === 0 && elephc_xml_sx_int($handle, 9) !== 0) {
+            throw new ValueError('Cannot append to an attribute list');
+        }
+        if ($kind === 3 && $key === '') { throw new ValueError('Cannot create attribute with an empty name'); }
+        $text = __elephc_simplexml_assigned_value($value, $attributes || $kind === 3);
+        if (!$attributes && ($kind === 4 || $kind === 5) && elephc_xml_sx_int($handle, 4) === 2) {
+            throw new Error('Cannot create duplicate attribute');
+        }
+        if ($kind === 4 && $attributes) {
+            $length = elephc_xml_sx_int($handle, 0);
+            if ($index < 0 || $index >= $length) {
+                $length = $index < 0 ? 0 : $length;
+                __elephc_simplexml_warning('Warning: Cannot change attribute number ' . $index . ' when only ' . $length . " attributes exist\n");
+                return;
+            }
+        }
+        if ($kind === 4 && $mode === 0 && $index !== 0 && elephc_xml_sx_int($handle, 1) !== 0) {
+            $name = elephc_xml_sx_string($handle, 1);
+            __elephc_simplexml_warning('Warning: Cannot add element ' . $name . ' number ' . $index . " when only 0 such elements exist\n");
+            return;
+        }
+        if ($kind === 4 && $mode === 2) {
             $length = elephc_xml_sx_int($handle, 0);
             if ($index < 0 || ($length > 0 && $index > $length)) {
                 $name = elephc_xml_sx_string($handle, 1);

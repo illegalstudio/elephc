@@ -34,10 +34,7 @@ pub(super) fn lower(
         _ => return None,
     };
     let ty = array_cast_source::array_cast_source_type_for_ir(ctx, object);
-    let may_be_native = matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
-        || singular_object_class(&ty).is_some_and(|(class, _)|
-            crate::types::builtin_classes::has_native_dimensions(class, ctx.classes));
-    if !may_be_native { return None; }
+    if !may_be_native(ctx, &ty) { return None; }
     let key_first = !dimension && !nullsafe && matches!(object.kind, ExprKind::Variable(_))
         && !matches!(key.kind, ExprKind::StringLiteral(_));
     let early_key = key_first.then(|| capture_key(ctx, &key, dimension));
@@ -132,6 +129,10 @@ fn dispatch(
     dimension: bool, construct: &str, arg: &Expr, expr: &Expr,
 ) -> LoweredValue {
     let object = ctx.load_local(&receiver.name, Some(arg.span));
+    let ty = ctx.builder.value_php_type(object.value);
+    if !may_be_native(ctx, &ty) {
+        return lower_regular(ctx, receiver, key, dimension, construct, arg, expr);
+    }
     let class = ctx.intern_class_name("SimpleXMLElement");
     let condition = ctx.emit_value(Op::InstanceOf, vec![object.value], Some(Immediate::Data(class)),
         PhpType::Bool, Op::InstanceOf.default_effects(), Some(arg.span));
@@ -143,7 +144,12 @@ fn dispatch(
     ctx.builder.terminate(Terminator::CondBr { cond: condition.value,
         then_target: native, then_args: vec![], else_target: regular, else_args: vec![] });
     ctx.builder.position_at_end(native);
-    let object = borrow_native_xml_property_receiver(ctx, object, arg.span);
+    let object = if singular_object_class(&ty).is_some_and(|(class, _)|
+        !crate::types::builtin_classes::has_native_dimensions(class, ctx.classes))
+    {
+        ctx.emit_value(Op::MixedBox, vec![object.value], None, PhpType::Mixed,
+            Op::MixedBox.default_effects(), Some(arg.span))
+    } else { borrow_native_xml_property_receiver(ctx, object, arg.span) };
     let method = if dimension { "__elephc_dimension_empty" } else { "__elephc_property_empty" };
     let key_expr = Expr::new(ExprKind::Variable(key.name.clone()), arg.span);
     let value = lower_method_call_with_receiver(ctx, object, method, &[key_expr], Op::MethodCall, expr);
@@ -152,15 +158,7 @@ fn dispatch(
     let native_slots = ctx.initialized_slots_snapshot();
     ctx.builder.position_at_end(regular);
     ctx.restore_initialized_slots(initial.clone());
-    let object = Box::new(Expr::new(ExprKind::Variable(receiver.name.clone()), arg.span));
-    let key = Box::new(Expr::new(ExprKind::Variable(key.name.clone()), arg.span));
-    let access = Expr::new(if dimension { ExprKind::ArrayAccess { array: object, index: key } }
-        else { ExprKind::DynamicPropertyAccess { object, property: key } }, arg.span);
-    let value = lazy_isset::lower_lazy_empty_without_native(ctx, construct, &[access.clone()], expr)
-        .unwrap_or_else(|| {
-            let value = lower_expr(ctx, &access);
-            lazy_isset::lower_empty_of_probed_value(ctx, value, construct, expr)
-        });
+    let value = lower_regular(ctx, receiver, key, dimension, construct, arg, expr);
     store_value_into_temp(ctx, &temp, PhpType::Bool, value, arg.span);
     branch_to(ctx, merge);
     let regular_slots = ctx.initialized_slots_snapshot();
@@ -168,4 +166,28 @@ fn dispatch(
     ctx.restore_initialized_slots(merge_initialized_slots_for_expr(&initial,
         native_slots, true, regular_slots, true));
     take_owned_temp(ctx, &temp, arg.span)
+}
+
+/// Admits dynamic values, bare objects, and interfaces as well as concrete XML subclasses.
+fn may_be_native(ctx: &LoweringContext<'_, '_>, ty: &PhpType) -> bool {
+    matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        || singular_object_class(ty).is_some_and(|(class, _)| class.is_empty()
+            || ctx.interfaces.contains_key(class)
+            || crate::types::builtin_classes::has_native_dimensions(class, ctx.classes))
+}
+
+/// Applies the ordinary property or dimension protocol without emitting an XML method call.
+fn lower_regular(
+    ctx: &mut LoweringContext<'_, '_>, receiver: &Capture, key: &Capture,
+    dimension: bool, construct: &str, arg: &Expr, expr: &Expr,
+) -> LoweredValue {
+    let object = Box::new(Expr::new(ExprKind::Variable(receiver.name.clone()), arg.span));
+    let key = Box::new(Expr::new(ExprKind::Variable(key.name.clone()), arg.span));
+    let access = Expr::new(if dimension { ExprKind::ArrayAccess { array: object, index: key } }
+        else { ExprKind::DynamicPropertyAccess { object, property: key } }, arg.span);
+    lazy_isset::lower_lazy_empty_without_native(ctx, construct, &[access.clone()], expr)
+        .unwrap_or_else(|| {
+            let value = lower_expr(ctx, &access);
+            lazy_isset::lower_empty_of_probed_value(ctx, value, construct, expr)
+        })
 }

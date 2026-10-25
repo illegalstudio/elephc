@@ -23,12 +23,16 @@ pub(super) enum AddError {
 
 impl View {
     /// Creates a missing named child and its missing ancestors for a chained write.
-    fn ensure_first(&self) -> Option<Node> {
+    pub(super) fn ensure_first(&self) -> Option<Node> {
         if let Some(node) = self.first() { return Some(node); }
         match &self.scope {
             Scope::Children(parent, Some(name)) => {
                 let node = parent.ensure_first()?;
                 parent.with_scope(Scope::Node(node)).add(name, None, None, false)
+            },
+            Scope::Attributes(parent, Some(name)) => {
+                let node = parent.ensure_first()?;
+                parent.with_scope(Scope::Node(node)).add(name, None, None, true)
             },
             Scope::Index(parent, 0) => parent.ensure_first(),
             _ => None,
@@ -61,7 +65,6 @@ impl View {
             }
         }
         let name = cstring(name);
-        if unsafe { crate::ffi::xmlValidateName(name.as_ptr().cast(), 0) } != 0 { return Err(AddError::InvalidName); }
         let text = cstring(value.unwrap_or(""));
         let uri = cstring(namespace.unwrap_or(""));
         let raw = unsafe { ffi::add(parent, name.as_ptr(), text.as_ptr(), uri.as_ptr(),
@@ -88,7 +91,13 @@ impl View {
     /// Writes a named property/attribute or numeric offset, returning a PHP status code.
     pub(super) fn write(&self, kind: i64, key: &str, index: i64, value: &str) -> i64 {
         if kind == 4 && index < 0 { return 0; }
+        if matches!(kind, 4 | 5) && matches!(self.scope, Scope::Children(_, Some(_)))
+            && self.first().is_none() { return 0; }
         if kind == 5 {
+            if matches!(self.scope, Scope::Node(_) | Scope::Index(..)) {
+                return self.first().filter(|node| unsafe { ffi::node_type(*node) } == 1)
+                    .map(|node| { self.assign_node(node, value); 1 }).unwrap_or(0);
+            }
             if let Scope::Children(parent, Some(name)) = &self.scope {
                 return parent.add(name, None, None, false).map(|node| { self.assign_node(node, value); 1 }).unwrap_or(0);
             }
