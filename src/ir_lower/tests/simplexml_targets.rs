@@ -30,6 +30,9 @@ function xmlWriteOpaqueParameter(mixed $node): void { $node->other[0] = 'value';
 xmlWriteOpaqueParameter($xml);
 function xmlAppendOpaqueParameter(mixed $node): void { $node[] = 'appended'; }
 xmlAppendOpaqueParameter($xml->item);
+function xmlMixedArithmetic(mixed $node): mixed { return $node + 1; }
+$otherNumber = new \BcMath\Number('1');
+echo xmlMixedArithmetic($xml->item[0]), xmlMixedArithmetic($otherNumber);
 $xml->item[0] += 1;
 try { $xml->item[0][null] = 'invalid'; } catch (ValueError $error) { echo $error->getMessage(); }
 $xml->xpath('count(//item)');
@@ -40,6 +43,10 @@ if ($imported instanceof SimpleXMLElement) { $imported->v = 'changed'; }
 echo $doc->saveXML();
 "###, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen::platform::Target::parse(target).unwrap());
+    let arithmetic = module.functions.iter().find(|function| function.name == "xmlMixedArithmetic")
+        .expect("mixed arithmetic fixture must remain reachable");
+    assert_eq!(arithmetic.instructions.iter().filter(|inst| inst.op == crate::ir::Op::StaticMethodCall).count(), 2,
+        "{target}: both SimpleXML and BcMath arithmetic adapters must be reachable");
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     assert!(assembly.contains("elephc_xml_sx_load"), "{target}: document parsing boundary");
     assert!(assembly.contains("elephc_xml_sx_mutate"), "{target}: document mutation boundary");

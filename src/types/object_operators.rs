@@ -13,6 +13,7 @@ use crate::parser::ast::BinOp;
 use crate::types::PhpType;
 
 /// One resolved internal-class adapter and its declared result representation.
+#[derive(Clone, Copy)]
 pub(crate) struct ObjectOperatorPlan {
     pub class: &'static ClassContract,
     pub method: &'static str,

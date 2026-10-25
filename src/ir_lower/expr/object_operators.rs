@@ -44,9 +44,23 @@ pub(crate) fn lower_dynamic_object_binary(
     let rt = ctx.builder.value_php_type(rhs.value);
     if !matches!(lt.codegen_repr(), PhpType::Mixed | PhpType::Union(_) | PhpType::Object(_))
         && !matches!(rt.codegen_repr(), PhpType::Mixed | PhpType::Union(_) | PhpType::Object(_)) { return None; }
-    let plan = ctx.classes.keys().find_map(|name| {
+    let mut plans = ctx.classes.keys().filter_map(|name| {
         crate::types::object_operators::binary_plan(op, &PhpType::Object(name.clone()), &PhpType::Mixed)
-    })?;
+    }).collect::<Vec<_>>();
+    plans.sort_unstable_by_key(|plan| plan.class.name);
+    plans.dedup_by_key(|plan| plan.class.name);
+    if plans.is_empty() { return None; }
+    Some(lower_dynamic_operator_plans(ctx, lhs, op, rhs, expr, consume, &plans, scalar))
+}
+
+/// Tries every applicable internal class before taking the ordinary scalar/object path.
+fn lower_dynamic_operator_plans(
+    ctx: &mut LoweringContext<'_, '_>, lhs: LoweredValue, op: &BinOp, rhs: LoweredValue,
+    expr: &Expr, consume: bool, plans: &[crate::types::object_operators::ObjectOperatorPlan],
+    scalar: impl FnOnce(&mut LoweringContext<'_, '_>) -> LoweredValue,
+) -> LoweredValue {
+    let Some((plan, rest)) = plans.split_first() else { return scalar(ctx); };
+    let plan = *plan;
     let result_type = if plan.comparison { plan.result_type(op) } else { PhpType::Mixed };
     let class_name = ctx.intern_class_name(plan.class.name);
     let left_instance = ctx.emit_value(Op::InstanceOf, vec![lhs.value], Some(Immediate::Data(class_name)),
@@ -70,7 +84,7 @@ pub(crate) fn lower_dynamic_object_binary(
     ctx.builder.position_at_end(scalar_block);
     ctx.restore_initialized_slots(initialized.clone());
     let scalar_pins = pin_in_flight_owners(ctx, &[lhs.value, rhs.value], expr.span);
-    let value = scalar(ctx);
+    let value = lower_dynamic_operator_plans(ctx, lhs, op, rhs, expr, consume, rest, scalar);
     unpin_in_flight_owners(ctx, scalar_pins, expr.span);
     store_value_into_temp(ctx, &temp, result_type, value, expr.span);
     branch_to(ctx, merge);
@@ -78,7 +92,7 @@ pub(crate) fn lower_dynamic_object_binary(
     ctx.builder.position_at_end(merge);
     ctx.restore_initialized_slots(merge_initialized_slots_for_expr(&initialized,
         object_initialized, true, scalar_initialized, true));
-    Some(take_owned_temp(ctx, &temp, expr.span))
+    take_owned_temp(ctx, &temp, expr.span)
 }
 
 /// Emits the reviewed static adapter for two evaluated operands and retires its arguments.
