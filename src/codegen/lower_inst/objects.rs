@@ -173,6 +173,7 @@ mod dynamic_factory;
 // open-coding the platform split, so `Emitter::syscall`'s macOS-to-Linux mapping has a single site.
 pub(super) use dynamic_factory::emit_fatal_message;
 mod dynamic_pdo;
+mod dynamic_class_flags;
 mod property_defaults;
 mod known_property_reads;
 mod mixed_property_reads;
@@ -212,6 +213,7 @@ use dynamic_mixed_candidates::*;
 use dynamic_factory::*;
 #[allow(unused_imports)]
 pub(in crate::codegen::lower_inst) use dynamic_pdo::*;
+pub(in crate::codegen::lower_inst) use dynamic_class_flags::*;
 #[allow(unused_imports)]
 use property_defaults::*;
 #[allow(unused_imports)]

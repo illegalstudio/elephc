@@ -10,6 +10,24 @@
 
 use std::path::{Path, PathBuf};
 
+/// Lowers the tokenizer example through the shared prelude pipeline for all supported targets.
+#[test]
+fn lowers_tokenizer_example_on_every_target() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/tokenizer/main.php");
+    let source = std::fs::read_to_string(&path).expect("tokenizer example");
+    let parent = path.parent().expect("example directory");
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = crate::codegen::platform::Target::parse(target).expect("target");
+        let module = super::lower_source_at_for_target(&source, &path, parent, target);
+        assert!(module.functions.iter().any(|function| function.name == "token_get_all"),
+            "tokenizer prelude on {}", target.as_str());
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .expect("tokenizer target assembly");
+        assert!(asm.contains("__rt_tokenizer_error_location"),
+            "tokenizer ParseError location on {}", target.as_str());
+    }
+}
+
 /// Lowers the PCNTL example for each desktop target without requiring cross-target linking.
 #[test]
 fn lowers_pcntl_example_on_every_desktop_target() {

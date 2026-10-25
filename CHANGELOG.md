@@ -5,6 +5,49 @@ Releases are listed newest first.
 
 ## [Unreleased]
 
+## [0.27.6] - 2026-10-25
+
+- Added C-width integer and floating-point storage for packed fields and `buffer<T>` elements, with natural C alignment and width-preserving reads and writes.
+- Added arrays and hashes of pointers and packed-record addresses, including nullable elements, iteration, spreads, and array mutation.
+- Added arrays, hashes, and variadic parameters of buffer handles.
+- Added static `buffer<T>`, `ptr`, and `ptr<T>` properties, including buffer element and packed-field access.
+- Added `buffer_ptr()` to pass scalar, width-specific, and packed buffer payloads to C; available in compiled and `eval()` code.
+- Added extern `?string` parameters and returns so C NULL strings map to PHP `null`.
+- Added PHP relative `namespace\` names in compiled and `eval()` code.
+- Added relational string comparisons with PHP numeric-string ordering, preserving exact large-integer comparisons and byte ordering for nonnumeric pairs.
+- Improved statically bound method calls through direct final-class dispatch and inlining of eligible small methods, including nested calls, property writes, and string construction.
+- Improved buffer access by reusing stable property reads and record addresses, hoisting eligible property-buffer loops, and removing proven redundant bounds checks and float spills.
+- Reduced allocations for scalar buffer element `++` and `--`, including narrow integer and floating-point buffers.
+- Improved bounded numeric loops, including resolved method calls, reused counter names, checked bounds, and counters seeded from another proven counter.
+- Reduced allocations in typed numeric reductions and arithmetic chains by reusing nonescaping stack cells.
+- Reduced argument allocations for eligible direct numeric closure calls while preserving overflow promotion and callable identity.
+- Reduced protected-cleanup overhead by avoiding signal-mask saves at internal exception boundaries while preserving explicit PHP signal-mask changes.
+- Reduced string copying in `substr()` and `strpos()` when later arguments cannot invalidate the subject.
+- Reduced compilation work for eval-heavy programs, large autoloaded class trees, and nested array spreads.
+- Changed positioned error and warning messages to include the source filename, including diagnostics in the entry file.
+- Fixed unnecessary array copies and ownership errors in appends and mutations through boxed, reference-bound, or captured locals.
+- Fixed type predicates failing to compile for tagged nullable scalar parameters.
+- Fixed numeric locals that promote from integer to float inside a loop being read back with the previous integer representation.
+- Fixed whole-element writes through instance buffer properties and initialization of readonly buffer and pointer properties.
+- Fixed `buffer_new<T>()` rejecting integer-arithmetic lengths; runtime lengths must convert exactly to a nonnegative in-range integer.
+- Fixed self-referential and forward-declared packed pointer fields, packed-record addresses used as pointers, and extern declarations inside braced namespaces.
+- Fixed nullable pointer values and locals that alternate between null and record addresses, preserving pointer access, null checks, calls, and returns.
+- Fixed branch merges and array literals losing buffer handles, scalar element types, packed/extern field types, or nullsafe short-circuit behavior.
+- Fixed packed and extern scalar field stores receiving boxed values, with catchable type checks and balanced cleanup instead of storing box addresses or coercing invalid values.
+- Fixed missing typed-array elements losing their null value in lazy merges and returns, including nullable receiver reads and their cleanup.
+- Fixed `array_reverse()`, `array_shift()`, `array_unshift()`, and `rsort()` on mixed-valued associative arrays, preserving numeric-key rules, copies, and value ownership.
+- Fixed null-valued assignment expressions being treated as true, and corrected sorting, shuffle, and array-walk results to return booleans.
+- Fixed `declare(strict_types=1)` after complete leading top-level declare statements, preserving declaration scope and rejecting invalid placement.
+- Fixed use-after-free and cleanup errors when transient strings or string-offset bytes pass through calls, stores, comparisons, and throwing expressions.
+- Fixed `unserialize()` duplicate-key references reading freed values and object hydration leaking replaced property defaults.
+- Fixed destructors that invoke methods or callables crashing during exception unwinding, and generator state corrupted by nested method calls.
+- Fixed stale buffer aliases in `eval()` accessing freed or reused storage; eval buffers now use generation-checked handles.
+- Fixed owned merge temporaries leaking when a match or ternary result is returned as a declared array or iterable.
+- Fixed `preg_replace_callback()` crashing on an empty subject on Linux x86_64.
+- Fixed anonymous classes in included files, source-location collisions between autoloaded classes, missing preludes used only by autoloaded classes, and narrowed method variadic storage.
+- Fixed Reflection callable and parameter string dumps, inherited prototypes and defaults, and union member ordering in compiled and `eval()` code.
+- Fixed inferred all-null array returns from user functions failing to compile or being misread after appending a non-null value.
+
 ## [0.27.5] - 2026-10-21
 
 - Security: blocked session-file injection through `--web` upload-progress keys and filenames, which could cause a later `session_start()` to hydrate attacker-supplied objects; `php` and `php_binary` readers also refuse `php_serialize` files.
@@ -830,7 +873,8 @@ Releases are listed newest first.
 ## [0.1.0] - 2026-03-22
 - Initial compiler: echo, variables, integers, arithmetic and string concatenation, comparison operators, control flow (`if`/`while`/`for`/`break`/`continue`), functions, logical/assignment/increment operators.
 
-[Unreleased]: https://github.com/illegalstudio/elephc/compare/v0.27.5...HEAD
+[Unreleased]: https://github.com/illegalstudio/elephc/compare/v0.27.6...HEAD
+[0.27.6]: https://github.com/illegalstudio/elephc/compare/v0.27.5...v0.27.6
 [0.27.5]: https://github.com/illegalstudio/elephc/compare/v0.27.4...v0.27.5
 [0.27.4]: https://github.com/illegalstudio/elephc/compare/v0.27.3...v0.27.4
 [0.27.3]: https://github.com/illegalstudio/elephc/compare/v0.27.2...v0.27.3

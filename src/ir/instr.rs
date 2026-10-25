@@ -1030,6 +1030,8 @@ pub enum Op {
     PdoAdapterAddr,
     /// Reports whether an AOT class selected by runtime name has a constructor.
     DynamicClassHasConstructor,
+    /// Reports whether an AOT class selected by runtime name is abstract.
+    DynamicClassIsAbstract,
     /// Classifies a runtime class name for PDO statement construction.
     DynamicPdoStatementClassStatus,
     /// Classifies a runtime late-static class name for `PDO::connect()`.
@@ -1293,6 +1295,7 @@ impl Op {
             | CallablePtr
             | PdoAdapterAddr
             | DynamicClassHasConstructor
+            | DynamicClassIsAbstract
             | DynamicPdoStatementClassStatus
             | DynamicPdoCalledClassStatus
             | Move
@@ -1825,6 +1828,7 @@ impl Op {
             NormalizeCallable => "normalize_callable",
             PdoAdapterAddr => "pdo_adapter_addr",
             DynamicClassHasConstructor => "dynamic_class_has_constructor",
+            DynamicClassIsAbstract => "dynamic_class_is_abstract",
             DynamicPdoStatementClassStatus => "dynamic_pdo_statement_class_status",
             DynamicPdoCalledClassStatus => "dynamic_pdo_called_class_status",
             DynamicPdoStatementConstructorCall => "dynamic_pdo_statement_constructor_call",

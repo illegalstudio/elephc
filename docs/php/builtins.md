@@ -954,6 +954,8 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`substr()`](./builtins/string/substr.md) | `(string $string, int $offset, ?int $length = null): string` | `string` | ✓ | ✓ |
 | [`substr_count()`](./builtins/string/substr_count.md) | `(string $haystack, string $needle, int $offset = 0, mixed $length = null): int` | `int` | ✓ | - |
 | [`substr_replace()`](./builtins/string/substr_replace.md) | `(string $string, string $replace, int $offset, int $length = null): string` | `string` | ✓ | ✓ |
+| [`token_get_all()`](./builtins/string/token_get_all.md) | `(string $code, int $flags = 0): array` | `array` | ✓ | ✓ |
+| [`token_name()`](./builtins/string/token_name.md) | `(int $id): string` | `string` | ✓ | ✓ |
 | [`trim()`](./builtins/string/trim.md) | `(string $string, string $characters = " \n\r\t\x0B\x0C\x00"): string` | `string` | ✓ | ✓ |
 | [`ucfirst()`](./builtins/string/ucfirst.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`ucwords()`](./builtins/string/ucwords.md) | `(string $string, string $separators = " \t\r\n\x0C\x0B"): string` | `string` | ✓ | ✓ |

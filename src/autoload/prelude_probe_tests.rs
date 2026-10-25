@@ -99,3 +99,21 @@ fn probe_restores_local_identities_but_keeps_include_temporaries_monotonic() {
         StmtKind::ClassDecl { name, .. } if name.ends_with(&expected_anonymous))),
         "the real parse must retain its anonymous-class name");
 }
+
+/// Tokenizer use hidden in Composer-loaded methods must trigger prelude injection.
+#[test]
+fn probe_detects_tokenizer_in_autoloaded_classes() {
+    let project = ProbeProject::new();
+    let defines = std::collections::HashSet::new();
+    for body in [
+        r"return \PhpToken::tokenize($source);",
+        r"return \token_get_all($source);",
+    ] {
+        fs::write(project.0.join("src/Probe.php"), format!(
+            "<?php namespace App; class Probe {{ public function scan(string $source): array {{ {body} }} }}",
+        )).unwrap();
+        let (registry, program) = Registry::build(&project.0, parse("<?php new App\\Probe();"));
+        let groups = autoloaded_prelude_groups(&program, &project.0, &registry, &defines);
+        assert!(groups.contains("tokenizer"), "autoloaded body was missed: {body}");
+    }
+}

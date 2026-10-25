@@ -170,6 +170,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     JsonLastErrorMsg,
     /// Dispatches `json_validate(...)`.
     JsonValidate,
+    /// Dispatches PHP tokenization and token-name lookup through the shared engine.
+    Tokenizer,
     /// Dispatches `log(...)`.
     Log,
     /// Dispatches `log2(...)`.
@@ -524,6 +526,7 @@ impl EvalValuesHook {
                 eval_json_last_error_msg_result(context, values)
             }
             Self::JsonValidate => eval_json_validate_values_result(evaluated_args, context, values),
+            Self::Tokenizer => eval_tokenizer_values(name, evaluated_args, context, values),
             Self::Log => match evaluated_args {
                 [num] => eval_log_result(*num, None, values),
                 [num, base] => eval_log_result(*num, Some(*base), values),

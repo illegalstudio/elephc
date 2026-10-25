@@ -167,6 +167,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     JsonLastErrorMsg,
     /// Dispatches `json_validate(...)`.
     JsonValidate,
+    /// Dispatches PHP tokenization and token-name lookup through the shared engine.
+    Tokenizer,
     /// Dispatches `log(...)`.
     Log,
     /// Dispatches `log2(...)`.
@@ -446,6 +448,7 @@ impl EvalDirectHook {
             Self::JsonLastError => eval_builtin_json_last_error(args, context, values),
             Self::JsonLastErrorMsg => eval_builtin_json_last_error_msg(args, context, values),
             Self::JsonValidate => eval_builtin_json_validate(args, context, scope, values),
+            Self::Tokenizer => eval_builtin_tokenizer(name, args, context, scope, values),
             Self::Log => eval_builtin_log(args, context, scope, values),
             Self::Log2 => eval_builtin_log2(args, context, scope, values),
             Self::Log10 => eval_builtin_log10(args, context, scope, values),

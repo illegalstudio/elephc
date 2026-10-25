@@ -2097,6 +2097,106 @@
         {
           "by_ref": false,
           "default": null,
+          "name": "class",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "__elephc_class_is_abstract",
+    "description": "Reports whether a dynamically named AOT class is abstract.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 704,
+      "notes": [
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/__elephc_class_is_abstract.rs",
+      "sig_line": null
+    },
+    "module": "elephc",
+    "name": "__elephc_class_is_abstract",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "internal compiler primitive"
+      },
+      "effects": {
+        "kind": "static",
+        "names": []
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "non_heap"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "class",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_class_is_abstract",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
           "name": "overrides",
           "optional": false,
           "type": "mixed"
@@ -14252,6 +14352,151 @@
     },
     "since": null,
     "slug": "__elephc_strtotime_raw",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "error",
+          "optional": false,
+          "type": "object"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "line",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "__elephc_tokenizer_error_location",
+    "description": "Records the source-buffer location of a tokenizer ParseError.",
+    "eval": {
+      "adapter_reason": null,
+      "area": "string",
+      "execution": "shared-runtime",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/tokenizer/location.rs",
+      "hooks": [],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "error",
+          "optional": false,
+          "type": "object"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "line",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": 88,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 704,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_tokenizer_error_location` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/__elephc_tokenizer_error_location.rs",
+      "sig_line": null
+    },
+    "module": "elephc",
+    "name": "__elephc_tokenizer_error_location",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_heap",
+          "writes_heap"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_tokenizer_error_location"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "non_heap"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_tokenizer_error_location"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "error",
+          "optional": false,
+          "type": "object"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "line",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_tokenizer_error_location",
     "sub_area": "System"
   },
   {
@@ -137930,6 +138175,195 @@
     "since": null,
     "slug": "tmpfile",
     "sub_area": "Filesystem"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "code",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "flags",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "String",
+    "canonical_name": "token_get_all",
+    "description": "Split PHP source into tokens while preserving its original bytes.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "string",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/tokenizer/token_get_all.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "code",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/tokenizer_prelude.rs",
+      "codegen_function": "token_get_all",
+      "codegen_line": 48,
+      "notes": [
+        "Implemented by the compiler-injected tokenizer prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs",
+      "sig_line": null
+    },
+    "module": "tokenizer",
+    "name": "token_get_all",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "code",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "array",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "token_get_all",
+    "sub_area": "String"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "id",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "String",
+    "canonical_name": "token_name",
+    "description": "Get the symbolic name of a PHP token identifier.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "string",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/tokenizer/token_name.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "id",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/tokenizer_prelude.rs",
+      "codegen_function": "token_name",
+      "codegen_line": 77,
+      "notes": [
+        "Implemented by the compiler-injected tokenizer prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs",
+      "sig_line": null
+    },
+    "module": "tokenizer",
+    "name": "token_name",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "id",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "token_name",
+    "sub_area": "String"
   },
   {
     "aot": {

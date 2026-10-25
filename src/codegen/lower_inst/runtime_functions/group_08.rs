@@ -19,6 +19,9 @@ pub(super) fn lower(
     target: RuntimeFnId,
 ) -> Option<Result<()>> {
     match target {
+        RuntimeFnId::TokenizerErrorLocation => Some(
+            crate::codegen::lower_inst::builtins::tokenizer::lower_error_location(ctx, inst)
+        ),
         RuntimeFnId::Sqrt => Some({
             crate::codegen::lower_inst::builtins::math::lower_sqrt(ctx, inst)
         }),

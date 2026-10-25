@@ -129,7 +129,7 @@ By default a bridge is linked **only when the program uses it** — using a hash
 function pulls in `crypto`, opening an `https://` stream pulls in `tls`,
 calling a `bc*` function or using `BcMath\Number` pulls in `bcmath`, calling an `iconv*` function pulls in
 `iconv`, calling `mb_strlen()` pulls in `mbstring`, referencing `PDO` pulls in
-`pdo`, and creating an `XMLWriter` or calling an `xml_*` function pulls in `xml`.
+`pdo`, calling `token_get_all()` or using `PhpToken` pulls in `tokenizer`, and creating an `XMLWriter` or calling an `xml_*` function pulls in `xml`.
 An `eval()` call pulls in Magician
 only when it needs runtime parsing: eligible literal fragments can be parsed at
 compile time and lowered to native EIR without the interpreter bridge. Programs
@@ -142,7 +142,7 @@ the lockfile, and Cargo configuration also participate in this freshness check.
 `--with-CRATE` force-enables a bridge regardless of that auto-detection. It
 force-links the staticlib (whole-archived, so it is retained even if no symbol
 references it) and, for crates whose PHP surface comes from an injected prelude
-(`pdo`, `mysqli`, `tz`, `image`, `xml`), force-injects that prelude so the classes/functions are
+(`pdo`, `mysqli`, `tz`, `image`, `xml`, `tokenizer`), force-injects that prelude so the classes/functions are
 available. This is useful when a program reaches a feature through indirection
 that detection cannot see. The flag is repeatable:
 

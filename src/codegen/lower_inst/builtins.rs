@@ -76,6 +76,7 @@ pub(crate) mod serialize;
 pub(crate) mod spl;
 pub(crate) mod system;
 pub(crate) mod strings;
+pub(crate) mod tokenizer;
 pub(crate) mod types;
 
 pub(crate) use count_empty::*;

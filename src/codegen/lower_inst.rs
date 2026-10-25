@@ -363,6 +363,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::CallablePtr => builtins::pointers::lower_elephc_callable_ptr(ctx, &inst),
         Op::NormalizeCallable => builtins::pointers::lower_elephc_normalize_callable(ctx, &inst),
         Op::PdoAdapterAddr => builtins::pointers::lower_elephc_pdo_adapter_addr(ctx, &inst),
+        Op::DynamicClassIsAbstract => objects::lower_dynamic_class_is_abstract(ctx, &inst),
         Op::DynamicClassHasConstructor => {
             builtins::system::lower_elephc_class_has_constructor(ctx, &inst)
         }

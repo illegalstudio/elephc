@@ -550,6 +550,7 @@ def validate_presentation_overrides(repo: Path, entries: list[dict]) -> None:
 # ``prelude_contracts_match_their_injected_signatures`` proves each contract is declared
 # by exactly one of them.
 PRELUDE_SOURCES: dict[str, tuple[str | tuple[str, ...], str, str]] = {
+    "tokenizer": ("tokenizer_prelude.rs", "tokenizer", "crates/elephc-builtin-contract/src/catalog_data.rs"),
     "curl": (
         "curl_prelude.rs",
         "curl",
@@ -635,6 +636,7 @@ def resolve_non_registry_lowering(
     canonical: str,
     aot_support: dict,
     area: str,
+    module: str | None = None,
 ) -> LoweringInfo:
     """Describe a compiler route that intentionally has no ``builtin!`` home."""
     contract_file = "crates/elephc-builtin-contract/src/catalog_surfaces.rs"
@@ -656,7 +658,7 @@ def resolve_non_registry_lowering(
     kind = aot_support.get("kind")
     if kind == "prelude":
         try:
-            source, label, sig_file = PRELUDE_SOURCES[area]
+            source, label, sig_file = PRELUDE_SOURCES[module if module in PRELUDE_SOURCES else area]
         except KeyError:
             raise ValueError(
                 f"prelude-provided builtin {canonical!r} is in contract area {area!r}, which "
@@ -777,7 +779,7 @@ def build_registry(repo: Path) -> list[Builtin]:
             lowering = resolve_registry_lowering(repo, read, entry, home_rel)
         else:
             lowering = resolve_non_registry_lowering(
-                repo, read, dispatch, lowering_dir, canonical, aot_support, entry["area"]
+                repo, read, dispatch, lowering_dir, canonical, aot_support, entry["area"], entry.get("module")
             )
         if canonical in RUNTIME_HELPER_OVERRIDES:
             lowering.runtime_helpers = RUNTIME_HELPER_OVERRIDES[canonical]

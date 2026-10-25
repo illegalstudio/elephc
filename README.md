@@ -64,9 +64,11 @@ See [showcases/http-server/](showcases/http-server/) for full source and build i
 
 ## DOOM rendered in PHP
 
-The flagship showcase: a real-time 3D renderer that loads original DOOM WAD files and renders E1M1 — BSP traversal, perspective projection, per-column fog, sector lighting, collision detection, step climbing — entirely in PHP compiled to a native binary.
+The flagship showcase: the shareware episode of DOOM played from the original `DOOM1.WAD`, entirely in PHP compiled to a native binary. A BSP column renderer draws DOOM's own 320x200 frame with textured walls, floors and sky, sprites and sector lighting, and the game runs doors, lifts, switches, pickups and the status bar at 35 tics per second.
 
-![DOOM E1M1 rendered in PHP](showcases/doom/demo.gif)
+https://github.com/user-attachments/assets/6bc3012a-4e59-4061-b53d-ca2152cb0845
+
+[Download the walkthrough (MP4)](https://raw.githubusercontent.com/getelephc/static/main/assets/doom/0.27.6/doom-walkthrough.mp4).
 
 See [showcases/doom/](showcases/doom/) for full source and build instructions.
 
@@ -449,7 +451,7 @@ cargo run -- hello.php
 | Showcase | Description |
 |---|---|
 | [HTTP server](showcases/http-server/) | Async HTTP/1.1 server with a non-blocking `poll()` event loop, one `Fiber` per connection, POSIX sockets via `extern` FFI, `ptr` buffers, HTTP parser and router |
-| [DOOM E1M1](showcases/doom/) | Real-time 3D WAD renderer with BSP traversal, SDL2 FFI, `packed class` geometry, `buffer<T>` storage, collision detection, HUD |
+| [DOOM](showcases/doom/) | DOOM's shareware episode from the original WAD: BSP column renderer, textures, sprites, lighting, doors and lifts, status bar; SDL2 FFI, `packed class` map records, `buffer<T>` storage |
 | [SDL framebuffer](examples/sdl_framebuffer/) | Pixel-level rendering with SDL2 via FFI |
 | [SDL audio](examples/sdl_audio/) | Audio playback with SDL2 via FFI |
 | [Hot-path buffers](examples/hot-path/) | `packed class` + `buffer<T>` for performance-critical data |
@@ -561,6 +563,7 @@ The full list of supported constructs, operators, and control structures is in t
 - **Database (PDO)**: `PDO`, `PDOStatement`, `PDOException` with SQLite, PostgreSQL, MySQL/MariaDB, optional FreeTDS PDO_DBLIB, pure-Rust PDO_FIREBIRD, system-driver-manager PDO_ODBC, Client SDK PDO_INFORMIX/PDO_IBM, Microsoft ODBC PDO_SQLSRV, Oracle Instant Client PDO_OCI, and official CCI PDO_CUBRID drivers, positional `?` and named `:name` binds, fetch modes, transactions, and `foreach` over result sets
 - **Database (mysqli)**: a documented `mysqli` / `mysqli_stmt` / `mysqli_result` subset for MySQL/MariaDB over the same pure-Rust client — buffered independent results, prepared statements, `multi_query`, `mysqli_report` error modes, and the full procedural `mysqli_*` alias surface
 - **Process control (PCNTL)**: `pcntl_fork`, wait/status helpers, `pcntl_exec`, signal handlers and async dispatch, masks, priorities, Linux affinity/namespaces, and macOS QoS; see the [PCNTL guide](docs/php/pcntl.md)
+- **Tokenizer**: `token_get_all`, `token_name`, `PhpToken` and all 154 PHP 8.5 constants, including `TOKEN_PARSE`; see the [Tokenizer guide](docs/php/tokenizer.md).
 - **XML**: the complete function, class and constant inventory of `ext/xml` (the `XMLParser` SAX parser, every handler, incremental `xml_parse()`, `xml_parse_into_struct()`, libxml2's error codes) and `ext/xmlwriter` (`XMLWriter` with memory and URI output), plus SimpleXML (`SimpleXMLElement`, `SimpleXMLIterator`, parsing, mutation, namespaces and XPath), on a statically pinned libxml2 2.15.3 from the native catalog (`elephc native add libxml2`, auto-linked or `--with-xml`), natively and inside `eval()`; see the [XML guide](docs/php/xml.md) for documented behavioral differences and [runtime limits](docs/php/xml.md#runtime-limits)
 - **Date/time**: `DateTime`, `DateTimeImmutable`, `DateTimeInterface`, `DateTimeZone`, `DateInterval`, `DatePeriod`, the PHP 8.3 date exception hierarchy, DST-aware formatting via a bundled IANA timezone database, and `ext/calendar` Julian-Day functions
 - **Crypto**: `md5()`/`sha1()`/`hash()`/`hash_hmac()` hashing and OpenSSL-compatible symmetric ciphers (`openssl_encrypt()`/`openssl_decrypt()`, AES CBC/CTR/ECB/GCM) through a pure-Rust bridge with no system OpenSSL dependency
@@ -576,7 +579,7 @@ The full list of supported constructs, operators, and control structures is in t
 
 ### Built-in functions (1074)
 
-The generated builtin documentation currently exposes 1074 PHP-visible entries across arrays, buffers, class introspection, databases, dates, filesystems, I/O, images, JSON, math/BCMath, multibyte strings, networking, process control, regex, SPL, streams, strings, types, web and XML, and elephc's pointer extensions. The exhaustive list, signatures, availability, and implementation links are generated from the shared contract in [Built-in functions](docs/php/builtins.md); keeping one generated index avoids a second hand-maintained list drifting here.
+The generated builtin documentation currently exposes 1076 PHP-visible entries across arrays, buffers, class introspection, databases, dates, filesystems, I/O, images, JSON, math/BCMath, multibyte strings, networking, process control, regex, SPL, streams, strings, types, web and XML, and elephc's pointer extensions. The exhaustive list, signatures, availability, and implementation links are generated from the shared contract in [Built-in functions](docs/php/builtins.md); keeping one generated index avoids a second hand-maintained list drifting here.
 
 ### Constants
 

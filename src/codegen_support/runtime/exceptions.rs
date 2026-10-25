@@ -26,6 +26,7 @@ mod destructor_throw;
 mod initialize;
 mod matches;
 mod location;
+mod scanned_location;
 pub(crate) use location::{emit_location, emit_creation_line_load};
 mod rethrow_current;
 mod ref_cell_release;

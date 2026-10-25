@@ -18,6 +18,7 @@ mod class_spec;
 mod constant_spec;
 mod catalog_classes;
 mod catalog_constants;
+mod catalog_constants_tokenizer;
 mod catalog_constants_curl;
 mod catalog_data;
 mod catalog_mbstring;

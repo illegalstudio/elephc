@@ -2,134 +2,118 @@
 
 namespace Showcases\Doom\Bsp;
 
+use Showcases\Doom\Data\Node;
 use Showcases\Doom\Map\MapData;
-use Showcases\Doom\Player\Camera;
 
-class BspWalker {
-    public function walk(MapData $map, Camera $camera) {
-        if (!$map->isValid() || $map->subSectorCount <= 0) {
-            return [];
-        }
+// BSP traversal. A point on the positive side of a node's partition is in front of
+// it, which the right child covers (DOOM's R_PointOnSide).
+final class BspWalker {
+    // subsector indices front to back for the last walk; only the first $count are valid
+    public buffer<int> $order;
+    public int $count;
+    public int $nodeCount;
+    public int $subSectorCount;
+    public int $viewX;
+    public int $viewY;
 
-        if ($map->nodeCount <= 0) {
-            $order = [];
-            int $i = 0;
-            while ($i < $map->subSectorCount) {
-                $order[] = $i;
-                $i += 1;
-            }
-            return $order;
-        }
-
-        return $this->visitNode($map, $camera, $map->nodeCount - 1);
+    public function __construct() {
+        $this->order = buffer_new<int>(1);
+        $this->count = 0;
+        $this->nodeCount = 0;
+        $this->subSectorCount = 0;
+        $this->viewX = 0;
+        $this->viewY = 0;
     }
 
-    public function findSubSectorIndex(MapData $map, Camera $camera): int {
+    public function walk(MapData $map, int $x, int $y): int {
+        $this->count = 0;
+        if (!$map->isValid() || $map->subSectorCount <= 0) {
+            return 0;
+        }
+        if (buffer_len($this->order) < $map->subSectorCount) {
+            buffer<int> $smaller = $this->order;
+            buffer_free($smaller);
+            $this->order = buffer_new<int>($map->subSectorCount);
+        }
+        if ($map->nodeCount <= 0) {
+            for ($i = 0; $i < $map->subSectorCount; $i++) {
+                $this->order[$i] = $i;
+            }
+            $this->count = $map->subSectorCount;
+            return $this->count;
+        }
+
+        $this->nodeCount = $map->nodeCount;
+        $this->subSectorCount = $map->subSectorCount;
+        $this->viewX = $x;
+        $this->viewY = $y;
+        int $root = $map->nodeCount - 1;
+        $this->visitNode($map->nodes, $root);
+        return $this->count;
+    }
+
+    public function visitNode(buffer<Node> $nodes, int $nodeIndex): void {
+        if ($nodeIndex < 0 || $nodeIndex >= $this->nodeCount) {
+            return;
+        }
+        int $nearChild = $nodes[$nodeIndex]->left_child;
+        int $farChild = $nodes[$nodeIndex]->right_child;
+        if ($this->sideOf($nodes, $nodeIndex, $this->viewX, $this->viewY) > 0) {
+            $nearChild = $nodes[$nodeIndex]->right_child;
+            $farChild = $nodes[$nodeIndex]->left_child;
+        }
+        $this->visitChild($nodes, $nearChild);
+        $this->visitChild($nodes, $farChild);
+    }
+
+    public function visitChild(buffer<Node> $nodes, int $child): void {
+        if ($child >= 32768) {
+            int $subSectorIndex = $child - 32768;
+            if ($subSectorIndex < $this->subSectorCount) {
+                $this->order[$this->count] = $subSectorIndex;
+                $this->count++;
+            }
+            return;
+        }
+        $this->visitNode($nodes, $child);
+    }
+
+    // Subsector containing a point, descending on the point's side of each partition.
+    public function subSectorAt(MapData $map, int $x, int $y): int {
         if (!$map->isValid() || $map->subSectorCount <= 0) {
             return -1;
         }
-
         if ($map->nodeCount <= 0) {
             return 0;
         }
-
-        return $this->findSubSectorNode($map, $camera, $map->nodeCount - 1);
-    }
-
-    public function visitNode(MapData $map, Camera $camera, int $nodeIndex) {
-        if ($nodeIndex < 0 || $nodeIndex >= $map->nodeCount) {
-            return [];
-        }
-
-        $node = $map->nodes[$nodeIndex];
-        int $side = $this->pointSide(
-            $camera->x,
-            $camera->y,
-            $node->partition_x,
-            $node->partition_y,
-            $node->delta_x,
-            $node->delta_y
-        );
-
-        int $nearChild = $node->right_child;
-        int $farChild = $node->left_child;
-        if ($side > 0) {
-            $nearChild = $node->left_child;
-            $farChild = $node->right_child;
-        }
-
-        $nearOrder = $this->visitChild($map, $camera, $nearChild);
-        $farOrder = $this->visitChild($map, $camera, $farChild);
-        return $this->appendOrder($nearOrder, $farOrder);
-    }
-
-    public function visitChild(MapData $map, Camera $camera, int $child) {
-        if ($child >= 32768) {
-            int $subSectorIndex = $child - 32768;
-            if ($subSectorIndex >= 0 && $subSectorIndex < $map->subSectorCount) {
-                return [$subSectorIndex];
+        buffer<Node> $nodes = $map->nodes;
+        int $nodeIndex = $map->nodeCount - 1;
+        for ($depth = 0; $depth < $map->nodeCount; $depth++) {
+            int $child = $nodes[$nodeIndex]->left_child;
+            if ($this->sideOf($nodes, $nodeIndex, $x, $y) > 0) {
+                $child = $nodes[$nodeIndex]->right_child;
             }
-            return [];
-        }
-
-        return $this->visitNode($map, $camera, $child);
-    }
-
-    public function findSubSectorNode(MapData $map, Camera $camera, int $nodeIndex): int {
-        if ($nodeIndex < 0 || $nodeIndex >= $map->nodeCount) {
-            return -1;
-        }
-
-        $node = $map->nodes[$nodeIndex];
-        int $side = $this->pointSide(
-            $camera->x,
-            $camera->y,
-            $node->partition_x,
-            $node->partition_y,
-            $node->delta_x,
-            $node->delta_y
-        );
-
-        int $nearChild = $node->right_child;
-        if ($side > 0) {
-            $nearChild = $node->left_child;
-        }
-
-        return $this->resolveSubSectorChild($map, $camera, $nearChild);
-    }
-
-    public function resolveSubSectorChild(MapData $map, Camera $camera, int $child): int {
-        if ($child >= 32768) {
-            int $subSectorIndex = $child - 32768;
-            if ($subSectorIndex >= 0 && $subSectorIndex < $map->subSectorCount) {
+            if ($child >= 32768) {
+                int $subSectorIndex = $child - 32768;
+                if ($subSectorIndex >= $map->subSectorCount) {
+                    return -1;
+                }
                 return $subSectorIndex;
             }
-            return -1;
+            if ($child >= $map->nodeCount) {
+                return -1;
+            }
+            $nodeIndex = $child;
         }
-
-        return $this->findSubSectorNode($map, $camera, $child);
+        return -1;
     }
 
-    public function appendOrder($left, $right) {
-        $out = $left;
-        int $i = 0;
-        while ($i < count($right)) {
-            $out[] = $right[$i];
-            $i += 1;
-        }
-        return $out;
-    }
-
-    public function pointSide(
-        int $px,
-        int $py,
-        int $partitionX,
-        int $partitionY,
-        int $deltaX,
-        int $deltaY
-    ): int {
-        int $relX = $px - $partitionX;
-        int $relY = $py - $partitionY;
-        return ($relX * $deltaY) - ($relY * $deltaX);
+    public function sideOf(buffer<Node> $nodes, int $nodeIndex, int $px, int $py): int {
+        int $relX = $px - $nodes[$nodeIndex]->x;
+        int $relY = $py - $nodes[$nodeIndex]->y;
+        int $first = $relX * $nodes[$nodeIndex]->dy;
+        int $second = $relY * $nodes[$nodeIndex]->dx;
+        int $side = $first - $second;
+        return $side;
     }
 }

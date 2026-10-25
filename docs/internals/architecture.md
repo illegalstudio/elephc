@@ -56,7 +56,9 @@ Source (.php or .lfc)
 ┌──────────────┐
 │   Preludes   │  src/{pdo,mysqli,tz,list_id,var_export,opcache,image,hash,curl,xml,dom_html,web,version}_prelude*
 │              │  Injects only the compiler-owned PHP surfaces required by
-│              │  resolved source usage, forced bridge flags, or --web.
+│              │  resolved source usage, forced bridge flags, or --web. Before
+│              │  injection, src/autoload/prelude_probe.rs scans an autoloaded
+│              │  copy for PDO/mysqli/tz/image/hash/curl/xml/var_export usage.
 └─────┬────────┘
       │
       ▼
@@ -518,8 +520,8 @@ src/
 │       ├── resource_ids.rs    Runtime resource-kind identifiers shared by cleanup paths
 │       ├── round_mode.rs      PHP rounding-mode constants used by runtime helpers
 │       ├── sysv_call_alignment.rs x86_64 SysV nested-call stack-alignment helpers
-│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, hashes, iconv, mbstring, parse_url, and conversion helpers (105 top-level Rust files + 62 nested Rust helpers)
-│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (208 top-level Rust files + 9 nested target/debug/test helpers)
+│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, hashes, iconv, mbstring, parse_url, and conversion helpers (106 top-level Rust files + 62 nested Rust helpers)
+│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (210 top-level Rust files + 9 nested target/debug/test helpers)
 │       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed, callable descriptor release, and `Closure::bind` support (7 files)
 │       ├── compare/           Loose/strict comparison and truthiness helpers (5 files)
 │       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (126 top-level files + 1 nested response-metadata helper)
@@ -530,7 +532,7 @@ src/
 │       ├── exceptions.rs      Exception runtime module root / re-exports
 │       ├── exceptions/        cleanup frames, handler dispatch, dynamic instanceof, matching, throwing, and Throwable helpers (23 top-level Rust files + 2 nested cleanup helpers)
 │       ├── pdo/               Target-aware PDO callable callback adapters (5 files)
-│       ├── system/            build_argv, time, getenv, shell_exec, date/JSON/strtotime, serialize/unserialize, preg_*, ... (50 top-level Rust files + 59 nested Rust files)
+│       ├── system/            build_argv, time, getenv, shell_exec, date/JSON/strtotime, serialize/unserialize, preg_*, ... (50 top-level Rust files + 61 nested Rust files)
 │       ├── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ptr_read_string, ptr_write_string, ... (7 files)
 │       ├── fibers/            stack allocation/free, context switch, entry trampoline (4 top-level files) + `api/` (4 target-aware public API helper files)
 │       ├── objects/           stdClass, object handles, Mixed property/index autovivification, object-vars/export, destructor dispatch, and new-by-name helpers (19 files)

@@ -215,6 +215,11 @@ offsetBoundaries("\x07aaaaaaaZ");
         let mut store_reads = 0;
         let mut persisted_reads = 0;
         for function in module.functions.iter().chain(module.class_methods.iter()) {
+            // Inspect this fixture's owners. Injected preludes may read borrowed bytes
+            // for immediate consumers such as ord(), which need no independent copy.
+            if !function.name.starts_with("offset") && !function.name.starts_with("Offset") {
+                continue;
+            }
             if function.name == "offsetNestedUpdateKey" {
                 let byte_results = function.instructions.iter()
                     .filter(|inst| inst.op == Op::StrCharAt)

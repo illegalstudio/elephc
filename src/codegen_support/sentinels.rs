@@ -407,6 +407,11 @@ pub(crate) fn x86_64_heap_kind_word(low_bits: u32) -> u64 {
 /// Read by `Throwable::getLine()` in `lower_inst.rs` and by `__rt_report_uncaught_exception`.
 pub(crate) const THROWABLE_CREATION_LINE_OFFSET: u64 = 32;
 
+/// Marks a creation line as belonging to tokenizer input with an explicitly empty filename.
+/// Normal source spans are u32, so their creation-line values never set this bit.
+/// Keeping this flag in the metadata word also preserves it through object cloning.
+pub(crate) const THROWABLE_SCANNED_LOCATION_FLAG: u64 = 1 << 63;
+
 /// Clears the creation-line slot of a freshly allocated Throwable payload in `payload_reg`.
 ///
 /// For the emitters that synthesize a Throwable with no user `new` behind it — an

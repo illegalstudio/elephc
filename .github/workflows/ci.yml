@@ -44,6 +44,7 @@ env:
     -p elephc-image
     -p elephc-pcntl
     -p elephc-xml
+    -p elephc-tokenizer
     -p elephc-magician
     -p elephc-web
     -p elephc-instr
@@ -2157,6 +2158,37 @@ jobs:
             "${{ matrix.sdk }}" \
             "${{ matrix.clang_target }}"
 
+  tokenizer-ios-compile-link:
+    name: Tokenizer iOS Compile & Link (${{ matrix.elephc_target }})
+    needs: plan
+    if: needs.plan.outputs.extended == 'true'
+    runs-on: macos-15
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - elephc_target: ios-arm64
+            rust_target: aarch64-apple-ios
+            sdk: iphoneos
+            clang_target: arm64-apple-ios13.0
+          - elephc_target: ios-sim-arm64
+            rust_target: aarch64-apple-ios-sim
+            sdk: iphonesimulator
+            clang_target: arm64-apple-ios13.0-simulator
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust with the iOS standard library
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ matrix.rust_target }}
+      - name: Compile and link the tokenizer bridge
+        run: |
+          bash scripts/ci/test_ios_tokenizer_link.sh \
+            "${{ matrix.elephc_target }}" "${{ matrix.rust_target }}" \
+            "${{ matrix.sdk }}" "${{ matrix.clang_target }}"
+
   # Eval integration tests compile, link, and run full programs while exercising
   # eval/magician paths, so keep them out of the ordinary codegen shards. Run each
   # deterministic shard in one libtest process so runtime-object and bridge caches
@@ -2528,6 +2560,68 @@ jobs:
             exit 1
           fi
 
+      - name: Upload generated builtin documentation
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: generated-builtin-docs
+          retention-days: 7
+          path: |
+            docs/php
+            docs/internals/builtins
+            scripts/docs/builtin_registry.json
+            scripts/docs/symbol_registry.json
+
+  tokenizer-tests:
+    name: Tokenizer PHP 8.5 parity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: Install PHP reference tokenizer
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.5'
+          extensions: tokenizer
+          coverage: none
+      - name: Check the shared tokenizer against PHP
+        env:
+          ELEPHC_TOKENIZER_REQUIRE_PHP85: '1'
+        run: cargo test --locked -p elephc-tokenizer-engine --lib
+
+  tokenizer-native-smoke:
+    name: Tokenizer native smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: Build the compiler and tokenizer bridge
+        run: |
+          cargo build --locked -p elephc-tokenizer
+          cargo build --locked --bin elephc
+      - name: Run the native tokenizer example
+        run: |
+          target/debug/elephc --with-tokenizer examples/tokenizer/main.php
+          trap 'rm -f "$RUNNER_TEMP/tokenizer-example.out"' EXIT
+          examples/tokenizer/main > "$RUNNER_TEMP/tokenizer-example.out"
+          grep -F 'Function declaration at line 1, byte ' "$RUNNER_TEMP/tokenizer-example.out"
+          grep -F 'First token: T_OPEN_TAG' "$RUNNER_TEMP/tokenizer-example.out"
+      - name: Run focused native, eval and argument regressions
+        run: |
+          cargo test --locked --test codegen_tests test_tokenizer_
+          cargo test --locked --test codegen_tests codegen::lfc::lfc_and_strict_php_eval_calls_do_not_leak_profiles -- --exact
+          cargo test --locked --test error_tests tokenizer_
+          cargo test --locked -p elephc --lib ir_lower::tests::corpus::lowers_tokenizer_example_on_every_target -- --exact
+          cargo test --locked -p elephc --lib autoload::prelude_probe::tests::probe_detects_tokenizer_in_autoloaded_classes -- --exact
+          cargo test --locked -p elephc --lib ir_lower::tests::string_offset_lifetime::string_offset_lifetime_stabilizes_views_on_all_targets -- --exact
+          cargo test --locked --test embedder_stack_tests prelude_injection_survives_the_nesting_limit_on_a_small_embedder_stack -- --exact
+
   differential-tests:
     name: Differential test run (PHPUnit vs elephc test)
     runs-on: ubuntu-latest
@@ -2571,6 +2665,20 @@ jobs:
         # Every test PHPUnit reports must exist in the compiled run with the same
         # outcome; tests only elephc runs (the .lfc files) are informational.
         run: python3 scripts/test-differential.py examples/testing --elephc target/debug/elephc
+
+      - name: Install the runtime's stream libraries
+        # The DOOM engine reads its WAD with file_get_contents() on a run-time path,
+        # which links the runtime's stream layer (`-lz -lbz2`,
+        # src/builtins/requirements.rs); the runner image has no libbz2-dev.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libbz2-dev zlib1g-dev
+
+      - name: DOOM showcase suite
+        # Runs here because this job already builds the compiler. Map changes, specials,
+        # pickups and rendering against a small WAD the tests write themselves: no SDL,
+        # display or DOOM1.WAD needed.
+        run: target/debug/elephc test showcases/doom/tests
 
   curl-feature-contract:
     name: Curl feature contract coverage
@@ -2942,11 +3050,14 @@ jobs:
       - curl-native-linux-aarch64
       - curl-ios-compile-link
       - xml-ios-compile-link
+      - tokenizer-ios-compile-link
       - eval-codegen-tests-macos-aarch64
       - eval-codegen-tests-linux-x86_64
       - eval-codegen-tests-linux-aarch64
       - image-api-sync
       - builtins-docs-sync
+      - tokenizer-tests
+      - tokenizer-native-smoke
       - differential-tests
       - managed-native-smoke
       - curl-feature-contract
@@ -2978,7 +3089,7 @@ jobs:
           EXTENDED_TIER: ${{ needs.plan.outputs.extended }}
         run: |
           always="plan build-archive-macos-aarch64 build-archive-linux-x86_64
-            build-archive-linux-aarch64 image-api-sync builtins-docs-sync differential-tests
+            build-archive-linux-aarch64 image-api-sync builtins-docs-sync tokenizer-tests tokenizer-native-smoke differential-tests
             curl-feature-contract security-audit action-pins frame-assertions-release
             benchmark-tooling"
           run_tier="non-codegen-tests-linux-x86_64 non-codegen-tests-linux-aarch64
@@ -2991,7 +3102,7 @@ jobs:
           extended_tier="non-codegen-tests-macos-aarch64 cli-tests-macos-aarch64
             web-tests-macos-aarch64 codegen-tests-macos-aarch64 pdo-codegen-tests-macos-aarch64
             curl-native-macos-aarch64 curl-codegen-tests-macos-aarch64
-            eval-codegen-tests-macos-aarch64 curl-ios-compile-link xml-ios-compile-link"
+            eval-codegen-tests-macos-aarch64 curl-ios-compile-link xml-ios-compile-link tokenizer-ios-compile-link"
           in_list() { case " $(echo $2) " in *" $1 "*) return 0 ;; esac; return 1; }
           echo "tiers: run=$RUN_TIER extended=$EXTENDED_TIER"
           status=0

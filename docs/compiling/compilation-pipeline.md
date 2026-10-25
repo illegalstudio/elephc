@@ -23,6 +23,7 @@ Physical source (.php or .lfc)
   -> (conditional)     apply compiler ifdef branches from --define
   -> autoload-build    discover autoload rules
   -> resolve           resolve include/require and declarations
+  -> autoload-prelude-probe detect preludes needed by autoloaded files
   -> pdo-prelude        inject the PDO prelude when used
   -> mysqli-prelude     inject the mysqli prelude when used (shares the elephc_pdo bridge)
   -> tz-prelude         inject the timezone-introspection prelude when used
@@ -99,11 +100,12 @@ Physical source (.php or .lfc)
   `func_get_arg()` into a hidden variadic parameter plus ordinary PHP operations.
   This happens after autoloading but before manifest baking, optimization, and
   checking, so those later passes see the desugared callable shape.
-- **autoload prelude probe** — the autoload pass runs after name resolution, so
+- **autoload-prelude-probe**: the autoload pass runs after name resolution, so
   a prelude needed only by an autoloaded file would be missed. When autoload
   rules exist, a probe (`src/autoload/prelude_probe.rs`) first runs name
-  resolution and the autoload pass on a copy of the program, asks each
-  prelude's detector about the result, and restores the thread-local source IDs
+  resolution and the autoload pass on a copy of the program, checks the PDO,
+  mysqli, timezone, image, hash, curl, XML, and `var_export` detectors against
+  the result, and restores the thread-local source IDs
   and anonymous-class counter. Process-global synthetic spans and include
   temporaries stay monotonic, so discarding a probe cannot recycle identities
   allocated by another compilation thread. The real pass injects the detected

@@ -352,6 +352,9 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_implode_float` | Join float array with glue, formatting each element through `__rt_ftoa` | glue + array | `x1`/`x2` |
 | `__rt_implode_bool` | Join bool array with glue (`true` as `1`, `false` as the empty string) | glue + array | `x1`/`x2` |
 | `__rt_strcmp` | Binary comparison | two strings | `x0` (-1, 0, 1) |
+| `__rt_str_smart_cmp` | PHP string ordering: compare integer strings exactly, apply PHP's numeric-overflow rules, and use byte ordering for nonnumeric pairs | `x1`/`x2` = left slice, `x3`/`x4` = right slice | `x0` (-1, 0, 1) |
+| `__rt_str_numeric_ex` | Classify a complete PHP string as numeric, rejecting embedded NUL bytes and retaining exact integer and overflow metadata | `x1`/`x2` = string slice | `x0` = numeric flag, `x1` = integer-kind flag, `x2` = overflow sign, `x3` = exact integer, `d0` = double |
+| `__rt_num_run_class` | Classify a clipped numeric run as integer or double without losing 64-bit integer precision | `x0` = NUL-terminated numeric run | `x0` = integer-kind flag, `x1` = overflow sign, `x2` = exact integer |
 | `__rt_strcasecmp` | Case-insensitive compare | two strings | `x0` |
 | `__rt_str_starts_with` | Check prefix match | `x1`/`x2` + `x3`/`x4` | `x0` (0 or 1) |
 | `__rt_str_ends_with` | Check suffix match | `x1`/`x2` + `x3`/`x4` | `x0` (0 or 1) |
@@ -787,7 +790,7 @@ Extern callback trampolines use the same descriptor invoker from a C-facing entr
 
 ## Array routines
 
-**Source:** `src/codegen_support/runtime/arrays/` (208 top-level Rust files plus 9 nested target/debug/test helpers)
+**Source:** `src/codegen_support/runtime/arrays/` (210 top-level Rust files plus 9 nested target/debug/test helpers)
 
 ### Core allocation
 
@@ -806,6 +809,8 @@ Extern callback trampolines use the same descriptor invoker from a C-facing entr
 | `__rt_array_clone_shallow` | Clone indexed array storage for copy-on-write splitting, retaining nested heap children as needed | `x0` = array | `x0` = new array |
 | `__rt_array_to_mixed` | Convert an indexed array's live slots to boxed Mixed cells and stamp the array metadata as mixed | `x0` = array, `x1` = current value_type tag | `x0` = unique array |
 | `__rt_array_to_mixed_shared` | Convert the payload already selected by a pending append, preserving callback-retained views of that write instead of separating again | `x0` = selected array, `x1` = current value_type tag | `x0` = same array |
+| `__rt_array_to_pointer_words` | Consume one array owner, separate shared Mixed-slot storage, convert boxed nulls and integers to pointer words, and stamp pointer-element metadata | `x0` = owned indexed array | `x0` = owned pointer-word array |
+| `__rt_hash_shift_boxed` | Remove the insertion-order head, retain the removed value, and rebuild the hash with numeric keys renumbered and string keys preserved | first C argument = unique hash, second = removed-value output slot | owned rebuilt hash; removed box in output slot |
 | `__rt_array_ensure_unique` | Split a shared indexed array before mutation | `x0` = array | `x0` = unique array |
 | `__rt_array_grow` | Ensure uniqueness and double array capacity, extending a unique bump-tail allocation in place when possible or falling back to allocate-copy-free growth | `x0` = array | `x0` = grown array |
 | `__rt_array_free_deep` | Free array storage and release nested heap-backed elements | `x0` = array | — |
@@ -989,7 +994,7 @@ path for from a leaf helper.
 
 ## System routines
 
-**Source:** `src/codegen_support/runtime/system/` (50 top-level Rust files plus 59 files in nested JSON, serialization, date, and parsing modules; 109 Rust files recursively)
+**Source:** `src/codegen_support/runtime/system/` (50 top-level Rust files plus 61 files in nested JSON, serialization, date, and parsing modules; 111 Rust files recursively)
 
 ### `__rt_build_argv` — Build $argv array
 
@@ -1241,6 +1246,7 @@ Every parsed hash entry is inserted through `__rt_unser_store_entry` instead of 
 | `__rt_unserialize_inherit_policy` | Inherit the enclosing allowed-class policy for a nested legacy decode without explicit options | current parser context | inherited policy |
 | `__rt_unserialize_promote_legacy_data` | Move temporary reference owners from a shared nested decode into the enclosing context before cleanup | nested parser context | enclosing ownership list |
 | `__rt_unser_store_entry` | Insert a parsed box and reuse an existing box on a duplicate key, deferring the replaced payload | `x0` hash, `x1`/`x2` key, `x3` box | `x0` = possibly reallocated hash |
+| `__rt_unser_reuse_box` | Replace a Mixed box in place while keeping serialized reference slots valid and deferring replaced owners to the parser context | `x0` = destination box, `x1` = parsed replacement box | `x0` = destination box |
 | `__rt_unser_finish_stored_prop` | Release or retain a parsed box after its property slot took the copied payload | `x0` box | none |
 | `__rt_unser_release_prev_prop` | Release the default or earlier value a property hydration overwrites | `x0` slot, `x1` tag | none |
 | `__rt_unser_release_payload` | Release only the payload a replaced box owned, leaving the box itself for reuse | `x0` boxed tag, `x1` payload | none |

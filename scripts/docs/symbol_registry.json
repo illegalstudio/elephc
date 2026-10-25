@@ -2960,6 +2960,24 @@
         "kind": "prelude",
         "supported": true
       },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "tokenizer",
+      "name": "PhpToken",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
       "bundled": false,
       "eval": {
         "kind": "prelude",
@@ -24978,11 +24996,2783 @@
       },
       "extension": false,
       "internal": false,
+      "module": "tokenizer",
+      "name": "TOKEN_PARSE",
+      "route": "predefined",
+      "since": null,
+      "value": 1
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
       "module": "core",
       "name": "TRUE",
       "route": "predefined",
       "since": null,
       "value": true
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_ABSTRACT",
+      "route": "predefined",
+      "since": null,
+      "value": 322
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG",
+      "route": "predefined",
+      "since": null,
+      "value": 409
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG",
+      "route": "predefined",
+      "since": null,
+      "value": 410
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_AND_EQUAL",
+      "route": "predefined",
+      "since": null,
+      "value": 362
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_ARRAY",
+      "route": "predefined",
+      "since": null,
+      "value": 344
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_ARRAY_CAST",
+      "route": "predefined",
+      "since": null,
+      "value": 384
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_AS",
+      "route": "predefined",
+      "since": null,
+      "value": 301
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_ATTRIBUTE",
+      "route": "predefined",
+      "since": null,
+      "value": 355
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_BAD_CHARACTER",
+      "route": "predefined",
+      "since": null,
+      "value": 411
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_BOOLEAN_AND",
+      "route": "predefined",
+      "since": null,
+      "value": 369
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_BOOLEAN_OR",
+      "route": "predefined",
+      "since": null,
+      "value": 368
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_BOOL_CAST",
+      "route": "predefined",
+      "since": null,
+      "value": 386
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_BREAK",
+      "route": "predefined",
+      "since": null,
+      "value": 307
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_CALLABLE",
+      "route": "predefined",
+      "since": null,
+      "value": 345
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_CASE",
+      "route": "predefined",
+      "since": null,
+      "value": 304
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_CATCH",
+      "route": "predefined",
+      "since": null,
+      "value": 315
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_CLASS",
+      "route": "predefined",
+      "since": null,
+      "value": 336
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_CLASS_C",
+      "route": "predefined",
+      "since": null,
+      "value": 349
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_CLONE",
+      "route": "predefined",
+      "since": null,
+      "value": 285
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_CLOSE_TAG",
+      "route": "predefined",
+      "since": null,
+      "value": 396
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_COALESCE",
+      "route": "predefined",
+      "since": null,
+      "value": 405
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_COALESCE_EQUAL",
+      "route": "predefined",
+      "since": null,
+      "value": 367
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_COMMENT",
+      "route": "predefined",
+      "since": null,
+      "value": 392
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_CONCAT_EQUAL",
+      "route": "predefined",
+      "since": null,
+      "value": 360
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_CONST",
+      "route": "predefined",
+      "since": null,
+      "value": 312
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_CONSTANT_ENCAPSED_STRING",
+      "route": "predefined",
+      "since": null,
+      "value": 269
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_CONTINUE",
+      "route": "predefined",
+      "since": null,
+      "value": 308
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_CURLY_OPEN",
+      "route": "predefined",
+      "since": null,
+      "value": 401
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_DEC",
+      "route": "predefined",
+      "since": null,
+      "value": 380
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_DECLARE",
+      "route": "predefined",
+      "since": null,
+      "value": 299
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_DEFAULT",
+      "route": "predefined",
+      "since": null,
+      "value": 305
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_DIR",
+      "route": "predefined",
+      "since": null,
+      "value": 348
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_DIV_EQUAL",
+      "route": "predefined",
+      "since": null,
+      "value": 359
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_DNUMBER",
+      "route": "predefined",
+      "since": null,
+      "value": 261
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_DO",
+      "route": "predefined",
+      "since": null,
+      "value": 292
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_DOC_COMMENT",
+      "route": "predefined",
+      "since": null,
+      "value": 393
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_DOLLAR_OPEN_CURLY_BRACES",
+      "route": "predefined",
+      "since": null,
+      "value": 400
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_DOUBLE_ARROW",
+      "route": "predefined",
+      "since": null,
+      "value": 391
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_DOUBLE_CAST",
+      "route": "predefined",
+      "since": null,
+      "value": 382
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_DOUBLE_COLON",
+      "route": "predefined",
+      "since": null,
+      "value": 402
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_ECHO",
+      "route": "predefined",
+      "since": null,
+      "value": 291
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_ELLIPSIS",
+      "route": "predefined",
+      "since": null,
+      "value": 404
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_ELSE",
+      "route": "predefined",
+      "since": null,
+      "value": 289
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_ELSEIF",
+      "route": "predefined",
+      "since": null,
+      "value": 288
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_EMPTY",
+      "route": "predefined",
+      "since": null,
+      "value": 334
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_ENCAPSED_AND_WHITESPACE",
+      "route": "predefined",
+      "since": null,
+      "value": 268
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_ENDDECLARE",
+      "route": "predefined",
+      "since": null,
+      "value": 300
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_ENDFOR",
+      "route": "predefined",
+      "since": null,
+      "value": 296
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_ENDFOREACH",
+      "route": "predefined",
+      "since": null,
+      "value": 298
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_ENDIF",
+      "route": "predefined",
+      "since": null,
+      "value": 290
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_ENDSWITCH",
+      "route": "predefined",
+      "since": null,
+      "value": 303
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_ENDWHILE",
+      "route": "predefined",
+      "since": null,
+      "value": 294
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_END_HEREDOC",
+      "route": "predefined",
+      "since": null,
+      "value": 399
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_ENUM",
+      "route": "predefined",
+      "since": null,
+      "value": 339
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_EVAL",
+      "route": "predefined",
+      "since": null,
+      "value": 274
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_EXIT",
+      "route": "predefined",
+      "since": null,
+      "value": 286
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_EXTENDS",
+      "route": "predefined",
+      "since": null,
+      "value": 340
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_FILE",
+      "route": "predefined",
+      "since": null,
+      "value": 347
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_FINAL",
+      "route": "predefined",
+      "since": null,
+      "value": 323
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_FINALLY",
+      "route": "predefined",
+      "since": null,
+      "value": 316
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_FN",
+      "route": "predefined",
+      "since": null,
+      "value": 311
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_FOR",
+      "route": "predefined",
+      "since": null,
+      "value": 295
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_FOREACH",
+      "route": "predefined",
+      "since": null,
+      "value": 297
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_FUNCTION",
+      "route": "predefined",
+      "since": null,
+      "value": 310
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_FUNC_C",
+      "route": "predefined",
+      "since": null,
+      "value": 352
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_GLOBAL",
+      "route": "predefined",
+      "since": null,
+      "value": 320
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_GOTO",
+      "route": "predefined",
+      "since": null,
+      "value": 309
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_HALT_COMPILER",
+      "route": "predefined",
+      "since": null,
+      "value": 335
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_IF",
+      "route": "predefined",
+      "since": null,
+      "value": 287
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_IMPLEMENTS",
+      "route": "predefined",
+      "since": null,
+      "value": 341
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_INC",
+      "route": "predefined",
+      "since": null,
+      "value": 379
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_INCLUDE",
+      "route": "predefined",
+      "since": null,
+      "value": 272
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_INCLUDE_ONCE",
+      "route": "predefined",
+      "since": null,
+      "value": 273
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_INLINE_HTML",
+      "route": "predefined",
+      "since": null,
+      "value": 267
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_INSTANCEOF",
+      "route": "predefined",
+      "since": null,
+      "value": 283
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_INSTEADOF",
+      "route": "predefined",
+      "since": null,
+      "value": 319
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_INTERFACE",
+      "route": "predefined",
+      "since": null,
+      "value": 338
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_INT_CAST",
+      "route": "predefined",
+      "since": null,
+      "value": 381
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_ISSET",
+      "route": "predefined",
+      "since": null,
+      "value": 333
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_IS_EQUAL",
+      "route": "predefined",
+      "since": null,
+      "value": 370
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_IS_GREATER_OR_EQUAL",
+      "route": "predefined",
+      "since": null,
+      "value": 375
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_IS_IDENTICAL",
+      "route": "predefined",
+      "since": null,
+      "value": 372
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_IS_NOT_EQUAL",
+      "route": "predefined",
+      "since": null,
+      "value": 371
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_IS_NOT_IDENTICAL",
+      "route": "predefined",
+      "since": null,
+      "value": 373
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_IS_SMALLER_OR_EQUAL",
+      "route": "predefined",
+      "since": null,
+      "value": 374
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_LINE",
+      "route": "predefined",
+      "since": null,
+      "value": 346
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_LIST",
+      "route": "predefined",
+      "since": null,
+      "value": 343
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_LNUMBER",
+      "route": "predefined",
+      "since": null,
+      "value": 260
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_LOGICAL_AND",
+      "route": "predefined",
+      "since": null,
+      "value": 279
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_LOGICAL_OR",
+      "route": "predefined",
+      "since": null,
+      "value": 277
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_LOGICAL_XOR",
+      "route": "predefined",
+      "since": null,
+      "value": 278
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_MATCH",
+      "route": "predefined",
+      "since": null,
+      "value": 306
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_METHOD_C",
+      "route": "predefined",
+      "since": null,
+      "value": 351
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_MINUS_EQUAL",
+      "route": "predefined",
+      "since": null,
+      "value": 357
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_MOD_EQUAL",
+      "route": "predefined",
+      "since": null,
+      "value": 361
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_MUL_EQUAL",
+      "route": "predefined",
+      "since": null,
+      "value": 358
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_NAMESPACE",
+      "route": "predefined",
+      "since": null,
+      "value": 342
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_NAME_FULLY_QUALIFIED",
+      "route": "predefined",
+      "since": null,
+      "value": 263
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_NAME_QUALIFIED",
+      "route": "predefined",
+      "since": null,
+      "value": 265
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_NAME_RELATIVE",
+      "route": "predefined",
+      "since": null,
+      "value": 264
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_NEW",
+      "route": "predefined",
+      "since": null,
+      "value": 284
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_NS_C",
+      "route": "predefined",
+      "since": null,
+      "value": 354
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_NS_SEPARATOR",
+      "route": "predefined",
+      "since": null,
+      "value": 403
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_NULLSAFE_OBJECT_OPERATOR",
+      "route": "predefined",
+      "since": null,
+      "value": 390
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_NUM_STRING",
+      "route": "predefined",
+      "since": null,
+      "value": 271
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_OBJECT_CAST",
+      "route": "predefined",
+      "since": null,
+      "value": 385
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_OBJECT_OPERATOR",
+      "route": "predefined",
+      "since": null,
+      "value": 389
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_OPEN_TAG",
+      "route": "predefined",
+      "since": null,
+      "value": 394
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_OPEN_TAG_WITH_ECHO",
+      "route": "predefined",
+      "since": null,
+      "value": 395
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_OR_EQUAL",
+      "route": "predefined",
+      "since": null,
+      "value": 363
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_PAAMAYIM_NEKUDOTAYIM",
+      "route": "predefined",
+      "since": null,
+      "value": 402
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_PIPE",
+      "route": "predefined",
+      "since": null,
+      "value": 408
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_PLUS_EQUAL",
+      "route": "predefined",
+      "since": null,
+      "value": 356
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_POW",
+      "route": "predefined",
+      "since": null,
+      "value": 406
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_POW_EQUAL",
+      "route": "predefined",
+      "since": null,
+      "value": 407
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_PRINT",
+      "route": "predefined",
+      "since": null,
+      "value": 280
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_PRIVATE",
+      "route": "predefined",
+      "since": null,
+      "value": 324
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_PRIVATE_SET",
+      "route": "predefined",
+      "since": null,
+      "value": 327
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_PROPERTY_C",
+      "route": "predefined",
+      "since": null,
+      "value": 353
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_PROTECTED",
+      "route": "predefined",
+      "since": null,
+      "value": 325
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_PROTECTED_SET",
+      "route": "predefined",
+      "since": null,
+      "value": 328
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_PUBLIC",
+      "route": "predefined",
+      "since": null,
+      "value": 326
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_PUBLIC_SET",
+      "route": "predefined",
+      "since": null,
+      "value": 329
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_READONLY",
+      "route": "predefined",
+      "since": null,
+      "value": 330
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_REQUIRE",
+      "route": "predefined",
+      "since": null,
+      "value": 275
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_REQUIRE_ONCE",
+      "route": "predefined",
+      "since": null,
+      "value": 276
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_RETURN",
+      "route": "predefined",
+      "since": null,
+      "value": 313
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_SL",
+      "route": "predefined",
+      "since": null,
+      "value": 377
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_SL_EQUAL",
+      "route": "predefined",
+      "since": null,
+      "value": 365
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_SPACESHIP",
+      "route": "predefined",
+      "since": null,
+      "value": 376
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_SR",
+      "route": "predefined",
+      "since": null,
+      "value": 378
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_SR_EQUAL",
+      "route": "predefined",
+      "since": null,
+      "value": 366
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_START_HEREDOC",
+      "route": "predefined",
+      "since": null,
+      "value": 398
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_STATIC",
+      "route": "predefined",
+      "since": null,
+      "value": 321
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_STRING",
+      "route": "predefined",
+      "since": null,
+      "value": 262
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_STRING_CAST",
+      "route": "predefined",
+      "since": null,
+      "value": 383
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_STRING_VARNAME",
+      "route": "predefined",
+      "since": null,
+      "value": 270
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_SWITCH",
+      "route": "predefined",
+      "since": null,
+      "value": 302
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_THROW",
+      "route": "predefined",
+      "since": null,
+      "value": 317
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_TRAIT",
+      "route": "predefined",
+      "since": null,
+      "value": 337
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_TRAIT_C",
+      "route": "predefined",
+      "since": null,
+      "value": 350
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_TRY",
+      "route": "predefined",
+      "since": null,
+      "value": 314
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_UNSET",
+      "route": "predefined",
+      "since": null,
+      "value": 332
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_UNSET_CAST",
+      "route": "predefined",
+      "since": null,
+      "value": 387
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_USE",
+      "route": "predefined",
+      "since": null,
+      "value": 318
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_VAR",
+      "route": "predefined",
+      "since": null,
+      "value": 331
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_VARIABLE",
+      "route": "predefined",
+      "since": null,
+      "value": 266
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_VOID_CAST",
+      "route": "predefined",
+      "since": null,
+      "value": 388
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_WHILE",
+      "route": "predefined",
+      "since": null,
+      "value": 293
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_WHITESPACE",
+      "route": "predefined",
+      "since": null,
+      "value": 397
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_XOR_EQUAL",
+      "route": "predefined",
+      "since": null,
+      "value": 364
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_YIELD",
+      "route": "predefined",
+      "since": null,
+      "value": 281
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tokenizer",
+      "name": "T_YIELD_FROM",
+      "route": "predefined",
+      "since": null,
+      "value": 282
     },
     {
       "aot": {

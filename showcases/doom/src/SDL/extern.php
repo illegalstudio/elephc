@@ -5,12 +5,14 @@ extern "SDL2" {
     function SDL_Quit(): void;
     function SDL_CreateWindow(string $title, i32 $x, i32 $y, i32 $w, i32 $h, u32 $flags): ptr;
     function SDL_DestroyWindow(ptr $window): void;
+    function SDL_SetWindowTitle(ptr $window, string $title): void;
     function SDL_CreateRenderer(ptr $window, i32 $index, u32 $flags): ptr;
     function SDL_DestroyRenderer(ptr $renderer): void;
-    function SDL_SetRenderDrawColor(ptr $renderer, u8 $r, u8 $g, u8 $b, u8 $a): i32;
-    function SDL_RenderClear(ptr $renderer): i32;
-    function SDL_RenderDrawLine(ptr $renderer, i32 $x1, i32 $y1, i32 $x2, i32 $y2): i32;
-    function SDL_RenderDrawPoint(ptr $renderer, i32 $x, i32 $y): i32;
+    function SDL_RenderSetVSync(ptr $renderer, i32 $vsync): i32;
+    function SDL_CreateTexture(ptr $renderer, u32 $format, i32 $access, i32 $w, i32 $h): ptr;
+    function SDL_DestroyTexture(ptr $texture): void;
+    function SDL_UpdateTexture(ptr $texture, ptr $rect, ptr $pixels, i32 $pitch): i32;
+    function SDL_RenderCopy(ptr $renderer, ptr $texture, ptr $src, ptr $dst): i32;
     function SDL_RenderPresent(ptr $renderer): void;
     function SDL_PumpEvents(): void;
     function SDL_GetKeyboardState(ptr $numkeys): ptr;

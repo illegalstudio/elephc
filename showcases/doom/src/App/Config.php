@@ -2,30 +2,33 @@
 
 namespace Showcases\Doom\App;
 
-class Config {
-    public $windowWidth;
-    public $windowHeight;
-    public $windowTitle;
-    public $wadPath;
-    public $startupMap;
-    public $backgroundR;
-    public $backgroundG;
-    public $backgroundB;
-    public $targetFrameMs;
-    public $bootDurationMs;
-    public $renderMode;
+final class Config {
+    public int $windowWidth;
+    public int $windowHeight;
+    public int $renderWidth;
+    public int $renderHeight;
+    public string $windowTitle;
+    public string $wadPath;
+    public string $startupMap;
+    public int $tickRate;
+    public bool $vsync;
+    public int $bootDurationMs;
+    // load and map messages on stdout
+    public bool $verbose;
 
     public function __construct() {
+        // DOOM's 320x200 frame, shown at 4:3 like on the monitors it was drawn for
         $this->windowWidth = 960;
-        $this->windowHeight = 600;
+        $this->windowHeight = 720;
+        $this->renderWidth = 320;
+        $this->renderHeight = 200;
         $this->windowTitle = "elephc DOOM showcase";
         $this->wadPath = "DOOM1.WAD";
         $this->startupMap = "E1M1";
-        $this->backgroundR = 18;
-        $this->backgroundG = 22;
-        $this->backgroundB = 30;
-        $this->targetFrameMs = 16;
+        // the game runs at DOOM's 35 tics per second whatever the frame rate
+        $this->tickRate = 35;
+        $this->vsync = true;
         $this->bootDurationMs = 0;
-        $this->renderMode = RenderMode::Split;
+        $this->verbose = true;
     }
 }

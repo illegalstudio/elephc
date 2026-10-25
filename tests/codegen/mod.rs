@@ -88,6 +88,7 @@ mod pdo_pgsql;
 mod image;
 mod pcntl;
 mod xml;
+mod tokenizer;
 mod arrays;
 mod calendar;
 mod call_counters;

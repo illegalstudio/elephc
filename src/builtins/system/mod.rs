@@ -26,6 +26,7 @@
 //! - Add `pub mod <name>;` here for every new system builtin home.
 
 pub mod __elephc_class_has_constructor;
+pub mod __elephc_class_is_abstract;
 pub mod __elephc_gmmktime_raw;
 pub mod __elephc_initialize_pdo_statement;
 pub mod __elephc_invoke_pdo_statement_constructor;
@@ -46,6 +47,7 @@ pub mod __elephc_pdo_called_class_status;
 pub mod __elephc_pdo_statement_class_status;
 pub mod __elephc_strtotime_raw;
 pub mod __elephc_simplexml_warning;
+pub mod __elephc_tokenizer_error_location;
 pub mod attr_support;
 pub mod checkdate;
 pub mod class_attribute_args;

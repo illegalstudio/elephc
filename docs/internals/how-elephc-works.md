@@ -117,11 +117,20 @@ In this example, there's nothing to resolve — the AST passes through unchanged
 **File:** `src/name_resolver/`
 
 Between include resolution and name resolution, elephc injects demand-loaded PHP
-preludes for built-in surfaces that need helper declarations: PDO,
+preludes for built-in surfaces that need helper declarations, including PDO,
 timezone-introspection APIs, `DateTimeZone::listIdentifiers()` filtering, and
 `var_export()`. These passes run after includes so usage inside included files is
 detected, and before name resolution so injected declarations participate in the
 same canonical-name pipeline as user code.
+
+Before injection, `src/autoload/prelude_probe.rs` runs name resolution and
+autoloading on a disposable copy of the include-resolved program. Its PDO,
+mysqli, timezone, image, hash, curl, XML, and `var_export` detectors find uses
+that occur only in autoloaded class files. The real pipeline then injects those
+preludes before resolving names. The probe restores thread-local source IDs and
+anonymous-class numbering while keeping process-global synthetic spans and
+include temporaries monotonic. This work has the `autoload-prelude-probe`
+timing label; it does not replace the later real autoload expansion.
 
 After includes are flattened, elephc resolves namespace-aware names. This pass applies the current `namespace`, any `use` / `use function` / `use const` imports, and rewrites references to their canonical fully-qualified names before semantic analysis.
 

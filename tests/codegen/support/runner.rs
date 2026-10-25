@@ -77,6 +77,11 @@ struct TestBridgeStaticlib {
 /// Lists bridge staticlibs that codegen fixtures may link through `extra_link_libs`.
 const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
     TestBridgeStaticlib {
+        lib_name: "elephc_tokenizer",
+        package: "elephc-tokenizer",
+        php_extensions: &["tokenizer"],
+    },
+    TestBridgeStaticlib {
         lib_name: "elephc_tls",
         package: "elephc-tls",
         php_extensions: &["openssl"],
@@ -386,6 +391,7 @@ mod bridge_extension_tests {
     #[test]
     fn bridge_extension_metadata_matches_distinct_and_shared_surfaces() {
         let linked = vec![
+            "elephc_tokenizer".to_string(),
             "elephc_pdo".to_string(),
             "elephc_iconv".to_string(),
             "elephc_pcntl".to_string(),
@@ -393,7 +399,7 @@ mod bridge_extension_tests {
         ];
         assert_eq!(
             test_linked_extensions(&linked),
-            ["iconv", "pcntl", "posix", "curl"]
+            ["tokenizer", "iconv", "pcntl", "posix", "curl"]
         );
     }
 }

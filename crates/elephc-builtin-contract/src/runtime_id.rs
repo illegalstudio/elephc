@@ -191,6 +191,8 @@ pub enum RuntimeBuiltinId {
     MbSendMail = 86,
     /// Converts live variables and nested storage through one detected source encoding.
     MbConvertVariables = 87,
+    /// Records the scanned source line and empty filename of a tokenizer ParseError.
+    TokenizerErrorLocation = 88,
 }
 
 /// Status returned by `__elephc_runtime_builtin_call_v1`.
@@ -222,7 +224,7 @@ impl RuntimeBuiltinStatus {
 
 impl RuntimeBuiltinId {
     /// Every version-one runtime builtin in stable ABI order.
-    pub const ALL: [Self; 87] = [
+    pub const ALL: [Self; 88] = [
         Self::Boolval,
         Self::Floatval,
         Self::Intval,
@@ -310,6 +312,7 @@ impl RuntimeBuiltinId {
         Self::MbEregReplaceCallback,
         Self::MbSendMail,
         Self::MbConvertVariables,
+        Self::TokenizerErrorLocation,
     ];
 
     /// Every operation currently implemented by the optional mbstring engine.
@@ -482,6 +485,7 @@ impl RuntimeBuiltinId {
             Self::MbEregi => "mb_eregi",
             Self::MbParseStr => "mb_parse_str",
             Self::SharedIni => "__elephc_shared_ini",
+            Self::TokenizerErrorLocation => "__elephc_tokenizer_error_location",
             Self::MbOutputHandler => "mb_output_handler",
             Self::MbEregReplaceCallback => "mb_ereg_replace_callback",
             Self::MbSendMail => "mb_send_mail",
@@ -586,6 +590,7 @@ impl RuntimeBuiltinId {
             85 => Some(Self::MbEregReplaceCallback),
             86 => Some(Self::MbSendMail),
             87 => Some(Self::MbConvertVariables),
+            88 => Some(Self::TokenizerErrorLocation),
             _ => None,
         }
     }
@@ -636,6 +641,7 @@ impl RuntimeBuiltinId {
             Self::MbRegexEncoding | Self::MbRegexSetOptions => arg_count <= 1,
             Self::MbParseStr => arg_count == 2,
             Self::SharedIni => arg_count == 4,
+            Self::TokenizerErrorLocation => arg_count == 2,
             Self::MbOutputHandler => arg_count == 2,
             Self::MbEregMatch | Self::MbEreg | Self::MbEregi | Self::MbSplit => arg_count == 2 || arg_count == 3,
             Self::MbEregReplace | Self::MbEregiReplace | Self::MbEregReplaceCallback => arg_count == 3 || arg_count == 4,
@@ -683,7 +689,8 @@ mod tests {
             assert_eq!(id, expected);
             assert_eq!(id.as_u32(), raw);
             assert!(id.supports_arity(match id {
-                RuntimeBuiltinId::MbConvertCase
+                RuntimeBuiltinId::TokenizerErrorLocation
+                | RuntimeBuiltinId::MbConvertCase
                 | RuntimeBuiltinId::Fdiv
                 | RuntimeBuiltinId::Fmod
                 | RuntimeBuiltinId::Pow

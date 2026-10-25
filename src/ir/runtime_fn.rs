@@ -801,6 +801,8 @@ pub enum RuntimeFnId {
     IsNan,
     IsNumeric,
     Settype,
+    /// Stamps the source-buffer location on a tokenizer ParseError.
+    TokenizerErrorLocation,
 }
 
 impl RuntimeFnId {
@@ -1155,6 +1157,9 @@ impl RuntimeFnId {
             );
         }
         match self {
+            RuntimeFnId::TokenizerErrorLocation => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::WRITES_HEAP.bits(),
+            ),
             // Clone hooks and property hooks can execute arbitrary user code. I/O effects are
             // attributed to the nested operation that performs them.
             RuntimeFnId::CloneWith => crate::ir::Effects::from_bits_retain(
@@ -2301,6 +2306,7 @@ impl RuntimeFnId {
         if matches!(
             self,
             RuntimeFnId::IntvalBase
+                | RuntimeFnId::TokenizerErrorLocation
                 // Both array mutators answer the resulting element count. The returned
                 // machine integer cannot keep any variadic value operand alive.
                 | RuntimeFnId::ArrayPush
@@ -3232,6 +3238,7 @@ impl RuntimeFnId {
             RuntimeFnId::MbOutputHandler => "mb_output_handler",
             RuntimeFnId::MbGetInfo => "mb_get_info",
             RuntimeFnId::SharedIni => "__elephc_shared_ini",
+            RuntimeFnId::TokenizerErrorLocation => "__elephc_tokenizer_error_location",
             RuntimeFnId::MbParseStr => "mb_parse_str",
             RuntimeFnId::MbSendMail => "mb_send_mail",
             RuntimeFnId::MbHttpInput => "mb_http_input",

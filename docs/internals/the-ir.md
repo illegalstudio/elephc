@@ -1079,7 +1079,7 @@ Builtin calls use the checker's result recorded for their call span.
 | Op | Operands | Result | Effects |
 |---|---|---|---|
 | `Call(function_id, args)` | normalized args | return type | callee effect summary |
-| `FunctionVariantCall(group, args)` | normalized args | return type | union of variant effects |
+| `FunctionVariantCall(group, args)` (reserved) | normalized args | return type | retained in the IR vocabulary and analyses; current lowering uses `Call` to the public include-variant dispatcher, and codegen has no lowering arm for this op |
 | `LanguageConstructCall(name, args)` | normalized args | construct-specific return | compiler-resident construct effect summary |
 | `RuntimeCall(target, args)` | normalized typed operands | target-declared return | descriptor/typed-target effect summary |
 | `ExternCall(name, args)` | C ABI args | extern return | conservative FFI effects |
@@ -1926,9 +1926,12 @@ storage types, so spread/named-boxed-`mixed` and `int`↔`float` sites stay ordi
 calls), and any `string` argument must come from a non-scratch source
 (`const_str`/`load_local`), because the spliced body runs the callee's
 statement-boundary concat-buffer reset in the host frame and would otherwise free an
-in-flight scratch string argument. Call-site name resolution (`call` Data immediates
-and `function_variant_call` include-variant refs) uses snapshots taken before
-mutation, so the rewrite loop never aliases the module while holding a function.
+in-flight scratch string argument. Call-site name resolution uses snapshots taken
+before mutation, so the rewrite loop never aliases the module while holding a
+function. Current lowering emits `call` with a Data immediate, including calls
+to public include-variant dispatchers. The inliner's resolver also retains support
+for reserved `function_variant_call` references; that opcode is not emitted by
+the current AST-to-EIR path.
 
 Small instance methods also participate through `src/ir_passes/inline/methods.rs`.
 Its `MethodTargets` snapshot resolves a `method_call` only for a plain non-nullable

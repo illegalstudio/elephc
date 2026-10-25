@@ -434,28 +434,28 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `prev()` | `prev(&$arr): mixed` | Rewind the internal pointer one position and return the new element, or `false` |
 | `reset()` | `reset(&$arr): mixed` | Move the internal pointer to the first element and return it, or `false` for an empty array |
 | `end()` | `end(&$arr): mixed` | Move the internal pointer to the last element and return it, or `false` for an empty array |
-| `sort()` | `sort($arr): void` | Sort ascending (in-place) |
-| `rsort()` | `rsort($arr): void` | Sort descending |
-| `asort()` | `asort($arr): void` | Sort by value, maintain keys |
-| `arsort()` | `arsort($arr): void` | Sort by value desc, maintain keys |
+| `sort()` | `sort($arr): bool` | Sort ascending (in-place) |
+| `rsort()` | `rsort($arr): bool` | Sort descending |
+| `asort()` | `asort($arr): bool` | Sort by value, maintain keys |
+| `arsort()` | `arsort($arr): bool` | Sort by value desc, maintain keys |
 | `ksort()` | `ksort($arr, $flags = SORT_REGULAR): bool` | Sort by key ascending, comparing keys under `$flags`. On an indexed array this is a no-op, because its keys are already the ascending slot positions `0..n-1` |
 | `krsort()` | `krsort($arr, $flags = SORT_REGULAR): bool` | Sort by key descending, comparing keys under `$flags`. A non-empty indexed array is promoted to associative storage so its numeric keys can appear in descending iteration order |
-| `natsort()` | `natsort($arr): void` | Natural order sort |
-| `natcasesort()` | `natcasesort($arr): void` | Case-insensitive natural sort |
-| `shuffle()` | `shuffle($arr): void` | Randomly shuffle (in-place) |
+| `natsort()` | `natsort($arr): bool` | Natural order sort |
+| `natcasesort()` | `natcasesort($arr): bool` | Case-insensitive natural sort |
+| `shuffle()` | `shuffle($arr): bool` | Randomly shuffle (in-place) |
 | `array_multisort()` | `array_multisort($arr1, $arr2): bool` | Sort equal-length indexed arrays in place by ascending row order: compare `$arr1`, then `$arr2` for ties. AOT accepts two concrete integer arrays or two boxed scalar arrays (for example through declared `array` parameters), not one of each. Concrete string/float arrays, associative arrays, sort flags, and more than two arrays are unsupported. |
 | `array_rand()` | `array_rand($arr): int` | Pick one random key |
 | `array_map()` | `array_map($callback, $arr): array` | Apply callback to each element |
 | `array_filter()` | `array_filter($arr, $callback = null, $mode = 0): array` | Preserve keys and values accepted by the callback; omitted/null callbacks remove empty values |
 | `array_reduce()` | `array_reduce($arr, $callback, $init): int` | Reduce to single value |
-| `array_walk()` | `array_walk($arr, $callback): void` | Call a callback on each element. Boxed PHP arrays support writable value references and keys, subject to the reference-escape restrictions below. |
-| `array_walk_recursive()` | `array_walk_recursive($arr, $callback): void` | Apply a callback to non-array leaves. The concrete-array path requires homogeneous scalar leaves and passes values without keys. The boxed PHP-array path supports writable leaf references and keys, subject to the restrictions below. |
+| `array_walk()` | `array_walk($arr, $callback): bool` | Call a callback on each element. Boxed PHP arrays support writable value references and keys, subject to the reference-escape restrictions below. |
+| `array_walk_recursive()` | `array_walk_recursive($arr, $callback): bool` | Apply a callback to non-array leaves. The concrete-array path requires homogeneous scalar leaves and passes values without keys. The boxed PHP-array path supports writable leaf references and keys, subject to the restrictions below. |
 | `array_find()` | `array_find($arr, $callback): mixed` | (PHP 8.4) Returns the first element for which `$callback($value)` is truthy, or `null` if none match. |
 | `array_any()` | `array_any($arr, $callback): bool` | (PHP 8.4) `true` if `$callback($value)` is truthy for at least one element. |
 | `array_all()` | `array_all($arr, $callback): bool` | (PHP 8.4) `true` if `$callback($value)` is truthy for every element. |
-| `usort()` | `usort($arr, $callback): void` | Sort with user comparison |
-| `uksort()` | `uksort($arr, $callback): void` | Sort by key with user comparison |
-| `uasort()` | `uasort($arr, $callback): void` | Sort with user comparison, maintain keys |
+| `usort()` | `usort($arr, $callback): bool` | Sort with user comparison |
+| `uksort()` | `uksort($arr, $callback): bool` | Sort by key with user comparison |
+| `uasort()` | `uasort($arr, $callback): bool` | Sort with user comparison, maintain keys |
 | `call_user_func()` | `call_user_func($callback, ...): mixed` | Call a callback value |
 | `call_user_func_array()` | `call_user_func_array($callback, $args): mixed` | Call with args from array |
 | `function_exists()` | `function_exists(string $name): bool` | Check if a global or fully-qualified function name is defined. A literal name const-folds; any other string expression is matched case-insensitively at run time against the functions this binary declares |
@@ -488,6 +488,23 @@ rejected. The borrowed element reference must not escape the callback through a
 closure capture or a property reference: those operations throw a catchable
 `Error`. Ordinary compiler-managed references are unaffected. These restrictions
 are specific to the boxed walk path and are not a claim of full PHP parity.
+
+The sorting, shuffle, and array-walk functions above return `true` on successful
+completion; their results can be used as boolean expressions.
+
+### Mixed-valued associative arrays
+
+`array_reverse()`, `array_shift()`, `array_unshift()`, and `rsort()` also support
+associative arrays whose values use boxed `mixed` storage. Reverse honors
+`$preserve_keys`; shift and unshift renumber numeric keys while preserving string
+keys. `rsort()` sorts supported scalar values in descending order and renumbers
+the keys. Mutations preserve copy-on-write snapshots and retain removed values
+before releasing their entries.
+
+Calling `array_unshift($arr)` without values also renumbers numeric keys and
+resets the next append index, including for typed associative arrays. See
+[`examples/mixed_hash_array_builtins/main.php`](../../examples/mixed_hash_array_builtins/main.php)
+for a mixed-key example.
 
 ### Sorting runtime-typed indexed arrays
 

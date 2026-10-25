@@ -2,7 +2,7 @@
 title: "session_regenerate_id()"
 description: "Replaces the session id, optionally deleting the old session's data."
 sidebar:
-  order: 999
+  order: 1001
 ---
 
 ## session_regenerate_id()

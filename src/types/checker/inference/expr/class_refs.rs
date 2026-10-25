@@ -34,6 +34,11 @@ impl Checker {
         class_names.sort();
 
         for class_name in class_names {
+            // Abstract receivers fail at runtime. Their concrete descendants still need
+            // constructor validation, but an abstract candidate is never instantiated here.
+            if self.classes.get(&class_name).is_some_and(|class| class.is_abstract) {
+                continue;
+            }
             let constructor = self
                 .classes
                 .get(&class_name)

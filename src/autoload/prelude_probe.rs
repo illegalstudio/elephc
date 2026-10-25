@@ -6,7 +6,7 @@
 //! - `crate::pipeline::compile()`, right before the prelude injections.
 //!
 //! Key details:
-//! - Each prelude (PDO, mysqli, tz, image, hash, curl, xml, var_export) is injected only when
+//! - Each prelude (PDO, mysqli, tz, image, hash, tokenizer, curl, xml, var_export) is injected only when
 //!   the program uses its surface, and that decision has to be taken before name resolution so a
 //!   namespaced caller resolves to the injected declarations. The Composer/SPL autoload pass runs
 //!   AFTER name resolution, so a class file it loads that uses `PDO` or `CurlHandle` was never
@@ -39,6 +39,7 @@ const PROBED_GROUPS: &[(&str, fn(&[Stmt]) -> bool)] = &[
     ("tz", crate::tz_prelude::program_uses_surface),
     ("image", crate::image_prelude::program_uses_surface),
     ("hash", crate::hash_prelude::program_uses_surface),
+    ("tokenizer", crate::tokenizer_prelude::program_uses_surface),
     ("curl", crate::curl_prelude::program_uses_surface),
     ("xml", crate::xml_prelude::program_uses_surface),
     ("var_export", crate::var_export_prelude::program_uses_surface),
