@@ -503,7 +503,6 @@ pub(crate) fn lower_and_validate_ir_for_codegen_fixture(
         elephc::ir_passes::optimize_module(&mut module);
     }
     elephc::ir::validate_module(&module).expect("EIR validation failed for codegen fixture");
-    super::function_dump::dump_fixture_ir(&module);
     module
 }
 

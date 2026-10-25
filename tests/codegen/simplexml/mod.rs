@@ -578,7 +578,7 @@ echo count($xml->item), ':', (string)$xml->item[2], "\n";
 #[test]
 fn test_simplexml_dynamic_property_receiver_evaluation_order() {
     if skip_without_xml_native("test_simplexml_dynamic_property_receiver_evaluation_order") { return; }
-    let out = with_function_dump(&["main", "alterxmlreceiver", "__elephc_property_get"], || compile_and_run(r###"<?php
+    let out = compile_and_run(r###"<?php
 $receiver = new SimpleXMLElement('<r><a>old</a></r>');
 function alterXmlReceiver(): string {
     global $receiver;
@@ -586,7 +586,7 @@ function alterXmlReceiver(): string {
     return 'a';
 }
 echo (string)$receiver->{alterXmlReceiver()}, ':', (string)$receiver->a;
-"###));
+"###);
     assert_eq!(out, "new:new");
 }
 
