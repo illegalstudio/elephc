@@ -35,6 +35,7 @@ mod property_default_errors;
 mod reflection;
 mod stmt;
 mod throwable_constructors;
+mod validation_context;
 mod core_methods;
 
 #[cfg(test)]
@@ -92,6 +93,8 @@ pub fn lower_program_with_source_path_and_web(
 #[derive(Debug)]
 pub enum LoweringError {
     Validation(ValidationError),
+    /// Retains the failing function and value metadata for remote validation failures.
+    ValidationInFunction { function: String, error: ValidationError, detail: String },
     /// A PHP shape this lowering deliberately refuses, reported as a source diagnostic.
     ///
     /// Lowering refuses instead of emitting code whenever the selected path cannot honor an
@@ -105,6 +108,9 @@ impl fmt::Display for LoweringError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             LoweringError::Validation(err) => write!(f, "EIR validation failed: {:?}", err),
+            LoweringError::ValidationInFunction { function, error, detail } => {
+                write!(f, "EIR validation failed in {function}: {error:?}{detail}")
+            }
             LoweringError::Unsupported(err) => write!(
                 f,
                 "unsupported EIR lowering at {}:{}: {}",

@@ -178,6 +178,6 @@ fn lower_on_compiler_stack(
     if let Some(error) = super::diagnostics::take_first() {
         return Err(LoweringError::Unsupported(error));
     }
-    validate_module(&module)?;
+    validate_module(&module).map_err(|error| super::validation_context::describe(&module, error))?;
     Ok(module)
 }
