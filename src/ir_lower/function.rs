@@ -189,8 +189,12 @@ pub(crate) fn lower_user_function(
     let web = module.web;
     let fallback = signature_from_ast(params, return_type);
     let signature = check_result.functions.get(name).unwrap_or(&fallback);
-    let eir_signature =
+    let mut eir_signature =
         eir_signature_with_php_param_contracts(name, signature, &check_result.callable_param_sigs);
+    // The body builds a `[null]` it returns with boxed slots, as every caller reads it
+    // (`caller_visible_return_type`).
+    eir_signature.return_type =
+        crate::types::dynamic_params::null_only_container_return_storage(&eir_signature.return_type);
     // A generator's compiled body is a coroutine that returns the value passed
     // to `return` (Mixed, read back via `Generator::getReturn()`), not the
     // `Generator` object itself. The public signature stays `Generator` for
@@ -2356,15 +2360,20 @@ fn direct_closure_return_expr_type(
         // recognize. `$f = function ($v) { return tag($v); }` therefore returned a declared
         // `: string` through an int slot and printed 0, with no diagnostic (issue #1028). The
         // checker gets this right; only this re-derivation did not.
-        // Through `eir_user_function_return_type`, NOT the raw signature type, because that is
-        // what ordinary call lowering hands back and the two have to agree. A callee with an
-        // untyped by-value parameter receives it as a boxed Mixed, so a container it builds out
-        // of that parameter has Mixed elements whatever the signature's inferred element type
-        // says. Copying the raw type here stamped `array<string>` on a call that really produces
-        // `array<mixed>`, and the caller then read the boxed element with the wrong layout: the
-        // element came back as its own pointer printed as an integer. Raised in review.
+        // Through the caller rule, NOT the raw signature type, because that is what ordinary
+        // call lowering hands back and the two have to agree. A callee with an untyped by-value
+        // parameter receives it as a boxed Mixed, so a container it builds out of that parameter
+        // has Mixed elements whatever the signature's inferred element type says. Copying the
+        // raw type here stamped `array<string>` on a call that really produces `array<mixed>`,
+        // and the caller then read the boxed element with the wrong layout: the element came
+        // back as its own pointer printed as an integer. Raised in review.
+        // The rule is read before the boxed storage of a callee returning only `null`s
+        // (`caller_visible_checker_return_type`), so such a closure keeps `array<void>`, as on
+        // main: its `StaticCallableBinding` signature is all a `?:` or `??` merge of `$f()` can
+        // read, and beside a pointer array that arm must join into `?ptr<T>` (task 1539dae5
+        // tracks closures and methods).
         if let Some(sig) = ctx.functions.get(name.as_str()) {
-            return crate::ir_lower::expr::eir_user_function_return_type(sig);
+            return crate::types::dynamic_params::caller_visible_checker_return_type(sig);
         }
     }
     // The other call shapes fell to the same syntactic fallback, whose answer for a call it does

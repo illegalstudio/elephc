@@ -84,8 +84,49 @@ fn merge_arm_type(ctx: &LoweringContext<'_, '_>, arm: &Expr) -> PhpType {
         ExprKind::ArrayLiteralAssoc(pairs) => {
             super::assoc_array_literals::assoc_array_literal_type_for_ir(ctx, pairs, arm)
         }
-        _ => materialized_expr_type_for_merge(ctx, arm),
+        _ => null_only_call_merge_type(ctx, arm)
+            .unwrap_or_else(|| materialized_expr_type_for_merge(ctx, arm)),
     }
+}
+
+/// Returns the checker's `array<void>` (or `array<K, void>`) for a call to a user function whose
+/// inferred return holds only `null`s, and `None` for any other expression.
+///
+/// The call hands back boxed `mixed` slots (`caller_visible_return_type`), but a merge types it
+/// the way it types a `[null]` local: beside a pointer array the `null` element joins into
+/// `?ptr<T>`, so `$ps ?: f()`, `$m ?? f()` and `$ps ?: (f() ?? [])` keep pointer storage and the
+/// call result is converted into it. A merge whose arms are all such calls keeps `array<void>`, as
+/// on main. The call may be suppressed, assigned, or made through a local statically bound to
+/// the function (`$f = f(...); $f()`), as `materialized_expr_type_for_merge` reads those shapes.
+pub(super) fn null_only_call_merge_type(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> Option<PhpType> {
+    let mut call = expr;
+    loop {
+        match &call.kind {
+            ExprKind::ErrorSuppress(inner) => call = inner,
+            ExprKind::Assignment { value, result_target, prelude, .. } => {
+                call = assignment_result_expr(value, result_target.as_deref(), prelude);
+            }
+            _ => break,
+        }
+    }
+    let canonical = match &call.kind {
+        ExprKind::FunctionCall { name, .. } => {
+            let canonical = name.as_str().to_string();
+            if source_prefers_extension_builtin(&canonical) {
+                return None;
+            }
+            canonical
+        }
+        ExprKind::ClosureCall { var, .. } => match ctx.static_callable_local(var) {
+            Some(StaticCallableBinding::UserFunction(name)) => name,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let signature = ctx.functions.get(canonical.as_str())?;
+    let checker = crate::types::dynamic_params::caller_visible_checker_return_type(signature);
+    (crate::types::dynamic_params::null_only_container_return_storage(&checker) != checker)
+        .then_some(checker)
 }
 
 /// Returns the `buffer<T>` type every arm that completes shares, if they all hold the same one.
@@ -444,7 +485,8 @@ pub(super) fn assignment_result_expr<'e>(
 fn null_coalesce_value_type_for_merge(ctx: &LoweringContext<'_, '_>, value: &Expr) -> PhpType {
     match &value.kind {
         ExprKind::Variable(name) => normalize_value_php_type(ctx.local_type(name)),
-        _ => materialized_expr_type_for_merge(ctx, value),
+        _ => null_only_call_merge_type(ctx, value)
+            .unwrap_or_else(|| materialized_expr_type_for_merge(ctx, value)),
     }
 }
 
@@ -639,9 +681,11 @@ pub(in crate::ir_lower) fn coerce_container_to_mixed_payload(
             }
             return unboxed;
         }
-        // An indexed array of boxed cells (`function boxed() { $a = [null]; return $a; }` is
-        // `array<void>` at the call site) merged into a pointer-array temporary would hand those
-        // cells to pointer-word readers, whichever way the merging arm was lowered.
+        // An indexed array whose static element is not a pointer can still hold boxed cells: a
+        // `[null]` local, or the `array<mixed>` result of `function boxed() { return [null]; }`,
+        // which `null_only_call_merge_type` lets `?:` and `??` merge as a null-only arm. Stored
+        // in a pointer-array temporary unconverted, those cells would reach pointer-word readers,
+        // whichever way the merging arm was lowered.
         return super::indexed_array_literals::convert_array_to_pointer_storage(
             ctx, value, target_ty, span,
         );

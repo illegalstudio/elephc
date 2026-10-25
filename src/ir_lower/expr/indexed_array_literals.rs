@@ -191,8 +191,9 @@ pub(crate) fn lower_expr_for_destination(
 /// Converts an indexed array bound to a pointer-array destination into pointer storage.
 ///
 /// A literal of only `null`s held in a local (`$a = [null]`), also when a function without a
-/// return type returns that local (`function boxed() { $a = [null]; return $a; }`, typed
-/// `array<void>` at the call site), is an array of boxed Mixed cells, which a pointer-array reader would take for addresses. Whether the slots are boxed
+/// return type returns that local or the literal itself (`function boxed() { $a = [null];
+/// return $a; }`, an `array<mixed>` at the call site), is an array of boxed Mixed cells, which a
+/// pointer-array reader would take for addresses. Whether the slots are boxed
 /// is a runtime property of the array's header, not of its static element type, so every source
 /// whose element is not already a pointer goes through `Op::ArrayToPointerWords`: it rewrites a
 /// boxed null as the null pointer word and a boxed integer as its address, and passes arrays that

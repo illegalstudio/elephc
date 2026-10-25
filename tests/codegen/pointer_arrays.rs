@@ -883,8 +883,8 @@ echo $r;
     assert_eq!(summary(&called.stderr), summary(&baseline.stderr), "{}", called.stderr);
 }
 
-/// Verifies a `[null]` local returned by functions without a return type (typed `array<void>` at
-/// the call site but built with boxed cells) is converted when it reaches a pointer-array destination: both ternary
+/// Verifies a `[null]` local returned by functions without a return type (an `array<mixed>` of
+/// boxed cells at the call site) is converted when it reaches a pointer-array destination: both ternary
 /// orders, a `match`, a plain return and a call argument all read the element as null in
 /// `foreach` and `isset()`, and the conversion keeps the heap-debug leak summary unchanged.
 #[test]
@@ -957,10 +957,10 @@ function walk(): string {
     assert_eq!(summary(&called.stderr), summary(&baseline.stderr), "{}", called.stderr);
 }
 
-/// Verifies an untyped `[null]` local returned from a call and merged with a pointer-array arm is converted when it
-/// lands in the merge temporary: a `match`, a ternary assignment without a destination and a
-/// short ternary all read the boxed arm's element as null in `foreach` and `isset()`, the live
-/// arm keeps its pointer, and the conversion keeps the heap-debug leak summary unchanged. The
+/// Verifies an untyped `[null]` local returned from a call and merged with a pointer-array arm
+/// still reads as null: a `match`, a ternary assignment without a destination and a short
+/// ternary all read the boxed arm's element as null in `foreach` and `isset()`, the live arm keeps
+/// its pointer, and the heap-debug leak summary is unchanged. The
 /// `match` arm is a literal: a parameter arm beside a call arm leaks on `main` as well.
 #[test]
 fn test_pointer_array_merges_convert_untyped_null_array_arms() {
@@ -1001,6 +1001,57 @@ $ps = [$w[0]];
     assert_eq!(called.stdout, "NLNuLsN\n", "{}", called.stderr);
     assert!(summary(&baseline.stderr).is_some(), "{}", baseline.stderr);
     assert_eq!(summary(&called.stderr), summary(&baseline.stderr), "{}", called.stderr);
+}
+
+/// Verifies `?:` and `??` keep pointer storage when the other side is an untyped call returning
+/// only `null`s: the call result is an `array<mixed>` of boxed cells, but the merge types it the
+/// way it types a `[null]` local, so the live arm still reaches its record through `$p->x` and the
+/// boxed null is converted into a null pointer word. Also covers an `@` call arm, a call through
+/// a first-class callable local and through a closure returning the call, an assignment arm,
+/// nested all-null `?:` and `??` arms, and the `(array)` literal element predictor of the `??`.
+#[test]
+fn test_pointer_array_short_ternary_and_coalesce_with_null_only_calls_keep_records() {
+    let out = compile_and_run(
+        r#"<?php
+packed class Vec2 { public int $x; public int $y; }
+function boxed() { $a = [null]; return $a; }
+function nulls() { return [null]; }
+function short(array<ptr<Vec2>|null> $ps): string {
+    $r = $ps ?: boxed();
+    $t = $ps ?: nulls();
+    $u = $ps ?: @nulls();
+    $f = boxed(...);
+    $v = $ps ?: $f();
+    $g = fn() => boxed();
+    $k = $ps ?: $g();
+    $z = $ps ?: ($q = boxed());
+    $n = $ps ?: (boxed() ?: boxed());
+    $o = $ps ?: (boxed() ?? []);
+    $s = "";
+    foreach ($r as $p) { $s .= $p === null ? "N" : (string) $p->x; }
+    foreach ($t as $p) { $s .= $p === null ? "N" : (string) $p->x; }
+    foreach ($u as $p) { $s .= $p === null ? "N" : (string) $p->x; }
+    foreach ($v as $p) { $s .= $p === null ? "N" : (string) $p->x; }
+    foreach ($k as $p) { $s .= $p === null ? "N" : (string) $p->x; }
+    foreach ($z as $p) { $s .= $p === null ? "N" : (string) $p->x; }
+    foreach ($n as $p) { $s .= $p === null ? "N" : (string) $p->x; }
+    foreach ($o as $p) { $s .= $p === null ? "N" : (string) $p->x; }
+    return $s;
+}
+function coalesce(?array<ptr<Vec2>|null> $m): string {
+    $r = $m ?? boxed();
+    $c = [(array) ($m ?? boxed())];
+    $s = "";
+    foreach ($r as $p) { $s .= $p === null ? "N" : (string) $p->x; }
+    foreach ($c[0] as $p) { $s .= $p === null ? "N" : (string) $p->x; }
+    return $s;
+}
+$w = buffer_new<Vec2>(1);
+$w[0]->x = 7;
+echo short([$w[0]]), "|", short([]), "|", coalesce([$w[0]]), "|", coalesce(null), "\n";
+"#,
+    );
+    assert_eq!(out, "77777777|NNNNNNNN|77|NN\n");
 }
 
 /// Verifies a local read from an element of an array or a hash of pointers binds to a `?ptr<T>`

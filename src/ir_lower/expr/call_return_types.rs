@@ -29,8 +29,9 @@ pub(in crate::ir_lower) fn call_return_type(
 
 /// Returns the caller-visible EIR return type for a user function signature.
 ///
-/// Delegates to `crate::types::dynamic_params::caller_visible_return_type`, the rule the checker
-/// also applies to a closure that returns a user call, so both sides agree on the element type.
+/// Delegates to `crate::types::dynamic_params::caller_visible_return_type`. The checker and the
+/// stamp of a closure that returns a user call share its view before the boxed storage of an
+/// all-null return (`caller_visible_checker_return_type`), so they agree on the element type.
 pub(in crate::ir_lower) fn eir_user_function_return_type(signature: &FunctionSig) -> PhpType {
     crate::types::dynamic_params::caller_visible_return_type(signature)
 }

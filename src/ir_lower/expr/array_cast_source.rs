@@ -280,8 +280,15 @@ fn null_coalesce_source_type(
     value: &Expr,
     default: &Expr,
 ) -> PhpType {
-    let value_ty = strip_void_from_union(array_cast_source_type_for_ir(ctx, value)).codegen_repr();
-    let default_ty = array_cast_source_type_for_ir(ctx, default).codegen_repr();
+    // An all-null user call on either side is typed as the merge types it (`null_only_call_merge_type`).
+    let value_ty = strip_void_from_union(
+        super::merge_temps::null_only_call_merge_type(ctx, value)
+            .unwrap_or_else(|| array_cast_source_type_for_ir(ctx, value)),
+    )
+    .codegen_repr();
+    let default_ty = super::merge_temps::null_only_call_merge_type(ctx, default)
+        .unwrap_or_else(|| array_cast_source_type_for_ir(ctx, default))
+        .codegen_repr();
     // Must agree with `null_coalesce_result_type`, which boxes an int/bool pair.
     materialized_merge_type(&value_ty, &default_ty)
 }

@@ -277,7 +277,7 @@ impl Checker {
     /// Applies the caller-visible container rule to a closure whose body is `return <user call>;`.
     ///
     /// EIR lowering stamps exactly that body shape with the callee's
-    /// `crate::types::dynamic_params::caller_visible_return_type` (see
+    /// `crate::types::dynamic_params::caller_visible_checker_return_type` (see
     /// `crate::ir_lower::function::direct_closure_return_expr_type`), built from the two
     /// predicates applied here: a callee with an untyped by-value parameter receives it as a
     /// boxed Mixed cell, so an array it builds from it holds Mixed elements. The checker

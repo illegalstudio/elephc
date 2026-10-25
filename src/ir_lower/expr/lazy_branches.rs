@@ -16,7 +16,8 @@ pub(super) fn lower_null_coalesce(
     default: &Expr,
     expr: &Expr,
 ) -> LoweredValue {
-    let value = lower_null_coalesce_value(ctx, value);
+    let value_expr = value;
+    let value = lower_null_coalesce_value(ctx, value_expr);
     let is_null = ctx.emit_value(
         Op::IsNull,
         vec![value.value],
@@ -25,7 +26,20 @@ pub(super) fn lower_null_coalesce(
         Op::IsNull.default_effects(),
         Some(expr.span),
     );
-    let result_type = null_coalesce_result_type(ctx, value.value, default);
+    // An all-null user call on the value side merges as the checker types it, as `?:` does
+    // (`null_only_call_merge_type`), when the lowered value is that call's `array<mixed>` storage;
+    // it is converted into the temp. A value loaded back through a slot that keeps its own type
+    // (a global alias, a static or reference-bound local) keeps that type, as on main.
+    let result_type = match super::merge_temps::null_only_call_merge_type(ctx, value_expr) {
+        Some(checker)
+            if ctx.builder.value_php_type(value.value).codegen_repr()
+                == crate::types::dynamic_params::null_only_container_return_storage(&checker)
+                && !assigns_through_kept_type_slot(ctx, value_expr) =>
+        {
+            null_coalesce_merge_type(ctx, checker, default)
+        }
+        _ => null_coalesce_result_type(ctx, value.value, default),
+    };
     let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let split_initialized = ctx.initialized_slots_snapshot();
     let default_block = ctx
@@ -65,6 +79,37 @@ pub(super) fn lower_null_coalesce(
         value_reachable,
     ));
     take_owned_temp(ctx, &temp_name, expr.span)
+}
+
+/// Returns true when the value side of `??` assigns through a local that keeps its own slot type
+/// (static or reference-bound), so the reloaded value carries that type rather than the call's.
+///
+/// Walks the chain the way `null_only_call_merge_type` does, so a non-local target whose value is
+/// bound to a prelude temp (`$d[0] = ($s = f())`) still reaches the inner slot.
+fn assigns_through_kept_type_slot(ctx: &LoweringContext<'_, '_>, mut expr: &Expr) -> bool {
+    loop {
+        match &expr.kind {
+            ExprKind::ErrorSuppress(inner) => expr = inner,
+            ExprKind::Assignment { target, value, result_target, prelude, .. } => {
+                if let ExprKind::Variable(name) = &target.kind {
+                    if ctx.is_ref_bound_local(name)
+                        || matches!(
+                            ctx.local_kinds.get(name.as_str()),
+                            Some(crate::ir::LocalKind::StaticLocal)
+                        )
+                    {
+                        return true;
+                    }
+                }
+                expr = super::merge_temps::assignment_result_expr(
+                    value,
+                    result_target.as_deref(),
+                    prelude,
+                );
+            }
+            _ => return false,
+        }
+    }
 }
 
 /// Lowers the value side of `??`, suppressing undefined-offset warnings from
@@ -139,7 +184,8 @@ pub(super) fn null_coalesce_merge_type(
     let value_ty = strip_void_from_union(raw_value_ty.clone()).codegen_repr();
     // Typed once: the pointer and buffer checks below and the ordinary merge all read it, and a
     // nested merge inside the default must not be scanned per check.
-    let declared_default_ty = materialized_expr_type_for_merge(ctx, default);
+    let declared_default_ty = super::merge_temps::null_only_call_merge_type(ctx, default)
+        .unwrap_or_else(|| materialized_expr_type_for_merge(ctx, default));
     // A pointer array beside a `[null]` (or another pointer array) default keeps pointer storage.
     if super::indexed_array_literals::literal_pointer_element_type(&value_ty).is_some() {
         if super::indexed_array_literals::is_null_only_literal(default) {
