@@ -9,6 +9,8 @@
 
 use crate::support::*;
 
+mod review_regressions;
+
 /// Verifies SimpleXML parsing and properties against PHP's observable output.
 #[test]
 fn test_simplexml_parsing_and_properties() {

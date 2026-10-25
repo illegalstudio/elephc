@@ -45,6 +45,7 @@ pub mod __elephc_opcache_rt_swap;
 pub mod __elephc_pdo_called_class_status;
 pub mod __elephc_pdo_statement_class_status;
 pub mod __elephc_strtotime_raw;
+pub mod __elephc_simplexml_warning;
 pub mod attr_support;
 pub mod checkdate;
 pub mod class_attribute_args;

@@ -167,6 +167,16 @@ pub(super) fn lower_lazy_empty(
     {
         return None;
     }
+    if let Some(value) = native_xml_empty::lower(ctx, name, &args[0], expr) {
+        return Some(value);
+    }
+    lower_lazy_empty_without_native(ctx, name, args, expr)
+}
+
+/// Keeps ordinary empty semantics after an enclosing native receiver guard has selected fallback.
+pub(super) fn lower_lazy_empty_without_native(
+    ctx: &mut LoweringContext<'_, '_>, name: &str, args: &[Expr], expr: &Expr,
+) -> Option<LoweredValue> {
     if let ExprKind::ArrayAccess { array, index } = &args[0].kind {
         // The receiver is read ONCE and judged by the type it lowers to. `$this`, a property
         // and a call or `new` result only get that type by being lowered (#1448), and even a

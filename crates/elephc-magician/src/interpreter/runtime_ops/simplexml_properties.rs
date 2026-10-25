@@ -10,6 +10,29 @@
 
 use super::*;
 
+/// Tests native container emptiness without applying the object's boolean cast.
+pub(in crate::interpreter) fn empty(
+    values: &mut impl RuntimeValueOps, object: RuntimeCellHandle,
+    property: Option<&str>, index: Option<RuntimeCellHandle>,
+) -> Result<Option<bool>, EvalStatus> {
+    let result = if let Some(property) = property {
+        invoke(values, object, property, elephc_builtin_contract::ObjectProperty::Empty, None)?
+    } else {
+        if values.type_tag(object)? != EVAL_TAG_OBJECT { return Ok(None); }
+        match values.object_is_a(object, "SimpleXMLElement", false) {
+            Ok(true) => (),
+            Ok(false) | Err(EvalStatus::UnsupportedConstruct) => return Ok(None),
+            Err(status) => return Err(status),
+        }
+        let index = index.ok_or(EvalStatus::RuntimeFatal)?;
+        Some(values.operator_method_call(object, "__elephc_dimension_empty", vec![index])?)
+    };
+    let Some(result) = result else { return Ok(None); };
+    let empty = values.truthy(result);
+    let released = values.release(result);
+    empty.and_then(|empty| released.map(|()| Some(empty)))
+}
+
 /// Dispatches a native XML property operation, or returns None for an ordinary object.
 pub(in crate::interpreter) fn invoke(
     values: &mut impl RuntimeValueOps, object: RuntimeCellHandle, property: &str,

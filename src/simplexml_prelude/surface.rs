@@ -117,6 +117,21 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         if (!$this->__elephc_property_isset($name)) { return null; }
         return $this->__elephc_property_get($name);
     }
+    final public function __elephc_property_empty(string $name): bool {
+        $handle = $this->__elephc_handle;
+        $selected = elephc_xml_sx_select($handle, 2, $name, "", 0, 0);
+        $empty = elephc_xml_sx_int($selected, 7) !== 0;
+        elephc_xml_sx_free($selected);
+        return $empty;
+    }
+    final public function __elephc_dimension_empty(mixed $offset): bool {
+        $handle = $this->__elephc_handle;
+        if (is_int($offset)) { $selected = elephc_xml_sx_select($handle, 4, "", "", 0, $offset); }
+        else { $selected = elephc_xml_sx_select($handle, 3, (string)$offset, "", 0, 0); }
+        $empty = elephc_xml_sx_int($selected, 7) !== 0;
+        elephc_xml_sx_free($selected);
+        return $empty;
+    }
     public function __unset(string $name): void {
         $this->__elephc_property_unset($name);
     }
@@ -205,7 +220,16 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $handle = $this->__elephc_handle;
         $result = elephc_xml_sx_xpath($handle, $expression);
         if ($result === 0) { return null; }
-        if ($result < 0) { return false; }
+        if ($result < 0) {
+            if ($result !== -1) {
+                $type = 'undefined';
+                if ($result === -3) { $type = 'bool'; }
+                elseif ($result === -4) { $type = 'number'; }
+                elseif ($result === -5) { $type = 'string'; }
+                __elephc_simplexml_warning('Warning: SimpleXMLElement::xpath(): XPath expression must return a node set, ' . $type . " returned\n");
+            }
+            return false;
+        }
         $nodes = [];
         $length = elephc_xml_sx_int($result, 2);
         for ($i = 0; $i < $length; $i++) {
@@ -238,7 +262,14 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $base = __elephc_simplexml_wrap(elephc_xml_sx_projection_base($handle), get_class($this));
         $result = ["__elephc_projection_seed" => null];
         unset($result["__elephc_projection_seed"]);
-        if ($mode === 4 || ($mode !== 3 && elephc_xml_sx_int($handle, 4) === 2)) {
+        if ($mode === 4) {
+            $values = ["__elephc_projection_seed" => ""];
+            unset($values["__elephc_projection_seed"]);
+            foreach ($this as $name => $attribute) { $values[$name] = (string)$attribute; }
+            if (count($values) > 0) { $result["@attributes"] = $values; }
+            return $result;
+        }
+        if ($mode !== 3 && elephc_xml_sx_int($handle, 4) === 2) {
             $result["0"] = (string)$this;
             return $result;
         }

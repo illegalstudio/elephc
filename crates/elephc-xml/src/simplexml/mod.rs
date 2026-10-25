@@ -56,6 +56,7 @@ enum Scope {
     Attributes(Rc<View>, Option<String>),
     Index(Rc<View>, usize),
     Nodes(Vec<Node>),
+    XPath(Vec<Node>),
 }
 
 /// PHP wrapper state; iterator position does not change through ordinary getters.
@@ -69,7 +70,7 @@ impl View {
     fn nodes(&self) -> Vec<Node> {
         match &self.scope {
             Scope::Node(node) => if node.is_null() { vec![] } else { vec![*node] },
-            Scope::Nodes(nodes) => nodes.clone(),
+            Scope::Nodes(nodes) | Scope::XPath(nodes) => nodes.clone(),
             Scope::Index(parent, index) => parent.nodes().get(*index).copied().into_iter().collect(),
             Scope::Children(parent, name) | Scope::Attributes(parent, name) => {
                 let Some(node) = parent.first() else { return vec![]; };
@@ -93,11 +94,22 @@ impl View {
     fn first(&self) -> Option<Node> { self.nodes().first().copied() }
     /// Returns nodes traversed by foreach and count for this wrapper kind.
     fn items(&self) -> Vec<Node> {
-        if matches!(self.scope, Scope::Attributes(_, Some(_))) { return vec![]; }
         if matches!(self.scope, Scope::Node(_) | Scope::Index(..)) {
             let view = self.select(7, "", "", false, 0);
             view.nodes()
         } else { self.nodes() }
+    }
+    /// Materializes an XPath attribute as a filtered attribute list, preserving ordinary offsets.
+    fn item(&self, index: usize) -> Option<Self> {
+        let node = *self.items().get(index)?;
+        if matches!(self.scope, Scope::XPath(_)) && unsafe { ffi::node_type(node) } == 2 {
+            let parent = self.with_scope(Scope::Node(unsafe { ffi::parent(node) }));
+            let name = unsafe { string(ffi::name(node)) };
+            let mut selected = self.with_scope(Scope::Attributes(Rc::new(parent), Some(name)));
+            selected.ns = Namespace { value: unsafe { string(ffi::ns(node, 0)) }, prefix: false };
+            return Some(selected);
+        }
+        Some(self.with_scope(Scope::Node(node)))
     }
     /// Builds an independent wrapper while sharing the document and XPath registrations.
     fn with_scope(&self, scope: Scope) -> Self { Self { scope, ..self.clone() } }

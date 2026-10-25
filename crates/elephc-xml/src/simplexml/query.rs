@@ -9,31 +9,38 @@
 
 use super::*;
 
+/// Distinguishes invalid XPath from a scalar result that requires PHP's typed warning.
+#[derive(Debug, Eq, PartialEq)]
+pub(super) enum XPathError { Invalid, Scalar(i32) }
+
 impl View {
     /// Evaluates XPath with in-scope prefixes followed by explicitly registered overrides.
-    pub(super) fn xpath(&self, expression: &str) -> Option<Vec<Node>> {
-        let node = self.first()?;
+    pub(super) fn xpath(&self, expression: &str) -> Result<Vec<Node>, XPathError> {
+        let node = self.first().ok_or(XPathError::Invalid)?;
         unsafe {
             let context = ffi::xpath_context(self.doc.raw, node);
-            if context.is_null() { return None; }
+            if context.is_null() { return Err(XPathError::Invalid); }
             for (prefix, uri) in self.xpath_ns.borrow().iter() {
                 ffi::xpath_register(context, cstring(prefix).as_ptr(), cstring(uri).as_ptr());
             }
             let result = ffi::xpath_eval(context, cstring(expression).as_ptr());
             let count = ffi::xpath_count(result);
+            let kind = ffi::xpath_type(result);
             let mut nodes = Vec::new();
             for index in 0..count.max(0) {
                 let raw = ffi::xpath_node(result, index);
                 if raw.is_null() { continue; }
                 match ffi::node_type(raw) {
-                    1 | 2 => nodes.push(raw),
-                    3 | 4 => { let parent = ffi::parent(raw); if !parent.is_null() { nodes.push(parent); } }
+                    1 | 2 | 7 | 8 => nodes.push(raw),
+                    3 => { let parent = ffi::parent(raw); if !parent.is_null() { nodes.push(parent); } }
                     _ => (),
                 }
             }
             ffi::xpath_free(result);
             ffi::xpath_context_free(context);
-            (count >= 0).then_some(nodes)
+            if count >= 0 { Ok(nodes) }
+            else if kind == 0 { Err(XPathError::Invalid) }
+            else { Err(XPathError::Scalar(kind)) }
         }
     }
     /// Enumerates namespace declarations or namespace uses in PHP traversal order.

@@ -62,6 +62,43 @@ echo "\n";
     assert_clean(out, "01IA\n");
 }
 
+/// Borrowed object and array method returns acquire their own foreach value owners.
+#[test]
+fn test_foreach_borrowed_concrete_method_results_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class BorrowedSelfIterator implements Iterator {
+    private int $position = 0;
+    public function __destruct() { echo 'D'; }
+    public function current(): self { return $this; }
+    public function key(): self { return $this; }
+    public function next(): void { $this->position++; }
+    public function rewind(): void { $this->position = 0; }
+    public function valid(): bool { return $this->position < 2; }
+}
+$iterator = new BorrowedSelfIterator();
+foreach ($iterator as $key => $value) { echo (int)($key === $iterator && $value === $iterator); }
+unset($key, $value, $iterator);
+echo '|';
+$sharedRows = [10, 20];
+class BorrowedArrayIterator implements Iterator {
+    private int $position = 0;
+    public function current(): array { global $sharedRows; return $sharedRows; }
+    public function key(): int { return $this->position; }
+    public function next(): void { $this->position++; }
+    public function rewind(): void { $this->position = 0; }
+    public function valid(): bool { return $this->position < 2; }
+}
+foreach (new BorrowedArrayIterator() as $row) {
+    echo $row[0], ':';
+    $row[0] = 30;
+    echo $row[0], ':';
+}
+unset($row);
+echo implode(',', $sharedRows), "\n";
+"#);
+    assert_clean(out, "11D|10:30:10:30:10,20\n");
+}
+
 /// A local aggregate that returns an existing Iterator must not leak.
 #[test]
 fn test_foreach_local_aggregate_existing_iterator_heap_clean() {

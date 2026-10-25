@@ -19,6 +19,9 @@ extern "C" {
     /// Sets scalar node content for DOM text, comment, and processing instruction nodes.
     #[link_name = "elephc_libxml2_v1_sx_content"]
     pub(super) fn content(node: Node, value: *const c_char);
+    /// Tests the PHP property/dimension check_empty rule without changing bool conversion.
+    #[link_name = "elephc_libxml2_v1_sx_empty"]
+    pub(super) fn empty(node: Node) -> c_int;
     /// Returns all descendant text for DOM nodeValue/textContent.
     #[link_name = "elephc_libxml2_v1_sx_full_text"]
     pub(super) fn full_text(node: Node) -> *mut c_char;
@@ -103,6 +106,9 @@ extern "C" {
     /// Calls the opaque shim xpath_count operation.
     #[link_name = "elephc_libxml2_v1_sx_xpath_count"]
     pub(super) fn xpath_count(result: Node) -> c_int;
+    /// Returns the XPath result kind, or zero for an invalid expression.
+    #[link_name = "elephc_libxml2_v1_sx_xpath_type"]
+    pub(super) fn xpath_type(result: Node) -> c_int;
     /// Calls the opaque shim xpath_node operation.
     #[link_name = "elephc_libxml2_v1_sx_xpath_node"]
     pub(super) fn xpath_node(result: Node, index: c_int) -> Node;

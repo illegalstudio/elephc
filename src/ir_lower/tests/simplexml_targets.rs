@@ -19,6 +19,8 @@ echo (string)$xml->item[0], ':', (string)$cloned->item[0];
 $xml->addChild('p:child', 'value', 'urn:p');
 foreach ($xml->item as $key => $node) { echo $key, (string)$node, (int)$node, (float)$node; }
 var_dump((bool)$xml->missing);
+var_dump(empty($xml->item), empty($xml['id']), empty($xml?->missing));
+$xml->xpath('count(//item)');
 echo json_encode($xml), json_encode((array)$xml), $xml->asXML();
 $doc = new DOMDocument(); $doc->loadXML('<r><v>shared</v></r>');
 $imported = simplexml_import_dom($doc);

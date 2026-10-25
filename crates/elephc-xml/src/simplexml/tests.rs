@@ -73,7 +73,48 @@ fn simplexml_xpath_namespace_and_text_nodes() {
     root.xpath_ns.borrow_mut().insert("q".into(), "urn:p".into());
     assert_eq!(root.xpath("//q:a/text()").unwrap().len(), 1);
     assert_eq!(root.namespaces(true, true, true), vec![("p".into(), "urn:p".into())]);
-    assert!(root.xpath("count(//a)").is_none());
+    assert_eq!(root.xpath("count(//a)"), Err(query::XPathError::Scalar(3)));
+}
+
+/// XPath attribute wrappers count and iterate only their selected expanded name.
+#[test]
+fn simplexml_xpath_attribute_wrappers_preserve_namespace_uri() {
+    let root = parse(b"<r xmlns:p='urn:p' id='7' p:id='8'/>", 0, "", false).unwrap();
+    let results = root.with_scope(Scope::XPath(root.xpath("//@*").unwrap()));
+    for (index, expected) in ["7", "8"].into_iter().enumerate() {
+        let attribute = results.item(index).unwrap();
+        assert!(matches!(attribute.scope, Scope::Attributes(_, Some(_))));
+        assert_eq!(attribute.items().len(), 1);
+        assert_eq!(unsafe { owned_string(ffi::text(attribute.first().unwrap())) }, expected);
+    }
+    let offset = root.select(3, "id", "", false, 0);
+    assert_eq!(offset.with_scope(Scope::Node(offset.first().unwrap())).items().len(), 0);
+}
+
+/// Comment and PI XPath nodes retain their content, while scalar types remain distinct.
+#[test]
+fn simplexml_xpath_miscellaneous_nodes_and_scalar_types() {
+    let root = parse(b"<r><!--note--><?work data?></r>", 0, "", false).unwrap();
+    let nodes = root.xpath("comment() | processing-instruction()").unwrap();
+    assert_eq!(nodes.len(), 2);
+    assert_eq!(unsafe { owned_string(ffi::text(nodes[0])) }, "note");
+    assert_eq!(unsafe { owned_string(ffi::text(nodes[1])) }, "data");
+    assert_eq!(root.xpath("true()"), Err(query::XPathError::Scalar(2)));
+    assert_eq!(root.xpath("string(.)"), Err(query::XPathError::Scalar(4)));
+}
+
+/// The native empty predicate follows the first text child's exact PHP falsiness rules.
+#[test]
+fn simplexml_container_empty_is_distinct_from_boolean() {
+    let root = parse(b"<r z='0' n='00'><blank/><zero>0</zero><number>00</number><nested><a/></nested><cdata><![CDATA[0]]></cdata></r>", 0, "", false).unwrap();
+    for (name, expected) in [("blank", 1), ("zero", 1), ("number", 0), ("nested", 0), ("cdata", 0)] {
+        let node = root.select(2, name, "", false, 0).first().unwrap();
+        assert_eq!(unsafe { ffi::empty(node) }, expected, "{name}");
+    }
+    for (name, expected) in [("z", 1), ("n", 0)] {
+        let node = root.select(3, name, "", false, 0).first().unwrap();
+        assert_eq!(unsafe { ffi::empty(node) }, expected, "{name}");
+    }
 }
 
 /// Root and indexed-node iteration retain explicit namespace filters independently of public children().

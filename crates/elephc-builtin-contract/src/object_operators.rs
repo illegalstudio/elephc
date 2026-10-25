@@ -36,7 +36,7 @@ pub enum ObjectCast { Int, Float, Array }
 
 /// Native property operation that takes precedence over PHP slots and magic methods.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ObjectProperty { Get, Set, Isset, Unset, Probe }
+pub enum ObjectProperty { Get, Set, Isset, Unset, Probe, Empty }
 
 /// Methods implementing an internal class's native operators and clone protocol.
 #[derive(Clone, Copy, Debug)]
@@ -96,6 +96,7 @@ pub const SIMPLEXML_OPERATORS: ClassOperators = ClassOperators {
     properties: &[(ObjectProperty::Get, "__elephc_property_get"),
         (ObjectProperty::Set, "__elephc_property_set"),
         (ObjectProperty::Isset, "__elephc_property_isset"),
+        (ObjectProperty::Empty, "__elephc_property_empty"),
         (ObjectProperty::Unset, "__elephc_property_unset"),
         (ObjectProperty::Probe, "__elephc_property_probe")],
     native_clone: Some("__elephc_clone_initialize"),

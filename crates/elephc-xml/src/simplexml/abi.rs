@@ -79,6 +79,7 @@ pub extern "C" fn elephc_xml_sx_int(handle: i64, operation: i64) -> i64 {
             Scope::Attributes(_, None) => 3, Scope::Attributes(_, Some(_)) => 4, _ => 0 },
         6 => v.first().map(|n| unsafe { let child = ffi::child(n);
             i64::from(!child.is_null() && matches!(ffi::node_type(child), 3 | 4)) }).unwrap_or(0),
+        7 => v.first().map(|n| unsafe { i64::from(ffi::empty(n) != 0) }).unwrap_or(1),
         _ => 0,
     }).unwrap_or(0))
 }
@@ -95,7 +96,7 @@ pub extern "C" fn elephc_xml_sx_string(handle: i64, operation: i64) -> *const c_
 /// Returns the indexed child visited by foreach and explicit iterator methods.
 #[no_mangle]
 pub extern "C" fn elephc_xml_sx_item(handle: i64, index: i64) -> i64 {
-    guard(|| view(handle).and_then(|v| v.items().get(index.max(0) as usize).copied().map(|n| insert(v.with_scope(Scope::Node(n))))).unwrap_or(0))
+    guard(|| view(handle).and_then(|v| v.item(index.max(0) as usize)).map(insert).unwrap_or(0))
 }
 /// Writes a property/offset, removes one selection (10+kind), or adds a child/attribute.
 #[no_mangle]
@@ -129,12 +130,16 @@ pub unsafe extern "C" fn elephc_xml_sx_register(handle: i64, prefix: *const c_ch
         1
     })
 }
-/// Evaluates XPath into a temporary result-list handle; -1 means an invalid expression.
+/// Evaluates XPath; -1 is invalid and other negative values encode scalar result kinds.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_xml_sx_xpath(handle: i64, expression: *const c_char) -> i64 {
     guard(|| view(handle).map(|v| {
-        if v.first().is_none() { return 0; }
-        v.xpath(&string(expression)).map(|nodes| insert(v.with_scope(Scope::Nodes(nodes)))).unwrap_or(-1)
+        if v.first().is_none() || matches!(v.scope, Scope::Attributes(..)) { return 0; }
+        match v.xpath(&string(expression)) {
+            Ok(nodes) => insert(v.with_scope(Scope::XPath(nodes))),
+            Err(query::XPathError::Invalid) => -1,
+            Err(query::XPathError::Scalar(kind)) => -i64::from(kind) - 1,
+        }
     }).unwrap_or(-1))
 }
 /// Reads one namespace prefix/URI or the entry count (index -1), encoded as a C string.

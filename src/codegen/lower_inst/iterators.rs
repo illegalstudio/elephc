@@ -30,7 +30,7 @@ use crate::codegen::{
     emit_box_runtime_payload_as_mixed,
 };
 use crate::intrinsics::IntrinsicCall;
-use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
+use crate::ir::{Immediate, Instruction, LocalSlotId, Op, Ownership, ValueDef, ValueId};
 use crate::names::php_symbol_key;
 use crate::types::PhpType;
 
@@ -1445,10 +1445,8 @@ fn resolve_dynamic_object_iterator_source(
 
 /// Owns a nonzero `getIterator()` result in the Mixed owner slot, then publishes a borrow.
 ///
-/// `emit_box_current_owned_value_as_mixed` is the transfer: `__rt_mixed_from_value`
-/// retains the payload into a fresh Mixed cell, then the helper releases the
-/// original method-return owner. There is no user callback between those two
-/// steps, so the Mixed cell is the sole owner afterward. The iterator source
+/// The compiled return marker decides whether boxing transfers a return owner or
+/// retains a borrowed payload. The iterator source
 /// word is then loaded from that cell's payload. The previous aggregate pointer
 /// is overwritten without a matching release; the loop's source retain still
 /// owns the aggregate.
@@ -1474,7 +1472,7 @@ fn adopt_get_iterator_result(
             ctx.emitter.instruction(&format!("je {}", keep_original));          // skip replacement when getIterator() was not resolved
         }
     }
-    emit_box_current_owned_value_as_mixed(ctx.emitter, &return_ty.codegen_repr());
+    box_compiled_iterator_result(ctx, return_ty);
     let local_offset = ctx.local_offset(slot)?;
     abi::store_at_offset(ctx.emitter, result_reg, local_offset);
     abi::emit_load_from_address(
@@ -1804,20 +1802,29 @@ fn box_iterator_method_result_if_needed(
     if result_ty == PhpType::Mixed && return_ty.codegen_repr() != PhpType::Mixed {
         // A `?ptr<T>` result keeps its union, so address 0 is PHP null.
         let box_ty = crate::types::mixed_box_php_type(return_ty);
-        if return_ty.codegen_repr() == PhpType::Str {
-            let owned = ctx.next_label("iterator_string_owned");
-            let done = ctx.next_label("iterator_string_boxed");
-            crate::codegen::return_ownership::emit_branch_if_owned(ctx.emitter, &owned);
-            emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
-            abi::emit_jump(ctx.emitter, &done);
-            ctx.emitter.label(&owned);
-            emit_box_current_owned_value_as_mixed(ctx.emitter, &box_ty);
-            ctx.emitter.label(&done);
-        } else {
-            emit_box_current_owned_value_as_mixed(ctx.emitter, &box_ty);
-        }
+        box_compiled_iterator_result(ctx, &box_ty);
     }
     Ok(())
+}
+
+/// Boxes a compiled iterator return without consuming an owner on borrowed return paths.
+fn box_compiled_iterator_result(ctx: &mut FunctionContext<'_>, return_ty: &PhpType) {
+    if !Ownership::php_type_needs_lifetime_tracking(return_ty) {
+        emit_box_current_value_as_mixed(ctx.emitter, return_ty);
+        return;
+    }
+    let owned = ctx.next_label("iterator_value_owned");
+    let done = ctx.next_label("iterator_value_boxed");
+    crate::codegen::return_ownership::emit_branch_if_owned(ctx.emitter, &owned);
+    if return_ty.codegen_repr() == PhpType::Mixed {
+        abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    } else {
+        emit_box_current_value_as_mixed(ctx.emitter, return_ty);
+    }
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&owned);
+    emit_box_current_owned_value_as_mixed(ctx.emitter, return_ty);
+    ctx.emitter.label(&done);
 }
 
 /// Lowers object iterator advancement using PHP's Iterator method protocol.

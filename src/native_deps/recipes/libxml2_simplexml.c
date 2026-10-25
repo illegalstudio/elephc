@@ -29,7 +29,8 @@ const char *elephc_libxml2_v1_sx_ns(void *node, int prefix) {
 /* SimpleXML string conversion includes direct text/CDATA, never descendant elements. */
 char *elephc_libxml2_v1_sx_text(void *raw) {
     xmlNodePtr node = raw;
-    if (node->type == XML_ATTRIBUTE_NODE) return (char *)xmlNodeGetContent(node);
+    if (node->type == XML_ATTRIBUTE_NODE || node->type == XML_COMMENT_NODE || node->type == XML_PI_NODE)
+        return (char *)xmlNodeGetContent(node);
     xmlBufferPtr out = xmlBufferCreate();
     if (!out) return NULL;
     for (xmlNodePtr c = node->children; c; c = c->next) {
@@ -66,6 +67,14 @@ void elephc_libxml2_v1_sx_node_free(void *node) {
 }
 void elephc_libxml2_v1_sx_content(void *node, const char *value) {
     xmlNodeSetContent(node, (const xmlChar *)value);
+}
+/* PHP's property/dimension check_empty differs from a SimpleXML boolean cast. */
+int elephc_libxml2_v1_sx_empty(void *raw) {
+    xmlNodePtr node = raw;
+    xmlNodePtr child = node->children;
+    if (!child) return 1;
+    if (node->type != XML_ATTRIBUTE_NODE && (child->type != XML_TEXT_NODE || child->next)) return 0;
+    return !child->content || !child->content[0] || xmlStrEqual(child->content, BAD_CAST "0");
 }
 /* Text assignment escapes ampersands, whereas addChild follows PHP's entity parsing. */
 void elephc_libxml2_v1_sx_assign(void *raw, const char *value) {
@@ -127,6 +136,10 @@ void *elephc_libxml2_v1_sx_xpath_eval(void *ctx, const char *expression) {
 int elephc_libxml2_v1_sx_xpath_count(void *result) {
     xmlXPathObjectPtr obj = result;
     return obj && obj->type == XPATH_NODESET ? (obj->nodesetval ? obj->nodesetval->nodeNr : 0) : -1;
+}
+int elephc_libxml2_v1_sx_xpath_type(void *result) {
+    xmlXPathObjectPtr obj = result;
+    return obj ? (int)obj->type : 0;
 }
 void *elephc_libxml2_v1_sx_xpath_node(void *result, int index) {
     return ((xmlXPathObjectPtr)result)->nodesetval->nodeTab[index];

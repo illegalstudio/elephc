@@ -3788,6 +3788,17 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         requirements: &[],
     },
     BuiltinContract {
+        id: BuiltinId::from_canonical_name("__elephc_simplexml_warning"),
+        name: "__elephc_simplexml_warning", area: Area::System, module: PhpModule::Elephc,
+        since: None, kind: BuiltinKind::Function,
+        params: &[ParamSpec { name: "diagnostic", ty: TypeSpec::Str, default: None, by_ref: false }],
+        variadic: None, variadic_by_ref: false, min_args: None, max_args: None, arity_error: None,
+        returns: TypeSpec::Bool, by_ref_return: false,
+        summary: "Dispatches a complete internal SimpleXML warning through PHP error handlers.",
+        examples: &[], php_manual: None, deprecation: None, extension: false, internal: true,
+        requirements: &[],
+    },
+    BuiltinContract {
         id: BuiltinId::from_canonical_name("__elephc_strtotime_raw"),
         name: "__elephc_strtotime_raw",
         area: Area::System,
