@@ -177,12 +177,17 @@ fn parse(data: &[u8], options: i64, namespace: &str, prefix: bool) -> Option<Vie
 
 /// Retains a file's base URI while libxml2 resolves relative external subsets and entities.
 fn parse_with_url(data: &[u8], options: i64, namespace: &str, prefix: bool, url: &str) -> Option<View> {
+    parse_with_diagnostics(data, options, namespace, prefix, url, 1)
+}
+
+/// Keeps DOM's structured diagnostics separate from SimpleXML's generic formatter lines.
+fn parse_with_diagnostics(data: &[u8], options: i64, namespace: &str, prefix: bool, url: &str, style: i32) -> Option<View> {
     diagnostics::reset();
     crate::ffi::init_library();
     let length = i32::try_from(data.len()).ok()?;
     let url = cstring(url);
     let mut messages = std::ptr::null_mut();
-    let raw = unsafe { ffi::parse(data.as_ptr().cast(), length, i32::try_from(options).ok()?, url.as_ptr(), &mut messages) };
+    let raw = unsafe { ffi::parse(data.as_ptr().cast(), length, i32::try_from(options).ok()?, url.as_ptr(), style, &mut messages) };
     unsafe { diagnostics::capture(messages); }
     if raw.is_null() { return None; }
     let root = unsafe { ffi::root(raw) };

@@ -44,6 +44,16 @@ pub unsafe extern "C" fn elephc_xml_sx_load(data: *const c_char, length: i64, op
             &string(ns), prefix != 0, &string(url)).map(insert).unwrap_or(0)
     })
 }
+/// Parses DOM loadXML bytes while retaining its single structured warning or notice.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_xml_sx_load_dom(data: *const c_char, length: i64, options: i64) -> i64 {
+    guard(|| {
+        diagnostics::reset();
+        if data.is_null() || length < 0 || length > i32::MAX as i64 { return 0; }
+        parse_with_diagnostics(std::slice::from_raw_parts(data.cast(), length as usize), options,
+            "", false, "", 2).map(insert).unwrap_or(0)
+    })
+}
 /// Consumes formatted diagnostics before user warning handlers can run nested native operations.
 #[no_mangle]
 pub extern "C" fn elephc_xml_sx_diagnostics() -> *const c_char { guard(|| output(diagnostics::take())) }
@@ -164,9 +174,11 @@ pub extern "C" fn elephc_xml_sx_namespace(handle: i64, declared: i64, recursive:
     }).unwrap_or_default()))
 }
 
-/// Creates another wrapper over the same native selection, without PHP clone's deep copy.
+/// Creates a new PHP wrapper over native storage with its own empty XPath context.
 #[no_mangle]
-pub extern "C" fn elephc_xml_sx_alias(handle: i64) -> i64 { guard(|| view(handle).map(insert).unwrap_or(0)) }
+pub extern "C" fn elephc_xml_sx_alias(handle: i64) -> i64 {
+    guard(|| view(handle).map(|v| insert(v.with_scope(v.scope.clone()))).unwrap_or(0))
+}
 
 /// Encodes serialized bytes as ASCII hex so the extern C-string ABI preserves all encodings.
 #[no_mangle]

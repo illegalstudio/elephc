@@ -1,11 +1,11 @@
 //! Purpose:
-//! Gives the compiled SimpleXML prelude access to ordinary PHP warnings.
+//! Gives the compiled XML preludes access to ordinary PHP warnings and notices.
 //!
 //! Called from:
-//! - SimpleXMLElement::xpath after rejecting a scalar XPath result.
+//! - SimpleXML operations and DOMDocument::loadXML diagnostic reporting.
 //!
 //! Key details:
-//! - The existing diagnostic EIR target preserves E_WARNING, handlers, and suppression.
+//! - The existing diagnostic EIR target selects warning/notice levels from complete prefixes.
 //! - Eval invokes the same compiled prelude methods, as with XML object allocation.
 
 use crate::builtins::semantics::{

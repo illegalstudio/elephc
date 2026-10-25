@@ -117,6 +117,25 @@ fn simplexml_parse_diagnostics_preserve_php_lines() {
     assert!(diagnostics::take().is_empty());
 }
 
+/// DOM parser callbacks have one contextual line and preserve warning versus notice severity.
+#[test]
+fn simplexml_dom_parser_diagnostics_use_structured_lines() {
+    assert!(parse_with_diagnostics(b"<r>", 0, "", false, "", 2).is_none());
+    assert_eq!(diagnostics::take(), "Warning: Premature end of data in tag r line 1 in Entity, line: 1\n");
+    assert!(parse_with_diagnostics(b"<?xml version='1.1'?><r/>", 0, "", false, "", 2).is_some());
+    assert_eq!(diagnostics::take(), "Notice: Unsupported version '1.1' in Entity, line: 1\n");
+}
+
+/// A selected attribute reports its namespace; an empty filtered attribute list reports none.
+#[test]
+fn simplexml_attribute_used_namespace_matches_selected_node() {
+    let root = parse(b"<r xmlns:p='urn:p' p:id='8'/>", 0, "", false).unwrap();
+    let attribute = root.select(1, "", "p", true, 0).select(2, "id", "", false, 0);
+    assert_eq!(attribute.namespaces(false, false, false), vec![("p".into(), "urn:p".into())]);
+    assert_eq!(attribute.namespaces(false, true, false), vec![("p".into(), "urn:p".into())]);
+    assert!(root.select(1, "", "", false, 0).namespaces(false, false, false).is_empty());
+}
+
 /// XPath attribute wrappers count and iterate only their selected expanded name.
 #[test]
 fn simplexml_xpath_attribute_wrappers_preserve_namespace_uri() {

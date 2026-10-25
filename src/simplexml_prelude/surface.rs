@@ -11,6 +11,7 @@
 pub(super) const SOURCE: &str = r###"<?php
 extern "elephc_xml" {
     function elephc_xml_sx_load(string $data, int $length, int $options, string $ns, int $prefix, string $url): int;
+    function elephc_xml_sx_load_dom(string $data, int $length, int $options): int;
     function elephc_xml_sx_diagnostics(): string;
     function elephc_xml_sx_free(int $handle): void;
     function elephc_xml_sx_clone(int $handle): int;
@@ -103,14 +104,18 @@ function __elephc_simplexml_write_warning(string $message): void {
     __elephc_simplexml_warning('Warning: ' . $caller . ': ' . $message . "\n");
 }
 
-function __elephc_simplexml_report_diagnostics(string $caller): void {
+function __elephc_simplexml_report_diagnostics(string $caller, bool $dom = false): void {
     $text = elephc_xml_sx_diagnostics();
     if ($text === '') { return; }
     $lines = explode("\n", $text);
     $length = count($lines);
     if ($length > 0 && $lines[$length - 1] === '') { $length--; }
     for ($i = 0; $i < $length; $i++) {
-        __elephc_simplexml_warning('Warning: ' . $caller . ': ' . $lines[$i] . "\n");
+        $line = $lines[$i];
+        $category = 'Warning: ';
+        if ($dom && str_starts_with($line, 'Notice: ')) { $category = 'Notice: '; $line = substr($line, 8); }
+        elseif ($dom && str_starts_with($line, 'Warning: ')) { $line = substr($line, 9); }
+        __elephc_simplexml_warning($category . $caller . ': ' . $line . "\n");
     }
 }
 
@@ -498,7 +503,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         return $this->__elephc_position >= 0 && $this->__elephc_position < elephc_xml_sx_int($handle, 2);
     }
     public function current(): SimpleXMLElement {
-        if (!$this->valid()) { throw new Error("Iterator not initialized or already finished"); }
+        if (!$this->valid()) { throw new Error("Iterator not initialized or already consumed"); }
         $cached = $this->__elephc_current;
         if ($cached instanceof SimpleXMLElement) { return $cached; }
         $handle = $this->__elephc_handle;
@@ -533,6 +538,13 @@ function simplexml_load_file(string $filename, ?string $class_name = "SimpleXMLE
     __elephc_simplexml_report_diagnostics('simplexml_load_file()');
     return $object;
 }
+function __elephc_simplexml_load_dom(string $data, int $options): SimpleXMLElement|false {
+    $handle = elephc_xml_sx_load_dom($data, strlen($data), $options);
+    $object = false;
+    if ($handle !== 0) { $object = __elephc_simplexml_wrap($handle, 'SimpleXMLElement'); }
+    __elephc_simplexml_report_diagnostics('DOMDocument::loadXML()', true);
+    return $object;
+}
 function __elephc_simplexml_bind_dom(DOMNode $node, SimpleXMLElement $view): void {
     $children = $node->childNodes;
     if ($node instanceof DOMDocument) {
@@ -563,18 +575,29 @@ function __elephc_simplexml_bind_dom(DOMNode $node, SimpleXMLElement $view): voi
 function simplexml_import_dom(object $node, ?string $class_name = "SimpleXMLElement"): ?SimpleXMLElement {
     $class = __elephc_simplexml_class($class_name);
     if ($node instanceof DOMNode) { return __elephc_simplexml_import_node($node, $class); }
-    throw new TypeError("simplexml_import_dom(): Argument #1 ($node) must be of type DOMNode");
+    throw new TypeError("simplexml_import_dom(): Argument #1 ($node) must be a valid XML node");
 }
 function __elephc_simplexml_import_node(DOMNode $node, string $class): ?SimpleXMLElement {
-    if (!($node instanceof DOMDocument) && !($node instanceof DOMElement)) { return null; }
     $bound = $node->__elephc_simplexml;
-    if ($bound instanceof SimpleXMLElement) {
+    if ($node instanceof DOMElement && $bound instanceof SimpleXMLElement) {
         $handle = $bound->__elephc_handle_value();
         return __elephc_simplexml_wrap(elephc_xml_sx_alias($handle), $class);
     }
     $document = $node->ownerDocument;
     if ($node instanceof DOMDocument) { $document = $node; }
-    if (!($document instanceof DOMDocument)) { return null; }
+    if (!($document instanceof DOMDocument)) {
+        __elephc_simplexml_warning("Warning: simplexml_import_dom(): Imported Node must have associated Document\n");
+        return null;
+    }
+    if ((!($node instanceof DOMDocument) && !($node instanceof DOMElement))
+        || ($node instanceof DOMDocument && !($document->documentElement instanceof DOMElement))) {
+        __elephc_simplexml_warning("Warning: simplexml_import_dom(): Invalid Nodetype to import\n");
+        return null;
+    }
+    if ($bound instanceof SimpleXMLElement) {
+        $handle = $bound->__elephc_handle_value();
+        return __elephc_simplexml_wrap(elephc_xml_sx_alias($handle), $class);
+    }
     $result = simplexml_load_string($document->saveXML(), $class);
     if ($result === false) { return null; }
     __elephc_simplexml_bind_dom($document, $result);

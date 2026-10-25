@@ -15,6 +15,7 @@ mod typed_empty;
 mod opaque_writes;
 mod dimension_writes;
 mod diagnostics;
+mod dom_and_iterator;
 
 /// Verifies SimpleXML parsing and properties against PHP's observable output.
 #[test]

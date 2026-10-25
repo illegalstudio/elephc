@@ -54,6 +54,10 @@ impl View {
         let mut pending = vec![start];
         while let Some(node) = pending.pop() {
             unsafe {
+                if !declared && ffi::node_type(node) == 2 {
+                    insert_namespace(&mut entries, string(ffi::ns(node, 1)), string(ffi::ns(node, 0)));
+                    continue;
+                }
                 if ffi::node_type(node) != 1 { continue; }
                 if declared {
                     let mut ns = ffi::ns_defs(node);

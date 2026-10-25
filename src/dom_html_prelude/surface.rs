@@ -1166,8 +1166,9 @@ class DOMDocument extends DOMNode {
     }
 
     public function loadXML(string $source, int $options = 0): bool {
-        $load = "simplexml_load_string";
-        $view = $load($source, null, $options);
+        if ($source === '') { throw new ValueError('DOMDocument::loadXML(): Argument #1 ($source) must not be empty'); }
+        $load = "__elephc_simplexml_load_dom";
+        $view = $load($source, $options);
         if (!is_object($view)) { return false; }
         $this->__elephc_simplexml = $view;
         $root = $view->__elephc_dom_node($this, $this);
