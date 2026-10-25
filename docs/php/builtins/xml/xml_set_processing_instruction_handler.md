@@ -2,7 +2,7 @@
 title: "xml_set_processing_instruction_handler()"
 description: "Sets the processing instruction handler."
 sidebar:
-  order: 1033
+  order: 1035
 ---
 
 ## xml_set_processing_instruction_handler()

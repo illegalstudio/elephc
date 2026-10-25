@@ -2,7 +2,7 @@
 title: "xmlwriter_start_pi()"
 description: "Starts a processing instruction."
 sidebar:
-  order: 1064
+  order: 1066
 ---
 
 ## xmlwriter_start_pi()

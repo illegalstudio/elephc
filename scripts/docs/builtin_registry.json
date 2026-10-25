@@ -14224,6 +14224,127 @@
         {
           "by_ref": false,
           "default": null,
+          "name": "diagnostic",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "__elephc_simplexml_warning",
+    "description": "Dispatches a complete internal XML diagnostic through PHP error handlers.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 704,
+      "notes": [
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/__elephc_simplexml_warning.rs",
+      "sig_line": null
+    },
+    "module": "elephc",
+    "name": "__elephc_simplexml_warning",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "internal compiler primitive"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "writes_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "refcount_op",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt",
+          "blocking_io",
+          "network_io"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "non_heap"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "diagnostic",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_simplexml_warning",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
           "name": "datetime",
           "optional": false,
           "type": "string"
@@ -121669,7 +121790,7 @@
       "checker_line": null,
       "codegen_file": "src/simplexml_prelude/surface.rs",
       "codegen_function": "simplexml_import_dom",
-      "codegen_line": 400,
+      "codegen_line": 611,
       "notes": [
         "Implemented by the compiler-injected xml prelude."
       ],
@@ -121816,7 +121937,7 @@
       "checker_line": null,
       "codegen_file": "src/simplexml_prelude/surface.rs",
       "codegen_function": "simplexml_load_file",
-      "codegen_line": 365,
+      "codegen_line": 563,
       "notes": [
         "Implemented by the compiler-injected xml prelude."
       ],
@@ -121984,7 +122105,7 @@
       "checker_line": null,
       "codegen_file": "src/simplexml_prelude/surface.rs",
       "codegen_function": "simplexml_load_string",
-      "codegen_line": 359,
+      "codegen_line": 555,
       "notes": [
         "Implemented by the compiler-injected xml prelude."
       ],

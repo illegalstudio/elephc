@@ -2,7 +2,7 @@
 title: "xmlwriter_end_pi() - internals"
 description: "Compiler internals for xmlwriter_end_pi(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1045
+  order: 1047
 ---
 
 ## `xmlwriter_end_pi()` - internals

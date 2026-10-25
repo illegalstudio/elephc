@@ -2,7 +2,7 @@
 title: "simplexml_load_string() - internals"
 description: "Compiler internals for simplexml_load_string(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1013
+  order: 1015
 ---
 
 ## `simplexml_load_string()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/simplexml_prelude/surface.rs`:359](https://github.com/illegalstudio/elephc/blob/main/src/simplexml_prelude/surface.rs#L359) (`simplexml_load_string`)
+- **Lowering**: [`src/simplexml_prelude/surface.rs`:555](https://github.com/illegalstudio/elephc/blob/main/src/simplexml_prelude/surface.rs#L555) (`simplexml_load_string`)
 - **Function symbol**: `simplexml_load_string()`
 
 

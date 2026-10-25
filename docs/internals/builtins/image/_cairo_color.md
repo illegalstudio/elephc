@@ -2,7 +2,7 @@
 title: "_cairo_color() - internals"
 description: "Compiler internals for _cairo_color(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1189
+  order: 1194
 ---
 
 ## `_cairo_color()` - internals

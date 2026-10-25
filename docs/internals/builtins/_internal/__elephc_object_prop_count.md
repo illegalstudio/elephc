@@ -2,7 +2,7 @@
 title: "__elephc_object_prop_count() - internals"
 description: "Compiler internals for __elephc_object_prop_count(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1149
+  order: 1152
 ---
 
 ## `__elephc_object_prop_count()` - internals

@@ -2,7 +2,7 @@
 title: "simplexml_load_string()"
 description: "Parses XML bytes into a SimpleXML element."
 sidebar:
-  order: 1013
+  order: 1015
 ---
 
 ## simplexml_load_string()

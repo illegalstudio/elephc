@@ -2,7 +2,7 @@
 title: "xmlwriter_write_cdata() - internals"
 description: "Compiler internals for xmlwriter_write_cdata(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1068
+  order: 1070
 ---
 
 ## `xmlwriter_write_cdata()` - internals

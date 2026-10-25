@@ -2,7 +2,7 @@
 title: "__elephc_tokenizer_error_location() - internals"
 description: "Compiler internals for __elephc_tokenizer_error_location(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1187
+  order: 1192
 ---
 
 ## `__elephc_tokenizer_error_location()` - internals

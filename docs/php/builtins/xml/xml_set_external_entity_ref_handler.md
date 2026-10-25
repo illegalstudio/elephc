@@ -2,7 +2,7 @@
 title: "xml_set_external_entity_ref_handler()"
 description: "Sets the external entity reference handler."
 sidebar:
-  order: 1030
+  order: 1032
 ---
 
 ## xml_set_external_entity_ref_handler()

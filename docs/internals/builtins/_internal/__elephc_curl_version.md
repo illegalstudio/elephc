@@ -2,7 +2,7 @@
 title: "__elephc_curl_version() - internals"
 description: "Compiler internals for __elephc_curl_version(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1137
+  order: 1140
 ---
 
 ## `__elephc_curl_version()` - internals
