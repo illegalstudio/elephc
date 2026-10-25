@@ -38,6 +38,9 @@ extern "C" {
     #[link_name = "elephc_libxml2_v1_sx_parse"]
     pub(super) fn parse(data: *const c_char, len: c_int, options: c_int, url: *const c_char,
         diagnostic_style: c_int, diagnostics: *mut *mut c_char) -> Node;
+    /// Opens a document using the same parser context and operation-local diagnostic capture.
+    #[link_name = "elephc_libxml2_v1_sx_parse_file"]
+    pub(super) fn parse_file(filename: *const c_char, options: c_int, diagnostics: *mut *mut c_char) -> Node;
     /// Calls the opaque shim doc_free operation.
     #[link_name = "elephc_libxml2_v1_sx_doc_free"]
     pub(super) fn doc_free(doc: Node) -> ();

@@ -70,6 +70,18 @@ void *elephc_libxml2_v1_sx_parse(const char *data, int len, int options, const c
     xmlFreeParserCtxt(context);
     return doc;
 }
+/* Let libxml report file-open failures under the PHP caller's own diagnostic prefix. */
+void *elephc_libxml2_v1_sx_parse_file(const char *filename, int options, char **diagnostics) {
+    *diagnostics = NULL;
+    xmlParserCtxtPtr context = xmlNewParserCtxt();
+    if (!context) return NULL;
+    struct sx_diagnostics capture = { xmlBufferCreate(), options, 1, context };
+    xmlCtxtSetErrorHandler(context, sx_diagnostic_error, &capture);
+    xmlDocPtr doc = xmlCtxtReadFile(context, filename, NULL, options);
+    sx_diagnostic_finish(&capture, diagnostics);
+    xmlFreeParserCtxt(context);
+    return doc;
+}
 void elephc_libxml2_v1_sx_doc_free(void *doc) { xmlFreeDoc(doc); }
 void *elephc_libxml2_v1_sx_root(void *doc) { return xmlDocGetRootElement(doc); }
 void *elephc_libxml2_v1_sx_child(void *node) { return ((xmlNodePtr)node)->children; }

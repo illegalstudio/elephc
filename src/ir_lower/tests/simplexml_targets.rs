@@ -33,6 +33,7 @@ xmlAppendOpaqueParameter($xml->item);
 function xmlMixedArithmetic(mixed $node): mixed { return $node + 1; }
 $otherNumber = new \BcMath\Number('1');
 echo xmlMixedArithmetic($xml->item[0]), xmlMixedArithmetic($otherNumber);
+echo (int)($xml->item[0] > 1), (int)($xml->item[0] == '7'), $xml <=> $xml->item;
 $xml->item[0] += 1;
 try { $xml->item[0][null] = 'invalid'; } catch (ValueError $error) { echo $error->getMessage(); }
 $xml->xpath('count(//item)');
@@ -52,6 +53,8 @@ echo $doc->saveXML();
     assert!(assembly.contains("elephc_xml_sx_mutate"), "{target}: document mutation boundary");
     assert!(assembly.contains("elephc_xml_sx_diagnostics"), "{target}: native diagnostic transfer boundary");
     assert!(assembly.contains("elephc_xml_sx_load_dom"), "{target}: DOM structured parsing boundary");
+    assert!(assembly.contains("elephc_xml_sx_load_file"), "{target}: native file parser boundary");
+    assert!(assembly.contains("elephc_xml_sx_compare"), "{target}: XML node comparison boundary");
     assert!(assembly.contains(&crate::names::method_symbol("SimpleXMLElement", "__elephc_array")),
         "{target}: native property projection body");
     assert!(assembly.contains(&crate::names::method_symbol("SimpleXMLElement", "__elephc_clone_initialize")),

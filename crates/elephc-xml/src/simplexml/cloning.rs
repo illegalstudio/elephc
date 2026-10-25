@@ -35,7 +35,8 @@ impl View {
             Scope::Attributes(parent, name) => Scope::Attributes(Rc::new(parent.remap(doc.clone())), name.clone()),
             Scope::Index(parent, index) => Scope::Index(Rc::new(parent.remap(doc.clone())), *index),
         };
-        Self { doc, scope, ns: self.ns.clone(), xpath_ns: Rc::new(RefCell::new(self.xpath_ns.borrow().clone())) }
+        let identity = map(self.identity);
+        Self { doc, scope, identity, ns: self.ns.clone(), xpath_ns: Rc::new(RefCell::new(self.xpath_ns.borrow().clone())) }
     }
 
     /// Finds one node in the live copy before searching independently copied detached subtrees.

@@ -136,6 +136,25 @@ fn simplexml_attribute_used_namespace_matches_selected_node() {
     assert!(root.select(1, "", "", false, 0).namespaces(false, false, false).is_empty());
 }
 
+/// Comparisons retain the receiver base even after a live selection moves to another node.
+#[test]
+fn simplexml_comparison_identity_preserves_retained_base_nodes() {
+    let root = parse(b"<r><a>1</a><a>2</a><b>1</b></r>", 0, "", false).unwrap();
+    let a = root.select(2, "a", "", false, 0);
+    let b = root.select(2, "b", "", false, 0);
+    assert_eq!(a.identity, root.identity);
+    assert_eq!(b.identity, root.identity);
+    let first = a.select(4, "", "", false, 0);
+    let saved = a.select(2, "missing", "", false, 0);
+    assert_eq!(saved.identity, first.identity);
+    root.remove(2, "a", 0);
+    assert_eq!(saved.identity, first.identity);
+    assert!(a.first().is_none());
+    let copied = first.deep_clone().unwrap();
+    assert!(!copied.identity.is_null());
+    assert_ne!(copied.identity, first.identity);
+}
+
 /// XPath attribute wrappers count and iterate only their selected expanded name.
 #[test]
 fn simplexml_xpath_attribute_wrappers_preserve_namespace_uri() {

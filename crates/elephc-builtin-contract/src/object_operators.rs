@@ -132,7 +132,7 @@ pub const SIMPLEXML_OPERATORS: ClassOperators = ClassOperators {
         (ObjectArithmetic::Div, "__elephc_div"), (ObjectArithmetic::Mod, "__elephc_mod"),
         (ObjectArithmetic::Pow, "__elephc_pow")],
     arithmetic_result: ObjectArithmeticResult::Number,
-    compare: None, boolean: Some("__elephc_bool"),
+    compare: Some("__elephc_compare"), boolean: Some("__elephc_bool"),
 };
 
 #[cfg(test)]

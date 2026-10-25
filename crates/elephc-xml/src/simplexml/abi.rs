@@ -54,6 +54,11 @@ pub unsafe extern "C" fn elephc_xml_sx_load_dom(data: *const c_char, length: i64
             "", false, "", 2).map(insert).unwrap_or(0)
     })
 }
+/// Opens a file or URL through libxml so read failures retain the SimpleXML caller's warnings.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_xml_sx_load_file(filename: *const c_char, options: i64, ns: *const c_char, prefix: i64) -> i64 {
+    guard(|| parse_file(filename, options, &string(ns), prefix != 0).map(insert).unwrap_or(0))
+}
 /// Consumes formatted diagnostics before user warning handlers can run nested native operations.
 #[no_mangle]
 pub extern "C" fn elephc_xml_sx_diagnostics() -> *const c_char { guard(|| output(diagnostics::take())) }
@@ -71,7 +76,7 @@ pub unsafe extern "C" fn elephc_xml_sx_select(handle: i64, kind: i64, name: *con
         if kind == 4 && index < 0 { return insert(v.with_scope(Scope::Nodes(vec![]))); }
         let mut selected = v.select(kind, &string(name), &string(ns), prefix != 0, index.max(0) as usize);
         if kind == 3 || (kind == 2 && matches!(v.scope, Scope::Attributes(..))) {
-            if let Some(node) = selected.first() { selected.scope = Scope::Node(node); }
+            if let Some(node) = selected.first() { selected.scope = Scope::Node(node); selected.identity = node; }
         }
         insert(selected)
     }).unwrap_or(0))
@@ -177,7 +182,22 @@ pub extern "C" fn elephc_xml_sx_namespace(handle: i64, declared: i64, recursive:
 /// Creates a new PHP wrapper over native storage with its own empty XPath context.
 #[no_mangle]
 pub extern "C" fn elephc_xml_sx_alias(handle: i64) -> i64 {
-    guard(|| view(handle).map(|v| insert(v.with_scope(v.scope.clone()))).unwrap_or(0))
+    guard(|| view(handle).map(|v| {
+        let mut alias = v.with_scope(v.scope.clone());
+        alias.identity = v.identity;
+        insert(alias)
+    }).unwrap_or(0))
+}
+
+/// Compares PHP's retained base-node identity; distinct XML objects are unordered, not textual.
+#[no_mangle]
+pub extern "C" fn elephc_xml_sx_compare(left: i64, right: i64) -> i64 {
+    guard(|| {
+        let (Some(left), Some(right)) = (view(left), view(right)) else { return 2; };
+        let equal = if left.identity.is_null() && right.identity.is_null() { left.doc.raw == right.doc.raw }
+            else { !left.identity.is_null() && left.identity == right.identity };
+        if equal { 0 } else { 2 }
+    })
 }
 
 /// Encodes serialized bytes as ASCII hex so the extern C-string ABI preserves all encodings.

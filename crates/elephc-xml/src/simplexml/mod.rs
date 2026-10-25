@@ -64,6 +64,7 @@ enum Scope {
 #[derive(Clone)]
 struct View {
     doc: Rc<Document>, scope: Scope, ns: Namespace,
+    identity: Node,
     xpath_ns: Rc<RefCell<BTreeMap<String, String>>>,
 }
 impl View {
@@ -114,7 +115,8 @@ impl View {
     }
     /// Builds a new wrapper with its own empty XPath context, sharing only native storage.
     fn with_scope(&self, scope: Scope) -> Self {
-        Self { scope, xpath_ns: Rc::new(RefCell::new(BTreeMap::new())), ..self.clone() }
+        let identity = scope_identity(&scope);
+        Self { scope, identity, xpath_ns: Rc::new(RefCell::new(BTreeMap::new())), ..self.clone() }
     }
     /// Builds children, attributes, named properties, or a numeric offset selection.
     fn select(&self, kind: i64, name: &str, ns: &str, prefix: bool, index: usize) -> Self {
@@ -141,13 +143,24 @@ impl View {
                 .unwrap_or_else(|| Scope::Index(parent, index)),
         };
         let filter = if kind <= 1 { Namespace { value: ns.into(), prefix } } else { self.ns.clone() };
-        Self { scope, ns: filter, xpath_ns: Rc::new(RefCell::new(BTreeMap::new())), ..self.clone() }
+        let identity = scope_identity(&scope);
+        Self { scope, identity, ns: filter, xpath_ns: Rc::new(RefCell::new(BTreeMap::new())), ..self.clone() }
     }
     /// Detaches a node without freeing memory still visible to another wrapper.
     fn detach(&self, node: Node) {
         if self.doc.detached.borrow().contains(&node) { return; }
         unsafe { ffi::unlink(node); }
         self.doc.detached.borrow_mut().push(node);
+    }
+}
+
+/// Captures the native base node retained by PHP wrappers, separate from their live selection.
+fn scope_identity(scope: &Scope) -> Node {
+    match scope {
+        Scope::Node(node) => *node,
+        Scope::Children(parent, _) | Scope::Attributes(parent, _) | Scope::Index(parent, _) =>
+            parent.first().unwrap_or(std::ptr::null_mut()),
+        Scope::Nodes(nodes) | Scope::XPath(nodes) => nodes.first().copied().unwrap_or(std::ptr::null_mut()),
     }
 }
 
@@ -189,11 +202,27 @@ fn parse_with_diagnostics(data: &[u8], options: i64, namespace: &str, prefix: bo
     let mut messages = std::ptr::null_mut();
     let raw = unsafe { ffi::parse(data.as_ptr().cast(), length, i32::try_from(options).ok()?, url.as_ptr(), style, &mut messages) };
     unsafe { diagnostics::capture(messages); }
+    from_document(raw, namespace, prefix)
+}
+
+/// Preserves filename bytes and libxml's base URI and I/O diagnostics for file factories.
+unsafe fn parse_file(filename: *const c_char, options: i64, namespace: &str, prefix: bool) -> Option<View> {
+    diagnostics::reset();
+    crate::ffi::init_library();
+    if filename.is_null() { return None; }
+    let mut messages = std::ptr::null_mut();
+    let raw = ffi::parse_file(filename, i32::try_from(options).ok()?, &mut messages);
+    diagnostics::capture(messages);
+    from_document(raw, namespace, prefix)
+}
+
+/// Adopts a parsed document once and releases rootless results on the failure path.
+fn from_document(raw: Node, namespace: &str, prefix: bool) -> Option<View> {
     if raw.is_null() { return None; }
     let root = unsafe { ffi::root(raw) };
     let doc = Rc::new(Document { raw, detached: RefCell::new(vec![]) });
     if root.is_null() { return None; }
-    Some(View { doc, scope: Scope::Node(root), ns: Namespace { value: namespace.into(), prefix },
+    Some(View { doc, scope: Scope::Node(root), identity: root, ns: Namespace { value: namespace.into(), prefix },
         xpath_ns: Rc::new(RefCell::new(BTreeMap::new())) })
 }
 

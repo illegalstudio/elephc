@@ -3857,7 +3857,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[ParamSpec { name: "diagnostic", ty: TypeSpec::Str, default: None, by_ref: false }],
         variadic: None, variadic_by_ref: false, min_args: None, max_args: None, arity_error: None,
         returns: TypeSpec::Bool, by_ref_return: false,
-        summary: "Dispatches a complete internal SimpleXML warning through PHP error handlers.",
+        summary: "Dispatches a complete internal XML diagnostic through PHP error handlers.",
         examples: &[], php_manual: None, deprecation: None, extension: false, internal: true,
         requirements: &[],
     },

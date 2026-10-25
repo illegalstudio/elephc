@@ -12,10 +12,12 @@ pub(super) const SOURCE: &str = r###"<?php
 extern "elephc_xml" {
     function elephc_xml_sx_load(string $data, int $length, int $options, string $ns, int $prefix, string $url): int;
     function elephc_xml_sx_load_dom(string $data, int $length, int $options): int;
+    function elephc_xml_sx_load_file(string $filename, int $options, string $ns, int $prefix): int;
     function elephc_xml_sx_diagnostics(): string;
     function elephc_xml_sx_free(int $handle): void;
     function elephc_xml_sx_clone(int $handle): int;
     function elephc_xml_sx_alias(int $handle): int;
+    function elephc_xml_sx_compare(int $left, int $right): int;
     function elephc_xml_sx_select(int $handle, int $kind, string $name, string $ns, int $prefix, int $index): int;
     function elephc_xml_sx_int(int $handle, int $operation): int;
     function elephc_xml_sx_projection_base(int $handle): int;
@@ -106,6 +108,10 @@ function __elephc_simplexml_write_warning(string $message): void {
 
 function __elephc_simplexml_report_diagnostics(string $caller, bool $dom = false): void {
     $text = elephc_xml_sx_diagnostics();
+    __elephc_simplexml_report_text($text, $caller, $dom);
+}
+
+function __elephc_simplexml_report_text(string $text, string $caller, bool $dom = false): void {
     if ($text === '') { return; }
     $lines = explode("\n", $text);
     $length = count($lines);
@@ -136,16 +142,17 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     }
     public function __elephc_handle_value(): int { return $this->__elephc_handle; }
     public function __construct(string $data, int $options = 0, bool $dataIsURL = false, string $namespaceOrPrefix = "", bool $isPrefix = false) {
-        $url = "";
         if ($dataIsURL) {
-            $url = $data;
-            $contents = file_get_contents($data);
-            if ($contents === false) { throw new Exception("String could not be parsed as XML"); }
-            $data = $contents;
+            $handle = elephc_xml_sx_load_file($data, $options, $namespaceOrPrefix, (int)$isPrefix);
+        } else {
+            $handle = elephc_xml_sx_load($data, strlen($data), $options, $namespaceOrPrefix, (int)$isPrefix, "");
         }
-        $handle = elephc_xml_sx_load($data, strlen($data), $options, $namespaceOrPrefix, (int)$isPrefix, $url);
         if ($handle !== 0) { $this->__elephc_attach($handle); }
-        __elephc_simplexml_report_diagnostics('SimpleXMLElement::__construct()');
+        try { __elephc_simplexml_report_diagnostics('SimpleXMLElement::__construct()'); }
+        catch (Throwable $error) {
+            if ($handle === 0) { throw new Exception("String could not be parsed as XML", 0, $error); }
+            throw $error;
+        }
         if ($handle === 0) { throw new Exception("String could not be parsed as XML"); }
         $this->__elephc_current = null;
         $this->__elephc_position = -1;
@@ -172,6 +179,31 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     public static function __elephc_div(mixed $left, mixed $right): int|float { return __elephc_simplexml_numeric_value($left) / __elephc_simplexml_numeric_value($right); }
     public static function __elephc_mod(mixed $left, mixed $right): int|float { return __elephc_simplexml_numeric_value($left) % __elephc_simplexml_numeric_value($right); }
     public static function __elephc_pow(mixed $left, mixed $right): int|float { return __elephc_simplexml_numeric_value($left) ** __elephc_simplexml_numeric_value($right); }
+    public static function __elephc_compare(mixed $left, mixed $right): int {
+        if ($left instanceof SimpleXMLElement && $right instanceof SimpleXMLElement) {
+            return elephc_xml_sx_compare($left->__elephc_handle, $right->__elephc_handle);
+        }
+        if (is_bool($left) || is_bool($right)) {
+            $a = $left instanceof SimpleXMLElement ? $left->__elephc_bool() : (bool)$left;
+            $b = $right instanceof SimpleXMLElement ? $right->__elephc_bool() : (bool)$right;
+            return (int)$a - (int)$b;
+        }
+        if (is_object($left) && !($left instanceof SimpleXMLElement)) { return 2; }
+        if (is_object($right) && !($right instanceof SimpleXMLElement)) { return 2; }
+        if ($left === null || is_array($left)) { return -1; }
+        if ($right === null || is_array($right)) { return 1; }
+        if ((is_float($left) && is_nan($left)) || (is_float($right) && is_nan($right))) { return 2; }
+        if ($left instanceof SimpleXMLElement) {
+            if (is_int($right)) { $left = $left->__elephc_int(); }
+            elseif (is_float($right)) { $left = $left->__elephc_float(); }
+            else { $left = (string)$left; }
+        } else {
+            if (is_int($left)) { $right = $right->__elephc_int(); }
+            elseif (is_float($left)) { $right = $right->__elephc_float(); }
+            else { $right = (string)$right; }
+        }
+        return $left <=> $right;
+    }
     public function __elephc_bool(): bool {
         $handle = $this->__elephc_handle;
         return elephc_xml_sx_int($handle, 3) !== 0;
@@ -529,21 +561,25 @@ function simplexml_load_string(string $data, ?string $class_name = "SimpleXMLEle
     return $object;
 }
 function simplexml_load_file(string $filename, ?string $class_name = "SimpleXMLElement", int $options = 0, string $namespace_or_prefix = "", bool $is_prefix = false): SimpleXMLElement|false {
+    if (strpos($filename, "\0") !== false) { throw new ValueError('simplexml_load_file(): Argument #1 ($filename) must not contain any null bytes'); }
     $class = __elephc_simplexml_class($class_name);
-    $data = file_get_contents($filename);
-    if ($data === false) { return false; }
-    $handle = elephc_xml_sx_load($data, strlen($data), $options, $namespace_or_prefix, (int)$is_prefix, $filename);
+    $handle = elephc_xml_sx_load_file($filename, $options, $namespace_or_prefix, (int)$is_prefix);
     $object = false;
     if ($handle !== 0) { $object = __elephc_simplexml_wrap($handle, $class); }
     __elephc_simplexml_report_diagnostics('simplexml_load_file()');
     return $object;
 }
-function __elephc_simplexml_load_dom(string $data, int $options): SimpleXMLElement|false {
+function __elephc_simplexml_load_dom(DOMDocument $document, string $data, int $options): bool {
     $handle = elephc_xml_sx_load_dom($data, strlen($data), $options);
-    $object = false;
-    if ($handle !== 0) { $object = __elephc_simplexml_wrap($handle, 'SimpleXMLElement'); }
-    __elephc_simplexml_report_diagnostics('DOMDocument::loadXML()', true);
-    return $object;
+    $diagnostics = elephc_xml_sx_diagnostics();
+    if ($handle !== 0) {
+        $object = __elephc_simplexml_wrap($handle, 'SimpleXMLElement');
+        $document->__elephc_simplexml = $object;
+        $root = $object->__elephc_dom_node($document, $document);
+        $document->childNodes = new DOMNodeList([$root]);
+    }
+    __elephc_simplexml_report_text($diagnostics, 'DOMDocument::loadXML()', true);
+    return $handle !== 0;
 }
 function __elephc_simplexml_bind_dom(DOMNode $node, SimpleXMLElement $view): void {
     $children = $node->childNodes;
