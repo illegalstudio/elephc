@@ -69,6 +69,22 @@ fn dispatch(
     result_type: PhpType, method: &str,
     fallback: impl FnOnce(&mut LoweringContext<'_, '_>, LoweredValue) -> LoweredValue,
 ) -> LoweredValue {
+    let object_type = ctx.builder.value_php_type(object.value);
+    // A concrete XML receiver needs no runtime fallback. Keep the same direct call path as a
+    // named property read so dynamic names do not add a second receiver ownership boundary.
+    let definitely_native = object_type.codegen_repr() != PhpType::Mixed
+        && singular_object_class(&object_type).is_some_and(|(class, _)|
+            crate::types::builtin_classes::has_native_dimensions(class, ctx.classes));
+    if definitely_native {
+        let value = lower_method_call_with_receiver(
+            ctx, object, method, &[name.clone()], Op::MethodCall, expr,
+        );
+        return if result_type == PhpType::Bool {
+            ctx.truthy_consuming(value, Some(expr.span))
+        } else {
+            value
+        };
+    }
     let result_staging = prepublish_call_result(ctx, &result_type, expr.span);
     let (object, owner) = root_owned_call_operand(ctx, object, expr.span);
     let class = ctx.intern_class_name("SimpleXMLElement");
