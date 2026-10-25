@@ -32,6 +32,11 @@ use crate::parser::ast::Program;
 /// reused for every injecting compile.
 static PARSED_PRELUDE: OnceLock<Program> = OnceLock::new();
 
+/// Identifies actual DOM class references for XML receiver detection before injection.
+pub(crate) fn program_uses_dom_html(program: &[crate::parser::ast::Stmt]) -> bool {
+    detect::program_uses_dom_html(program)
+}
+
 /// Tokenizes and parses the DOM HTML prelude exactly once.
 fn parsed_prelude() -> Program {
     PARSED_PRELUDE

@@ -373,24 +373,6 @@ pub(super) fn eval_array_element_reference_write(
     }
 }
 
-/// Evaluates an array-set index and normalizes PHP integer-string keys.
-pub(super) fn eval_array_set_index(
-    index: &EvalExpr,
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let index = eval_expr(index, context, scope, values)?;
-    if values.type_tag(index)? != EVAL_TAG_STRING {
-        return Ok(index);
-    }
-    let bytes = values.string_bytes(index)?;
-    match eval_numeric_string_array_key(&bytes) {
-        Some(key) => values.int(key),
-        None => Ok(index),
-    }
-}
-
 /// Normalizes an array mutation key into an owned cell, consuming temporary string inputs.
 fn eval_owned_array_set_index(
     index: &EvalExpr,

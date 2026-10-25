@@ -1157,6 +1157,7 @@ class DOMDocument extends DOMNode {
     public function loadHTML(string $source, int $options = 0): bool {
         $this->__elephc_flags = $options;
         $_tree = __elephc_dom_parse_html($source, $options);
+        $this->__elephc_simplexml = null;
         $this->nodeName = "#document";
         $this->ownerDocument = null;
         $_kids = __elephc_dom_make_children($this, $this, $_tree["children"]);

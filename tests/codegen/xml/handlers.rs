@@ -14,6 +14,25 @@
 
 use crate::support::*;
 
+/// Backtrace argument capture keeps ordinary and optional handler parameters PHP-visible.
+#[test]
+fn test_xml_handler_closures_with_backtrace_capture() {
+    if skip_without_xml_native("test_xml_handler_closures_with_backtrace_capture") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$parser = xml_parser_create();
+xml_set_element_handler($parser,
+    function (XMLParser $parser, string $name, array $attributes): void { echo $name, ':', $attributes['ID'], '|'; },
+    function (XMLParser $parser, string $name, string $optional = 'end'): void { echo $optional, '|'; });
+xml_set_character_data_handler($parser, function (XMLParser $parser, string $data): void {
+    echo $data, ':', count(debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS)) > 0, '|';
+});
+var_dump(xml_parse($parser, '<r id="7">text</r>', true));
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert_eq!(out.stdout, "R:7|text:1|end|int(1)\n");
+}
+
 /// The default handler receives what no installed handler claims, and entity references
 /// follow php-src's `get_entity()` rules for every handler combination.
 #[test]

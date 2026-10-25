@@ -45,7 +45,9 @@ compareNativeXml(simplexml_import_dom($doc), simplexml_import_dom($doc));
 $source = $argc > 0 ? '$ex = new SimpleXMLElement("<r>3.5</r>"); compareNativeXml($ex, 3); compareNativeXml($ex, 3.0); compareNativeXml($ex, "3.5"); $ee = (new SimpleXMLElement("<r><e/></r>"))->e[0]; compareNativeXml($ee, false);' : '';
 eval($source);
 "###);
-    assert_eq!(out, r###"1:1:1:1:child,|{"child":"text"}|11010|10011:0|10011:0|10011:0|10011:0|00101:1|01010:-1|01010:-1|00101:1|01010:-1|00101:1|00101:1|01010:-1|10011:0|10011:0|00101:1|01010:-1|00101:1|01010:-1|00000:1|00000:1|00000:1|00000:1|10011:0|10011:0|10011:0|00101:1|10011:0|10011:0|10011:0|10011:0|00000:1|00000:1|10011:0|10011:0|10011:0|00101:1|10011:0|10011:0|"###);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert_eq!(out.stdout, r###"1:1:1:1:child,|{"child":"text"}|11010|10011:0|10011:0|10011:0|10011:0|00101:1|01010:-1|01010:-1|00101:1|01010:-1|00101:1|00101:1|01010:-1|10011:0|10011:0|00101:1|01010:-1|00101:1|01010:-1|00000:1|00000:1|00000:1|00000:1|10011:0|10011:0|10011:0|00101:1|10011:0|10011:0|10011:0|10011:0|00000:1|00000:1|10011:0|10011:0|10011:0|00101:1|10011:0|10011:0|"###);
 }
 
 /// File failures retain caller warnings and constructor chains while DOM commits successful parses before throws.
@@ -80,7 +82,9 @@ try { $doc->loadXML('<?xml version="1.1"?><new/>'); } catch (RuntimeException $e
 try { $doc->loadXML('<broken>'); } catch (RuntimeException $error) { echo $error->getMessage(), ':', $doc->documentElement->nodeName, '|'; }
 restore_error_handler();
 "###);
-    assert_eq!(out, r###"2:file-io|bool(false)
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert_eq!(out.stdout, r###"2:file-io|bool(false)
 2:ctor-io|String could not be parsed as XML|2:file-io|bool(false)
 bool(false)
 simplexml_load_file(): Argument #1 ($filename) must not contain any null bytes|loaded:loaded|2:file-io|bool(false)

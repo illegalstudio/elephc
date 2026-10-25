@@ -38,7 +38,9 @@ eval($source);
 restore_error_handler();
 "###);
     let warning = "2:SimpleXMLElement::xpath(): Undefined namespace prefix: q|bool(false)\n1|";
-    assert_eq!(out, format!("{}1|{}", warning.repeat(4), warning));
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert_eq!(out.stdout, format!("{}1|{}", warning.repeat(4), warning));
 }
 
 /// Parse failures deliver all three warnings, preserve false/throw behavior, and tolerate reentry.
@@ -82,7 +84,9 @@ restore_error_handler();
     };
     let load = warning("simplexml_load_string()", malformed, "<r>", "   ^");
     let constructor = warning("SimpleXMLElement::__construct()", malformed, "<r>", "   ^");
-    assert_eq!(out, format!("{load}bool(false)\n{}bool(false)\nbool(false)\n1|{constructor}String could not be parsed as XML|{}bool(false)\ncaught|caught|{load}bool(false)\n{load}bool(false)\n{constructor}String could not be parsed as XML|",
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert_eq!(out.stdout, format!("{load}bool(false)\n{}bool(false)\nbool(false)\n1|{constructor}String could not be parsed as XML|{}bool(false)\ncaught|caught|{load}bool(false)\n{load}bool(false)\n{constructor}String could not be parsed as XML|",
         warning("simplexml_load_string()", empty, "", "^"),
         "2:simplexml_load_file():|".repeat(3)));
 }

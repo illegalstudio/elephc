@@ -53,7 +53,10 @@ function __elephc_simplexml_assigned_value(mixed $value, bool $attribute): strin
     if ($value === null || is_scalar($value)) { return (string)$value; }
     if (is_object($value) && get_class($value) === 'SimpleXMLElement') { return (string)$value; }
     $target = $attribute ? 'attributes' : 'properties';
-    throw new TypeError("It's not possible to assign a complex type to " . $target . ', ' . get_debug_type($value) . ' given');
+    $type = gettype($value);
+    if (is_object($value)) { $type = (string)explode("\0", get_class($value))[0]; }
+    elseif (is_resource($value)) { $type = 'resource (' . get_resource_type($value) . ')'; }
+    throw new TypeError("It's not possible to assign a complex type to " . $target . ', ' . $type . ' given');
 }
 
 function __elephc_simplexml_numeric_value(mixed $value): mixed {
@@ -115,7 +118,7 @@ function __elephc_simplexml_report_text(string $text, string $caller, bool $dom 
     if ($text === '') { return; }
     $lines = explode("\n", $text);
     $length = count($lines);
-    if ($length > 0 && $lines[$length - 1] === '') { $length--; }
+    if ($length > 0 && $lines[$length - 1] === '') { $length = $length - 1; }
     for ($i = 0; $i < $length; $i++) {
         $line = $lines[$i];
         $category = 'Warning: ';
@@ -194,15 +197,13 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         if ($right === null || is_array($right)) { return 1; }
         if ((is_float($left) && is_nan($left)) || (is_float($right) && is_nan($right))) { return 2; }
         if ($left instanceof SimpleXMLElement) {
-            if (is_int($right)) { $left = $left->__elephc_int(); }
-            elseif (is_float($right)) { $left = $left->__elephc_float(); }
-            else { $left = (string)$left; }
-        } else {
-            if (is_int($left)) { $right = $right->__elephc_int(); }
-            elseif (is_float($left)) { $right = $right->__elephc_float(); }
-            else { $right = (string)$right; }
+            if (is_int($right)) { return $left->__elephc_int() <=> $right; }
+            if (is_float($right)) { return $left->__elephc_float() <=> $right; }
+            return (string)$left <=> $right;
         }
-        return $left <=> $right;
+        if (is_int($left)) { return $left <=> $right->__elephc_int(); }
+        if (is_float($left)) { return $left <=> $right->__elephc_float(); }
+        return $left <=> (string)$right;
     }
     public function __elephc_bool(): bool {
         $handle = $this->__elephc_handle;
@@ -555,8 +556,11 @@ class SimpleXMLIterator extends SimpleXMLElement {}
 function simplexml_load_string(string $data, ?string $class_name = "SimpleXMLElement", int $options = 0, string $namespace_or_prefix = "", bool $is_prefix = false): SimpleXMLElement|false {
     $class = __elephc_simplexml_class($class_name);
     $handle = elephc_xml_sx_load($data, strlen($data), $options, $namespace_or_prefix, (int)$is_prefix, "");
-    $object = false;
-    if ($handle !== 0) { $object = __elephc_simplexml_wrap($handle, $class); }
+    if ($handle === 0) {
+        __elephc_simplexml_report_diagnostics('simplexml_load_string()');
+        return false;
+    }
+    $object = __elephc_simplexml_wrap($handle, $class);
     __elephc_simplexml_report_diagnostics('simplexml_load_string()');
     return $object;
 }
@@ -564,8 +568,11 @@ function simplexml_load_file(string $filename, ?string $class_name = "SimpleXMLE
     if (strpos($filename, "\0") !== false) { throw new ValueError('simplexml_load_file(): Argument #1 ($filename) must not contain any null bytes'); }
     $class = __elephc_simplexml_class($class_name);
     $handle = elephc_xml_sx_load_file($filename, $options, $namespace_or_prefix, (int)$is_prefix);
-    $object = false;
-    if ($handle !== 0) { $object = __elephc_simplexml_wrap($handle, $class); }
+    if ($handle === 0) {
+        __elephc_simplexml_report_diagnostics('simplexml_load_file()');
+        return false;
+    }
+    $object = __elephc_simplexml_wrap($handle, $class);
     __elephc_simplexml_report_diagnostics('simplexml_load_file()');
     return $object;
 }
@@ -635,7 +642,7 @@ function __elephc_simplexml_import_node(DOMNode $node, string $class): ?SimpleXM
         return __elephc_simplexml_wrap(elephc_xml_sx_alias($handle), $class);
     }
     $result = simplexml_load_string($document->saveXML(), $class);
-    if ($result === false) { return null; }
+    if (!($result instanceof SimpleXMLElement)) { return null; }
     __elephc_simplexml_bind_dom($document, $result);
     $bound = $node->__elephc_simplexml;
     if ($bound instanceof SimpleXMLElement) {

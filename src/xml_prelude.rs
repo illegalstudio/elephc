@@ -35,6 +35,7 @@
 
 mod build;
 mod detect;
+mod dom_receiver;
 #[cfg(test)]
 mod fragments;
 

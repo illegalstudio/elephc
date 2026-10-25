@@ -9,6 +9,29 @@
 
 use crate::support::*;
 
+/// Loading HTML replaces a document's XML binding without invalidating retained old nodes.
+#[test]
+fn test_simplexml_dom_html_reload_bundle() {
+    if skip_without_xml_native("test_simplexml_dom_html_reload_bundle") { return; }
+    let out = compile_and_run_with_heap_debug(r###"<?php
+$document = new DOMDocument();
+$document->loadXML('<old>before</old>');
+$old = simplexml_import_dom($document);
+$document->loadHTML('<html><body><p>after</p></body></html>');
+var_dump($document->documentElement->nodeName, str_contains($document->saveXML(), 'after'), str_contains($document->saveXML(), '<old>'));
+echo $old->getName(), ':', (string)$old, '|';
+$document->loadHTML('<html><body><p>first</p></body></html>');
+$imported = simplexml_import_dom($document);
+$document->loadHTML('<html><body><p>second</p></body></html>');
+var_dump(str_contains($document->saveXML(), 'second'), str_contains($document->saveXML(), 'first'));
+$source = $argc > 0 ? '$ed = new DOMDocument(); $ed->loadXML("<old/>"); $ed->loadHTML("<html><body><p>new</p></body></html>"); var_dump($ed->documentElement->nodeName, str_contains($ed->saveXML(), "new"), str_contains($ed->saveXML(), "<old"));' : '';
+eval($source);
+"###);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert_eq!(out.stdout, "string(4) \"html\"\nbool(true)\nbool(false)\nold:before|bool(true)\nbool(false)\nstring(4) \"html\"\nbool(true)\nbool(false)\n");
+}
+
 /// DOM failures warn before returning, imported wrappers isolate prefixes, and iterator errors match PHP.
 #[test]
 fn test_simplexml_dom_namespace_and_iterator_bundle() {
@@ -54,5 +77,7 @@ restore_error_handler();
     let missing = "2:simplexml_import_dom(): Imported Node must have associated Document|NULL\n";
     let consumed = "Iterator not initialized or already consumed|";
     let parse = "2:DOMDocument::loadXML(): Premature end of data in tag r line 1 in Entity, line: 1|bool(false)\n";
-    assert_eq!(out, format!("{invalid}{missing}{invalid}simplexml_import_dom(): Argument #1 ($node) must be a valid XML node|2:SimpleXMLElement::xpath(): Undefined namespace prefix: q|bool(false)\n1|{{\"p\":\"urn:p\"}}|{{\"p\":\"urn:p\"}}|[]|{}{parse}8:DOMDocument::loadXML(): Unsupported version '1.1' in Entity, line: 1|bool(true)\nDOMDocument::loadXML(): Argument #1 ($source) must not be empty|caught|caught|{invalid}{parse}{consumed}", consumed.repeat(4)));
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert_eq!(out.stdout, format!("{invalid}{missing}{invalid}simplexml_import_dom(): Argument #1 ($node) must be a valid XML node|2:SimpleXMLElement::xpath(): Undefined namespace prefix: q|bool(false)\n1|{{\"p\":\"urn:p\"}}|{{\"p\":\"urn:p\"}}|[]|{}{parse}8:DOMDocument::loadXML(): Unsupported version '1.1' in Entity, line: 1|bool(true)\nDOMDocument::loadXML(): Argument #1 ($source) must not be empty|caught|caught|{invalid}{parse}{consumed}", consumed.repeat(4)));
 }
