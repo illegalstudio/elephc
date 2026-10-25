@@ -7,12 +7,58 @@
 #include <libxml/tree.h>
 #include <libxml/xpath.h>
 #include <libxml/xpathInternals.h>
+#include <libxml/xmlerror.h>
+#include <stdarg.h>
+#include <stdio.h>
 #include <string.h>
 
-/* Parse bytes without installing process-global error handlers. */
-void *elephc_libxml2_v1_sx_parse(const char *data, int len, int options, const char *url) {
-    return xmlReadMemory(data, len, url && *url ? url : NULL, NULL,
-        options | XML_PARSE_NOERROR | XML_PARSE_NOWARNING);
+/* Capture libxml diagnostics per operation, without replacing any global handler. */
+struct sx_diagnostics { xmlBufferPtr text; int options; int formatted; };
+/* Concatenate printf fragments before PHP splits complete warning lines. */
+static void sx_diagnostic_fragment(void *raw, const char *format, ...) {
+    struct sx_diagnostics *capture = raw;
+    if (!capture->text) return;
+    va_list args, copy;
+    va_start(args, format);
+    va_copy(copy, args);
+    int length = vsnprintf(NULL, 0, format, copy);
+    va_end(copy);
+    if (length >= 0) {
+        char *text = xmlMalloc((size_t)length + 1);
+        if (text) {
+            vsnprintf(text, (size_t)length + 1, format, args);
+            xmlBufferAdd(capture->text, (const xmlChar *)text, length);
+            xmlFree(text);
+        }
+    }
+    va_end(args);
+}
+/* Parser options filter diagnostics; XPath uses the message without parser context lines. */
+static void sx_diagnostic_error(void *raw, const xmlError *error) {
+    struct sx_diagnostics *capture = raw;
+    if (!capture->text || !error) return;
+    if ((error->level == XML_ERR_WARNING && (capture->options & XML_PARSE_NOWARNING)) ||
+        (error->level >= XML_ERR_ERROR && (capture->options & XML_PARSE_NOERROR))) return;
+    if (capture->formatted) xmlFormatError(error, sx_diagnostic_fragment, capture);
+    else if (error->message) xmlBufferCat(capture->text, (const xmlChar *)error->message);
+}
+/* Transfer an owned buffer to Rust, including an empty buffer when no warning occurred. */
+static void sx_diagnostic_finish(struct sx_diagnostics *capture, char **diagnostics) {
+    *diagnostics = capture->text ? (char *)xmlStrdup(xmlBufferContent(capture->text)) : NULL;
+    if (capture->text) xmlBufferFree(capture->text);
+}
+/* Parse bytes while preserving the formatter's description, source and caret lines. */
+void *elephc_libxml2_v1_sx_parse(const char *data, int len, int options, const char *url,
+        char **diagnostics) {
+    *diagnostics = NULL;
+    xmlParserCtxtPtr context = xmlNewParserCtxt();
+    if (!context) return NULL;
+    struct sx_diagnostics capture = { xmlBufferCreate(), options, 1 };
+    xmlCtxtSetErrorHandler(context, sx_diagnostic_error, &capture);
+    xmlDocPtr doc = xmlCtxtReadMemory(context, data, len, url && *url ? url : NULL, NULL, options);
+    sx_diagnostic_finish(&capture, diagnostics);
+    xmlFreeParserCtxt(context);
+    return doc;
 }
 void elephc_libxml2_v1_sx_doc_free(void *doc) { xmlFreeDoc(doc); }
 void *elephc_libxml2_v1_sx_root(void *doc) { return xmlDocGetRootElement(doc); }
@@ -129,8 +175,13 @@ void *elephc_libxml2_v1_sx_xpath_context(void *doc, void *node) {
 int elephc_libxml2_v1_sx_xpath_register(void *ctx, const char *prefix, const char *uri) {
     return xmlXPathRegisterNs(ctx, (const xmlChar *)prefix, (const xmlChar *)uri);
 }
-void *elephc_libxml2_v1_sx_xpath_eval(void *ctx, const char *expression) {
-    return xmlXPathEvalExpression((const xmlChar *)expression, ctx);
+void *elephc_libxml2_v1_sx_xpath_eval(void *ctx, const char *expression, char **diagnostics) {
+    struct sx_diagnostics capture = { xmlBufferCreate(), 0, 0 };
+    xmlXPathSetErrorHandler(ctx, sx_diagnostic_error, &capture);
+    xmlXPathObjectPtr result = xmlXPathEvalExpression((const xmlChar *)expression, ctx);
+    xmlXPathSetErrorHandler(ctx, NULL, NULL);
+    sx_diagnostic_finish(&capture, diagnostics);
+    return result;
 }
 int elephc_libxml2_v1_sx_xpath_count(void *result) {
     xmlXPathObjectPtr obj = result;

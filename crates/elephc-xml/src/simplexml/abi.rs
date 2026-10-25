@@ -38,11 +38,15 @@ fn output(value: String) -> *const c_char {
 #[no_mangle]
 pub unsafe extern "C" fn elephc_xml_sx_load(data: *const c_char, length: i64, options: i64, ns: *const c_char, prefix: i64, url: *const c_char) -> i64 {
     guard(|| {
-        if data.is_null() || length <= 0 || length > i32::MAX as i64 { return 0; }
+        diagnostics::reset();
+        if data.is_null() || length < 0 || length > i32::MAX as i64 { return 0; }
         parse_with_url(std::slice::from_raw_parts(data.cast(), length as usize), options,
             &string(ns), prefix != 0, &string(url)).map(insert).unwrap_or(0)
     })
 }
+/// Consumes formatted diagnostics before user warning handlers can run nested native operations.
+#[no_mangle]
+pub extern "C" fn elephc_xml_sx_diagnostics() -> *const c_char { guard(|| output(diagnostics::take())) }
 /// Releases one wrapper; the document dies only after its final selection is released.
 #[no_mangle]
 pub extern "C" fn elephc_xml_sx_free(handle: i64) { guard(|| REGISTRY.with(|r| { r.borrow_mut().views.remove(&handle); })); }
@@ -141,14 +145,14 @@ pub unsafe extern "C" fn elephc_xml_sx_register(handle: i64, prefix: *const c_ch
 /// Evaluates XPath; -1 is invalid and other negative values encode scalar result kinds.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_xml_sx_xpath(handle: i64, expression: *const c_char) -> i64 {
-    guard(|| view(handle).map(|v| {
+    guard(|| { diagnostics::reset(); view(handle).map(|v| {
         if v.first().is_none() || matches!(v.scope, Scope::Attributes(..)) { return 0; }
         match v.xpath(&string(expression)) {
             Ok(nodes) => insert(v.with_scope(Scope::XPath(nodes))),
             Err(query::XPathError::Invalid) => -1,
             Err(query::XPathError::Scalar(kind)) => -i64::from(kind) - 1,
         }
-    }).unwrap_or(-1))
+    }).unwrap_or(-1) })
 }
 /// Reads one namespace prefix/URI or the entry count (index -1), encoded as a C string.
 #[no_mangle]

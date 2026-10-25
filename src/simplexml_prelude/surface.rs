@@ -11,6 +11,7 @@
 pub(super) const SOURCE: &str = r###"<?php
 extern "elephc_xml" {
     function elephc_xml_sx_load(string $data, int $length, int $options, string $ns, int $prefix, string $url): int;
+    function elephc_xml_sx_diagnostics(): string;
     function elephc_xml_sx_free(int $handle): void;
     function elephc_xml_sx_clone(int $handle): int;
     function elephc_xml_sx_alias(int $handle): int;
@@ -102,6 +103,17 @@ function __elephc_simplexml_write_warning(string $message): void {
     __elephc_simplexml_warning('Warning: ' . $caller . ': ' . $message . "\n");
 }
 
+function __elephc_simplexml_report_diagnostics(string $caller): void {
+    $text = elephc_xml_sx_diagnostics();
+    if ($text === '') { return; }
+    $lines = explode("\n", $text);
+    $length = count($lines);
+    if ($length > 0 && $lines[$length - 1] === '') { $length--; }
+    for ($i = 0; $i < $length; $i++) {
+        __elephc_simplexml_warning('Warning: ' . $caller . ': ' . $lines[$i] . "\n");
+    }
+}
+
 final class __ElephcSimpleXMLLease {
     private int $handle;
     public function __construct(int $handle) { $this->handle = $handle; }
@@ -127,8 +139,9 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
             $data = $contents;
         }
         $handle = elephc_xml_sx_load($data, strlen($data), $options, $namespaceOrPrefix, (int)$isPrefix, $url);
+        if ($handle !== 0) { $this->__elephc_attach($handle); }
+        __elephc_simplexml_report_diagnostics('SimpleXMLElement::__construct()');
         if ($handle === 0) { throw new Exception("String could not be parsed as XML"); }
-        $this->__elephc_attach($handle);
         $this->__elephc_current = null;
         $this->__elephc_position = -1;
     }
@@ -335,6 +348,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $result = elephc_xml_sx_xpath($handle, $expression);
         if ($result === 0) { return null; }
         if ($result < 0) {
+            __elephc_simplexml_report_diagnostics('SimpleXMLElement::xpath()');
             if ($result !== -1) {
                 $type = 'undefined';
                 if ($result === -3) { $type = 'bool'; }
@@ -504,16 +518,20 @@ class SimpleXMLIterator extends SimpleXMLElement {}
 function simplexml_load_string(string $data, ?string $class_name = "SimpleXMLElement", int $options = 0, string $namespace_or_prefix = "", bool $is_prefix = false): SimpleXMLElement|false {
     $class = __elephc_simplexml_class($class_name);
     $handle = elephc_xml_sx_load($data, strlen($data), $options, $namespace_or_prefix, (int)$is_prefix, "");
-    if ($handle === 0) { return false; }
-    return __elephc_simplexml_wrap($handle, $class);
+    $object = false;
+    if ($handle !== 0) { $object = __elephc_simplexml_wrap($handle, $class); }
+    __elephc_simplexml_report_diagnostics('simplexml_load_string()');
+    return $object;
 }
 function simplexml_load_file(string $filename, ?string $class_name = "SimpleXMLElement", int $options = 0, string $namespace_or_prefix = "", bool $is_prefix = false): SimpleXMLElement|false {
     $class = __elephc_simplexml_class($class_name);
     $data = file_get_contents($filename);
     if ($data === false) { return false; }
     $handle = elephc_xml_sx_load($data, strlen($data), $options, $namespace_or_prefix, (int)$is_prefix, $filename);
-    if ($handle === 0) { return false; }
-    return __elephc_simplexml_wrap($handle, $class);
+    $object = false;
+    if ($handle !== 0) { $object = __elephc_simplexml_wrap($handle, $class); }
+    __elephc_simplexml_report_diagnostics('simplexml_load_file()');
+    return $object;
 }
 function __elephc_simplexml_bind_dom(DOMNode $node, SimpleXMLElement $view): void {
     $children = $node->childNodes;

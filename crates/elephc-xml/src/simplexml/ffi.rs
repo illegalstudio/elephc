@@ -36,7 +36,8 @@ extern "C" {
     pub(super) fn correspond(source: Node, destination: Node, node: Node) -> Node;
     /// Calls the opaque shim parse operation.
     #[link_name = "elephc_libxml2_v1_sx_parse"]
-    pub(super) fn parse(data: *const c_char, len: c_int, options: c_int, url: *const c_char) -> Node;
+    pub(super) fn parse(data: *const c_char, len: c_int, options: c_int, url: *const c_char,
+        diagnostics: *mut *mut c_char) -> Node;
     /// Calls the opaque shim doc_free operation.
     #[link_name = "elephc_libxml2_v1_sx_doc_free"]
     pub(super) fn doc_free(doc: Node) -> ();
@@ -102,7 +103,7 @@ extern "C" {
     pub(super) fn xpath_register(ctx: Node, prefix: *const c_char, uri: *const c_char) -> c_int;
     /// Calls the opaque shim xpath_eval operation.
     #[link_name = "elephc_libxml2_v1_sx_xpath_eval"]
-    pub(super) fn xpath_eval(ctx: Node, expression: *const c_char) -> Node;
+    pub(super) fn xpath_eval(ctx: Node, expression: *const c_char, diagnostics: *mut *mut c_char) -> Node;
     /// Calls the opaque shim xpath_count operation.
     #[link_name = "elephc_libxml2_v1_sx_xpath_count"]
     pub(super) fn xpath_count(result: Node) -> c_int;

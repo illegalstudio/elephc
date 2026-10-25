@@ -11,6 +11,7 @@
 
 mod abi;
 mod cloning;
+mod diagnostics;
 mod ffi;
 mod mutation;
 mod query;
@@ -111,8 +112,10 @@ impl View {
         }
         Some(self.with_scope(Scope::Node(node)))
     }
-    /// Builds an independent wrapper while sharing the document and XPath registrations.
-    fn with_scope(&self, scope: Scope) -> Self { Self { scope, ..self.clone() } }
+    /// Builds a new wrapper with its own empty XPath context, sharing only native storage.
+    fn with_scope(&self, scope: Scope) -> Self {
+        Self { scope, xpath_ns: Rc::new(RefCell::new(BTreeMap::new())), ..self.clone() }
+    }
     /// Builds children, attributes, named properties, or a numeric offset selection.
     fn select(&self, kind: i64, name: &str, ns: &str, prefix: bool, index: usize) -> Self {
         let parent = Rc::new(self.clone());
@@ -174,10 +177,13 @@ fn parse(data: &[u8], options: i64, namespace: &str, prefix: bool) -> Option<Vie
 
 /// Retains a file's base URI while libxml2 resolves relative external subsets and entities.
 fn parse_with_url(data: &[u8], options: i64, namespace: &str, prefix: bool, url: &str) -> Option<View> {
+    diagnostics::reset();
     crate::ffi::init_library();
     let length = i32::try_from(data.len()).ok()?;
     let url = cstring(url);
-    let raw = unsafe { ffi::parse(data.as_ptr().cast(), length, i32::try_from(options).ok()?, url.as_ptr()) };
+    let mut messages = std::ptr::null_mut();
+    let raw = unsafe { ffi::parse(data.as_ptr().cast(), length, i32::try_from(options).ok()?, url.as_ptr(), &mut messages) };
+    unsafe { diagnostics::capture(messages); }
     if raw.is_null() { return None; }
     let root = unsafe { ffi::root(raw) };
     let doc = Rc::new(Document { raw, detached: RefCell::new(vec![]) });

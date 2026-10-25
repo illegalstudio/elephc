@@ -50,6 +50,7 @@ echo $doc->saveXML();
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     assert!(assembly.contains("elephc_xml_sx_load"), "{target}: document parsing boundary");
     assert!(assembly.contains("elephc_xml_sx_mutate"), "{target}: document mutation boundary");
+    assert!(assembly.contains("elephc_xml_sx_diagnostics"), "{target}: native diagnostic transfer boundary");
     assert!(assembly.contains(&crate::names::method_symbol("SimpleXMLElement", "__elephc_array")),
         "{target}: native property projection body");
     assert!(assembly.contains(&crate::names::method_symbol("SimpleXMLElement", "__elephc_clone_initialize")),

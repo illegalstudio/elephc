@@ -76,6 +76,47 @@ fn simplexml_xpath_namespace_and_text_nodes() {
     assert_eq!(root.xpath("count(//a)"), Err(query::XPathError::Scalar(3)));
 }
 
+/// Newly materialized wrappers own independent prefix maps while aliases and clones preserve theirs.
+#[test]
+fn simplexml_derived_xpath_registrations_are_isolated() {
+    let root = parse(b"<r xmlns:p='urn:p'><p:v>one</p:v><c/></r>", 0, "", false).unwrap();
+    root.xpath_ns.borrow_mut().insert("q".into(), "urn:p".into());
+    let alias = root.clone();
+    let copied = root.deep_clone().unwrap();
+    let results = root.with_scope(Scope::XPath(root.xpath("//c").unwrap()));
+    let xpath = results.item(0).unwrap();
+    let iterated = root.item(0).unwrap();
+    let added = root.with_scope(Scope::Node(root.add("d", None, None, false).unwrap()));
+    for derived in [xpath, iterated, added] {
+        assert_eq!(derived.xpath("//q:v"), Err(query::XPathError::Invalid));
+        assert!(diagnostics::take().contains("Undefined namespace prefix"));
+        derived.xpath_ns.borrow_mut().insert("q".into(), "urn:other".into());
+        assert_eq!(root.xpath("//q:v").unwrap().len(), 1);
+    }
+    alias.xpath_ns.borrow_mut().insert("q".into(), "urn:other".into());
+    assert!(root.xpath("//q:v").unwrap().is_empty());
+    assert_eq!(copied.xpath("//q:v").unwrap().len(), 1);
+}
+
+/// Parser diagnostics retain source/caret lines, respect options, and clear between operations.
+#[test]
+fn simplexml_parse_diagnostics_preserve_php_lines() {
+    assert!(parse(b"<r>", 0, "", false).is_none());
+    let messages = diagnostics::take();
+    let lines = messages.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 3);
+    assert!(lines[0].contains("Premature end of data in tag r line 1"));
+    assert_eq!(lines[1], "<r>");
+    assert_eq!(lines[2], "   ^");
+    assert!(diagnostics::take().is_empty());
+    assert!(parse(b"", 0, "", false).is_none());
+    assert!(diagnostics::take().contains("Document is empty"));
+    assert!(parse(b"<r>", 32, "", false).is_none());
+    assert!(diagnostics::take().is_empty());
+    assert!(parse(b"<r/>", 0, "", false).is_some());
+    assert!(diagnostics::take().is_empty());
+}
+
 /// XPath attribute wrappers count and iterate only their selected expanded name.
 #[test]
 fn simplexml_xpath_attribute_wrappers_preserve_namespace_uri() {

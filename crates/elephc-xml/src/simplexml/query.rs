@@ -16,6 +16,7 @@ pub(super) enum XPathError { Invalid, Scalar(i32) }
 impl View {
     /// Evaluates XPath with in-scope prefixes followed by explicitly registered overrides.
     pub(super) fn xpath(&self, expression: &str) -> Result<Vec<Node>, XPathError> {
+        diagnostics::reset();
         let node = self.first().ok_or(XPathError::Invalid)?;
         unsafe {
             let context = ffi::xpath_context(self.doc.raw, node);
@@ -23,7 +24,9 @@ impl View {
             for (prefix, uri) in self.xpath_ns.borrow().iter() {
                 ffi::xpath_register(context, cstring(prefix).as_ptr(), cstring(uri).as_ptr());
             }
-            let result = ffi::xpath_eval(context, cstring(expression).as_ptr());
+            let mut messages = std::ptr::null_mut();
+            let result = ffi::xpath_eval(context, cstring(expression).as_ptr(), &mut messages);
+            diagnostics::capture(messages);
             let count = ffi::xpath_count(result);
             let kind = ffi::xpath_type(result);
             let mut nodes = Vec::new();
