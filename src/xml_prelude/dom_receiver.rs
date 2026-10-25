@@ -7,7 +7,7 @@
 //! Key details:
 //! - Known unrelated receivers never opt into libxml2 just by naming loadXML.
 //! - Boxed receivers remain conservative only in programs that reference the DOM surface.
-//! - Assignment facts accumulate across branches so either possible DOM receiver counts.
+//! - Assignments replace facts; explicit branch and loop joins preserve alternative receivers.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -16,22 +16,20 @@ use std::rc::Rc;
 use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind, TypeExpr};
 
+mod declarations;
+mod signatures;
+use declarations::{collect_declarations, Declarations};
+
 type Classes = Option<HashSet<String>>;
 type Parameter = (String, Option<TypeExpr>, Option<Expr>, bool);
 
-/// Shared declaration facts resolved with the detector's global fallback symbols.
-#[derive(Default)]
-struct Declarations {
-    classes: HashSet<String>,
-    parents: HashMap<String, String>,
-    properties: HashMap<(String, String), Classes>,
-    returns: HashMap<String, Classes>,
-}
-
 /// A lexical scope's possible receiver classes, separate from compiler type inference.
+#[derive(Clone)]
 pub(super) struct DomReceiver {
     declarations: Rc<Declarations>,
     variables: RefCell<HashMap<String, Classes>>,
+    callables: RefCell<HashMap<String, crate::types::FunctionSig>>,
+    escaped_refs: RefCell<HashSet<String>>,
     class: Option<String>,
     dom_available: bool,
 }
@@ -66,35 +64,6 @@ fn type_classes(ty: &TypeExpr) -> Classes {
     }
 }
 
-/// Collects class inheritance, property hints, and function return hints before walking calls.
-fn collect_declarations(program: &[Stmt], declarations: &mut Declarations) {
-    for stmt in program {
-        match &stmt.kind {
-            StmtKind::ClassDecl { name, extends, properties, methods, .. } => {
-                let class = php_symbol_key(name);
-                declarations.classes.insert(class.clone());
-                if let Some(parent) = extends {
-                    declarations.parents.insert(class.clone(), class_key(parent));
-                }
-                for property in properties {
-                    let ty = property.type_expr.as_ref().and_then(type_classes);
-                    declarations.properties.insert((class.clone(), property.name.clone()), ty);
-                }
-                for method in methods {
-                    collect_declarations(&method.body, declarations);
-                }
-            }
-            StmtKind::FunctionDecl { name, return_type, body, .. } => {
-                declarations.returns.insert(php_symbol_key(name), return_type.as_ref().and_then(type_classes));
-                collect_declarations(body, declarations);
-            }
-            StmtKind::Synthetic(body) | StmtKind::NamespaceBlock { body, .. }
-            | StmtKind::IncludeOnceGuard { body, .. } => collect_declarations(body, declarations),
-            _ => {}
-        }
-    }
-}
-
 impl DomReceiver {
     /// Creates the top-level scope with all known declaration hints.
     pub(super) fn new(program: &[Stmt], dom_available: bool) -> Self {
@@ -102,6 +71,7 @@ impl DomReceiver {
         collect_declarations(program, &mut declarations);
         Self {
             declarations: Rc::new(declarations), variables: RefCell::new(HashMap::new()),
+            callables: RefCell::new(HashMap::new()), escaped_refs: RefCell::new(HashSet::new()),
             class: None, dom_available,
         }
     }
@@ -111,6 +81,8 @@ impl DomReceiver {
         let result = Self {
             declarations: self.declarations.clone(),
             variables: RefCell::new(if capture { self.variables.borrow().clone() } else { HashMap::new() }),
+            callables: RefCell::new(if capture { self.callables.borrow().clone() } else { HashMap::new() }),
+            escaped_refs: RefCell::new(if capture { self.escaped_refs.borrow().clone() } else { HashSet::new() }),
             class: self.class.clone(), dom_available: self.dom_available,
         };
         for (name, ty, _, _) in params {
@@ -126,27 +98,58 @@ impl DomReceiver {
         result
     }
 
-    /// Accumulates possible assignment types instead of overwriting a different branch's facts.
+    /// Records an unconditional assignment; control-flow joins are handled separately.
     fn assign(&self, name: &str, classes: Classes) {
-        let mut variables = self.variables.borrow_mut();
-        match variables.get_mut(name) {
-            Some(Some(old)) => match classes {
-                Some(classes) => old.extend(classes),
-                None => { variables.insert(name.to_string(), None); }
-            },
-            Some(None) => {}
-            None => { variables.insert(name.to_string(), classes); }
+        self.variables.borrow_mut().insert(name.to_string(), classes);
+        self.callables.borrow_mut().remove(name);
+    }
+
+    /// Replaces this path's facts after an unconditional control-flow region.
+    pub(super) fn replace(&self, other: &Self) {
+        *self.variables.borrow_mut() = other.variables.borrow().clone();
+        *self.callables.borrow_mut() = other.callables.borrow().clone();
+        *self.escaped_refs.borrow_mut() = other.escaped_refs.borrow().clone();
+    }
+
+    /// Joins alternative paths and reports whether any receiver fact changed.
+    pub(super) fn join(&self, other: &Self) -> bool {
+        let before = self.variables.borrow().clone();
+        let right = other.variables.borrow();
+        let mut joined = before.clone();
+        for name in before.keys().chain(right.keys()) {
+            let classes = match (before.get(name), right.get(name)) {
+                (Some(Some(left)), Some(Some(right))) => Some(left.union(right).cloned().collect()),
+                _ => None,
+            };
+            joined.insert(name.clone(), classes);
         }
+        let mut callables = self.callables.borrow_mut();
+        let callables_before = callables.clone();
+        callables.retain(|name, sig| other.callables.borrow().get(name) == Some(sig));
+        let refs_before = self.escaped_refs.borrow().len();
+        self.escaped_refs.borrow_mut().extend(other.escaped_refs.borrow().iter().cloned());
+        let changed = joined != before || *callables != callables_before || refs_before != self.escaped_refs.borrow().len();
+        *self.variables.borrow_mut() = joined;
+        changed
     }
 
     /// Records local assignments before later expressions inspect their receiver.
     pub(super) fn observe_statement(&self, stmt: &Stmt) {
         match &stmt.kind {
-            StmtKind::Assign { name, value } => self.assign(name, self.classes(value)),
+            StmtKind::Assign { name, value } => {
+                let sig = self.callable_signature(value);
+                self.assign(name, self.classes(value));
+                if let Some(sig) = sig { self.callables.borrow_mut().insert(name.clone(), sig); }
+                else { self.callables.borrow_mut().remove(name); }
+            },
             StmtKind::TypedAssign { name, type_expr, .. } => self.assign(name, type_classes(type_expr)),
             StmtKind::RefAssign { target, source } => {
                 self.assign(target, None);
-                if let ExprKind::Variable(name) = &source.kind { self.assign(name, None); }
+                self.escaped_refs.borrow_mut().insert(target.clone());
+                if let ExprKind::Variable(name) = &source.kind {
+                    self.assign(name, None);
+                    self.escaped_refs.borrow_mut().insert(name.clone());
+                }
             }
             StmtKind::Foreach { key_var, value_var, .. } => {
                 self.assign(value_var, None);
@@ -158,27 +161,26 @@ impl DomReceiver {
 
     /// Records assignment expressions, including ones nested in call arguments.
     pub(super) fn observe_expression(&self, expr: &Expr) {
-        if let ExprKind::Closure { capture_refs, .. } = &expr.kind {
-            for name in capture_refs { self.assign(name, None); }
-        }
         if let ExprKind::Assignment { target, value, .. } = &expr.kind {
             if let ExprKind::Variable(name) = &target.kind {
                 self.assign(name, self.classes(value));
             }
         }
-        let args = match &expr.kind {
-            ExprKind::FunctionCall { args, .. } | ExprKind::MethodCall { args, .. }
-            | ExprKind::NullsafeMethodCall { args, .. } | ExprKind::NullsafeDynamicMethodCall { args, .. }
-            | ExprKind::StaticMethodCall { args, .. } | ExprKind::ExprCall { args, .. }
-            | ExprKind::ClosureCall { args, .. } | ExprKind::NewObject { args, .. }
-            | ExprKind::NewGeneric { args, .. } | ExprKind::NewDynamic { args, .. }
-            | ExprKind::NewDynamicObject { args, .. } | ExprKind::NewScopedObject { args, .. } => args,
-            _ => return,
-        };
-        for arg in args {
-            let arg = if let ExprKind::NamedArg { value, .. } = &arg.kind { value } else { arg };
-            if let ExprKind::Variable(name) = &arg.kind { self.assign(name, None); }
+    }
+
+    /// Marks captured aliases before analyzing a closure and remembers later indirect mutations.
+    pub(super) fn observe_captures(&self, expr: &Expr) {
+        if let ExprKind::Closure { capture_refs, .. } = &expr.kind {
+            for name in capture_refs {
+                self.assign(name, None);
+                self.escaped_refs.borrow_mut().insert(name.clone());
+            }
         }
+    }
+
+    /// Applies call mutations after the receiver and source arguments were evaluated.
+    pub(super) fn apply_mutations(&self, names: &[String]) {
+        for name in names { self.assign(name, None); }
     }
 
     /// Infers only provenance supported by explicit constructors, annotations, and aliases.

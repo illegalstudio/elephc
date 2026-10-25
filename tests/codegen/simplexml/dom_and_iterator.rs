@@ -9,6 +9,21 @@
 
 use crate::support::*;
 
+/// Dynamic method syntax and callback arrays inject the XML loader used by DOMDocument.
+#[test]
+fn test_simplexml_dynamic_dom_load_xml() {
+    if skip_without_xml_native("test_simplexml_dynamic_dom_load_xml") { return; }
+    let out = compile_and_run(r#"<?php
+$document = new DOMDocument();
+$method = 'loadXML';
+var_dump($document->$method('<r>dynamic</r>'));
+var_dump($document?->{'loadXML'}('<r>nullsafe</r>'));
+var_dump(call_user_func([$document, 'loadXML'], '<r>callback</r>'));
+echo $document->documentElement->textContent;
+"#);
+    assert_eq!(out, "bool(true)\nbool(true)\nbool(true)\ncallback");
+}
+
 /// A by-reference callback can replace a non-DOM local before its first XML load.
 #[test]
 fn test_simplexml_dom_load_after_captured_reassignment() {
