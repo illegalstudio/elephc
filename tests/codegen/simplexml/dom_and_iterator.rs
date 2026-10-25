@@ -15,7 +15,8 @@ fn test_simplexml_dom_load_after_captured_reassignment() {
     if skip_without_xml_native("test_simplexml_dom_load_after_captured_reassignment") { return; }
     let out = compile_and_run(r#"<?php
 class InitialConfig {}
-$document = new InitialConfig();
+function initialDocumentConfig(): mixed { return new InitialConfig(); }
+$document = initialDocumentConfig();
 $replace = function () use (&$document): void { $document = new DOMDocument(); };
 $replace();
 var_dump($document->loadXML('<r>captured</r>'));
