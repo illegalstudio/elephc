@@ -56,9 +56,9 @@ function __elephc_simplexml_write_warning(string $message): void {
     $caller = 'main()';
     foreach (debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS) as $frame) {
         $function = (string)$frame['function'];
-        if (str_starts_with($function, '__elephc_simplexml_')) { continue; }
-        if (isset($frame['class']) && is_a((string)$frame['class'], 'SimpleXMLElement', true)) {
-            if (str_starts_with($function, '__elephc_') || $function === 'offsetSet' || $function === '__set') { continue; }
+        if (str_starts_with($function, '__elephc_')) { continue; }
+        if (isset($frame['class']) && (string)$frame['class'] === 'SimpleXMLElement') {
+            if ($function === 'offsetSet' || $function === '__set') { continue; }
         }
         if ($function === 'eval') { $caller = 'Unknown'; }
         elseif (isset($frame['class'])) { $caller = (string)$frame['class'] . '::' . $function . '()'; }

@@ -93,15 +93,20 @@ function simpleXmlWarningCaller(SimpleXMLElement $xml): void { $xml->item[4] = '
 class SimpleXmlWarningCaller {
     public static function write(SimpleXMLElement $xml): void { $xml->item[4] = 'v'; }
 }
+class SimpleXmlUserWarningCaller extends SimpleXMLElement {
+    public function __set(string $name, mixed $value): void { $this->item[4] = $value; }
+}
 $xml = new SimpleXMLElement('<r><item>a</item></r>');
 set_error_handler(function(int $level, string $message): bool { echo $level, ':', $message, '|'; return true; });
 simpleXmlWarningCaller($xml); SimpleXmlWarningCaller::write($xml);
+$user = new SimpleXmlUserWarningCaller('<r/>'); $user->__set('ignored', 'v');
 restore_error_handler();
 "###);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, concat!(
         "2:simpleXmlWarningCaller(): Cannot add element item number 4 when only 1 such elements exist|",
         "2:SimpleXmlWarningCaller::write(): Cannot add element item number 4 when only 2 such elements exist|",
+        "2:SimpleXmlUserWarningCaller::__set(): Cannot add element item number 4 when only 0 such elements exist|",
     ));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
