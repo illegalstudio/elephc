@@ -185,7 +185,6 @@ fn compile_source_to_asm_with_defines_repr_regex_and_php_version(
         with_regex,
         php_version,
     );
-    if let Ok(assembly) = &user_asm { super::function_dump::dump_fixture_assembly(assembly); }
     (
         user_asm.expect("EIR backend codegen failed for codegen fixture"),
         runtime_asm,
@@ -504,7 +503,6 @@ pub(crate) fn lower_and_validate_ir_for_codegen_fixture(
         elephc::ir_passes::optimize_module(&mut module);
     }
     elephc::ir::validate_module(&module).expect("EIR validation failed for codegen fixture");
-    super::function_dump::dump_fixture_ir(&module);
     module
 }
 

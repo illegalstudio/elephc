@@ -11,13 +11,16 @@ use super::*;
 
 mod native_xml_reads;
 
-/// Narrows only the native branch's receiver after its successful SimpleXML instance guard.
+/// Erases boxed union metadata after the native guard while preserving concrete XML subclasses.
 pub(crate) fn borrow_native_xml_property_receiver(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, span: Span,
 ) -> LoweredValue {
-    let ty = if ctx.builder.value_php_type(object.value).codegen_repr() == PhpType::Mixed {
+    let object_type = ctx.builder.value_php_type(object.value);
+    let ty = if object_type.codegen_repr() == PhpType::Mixed {
         PhpType::Mixed
-    } else { PhpType::Object("SimpleXMLElement".into()) };
+    } else {
+        object_type
+    };
     let receiver = ctx.emit_value(Op::Borrow, vec![object.value], None, ty,
         Op::Borrow.default_effects(), Some(span));
     ctx.builder.set_value_ownership(receiver.value, Ownership::Borrowed);
