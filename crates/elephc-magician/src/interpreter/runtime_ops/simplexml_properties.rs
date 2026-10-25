@@ -10,6 +10,18 @@
 
 use super::*;
 
+/// Recognizes native XML properties without fetching or materializing a selection.
+pub(in crate::interpreter) fn is_native(
+    values: &mut impl RuntimeValueOps, object: RuntimeCellHandle, property: &str,
+) -> Result<bool, EvalStatus> {
+    if property.starts_with("__elephc_") || values.type_tag(object)? != EVAL_TAG_OBJECT { return Ok(false); }
+    match values.object_is_a(object, "SimpleXMLElement", false) {
+        Ok(found) => Ok(found),
+        Err(EvalStatus::UnsupportedConstruct) => Ok(false),
+        Err(status) => Err(status),
+    }
+}
+
 /// Tests native container emptiness without applying the object's boolean cast.
 pub(in crate::interpreter) fn empty(
     values: &mut impl RuntimeValueOps, object: RuntimeCellHandle,
@@ -38,13 +50,7 @@ pub(in crate::interpreter) fn invoke(
     values: &mut impl RuntimeValueOps, object: RuntimeCellHandle, property: &str,
     operation: elephc_builtin_contract::ObjectProperty, assigned: Option<RuntimeCellHandle>,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    if property.starts_with("__elephc_") { return Ok(None); }
-    if values.type_tag(object)? != EVAL_TAG_OBJECT { return Ok(None); }
-    match values.object_is_a(object, "SimpleXMLElement", false) {
-        Ok(true) => (),
-        Ok(false) | Err(EvalStatus::UnsupportedConstruct) => return Ok(None),
-        Err(status) => return Err(status),
-    }
+    if !is_native(values, object, property)? { return Ok(None); }
     let method = elephc_builtin_contract::lookup_class("SimpleXMLElement")
         .and_then(|class| class.operators).and_then(|operators| operators.property_method(operation))
         .ok_or(EvalStatus::RuntimeFatal)?;

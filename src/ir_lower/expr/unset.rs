@@ -355,6 +355,8 @@ pub(super) fn lower_unset_dynamic_property_access(
     let ty = ctx.builder.value_php_type(object.value);
     if ctx.classes.contains_key("SimpleXMLElement")
         && (matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+            || matches!(ty.codegen_repr(), PhpType::Object(ref class)
+                if class.is_empty() || ctx.interfaces.contains_key(class))
             || singular_object_class(&ty).is_some_and(|(class, _)|
                 crate::types::builtin_classes::has_native_dimensions(class, ctx.classes)))
     {

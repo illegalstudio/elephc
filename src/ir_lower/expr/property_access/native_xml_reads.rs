@@ -127,9 +127,10 @@ fn dispatch(
     let native_initialized = ctx.initialized_slots_snapshot();
     ctx.builder.position_at_end(regular);
     ctx.restore_initialized_slots(initial.clone());
-    let receiver = borrow_receiver(ctx, object, expr.span);
+    let (receiver, fallback_owner) = ordinary_receiver(ctx, object, expr.span);
     let value = fallback(ctx, receiver);
     store_value_into_temp(ctx, &temp, result_type, value, expr.span);
+    if let Some(owner) = fallback_owner { retire_owned_call_operand(ctx, owner, expr.span); }
     branch_to(ctx, merge);
     let regular_initialized = ctx.initialized_slots_snapshot();
     ctx.builder.position_at_end(merge);
@@ -213,7 +214,9 @@ fn dispatch_unset(
     let native_initialized = ctx.initialized_slots_snapshot();
     ctx.builder.position_at_end(regular);
     ctx.restore_initialized_slots(initial.clone());
-    fallback(ctx, object);
+    let (receiver, fallback_owner) = ordinary_receiver(ctx, object, expr.span);
+    fallback(ctx, receiver);
+    if let Some(owner) = fallback_owner { retire_owned_call_operand(ctx, owner, expr.span); }
     branch_to(ctx, merge);
     let regular_initialized = ctx.initialized_slots_snapshot();
     ctx.builder.position_at_end(merge);
@@ -261,6 +264,18 @@ fn borrow_owned_name(
     let name = ctx.load_local(temp, Some(span));
     ctx.builder.set_value_ownership(name.value, Ownership::Borrowed);
     name
+}
+
+/// Roots a boxed ordinary receiver when the source's object class is opaque.
+fn ordinary_receiver(ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, span: Span)
+    -> (LoweredValue, Option<crate::ir::LocalSlotId>)
+{
+    let borrowed = borrow_receiver(ctx, object, span);
+    let ty = ctx.builder.value_php_type(borrowed.value);
+    if !is_opaque_property_object(ctx, &ty) { return (borrowed, None); }
+    let boxed = ctx.box_value_as_mixed(borrowed, PhpType::Mixed, Some(span));
+    let (boxed, owner) = root_owned_call_operand(ctx, boxed, span);
+    (borrow_receiver(ctx, boxed, span), owner)
 }
 
 /// Lends the boxed receiver to either branch without consuming its common owner.

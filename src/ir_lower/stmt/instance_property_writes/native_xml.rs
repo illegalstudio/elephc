@@ -18,12 +18,14 @@ pub(super) fn lower(
     if property.starts_with("__elephc_") { return false; }
     let ty = ctx.builder.value_php_type(object.value);
     if let PhpType::Object(class) = ty.codegen_repr() {
-        let Some(method) = crate::types::builtin_classes::native_property_method(&class, property,
-            elephc_builtin_contract::ObjectProperty::Set, ctx.classes) else { return false; };
-        emit_set(ctx, object, property, value, method, span);
-        return true;
+        if let Some(method) = crate::types::builtin_classes::native_property_method(&class, property,
+            elephc_builtin_contract::ObjectProperty::Set, ctx.classes) {
+            emit_set(ctx, object, property, value, method, span);
+            return true;
+        }
+        if !class.is_empty() && !ctx.interfaces.contains_key(&class) { return false; }
     }
-    if !matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+    if !opaque_receiver(ctx, &ty)
         || !ctx.classes.contains_key("SimpleXMLElement") { return false; }
     let class = ctx.intern_class_name("SimpleXMLElement");
     let condition = ctx.emit_value(Op::InstanceOf, vec![object.value], Some(Immediate::Data(class)),
@@ -40,8 +42,10 @@ pub(super) fn lower(
     let native_initialized = ctx.initialized_slots_snapshot();
     ctx.builder.position_at_end(regular);
     ctx.restore_initialized_slots(initial.clone());
-    lower_property_assign_without_native(ctx, object, property, value_expr, value,
+    let (ordinary, fallback_owner) = ordinary_receiver(ctx, object, span);
+    lower_property_assign_without_native(ctx, ordinary, property, value_expr, value,
         preserve_property_operand, span);
+    if let Some(owner) = fallback_owner { crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span); }
     branch_to(ctx, merge);
     let regular_initialized = ctx.initialized_slots_snapshot();
     ctx.builder.position_at_end(merge);
@@ -67,6 +71,10 @@ fn emit_set_name(
     value: LoweredValue, method: &str, span: Span,
 ) {
     let object = crate::ir_lower::expr::borrow_native_xml_property_receiver(ctx, object, span);
+    let ty = ctx.builder.value_php_type(object.value);
+    let object = if matches!(ty.codegen_repr(), PhpType::Object(_)) && opaque_receiver(ctx, &ty) {
+        ctx.box_value_as_mixed(object, PhpType::Mixed, Some(span))
+    } else { object };
     let value = ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span));
     let signature = ctx.classes.get("SimpleXMLElement")
         .and_then(|info| info.methods.get(&php_symbol_key(method))).cloned();
@@ -82,6 +90,7 @@ fn emit_set_name(
     crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
     for value in extra { crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span)); }
     crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
 }
 
 /// Dispatches a runtime-name write while its caller owns receiver, name, and value cleanup.
@@ -91,12 +100,14 @@ pub(super) fn lower_dynamic(
 ) -> bool {
     let ty = ctx.builder.value_php_type(object.value);
     if let PhpType::Object(class) = ty.codegen_repr() {
-        let Some(method) = crate::types::builtin_classes::native_property_method(&class, "",
-            elephc_builtin_contract::ObjectProperty::Set, ctx.classes) else { return false; };
-        emit_set_name(ctx, object, name, value, method, span);
-        return true;
+        if let Some(method) = crate::types::builtin_classes::native_property_method(&class, "",
+            elephc_builtin_contract::ObjectProperty::Set, ctx.classes) {
+            emit_set_name(ctx, object, name, value, method, span);
+            return true;
+        }
+        if !class.is_empty() && !ctx.interfaces.contains_key(&class) { return false; }
     }
-    if !matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+    if !opaque_receiver(ctx, &ty)
         || !ctx.classes.contains_key("SimpleXMLElement") { return false; }
     let class = ctx.intern_class_name("SimpleXMLElement");
     let condition = ctx.emit_value(Op::InstanceOf, vec![object.value], Some(Immediate::Data(class)),
@@ -113,12 +124,38 @@ pub(super) fn lower_dynamic(
     let native_initialized = ctx.initialized_slots_snapshot();
     ctx.builder.position_at_end(regular);
     ctx.restore_initialized_slots(initial.clone());
-    ctx.emit_void(Op::DynamicPropSet, vec![object.value, name.value, value.value], None,
+    let (ordinary, fallback_owner) = ordinary_receiver(ctx, object, span);
+    ctx.emit_void(Op::DynamicPropSet, vec![ordinary.value, name.value, value.value], None,
         Op::DynamicPropSet.default_effects(), Some(span));
+    if let Some(owner) = fallback_owner { crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span); }
     branch_to(ctx, merge);
     let regular_initialized = ctx.initialized_slots_snapshot();
     ctx.builder.position_at_end(merge);
     ctx.restore_initialized_slots(merge_initialized_slots(&initial,
         native_initialized, true, regular_initialized, true));
     true
+}
+
+/// Recognizes object storage that can hold XML without naming its concrete native class.
+fn opaque_receiver(ctx: &LoweringContext<'_, '_>, ty: &PhpType) -> bool {
+    matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        || matches!(ty.codegen_repr(), PhpType::Object(class)
+            if class.is_empty() || ctx.interfaces.contains_key(&class))
+}
+
+/// Gives opaque raw objects the existing Mixed fallback ABI without consuming their outer lease.
+fn ordinary_receiver(ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, span: Span)
+    -> (LoweredValue, Option<LocalSlotId>)
+{
+    let ty = ctx.builder.value_php_type(object.value);
+    if !matches!(ty.codegen_repr(), PhpType::Object(_)) || !opaque_receiver(ctx, &ty) { return (object, None); }
+    let borrowed = ctx.emit_value(Op::Borrow, vec![object.value], None, ty,
+        Op::Borrow.default_effects(), Some(span));
+    ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+    let boxed = ctx.box_value_as_mixed(borrowed, PhpType::Mixed, Some(span));
+    let (boxed, owner) = crate::ir_lower::expr::root_owned_call_operand(ctx, boxed, span);
+    let borrowed = ctx.emit_value(Op::Borrow, vec![boxed.value], None, PhpType::Mixed,
+        Op::Borrow.default_effects(), Some(span));
+    ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+    (borrowed, owner)
 }

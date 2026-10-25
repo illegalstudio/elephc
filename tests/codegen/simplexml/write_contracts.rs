@@ -51,15 +51,18 @@ echo (string)$xml->item;
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// Write-fetch creates missing nodes before keys run, while a saved empty read stays lazy.
+/// Write-fetch creates missing nodes after keys and values run, while a saved empty read stays lazy.
 #[test]
 fn test_simplexml_missing_child_write_fetch() {
     if skip_without_xml_native("test_simplexml_missing_child_write_fetch") { return; }
     let out = compile_and_run(r###"<?php
 $xml = new SimpleXMLElement('<r/>');
 function missingXmlWriteIndex(): int { global $xml; echo (int)isset($xml->positive), '|'; return 1; }
+function missingXmlWriteValue(): string { global $xml; echo (int)isset($xml->positive), '|'; return 'ignored'; }
+function missingEvalXmlWriteIndex(): int { global $xml; echo (int)isset($xml->evaluated), '|'; return 1; }
+function missingEvalXmlWriteValue(): string { global $xml; echo (int)isset($xml->evaluated), '|'; return 'ignored'; }
 set_error_handler(function(int $level, string $message): bool { echo $level, ':', $message, '|'; return true; });
-$xml->positive[missingXmlWriteIndex()] = 'ignored';
+$xml->positive[missingXmlWriteIndex()] = missingXmlWriteValue();
 $xml->negative[-1] = 'ignored';
 $xml->zero[0] = 'c';
 $xml->appended[] = 'd';
@@ -67,18 +70,40 @@ $selection = $xml->absent;
 $selection[0] = 'ignored'; $selection[1] = 'ignored'; $selection[] = 'ignored';
 restore_error_handler();
 echo $xml->asXML();
-$code = $argc > 0 ? '$xml->evaluated[1] = "ignored";' : '';
+$code = $argc > 0 ? '$xml->evaluated[missingEvalXmlWriteIndex()] = missingEvalXmlWriteValue();' : '';
 set_error_handler(function(int $level, string $message): bool { echo $level, ':', $message, '|'; return true; });
 eval($code);
 restore_error_handler();
 echo count($xml->evaluated), ':', (string)$xml->evaluated;
 "###);
     assert_eq!(out, concat!(
-        "1|2:Cannot add element positive number 1 when only 0 such elements exist|",
-        "2:Cannot add element negative number -1 when only 0 such elements exist|",
+        "0|0|2:main(): Cannot add element positive number 1 when only 0 such elements exist|",
+        "2:main(): Cannot add element negative number -1 when only 0 such elements exist|",
         "<?xml version=\"1.0\"?>\n<r><positive/><negative/><zero>c</zero><appended>d</appended></r>\n",
-        "2:Cannot add element evaluated number 1 when only 0 such elements exist|1:",
+        "0|0|2:Unknown: Cannot add element evaluated number 1 when only 0 such elements exist|1:",
     ));
+}
+
+/// Assignment diagnostics identify their PHP caller and release backtrace storage after callbacks.
+#[test]
+fn test_simplexml_assignment_warning_caller() {
+    if skip_without_xml_native("test_simplexml_assignment_warning_caller") { return; }
+    let out = compile_and_run_with_heap_debug(r###"<?php
+function simpleXmlWarningCaller(SimpleXMLElement $xml): void { $xml->item[4] = 'v'; }
+class SimpleXmlWarningCaller {
+    public static function write(SimpleXMLElement $xml): void { $xml->item[4] = 'v'; }
+}
+$xml = new SimpleXMLElement('<r><item>a</item></r>');
+set_error_handler(function(int $level, string $message): bool { echo $level, ':', $message, '|'; return true; });
+simpleXmlWarningCaller($xml); SimpleXmlWarningCaller::write($xml);
+restore_error_handler();
+"###);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, concat!(
+        "2:simpleXmlWarningCaller(): Cannot add element item number 4 when only 1 such elements exist|",
+        "2:SimpleXmlWarningCaller::write(): Cannot add element item number 4 when only 2 such elements exist|",
+    ));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
 /// Attribute appends throw, invalid indexes warn without mutation, and in-range writes remain valid.
@@ -99,8 +124,8 @@ echo $xml->asXML();
 "###);
     assert_eq!(out, concat!(
         "Cannot append to an attribute list|Cannot create duplicate attribute|Cannot create duplicate attribute|",
-        "2:Cannot change attribute number 5 when only 1 attributes exist|",
-        "2:Cannot change attribute number -1 when only 0 attributes exist|",
+        "2:main(): Cannot change attribute number 5 when only 1 attributes exist|",
+        "2:main(): Cannot change attribute number -1 when only 0 attributes exist|",
         "<?xml version=\"1.0\"?>\n<r id=\"new\"/>\n",
     ));
 }

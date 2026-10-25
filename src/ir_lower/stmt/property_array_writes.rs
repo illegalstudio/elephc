@@ -9,6 +9,8 @@
 
 use super::*;
 
+mod native_xml;
+
 /// Lowers `$object->prop[] = value`.
 pub(super) fn lower_property_array_push(
     ctx: &mut LoweringContext<'_, '_>,
@@ -22,22 +24,21 @@ pub(super) fn lower_property_array_push(
     }, span);
     if crate::ir_lower::expr::lower_weak_map_denied_append(ctx, &receiver, value, span) { return; }
     let mut roots = Vec::new();
-    let (mut receiver, value, native_child) = if crate::ir_lower::expr::is_static_property_write_chain(object) {
+    let (mut receiver, value) = if crate::ir_lower::expr::is_static_property_write_chain(object) {
         let value = lower_rooted_property_write_operand(ctx, value, &mut roots);
         let receiver = crate::ir_lower::expr::lower_static_property_write_chain(ctx, object, value, span);
-        (receiver, value, None)
+        (receiver, value)
     } else {
         let object = lower_expr(ctx, object);
         let mut receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
-        let child = early_native_write_fetch(ctx, receiver.value, property, &mut roots, span);
         let value = lower_rooted_property_write_operand(ctx, value, &mut roots);
         receiver.place_above_operand_roots(ctx, &roots, span);
-        (receiver, value, child)
+        (receiver, value)
     };
     receiver.narrow_for_array(ctx, property, &[value.value], span);
-    if let Some(child) = native_child.or_else(|| lower_native_dimension_property(ctx, receiver.value, object, property, span)) {
-        let null = lower_expr(ctx, &Expr::new(ExprKind::Null, span));
-        array_write_core::lower_boxed_array_set_values(ctx, child, null, value, span, false);
+    if let Some(child) = native_xml::fetch(ctx, receiver.value, property, span)
+        .or_else(|| lower_native_dimension_property(ctx, receiver.value, object, property, span).map(native_xml::Fetch::known)) {
+        native_xml::write(ctx, receiver.value, child, property, None, value, span, false);
         receiver.finish(ctx, span);
         retire_property_write_roots(ctx, roots, span);
         return;
@@ -96,14 +97,7 @@ fn lower_property_array_push_value(
         return;
     }
 
-    let data = ctx.intern_string(property);
-    ctx.emit_void(
-        Op::RuntimeCall,
-        vec![object.value, value.value],
-        Some(Immediate::Data(data)),
-        effects_lookup::runtime_effects(),
-        Some(span),
-    );
+    native_xml::ordinary_append(ctx, object, property, value, span);
 }
 
 /// Lowers `$object->prop[index] = value`.
@@ -215,7 +209,7 @@ pub(super) fn lower_property_array_assign_with_update(
     update: PropertyElementUpdate,
 ) {
     let mut roots = Vec::new();
-    let (mut receiver, index, value, native_child) = if crate::ir_lower::expr::is_static_property_write_chain(object) {
+    let (mut receiver, index, value) = if crate::ir_lower::expr::is_static_property_write_chain(object) {
         let source = match update {
             PropertyElementUpdate::Stored(stored) => PropertyWriteValue::Stored(stored),
             PropertyElementUpdate::Written | PropertyElementUpdate::IncDec(_) => {
@@ -225,11 +219,10 @@ pub(super) fn lower_property_array_assign_with_update(
         let (index, value) = lower_property_write_operands(ctx, index, source, &mut roots, span);
         let receiver = crate::ir_lower::expr::lower_static_property_write_chain_with_operands(
             ctx, object, &[index.value, value.value], span);
-        (receiver, index, value, None)
+        (receiver, index, value)
     } else {
         let object = lower_expr(ctx, object);
         let mut receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
-        let child = early_native_write_fetch(ctx, receiver.value, property, &mut roots, span);
         let source = match update {
             PropertyElementUpdate::Written => PropertyWriteValue::Expr(value),
             PropertyElementUpdate::IncDec(increment) => {
@@ -242,13 +235,12 @@ pub(super) fn lower_property_array_assign_with_update(
         };
         let (index, value) = lower_property_write_operands(ctx, index, source, &mut roots, span);
         receiver.place_above_operand_roots(ctx, &roots, span);
-        (receiver, index, value, child)
+        (receiver, index, value)
     };
     receiver.narrow_for_array(ctx, property, &[index.value, value.value], span);
-    if let Some(child) = native_child.or_else(|| lower_native_dimension_property(ctx, receiver.value, object, property, span)) {
-        array_write_core::lower_boxed_array_set_values(
-            ctx, child, index, value, span, key_already_diagnosed,
-        );
+    if let Some(child) = native_xml::fetch(ctx, receiver.value, property, span)
+        .or_else(|| lower_native_dimension_property(ctx, receiver.value, object, property, span).map(native_xml::Fetch::known)) {
+        native_xml::write(ctx, receiver.value, child, property, Some(index), value, span, key_already_diagnosed);
         receiver.finish(ctx, span);
         retire_property_write_roots(ctx, roots, span);
         return;
@@ -256,30 +248,6 @@ pub(super) fn lower_property_array_assign_with_update(
     lower_property_array_assign_value(ctx, receiver.value, property, index, value, span, key_already_diagnosed);
     receiver.finish(ctx, span);
     retire_property_write_roots(ctx, roots, span);
-}
-
-/// Roots an XML write-fetch before index and value effects while leaving ordinary slots late-bound.
-fn early_native_write_fetch(
-    ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, property: &str,
-    roots: &mut Vec<LocalSlotId>, span: Span,
-) -> Option<LoweredValue> {
-    let ty = ctx.builder.value_php_type(receiver.value);
-    let (class, _) = crate::ir_lower::expr::singular_object_class(&ty)?;
-    crate::types::builtin_classes::native_property_method(class, property,
-        elephc_builtin_contract::ObjectProperty::WriteFetch, ctx.classes)?;
-    let object = ctx.emit_value(Op::Borrow, vec![receiver.value], None, ty,
-        Op::Borrow.default_effects(), Some(span));
-    ctx.builder.set_value_ownership(object.value, Ownership::Borrowed);
-    let expr = Expr::new(ExprKind::StringLiteral(property.into()), span);
-    let child = crate::ir_lower::expr::lower_native_xml_property_write_fetch(ctx, object, property, &expr);
-    let (child, root) = crate::ir_lower::expr::root_owned_call_operand(ctx, child, span);
-    let Some(root) = root else { return Some(child); };
-    roots.push(root);
-    let ty = ctx.builder.value_php_type(child.value);
-    let borrowed = ctx.emit_value(Op::Borrow, vec![child.value], None, ty,
-        Op::Borrow.default_effects(), Some(span));
-    ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
-    Some(borrowed)
 }
 
 /// Reads a native XML child through its write-fetch while the parent lease protects the receiver.

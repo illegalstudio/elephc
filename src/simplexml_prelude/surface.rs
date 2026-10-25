@@ -52,6 +52,22 @@ function __elephc_simplexml_assigned_value(mixed $value, bool $attribute): strin
     throw new TypeError("It's not possible to assign a complex type to " . $target . ', ' . get_debug_type($value) . ' given');
 }
 
+function __elephc_simplexml_write_warning(string $message): void {
+    $caller = 'main()';
+    foreach (debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS) as $frame) {
+        $function = (string)$frame['function'];
+        if (str_starts_with($function, '__elephc_simplexml_')) { continue; }
+        if (isset($frame['class']) && is_a((string)$frame['class'], 'SimpleXMLElement', true)) {
+            if (str_starts_with($function, '__elephc_') || $function === 'offsetSet' || $function === '__set') { continue; }
+        }
+        if ($function === 'eval') { $caller = 'Unknown'; }
+        elseif (isset($frame['class'])) { $caller = (string)$frame['class'] . '::' . $function . '()'; }
+        else { $caller = $function . '()'; }
+        break;
+    }
+    __elephc_simplexml_warning('Warning: ' . $caller . ': ' . $message . "\n");
+}
+
 final class __ElephcSimpleXMLLease {
     private int $handle;
     public function __construct(int $handle) { $this->handle = $handle; }
@@ -123,7 +139,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $mode = elephc_xml_sx_int($handle, 5);
         $text = __elephc_simplexml_assigned_value($value, $mode === 3 || $mode === 4);
         $status = elephc_xml_sx_mutate($handle, 2, $name, $text, "", 0, 0);
-        if ($status === -2) { __elephc_simplexml_warning("Warning: Cannot assign to an array of nodes (duplicate subnodes or attr detected)\n"); }
+        if ($status === -2) { __elephc_simplexml_write_warning('Cannot assign to an array of nodes (duplicate subnodes or attr detected)'); }
     }
     public function __isset(string $name): bool {
         return $this->__elephc_property_isset($name);
@@ -181,7 +197,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $key = "";
         if ($offset === null) { $kind = 5; }
         elseif (is_int($offset)) { $kind = 4; $index = $offset; }
-        else { $key = (string)$offset; }
+        else { $key = is_string($offset) ? $offset : trim((string)$offset); }
         if ($kind === 5 && $attributes) { throw new Error('Cannot append to an attribute list'); }
         if ($kind === 5 && $mode === 0 && elephc_xml_sx_int($handle, 9) !== 0) {
             throw new ValueError('Cannot append to an attribute list');
@@ -195,24 +211,24 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
             $length = elephc_xml_sx_int($handle, 0);
             if ($index < 0 || $index >= $length) {
                 $length = $index < 0 ? 0 : $length;
-                __elephc_simplexml_warning('Warning: Cannot change attribute number ' . $index . ' when only ' . $length . " attributes exist\n");
+                __elephc_simplexml_write_warning('Cannot change attribute number ' . $index . ' when only ' . $length . ' attributes exist');
                 return;
             }
         }
         if ($kind === 4 && $mode === 0 && $index !== 0 && elephc_xml_sx_int($handle, 1) !== 0) {
             $name = elephc_xml_sx_string($handle, 1);
-            __elephc_simplexml_warning('Warning: Cannot add element ' . $name . ' number ' . $index . " when only 0 such elements exist\n");
+            __elephc_simplexml_write_warning('Cannot add element ' . $name . ' number ' . $index . ' when only 0 such elements exist');
             return;
         }
         if ($kind === 4 && $mode === 2) {
             $length = elephc_xml_sx_int($handle, 0);
             if ($index < 0 || ($length > 0 && $index > $length)) {
                 $name = elephc_xml_sx_string($handle, 1);
-                __elephc_simplexml_warning('Warning: Cannot add element ' . $name . ' number ' . $index . ' when only ' . $length . " such elements exist\n");
+                __elephc_simplexml_write_warning('Cannot add element ' . $name . ' number ' . $index . ' when only ' . $length . ' such elements exist');
             }
         }
         $status = elephc_xml_sx_mutate($handle, $kind, $key, $text, "", 0, $index);
-        if ($status === -2) { __elephc_simplexml_warning("Warning: Cannot assign to an array of nodes (duplicate subnodes or attr detected)\n"); }
+        if ($status === -2) { __elephc_simplexml_write_warning('Cannot assign to an array of nodes (duplicate subnodes or attr detected)'); }
     }
     public function __elephc_append(mixed $value): void { $this->offsetSet(null, $value); }
     public function offsetUnset(mixed $offset): void {

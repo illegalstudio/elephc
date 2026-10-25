@@ -26,6 +26,8 @@ $peer = new XmlEmptyScalarPeer();
 var_dump(empty($peer?->text[0]));
 function xmlEmptyObjectParameter(object $node): bool { return empty($node->item); }
 var_dump(xmlEmptyObjectParameter($xml));
+function xmlWriteOpaqueParameter(mixed $node): void { $node->other[0] = 'value'; }
+xmlWriteOpaqueParameter($xml);
 $xml->xpath('count(//item)');
 echo json_encode($xml), json_encode((array)$xml), $xml->asXML();
 $doc = new DOMDocument(); $doc->loadXML('<r><v>shared</v></r>');

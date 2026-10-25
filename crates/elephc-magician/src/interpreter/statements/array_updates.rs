@@ -379,6 +379,9 @@ pub(super) fn eval_property_array_write_result(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    if op.is_none() && super::super::runtime_ops::simplexml_properties::is_native(values, object, property)? {
+        return eval_simplexml_property_array_write_result(object, property, index, value, context, scope, values);
+    }
     let mut operands = Vec::new();
     let mut result = (|| {
         let current = match super::super::runtime_ops::simplexml_properties::invoke(
@@ -427,6 +430,45 @@ pub(super) fn eval_property_array_write_result(
         // Runtime setters mutate the receiver cell in place, retaining only the inserted value.
         values.array_set(array, index, value)?;
         eval_property_set_result(object, property, array, context, values)
+    })();
+    for operand in operands.into_iter().rev() {
+        let released = eval_release_value(context, values, operand);
+        if result.is_ok() { result = released; }
+    }
+    result
+}
+
+/// Delays SimpleXML's writable child selection until the plain assignment operands finish.
+fn eval_simplexml_property_array_write_result(
+    object: RuntimeCellHandle, property: &str, index: Option<&EvalExpr>, value: &EvalExpr,
+    context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let mut operands = Vec::new();
+    let mut result = (|| {
+        let late_key = matches!(index, Some(EvalExpr::LoadVar(_)));
+        let early_index = if late_key { None } else {
+            let key = match index {
+                Some(index) => eval_owned_expr(index, context, scope, values)?,
+                None => values.null()?,
+            };
+            operands.push(key);
+            Some(key)
+        };
+        let assigned = eval_owned_expr(value, context, scope, values)?;
+        operands.push(assigned);
+        let key = if let Some(key) = early_index { key } else {
+            let key = eval_owned_expr(index.ok_or(EvalStatus::RuntimeFatal)?, context, scope, values)?;
+            operands.push(key);
+            key
+        };
+        let child = super::super::runtime_ops::simplexml_properties::invoke(
+            values, object, property, elephc_builtin_contract::ObjectProperty::WriteFetch, None,
+        )?.ok_or(EvalStatus::RuntimeFatal)?;
+        let child = if child.is_borrowed() { values.retain(child)? } else { child };
+        operands.push(child);
+        let returned = eval_method_call_result(child, "offsetSet", vec![key, assigned], context, values)?;
+        operands.push(returned);
+        Ok(())
     })();
     for operand in operands.into_iter().rev() {
         let released = eval_release_value(context, values, operand);

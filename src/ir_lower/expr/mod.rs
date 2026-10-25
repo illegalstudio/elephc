@@ -238,7 +238,7 @@ use weak_map_places::lower_weak_map_incdec_expression;
 pub(crate) use instanceof_coercions::{
     coerce_array_key_to_int_at_span, coerce_to_int_at_span,
 };
-pub(crate) use merge_temps::emit_bool_literal;
+pub(crate) use merge_temps::{emit_bool_literal, store_value_into_temp, take_owned_temp};
 pub(crate) use property_access::{
     borrow_native_xml_property_receiver,
     lower_property_get_from_value,

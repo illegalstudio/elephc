@@ -170,13 +170,13 @@ try { $xml->item[9] = 'not-added'; } catch (RuntimeException $error) { echo $err
 restore_error_handler();
 "###);
     assert_eq!(out, concat!(
-        "2:Cannot assign to an array of nodes (duplicate subnodes or attr detected)|",
+        "2:main(): Cannot assign to an array of nodes (duplicate subnodes or attr detected)|",
         "2:SimpleXMLElement::addChild(): Cannot add element to attributes|",
         "2:SimpleXMLElement::addChild(): Cannot add child. Parent is not a permanent member of the XML tree|",
         "2:SimpleXMLElement::addAttribute(): Unable to locate parent Element|",
         "2:SimpleXMLElement::addAttribute(): Attribute requires prefix for namespace|",
         "2:SimpleXMLElement::addAttribute(): Attribute already exists|",
-        "2:Cannot add element item number 5 when only 2 such elements exist|3:c|",
+        "2:main(): Cannot add element item number 5 when only 2 such elements exist|3:c|",
         "SimpleXMLElement::addChild(): Argument #1 ($qualifiedName) must not be empty|",
         "SimpleXMLElement::addAttribute(): Argument #1 ($qualifiedName) must not be empty|stopped:3",
     ));

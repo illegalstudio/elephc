@@ -78,7 +78,11 @@ pub(super) fn check_property_array_push(
         .filter(|_| matches!(&obj_ty, PhpType::Union(members)
             if members.iter().all(|ty| matches!(ty, PhpType::Object(_) | PhpType::Void))))
         .map(PhpType::Object).unwrap_or(obj_ty);
+    if matches!(&obj_ty, PhpType::Object(name) if name.is_empty() || checker.interfaces.contains_key(name)) {
+        return Ok(());
+    }
     match &obj_ty {
+        PhpType::Mixed => Ok(()),
         PhpType::Object(class_name) => {
             refuse_scope_dynamic_element_write(checker, class_name, property, span)?;
             let (prop_ty, property_has_declared_type) =
@@ -220,7 +224,9 @@ pub(super) fn check_property_array_assign(
         .filter(|_| matches!(&obj_ty, PhpType::Union(members)
             if members.iter().all(|ty| matches!(ty, PhpType::Object(_) | PhpType::Void))))
         .map(PhpType::Object).unwrap_or(obj_ty);
-    if matches!(obj_ty, PhpType::Mixed) {
+    if matches!(obj_ty, PhpType::Mixed)
+        || matches!(&obj_ty, PhpType::Object(name) if name.is_empty() || checker.interfaces.contains_key(name))
+    {
         if !is_php_array_key_type(&normalized_idx_ty) {
             return Err(CompileError::new(span, "Array index must be integer"));
         }
@@ -875,6 +881,9 @@ fn resolve_object_array_property(
     property: &str,
     span: Span,
 ) -> Result<(PhpType, bool), CompileError> {
+    if class_name.is_empty() || checker.interfaces.contains_key(class_name) {
+        return Ok((PhpType::Mixed, false));
+    }
     let class_info = checker
         .classes
         .get(class_name)

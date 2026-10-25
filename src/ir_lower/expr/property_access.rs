@@ -11,13 +11,15 @@ use super::*;
 
 mod native_xml_reads;
 
-/// Erases boxed union metadata after the native guard while preserving concrete XML subclasses.
+/// Borrows guarded XML storage, narrowing opaque object metadata while preserving boxed unions.
 pub(crate) fn borrow_native_xml_property_receiver(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, span: Span,
 ) -> LoweredValue {
     let object_type = ctx.builder.value_php_type(object.value);
     let ty = if object_type.codegen_repr() == PhpType::Mixed {
         PhpType::Mixed
+    } else if is_opaque_property_object(ctx, &object_type) {
+        PhpType::Object("SimpleXMLElement".into())
     } else {
         object_type
     };
@@ -32,8 +34,24 @@ pub(super) fn needs_native_xml_property_dispatch(
     ctx: &LoweringContext<'_, '_>, object: &Expr, property: &str,
 ) -> bool {
     !property.starts_with("__elephc_") && ctx.classes.contains_key("SimpleXMLElement")
-        && matches!(super::array_cast_source::array_cast_source_type_for_ir(ctx, object).codegen_repr(),
-            PhpType::Mixed | PhpType::Union(_))
+        && {
+            let ty = super::array_cast_source::array_cast_source_type_for_ir(ctx, object);
+            matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+                || is_opaque_property_object(ctx, &ty)
+        }
+}
+
+/// Recognizes raw object storage whose class and properties are resolved at runtime.
+fn is_opaque_property_object(ctx: &LoweringContext<'_, '_>, ty: &PhpType) -> bool {
+    matches!(ty.codegen_repr(), PhpType::Object(class)
+        if class.is_empty() || ctx.interfaces.contains_key(&class))
+}
+
+/// Uses the existing Mixed property ladders for bare-object and interface storage.
+fn box_opaque_property_receiver(ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, span: Span) -> LoweredValue {
+    let ty = ctx.builder.value_php_type(object.value);
+    if is_opaque_property_object(ctx, &ty) { ctx.box_value_as_mixed(object, PhpType::Mixed, Some(span)) }
+    else { object }
 }
 
 /// Performs a native-aware isset probe after receiver evaluation.
@@ -417,6 +435,7 @@ pub(crate) fn lower_property_get_from_value(
     op: Op,
     expr: &Expr,
 ) -> LoweredValue {
+    let object = box_opaque_property_receiver(ctx, object, expr.span);
     let ty = ctx.builder.value_php_type(object.value);
     if matches!(op, Op::PropGet | Op::NullsafePropGet)
         && !property.starts_with("__elephc_")
@@ -1038,6 +1057,7 @@ pub(super) fn lower_dynamic_property_fetch_from_operands(
     known_native: bool,
     expr: &Expr,
 ) -> LoweredValue {
+    let object = box_opaque_property_receiver(ctx, object, expr.span);
     let ty = ctx.builder.value_php_type(object.value);
     let may_be_native = matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
         || singular_object_class(&ty).is_some_and(|(class, _)|
@@ -1077,6 +1097,7 @@ pub(super) fn lower_property_probe_from_value(
     property: &str,
     expr: &Expr,
 ) -> LoweredValue {
+    let object = box_opaque_property_receiver(ctx, object, expr.span);
     if let Some(method) = native_property_method_for_value(ctx, object.value, property,
         elephc_builtin_contract::ObjectProperty::Probe)
     {

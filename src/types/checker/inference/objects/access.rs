@@ -311,6 +311,9 @@ impl Checker {
                 &format!("Undefined property: {}::{}", class_name, property),
             ));
         }
+        if class_name.is_empty() || self.interfaces.contains_key(class_name) {
+            return Ok(PhpType::Mixed);
+        }
         if self.awaits_generic_instantiation(class_name) {
             // Resolved by this round, spliced by the next one. `Mixed` keeps the rest of this
             // round meaningful; the next sees an ordinary class and types the read properly.
