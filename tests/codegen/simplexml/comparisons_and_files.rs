@@ -9,6 +9,20 @@
 
 use crate::support::*;
 
+/// Resource peers sort before XML objects, including resources that have been closed.
+#[test]
+fn test_simplexml_resource_comparison() {
+    if skip_without_xml_native("test_simplexml_resource_comparison") { return; }
+    let out = compile_and_run(r#"<?php
+$xml = new SimpleXMLElement('<r>0</r>');
+$stream = fopen('php://temp', 'r+');
+var_dump($xml > $stream, $stream < $xml, $xml <=> $stream, $stream <=> $xml);
+fclose($stream);
+var_dump($xml > $stream, $stream < $xml, $xml <=> $stream, $stream <=> $xml);
+"#);
+    assert_eq!(out, "bool(true)\nbool(true)\nint(1)\nint(-1)\nbool(true)\nbool(true)\nint(1)\nint(-1)\n");
+}
+
 /// Native node identity and peer-directed casts preserve PHP comparison and namespace behavior.
 #[test]
 fn test_simplexml_native_comparison_and_default_namespace_bundle() {

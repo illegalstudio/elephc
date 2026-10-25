@@ -193,17 +193,17 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         }
         if (is_object($left) && !($left instanceof SimpleXMLElement)) { return 2; }
         if (is_object($right) && !($right instanceof SimpleXMLElement)) { return 2; }
-        if ($left === null || is_array($left)) { return -1; }
-        if ($right === null || is_array($right)) { return 1; }
+        if ($left === null || is_array($left) || is_resource($left) || gettype($left) === 'resource (closed)') { return -1; }
+        if ($right === null || is_array($right) || is_resource($right) || gettype($right) === 'resource (closed)') { return 1; }
         if ((is_float($left) && is_nan($left)) || (is_float($right) && is_nan($right))) { return 2; }
         if ($left instanceof SimpleXMLElement) {
             if (is_int($right)) { return $left->__elephc_int() <=> $right; }
             if (is_float($right)) { return $left->__elephc_float() <=> $right; }
-            return (string)$left <=> $right;
+            return (string)$left <=> (string)$right;
         }
         if (is_int($left)) { return $left <=> $right->__elephc_int(); }
         if (is_float($left)) { return $left <=> $right->__elephc_float(); }
-        return $left <=> (string)$right;
+        return (string)$left <=> (string)$right;
     }
     public function __elephc_bool(): bool {
         $handle = $this->__elephc_handle;
