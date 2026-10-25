@@ -62,9 +62,9 @@ echo $s[0][5], $s[1][9], "|", $m[0][3], $m[0]["k"], $m[1][7];
 
 /// String VALUES work, which is what the indexed helpers cannot do.
 ///
-/// An indexed `array<string>` still reports unsupported here (issue #675): its 16-byte
-/// `{pointer, length}` slots do not fit the pointer-sized chunk helpers. Building hash chunks
-/// sidesteps that, so the associative path carries string values in both modes.
+/// An indexed `array<string>` needs its own helper for this (`__rt_array_chunk_str`, issue #675):
+/// its 16-byte `{pointer, length}` slots do not fit the pointer-sized chunk helpers. Building hash
+/// chunks sidesteps that, so the associative path carries string values in both modes.
 #[test]
 fn test_assoc_chunk_carries_string_values() {
     let out = compile_and_run(

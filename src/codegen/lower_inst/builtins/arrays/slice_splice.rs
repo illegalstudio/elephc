@@ -479,16 +479,27 @@ pub(super) fn lower_array_pad_call(
     pad_value: ValueId,
     source_elem_ty: &PhpType,
 ) -> Result<()> {
+    // A string pad value travels as its {pointer, length} pair in the third and fourth
+    // argument registers (`__rt_array_pad_str`); every other layout fits the third alone.
+    let pad_is_str = source_elem_ty == &PhpType::Str;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(array, "x0")?;
             ctx.load_value_to_reg(target_size, "x1")?;
-            ctx.load_value_to_reg(pad_value, "x2")?;
+            if pad_is_str {
+                ctx.load_string_value_to_regs(pad_value, "x2", "x3")?;
+            } else {
+                ctx.load_value_to_reg(pad_value, "x2")?;
+            }
         }
         Arch::X86_64 => {
             ctx.load_value_to_reg(array, "rdi")?;
             ctx.load_value_to_reg(target_size, "rsi")?;
-            ctx.load_value_to_reg(pad_value, "rdx")?;
+            if pad_is_str {
+                ctx.load_string_value_to_regs(pad_value, "rdx", "rcx")?;
+            } else {
+                ctx.load_value_to_reg(pad_value, "rdx")?;
+            }
         }
     }
     emit_array_pad_length_guard(ctx);
@@ -534,7 +545,9 @@ fn emit_array_pad_length_guard(ctx: &mut FunctionContext<'_>) {
 
 /// Returns the helper that matches the chunk source element ownership representation.
 pub(super) fn array_chunk_runtime_helper(source_elem_ty: &PhpType) -> &'static str {
-    if source_elem_ty.is_refcounted() {
+    if source_elem_ty == &PhpType::Str {
+        "__rt_array_chunk_str"
+    } else if source_elem_ty.is_refcounted() {
         "__rt_array_chunk_refcounted"
     } else {
         "__rt_array_chunk"
@@ -543,7 +556,9 @@ pub(super) fn array_chunk_runtime_helper(source_elem_ty: &PhpType) -> &'static s
 
 /// Returns the helper that matches the pad source element ownership representation.
 pub(super) fn array_pad_runtime_helper(source_elem_ty: &PhpType) -> &'static str {
-    if source_elem_ty.is_refcounted() {
+    if source_elem_ty == &PhpType::Str {
+        "__rt_array_pad_str"
+    } else if source_elem_ty.is_refcounted() {
         "__rt_array_pad_refcounted"
     } else {
         "__rt_array_pad"
