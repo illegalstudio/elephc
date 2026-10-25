@@ -22,6 +22,7 @@ type Parameter = (String, Option<TypeExpr>, Option<Expr>, bool);
 /// Shared declaration facts resolved with the detector's global fallback symbols.
 #[derive(Default)]
 struct Declarations {
+    classes: HashSet<String>,
     parents: HashMap<String, String>,
     properties: HashMap<(String, String), Classes>,
     returns: HashMap<String, Classes>,
@@ -71,6 +72,7 @@ fn collect_declarations(program: &[Stmt], declarations: &mut Declarations) {
         match &stmt.kind {
             StmtKind::ClassDecl { name, extends, properties, methods, .. } => {
                 let class = php_symbol_key(name);
+                declarations.classes.insert(class.clone());
                 if let Some(parent) = extends {
                     declarations.parents.insert(class.clone(), class_key(parent));
                 }
@@ -214,7 +216,9 @@ impl DomReceiver {
             loop {
                 if class == "#domdocument" { return true; }
                 if !visited.insert(class.clone()) { return false; }
-                let Some(parent) = self.declarations.parents.get(&class) else { return false; };
+                let Some(parent) = self.declarations.parents.get(&class) else {
+                    return !self.declarations.classes.contains(&class) && self.dom_available;
+                };
                 class = parent.clone();
             }
         })

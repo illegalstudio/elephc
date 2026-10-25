@@ -84,7 +84,13 @@ pub(super) fn program_uses_xml(program: &[Stmt]) -> bool {
         program.to_vec(), xml_functions(), &classes,
     )
     .is_ok_and(|resolved| {
-        let detector = Detector { dom: super::dom_receiver::DomReceiver::new(&resolved, dom_available) };
+        let mut detector = Detector {
+            dom: super::dom_receiver::DomReceiver::new(&resolved, dom_available),
+            collect_only: true,
+        };
+        if resolved.iter().any(|stmt| detector.stmt_refs_xml(stmt)) { return true; }
+        // A loop's receiver can come from an assignment later in its body.
+        detector.collect_only = false;
         resolved.iter().any(|stmt| detector.stmt_refs_xml(stmt))
     })
 }
@@ -175,6 +181,7 @@ fn packed_field_refs_xml(field: &PackedField) -> bool {
 /// Receiver facts shared by the exhaustive XML reference walk.
 struct Detector {
     dom: super::dom_receiver::DomReceiver,
+    collect_only: bool,
 }
 
 impl Detector {
@@ -185,7 +192,10 @@ impl Detector {
         body: &[Stmt],
         capture: bool,
     ) -> bool {
-        let detector = Self { dom: self.dom.nested(params, capture) };
+        if self.collect_only { return false; }
+        let mut detector = Self { dom: self.dom.nested(params, capture), collect_only: true };
+        if body.iter().any(|stmt| detector.stmt_refs_xml(stmt)) { return true; }
+        detector.collect_only = false;
         body.iter().any(|stmt| detector.stmt_refs_xml(stmt))
     }
 
@@ -416,6 +426,10 @@ impl Detector {
     /// class members. The `match` is exhaustive so a newly added `StmtKind` cannot silently
     /// bypass detection.
     fn stmt_refs_xml(&self, stmt: &Stmt) -> bool {
+        if self.collect_only && matches!(stmt.kind,
+            StmtKind::FunctionDecl { .. } | StmtKind::ClassDecl { .. } | StmtKind::EnumDecl { .. }
+            | StmtKind::InterfaceDecl { .. } | StmtKind::TraitDecl { .. }
+        ) { return false; }
         self.dom.observe_statement(stmt);
         match &stmt.kind {
             // Statements with no xml-name position and no child expr/stmt.
@@ -557,7 +571,7 @@ impl Detector {
                     || implements.iter().any(name_is_xml_class)
                     || trait_uses.iter().any(trait_use_refs_xml)
                     || properties.iter().any(|value| self.class_property_refs_xml(value))
-                    || methods.iter().any(|value| Self { dom: self.dom.in_class(name) }.class_method_refs_xml(value))
+                    || methods.iter().any(|value| Self { dom: self.dom.in_class(name), collect_only: self.collect_only }.class_method_refs_xml(value))
                     || constants.iter().any(|value| self.class_const_refs_xml(value))
             }
             // An enum carries the same member kinds as a class (methods, constants, trait
@@ -577,7 +591,7 @@ impl Detector {
                     || cases.iter().any(|value| self.enum_case_refs_xml(value))
                     || implements.iter().any(name_is_xml_class)
                     || trait_uses.iter().any(trait_use_refs_xml)
-                    || methods.iter().any(|value| Self { dom: self.dom.in_class(name) }.class_method_refs_xml(value))
+                    || methods.iter().any(|value| Self { dom: self.dom.in_class(name), collect_only: self.collect_only }.class_method_refs_xml(value))
                     || constants.iter().any(|value| self.class_const_refs_xml(value))
             }
             StmtKind::PackedClassDecl { fields, .. } => fields.iter().any(packed_field_refs_xml),
@@ -591,7 +605,7 @@ impl Detector {
             } => {
                 extends.iter().any(name_is_xml_class)
                     || properties.iter().any(|value| self.class_property_refs_xml(value))
-                    || methods.iter().any(|value| Self { dom: self.dom.in_class(name) }.class_method_refs_xml(value))
+                    || methods.iter().any(|value| Self { dom: self.dom.in_class(name), collect_only: self.collect_only }.class_method_refs_xml(value))
                     || constants.iter().any(|value| self.class_const_refs_xml(value))
             }
             StmtKind::TraitDecl {
@@ -604,7 +618,7 @@ impl Detector {
             } => {
                 trait_uses.iter().any(trait_use_refs_xml)
                     || properties.iter().any(|value| self.class_property_refs_xml(value))
-                    || methods.iter().any(|value| Self { dom: self.dom.in_class(name) }.class_method_refs_xml(value))
+                    || methods.iter().any(|value| Self { dom: self.dom.in_class(name), collect_only: self.collect_only }.class_method_refs_xml(value))
                     || constants.iter().any(|value| self.class_const_refs_xml(value))
             }
             StmtKind::PropertyAssign { object, value, .. } => {
@@ -843,6 +857,9 @@ mod tests {
             "$doc = new DOMDocument(); $parse = function () use ($doc) { $doc->loadXML('<r/>'); };",
             "class Config {} $doc = new Config(); if ($argc) { $doc = new DOMDocument(); } $doc->loadXML('<r/>');",
             "namespace App; use DOMDocument as Doc; $doc = new Doc(); $doc->loadXML('<r/>');",
+            "class Config {} $doc = new Config(); while ($argc) { $doc->loadXML('<r/>'); $doc = new DOMDocument(); }",
+            "function run(): void { $doc = new Config(); while ($argc) { $doc->loadXML('<r/>'); $doc = new DOMDocument(); } } class Config {}",
+            "if ($argc) { class Document extends DOMDocument {} } $doc = new Document(); $doc->loadXML('<r/>');",
         ] {
             assert!(program_uses_xml(&parse(&format!("<?php {source}"))), "{source}");
         }
