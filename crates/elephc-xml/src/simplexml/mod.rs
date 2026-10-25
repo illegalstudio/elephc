@@ -34,7 +34,7 @@ impl Drop for Document {
     }
 }
 
-/// Namespace matching follows either a URI or a prefix, with no filter for an empty URI.
+/// An empty selector matches unprefixed nodes, including nodes in a default namespace.
 #[derive(Clone, Default)]
 struct Namespace { value: String, prefix: bool }
 impl Namespace {
