@@ -40,6 +40,7 @@ mod ref_place_args;
 mod boxed_user_sort;
 mod scalar_literals;
 mod numeric_binary;
+mod prepared_binary;
 pub(crate) mod object_operators;
 mod string_concat;
 mod comparisons;
@@ -239,6 +240,8 @@ pub(crate) use instanceof_coercions::{
     coerce_array_key_to_int_at_span, coerce_to_int_at_span,
 };
 pub(crate) use merge_temps::{emit_bool_literal, store_value_into_temp, take_owned_temp};
+pub(crate) use prepared_binary::lower_prepared_binary;
+pub(crate) use array_access::lower_array_access_from_values;
 pub(crate) use property_access::{
     borrow_native_xml_property_receiver,
     lower_property_get_from_value,

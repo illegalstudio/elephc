@@ -128,6 +128,14 @@ pub(super) fn lower_numeric_binary(
     let (lhs, left_pins) = object_operators::capture_left_operand(ctx, lhs, left.span);
     let rhs = lower_expr(ctx, right);
     unpin_in_flight_owners(ctx, left_pins, left.span);
+    lower_numeric_binary_from_values(ctx, lhs, op, rhs, left, right, expr)
+}
+
+/// Applies the ordinary object, dynamic and numeric paths to already evaluated operands.
+pub(super) fn lower_numeric_binary_from_values(
+    ctx: &mut LoweringContext<'_, '_>, lhs: LoweredValue, op: &BinOp, rhs: LoweredValue,
+    left: &Expr, right: &Expr, expr: &Expr,
+) -> LoweredValue {
     if let Some(result) = object_operators::lower_object_binary_values(ctx, lhs, op, rhs, expr) {
         return result;
     }

@@ -50,6 +50,12 @@ fn eval_local_offset_write(
                     };
                     return eval_throw_error(&format!("Cannot use object of type {class_name} as array"), context, values);
                 }
+                if index.is_none() {
+                    if let Some(returned) = super::super::runtime_ops::simplexml_properties::append(values, current, value)? {
+                        operands.push(returned);
+                        return Ok(());
+                    }
+                }
                 let index = match index {
                     Some(index) => index,
                     None => {
@@ -59,7 +65,12 @@ fn eval_local_offset_write(
                         index
                     }
                 };
-                let returned = eval_method_call_result(current, "offsetSet", vec![index, value], context, values)?;
+                let returned = match super::super::runtime_ops::simplexml_properties::dimension(
+                    values, current, elephc_builtin_contract::ObjectDimension::Set, vec![index, value],
+                )? {
+                    Some(value) => value,
+                    None => eval_method_call_result(current, "offsetSet", vec![index, value], context, values)?,
+                };
                 operands.push(returned);
                 return Ok(());
             }

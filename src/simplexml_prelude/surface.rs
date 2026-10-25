@@ -52,14 +52,48 @@ function __elephc_simplexml_assigned_value(mixed $value, bool $attribute): strin
     throw new TypeError("It's not possible to assign a complex type to " . $target . ', ' . get_debug_type($value) . ' given');
 }
 
+function __elephc_simplexml_numeric_value(mixed $value): mixed {
+    if ($value instanceof SimpleXMLElement) { return $value->__elephc_number(); }
+    return $value;
+}
+
+function __elephc_simplexml_parse_number(string $text): int|float {
+    $text = ltrim($text, " \t\n\r\v\f");
+    $length = strlen($text);
+    $i = 0;
+    $negative = $length > 0 && $text[0] === '-';
+    if ($length > 0 && ($text[0] === '-' || $text[0] === '+')) { $i++; }
+    $start = $i;
+    while ($i < $length && ord($text[$i]) >= 48 && ord($text[$i]) <= 57) { $i++; }
+    $whole = substr($text, $start, $i - $start);
+    $digits = $i - $start;
+    $floating = false;
+    if ($i < $length && $text[$i] === '.') {
+        $floating = true;
+        $i++; $start = $i;
+        while ($i < $length && ord($text[$i]) >= 48 && ord($text[$i]) <= 57) { $i++; }
+        $digits += $i - $start;
+    }
+    if ($digits === 0) { return 0; }
+    if ($i < $length && ($text[$i] === 'e' || $text[$i] === 'E')) {
+        $i++;
+        if ($i < $length && ($text[$i] === '-' || $text[$i] === '+')) { $i++; }
+        if ($i < $length && ord($text[$i]) >= 48 && ord($text[$i]) <= 57) { $floating = true; }
+    }
+    if (!$floating) {
+        $whole = ltrim($whole, '0');
+        $limit = $negative ? '9223372036854775808' : '9223372036854775807';
+        $size = strlen($whole);
+        $floating = $size > 19 || ($size === 19 && strcmp($whole, $limit) > 0);
+    }
+    return $floating ? (float)$text : (int)$text;
+}
+
 function __elephc_simplexml_write_warning(string $message): void {
     $caller = 'main()';
     foreach (debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS) as $frame) {
         $function = (string)$frame['function'];
         if (str_starts_with($function, '__elephc_')) { continue; }
-        if (isset($frame['class']) && (string)$frame['class'] === 'SimpleXMLElement') {
-            if ($function === 'offsetSet' || $function === '__set') { continue; }
-        }
         if ($function === 'eval') { $caller = 'Unknown'; }
         elseif (isset($frame['class'])) { $caller = (string)$frame['class'] . '::' . $function . '()'; }
         else { $caller = $function . '()'; }
@@ -108,13 +142,22 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $handle = $this->__elephc_handle;
         return elephc_xml_sx_string($handle, 0);
     }
-    public function __elephc_int(): int { return (int)(string)$this; }
-    public function __elephc_float(): float { return (float)(string)$this; }
+    final public function __elephc_int(): int { $handle = $this->__elephc_handle; return (int)elephc_xml_sx_string($handle, 0); }
+    final public function __elephc_float(): float { $handle = $this->__elephc_handle; return (float)elephc_xml_sx_string($handle, 0); }
+    final public function __elephc_number(): int|float {
+        $handle = $this->__elephc_handle;
+        return __elephc_simplexml_parse_number(elephc_xml_sx_string($handle, 0));
+    }
+    public static function __elephc_add(mixed $left, mixed $right): int|float { return __elephc_simplexml_numeric_value($left) + __elephc_simplexml_numeric_value($right); }
+    public static function __elephc_sub(mixed $left, mixed $right): int|float { return __elephc_simplexml_numeric_value($left) - __elephc_simplexml_numeric_value($right); }
+    public static function __elephc_mul(mixed $left, mixed $right): int|float { return __elephc_simplexml_numeric_value($left) * __elephc_simplexml_numeric_value($right); }
+    public static function __elephc_div(mixed $left, mixed $right): int|float { return __elephc_simplexml_numeric_value($left) / __elephc_simplexml_numeric_value($right); }
+    public static function __elephc_mod(mixed $left, mixed $right): int|float { return __elephc_simplexml_numeric_value($left) % __elephc_simplexml_numeric_value($right); }
+    public static function __elephc_pow(mixed $left, mixed $right): int|float { return __elephc_simplexml_numeric_value($left) ** __elephc_simplexml_numeric_value($right); }
     public function __elephc_bool(): bool {
         $handle = $this->__elephc_handle;
         return elephc_xml_sx_int($handle, 3) !== 0;
     }
-    public function __get(string $name): mixed { return $this->__elephc_property_get($name); }
     final public function __elephc_property_get(string $name): static {
         $handle = $this->__elephc_handle;
         $selected = elephc_xml_sx_select($handle, 2, $name, "", 0, 0);
@@ -130,9 +173,6 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         }
         return $selected;
     }
-    public function __set(string $name, mixed $value): void {
-        $this->__elephc_property_set($name, $value);
-    }
     final public function __elephc_property_set(string $name, mixed $value): void {
         if ($name === '') { throw new ValueError('Cannot create element with an empty name'); }
         $handle = $this->__elephc_handle;
@@ -140,9 +180,6 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $text = __elephc_simplexml_assigned_value($value, $mode === 3 || $mode === 4);
         $status = elephc_xml_sx_mutate($handle, 2, $name, $text, "", 0, 0);
         if ($status === -2) { __elephc_simplexml_write_warning('Cannot assign to an array of nodes (duplicate subnodes or attr detected)'); }
-    }
-    public function __isset(string $name): bool {
-        return $this->__elephc_property_isset($name);
     }
     final public function __elephc_property_isset(string $name): bool {
         $node = $this->__elephc_property_get($name);
@@ -168,14 +205,11 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         elephc_xml_sx_free($selected);
         return $empty;
     }
-    public function __unset(string $name): void {
-        $this->__elephc_property_unset($name);
-    }
     final public function __elephc_property_unset(string $name): void {
         $handle = $this->__elephc_handle;
         elephc_xml_sx_mutate($handle, 12, $name, "", "", 0, 0);
     }
-    public function offsetGet(mixed $offset): mixed {
+    final public function __elephc_dimension_get(mixed $offset): mixed {
         $handle = $this->__elephc_handle;
         if (is_int($offset)) {
             $selected = elephc_xml_sx_select($handle, 4, "", "", 0, $offset);
@@ -185,17 +219,20 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         if (elephc_xml_sx_int($selected, 1) === 0) { elephc_xml_sx_free($selected); return null; }
         return __elephc_simplexml_wrap($selected, get_class($this));
     }
-    public function offsetExists(mixed $offset): bool {
-        return $this->offsetGet($offset) !== null;
+    final public function __elephc_dimension_isset(mixed $offset): bool {
+        return $this->__elephc_dimension_get($offset) !== null;
     }
-    public function offsetSet(mixed $offset, mixed $value): void {
+    final public function __elephc_dimension_set(mixed $offset, mixed $value): void {
+        $this->__elephc_dimension_write($offset, $value, false);
+    }
+    final public function __elephc_dimension_write(mixed $offset, mixed $value, bool $append): void {
         $handle = $this->__elephc_handle;
         $mode = elephc_xml_sx_int($handle, 5);
         $attributes = $mode === 3 || $mode === 4;
         $kind = 3;
         $index = 0;
         $key = "";
-        if ($offset === null) { $kind = 5; }
+        if ($append) { $kind = 5; }
         elseif (is_int($offset)) { $kind = 4; $index = $offset; }
         else { $key = is_string($offset) ? $offset : trim((string)$offset); }
         if ($kind === 5 && $attributes) { throw new Error('Cannot append to an attribute list'); }
@@ -230,8 +267,8 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $status = elephc_xml_sx_mutate($handle, $kind, $key, $text, "", 0, $index);
         if ($status === -2) { __elephc_simplexml_write_warning('Cannot assign to an array of nodes (duplicate subnodes or attr detected)'); }
     }
-    public function __elephc_append(mixed $value): void { $this->offsetSet(null, $value); }
-    public function offsetUnset(mixed $offset): void {
+    final public function __elephc_append(mixed $value): void { $this->__elephc_dimension_write(null, $value, true); }
+    final public function __elephc_dimension_unset(mixed $offset): void {
         $handle = $this->__elephc_handle;
         if (is_int($offset)) { elephc_xml_sx_mutate($handle, 14, "", "", "", 0, $offset); }
         else { elephc_xml_sx_mutate($handle, 13, (string)$offset, "", "", 0, 0); }

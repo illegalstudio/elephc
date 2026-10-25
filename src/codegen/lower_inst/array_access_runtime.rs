@@ -207,12 +207,18 @@ pub(super) fn try_lower_array_access_runtime_call(
     };
     match dispatch {
         ArrayAccessRuntimeDispatch::Concrete(class_name) => {
+            let native_operation = match method_name {
+                "offsetGet" => Some(elephc_builtin_contract::ObjectDimension::Get),
+                "offsetSet" => Some(elephc_builtin_contract::ObjectDimension::Set),
+                "append" => Some(elephc_builtin_contract::ObjectDimension::Append),
+                _ => None,
+            };
+            let native_method = native_operation.and_then(|op|
+                crate::types::builtin_classes::native_dimension_method(&class_name, op, &ctx.module.class_infos));
             let concrete_method =
-                if method_name == "append" && is_spl_doubly_linked_list_family(&class_name) {
+                if let Some(method) = native_method { method }
+                else if method_name == "append" && is_spl_doubly_linked_list_family(&class_name) {
                     "push"
-                } else if method_name == "append"
-                    && crate::types::builtin_classes::has_native_dimensions(&class_name, &ctx.module.class_infos) {
-                    "__elephc_append"
                 } else {
                     method_name
                 };

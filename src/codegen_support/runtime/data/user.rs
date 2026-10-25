@@ -617,8 +617,14 @@ pub(crate) fn emit_runtime_data_user(
     ] {
         out.push_str(&format!(".globl {table}\n{table}:\n"));
         if let Some(max_class_id) = max_class_id {
-            let method_key = php_symbol_key(method);
             for class_id in 0..=max_class_id {
+                let native = match method {
+                    "offsetGet" => Some(elephc_builtin_contract::ObjectDimension::Get),
+                    "offsetSet" => Some(elephc_builtin_contract::ObjectDimension::Set),
+                    _ => None,
+                }.and_then(|op| class_name_by_id.get(&class_id).and_then(|name|
+                    crate::types::builtin_classes::native_dimension_method(name, op, classes)));
+                let method_key = php_symbol_key(native.unwrap_or(method));
                 let entry = class_info_by_id
                     .get(&class_id)
                     .filter(|class_info| {

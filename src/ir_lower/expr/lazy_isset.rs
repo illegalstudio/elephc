@@ -76,10 +76,14 @@ pub(super) fn lower_lazy_isset_operand(
     match &arg.kind {
         ExprKind::ArrayAccess { array, index } => {
             if array_access_expr_satisfies_array_access(ctx, array) {
+                let ty = super::array_cast_source::array_cast_source_type_for_ir(ctx, array);
+                let method = singular_object_class(&ty).and_then(|(class, _)|
+                    crate::types::builtin_classes::native_dimension_method(class,
+                        elephc_builtin_contract::ObjectDimension::Isset, ctx.classes)).unwrap_or("offsetExists");
                 let synthetic = Expr::new(
                     ExprKind::MethodCall {
                         object: array.clone(),
-                        method: "offsetExists".to_string(),
+                        method: method.to_string(),
                         args: vec![(**index).clone()],
                     },
                     arg.span,

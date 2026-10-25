@@ -36,6 +36,7 @@ mod native_property_unset;
 mod native_static_dispatch;
 mod property_constant_validation;
 mod property_dispatch;
+mod property_dimension_writes;
 mod property_validation;
 mod abstract_setter;
 mod readonly_property_writes;
@@ -54,7 +55,7 @@ use crate::context::{
 };
 
 use abstract_requirements::*;
-use array_append::{eval_array_append_owned_value_with_type, eval_array_append_value};
+use array_append::eval_array_append_owned_value_with_type;
 pub(crate) use array_updates::*;
 // Re-exported under a distinct name so the `class_resolution::*` glob below and the crate-level
 // re-export in `interpreter/mod.rs` cannot import the same name at two visibilities.
@@ -88,6 +89,10 @@ use native_property_unset::*;
 pub(in crate::interpreter) use native_static_dispatch::*;
 use property_constant_validation::*;
 use property_dispatch::*;
+use property_dimension_writes::{
+    eval_property_dimension_write, DimensionProperty,
+    eval_static_property_array_append_result, eval_static_property_array_set_result,
+};
 pub(in crate::interpreter) use property_validation::*;
 pub(in crate::interpreter) use abstract_setter::*;
 use readonly_property_writes::*;

@@ -8,8 +8,20 @@
 //! - Preserves statement ordering, CFG shape, EIR effects, and ownership contracts.
 
 use super::*;
+use crate::parser::ast::BinOp;
 
 mod native_xml;
+mod compound;
+use compound::{compound_source, with_compound_value, write_ordinary_compound};
+
+/// Defers storage-only receiver chains while preserving early evaluation of computed receivers.
+fn deferred_property_receiver(object: &Expr) -> bool {
+    match &object.kind {
+        ExprKind::Variable(_) | ExprKind::This | ExprKind::StaticPropertyAccess { .. } => true,
+        ExprKind::PropertyAccess { object, .. } => deferred_property_receiver(object),
+        _ => false,
+    }
+}
 
 /// Lowers `$object->prop[] = value`.
 pub(super) fn lower_property_array_push(
@@ -24,7 +36,7 @@ pub(super) fn lower_property_array_push(
     }, span);
     if crate::ir_lower::expr::lower_weak_map_denied_append(ctx, &receiver, value, span) { return; }
     let mut roots = Vec::new();
-    let (mut receiver, value) = if crate::ir_lower::expr::is_static_property_write_chain(object) {
+    let (mut receiver, value) = if deferred_property_receiver(object) {
         let value = lower_rooted_property_write_operand(ctx, value, &mut roots);
         let receiver = crate::ir_lower::expr::lower_static_property_write_chain(ctx, object, value, span);
         (receiver, value)
@@ -38,7 +50,7 @@ pub(super) fn lower_property_array_push(
     receiver.narrow_for_array(ctx, property, &[value.value], span);
     if let Some(child) = native_xml::fetch(ctx, receiver.value, property, span)
         .or_else(|| lower_native_dimension_property(ctx, receiver.value, object, property, span).map(native_xml::Fetch::known)) {
-        native_xml::write(ctx, receiver.value, child, property, None, value, span, false);
+        native_xml::write(ctx, receiver.value, child, property, None, value, None, span, false);
         receiver.finish(ctx, span);
         retire_property_write_roots(ctx, roots, span);
         return;
@@ -208,12 +220,15 @@ pub(super) fn lower_property_array_assign_with_update(
     key_already_diagnosed: bool,
     update: PropertyElementUpdate,
 ) {
+    let compound = compound_source(value, object, property, index, span);
+    let index_expression = index;
+    let source_value = compound.map_or(value, |(_, rhs)| rhs);
     let mut roots = Vec::new();
-    let (mut receiver, index, value) = if crate::ir_lower::expr::is_static_property_write_chain(object) {
+    let (mut receiver, index, value) = if deferred_property_receiver(object) {
         let source = match update {
             PropertyElementUpdate::Stored(stored) => PropertyWriteValue::Stored(stored),
             PropertyElementUpdate::Written | PropertyElementUpdate::IncDec(_) => {
-                PropertyWriteValue::Expr(value)
+                PropertyWriteValue::Expr(source_value)
             }
         };
         let (index, value) = lower_property_write_operands(ctx, index, source, &mut roots, span);
@@ -224,7 +239,7 @@ pub(super) fn lower_property_array_assign_with_update(
         let object = lower_expr(ctx, object);
         let mut receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
         let source = match update {
-            PropertyElementUpdate::Written => PropertyWriteValue::Expr(value),
+            PropertyElementUpdate::Written => PropertyWriteValue::Expr(source_value),
             PropertyElementUpdate::IncDec(increment) => {
                 super::buffer_element_updates::property_statement_update(
                     ctx, receiver.value, property, value, increment,
@@ -240,12 +255,14 @@ pub(super) fn lower_property_array_assign_with_update(
     receiver.narrow_for_array(ctx, property, &[index.value, value.value], span);
     if let Some(child) = native_xml::fetch(ctx, receiver.value, property, span)
         .or_else(|| lower_native_dimension_property(ctx, receiver.value, object, property, span).map(native_xml::Fetch::known)) {
-        native_xml::write(ctx, receiver.value, child, property, Some(index), value, span, key_already_diagnosed);
+        native_xml::write(ctx, receiver.value, child, property, Some(index), value,
+            compound.map(|(op, _)| (op, index_expression)), span, key_already_diagnosed);
         receiver.finish(ctx, span);
         retire_property_write_roots(ctx, roots, span);
         return;
     }
-    lower_property_array_assign_value(ctx, receiver.value, property, index, value, span, key_already_diagnosed);
+    write_ordinary_compound(ctx, receiver.value, property, index, value,
+        compound.map(|(op, _)| (op, index_expression)), span, key_already_diagnosed);
     receiver.finish(ctx, span);
     retire_property_write_roots(ctx, roots, span);
 }
@@ -319,7 +336,14 @@ fn lower_rooted_property_write_operand(
     roots: &mut Vec<LocalSlotId>,
 ) -> LoweredValue {
     let value = lower_expr(ctx, expr);
-    let (value, root) = crate::ir_lower::expr::root_owned_call_operand(ctx, value, expr.span);
+    root_property_write_value(ctx, value, expr.span, roots)
+}
+
+/// Publishes an already evaluated write operand and lends a non-consuming view to nested calls.
+fn root_property_write_value(
+    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span, roots: &mut Vec<LocalSlotId>,
+) -> LoweredValue {
+    let (value, root) = crate::ir_lower::expr::root_owned_call_operand(ctx, value, span);
     let Some(root) = root else {
         return value;
     };
@@ -331,7 +355,7 @@ fn lower_rooted_property_write_operand(
         None,
         ty,
         Op::Borrow.default_effects(),
-        Some(expr.span),
+        Some(span),
     );
     ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
     borrowed

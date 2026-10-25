@@ -36,11 +36,12 @@ pub(crate) fn binary_plan(op: &BinOp, left: &PhpType, right: &PhpType) -> Option
 /// Resolves a reviewed class contract without depending on a particular PHP class name.
 fn binary_plan_for_class(class: &'static ClassContract, op: &BinOp, left: &PhpType, right: &PhpType) -> Option<ObjectOperatorPlan> {
     let comparison = matches!(op, BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq | BinOp::Spaceship);
+    let operators = class.operators?;
     let accepts = |ty: &PhpType| comparison
         || matches!(ty, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str | PhpType::Mixed | PhpType::TaggedScalar)
+        || (*ty == PhpType::Void && operators.arithmetic_result == elephc_builtin_contract::ObjectArithmeticResult::Number)
         || matches!(ty, PhpType::Object(name) if name.eq_ignore_ascii_case(class.name));
     if !accepts(left) || !accepts(right) { return None; }
-    let operators = class.operators?;
     let arithmetic = match op {
         BinOp::Add => Some(ObjectArithmetic::Add),
         BinOp::Sub => Some(ObjectArithmetic::Sub),
@@ -65,11 +66,13 @@ mod tests {
     use elephc_builtin_contract::{BuiltinId, ClassKind, ClassOperators, ClassRoute, PhpModule};
 
     static OPERATORS: ClassOperators = ClassOperators {
+        dimensions: &[],
         properties: &[],
         native_clone: None,
         json: None,
         casts: &[],
         arithmetic: &[(ObjectArithmetic::Add, "synthetic_sum")], compare: Some("synthetic_order"), boolean: None,
+        arithmetic_result: elephc_builtin_contract::ObjectArithmeticResult::Object,
     };
     static SYNTHETIC: ClassContract = ClassContract {
         id: BuiltinId::from_canonical_name("syntheticvalue"), name: "SyntheticValue",
@@ -96,7 +99,11 @@ mod tests {
 impl ObjectOperatorPlan {
     /// Returns the PHP-facing result, distinct from a comparison adapter's signed integer.
     pub(crate) fn result_type(&self, op: &BinOp) -> PhpType {
-        if !self.comparison { PhpType::Object(self.class.name.to_string()) }
+        if !self.comparison {
+            if self.class.operators.is_some_and(|ops| ops.arithmetic_result == elephc_builtin_contract::ObjectArithmeticResult::Number) {
+                PhpType::Union(vec![PhpType::Int, PhpType::Float])
+            } else { PhpType::Object(self.class.name.to_string()) }
+        }
         else if matches!(op, BinOp::Spaceship) { PhpType::Int }
         else { PhpType::Bool }
     }

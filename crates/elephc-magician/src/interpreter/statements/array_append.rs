@@ -1,5 +1,5 @@
 //! Purpose:
-//! Evaluates append values and consumes host-owned automatic array-index decisions.
+//! Inserts prepared append values using host-owned automatic array-index decisions.
 //!
 //! Called from:
 //! - Variable, instance-property, and static-property array append statements.
@@ -9,29 +9,6 @@
 //! - Every temporary key and value is released after insertion or failure.
 
 use super::*;
-
-/// Appends an owned RHS through the host's persistent index, preserving evaluation and cleanup order.
-pub(super) fn eval_array_append_value(
-    array: RuntimeCellHandle,
-    expr: &EvalExpr,
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_array_append_value_with_type(array, expr, None, context, scope, values)
-}
-
-/// Validates an explicitly typed local append at the same operand and index boundary.
-pub(super) fn eval_array_append_value_with_type(
-    array: RuntimeCellHandle, expr: &EvalExpr, declared: Option<&EvalParameterType>,
-    context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let value = eval_owned_expr(expr, context, scope, values)?;
-    let declared = declared.cloned().into_iter().collect::<Vec<_>>();
-    let inserted = eval_array_append_owned_value_with_type(array, value, &declared, context, values);
-    let cleanup = values.release(value);
-    inserted.and_then(|result| cleanup.map(|()| result))
-}
 
 /// Inserts an already evaluated RHS without taking its owner, releasing the automatic key.
 pub(super) fn eval_array_append_owned_value_with_type(

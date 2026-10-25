@@ -61,6 +61,7 @@ mod instance_property_writes;
 mod readonly_receiver_guard;
 mod static_property_writes;
 mod property_array_writes;
+mod native_dimension_append;
 pub(crate) mod property_write_receiver;
 mod metadata_control;
 mod nested_append;

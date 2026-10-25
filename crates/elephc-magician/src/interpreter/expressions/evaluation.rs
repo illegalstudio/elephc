@@ -122,6 +122,9 @@ pub(in crate::interpreter) fn eval_array_get_result(
     if !eval_array_access_object_matches(array, context, values)? {
         return Err(EvalStatus::RuntimeFatal);
     }
+    if let Some(value) = super::super::runtime_ops::simplexml_properties::dimension(
+        values, array, elephc_builtin_contract::ObjectDimension::Get, vec![index],
+    )? { return Ok(value); }
     eval_method_call_result(array, "offsetGet", vec![index], context, values)
 }
 

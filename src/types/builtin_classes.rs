@@ -77,6 +77,23 @@ pub(crate) fn has_native_dimensions(name: &str, classes: &HashMap<String, super:
     false
 }
 
+/// Resolves a native dimension adapter through the declaring internal ancestor.
+pub(crate) fn native_dimension_method(
+    name: &str, operation: elephc_builtin_contract::ObjectDimension,
+    classes: &HashMap<String, super::ClassInfo>,
+) -> Option<&'static str> {
+    let mut current = Some(name.trim_start_matches('\\'));
+    for _ in 0..=classes.len() {
+        let info = classes.get(current?)?;
+        if info.is_internal {
+            if let Some(method) = lookup_class(current?).and_then(|class| class.operators)
+                .and_then(|operators| operators.dimension_method(operation)) { return Some(method); }
+        }
+        current = info.parent.as_deref();
+    }
+    None
+}
+
 /// Resolves a native property adapter while reserving the prelude's own storage names.
 pub(crate) fn native_property_method(
     name: &str, property: &str, operation: elephc_builtin_contract::ObjectProperty,

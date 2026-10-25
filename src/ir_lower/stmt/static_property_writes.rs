@@ -210,6 +210,21 @@ pub(super) fn lower_static_property_array_push(
     }
 
     let property_value = load_static_property(ctx, receiver, property, span);
+    if super::native_dimension_append::lower(ctx, property_value, value, span, |ctx, array, value| {
+        if static_property_may_be_eval_dynamic(ctx, receiver) {
+            ctx.emit_void(Op::MixedArrayAppend, vec![array.value, value.value], None,
+                Op::MixedArrayAppend.default_effects(), Some(span));
+        } else {
+            ctx.emit_void(Op::RuntimeCall, vec![array.value, value.value], None,
+                effects_lookup::runtime_effects(), Some(span));
+        }
+    }) {
+        if static_property_may_be_eval_dynamic(ctx, receiver) {
+            store_static_property(ctx, receiver, property, property_value.value, span);
+        }
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+        return;
+    }
     if static_property_may_be_eval_dynamic(ctx, receiver) {
         ctx.emit_void(
             Op::MixedArrayAppend,

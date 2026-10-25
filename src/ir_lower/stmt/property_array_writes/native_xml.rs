@@ -94,20 +94,20 @@ fn root(ctx: &mut LoweringContext<'_, '_>, child: LoweredValue, roots: &mut Vec<
 /// Chooses native offsetSet or the unchanged ordinary property writer after operands are staged.
 pub(super) fn write(
     ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, fetch: Fetch, property: &str,
-    index: Option<LoweredValue>, value: LoweredValue, span: Span, diagnosed: bool,
+    index: Option<LoweredValue>, value: LoweredValue, compound: Option<(&BinOp, &Expr)>, span: Span, diagnosed: bool,
 ) {
     let mut roots = Vec::new();
     let fetch = Fetch { value: root(ctx, fetch.value, &mut roots, span), conditional: fetch.conditional };
-    write_rooted(ctx, receiver, fetch, property, index, value, span, diagnosed);
+    write_rooted(ctx, receiver, fetch, property, index, value, compound, span, diagnosed);
     retire_property_write_roots(ctx, roots, span);
 }
 
 /// Keeps the selected child alive through native writes, fallback calls and warning handlers.
 fn write_rooted(
     ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, fetch: Fetch, property: &str,
-    index: Option<LoweredValue>, value: LoweredValue, span: Span, diagnosed: bool,
+    index: Option<LoweredValue>, value: LoweredValue, compound: Option<(&BinOp, &Expr)>, span: Span, diagnosed: bool,
 ) {
-    if !fetch.conditional { native_write(ctx, fetch.value, index, value, span, diagnosed); return; }
+    if !fetch.conditional { native_write(ctx, fetch.value, index, value, compound, span, diagnosed); return; }
     let absent = ctx.emit_value(Op::IsNull, vec![fetch.value.value], None, PhpType::Bool,
         Op::IsNull.default_effects(), Some(span));
     let native = ctx.builder.create_named_block("xml.dimension.write.native", vec![]);
@@ -117,7 +117,7 @@ fn write_rooted(
     ctx.builder.terminate(Terminator::CondBr { cond: absent.value,
         then_target: ordinary, then_args: vec![], else_target: native, else_args: vec![] });
     ctx.builder.position_at_end(native);
-    native_write(ctx, fetch.value, index, value, span, diagnosed);
+    native_write(ctx, fetch.value, index, value, compound, span, diagnosed);
     jump(ctx, merge);
     let native_slots = ctx.initialized_slots_snapshot();
     ctx.builder.position_at_end(ordinary);
@@ -133,7 +133,7 @@ fn write_rooted(
     } else { receiver };
     let pins = if boxed { crate::ir_lower::expr::pin_in_flight_owners(ctx, &[object.value], span) } else { vec![] };
     if let Some(index) = index {
-        lower_property_array_assign_value(ctx, object, property, index, value, span, diagnosed);
+        write_ordinary_compound(ctx, object, property, index, value, compound, span, diagnosed);
     } else { ordinary_append(ctx, object, property, value, span); }
     crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
     if boxed { crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span)); }
@@ -143,10 +143,18 @@ fn write_rooted(
     ctx.restore_initialized_slots(native_slots.intersection(&ordinary_slots).copied().collect());
 }
 
-/// Emits the native dimension writer with an explicit null append operand when needed.
-fn native_write(ctx: &mut LoweringContext<'_, '_>, child: LoweredValue, index: Option<LoweredValue>, value: LoweredValue, span: Span, diagnosed: bool) {
-    let index = index.unwrap_or_else(|| lower_expr(ctx, &Expr::new(ExprKind::Null, span)));
-    array_write_core::lower_boxed_array_set_values(ctx, child, index, value, span, diagnosed);
+/// Uses the distinct append entry or computes a compound value from the selected native dimension.
+fn native_write(ctx: &mut LoweringContext<'_, '_>, child: LoweredValue, index: Option<LoweredValue>, value: LoweredValue, compound: Option<(&BinOp, &Expr)>, span: Span, diagnosed: bool) {
+    let Some(index) = index else {
+        let handled = super::super::native_dimension_append::lower(ctx, child, value, span, |_, _, _| {});
+        assert!(handled, "native XML child append has native dimensions");
+        return;
+    };
+    if let Some((op, key)) = compound {
+        with_compound_value(ctx, child, index, value, op, key, span, |ctx, stored| {
+            array_write_core::lower_boxed_array_set_values(ctx, child, index, stored, span, diagnosed);
+        });
+    } else { array_write_core::lower_boxed_array_set_values(ctx, child, index, value, span, diagnosed); }
 }
 
 /// Appends through an ordinary runtime property with an independent COW cell and explicit writeback.
@@ -165,8 +173,13 @@ pub(super) fn ordinary_append(ctx: &mut LoweringContext<'_, '_>, object: Lowered
     let borrowed = ctx.emit_value(Op::Borrow, vec![array.value], None, PhpType::Mixed,
         Op::Borrow.default_effects(), Some(span));
     ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
-    ctx.emit_void(Op::MixedArrayAppend, vec![borrowed.value, value.value], None,
-        Op::MixedArrayAppend.default_effects(), Some(span));
+    if !super::super::native_dimension_append::lower(ctx, borrowed, value, span, |ctx, array, value| {
+        ctx.emit_void(Op::MixedArrayAppend, vec![array.value, value.value], None,
+            Op::MixedArrayAppend.default_effects(), Some(span));
+    }) {
+        ctx.emit_void(Op::MixedArrayAppend, vec![borrowed.value, value.value], None,
+            Op::MixedArrayAppend.default_effects(), Some(span));
+    }
     ctx.emit_void(Op::DynamicPropSet, vec![object.value, name.value, borrowed.value], None,
         Op::DynamicPropSet.default_effects(), Some(span));
     if let Some(owner) = owner { crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span); }

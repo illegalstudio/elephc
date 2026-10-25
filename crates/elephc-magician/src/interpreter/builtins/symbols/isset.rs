@@ -156,7 +156,12 @@ pub(in crate::interpreter) fn eval_array_access_isset_result(
     if !eval_array_access_object_matches(object, context, values)? {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let result = eval_method_call_result(object, "offsetExists", vec![index], context, values)?;
+    let result = match super::super::super::runtime_ops::simplexml_properties::dimension(
+        values, object, elephc_builtin_contract::ObjectDimension::Isset, vec![index],
+    )? {
+        Some(value) => value,
+        None => eval_method_call_result(object, "offsetExists", vec![index], context, values)?,
+    };
     let exists = values.truthy(result)?;
     values.release(result)?;
     Ok(exists)

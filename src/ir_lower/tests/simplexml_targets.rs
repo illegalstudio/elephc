@@ -28,6 +28,10 @@ function xmlEmptyObjectParameter(object $node): bool { return empty($node->item)
 var_dump(xmlEmptyObjectParameter($xml));
 function xmlWriteOpaqueParameter(mixed $node): void { $node->other[0] = 'value'; }
 xmlWriteOpaqueParameter($xml);
+function xmlAppendOpaqueParameter(mixed $node): void { $node[] = 'appended'; }
+xmlAppendOpaqueParameter($xml->item);
+$xml->item[0] += 1;
+try { $xml->item[0][null] = 'invalid'; } catch (ValueError $error) { echo $error->getMessage(); }
 $xml->xpath('count(//item)');
 echo json_encode($xml), json_encode((array)$xml), $xml->asXML();
 $doc = new DOMDocument(); $doc->loadXML('<r><v>shared</v></r>');

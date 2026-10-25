@@ -22,6 +22,25 @@ pub(in crate::interpreter) fn is_native(
     }
 }
 
+/// Appends without supplying an explicit PHP null dimension to the native writer.
+pub(in crate::interpreter) fn append(
+    values: &mut impl RuntimeValueOps, object: RuntimeCellHandle, value: RuntimeCellHandle,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    dimension(values, object, elephc_builtin_contract::ObjectDimension::Append, vec![value])
+}
+
+/// Invokes a final native dimension adapter while preserving public user method semantics.
+pub(in crate::interpreter) fn dimension(
+    values: &mut impl RuntimeValueOps, object: RuntimeCellHandle,
+    operation: elephc_builtin_contract::ObjectDimension, arguments: Vec<RuntimeCellHandle>,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !is_native(values, object, "")? { return Ok(None); }
+    let method = elephc_builtin_contract::lookup_class("SimpleXMLElement")
+        .and_then(|class| class.operators).and_then(|ops| ops.dimension_method(operation))
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    values.operator_method_call(object, method, arguments).map(Some)
+}
+
 /// Tests native container emptiness without applying the object's boolean cast.
 pub(in crate::interpreter) fn empty(
     values: &mut impl RuntimeValueOps, object: RuntimeCellHandle,
