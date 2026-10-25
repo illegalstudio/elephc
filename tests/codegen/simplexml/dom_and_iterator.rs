@@ -9,6 +9,21 @@
 
 use crate::support::*;
 
+/// A by-reference callback can replace a non-DOM local before its first XML load.
+#[test]
+fn test_simplexml_dom_load_after_captured_reassignment() {
+    if skip_without_xml_native("test_simplexml_dom_load_after_captured_reassignment") { return; }
+    let out = compile_and_run(r#"<?php
+class InitialConfig {}
+$document = new InitialConfig();
+$replace = function () use (&$document): void { $document = new DOMDocument(); };
+$replace();
+var_dump($document->loadXML('<r>captured</r>'));
+echo $document->documentElement->textContent;
+"#);
+    assert_eq!(out, "bool(true)\ncaptured");
+}
+
 /// Loading HTML replaces a document's XML binding without invalidating retained old nodes.
 #[test]
 fn test_simplexml_dom_html_reload_bundle() {

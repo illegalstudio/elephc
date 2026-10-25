@@ -158,6 +158,9 @@ impl DomReceiver {
 
     /// Records assignment expressions, including ones nested in call arguments.
     pub(super) fn observe_expression(&self, expr: &Expr) {
+        if let ExprKind::Closure { capture_refs, .. } = &expr.kind {
+            for name in capture_refs { self.assign(name, None); }
+        }
         if let ExprKind::Assignment { target, value, .. } = &expr.kind {
             if let ExprKind::Variable(name) = &target.kind {
                 self.assign(name, self.classes(value));
@@ -165,7 +168,11 @@ impl DomReceiver {
         }
         let args = match &expr.kind {
             ExprKind::FunctionCall { args, .. } | ExprKind::MethodCall { args, .. }
-            | ExprKind::StaticMethodCall { args, .. } | ExprKind::ExprCall { args, .. } => args,
+            | ExprKind::NullsafeMethodCall { args, .. } | ExprKind::NullsafeDynamicMethodCall { args, .. }
+            | ExprKind::StaticMethodCall { args, .. } | ExprKind::ExprCall { args, .. }
+            | ExprKind::ClosureCall { args, .. } | ExprKind::NewObject { args, .. }
+            | ExprKind::NewGeneric { args, .. } | ExprKind::NewDynamic { args, .. }
+            | ExprKind::NewDynamicObject { args, .. } | ExprKind::NewScopedObject { args, .. } => args,
             _ => return,
         };
         for arg in args {
@@ -217,7 +224,9 @@ impl DomReceiver {
                 if class == "#domdocument" { return true; }
                 if !visited.insert(class.clone()) { return false; }
                 let Some(parent) = self.declarations.parents.get(&class) else {
-                    return !self.declarations.classes.contains(&class) && self.dom_available;
+                    let builtin = crate::types::builtin_classes::builtin_class_like_names()
+                        .any(|name| php_symbol_key(name) == class);
+                    return !builtin && !self.declarations.classes.contains(&class) && self.dom_available;
                 };
                 class = parent.clone();
             }

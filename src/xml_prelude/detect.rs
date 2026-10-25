@@ -839,6 +839,7 @@ mod tests {
             "class Config { function loadXML(): void {} } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); $cfg = new Config(); $cfg->loadXML();",
             "class Config { function loadXML(): void {} } function run(Config $cfg): void { $cfg->loadXML(); } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); run(new Config());",
             "namespace App; class DOMDocument { function loadXML(): void {} } (new DOMDocument())->loadXML();",
+            "class Config extends stdClass { function loadXML(): void {} } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); (new Config())->loadXML();",
         ] {
             assert!(!program_uses_xml(&parse(&format!("<?php {source}"))), "{source}");
         }
@@ -860,6 +861,8 @@ mod tests {
             "class Config {} $doc = new Config(); while ($argc) { $doc->loadXML('<r/>'); $doc = new DOMDocument(); }",
             "function run(): void { $doc = new Config(); while ($argc) { $doc->loadXML('<r/>'); $doc = new DOMDocument(); } } class Config {}",
             "if ($argc) { class Document extends DOMDocument {} } $doc = new Document(); $doc->loadXML('<r/>');",
+            "class Config {} $doc = new Config(); $change = function () use (&$doc): void { $doc = new DOMDocument(); }; $change(); $doc->loadXML('<r/>');",
+            "class Config {} $doc = new Config(); $change = function (&$value): void { $value = new DOMDocument(); }; $change($doc); $doc->loadXML('<r/>');",
         ] {
             assert!(program_uses_xml(&parse(&format!("<?php {source}"))), "{source}");
         }
