@@ -494,7 +494,7 @@ fn emit_exec_float_string(ctx: &mut FunctionContext<'_>) -> Result<()> {
         Arch::AArch64 => ctx.emitter.instruction("fmov d0, x3"),                // move the loaded float bits to the formatter register
         Arch::X86_64 => ctx.emitter.instruction("movq xmm0, rcx"),              // move the loaded float bits to the formatter register
     }
-    abi::emit_call_label(ctx.emitter, "__rt_ftoa");
+    abi::emit_call_label(ctx.emitter, "__rt_ftoa_coerce");
     move_exec_string_result(ctx);
     Ok(())
 }

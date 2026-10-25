@@ -9,9 +9,10 @@
 //! - A homogeneous float array stores raw 8-byte doubles after the 24-byte array header, so
 //!   neither the string-slot walk of `__rt_implode` nor the integer walk of `__rt_implode_int`
 //!   can read it (#640).
-//! - `__rt_ftoa` appends its text at `_concat_off` and advances it. This helper keeps
+//! - `__rt_ftoa_coerce` (which warns on a NAN on PHP 8.5, then runs `__rt_ftoa`) appends its
+//!   text at `_concat_off` and advances it. This helper keeps
 //!   `_concat_off` equal to the output cursor: glue bytes are written at `_concat_off` and the
-//!   offset is advanced past them, then `__rt_ftoa` appends the element in place. Nothing is
+//!   offset is advanced past them, then `__rt_ftoa_coerce` appends the element in place. Nothing is
 //!   copied, so the conversion can never overwrite glue already written.
 
 use crate::codegen_support::emit::Emitter;
@@ -76,7 +77,7 @@ pub fn emit_implode_float(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [sp, #40]");                                  // reload current element index
     emitter.instruction("add x3, x3, #24");                                     // skip 24-byte array header to reach data
     emitter.instruction("ldr d0, [x3, x11, lsl #3]");                           // load the float element at index (8 bytes each)
-    emitter.instruction("bl __rt_ftoa");                                        // append its PHP text at concat_off and advance the offset
+    emitter.instruction("bl __rt_ftoa_coerce");                                 // append its PHP text at concat_off and advance the offset
     emitter.instruction("ldr x11, [sp, #40]");                                  // reload element index
     emitter.instruction("add x11, x11, #1");                                    // increment element index
     emitter.instruction("str x11, [sp, #40]");                                  // save updated index
@@ -99,7 +100,8 @@ pub fn emit_implode_float(emitter: &mut Emitter) {
 
 /// Emits `__rt_implode_float` runtime helper for Linux x86_64.
 /// ABI: rdi/rsi=glue_ptr/glue_len, rdx=array_ptr → rax=result_ptr, rdx=result_len.
-/// Same scheme as the ARM64 body: glue and each `__rt_ftoa` text are appended at `_concat_off`.
+/// Same scheme as the ARM64 body: glue and each `__rt_ftoa_coerce` text are appended at
+/// `_concat_off`.
 fn emit_implode_float_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: implode_float ---");
@@ -149,7 +151,7 @@ fn emit_implode_float_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 48]");                       // reload the loop cursor
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the indexed-array pointer
     emitter.instruction("movsd xmm0, QWORD PTR [r10 + r11 * 8 + 24]");          // load the current float element into the ftoa input register
-    emitter.instruction("call __rt_ftoa");                                      // append its PHP text at concat_off and advance the offset
+    emitter.instruction("call __rt_ftoa_coerce");                               // append its PHP text at concat_off and advance the offset
     emitter.instruction("add QWORD PTR [rbp - 48], 1");                         // advance the loop cursor to the next element
     emitter.instruction("jmp __rt_implode_float_loop");                         // continue joining elements
 

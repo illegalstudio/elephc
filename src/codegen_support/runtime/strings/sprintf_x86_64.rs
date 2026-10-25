@@ -391,6 +391,11 @@ fn emit_conversion_dispatch(emitter: &mut Emitter) {
 /// A string record is emitted straight from its pointer/length pair (so the result is
 /// binary safe and not capped at any scratch-buffer size); precision truncates it. A record
 /// carrying another tag is rendered numerically instead of being dereferenced.
+/// A float record is a string coercion, so on PHP 8.5 a NAN first raises the
+/// `coerced to string` warning through `__rt_warn_nan_coerced_string`.
+/// That warning can run a user error handler, so the partial result is published to
+/// `_concat_off` first, as before a nested `__toString()`: the handler's own concatenations
+/// then start after it instead of overwriting it.
 fn emit_string_conversion(emitter: &mut Emitter) {
     emitter.label("__rt_sprintf_t_str_x64");
     emitter.instruction("mov QWORD PTR [rbp - 688], 0");                        // this conversion owns no temporary string yet
@@ -425,6 +430,18 @@ fn emit_string_conversion(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 80], -1");                        // the %s precision must not reach the numeric path
     emitter.instruction("cmp rax, 2");                                          // is the payload a double?
     emitter.instruction("jne __rt_sprintf_str_int_x64");                        // no → render it as a signed integer
+    if crate::codegen_support::runtime::nan_bool_coercion_warning_enabled() {
+        emitter.instruction("movq xmm0, r10");                                  // the float %s is about to coerce to string
+        emitter.instruction("ucomisd xmm0, xmm0");                              // a NAN is the only value unordered with itself
+        emitter.instruction("jnp __rt_sprintf_str_flt_ok_x64");                 // ordered values coerce silently
+        abi::emit_symbol_address(emitter, "r9", "_concat_buf");
+        emitter.instruction("mov rax, rbx");                                    // copy the partial-result write cursor
+        emitter.instruction("sub rax, r9");                                     // compute bytes already written before a user error handler runs
+        emitter.instruction("mov r9, QWORD PTR [rbp - 56]");                    // reload the address of the global concat offset
+        emitter.instruction("mov QWORD PTR [r9], rax");                         // make the handler's concat users start after the partial result
+        emitter.instruction("call __rt_warn_nan_coerced_string");               // report PHP 8.5's NAN-to-string coercion warning
+        emitter.label("__rt_sprintf_str_flt_ok_x64");
+    }
     emitter.instruction("mov QWORD PTR [rbp - 80], 14");                        // PHP renders floats with 14 significant digits
     emitter.instruction("mov r8d, 71");                                         // reuse the 'G' float conversion
     emitter.instruction("mov QWORD PTR [rbp - 104], r8");                       // record the substituted conversion character

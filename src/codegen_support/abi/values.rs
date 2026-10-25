@@ -397,7 +397,8 @@ pub fn emit_load_int_immediate(emitter: &mut Emitter, reg: &str, value: i64) {
 /// Dispatches to the appropriate runtime helper:
 /// - `Str` → `emit_write_current_string_stdout` directly
 /// - `Bool`/`Int` → `__rt_itoa` then `emit_write_current_string_stdout`
-/// - `Float` → `__rt_ftoa` then `emit_write_current_string_stdout`
+/// - `Float` → `__rt_ftoa_coerce` (PHP 8.5's NAN warning, then `__rt_ftoa`) then
+///   `emit_write_current_string_stdout`
 /// - `Pointer`/`Buffer`/`Packed` → `__rt_ptoa` then `emit_write_current_string_stdout`
 /// - `Resource` → `__rt_resource_write_stdout`
 /// - `Mixed` → `__rt_mixed_write_stdout`
@@ -420,7 +421,7 @@ pub fn emit_write_stdout(emitter: &mut Emitter, ty: &PhpType) {
             emit_call_label(emitter, "__rt_resource_write_stdout");
         }
         PhpType::Float => {
-            emit_call_label(emitter, "__rt_ftoa");
+            emit_call_label(emitter, "__rt_ftoa_coerce");
             emit_write_current_string_stdout(emitter);
         }
         PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_) => {
