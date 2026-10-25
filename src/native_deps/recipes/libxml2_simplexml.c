@@ -91,7 +91,6 @@ void *elephc_libxml2_v1_sx_add(void *raw, const char *qualified, const char *val
     xmlNsPtr ns = NULL;
     if (has_uri && *uri) {
         ns = xmlSearchNsByHref(parent->doc, parent, (const xmlChar *)uri);
-        if (ns && prefix && (!ns->prefix || xmlStrcmp(prefix, ns->prefix))) ns = NULL;
     } else if (!has_uri) {
         ns = attribute ? NULL : parent->ns;
     }

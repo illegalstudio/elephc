@@ -107,9 +107,15 @@ pub unsafe extern "C" fn elephc_xml_sx_mutate(handle: i64, operation: i64, key: 
         match operation {
             2..=5 => v.write(operation, &key, index, &text),
             12..=14 => { v.remove(operation - 10, &key, index); 1 }
-            20 | 21 => v.add(&key, (flags & 1 != 0).then_some(text.as_str()),
+            20 | 21 => v.add_checked(&key, (flags & 1 != 0).then_some(text.as_str()),
                 (flags & 2 != 0).then_some(uri.as_str()), operation == 21)
-                .map(|n| insert(v.with_scope(Scope::Node(n)))).unwrap_or(0),
+                .map(|n| {
+                    let mut child = v.with_scope(Scope::Node(n));
+                    if operation == 20 && (flags & 2 != 0 || key.contains(':')) {
+                        child.ns = Namespace { value: string(ffi::ns(n, 1)), prefix: true };
+                    }
+                    insert(child)
+                }).unwrap_or_else(|error| error as i64),
             22 => v.first().map(|n| { v.assign_node(n, &text); 1 }).unwrap_or(0),
             _ => 0,
         }

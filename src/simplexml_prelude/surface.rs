@@ -103,7 +103,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     final public function __elephc_property_set(string $name, mixed $value): void {
         $handle = $this->__elephc_handle;
         $status = elephc_xml_sx_mutate($handle, 2, $name, (string)$value, "", 0, 0);
-        if ($status === -2) { trigger_error("Cannot assign to an array of nodes (duplicate subnodes or attr detected)", E_USER_WARNING); }
+        if ($status === -2) { __elephc_simplexml_warning("Warning: Cannot assign to an array of nodes (duplicate subnodes or attr detected)\n"); }
     }
     public function __isset(string $name): bool {
         return $this->__elephc_property_isset($name);
@@ -160,7 +160,16 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         if ($offset === null) { $kind = 5; }
         elseif (is_int($offset)) { $kind = 4; $index = $offset; }
         else { $key = (string)$offset; }
-        elephc_xml_sx_mutate($handle, $kind, $key, (string)$value, "", 0, $index);
+        $text = (string)$value;
+        if ($kind === 4 && elephc_xml_sx_int($handle, 5) === 2) {
+            $length = elephc_xml_sx_int($handle, 0);
+            if ($index < 0 || ($length > 0 && $index > $length)) {
+                $name = elephc_xml_sx_string($handle, 1);
+                __elephc_simplexml_warning('Warning: Cannot add element ' . $name . ' number ' . $index . ' when only ' . $length . " such elements exist\n");
+            }
+        }
+        $status = elephc_xml_sx_mutate($handle, $kind, $key, $text, "", 0, $index);
+        if ($status === -2) { __elephc_simplexml_warning("Warning: Cannot assign to an array of nodes (duplicate subnodes or attr detected)\n"); }
     }
     public function __elephc_append(mixed $value): void { $this->offsetSet(null, $value); }
     public function offsetUnset(mixed $offset): void {
@@ -169,20 +178,29 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         else { elephc_xml_sx_mutate($handle, 13, (string)$offset, "", "", 0, 0); }
     }
     public function addChild(string $qualifiedName, ?string $value = null, ?string $namespace = null): ?SimpleXMLElement {
+        if ($qualifiedName === '') { throw new ValueError('SimpleXMLElement::addChild(): Argument #1 ($qualifiedName) must not be empty'); }
         $handle = $this->__elephc_handle;
         $flags = 0;
         if ($value !== null) { $flags = $flags + 1; }
         if ($namespace !== null) { $flags = $flags + 2; }
         $child = elephc_xml_sx_mutate($handle, 20, $qualifiedName, $value ?? "", $namespace ?? "", $flags, 0);
-        if ($child === 0) { return null; }
+        if ($child <= 0) {
+            if ($child === -10) { __elephc_simplexml_warning("Warning: SimpleXMLElement::addChild(): Cannot add element to attributes\n"); }
+            elseif ($child === -11) { __elephc_simplexml_warning("Warning: SimpleXMLElement::addChild(): Cannot add child. Parent is not a permanent member of the XML tree\n"); }
+            return null;
+        }
         return __elephc_simplexml_wrap($child, get_class($this));
     }
     public function addAttribute(string $qualifiedName, string $value, ?string $namespace = null): void {
+        if ($qualifiedName === '') { throw new ValueError('SimpleXMLElement::addAttribute(): Argument #1 ($qualifiedName) must not be empty'); }
         $handle = $this->__elephc_handle;
         $flags = 1;
         if ($namespace !== null) { $flags = 3; }
         $attribute = elephc_xml_sx_mutate($handle, 21, $qualifiedName, $value, $namespace ?? "", $flags, 0);
-        elephc_xml_sx_free($attribute);
+        if ($attribute === -12) { __elephc_simplexml_warning("Warning: SimpleXMLElement::addAttribute(): Unable to locate parent Element\n"); }
+        elseif ($attribute === -13) { __elephc_simplexml_warning("Warning: SimpleXMLElement::addAttribute(): Attribute requires prefix for namespace\n"); }
+        elseif ($attribute === -14) { __elephc_simplexml_warning("Warning: SimpleXMLElement::addAttribute(): Attribute already exists\n"); }
+        if ($attribute > 0) { elephc_xml_sx_free($attribute); }
     }
     public function asXML(?string $filename = null): string|bool {
         $handle = $this->__elephc_handle;

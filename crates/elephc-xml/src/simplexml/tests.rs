@@ -166,3 +166,20 @@ fn simplexml_attribute_addition_rejects_duplicates_and_missing_prefix() {
     assert_eq!(root.select(1, "", "", false, 0).nodes().len(), 1);
     assert_eq!(root.select(1, "", "urn:p", false, 0).nodes().len(), 1);
 }
+
+/// Native mutation errors distinguish missing parents, attribute lists, and duplicate names.
+#[test]
+fn simplexml_checked_add_resolves_parent_and_reports_failures() {
+    let root = parse(b"<r xmlns:p='urn:p' id='1'/>", 0, "", false).unwrap();
+    let attribute = root.select(3, "id", "", false, 0);
+    let attribute = attribute.with_scope(Scope::Node(attribute.first().unwrap()));
+    assert!(attribute.add_checked("extra", Some("2"), None, true).is_ok());
+    let attrs = root.select(1, "", "", false, 0);
+    assert!(attrs.add_checked("listed", Some("3"), None, true).is_ok());
+    assert_eq!(attrs.add_checked("child", None, None, false), Err(mutation::AddError::ElementToAttributes));
+    assert_eq!(root.add_checked("id", Some("2"), None, true), Err(mutation::AddError::DuplicateAttribute));
+    assert_eq!(root.add_checked("bare", Some("2"), Some("urn:p"), true), Err(mutation::AddError::AttributePrefix));
+    assert!(root.add_checked("q:child", Some("v"), Some("urn:p"), false).is_ok());
+    let child = root.select(0, "", "urn:p", false, 0).select(2, "child", "", false, 0);
+    assert_eq!(unsafe { string(ffi::ns(child.first().unwrap(), 1)) }, "p");
+}

@@ -9,6 +9,18 @@
 
 use super::*;
 
+/// Negative ABI results distinguish PHP's user-visible add-operation warnings.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(i64)]
+pub(super) enum AddError {
+    ElementToAttributes = -10,
+    MissingChildParent = -11,
+    MissingAttributeParent = -12,
+    AttributePrefix = -13,
+    DuplicateAttribute = -14,
+    InvalidName = -15,
+}
+
 impl View {
     /// Creates a missing named child and its missing ancestors for a chained write.
     fn ensure_first(&self) -> Option<Node> {
@@ -24,27 +36,37 @@ impl View {
     }
     /// Adds an element or attribute under the first selected element.
     pub(super) fn add(&self, name: &str, value: Option<&str>, namespace: Option<&str>, attribute: bool) -> Option<Node> {
-        let parent = self.first()?;
-        if unsafe { ffi::node_type(parent) } != 1 || name.is_empty() { return None; }
+        self.add_checked(name, value, namespace, attribute).ok()
+    }
+    /// Resolves non-element attribute receivers to their element parent and reports precise failures.
+    pub(super) fn add_checked(&self, name: &str, value: Option<&str>, namespace: Option<&str>, attribute: bool) -> Result<Node, AddError> {
+        let missing = if attribute { AddError::MissingAttributeParent } else { AddError::MissingChildParent };
+        if !attribute && matches!(self.scope, Scope::Attributes(..)) { return Err(AddError::ElementToAttributes); }
+        let mut parent = self.first().ok_or(missing)?;
+        if attribute && unsafe { ffi::node_type(parent) } != 1 {
+            parent = unsafe { ffi::parent(parent) };
+        }
+        if parent.is_null() || unsafe { ffi::node_type(parent) } != 1 { return Err(missing); }
+        if name.is_empty() { return Err(AddError::InvalidName); }
         if attribute {
             let uri = namespace.unwrap_or("");
-            if !uri.is_empty() && !name.contains(':') { return None; }
+            if !uri.is_empty() && !name.contains(':') { return Err(AddError::AttributePrefix); }
             let local = name.split_once(':').map(|(_, local)| local).unwrap_or(name);
             let mut current = unsafe { ffi::attrs(parent) };
             while !current.is_null() {
                 if unsafe { string(ffi::name(current)) == local && string(ffi::ns(current, 0)) == uri } {
-                    return None;
+                    return Err(AddError::DuplicateAttribute);
                 }
                 current = unsafe { ffi::next(current) };
             }
         }
         let name = cstring(name);
-        if unsafe { crate::ffi::xmlValidateName(name.as_ptr().cast(), 0) } != 0 { return None; }
+        if unsafe { crate::ffi::xmlValidateName(name.as_ptr().cast(), 0) } != 0 { return Err(AddError::InvalidName); }
         let text = cstring(value.unwrap_or(""));
         let uri = cstring(namespace.unwrap_or(""));
         let raw = unsafe { ffi::add(parent, name.as_ptr(), text.as_ptr(), uri.as_ptr(),
             i32::from(namespace.is_some()), i32::from(attribute), i32::from(value.is_some())) };
-        (!raw.is_null()).then_some(raw)
+        if raw.is_null() { Err(missing) } else { Ok(raw) }
     }
     /// Replaces direct content without freeing child wrappers that remain in user storage.
     pub(super) fn assign_node(&self, node: Node, value: &str) {

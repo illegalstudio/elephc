@@ -167,6 +167,11 @@ pub(super) fn lower_lazy_empty(
     {
         return None;
     }
+    if ctx.classes.contains_key("SimpleXMLElement") {
+        if let Some(value) = nullsafe_chain::lower_empty(ctx, &args[0]) {
+            return Some(value);
+        }
+    }
     if let Some(value) = native_xml_empty::lower(ctx, name, &args[0], expr) {
         return Some(value);
     }

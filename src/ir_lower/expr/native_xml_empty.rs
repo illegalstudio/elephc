@@ -86,6 +86,19 @@ pub(super) fn lower(
     Some(result)
 }
 
+/// Probes a chain's final access while its receiver is still on the guarded continuation.
+pub(super) fn lower_from_receiver(
+    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, key: &Expr,
+    dimension: bool, arg: &Expr,
+) -> LoweredValue {
+    let receiver = capture(ctx, value, arg.span);
+    let key = capture_key(ctx, key, dimension);
+    let value = dispatch(ctx, &receiver, &key, dimension, "empty", arg, arg);
+    retire(ctx, key, arg.span);
+    retire(ctx, receiver, arg.span);
+    value
+}
+
 /// Evaluates and normalizes one key before publishing its independent captured owner.
 fn capture_key(ctx: &mut LoweringContext<'_, '_>, key: &Expr, dimension: bool) -> Capture {
     let value = lower_expr(ctx, key);

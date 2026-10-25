@@ -107,3 +107,77 @@ unset($selection, $xml);
     assert_eq!(out.stdout, "key|1|1|11|0");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Upstream nullsafe exits skip terminal keys, while a real later null still evaluates them.
+#[test]
+fn test_simplexml_empty_long_nullsafe_chains() {
+    if skip_without_xml_native("test_simplexml_empty_long_nullsafe_chains") { return; }
+    let out = compile_and_run_with_heap_debug(r###"<?php
+$xml = new SimpleXMLElement('<r><child z="0"><item>0</item></child></r>');
+function emptyChainName(): string { echo 'name|'; return 'item'; }
+function emptyChainIndex(): string { echo 'index|'; return 'z'; }
+function emptyChains(mixed $node): void {
+    echo (int)empty($node?->child->{emptyChainName()}), '|';
+    echo (int)empty($node?->child[emptyChainIndex()]), '|';
+}
+emptyChains(null);
+emptyChains($xml);
+$ordinary = new stdClass(); $ordinary->child = null;
+emptyChains($ordinary);
+$code = $argc > 0 ? '$null = null; echo (int)empty($null?->child->{emptyChainName()}), "|", (int)empty($null?->child[emptyChainIndex()]), "|"; echo (int)empty($xml?->child->{emptyChainName()}), "|", (int)empty($xml?->child[emptyChainIndex()]), "|"; echo (int)empty($ordinary?->child->{emptyChainName()}), "|", (int)empty($ordinary?->child[emptyChainIndex()]), "|";' : '';
+eval($code);
+"###);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "1|1|name|1|index|1|name|1|index|1|1|1|name|1|index|1|name|1|index|1|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Attribute views add to their containing element and existing namespace URIs keep their prefix.
+#[test]
+fn test_simplexml_add_attribute_parent_and_namespace_reuse() {
+    if skip_without_xml_native("test_simplexml_add_attribute_parent_and_namespace_reuse") { return; }
+    let out = compile_and_run(r###"<?php
+$xml = new SimpleXMLElement('<r xmlns:p="urn:p" id="1"/>');
+$xml['id']->addAttribute('offset', '2');
+$xml->attributes()->addAttribute('list', '3');
+$xml->addChild('q:child', 'v', 'urn:p');
+$xml->addAttribute('q:a', '4', 'urn:p');
+echo $xml->asXML();
+"###);
+    assert_eq!(out, "<?xml version=\"1.0\"?>\n<r xmlns:p=\"urn:p\" id=\"1\" offset=\"2\" list=\"3\" p:a=\"4\"><p:child>v</p:child></r>\n");
+}
+
+/// Write and add failures use E_WARNING, preserve appending, and validate names with ValueError.
+#[test]
+fn test_simplexml_mutation_warning_contract() {
+    if skip_without_xml_native("test_simplexml_mutation_warning_contract") { return; }
+    let out = compile_and_run(r###"<?php
+$xml = new SimpleXMLElement('<r id="1"><item>a</item><item>b</item></r>');
+set_error_handler(function(int $level, string $message): bool { echo $level, ':', $message, '|'; return true; });
+$xml->item = 'wrong';
+$xml->attributes()->addChild('blocked');
+$xml->missing->addChild('blocked');
+$xml->missing->addAttribute('blocked', 'v');
+$xml->addAttribute('bare', 'v', 'urn:x');
+$xml->addAttribute('id', '2');
+$xml->item[5] = 'c';
+echo count($xml->item), ':', (string)$xml->item[2], '|';
+restore_error_handler();
+try { $xml->addChild(''); } catch (ValueError $error) { echo $error->getMessage(), '|'; }
+try { $xml->addAttribute('', 'v'); } catch (ValueError $error) { echo $error->getMessage(), '|'; }
+set_error_handler(function(int $level, string $message): bool { throw new RuntimeException('stopped'); });
+try { $xml->item[9] = 'not-added'; } catch (RuntimeException $error) { echo $error->getMessage(), ':', count($xml->item); }
+restore_error_handler();
+"###);
+    assert_eq!(out, concat!(
+        "2:Cannot assign to an array of nodes (duplicate subnodes or attr detected)|",
+        "2:SimpleXMLElement::addChild(): Cannot add element to attributes|",
+        "2:SimpleXMLElement::addChild(): Cannot add child. Parent is not a permanent member of the XML tree|",
+        "2:SimpleXMLElement::addAttribute(): Unable to locate parent Element|",
+        "2:SimpleXMLElement::addAttribute(): Attribute requires prefix for namespace|",
+        "2:SimpleXMLElement::addAttribute(): Attribute already exists|",
+        "2:Cannot add element item number 5 when only 2 such elements exist|3:c|",
+        "SimpleXMLElement::addChild(): Argument #1 ($qualifiedName) must not be empty|",
+        "SimpleXMLElement::addAttribute(): Argument #1 ($qualifiedName) must not be empty|stopped:3",
+    ));
+}

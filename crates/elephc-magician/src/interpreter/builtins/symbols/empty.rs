@@ -16,6 +16,8 @@ eval_builtin! {
 
 use super::super::super::*;
 
+mod nullsafe;
+
 /// Evaluates PHP's `empty(...)` language construct over eval-visible values.
 pub(in crate::interpreter) fn eval_empty_declared_call(
     args: &[EvalExpr],
@@ -68,6 +70,9 @@ pub(in crate::interpreter) fn eval_empty_arg(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
+    if let Some(empty) = nullsafe::evaluate(arg, context, scope, values)? {
+        return Ok(empty);
+    }
     if let EvalExpr::LoadVar(name) = arg {
         let Some(value) = visible_scope_cell(context, scope, name) else {
             return Ok(true);
