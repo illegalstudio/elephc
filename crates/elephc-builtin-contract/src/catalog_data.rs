@@ -10423,7 +10423,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "text",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Mixed,
                 default: None,
                 by_ref: false,
             },
@@ -10454,7 +10454,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "text",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Mixed,
                 default: None,
                 by_ref: false,
             },
@@ -10485,7 +10485,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "text",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Mixed,
                 default: None,
                 by_ref: false,
             },
@@ -10516,7 +10516,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "text",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Mixed,
                 default: None,
                 by_ref: false,
             },

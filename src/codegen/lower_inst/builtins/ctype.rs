@@ -7,7 +7,10 @@
 //! Key details:
 //! - PHP ctype checks operate over bytes, reject empty strings, and return scalar booleans.
 //! - The loops are emitted inline; there is no shared runtime helper.
+//! - The argument is `mixed`, as in php-src: an int in -128..=255 is one character code, any
+//!   other int is checked as its decimal string, and every other non-string type is false.
 
+use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
 use crate::ir::Instruction;
@@ -58,13 +61,38 @@ impl CtypeKind {
 }
 
 /// Emits the shared ctype byte-scanning loop and stores the boolean result.
+///
+/// The operand keeps its own type (the contract takes `mixed` and the argument lowering
+/// preserves values), so the subject is chosen here: a string is scanned as is, an int goes
+/// through [`emit_int_subject`], a boxed value is unboxed and dispatched on its runtime tag, and
+/// any other static type is false without a scan. Coercing every argument to a string first made
+/// `ctype_digit(7)` true, where php checks character 7 and answers false.
 fn lower_ctype(ctx: &mut FunctionContext<'_>, inst: &Instruction, kind: CtypeKind) -> Result<()> {
-    load_single_string_arg(ctx, inst, kind.name())?;
+    let operand_ty = load_single_arg(ctx, inst, kind.name())?;
     let loop_label = ctx.next_label("ctype_loop");
     let next_label = ctx.next_label("ctype_next");
     let fail_label = ctx.next_label("ctype_fail");
     let pass_label = ctx.next_label("ctype_pass");
     let end_label = ctx.next_label("ctype_end");
+    let scan_label = ctx.next_label("ctype_scan");
+    let int_label = ctx.next_label("ctype_int");
+    match operand_ty {
+        PhpType::Str => {}
+        PhpType::Int => {
+            emit_int_subject(ctx, kind, &scan_label, &fail_label, &pass_label);
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            emit_boxed_subject_dispatch(ctx, &scan_label, &int_label, &fail_label);
+            ctx.emitter.label(&int_label);
+            emit_int_subject(ctx, kind, &scan_label, &fail_label, &pass_label);
+        }
+        _ => {
+            // Bool, float, null, arrays and objects are never a ctype subject in php.
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+            return store_if_result(ctx, inst);
+        }
+    }
+    ctx.emitter.label(&scan_label);
     match ctx.emitter.target.arch {
         Arch::AArch64 => emit_aarch64_ctype_loop(
             ctx,
@@ -89,12 +117,15 @@ fn lower_ctype(ctx: &mut FunctionContext<'_>, inst: &Instruction, kind: CtypeKin
     store_if_result(ctx, inst)
 }
 
-/// Loads the single ctype argument into the target's string result registers.
-fn load_single_string_arg(
+/// Loads the single ctype argument into the result registers and returns its codegen type.
+///
+/// A string lands in the string result pair the scan loop reads, an int in the integer result
+/// register, and a boxed value as its cell pointer for [`emit_boxed_subject_dispatch`].
+fn load_single_arg(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
-) -> Result<()> {
+) -> Result<PhpType> {
     if inst.operands.len() != 1 {
         return Err(CodegenIrError::invalid_module(format!(
             "{} expected 1 arg, got {}",
@@ -103,13 +134,79 @@ fn load_single_string_arg(
         )));
     }
     let value = expect_operand(inst, 0)?;
-    match ctx.load_value_to_result(value)?.codegen_repr() {
-        PhpType::Str => Ok(()),
-        other => Err(CodegenIrError::unsupported(format!(
-            "{} for PHP type {:?}",
-            name, other
-        ))),
+    Ok(ctx.load_value_to_result(value)?.codegen_repr())
+}
+
+/// Unboxes the loaded Mixed cell and routes it by runtime tag: a string to the scan with its
+/// payload in the string result pair, an int to `int_label` with it in the integer result
+/// register, anything else to `fail_label`.
+fn emit_boxed_subject_dispatch(
+    ctx: &mut FunctionContext<'_>,
+    scan_label: &str,
+    int_label: &str,
+    fail_label: &str,
+) {
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #1");                              // a string payload is already in the x1/x2 pair the scan reads
+            ctx.emitter.instruction(&format!("b.eq {}", scan_label));           // scan a boxed string byte by byte
+            ctx.emitter.instruction(&format!("cbnz x0, {}", fail_label));       // every tag but int and string answers false
+            ctx.emitter.instruction("mov x0, x1");                              // move the boxed int into the integer result register
+            ctx.emitter.instruction(&format!("b {}", int_label));               // classify the int as a character code or its digits
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 1");                              // a string payload is in rdi/rdx after unboxing
+            ctx.emitter.instruction(&format!("jne {}_not_string", scan_label)); // route non-strings to the int test
+            ctx.emitter.instruction("mov rax, rdi");                            // move the string pointer into the scan's rax/rdx pair
+            ctx.emitter.instruction(&format!("jmp {}", scan_label));            // scan a boxed string byte by byte
+            ctx.emitter.label(&format!("{}_not_string", scan_label));
+            ctx.emitter.instruction("test rax, rax");                           // tag zero is a PHP int
+            ctx.emitter.instruction(&format!("jne {}", fail_label));            // every tag but int and string answers false
+            ctx.emitter.instruction("mov rax, rdi");                            // move the boxed int into the integer result register
+            ctx.emitter.instruction(&format!("jmp {}", int_label));             // classify the int as a character code or its digits
+        }
     }
+}
+
+/// Classifies the int in the integer result register the way php-src does.
+///
+/// -128..=255 is ONE character code (a negative value wraps by 256, which is its low byte), so
+/// its single byte is tested and the result is final. Any other int is formatted with
+/// `__rt_itoa`, which returns the digits in the string result pair, and falls into the scan.
+fn emit_int_subject(
+    ctx: &mut FunctionContext<'_>,
+    kind: CtypeKind,
+    scan_label: &str,
+    fail_label: &str,
+    pass_label: &str,
+) {
+    let digits_label = ctx.next_label("ctype_int_digits");
+    let byte_pass_label = ctx.next_label("ctype_byte_pass");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("add x9, x0, #128");                        // map the character-code range -128..255 onto 0..383
+            ctx.emitter.instruction("cmp x9, #383");                            // an unsigned compare also rejects everything below -128
+            ctx.emitter.instruction(&format!("b.hi {}", digits_label));         // larger magnitudes are checked as decimal strings
+            ctx.emitter.instruction("and w4, w0, #255");                        // the character code is the low byte
+            emit_aarch64_ctype_predicate(ctx, kind, &byte_pass_label, fail_label);
+            ctx.emitter.label(&byte_pass_label);
+            ctx.emitter.instruction(&format!("b {}", pass_label));              // the one character satisfied the class
+            ctx.emitter.label(&digits_label);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("lea r9, [rax + 128]");                     // map the character-code range -128..255 onto 0..383
+            ctx.emitter.instruction("cmp r9, 383");                             // an unsigned compare also rejects everything below -128
+            ctx.emitter.instruction(&format!("ja {}", digits_label));           // larger magnitudes are checked as decimal strings
+            ctx.emitter.instruction("movzx r8d, al");                           // the character code is the low byte
+            emit_x86_64_ctype_predicate(ctx, kind, &byte_pass_label, fail_label);
+            ctx.emitter.label(&byte_pass_label);
+            ctx.emitter.instruction(&format!("jmp {}", pass_label));            // the one character satisfied the class
+            ctx.emitter.label(&digits_label);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_itoa");                             // the decimal digits land in the string result pair
+    abi::emit_jump(ctx.emitter, scan_label);
 }
 
 /// Emits the AArch64 ctype scan loop.

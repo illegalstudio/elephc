@@ -35959,7 +35959,7 @@
           "default": null,
           "name": "text",
           "optional": false,
-          "type": "string"
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -35986,7 +35986,7 @@
           "default": null,
           "name": "text",
           "optional": false,
-          "type": "string"
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -36019,7 +36019,7 @@
     "module": "ctype",
     "name": "ctype_alnum",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "preserve_values",
       "callable": {
         "kind": "static_only",
         "reason": "typed backend operation has no runtime-selected wrapper contract"
@@ -36083,7 +36083,7 @@
           "default": null,
           "name": "text",
           "optional": false,
-          "type": "string"
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -36110,7 +36110,7 @@
           "default": null,
           "name": "text",
           "optional": false,
-          "type": "string"
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -36143,7 +36143,7 @@
     "module": "ctype",
     "name": "ctype_alpha",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "preserve_values",
       "callable": {
         "kind": "static_only",
         "reason": "typed backend operation has no runtime-selected wrapper contract"
@@ -36207,7 +36207,7 @@
           "default": null,
           "name": "text",
           "optional": false,
-          "type": "string"
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -36234,7 +36234,7 @@
           "default": null,
           "name": "text",
           "optional": false,
-          "type": "string"
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -36267,7 +36267,7 @@
     "module": "ctype",
     "name": "ctype_digit",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "preserve_values",
       "callable": {
         "kind": "static_only",
         "reason": "typed backend operation has no runtime-selected wrapper contract"
@@ -36331,7 +36331,7 @@
           "default": null,
           "name": "text",
           "optional": false,
-          "type": "string"
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -36358,7 +36358,7 @@
           "default": null,
           "name": "text",
           "optional": false,
-          "type": "string"
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -36391,7 +36391,7 @@
     "module": "ctype",
     "name": "ctype_space",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "preserve_values",
       "callable": {
         "kind": "static_only",
         "reason": "typed backend operation has no runtime-selected wrapper contract"
