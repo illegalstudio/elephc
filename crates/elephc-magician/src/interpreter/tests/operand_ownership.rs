@@ -824,20 +824,30 @@ fn failed_compound_property_rhs_releases_prior_operands() {
     assert_eq!(scope.visible_cell("box"), Some(object));
 }
 
-/// A failed indexed-property RHS releases the copied array, original read, key, and receiver.
+/// A failed RHS retires its key and computed receiver without fetching property storage.
 #[test]
 fn failed_property_array_rhs_releases_prior_operands() {
-    let mut values = FakeOps::default();
-    let mut context = ElephcEvalContext::new();
-    let mut scope = ElephcEvalScope::new();
-    let array = values.array_new(0).unwrap();
-    let object = values.alloc(FakeValue::Object(vec![("items".into(), array)]));
-    scope.set("box", object, ScopeCellOwnership::Owned);
-    let program = parse_fragment(b"$box->items[0] = missing_array_operand();").unwrap();
-    assert!(execute_program_with_context(&mut context, &program, &mut scope, &mut values).is_err());
-    assert_eq!(values.releases.iter().filter(|cell| **cell == array).count(), 1);
-    assert_eq!(values.releases.iter().filter(|cell| **cell == object).count(), 1);
-    assert_eq!(scope.visible_cell("box"), Some(object));
+    for computed in [false, true] {
+        let mut values = FakeOps::default();
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let array = values.array_new(0).unwrap();
+        let object = values.alloc(FakeValue::Object(vec![("items".into(), array)]));
+        scope.set("box", object, ScopeCellOwnership::Owned);
+        let choose = values.int(1).unwrap();
+        scope.set("choose", choose, ScopeCellOwnership::Owned);
+        let source = if computed { "($choose ? $box : $box)->items[0] = missing_array_operand();" }
+            else { "$box->items[0] = missing_array_operand();" };
+        let program = parse_fragment(source.as_bytes()).unwrap();
+        assert!(execute_program_with_context(&mut context, &program, &mut scope, &mut values).is_err());
+        assert_eq!(values.releases.iter().filter(|cell| **cell == array).count(), 0);
+        assert_eq!(values.retains.iter().filter(|cell| **cell == object).count(), usize::from(computed));
+        assert_eq!(values.releases.iter().filter(|cell| **cell == object).count(), usize::from(computed));
+        let keys = values.values.iter().filter(|(_, value)| matches!(value, FakeValue::Int(0))).collect::<Vec<_>>();
+        assert!(!keys.is_empty(), "the key was evaluated before the failed RHS");
+        for (id, _) in keys { assert_eq!(values.cell_owners[id], 0, "retire the staged key"); }
+        assert_eq!(scope.visible_cell("box"), Some(object));
+    }
 }
 
 /// Shallow copies release iteration cells and abandon partial arrays if insertion fails.

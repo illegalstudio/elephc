@@ -71,7 +71,7 @@ fn emit_native(ctx: &mut LoweringContext<'_, '_>, array: LoweredValue, value: Lo
         .and_then(|class| class.methods.get(&php_symbol_key("__elephc_append"))).cloned();
     let mut operands = vec![receiver.value, boxed.value];
     let expression = Expr::new(ExprKind::Null, span);
-    let extra = crate::ir_lower::expr::append_hidden_arguments(ctx, signature.as_ref(), &mut operands, 1, &expression);
+    let extra = crate::ir_lower::expr::object_operators::append_hidden_arguments(ctx, signature.as_ref(), &mut operands, 1, &expression);
     let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &operands, span);
     let method = ctx.intern_string("__elephc_append");
     ctx.emit_void(Op::MethodCall, operands, Some(Immediate::Data(method)),
