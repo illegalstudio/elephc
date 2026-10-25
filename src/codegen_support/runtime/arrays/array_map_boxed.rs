@@ -357,7 +357,7 @@ fn install_boundary(emitter: &mut Emitter) {
     abi::emit_frame_slot_address(emitter, result, HANDLER);
     abi::emit_store_reg_to_symbol(emitter, result, "_exc_handler_top", 0);
     abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter.target, 0), HANDLER - TRY_HANDLER_JMP_BUF_OFFSET);
-    emitter.bl_c("setjmp");                                                     // preserve map-owned inputs and partial results when a callback throws
+    emitter.save_exception_handler();                                           // preserve map-owned inputs and partial results when a callback throws
     abi::emit_branch_if_int_result_nonzero(emitter, "__rt_array_map_boxed_caught");
 }
 
@@ -409,7 +409,7 @@ mod tests {
             emit_array_map_boxed(&mut emitter);
             let asm = emitter.output();
             let snapshot = asm.find("__rt_mixed_from_value").unwrap();
-            let boundary = asm.find(&target.extern_symbol("setjmp")).unwrap();
+            let boundary = asm.find(&target.extern_symbol("_setjmp")).unwrap();
             let call = asm.find(if target.arch == Arch::AArch64 { "blr x10" } else { "call r10" }).unwrap();
             assert!(snapshot < boundary && boundary < call, "{name}");
             assert!(asm.contains("__rt_array_map_boxed_hash:"), "{name}");

@@ -15,6 +15,9 @@
 //!   a loop counter: `store_local` only counts as an integer sink once the slot is `I64`, and
 //!   the slot is only `mixed` because its sole writer is the boxed producer. Neither end can
 //!   move first, so the slot and its producers are proven together and committed at once.
+//! - A third phase (`bound_comparisons`) unboxes `X - c` when its only observers are strict
+//!   `L < (X - c)` comparisons with an integer `L` and `1 <= c <= 1024`, where the cast-mode
+//!   overflow result PHP_INT_MIN compares exactly like PHP's promoted -2^63.
 
 use std::collections::{HashMap, HashSet};
 
@@ -27,6 +30,8 @@ use crate::types::PhpType;
 use super::driver::IrPass;
 use super::rewrite::{neutralize_to_nop, replace_all_uses, resolve_chains};
 
+mod bound_comparisons;
+
 /// Rewrites checked arithmetic whose complete use graph observes only a PHP integer.
 pub struct CheckedIntSink;
 
@@ -36,15 +41,19 @@ impl IrPass for CheckedIntSink {
         "checked_int_sink"
     }
 
-    /// Skips functions with neither an integer sink nor a narrowable boxed integer local.
+    /// Skips functions with no integer sink, narrowable boxed integer local or bound comparison.
     fn is_applicable(&self, function: &Function) -> bool {
-        has_potential_integer_sink(function) || has_narrowable_integer_slot(function)
+        has_potential_integer_sink(function)
+            || has_narrowable_integer_slot(function)
+            || bound_comparisons::has_candidate(function)
     }
 
-    /// Specializes every independently proven producer, then every provable boxed int local.
+    /// Specializes every independently proven producer, then every provable boxed int local,
+    /// then every `L < (X - c)` bound comparison (`bound_comparisons`).
     fn run(&self, function: &mut Function, _data: &mut DataPool) -> bool {
         let mut changed = sink_proven_producers(function);
         changed |= sink_integer_slots(function);
+        changed |= bound_comparisons::sink(function);
         changed
     }
 }

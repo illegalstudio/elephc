@@ -9,6 +9,7 @@
 //! - Function-local tables own blocks, instructions, values, and locals. IDs
 //!   are zero-based indices into those tables.
 //! - Private entry variants retain a source name separately from their physical symbol.
+//! - `inlined_scopes` keeps the PHP class scope of instructions spliced in from a method body.
 
 use crate::ir::block::{BasicBlock, BlockId};
 use crate::ir::instr::{Immediate, InstId, Instruction, Op};
@@ -84,6 +85,17 @@ pub struct Function {
     /// it did not own. A read-only `array` parameter called in a loop therefore died with
     /// `heap debug detected bad refcount` under `-O`, while `-O0` was clean.
     pub no_epilogue_cleanup_slots: std::collections::HashSet<LocalSlotId>,
+    /// PHP lexical class scope of instructions the inliner spliced in from a method body.
+    ///
+    /// Property name resolution, visibility checks and the callable invocation scope all read
+    /// the scope of the frame an instruction executes in. A spliced method body keeps running
+    /// "inside" its class even though its instructions now live in another function, so the
+    /// inliner records the callee's class for every transplanted instruction whose scope differs
+    /// from this function's `lexical_class`. Codegen consults this table before
+    /// `lexical_class` through `FunctionContext::lexical_class`. Instruction ids are stable
+    /// (passes neutralize or relocate instructions rather than renumbering them), and passes
+    /// that copy a body into another function carry the entries along.
+    pub inlined_scopes: std::collections::HashMap<InstId, String>,
 }
 
 impl Function {
@@ -138,6 +150,7 @@ impl Function {
             source_defaults: Vec::new(),
             flags: FunctionFlags::default(),
             no_epilogue_cleanup_slots: std::collections::HashSet::new(),
+            inlined_scopes: std::collections::HashMap::new(),
         }
     }
 
@@ -201,6 +214,33 @@ impl Function {
                 .is_some_and(|receiver| {
                     matches!(receiver.php_type.codegen_repr(), PhpType::Packed(_))
                 })
+    }
+
+    /// Returns true when the frontend retained this frame's arguments for a dynamic backtrace.
+    ///
+    /// Descriptor-only calls to `debug_backtrace()` and `debug_print_backtrace()` do not leave a
+    /// `CoreBuiltin` instruction in EIR. The argument-introspection pass marks their reachability by
+    /// retaining a generated collector, count, or source-variadic snapshot in each PHP frame. The
+    /// physical EIR parameters are authoritative because public signature metadata may omit generated
+    /// ABI slots. Reading both shapes here keeps activation emission aligned with the frontend gate. A
+    /// frame using the same storage for `func_get_args()` is an intentional conservative match: it
+    /// costs an inactive reader slot but cannot change PHP behavior.
+    pub(crate) fn keeps_backtrace_argument_snapshot(&self) -> bool {
+        self.params.iter().any(|param| {
+            matches!(
+                param.name.as_str(),
+                crate::func_args::HIDDEN_ARGS_PARAM | crate::func_args::HIDDEN_ARGC_PARAM
+            )
+        }) || self.signature.as_ref().is_some_and(|signature| {
+            crate::func_args::sig_collects_surplus_args(signature)
+                || crate::func_args::sig_has_hidden_argc_param(signature)
+        }) || self.locals.iter().any(|local| {
+            matches!(
+                local.name.as_deref(),
+                Some(crate::func_args::SNAPSHOT_KEY_LOCAL)
+                    | Some(crate::func_args::SNAPSHOT_VALUE_LOCAL)
+            )
+        })
     }
 
     /// Assigns the module-local function identifier.

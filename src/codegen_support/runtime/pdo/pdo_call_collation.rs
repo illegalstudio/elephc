@@ -145,7 +145,7 @@ pub fn emit_pdo_call_collation(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // link the record as the active handler
     // setjmp(&jmp_buf) where jmp_buf = record + 24
     emitter.instruction("add x0, sp, #24");                                     // x0 = &jmp_buf inside the handler record
-    emitter.bl_c("setjmp"); // returns 0 on first pass, 1 when a throw longjmps back
+    emitter.save_exception_handler();                                           // returns 0 on first pass, 1 when a throw longjmps back
     emitter.instruction("cbnz x0, __rt_pdo_call_collation_threw");              // nonzero → arrived via longjmp
 
     // -- normal path: invoke the comparator through its descriptor (offset 56) --
@@ -280,7 +280,7 @@ fn emit_pdo_call_collation_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea r10, [rbp - 312]");                                // r10 = address of this handler record
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // link the record as the active handler
     emitter.instruction("lea rdi, [rbp - 288]");                                // rdi = &jmp_buf inside the handler record (record + 24)
-    emitter.bl_c("setjmp"); // returns 0 on first pass, 1 when a throw longjmps back
+    emitter.save_exception_handler();                                           // returns 0 on first pass, 1 when a throw longjmps back
     emitter.instruction("test rax, rax");                                       // did control arrive via longjmp?
     emitter.instruction("jne __rt_pdo_call_collation_threw_x86");               // nonzero → arrived via longjmp
 

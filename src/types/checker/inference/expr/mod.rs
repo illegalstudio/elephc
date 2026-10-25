@@ -115,15 +115,31 @@ impl Checker {
     }
 
     /// Merges ordinary elements and spread values for a literal that may carry string keys.
-    fn assoc_spread_literal_value_type(&mut self, elems: &[Expr], env: &TypeEnv) -> PhpType {
+    ///
+    /// `scanned_sources` holds, in order, the results for the spread sources the caller's
+    /// hash-spread scan typed already: always a leading run of the literal's spreads, up to the
+    /// first hash source. Those results are reused, so no spread source is typed twice; typing
+    /// it again doubled the work at every level of a nested literal.
+    fn assoc_spread_literal_value_type(
+        &mut self,
+        elems: &[Expr],
+        scanned_sources: Vec<Result<PhpType, CompileError>>,
+        env: &TypeEnv,
+    ) -> PhpType {
+        let mut scanned_sources = scanned_sources.into_iter();
         let mut value_ty = PhpType::Never;
         for elem in elems {
             let next = match &elem.kind {
-                ExprKind::Spread(inner) => match self.infer_type(inner, env) {
-                    Ok(PhpType::Array(elem)) => *elem,
-                    Ok(PhpType::AssocArray { value, .. }) => *value,
-                    _ => PhpType::Mixed,
-                },
+                ExprKind::Spread(inner) => {
+                    match scanned_sources
+                        .next()
+                        .unwrap_or_else(|| self.infer_type(inner, env))
+                    {
+                        Ok(PhpType::Array(elem)) => *elem,
+                        Ok(PhpType::AssocArray { value, .. }) => *value,
+                        _ => PhpType::Mixed,
+                    }
+                }
                 _ => self.infer_type(elem, env).unwrap_or(PhpType::Mixed),
             };
             if matches!(value_ty, PhpType::Never) {

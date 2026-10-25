@@ -19,7 +19,9 @@
 //! - THE ALLOWLIST IS DEFAULT-DENY. The callee signature (which parameters are
 //!   by-reference) is not available to a single-function pass, so any `load_local` result
 //!   consumed by an instruction that is not a proven value-only consumer counts as a
-//!   potential address escape. Terminator uses never alias and are ignored.
+//!   potential address escape. Operand zero of `prop_get` and `method_call` is a
+//!   value-only receiver on every lowering route; later method operands remain
+//!   conservative even when they repeat that receiver. Terminator uses never alias.
 //! - WHY IT IS SHARED. Two passes with different jobs need the identical, safety-critical
 //!   judgement; a second copy that drifted would reintroduce exactly the bug each of them
 //!   fixes. `immutable_local_loads` learned this the hard way: without the exclusion it
@@ -71,7 +73,13 @@ pub(crate) fn address_escaping_slots(function: &Function) -> HashSet<LocalSlotId
         {
             continue;
         }
-        for operand in &inst.operands {
+        for (index, operand) in inst.operands.iter().enumerate() {
+            // Property reads and method dispatch load the receiver pointer by value, including
+            // magic getters and nullable/boxed receivers. Only the receiver is exempt: a later
+            // method argument can still pass this same loaded value by reference.
+            if index == 0 && matches!(inst.op, Op::PropGet | Op::MethodCall) {
+                continue;
+            }
             if let Some(&slot) = load_result_slot.get(operand) {
                 escaping.insert(slot);
             }
@@ -86,8 +94,9 @@ pub(crate) fn address_escaping_slots(function: &Function) -> HashSet<LocalSlotId
 /// This is an intentionally conservative allowlist (default deny): only opcodes
 /// known to read operands by value are listed. Anything else — calls, object
 /// construction, closure capture, ref-arg materialization, property/array/iterator
-/// access, and any future opcode — is treated as a possible by-reference escape so
-/// the owning slot is excluded by every caller of this module.
+/// access, and any future opcode is treated as a possible by-reference escape so
+/// the owning slot is excluded by every caller of this module. The receiver-only
+/// exemptions for property reads and method calls are handled by operand position.
 pub(super) fn op_is_value_only_consumer(op: Op) -> bool {
     use Op::*;
     matches!(

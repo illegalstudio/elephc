@@ -12,7 +12,8 @@ use super::*;
 /// Lowers a direct instance-method call on a statically known object receiver.
 ///
 /// Overridable methods check literal `false` and `null` parameters on the runtime
-/// implementation. A final or otherwise non-virtual method keeps the resolved signature.
+/// implementation. Generic final declarations also select the runtime instantiation's
+/// diagnostic name, even though object-only variance preserves literal parameter types.
 pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let object = expect_operand(inst, 0)?;
     let method_name = method_name_data(ctx, inst)?.to_string();
@@ -73,7 +74,7 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
         return lower_interface_method_call(ctx, inst, &class_name, &method_name);
     }
     let target = resolve_method_call_target(ctx, &class_name, &method_name, inst.operands.len())?;
-    if target.dynamic_slot.is_some() {
+    if super::method_resolution::method_requires_runtime_literal_guards(ctx, &class_name, &target) {
         // An override may widen `false` or `null`. The vtable selects that body, so the
         // guard has to read the runtime class rather than the static base signature.
         let receiver_reg = abi::nested_call_reg(ctx.emitter);

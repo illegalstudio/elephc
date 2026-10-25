@@ -26,11 +26,25 @@ pub(super) fn lower_assignment_expr(
         return result;
     }
     let key_already_diagnosed = compound_array_key_diagnosed_in_prelude(target, value, prelude, expr.span);
+    // A `++`/`--` of a scalar buffer element takes over after the prelude has stabilized its
+    // receiver and key, at the element read; any other container continues below as written.
+    let buffer_update = crate::ir_lower::stmt::BufferExpressionUpdate::recognize(
+        target, value, result_target, prelude, conditional_value_temp, expr.span,
+    );
     let mut compound_receiver = None;
-    for stmt in prelude {
+    for (position, stmt) in prelude.iter().enumerate() {
         if let Some(receiver) = guard_static_compound_property_read(ctx, target, value, stmt, expr.span) {
             compound_receiver = Some(receiver);
             continue;
+        }
+        if let Some(update) = buffer_update.as_ref() {
+            if compound_receiver.is_none() && update.read_position() == position {
+                if let Some(result) = crate::ir_lower::stmt::lower_buffer_expression_update(
+                    ctx, update, expr.span,
+                ) {
+                    return result;
+                }
+            }
         }
         crate::ir_lower::stmt::lower_stmt(ctx, stmt);
     }

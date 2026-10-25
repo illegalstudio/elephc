@@ -9,11 +9,14 @@
 //!   PHP-visible direct/by-value wrappers and implementation code.
 //! - Helper reuse stays between builtin files with `ptr` owning raw address
 //!   conversions, `ptr_get` owning read widths, and `ptr_set` owning write widths.
+//! - `buffer_registry` registers no builtin: it owns every eval buffer allocation and the
+//!   generation-checked handles the `buffer_*` builtins resolve.
 
 mod buffer_free;
 mod buffer_len;
 mod buffer_new;
 mod buffer_ptr;
+mod buffer_registry;
 mod ptr;
 mod ptr_get;
 mod ptr_is_null;

@@ -38,6 +38,8 @@ mod constant_propagation;
 mod control_flow_normalization;
 #[path = "optimizer/checked_int_sink.rs"]
 mod checked_int_sink;
+#[path = "optimizer/buffer_element_incdec.rs"]
+mod buffer_element_incdec;
 #[path = "optimizer/bounded_mixed_counter.rs"]
 mod bounded_mixed_counter;
 #[path = "optimizer/method_loop_counters.rs"]
@@ -72,6 +74,8 @@ mod generator_yield;
 mod peephole;
 #[path = "optimizer/property_receiver_ownership.rs"]
 mod property_receiver_ownership;
+#[path = "optimizer/receiver_value_alias.rs"]
+mod receiver_value_alias;
 #[path = "optimizer/read_result_cleanup.rs"]
 mod read_result_cleanup;
 #[path = "optimizer/fresh_mixed_transfer.rs"]
@@ -80,6 +84,8 @@ mod fresh_mixed_transfer;
 mod release_local_slot;
 #[path = "optimizer/inline.rs"]
 mod inline;
+#[path = "optimizer/method_inline.rs"]
+mod method_inline;
 #[path = "optimizer/integer_range.rs"]
 mod integer_range;
 #[path = "optimizer/memory_model_propagation.rs"]
@@ -87,6 +93,8 @@ mod memory_model_propagation;
 #[path = "optimizer/mem2reg.rs"]
 mod mem2reg;
 mod buffer_access;
+mod buffer_property_reuse;
+mod buffer_property_loops;
 #[path = "optimizer/warning_globals.rs"]
 mod warning_globals;
 
@@ -104,3 +112,5 @@ mod stack_numeric;
 mod numeric_continuation;
 #[path = "optimizer/reused_loop_counters.rs"]
 mod reused_loop_counters;
+#[path = "optimizer/loop_counter_checked_bounds.rs"]
+mod loop_counter_checked_bounds;

@@ -38,7 +38,7 @@ pub(super) fn emit_entry(emitter: &mut Emitter) {
     emitter.instruction(&format!("lea r10, [rbp - {}]", previous_handler_offset)); // compute this wrapper's exception-handler record address
     crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
     emitter.instruction(&format!("lea rdi, [rbp - {}]", boundary_bytes - TRY_HANDLER_JMP_BUF_OFFSET)); // pass this boundary's opaque jmp_buf to setjmp
-    emitter.bl_c("setjmp"); // catch Throwable control flow escaping hydration hooks
+    emitter.save_exception_handler();                                           // catch Throwable control flow escaping hydration hooks
     emitter.instruction("test eax, eax");                                       // did control return through longjmp?
     emitter.instruction("jnz __rt_unserialize_mixed_throw_x");                  // clean runtime state before propagating the Throwable
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // base = preserved source string pointer

@@ -116,7 +116,19 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
     if mixed_storage_site && !ctx.has_local_slot(name) {
         ctx.declare_local(name, PhpType::Mixed);
     }
-    let (lowered, php_type) = contextualize_local_assignment(ctx, name, value, lowered, span);
+    // A counter seeded by checked integer arithmetic (`$j = $i + 1`) that the numeric storage
+    // replay proved never overflows: the seed is the `int` it always is, so the loop reads the
+    // counter as an integer exactly as after a `$j = 0` seed (`numeric_storage::lower_body`).
+    // The fresh result is stored like the checked add of `$j++`, without an assignment copy:
+    // nothing else owns it, and `checked_int_sink` can then narrow the slot it seeds.
+    let int_seed = !mixed_storage_site
+        && ctx.is_int_seed_binding(name)
+        && crate::ir_lower::numeric_storage::is_checked_int_seed(ctx, lowered.value);
+    let (lowered, php_type) = if int_seed {
+        (lowered, PhpType::Int)
+    } else {
+        contextualize_local_assignment(ctx, name, value, lowered, span)
+    };
     let php_type = if mixed_storage_site {
         PhpType::Mixed
     } else {

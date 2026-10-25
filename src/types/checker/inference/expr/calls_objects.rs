@@ -469,6 +469,20 @@ impl Checker {
         allow_traversable: bool,
     ) -> Result<PhpType, CompileError> {
         let ty = self.infer_type(inner, env)?;
+        self.spread_source_element_type(ty, span, allow_traversable)
+    }
+
+    /// Returns the element type a spread source of the already inferred type `ty` supplies, or
+    /// the "requires an array" diagnostic at `span`, the span of the `...` node itself.
+    ///
+    /// Split from [`Checker::infer_spread_element_type`] so the indexed-literal typing, which
+    /// types its spread sources once in its hash-spread scan, does not type them a second time.
+    pub(super) fn spread_source_element_type(
+        &self,
+        ty: PhpType,
+        span: crate::span::Span,
+        allow_traversable: bool,
+    ) -> Result<PhpType, CompileError> {
         match ty {
             PhpType::Array(elem_ty) => Ok(*elem_ty),
             PhpType::AssocArray { value, .. } => Ok(*value),

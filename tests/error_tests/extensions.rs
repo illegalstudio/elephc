@@ -187,6 +187,60 @@ $store->values[$index] = 1;
     );
 }
 
+/// Verifies a static buffer property uses the same element mismatch diagnostic as a local buffer.
+#[test]
+fn test_error_static_buffer_property_scalar_assign_type_mismatch() {
+    expect_error(
+        r#"<?php
+final class StaticIntBuffer { public static buffer<int> $values; }
+StaticIntBuffer::$values = buffer_new<int>(1);
+StaticIntBuffer::$values[0] = "wrong";
+"#,
+        "Buffer element type mismatch: expected int, got string",
+    );
+}
+
+/// Verifies a statically known string index is rejected for a static buffer property write.
+#[test]
+fn test_error_static_buffer_property_write_rejects_static_string_index() {
+    expect_error(
+        r#"<?php
+final class StaticIndexedBuffer { public static buffer<int> $values; }
+StaticIndexedBuffer::$values = buffer_new<int>(1);
+string $index = "0";
+StaticIndexedBuffer::$values[$index] = 1;
+"#,
+        "Buffer index must be integer",
+    );
+}
+
+/// Verifies packed buffer elements cannot be assigned whole through a static property.
+#[test]
+fn test_error_static_buffer_property_packed_element_requires_field_assignment() {
+    expect_error(
+        r#"<?php
+packed class Vec2 { public float $x; public float $y; }
+final class StaticPoints { public static buffer<Vec2> $values; }
+StaticPoints::$values = buffer_new<Vec2>(1);
+StaticPoints::$values[0] = 1;
+"#,
+        "Assign packed buffer elements through field access like $buf[$i]->field",
+    );
+}
+
+/// Verifies an append to a static buffer property is rejected with the buffer push diagnostic.
+#[test]
+fn test_error_static_buffer_property_rejects_push() {
+    expect_error(
+        r#"<?php
+final class StaticPushBuffer { public static buffer<int> $values; }
+StaticPushBuffer::$values = buffer_new<int>(1);
+StaticPushBuffer::$values[] = 1;
+"#,
+        "buffer<T> does not support push; allocate with buffer_new<T>(len)",
+    );
+}
+
 /// Verifies a nested packed field rejects a scalar where a whole record is expected.
 #[test]
 fn test_error_nested_packed_field_rejects_scalar_record_assignment() {
@@ -621,6 +675,36 @@ fn test_error_packed_int_field_rejects_static_string() {
         buffer_free($cells);
         ",
         "cannot assign string to packed field Cell::id of type int",
+    );
+}
+
+/// A packed `ptr` field takes no value whose type is only known at run time: a pointer boxes
+/// under the int tag, so the runtime narrowing scalar fields get could not tell an address from
+/// an arbitrary integer.
+#[test]
+fn test_error_packed_ptr_field_rejects_mixed() {
+    expect_error(
+        "<?php
+        packed class Node { public ptr $next; }
+        function load(mixed $v) { return $v; }
+        $nodes = buffer_new<Node>(1);
+        $nodes[0]->next = load(1);
+        ",
+        "cannot assign mixed to packed field Node::next of type ptr",
+    );
+}
+
+/// A statically known int into a packed `bool` field stays a compile error: only a value whose
+/// type is decided at run time reaches the strict bool narrowing.
+#[test]
+fn test_error_packed_bool_field_rejects_static_int() {
+    expect_error(
+        "<?php
+        packed class Cell { public bool $live; }
+        $cells = buffer_new<Cell>(1);
+        $cells[0]->live = 1;
+        ",
+        "cannot assign int to packed field Cell::live of type bool",
     );
 }
 

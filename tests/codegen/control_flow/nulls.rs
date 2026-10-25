@@ -486,3 +486,30 @@ fn test_nested_null_sibling_literals_type_in_linear_time() {
         "null-sibling literal typing took {elapsed:?}"
     );
 }
+
+/// Verifies the checker types each spread source once when a literal spreads a nested lazy
+/// merge: `[...E, null]` typed `E` in its hash-spread scan and again in the element merge, so a
+/// `$m ?? [...E, null]` or `$flag ? [...E, null] : []` nesting doubled the checker's work at
+/// every level (10.5 s for `--check` alone at 20 levels). A 24-deep nesting of each must compile
+/// well inside the bound. `$maybe` holds `[]` at runtime, so `$a` is that empty array, and `$b`
+/// keeps the innermost `[$argc]` plus one `null` per level: 25 elements.
+#[test]
+fn test_nested_null_sibling_spread_literals_type_in_linear_time() {
+    let mut coalesce = String::from("[$argc]");
+    let mut ternary = String::from("[$argc]");
+    for _ in 0..24 {
+        coalesce = format!("($maybe ?? [...{coalesce}, null])");
+        ternary = format!("($flag ? [...{ternary}, null] : [])");
+    }
+    let source = format!(
+        "<?php\n$maybe = $argc > 100 ? null : [];\n$flag = $argc > 0;\n$a = {coalesce};\n$b = {ternary};\necho count($a), \"|\", count($b), \"\\n\";\n"
+    );
+    let started = std::time::Instant::now();
+    let out = compile_and_run(&source);
+    let elapsed = started.elapsed();
+    assert_eq!(out, "0|25\n");
+    assert!(
+        elapsed < std::time::Duration::from_secs(30),
+        "nested spread literal typing took {elapsed:?}"
+    );
+}

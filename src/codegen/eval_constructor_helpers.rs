@@ -481,7 +481,7 @@ fn emit_aarch64_constructor_exception_boundary_push(emitter: &mut Emitter, escap
         "add x0, x29, #{}",
         handler_offset + TRY_HANDLER_JMP_BUF_OFFSET
     ));
-    emitter.bl_c("setjmp");                                                     // snapshot the bridge stack before entering native constructors
+    emitter.save_exception_handler();                                           // snapshot the bridge stack before entering native constructors
     emitter.instruction(&format!("cbnz x0, {}", escape_label));                 // non-zero setjmp result means a constructor Throwable escaped
 }
 
@@ -521,7 +521,7 @@ fn emit_x86_64_constructor_exception_boundary_push(emitter: &mut Emitter, escape
         "lea rdi, [rbp - {}]",
         handler_base - TRY_HANDLER_JMP_BUF_OFFSET
     ));
-    emitter.bl_c("setjmp");                                                      // snapshot the bridge stack before entering native constructors
+    emitter.save_exception_handler();                                           // snapshot the bridge stack before entering native constructors
     emitter.instruction("test eax, eax");                                       // did control arrive through longjmp?
     emitter.instruction(&format!("jne {}", escape_label));                      // non-zero setjmp result means a constructor Throwable escaped
 }

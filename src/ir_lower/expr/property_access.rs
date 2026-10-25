@@ -1307,3 +1307,20 @@ pub(crate) fn static_property_result_type(
     };
     normalize_value_php_type(result_type)
 }
+
+/// Returns the slot type of a static property that holds one raw word: a `buffer<T>` handle,
+/// a `ptr` or `ptr<T>` address, or a `?ptr<T>` word where null is address 0.
+///
+/// Merge temps and literal element stamps are predicted before the read is lowered, and the
+/// syntactic fallback types every static read `int`, which cast a buffer handle or pointer
+/// into an integer slot (a ternary of two static buffers then indexed an `int`). Other static
+/// reads answer `None` and keep the typing their callers already had.
+pub(crate) fn static_property_word_type(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    property: &str,
+    expr: &Expr,
+) -> Option<PhpType> {
+    let loaded = static_property_result_type(ctx, receiver, property, expr);
+    matches!(loaded.codegen_repr(), PhpType::Buffer(_) | PhpType::Pointer(_)).then_some(loaded)
+}

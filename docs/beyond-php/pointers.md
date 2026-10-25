@@ -149,6 +149,27 @@ Where such a local can be `null` it behaves as a `?ptr<T>`: `=== null`, `is_null
 `extern` function that takes `ptr<T>`, as for any `?ptr<T>`. Like every pointer local, it is
 not part of the local scope that `eval()` code sees.
 
+Instance and static properties can be typed `ptr`, `ptr<T>` or `?ptr<T>`. A non-nullable
+`ptr` or `ptr<T>` property may still take a `= null` default, which starts it as the null
+pointer; without a default, a typed static pointer property is uninitialized until its first
+assignment, like any typed static property:
+
+```php
+<?php
+packed class Vec2 { public int $x; public int $y; }
+
+final class Cursor {
+    public static ptr<Vec2> $at = null;
+}
+
+$items = buffer_new<Vec2>(2);
+if (ptr_is_null(Cursor::$at)) {
+    Cursor::$at = $items[1];      // the record address
+}
+Cursor::$at->x = 7;               // writes through to $items[1]
+echo $items[1]->x;                // 7
+```
+
 A `?ptr<T> &$p` (or `ptr<T> &$p`) by-reference parameter writes the pointer word back
 through the caller's variable, so that variable must be stored as a pointer word: a pointer
 value (`$p = $buffer[0];`), a declared `?ptr<T> $p = null;`, a pointer parameter, a local

@@ -130,8 +130,16 @@ pub(super) fn object_property_type(
     object: crate::ir::ValueId,
     property: &str,
 ) -> Option<PhpType> {
-    let object_ty = ctx.builder.value_php_type(object);
-    let (class_name, _) = crate::ir_lower::expr::singular_object_class(&object_ty)?;
+    object_type_property_type(ctx, &ctx.builder.value_php_type(object), property)
+}
+
+/// Resolves the declared PHP type of a property on a receiver of the given static type.
+pub(super) fn object_type_property_type(
+    ctx: &LoweringContext<'_, '_>,
+    object_ty: &PhpType,
+    property: &str,
+) -> Option<PhpType> {
+    let (class_name, _) = crate::ir_lower::expr::singular_object_class(object_ty)?;
     if crate::types::builtin_classes::native_property_method(class_name, property,
         elephc_builtin_contract::ObjectProperty::Set, ctx.classes).is_some()
     { return None; }

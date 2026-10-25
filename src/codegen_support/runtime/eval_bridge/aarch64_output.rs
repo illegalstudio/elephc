@@ -257,7 +257,17 @@ pub(super) fn emit_aarch64_output(emitter: &mut Emitter) {
 
     label_c_global(emitter, "__elephc_eval_set_pcntl_dispatching");
     abi::emit_symbol_address(emitter, "x9", "__rt_pcntl_dispatching");
-    emitter.instruction("str x0, [x9]");                                        // publish Magician handler execution to the Fiber guard
+    // -- paired eval entry/exit preserves a guard already owned by an AOT dispatch --
+    emitter.instruction("ldr x10, [x9]");                                       // retain the enclosing AOT or eval dispatch level
+    emitter.instruction("cbz x0, __elephc_eval_pcntl_dispatch_leave");          // inactive releases only the eval-owned level
+    emitter.instruction("add x10, x10, #1");                                    // acquire one eval dispatch level
+    emitter.instruction("b __elephc_eval_pcntl_dispatch_store");                // share publication with the paired release
+    emitter.label("__elephc_eval_pcntl_dispatch_leave");
+    emitter.instruction("cbz x10, __elephc_eval_pcntl_dispatch_done");          // tolerate a defensive release without underflow
+    emitter.instruction("sub x10, x10, #1");                                    // keep any enclosing AOT dispatch level active
+    emitter.label("__elephc_eval_pcntl_dispatch_store");
+    emitter.instruction("str x10, [x9]");                                       // publish the combined Fiber and reentrancy guard
+    emitter.label("__elephc_eval_pcntl_dispatch_done");
     emitter.instruction("ret");                                                 // return to the Rust interpreter
     label_c_global(emitter, "__elephc_eval_warning_raw");
     emitter.instruction("mov x2, x1");                                          // adapt the already-filtered warning length to the writer ABI

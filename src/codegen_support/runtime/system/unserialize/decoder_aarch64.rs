@@ -40,7 +40,7 @@ pub(super) fn emit_entry(emitter: &mut Emitter) {
     emitter.instruction("mov x10, sp");                                         // compute this wrapper's exception-handler record address
     crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
     emitter.instruction(&format!("add x0, sp, #{}", TRY_HANDLER_JMP_BUF_OFFSET)); // pass this boundary's opaque jmp_buf to setjmp
-    emitter.bl_c("setjmp"); // catch Throwable control flow escaping hydration hooks
+    emitter.save_exception_handler();                                           // catch Throwable control flow escaping hydration hooks
     emitter.instruction("cbnz x0, __rt_unserialize_mixed_throw");               // longjmp resumes here so runtime state can be cleaned first
     emitter.instruction(&format!("ldr x0, [sp, #{}]", source_offset));          // base = preserved source string pointer
     emitter.instruction("mov x1, #0");                                          // start parsing at position 0

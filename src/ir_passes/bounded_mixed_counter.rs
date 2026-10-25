@@ -8,6 +8,9 @@
 //! - A private trial function is scalarized, promoted to SSA and checked by IntegerRange.
 //! - Unproven overflow, type changes, references, implicit scope access and pointer escapes fail closed.
 //! - Existing direct calls keep their target and ABI; this pass never authorizes a closure call.
+//! - A seed computed by checked or mixed `+ - *` (`$j = $i + 1`) must be proven unchecked like
+//!   an update, and a comparison against a checked `+`/`-` bound (`$i < $end - 1`) stays a PHP
+//!   comparison whose one-sided overflow IntegerRange reasons about.
 
 use std::collections::{HashMap, HashSet};
 
@@ -20,7 +23,7 @@ use crate::ir::{
 use crate::types::PhpType;
 
 mod storage;
-pub(crate) use storage::proven_integer_slots;
+pub(crate) use storage::prove_integer_slots;
 
 /// Narrows only counters for which the existing range analysis proves all updates safe.
 #[derive(Default)]
@@ -151,12 +154,7 @@ impl IrPass for BoundedMixedCounter {
                 continue;
             }
             super::integer_range::IntegerRange.run(&mut trial, data);
-            if proof.updates.iter().all(|id| {
-                trial
-                    .instruction(*id)
-                    .is_some_and(|inst| matches!(inst.op, Op::IAdd | Op::ISub))
-            }) && crate::ir::validate_function(&trial).is_ok()
-            {
+            if proof.proven_unchecked(&trial) && crate::ir::validate_function(&trial).is_ok() {
                 *function = trial;
                 changed = true;
             }
@@ -170,6 +168,11 @@ struct CounterProof {
     scalar_values: HashSet<ValueId>,
     updates: HashSet<InstId>,
     comparisons: HashSet<InstId>,
+    /// Checked or mixed `+ - *` producers whose result seeds a counter (`$j = $i + 1`). The
+    /// trial must prove each one unchecked, exactly like an update.
+    seeds: HashSet<InstId>,
+    /// The candidate slots one of `seeds` writes.
+    seeded_slots: HashSet<LocalSlotId>,
     releases: HashSet<InstId>,
     copy_readonly_calls: bool,
 }
@@ -208,6 +211,8 @@ impl CounterProof {
             scalar_values: HashSet::new(),
             updates: HashSet::new(),
             comparisons: HashSet::new(),
+            seeds: HashSet::new(),
+            seeded_slots: HashSet::new(),
             releases: HashSet::new(),
             copy_readonly_calls: readonly_calls.is_some(),
         };
@@ -234,7 +239,7 @@ impl CounterProof {
                             }
                             pending.push(result);
                         }
-                        Op::StoreLocal => stores.push(*inst.operands.first()?),
+                        Op::StoreLocal => stores.push((candidate, *inst.operands.first()?)),
                         Op::ReleaseLocalSlot => {
                             proof.releases.insert(id);
                         }
@@ -315,22 +320,39 @@ impl CounterProof {
         if proof.updates.is_empty() || stores.is_empty() {
             return None;
         }
-        if !stores
-            .iter()
-            .all(|&value| proof.scalar_values.contains(&value) || integer(function, value))
-        {
-            return None;
-        }
-        for &id in &proof.comparisons {
-            if !function
-                .instruction(id)?
-                .operands
-                .iter()
-                .all(|&value| proof.scalar_values.contains(&value) || integer(function, value))
+        for &(slot, value) in &stores {
+            if !proof.scalar_values.contains(&value)
+                && !integer(function, value)
+                && !proof.accept_seed(function, slot, value, &uses, slots)
             {
                 return None;
             }
         }
+        let mut bound_comparisons = HashSet::new();
+        for &id in &proof.comparisons {
+            let operands = &function.instruction(id)?.operands;
+            if operands
+                .iter()
+                .all(|&value| proof.scalar_values.contains(&value) || integer(function, value))
+            {
+                continue;
+            }
+            // `$i < $end - 1`: a counter against a checked `+`/`-` of raw integers. It stays a
+            // PHP comparison, because the bound may be the float an overflow produced, and
+            // IntegerRange decides whether the bound still limits the counter.
+            if operands.len() == 2
+                && operands.iter().any(|value| proof.scalar_values.contains(value))
+                && operands
+                    .iter()
+                    .all(|&value| proof.scalar_values.contains(&value) || checked_bound(function, value))
+            {
+                bound_comparisons.insert(id);
+                continue;
+            }
+            return None;
+        }
+        // Only the counter-against-counter or counter-against-integer tests become `icmp`.
+        proof.comparisons.retain(|id| !bound_comparisons.contains(id));
         // An increment must consume a load or another closed numeric increment, not an
         // unrelated string value that merely shares a destination at one source location.
         if !proof.updates.iter().all(|id| {
@@ -341,6 +363,105 @@ impl CounterProof {
             return None;
         }
         Some(proof)
+    }
+
+    /// Accepts a store into `slot` of `wrapper*(P)`, where `P` is a checked or mixed `+`, `-`
+    /// or `*` whose operands are raw integers or values of the counters being proven
+    /// (`$j = $i + 1`).
+    ///
+    /// Each wrapper (acquire, move, borrow, clone) may only feed the next one, a release, or
+    /// this store, and `P` may only feed the first wrapper or a release, so scalarizing `P`
+    /// leaves no boxed observer behind. The wrappers become scalar copies, their releases
+    /// disappear, and the trial must then prove `P` unchecked (`proven_unchecked`), which is
+    /// what makes every value stored into the slot an integer.
+    fn accept_seed(
+        &mut self,
+        function: &Function,
+        slot: LocalSlotId,
+        stored: ValueId,
+        uses: &HashMap<ValueId, Vec<InstId>>,
+        slots: &HashSet<LocalSlotId>,
+    ) -> bool {
+        let mut wrappers = Vec::new();
+        let mut wrapper_insts = HashSet::new();
+        let mut value = stored;
+        let (producer_id, producer) = loop {
+            let Some(id) = defining_id(function, value) else {
+                return false;
+            };
+            let Some(inst) = function.instruction(id) else {
+                return false;
+            };
+            match inst.op {
+                Op::Acquire | Op::Move | Op::Borrow | Op::MixedClone
+                    if inst.immediate.is_none() && wrappers.len() < 8 =>
+                {
+                    let Some(&source) = inst.operands.first() else {
+                        return false;
+                    };
+                    wrappers.push(value);
+                    wrapper_insts.insert(id);
+                    value = source;
+                }
+                _ if seed_op(inst).is_some() => break (id, inst),
+                _ => return false,
+            }
+        };
+        let &[lhs, rhs] = producer.operands.as_slice() else {
+            return false;
+        };
+        if ![lhs, rhs]
+            .iter()
+            .all(|&operand| self.scalar_values.contains(&operand) || integer(function, operand))
+        {
+            return false;
+        }
+        let Some(result) = producer.result else {
+            return false;
+        };
+        let terminators: Vec<_> = function
+            .blocks
+            .iter()
+            .filter_map(|block| block.terminator.as_ref())
+            .collect();
+        let mut releases = Vec::new();
+        for owner in wrappers.iter().copied().chain([result]) {
+            if terminators.iter().any(|term| term.used_values().contains(&owner)) {
+                return false;
+            }
+            for &id in uses.get(&owner).into_iter().flatten() {
+                let Some(user) = function.instruction(id) else {
+                    return false;
+                };
+                match user.op {
+                    Op::Release => releases.push(id),
+                    Op::StoreLocal
+                        if owner == stored
+                            && matches!(user.immediate,
+                                Some(Immediate::LocalSlot(target)) if slots.contains(&target)) => {}
+                    _ if wrapper_insts.contains(&id) => {}
+                    _ => return false,
+                }
+            }
+        }
+        self.seeds.insert(producer_id);
+        self.seeded_slots.insert(slot);
+        self.scalar_values.extend(wrappers);
+        self.releases.extend(releases);
+        true
+    }
+
+    /// Returns whether the trial proved every update and every seed free of overflow.
+    fn proven_unchecked(&self, trial: &Function) -> bool {
+        self.updates.iter().all(|id| {
+            trial
+                .instruction(*id)
+                .is_some_and(|inst| matches!(inst.op, Op::IAdd | Op::ISub))
+        }) && self.seeds.iter().all(|id| {
+            trial
+                .instruction(*id)
+                .is_some_and(|inst| matches!(inst.op, Op::IAdd | Op::ISub | Op::IMul))
+        })
     }
 
     /// Rewrites the private trial while keeping original instruction identifiers stable.
@@ -368,6 +489,26 @@ impl CounterProof {
                     inst.op = Op::Move;
                 }
                 inst.effects = inst.op.default_effects();
+            }
+        }
+        // A seed producer becomes the checked integer form whose overflow the trial must rule
+        // out; `proven_unchecked` rejects the trial unless IntegerRange made it unchecked.
+        for &id in &self.seeds {
+            let inst = &mut function.instructions[id.as_raw() as usize];
+            let Some(op) = seed_op(inst) else {
+                continue;
+            };
+            inst.op = op;
+            inst.immediate = None;
+            inst.result_type = IrType::I64;
+            inst.result_php_type = PhpType::Int;
+            inst.result_ownership = Ownership::NonHeap;
+            inst.effects = op.default_effects();
+            if let Some(result) = inst.result {
+                let metadata = &mut function.values[result.as_raw() as usize];
+                metadata.ir_type = IrType::I64;
+                metadata.php_type = PhpType::Int;
+                metadata.ownership = Ownership::NonHeap;
             }
         }
         for &id in &self.releases {
@@ -496,6 +637,45 @@ impl CounterProof {
             function.blocks[block_index].instructions = rewritten;
         }
     }
+}
+
+/// Returns the instruction that defines `value`, or `None` for a block parameter.
+fn defining_id(function: &Function, value: ValueId) -> Option<InstId> {
+    let ValueDef::Instruction { inst, .. } = function.value(value)?.def else {
+        return None;
+    };
+    Some(inst)
+}
+
+/// Maps a counter seed producer to the checked integer opcode its trial must prove unchecked.
+fn seed_op(inst: &Instruction) -> Option<Op> {
+    match (inst.op, &inst.immediate) {
+        (Op::ICheckedAdd, _)
+        | (Op::MixedNumericBinop, Some(Immediate::MixedNumericOp(MixedNumericOp::Add))) => {
+            Some(Op::ICheckedAddToInt)
+        }
+        (Op::ICheckedSub, _)
+        | (Op::MixedNumericBinop, Some(Immediate::MixedNumericOp(MixedNumericOp::Sub))) => {
+            Some(Op::ICheckedSubToInt)
+        }
+        (Op::ICheckedMul, _)
+        | (Op::MixedNumericBinop, Some(Immediate::MixedNumericOp(MixedNumericOp::Mul))) => {
+            Some(Op::ICheckedMulToInt)
+        }
+        _ => None,
+    }
+}
+
+/// Accepts a checked `+` or `-` of two raw integers as a bound a counter may be compared with.
+///
+/// The bound may still overflow to a float. That is why the comparison keeps its PHP opcode and
+/// why IntegerRange, not this check, decides whether the bound limits the counter.
+fn checked_bound(function: &Function, value: ValueId) -> bool {
+    defining_instruction(function, value).is_some_and(|inst| {
+        matches!(inst.op, Op::ICheckedAdd | Op::ICheckedSub)
+            && inst.operands.len() == 2
+            && inst.operands.iter().all(|&operand| integer(function, operand))
+    })
 }
 
 /// Accepts an already raw PHP integer without assuming anything about a Mixed label.

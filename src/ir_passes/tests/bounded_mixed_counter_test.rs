@@ -379,7 +379,7 @@ fn bounded_mixed_counter_storage_joint_checks_every_update() {
         }
         assert!(validate_function(&function).is_ok());
         let original = crate::ir::print_function(&function);
-        let slots = crate::ir_passes::proven_integer_slots(&function, &mut DataPool::default(), &HashMap::new());
+        let slots = crate::ir_passes::prove_integer_slots(&function, &mut DataPool::default(), &HashMap::new()).slots;
         assert_eq!(slots.contains(&first), accepted);
         assert_eq!(slots.contains(&second), accepted);
         assert_eq!(crate::ir::print_function(&function), original, "analysis must not commit its trial");
@@ -420,8 +420,8 @@ fn bounded_mixed_counter_storage_ignores_unrelated_reference_slots() {
     let unrelated = function.add_local(Some("reference".into()), IrType::Heap(IrHeapKind::Mixed),
         PhpType::Mixed, LocalKind::RefCell);
     validate_function(&function).unwrap();
-    let slots = crate::ir_passes::proven_integer_slots(&function, &mut DataPool::default(),
-        &std::collections::HashMap::new());
+    let slots = crate::ir_passes::prove_integer_slots(&function, &mut DataPool::default(),
+        &std::collections::HashMap::new()).slots;
     assert!(slots.contains(&crate::ir::LocalSlotId::from_raw(1)));
     assert!(!slots.contains(&unrelated));
 }

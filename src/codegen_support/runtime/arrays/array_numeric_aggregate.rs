@@ -259,7 +259,7 @@ fn install_boundary(emitter: &mut Emitter, prefix: &str) {
     abi::emit_frame_slot_address(emitter, result, HANDLER);
     abi::emit_store_reg_to_symbol(emitter, result, "_exc_handler_top", 0);
     abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter.target, 0), HANDLER - TRY_HANDLER_JMP_BUF_OFFSET);
-    emitter.bl_c("setjmp");                                                     // preserve the snapshot and partial number when a warning handler throws
+    emitter.save_exception_handler();                                           // preserve the snapshot and partial number when a warning handler throws
     abi::emit_branch_if_int_result_nonzero(emitter, &format!("{prefix}_caught"));
 }
 
@@ -325,7 +325,7 @@ mod tests {
                 let mut emitter = Emitter::new(target);
                 emit_aggregate(&mut emitter, product);
                 let asm = emitter.output();
-                let boundary = asm.find(&target.extern_symbol("setjmp")).unwrap();
+                let boundary = asm.find(&target.extern_symbol("_setjmp")).unwrap();
                 let acquire = asm.find("__rt_mixed_from_value").unwrap();
                 let warning = asm.find("__rt_diag_warning").unwrap();
                 assert!(boundary < acquire && acquire < warning, "{name}");

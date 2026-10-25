@@ -5,10 +5,8 @@
 //! - `crate::interpreter::builtins::hooks`.
 //!
 //! Key details:
-//! - Eval buffers are the AOT-shaped header (length word, stride word) followed by the
-//!   payload, so the payload address is the header address plus the header words.
-
-use std::mem;
+//! - An eval buffer value is an opaque registry handle, so this builtin is the only way to
+//!   its payload; a freed buffer or a stale alias dies with the use-after-free fatal.
 
 use super::super::super::*;
 
@@ -45,14 +43,11 @@ pub(in crate::interpreter) fn eval_buffer_ptr_values_result(
     eval_buffer_ptr_result(*buffer, values)
 }
 
-/// Answers the payload address that follows an AOT-shaped buffer header.
+/// Answers the payload address of a live eval buffer.
 fn eval_buffer_ptr_result(
     buffer: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let header = super::ptr::eval_non_null_pointer(buffer, values)? as usize;
-    let payload = header
-        .checked_add(super::buffer_new::BUFFER_HEADER_WORDS * mem::size_of::<usize>())
-        .ok_or(EvalStatus::RuntimeFatal)?;
+    let payload = super::buffer_registry::eval_buffer_resolve(buffer, values)?.payload;
     super::ptr::eval_address_value(payload, values)
 }

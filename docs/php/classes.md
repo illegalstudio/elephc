@@ -243,7 +243,8 @@ final class InvoiceNumber {
 - `final class` cannot be extended
 - `final` methods cannot be overridden by subclasses
 - `final` properties cannot be redeclared by subclasses
-- `final` does not change object layout or dispatch for normal calls
+- `final` preserves object layout and PHP call semantics; for non-generic receiver classes, final methods and methods on a statically known final class can call their emitted implementation directly
+- Generic instantiations retain virtual dispatch so variance selects the actual instantiation's compiled method and static storage
 - `abstract final` classes and methods are rejected
 - `final private` methods emit a warning, matching PHP, because private methods are not overridden; `__construct` is the exception
 - `final private` properties are rejected, matching PHP

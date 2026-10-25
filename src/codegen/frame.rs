@@ -28,8 +28,8 @@ use crate::codegen::{
 use crate::codegen_support::data_section::DataWord;
 use crate::codegen_support::try_handlers::{EXCEPTION_GUARD_SLOT_SIZE, TRY_HANDLER_SLOT_SIZE};
 use crate::ir::{
-    CoreBuiltinOp, Function, GcControlOp, Immediate, LocalKind, LocalSlotId, Module, Op,
-    RuntimeCallTarget, ValueDef, ValueId,
+    Function, GcControlOp, Immediate, LocalKind, LocalSlotId, Module, Op, RuntimeCallTarget,
+    ValueDef, ValueId,
 };
 use crate::ir_passes::{allocate_registers, Allocation};
 use crate::names::ir_global_symbol;
@@ -204,37 +204,11 @@ pub(super) fn layout_for_function(
 }
 
 /// Returns whether any emitted EIR body can request a PHP Core backtrace.
+///
+/// The predicate lives on `Module` beside `Module::calls_php_backtrace`, the narrower question
+/// the inliner asks before splicing a method frame away.
 pub(super) fn module_uses_backtrace(module: &Module) -> bool {
-    if module.required_runtime_features.eval_bridge {
-        return true;
-    }
-    let functions = || {
-        module
-            .functions
-            .iter()
-            .chain(module.class_methods.iter())
-            .chain(module.closures.iter())
-            .chain(module.fiber_wrappers.iter())
-            .chain(module.callback_wrappers.iter())
-            .chain(module.extern_callback_trampolines.iter())
-            .chain(module.runtime_callable_invokers.iter())
-    };
-    if functions().any(function_keeps_backtrace_argument_snapshot) {
-        return true;
-    }
-    functions()
-        .flat_map(|function| function.instructions.iter())
-        .any(|inst| {
-            inst.op == Op::CoreBuiltin
-                && matches!(
-                    inst.immediate,
-                    Some(Immediate::I64(selector))
-                        if matches!(
-                            CoreBuiltinOp::from_i64(selector),
-                            Some(CoreBuiltinOp::DebugBacktrace | CoreBuiltinOp::DebugPrintBacktrace)
-                        )
-                )
-        })
+    module.uses_php_backtrace()
 }
 
 /// Returns whether an emitted body can observe per-request GC timing metrics.
@@ -296,33 +270,6 @@ fn module_uses_resource_inventory_cleanup(module: &Module) -> bool {
             };
             id.produces_resource_inventory_entry()
         })
-}
-
-/// Returns true when the frontend retained one frame's arguments for a dynamic backtrace.
-///
-/// Descriptor-only calls to `debug_backtrace()` and `debug_print_backtrace()` do not leave a
-/// `CoreBuiltin` instruction in EIR. The argument-introspection pass marks their reachability by
-/// retaining a generated collector, count, or source-variadic snapshot in each PHP frame. The
-/// physical EIR parameters are authoritative because public signature metadata may omit generated
-/// ABI slots. Reading both shapes here keeps activation emission aligned with the frontend gate. A
-/// frame using the same storage for `func_get_args()` is an intentional conservative match: it
-/// costs an inactive reader slot but cannot change PHP behavior.
-fn function_keeps_backtrace_argument_snapshot(function: &Function) -> bool {
-    function.params.iter().any(|param| {
-        matches!(
-            param.name.as_str(),
-            crate::func_args::HIDDEN_ARGS_PARAM | crate::func_args::HIDDEN_ARGC_PARAM
-        )
-    }) || function.signature.as_ref().is_some_and(|signature| {
-        crate::func_args::sig_collects_surplus_args(signature)
-            || crate::func_args::sig_has_hidden_argc_param(signature)
-    }) || function.locals.iter().any(|local| {
-        matches!(
-            local.name.as_deref(),
-            Some(crate::func_args::SNAPSHOT_KEY_LOCAL)
-                | Some(crate::func_args::SNAPSHOT_VALUE_LOCAL)
-        )
-    })
 }
 
 /// Saves the callee-saved registers the allocator used into their reserved

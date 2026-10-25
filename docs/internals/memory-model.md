@@ -311,6 +311,8 @@ Offset  Size  Field
 
 `__rt_buffer_resolve` validates the handle index, non-zero generation, active marker, and exact generation match before length, read, write, or free paths use descriptor metadata. `buffer_new<T>()` allocates exactly `length * stride` payload bytes from the compiler-managed heap and zeroes only that payload. `buffer_free()` marks the descriptor inactive before releasing the detached payload. Reusable descriptors enter the `_buffer_registry_free` list and receive a new generation for their next lifetime, which keeps stale aliases invalid after slot or heap reuse. A descriptor whose u32 generation reaches its maximum is retired instead of wrapping to zero.
 
+Buffers created inside `eval()` do not use `_buffer_registry`. Magician keeps its own thread-local registry (`crates/elephc-magician/src/interpreter/builtins/raw_memory/buffer_registry.rs`) with the same lifecycle: `buffer_new()` publishes a zeroed `calloc` payload of `length * 8` bytes in a slot and answers the handle `(generation << 32) | (1 << 31) | slot`, `buffer_len()` and `buffer_ptr()` resolve the handle before reading the slot, and `buffer_free()` unpublishes the slot before freeing the payload, so a stale alias dies with the same `use of buffer after buffer_free()` fatal. Bit 31 keeps eval handles disjoint from compiled descriptor indices, generations stop at `2^31 - 1` so every handle is a positive PHP integer, and a slot that reaches that generation is retired.
+
 ### Fiber stacks and scheduler state
 
 `Fiber` objects own native stacks rather than borrowing the caller's stack. The runtime allocates each fiber stack through `mmap` (256 KiB usable by default, plus the guard page), protects the bottom 16 KiB with `mprotect(PROT_NONE)` as a guard page, and stores both the mapping base and total mapped size in the Fiber object so `__rt_fiber_free_stack` can later return it with `munmap`.
@@ -1223,6 +1225,8 @@ Static properties are class-scoped storage rather than object fields. During `em
 ```
 
 The naming pattern comes from `static_property_symbol(...)`. Inherited static properties point back to the declaring class slot, so `Base::$count` and `Child::$count` share storage when the property is declared only on `Base`. When a subclass redeclares the static property, that subclass receives its own slot and `static::$count` dispatches to it through the called-class id at runtime. `_main` evaluates static-property defaults before user statements run, and later reads/writes load from or store to the resolved slot directly.
+
+A `buffer<T>`, `ptr` or `ptr<T>` static property keeps its handle or address in the slot's low word, as an instance property does. The word owns nothing: overwriting it frees no buffer, and shutdown releases nothing for it. Element writes (`Class::$buf[$i] = $v`) resolve the handle the slot holds and store into the buffer payload without writing the slot back. A typed pointer slot whose default is `null` is initialized to the zero word, while a typed buffer or pointer slot without a default carries the uninitialized marker in its high word until the first store.
 
 Converting a boxed `Mixed` value into a concrete scalar, string, or object property does not transfer the source box. EIR releases an owning temporary after the store and leaves borrowed boxes untouched. Scalar payloads need no owner; strings are persisted exactly once and object payloads are independently retained. Matching boxed-to-boxed storage instead transfers an owned box, or acquires a borrowed source before storing it.
 

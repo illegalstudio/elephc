@@ -458,6 +458,12 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// When set, loop facts reuse `numeric_closure_sites` instead of seeding
     /// another proof from the now-Mixed slots.
     pub(crate) numeric_proof_sealed: bool,
+    /// Named storage epochs of counters whose checked-arithmetic seed (`$j = $i + 1`) the
+    /// numeric storage proof showed always fits an integer, keyed like `final_mixed_locals`.
+    ///
+    /// Set on replay only (`numeric_storage::lower_body`); `lower_assign` then records such a seed
+    /// as `int`, so the loop reads the counter exactly as after a `$j = 0` seed.
+    pub(crate) int_seed_bindings: HashMap<String, HashSet<usize>>,
     /// Locals bound to a pointer by-reference parameter, checked against their final frame
     /// storage once the body is lowered (`refuse_pointer_reference_bindings`).
     pointer_reference_bindings: Vec<PointerReferenceBinding>,
@@ -617,6 +623,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             numeric_tracked_locals: HashSet::new(),
             final_mixed_locals: HashMap::new(),
             numeric_proof_sealed: false,
+            int_seed_bindings: HashMap::new(),
             pointer_reference_bindings: Vec::new(),
             source_path,
         }
@@ -1074,6 +1081,16 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Applies a replay constraint only to its original binding, including before the first store.
     pub(crate) fn is_final_mixed_local(&self, name: &str) -> bool {
         self.final_mixed_locals.get(name).is_some_and(|bindings| {
+            bindings.contains(&self.local_binding_ordinal(name, self.local_slots.get(name).copied()))
+        })
+    }
+
+    /// Returns whether the current binding of `name` is a counter with a proven integer seed.
+    ///
+    /// Resolved like `is_final_mixed_local`, so the answer also holds before the binding's first
+    /// store mints its slot.
+    pub(crate) fn is_int_seed_binding(&self, name: &str) -> bool {
+        self.int_seed_bindings.get(name).is_some_and(|bindings| {
             bindings.contains(&self.local_binding_ordinal(name, self.local_slots.get(name).copied()))
         })
     }
@@ -1932,17 +1949,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
         let kind = self.local_kinds.get(name).copied().unwrap_or(LocalKind::PhpLocal);
         let uses_global = self.uses_global_storage(name, kind);
-        // Under `--web`, superglobals carry a fixed `AssocArray{Str, Mixed}` type
-        // in every scope. Ordinary globals remain boxed Mixed cells.
-        let php_type = if uses_global {
-            self.global_alias_type(name)
-        } else if self.is_final_mixed_local(name) && !self.is_ref_bound_local(name) {
-            // Replay fixed the final representation. Preserve its actual runtime tag
-            // instead of truncating a promoted float to the entry integer type.
-            PhpType::Mixed
-        } else {
-            self.local_type(name)
-        };
+        let php_type = self.slot_load_php_type(name, uses_global);
         if !uses_global && php_type == PhpType::Void && !self.local_slots.contains_key(name) {
             // Probing an abandoned binding must not allocate a null slot that later widens
             // a fresh string capture to Mixed. The absent local is already known to be null.
@@ -1988,6 +1995,35 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             )
             .expect("load_local produces a value");
         LoweredValue { value, ir_type }
+    }
+
+    /// Returns the PHP type `load_local` stamps on a read of `name`, without emitting the read.
+    ///
+    /// `None` means the read is not a frame, reference-cell or global slot load (an extern
+    /// global or an eval-scope name). A lowering that picks its shape from the loaded
+    /// representation before it evaluates anything asks here, so its choice is the type of the
+    /// load that follows.
+    pub(crate) fn local_load_php_type(&self, name: &str) -> Option<PhpType> {
+        if self.extern_global_type(name).is_some() || self.should_load_from_eval_scope(name) {
+            return None;
+        }
+        let kind = self.local_kinds.get(name).copied().unwrap_or(LocalKind::PhpLocal);
+        Some(self.slot_load_php_type(name, self.uses_global_storage(name, kind)))
+    }
+
+    /// Selects the representation of a slot or global load for `load_local` and its probe.
+    fn slot_load_php_type(&self, name: &str, uses_global: bool) -> PhpType {
+        // Under `--web`, superglobals carry a fixed `AssocArray{Str, Mixed}` type
+        // in every scope. Ordinary globals remain boxed Mixed cells.
+        if uses_global {
+            self.global_alias_type(name)
+        } else if self.is_final_mixed_local(name) && !self.is_ref_bound_local(name) {
+            // Replay fixed the final representation. Preserve its actual runtime tag
+            // instead of truncating a promoted float to the entry integer type.
+            PhpType::Mixed
+        } else {
+            self.local_type(name)
+        }
     }
 
     /// Returns true when a variable read should be sourced from the eval scope handle.

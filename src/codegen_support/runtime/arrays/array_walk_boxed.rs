@@ -433,7 +433,7 @@ fn install_boundary(emitter: &mut Emitter) {
         abi::int_arg_reg_name(emitter.target, 0),
         HANDLER - TRY_HANDLER_JMP_BUF_OFFSET,
     );
-    emitter.bl_c("setjmp");                                                     // keep descriptor and source owners reachable across callback and cleanup throws
+    emitter.save_exception_handler();                                           // keep descriptor and source owners reachable across callback and cleanup throws
     abi::emit_branch_if_int_result_nonzero(emitter, "__rt_array_walk_boxed_caught");
 }
 
@@ -564,7 +564,7 @@ mod tests {
             let mut emitter = Emitter::new(target);
             emit_array_walk_boxed(&mut emitter);
             let asm = emitter.output();
-            let handler = asm.find(&target.extern_symbol("setjmp")).unwrap();
+            let handler = asm.find(&target.extern_symbol("_setjmp")).unwrap();
             let promote = asm.find("__rt_mixed_cell_promote_to_hash").unwrap();
             let detach = asm.find("__rt_mixed_clone").unwrap();
             let invoke = asm.find("__rt_callable_invoke_owned_args").unwrap();

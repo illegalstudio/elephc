@@ -15,6 +15,8 @@ mod instanceof;
 mod traits;
 #[path = "oop/inheritance.rs"]
 mod inheritance;
+#[path = "oop/final_class_dispatch.rs"]
+mod final_class_dispatch;
 #[path = "oop/interfaces.rs"]
 mod interfaces;
 #[path = "oop/modifiers_and_properties.rs"]

@@ -7,6 +7,8 @@
 //! Key details:
 //! - Preserves statement ordering, CFG shape, EIR effects, and ownership contracts.
 //! - Owned Mixed-to-object returns retain their payload before retiring the source cell.
+//! - Owned Mixed-to-container returns release the cell once the runtime unbox holds its own
+//!   reference; mixed-slot contracts convert that owned payload, never the cell's borrow.
 
 use super::*;
 use crate::ir::IrHeapKind;
@@ -80,16 +82,68 @@ pub(super) fn coerce_to_return_type(
             }
             result
         }
-        IrType::Heap(_) => ctx.emit_value(
-            Op::RuntimeCall,
-            vec![value.value],
-            None,
-            ctx.return_php_type.clone(),
-            effects_lookup::runtime_effects(),
-            span,
-        ),
+        IrType::Heap(_) => coerce_heap_return_source(ctx, value, span),
         IrType::Void => value,
     }
+}
+
+/// Coerces a heap value to the declared heap return storage through the runtime boundary.
+///
+/// A boxed source is unboxed with a reference of its own (`lower_runtime_call`), so an owning
+/// cell, such as a `match` or ternary merged into a `mixed` temp, has no reader left afterwards
+/// and is released here. Returning without that release leaked the cell and the container it
+/// held. An `array<mixed>` or `array<K, mixed>` contract unboxes the owned payload, releases the
+/// cell and only then converts the slots: the conversion consumes the reference it is handed and
+/// splits a shared payload, so converting the cell's own borrow would take the cell's reference
+/// away from a payload the caller may still share.
+fn coerce_heap_return_source(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Option<Span>,
+) -> LoweredValue {
+    let return_ty = ctx.return_php_type.clone();
+    let cell_is_owning = value.ir_type == IrType::Heap(IrHeapKind::Mixed)
+        && matches!(
+            ctx.builder.value_php_type(value.value).codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        )
+        && ctx.value_is_owning_temporary(value);
+    if cell_is_owning {
+        let mixed_slots = match return_ty.codegen_repr() {
+            PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => {
+                Some((PhpType::Array(Box::new(PhpType::Never)), Op::ArrayToMixed))
+            }
+            PhpType::AssocArray { key, value: slot } if slot.codegen_repr() == PhpType::Mixed => Some((
+                PhpType::AssocArray { key, value: Box::new(PhpType::Never) },
+                Op::HashToMixed,
+            )),
+            _ => None,
+        };
+        if let Some((payload_ty, op)) = mixed_slots {
+            let payload = ctx.emit_value(
+                Op::RuntimeCall,
+                vec![value.value],
+                None,
+                payload_ty,
+                effects_lookup::runtime_effects(),
+                span,
+            );
+            crate::ir_lower::ownership::release_if_owned(ctx, value, span);
+            return ctx.emit_value(op, vec![payload.value], None, return_ty, op.default_effects(), span);
+        }
+    }
+    let converted = ctx.emit_value(
+        Op::RuntimeCall,
+        vec![value.value],
+        None,
+        return_ty,
+        effects_lookup::runtime_effects(),
+        span,
+    );
+    if cell_is_owning {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, span);
+    }
+    converted
 }
 
 /// Verifies a dynamically-typed value against a DECLARED `int` return boundary.

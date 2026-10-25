@@ -228,34 +228,59 @@ impl Checker {
                 if elems.is_empty() {
                     return Ok(PhpType::Array(Box::new(PhpType::Never)));
                 }
-                if elems.iter().any(|elem| {
-                    matches!(
-                        &elem.kind,
-                        ExprKind::Spread(inner)
-                            if matches!(
-                                self.infer_type(inner, env).map(|ty| ty.codegen_repr()),
-                                Ok(PhpType::AssocArray { .. } | PhpType::Mixed)
-                            )
-                    )
-                }) {
-                    let value_ty = self.assoc_spread_literal_value_type(elems, env);
+                // Every spread source is typed ONCE. The hash-spread scan types the sources in
+                // order, up to the first one that makes the literal a hash, and whichever merge
+                // follows reuses those results. Typing a source again in the merge doubled the
+                // work at every nesting level, so `[...($m ?? [...E, null]), null]` grew
+                // exponentially with its depth.
+                let mut scanned_sources: Vec<Result<PhpType, CompileError>> = Vec::new();
+                let mut has_hash_spread = false;
+                for elem in elems {
+                    let ExprKind::Spread(inner) = &elem.kind else {
+                        continue;
+                    };
+                    let source_ty = self.infer_type(inner, env);
+                    has_hash_spread = matches!(
+                        source_ty.as_ref().map(|ty| ty.codegen_repr()),
+                        Ok(PhpType::AssocArray { .. } | PhpType::Mixed)
+                    );
+                    scanned_sources.push(source_ty);
+                    if has_hash_spread {
+                        break;
+                    }
+                }
+                if has_hash_spread {
+                    let value_ty =
+                        self.assoc_spread_literal_value_type(elems, scanned_sources, env);
                     return Ok(PhpType::AssocArray {
                         key: Box::new(PhpType::Mixed),
                         value: Box::new(value_ty),
                     });
                 }
-                let mut elem_ty = self.infer_type(&elems[0], env)?;
-                for elem in &elems[1..] {
-                    let ty = self.infer_type(elem, env)?;
-                    if ty != elem_ty {
-                        if let Some(merged_ty) = self.merge_array_element_type(&elem_ty, &ty) {
-                            elem_ty = merged_ty;
-                            continue;
+                // No source is a hash, so the scan typed every spread source, in the order the
+                // spreads appear: each spread element takes the next recorded result, and keeps
+                // the diagnostic a spread reports at its own span.
+                let mut scanned_sources = scanned_sources.into_iter();
+                let mut elem_ty: Option<PhpType> = None;
+                for elem in elems {
+                    let ty = match &elem.kind {
+                        ExprKind::Spread(inner) => {
+                            let source_ty = scanned_sources
+                                .next()
+                                .unwrap_or_else(|| self.infer_type(inner, env))?;
+                            self.spread_source_element_type(source_ty, elem.span, false)?
                         }
-                        elem_ty = PhpType::Mixed;
-                    }
+                        _ => self.infer_type(elem, env)?,
+                    };
+                    elem_ty = Some(match elem_ty {
+                        None => ty,
+                        Some(current) if current == ty => current,
+                        Some(current) => self
+                            .merge_array_element_type(&current, &ty)
+                            .unwrap_or(PhpType::Mixed),
+                    });
                 }
-                Ok(PhpType::Array(Box::new(elem_ty)))
+                Ok(PhpType::Array(Box::new(elem_ty.unwrap_or(PhpType::Never))))
             }
             ExprKind::ArrayAccess { .. } => self.infer_array_access_type(expr, env),
             ExprKind::Ternary {

@@ -84,8 +84,24 @@ pub(super) fn lower_write_key_and_value(
     LoweredValue,
     Vec<crate::ir_lower::expr::PinnedInFlightOwner>,
 ) {
+    lower_write_key_then(ctx, index, |ctx| lower_expr(ctx, value))
+}
+
+/// Lowers an element write's key and then its value, in the order of `lower_write_key_and_value`.
+///
+/// `lower_value` produces the stored value; a bare variable key is still read after it and a
+/// computed key before it, with the key kept unwind-visible while the value runs.
+pub(super) fn lower_write_key_then<'m, 'f, T>(
+    ctx: &mut LoweringContext<'m, 'f>,
+    index: &Expr,
+    lower_value: impl FnOnce(&mut LoweringContext<'m, 'f>) -> T,
+) -> (
+    LoweredValue,
+    T,
+    Vec<crate::ir_lower::expr::PinnedInFlightOwner>,
+) {
     if matches!(index.kind, ExprKind::Variable(_)) {
-        let value_value = lower_expr(ctx, value);
+        let value_value = lower_value(ctx);
         return (lower_expr(ctx, index), value_value, Vec::new());
     }
     let index_value = lower_expr(ctx, index);
@@ -96,7 +112,7 @@ pub(super) fn lower_write_key_and_value(
     );
     let mut pending = [index_value];
     let (value_value, index_pins) = crate::ir_lower::expr::lower_with_pending_owners(
-        ctx, &mut pending, index.span, |ctx| lower_expr(ctx, value),
+        ctx, &mut pending, index.span, lower_value,
     );
     (pending[0], value_value, index_pins)
 }
@@ -121,7 +137,11 @@ pub(super) fn lower_array_assign(
         crate::ir_lower::expr::lower_null_coalesce_update_stmt(ctx, read, default, span);
         return;
     }
-    lower_array_assign_with_diagnosed_key(ctx, array, index, value, span, update.is_some());
+    let incdec = match &update {
+        Some(ElementUpdate::IncDec { increment }) => Some(*increment),
+        _ => None,
+    };
+    lower_array_assign_with_update(ctx, array, index, value, span, update.is_some(), incdec);
 }
 
 /// How a statement value produced by the parser's update desugaring re-reads its own target.
@@ -200,7 +220,29 @@ pub(crate) fn lower_array_assign_with_diagnosed_key(
     span: Span,
     key_already_diagnosed: bool,
 ) {
+    lower_array_assign_with_update(ctx, array, index, value, span, key_already_diagnosed, None);
+}
+
+/// Lowers an array write whose value may be a statement `++`/`--` of the element it writes.
+///
+/// `incdec` carries the direction of such an update. A local scalar buffer takes it in
+/// registers (`buffer_element_updates`); every other container lowers the value as written.
+fn lower_array_assign_with_update(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &str,
+    index: &Expr,
+    value: &Expr,
+    span: Span,
+    key_already_diagnosed: bool,
+    incdec: Option<bool>,
+) {
     let array_value = load_array_local_for_write(ctx, array, span);
+    if let Some(update) = incdec.and_then(|increment| {
+        super::buffer_element_updates::statement_update(ctx, array_value, value, increment)
+    }) {
+        super::buffer_element_updates::lower_local_update(ctx, array_value, index, &update, span);
+        return;
+    }
     let op = array_set_op(array_value.ir_type);
     if op == Op::RuntimeCall {
         lower_boxed_array_set(ctx, array_value, index, value, span, key_already_diagnosed);

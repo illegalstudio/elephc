@@ -50,7 +50,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
     emitter.instruction(&format!("add x0, sp, #{TRY_HANDLER_JMP_BUF_OFFSET}")); // pass this boundary's opaque jump buffer to libc
     // -- contain both collection outcomes below the Rust caller's frames --
-    emitter.bl_c("setjmp");                                                     // contain native throws before they can cross Rust frames
+    emitter.save_exception_handler();                                           // contain native throws before they can cross Rust frames
     emitter.instruction("cbnz x0, __elephc_eval_gc_caught");                    // distinguish longjmp from the initial setjmp return
     emitter.instruction("bl __rt_gc_collect_cycles_explicit");                  // collect under the native exception boundary
     emitter.instruction(&format!("str x0, [sp, #{count}]"));                    // preserve the collector's count while restoring handler state
@@ -107,7 +107,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
     emitter.instruction(&format!("lea rdi, [rbp - {}]", frame - TRY_HANDLER_JMP_BUF_OFFSET)); // pass the boundary's opaque jump buffer
     // -- contain both collection outcomes below the Rust caller's frames --
-    emitter.bl_c("setjmp");                                                     // keep native exception jumps below Rust stack frames
+    emitter.save_exception_handler();                                           // keep native exception jumps below Rust stack frames
     emitter.instruction("test eax, eax");                                       // identify an exceptional resume through longjmp
     emitter.instruction("jnz __elephc_eval_gc_caught");                         // take the Throwable from native exception state on throw
     emitter.instruction("call __rt_gc_collect_cycles_explicit");                // execute cycle collection within the bounded native frame
@@ -158,7 +158,7 @@ mod tests {
             let asm = emitter.output();
             assert!(asm.contains(&format!("{}:", target.extern_symbol("__elephc_eval_gc_collect_cycles_v2"))), "{name}");
             assert!(!asm.contains(&format!("{}:", target.extern_symbol("__elephc_eval_gc_collect_cycles"))), "{name}");
-            let setjmp = asm.find(&target.extern_symbol("setjmp")).unwrap();
+            let setjmp = asm.find(&target.extern_symbol("_setjmp")).unwrap();
             let collect = asm.find("__rt_gc_collect_cycles_explicit").unwrap();
             let catch = asm.find("__elephc_eval_gc_caught:").unwrap();
             let boxed = asm.find("__rt_mixed_from_value").unwrap();

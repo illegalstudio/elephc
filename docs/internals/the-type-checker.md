@@ -287,6 +287,13 @@ A literal that mixes spreads and explicit keys uses `AssocArray` with `Mixed`
 keys. Each spread contributes its source's element type once, so spreading an
 array of arrays preserves the nested array type in the resulting value slots.
 
+An indexed literal with spreads (`[...$list, 1]`) stays an `Array` while every
+spread source is a list, and becomes an `AssocArray` with `Mixed` keys as soon
+as one source is a hash or `mixed`. The scan that decides this types each spread
+source once, and the element merge that follows reuses those types: typing a
+source again would double the work at every level when such literals nest under
+`??` or a ternary.
+
 ### Binary operations
 
 | Operation | Types | Result |

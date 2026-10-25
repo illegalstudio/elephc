@@ -287,7 +287,16 @@ pub(super) fn emit_x86_64_output(emitter: &mut Emitter) {
 
     label_c_global(emitter, "__elephc_eval_set_pcntl_dispatching");
     abi::emit_symbol_address(emitter, "r9", "__rt_pcntl_dispatching");
-    emitter.instruction("mov QWORD PTR [r9], rdi");                             // publish Magician handler execution to the Fiber guard
+    // -- paired eval entry/exit preserves a guard already owned by an AOT dispatch --
+    emitter.instruction("test rdi, rdi");                                       // distinguish eval dispatch entry from its paired exit
+    emitter.instruction("jz __elephc_eval_pcntl_dispatch_leave");               // inactive releases only the eval-owned level
+    emitter.instruction("add QWORD PTR [r9], 1");                               // acquire one eval dispatch level
+    emitter.instruction("ret");                                                 // return with the enclosing guard still owned
+    emitter.label("__elephc_eval_pcntl_dispatch_leave");
+    emitter.instruction("cmp QWORD PTR [r9], 0");                               // tolerate a defensive release without underflow
+    emitter.instruction("je __elephc_eval_pcntl_dispatch_done");                // an absent guard needs no release
+    emitter.instruction("sub QWORD PTR [r9], 1");                               // keep any enclosing AOT dispatch level active
+    emitter.label("__elephc_eval_pcntl_dispatch_done");
     emitter.instruction("ret");                                                 // return to the Rust interpreter
     label_c_global(emitter, "__elephc_eval_warning_raw");
     emitter.instruction("jmp __rt_diag_write");                                 // do not redispatch already-filtered trigger_error output

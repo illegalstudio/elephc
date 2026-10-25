@@ -1229,7 +1229,7 @@ fn emit_magic_set_exception_handler(ctx: &mut FunctionContext<'_>, caught_label:
         abi::int_arg_reg_name(ctx.emitter.target, 0),
         MAGIC_SET_GUARD_HANDLER_OFFSET + TRY_HANDLER_JMP_BUF_OFFSET,
     );
-    ctx.emitter.bl_c("setjmp");
+    ctx.emitter.save_exception_handler();
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, caught_label);
 }
 
@@ -1613,7 +1613,7 @@ fn emit_runtime_stdclass_set_for_stacked_name_after_eval_probe(
         abi::int_arg_reg_name(target, 5),
     );
     // php decides visibility from the WRITING function's lexical class; a free function has none.
-    let scope = ctx.function.lexical_class.clone().unwrap_or_default();
+    let scope = ctx.lexical_class().unwrap_or_default().to_owned();
     let (scope_label, scope_len) = ctx.data.add_string(scope.as_bytes());
     abi::emit_load_temporary_stack_slot(ctx.emitter, arg0, object_stack_offset + 32);
     abi::emit_load_temporary_stack_slot(ctx.emitter, arg1, name_stack_offset + 32);

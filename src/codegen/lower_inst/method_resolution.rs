@@ -76,7 +76,15 @@ pub(super) fn resolve_method_call_target(
             impl_class, method_name
         )));
     }
-    let dynamic_slot = if class_info.final_methods.contains(&method_key) {
+    // Variance can widen Box<Dog> to Box<Animal> without an inheritance edge, so even a
+    // final instantiation or method must keep its runtime-selected implementation.
+    let non_generic_receiver = !normalized.contains('<');
+    // A non-generic final receiver cannot select an override, including inherited methods.
+    // Keep the vtable fallback when this module has no directly callable EIR body.
+    let dynamic_slot = if has_direct_body
+        && non_generic_receiver
+        && (class_info.is_final || class_info.final_methods.contains(&method_key))
+    {
         None
     } else {
         dynamic_slot
@@ -95,6 +103,22 @@ pub(super) fn resolve_method_call_target(
         by_ref_return: callee_sig.by_ref_return,
         source_abi,
     })
+}
+
+/// Reports whether literal guards need a runtime signature or declaring-class diagnostic.
+///
+/// Object-only variance preserves final literal parameters, but the actual generic
+/// instantiation still supplies the class name in an argument TypeError.
+pub(super) fn method_requires_runtime_literal_guards(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    target: &MethodCallTarget,
+) -> bool {
+    let normalized = class_name.trim_start_matches('\\');
+    target.dynamic_slot.is_some()
+        && (normalized.contains('<') || ctx.module.class_infos.get(normalized).is_none_or(|class| {
+            !class.is_final && !class.final_methods.contains(&target.method_key)
+        }))
 }
 
 /// Emits an indirect instance call through either the physical or source-ABI vtable.

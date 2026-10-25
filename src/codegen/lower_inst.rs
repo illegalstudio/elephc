@@ -98,6 +98,9 @@ mod method_call_types;
 mod method_dispatch;
 mod method_intrinsics;
 mod method_resolution;
+#[cfg(test)]
+#[path = "lower_inst/null_parameter_guard_tests.rs"]
+mod null_parameter_guard_tests;
 mod mixed_array_runtime;
 mod mixed_property_runtime;
 mod output_values;
@@ -429,6 +432,16 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::EnumBackingStringToInt => enums::lower_enum_backing_string_to_int(ctx, &inst),
         Op::EnumBackingMixedToInt => enums::lower_enum_backing_mixed_to_int(ctx, &inst),
         Op::PackedFieldMixedToInt => objects::lower_packed_field_mixed_to_int(ctx, &inst),
+        Op::PackedFieldMixedToFloat => mixed_narrowing::lower_fixed_field_mixed_narrowing(
+            ctx,
+            &inst,
+            mixed_narrowing::FixedFieldScalar::Float,
+        ),
+        Op::PackedFieldMixedToBool => mixed_narrowing::lower_fixed_field_mixed_narrowing(
+            ctx,
+            &inst,
+            mixed_narrowing::FixedFieldScalar::Bool,
+        ),
         Op::ReturnBoundaryMixedToInt => {
             mixed_narrowing::lower_return_boundary_mixed_to_int(ctx, &inst)
         }

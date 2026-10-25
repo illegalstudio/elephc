@@ -1068,7 +1068,7 @@ backend that registered its handler.
 
 **Source:** `src/codegen_support/runtime/exceptions.rs` plus `src/codegen_support/runtime/exceptions/` (23 top-level Rust files plus 2 nested cleanup helpers)
 
-elephc lowers exceptions with a small runtime layer around `_setjmp` / `_longjmp`. Codegen publishes the current exception object into `_exc_value`, pushes a handler record into `_exc_handler_top`, and then uses these helpers to unwind, match catch clauses, and resume control flow through `catch` / `finally`.
+elephc lowers exceptions with a small runtime layer around the libc `_setjmp` / `_longjmp` pair on every supported target. These internal boundaries do not save or restore the signal mask, so ordinary protected releases avoid a signal-mask syscall and deliberate PHP signal-mask changes survive a throw. PCNTL dispatch restores its own temporary mask before exception unwinding resumes a handler outside that dispatch; exceptions caught inside a signal handler keep the current masked snapshot active. Codegen publishes the current exception object into `_exc_value`, pushes a handler record into `_exc_handler_top`, and then uses these helpers to unwind, match catch clauses, and resume control flow through `catch` / `finally`.
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|

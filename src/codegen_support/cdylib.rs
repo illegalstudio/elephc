@@ -125,7 +125,7 @@ fn emit_boundary_push_aarch64(emitter: &mut Emitter, escaped: &str, handler_base
     emitter.instruction(&format!("str x9, [x11, #{TRY_HANDLER_DIAG_DEPTH_OFFSET}]")); // snapshot diagnostic-suppression depth
     abi::emit_store_reg_to_symbol(emitter, "x11", "_exc_handler_top", 0);
     emitter.instruction(&format!("add x0, x11, #{TRY_HANDLER_JMP_BUF_OFFSET}")); // materialize the jump buffer embedded in the handler record
-    emitter.bl_c("setjmp");
+    emitter.save_exception_handler();
     emitter.instruction(&format!("cbnz x0, {escaped}"));                        // enter boundary recovery after longjmp returns nonzero
 }
 
@@ -155,7 +155,7 @@ fn emit_boundary_push_x86_64(emitter: &mut Emitter, escaped: &str, handler_base:
         "lea rdi, [rbp - {}]",
         handler_base - TRY_HANDLER_JMP_BUF_OFFSET
     ));
-    emitter.bl_c("setjmp");
+    emitter.save_exception_handler();
     emitter.instruction("test eax, eax");                                       // test whether setjmp returned through longjmp
     emitter.instruction(&format!("jne {escaped}"));                             // enter boundary recovery after longjmp returns nonzero
 }
@@ -318,7 +318,7 @@ mod tests {
         emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false, None);
         let asm = emitter.output();
         assert!(asm.contains("_roundtrip:"));
-        assert!(asm.contains("bl _setjmp"));
+        assert!(asm.contains("bl __setjmp"));
         assert!(asm.contains("bl __rt_heap_alloc"));
         assert!(asm.contains("add x9, x9, #1"));
         assert!(asm.contains("sub x9, x9, #1"));
@@ -326,7 +326,7 @@ mod tests {
         assert!(asm.contains("bl __rt_stack_limit_init"));
         let saved_host_args = asm.find("stur x3, [x29, #-32]").unwrap();
         let lazy_init = asm.find("bl __rt_stack_limit_init").unwrap();
-        let boundary_push = asm.find("bl _setjmp").unwrap();
+        let boundary_push = asm.find("bl __setjmp").unwrap();
         assert!(
             saved_host_args < lazy_init && lazy_init < boundary_push,
             "lazy stack init must follow host-argument preservation and precede boundary entry:\n{asm}"
@@ -415,7 +415,7 @@ mod tests {
         emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false, None);
         let asm = emitter.output();
         assert!(asm.contains("roundtrip:"));
-        assert!(asm.contains("call setjmp"));
+        assert!(asm.contains("call _setjmp"));
         assert!(asm.contains("call __rt_heap_alloc"));
         assert!(asm.contains("add r10, 1"));
         assert!(asm.contains("sub r10, 1"));
@@ -423,7 +423,7 @@ mod tests {
         assert!(asm.contains("call __rt_stack_limit_init"));
         let saved_host_args = asm.find("mov QWORD PTR [rbp - 32], rcx").unwrap();
         let lazy_init = asm.find("call __rt_stack_limit_init").unwrap();
-        let boundary_push = asm.find("call setjmp").unwrap();
+        let boundary_push = asm.find("call _setjmp").unwrap();
         assert!(
             saved_host_args < lazy_init && lazy_init < boundary_push,
             "lazy stack init must follow host-argument preservation and precede boundary entry:\n{asm}"
@@ -450,7 +450,7 @@ mod tests {
             let lazy_init = asm.find("__rt_stack_limit_init").unwrap();
             let configure = asm.find("__rt_mbstring_startup_status").unwrap();
             let call = if target.arch == Arch::AArch64 { "bl" } else { "call" };
-            let handler = asm.find(&format!("{call} {}", target.extern_symbol("setjmp"))).unwrap();
+            let handler = asm.find(&format!("{call} {}", target.extern_symbol("_setjmp"))).unwrap();
             assert!(lazy_init < configure && configure < handler,
                 "{target:?} must initialize before installing the PHP handler:\n{asm}");
             let first_output_load = match target.arch {

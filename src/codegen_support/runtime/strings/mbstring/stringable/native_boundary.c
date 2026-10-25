@@ -32,7 +32,7 @@ void mb_test_convert(uint64_t tag, const struct host_cell *cell, void *context, 
     }
     suppression = 99;
     call_frame_top = &nested_frame;
-    if (mode == 1) { longjmp(*(jmp_buf *)(handler + 24), 1); }
+    if (mode == 1) { _longjmp(*(jmp_buf *)(handler + 24), 1); }
     unsigned char *bytes = malloc(3);
     if (!bytes) { abort(); }
     memcpy(bytes, "a\0\xff", 3);

@@ -462,7 +462,7 @@ pub(super) fn emit_unserialize_object_to_string_helper(emitter: &mut Emitter) {
             emitter.instruction("mov x10, sp");                                 // compute this invocation's handler record address
             crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
             emitter.instruction(&format!("add x0, sp, #{}", TRY_HANDLER_JMP_BUF_OFFSET)); // pass this boundary's opaque jmp_buf to setjmp
-            emitter.bl_c("setjmp"); // catch Throwable control flow escaping __toString
+            emitter.save_exception_handler();                                   // catch Throwable control flow escaping __toString
             emitter.instruction("cbnz x0, __rt_unser_allowed_tostring_throw");  // longjmp resumes here for exact context cleanup
             emitter.instruction(&format!("ldr x0, [sp, #{}]", object_offset));  // reload borrowed receiver after setjmp
             emitter.instruction("ldr x11, [x0]");                               // keep class id outside the symbol helper's x9 scratch register
@@ -518,7 +518,7 @@ pub(super) fn emit_unserialize_object_to_string_helper(emitter: &mut Emitter) {
             emitter.instruction(&format!("lea r10, [rbp - {}]", previous_handler_offset)); // compute this handler record address
             crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
             emitter.instruction(&format!("lea rdi, [rbp - {}]", boundary_bytes - TRY_HANDLER_JMP_BUF_OFFSET)); // pass opaque jmp_buf to setjmp
-            emitter.bl_c("setjmp"); // catch Throwable control flow escaping __toString
+            emitter.save_exception_handler();                                   // catch Throwable control flow escaping __toString
             emitter.instruction("test eax, eax");                               // did control return through longjmp?
             emitter.instruction("jnz __rt_unser_allowed_tostring_throw_x");     // clean runtime state before propagating
             emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                // reload borrowed receiver after setjmp

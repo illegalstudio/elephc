@@ -381,7 +381,7 @@ fn emit_invoker_exception_boundary_push(
                 "sub x0, x29, #{}",
                 handler_base - TRY_HANDLER_JMP_BUF_OFFSET
             ));
-            emitter.bl_c("setjmp"); // snapshot the bridge stack before entering the callable
+            emitter.save_exception_handler();                                   // snapshot the bridge stack before entering the callable
             emitter.instruction(&format!("cbnz x0, {}", escape_label));         // non-zero setjmp result means a callable Throwable escaped
         }
         Arch::X86_64 => {
@@ -404,7 +404,7 @@ fn emit_invoker_exception_boundary_push(
                 "lea rdi, [rbp - {}]",
                 handler_base - TRY_HANDLER_JMP_BUF_OFFSET
             ));
-            emitter.bl_c("setjmp"); // snapshot the bridge stack before entering the callable
+            emitter.save_exception_handler();                                   // snapshot the bridge stack before entering the callable
             emitter.instruction("test eax, eax");                               // did control arrive through longjmp?
             emitter.instruction(&format!("jne {}", escape_label));              // non-zero setjmp result means a callable Throwable escaped
         }
@@ -3650,7 +3650,7 @@ mod tests {
                 let mut emitter = Emitter::new(target);
                 emit_runtime_callable_invoker_impl(&mut emitter, &mut DataSection::new(), &invoker, eval_boundary);
                 let asm = emitter.output();
-                assert!(asm.contains(&target.extern_symbol("setjmp")), "{name}: {eval_boundary}");
+                assert!(asm.contains(&target.extern_symbol("_setjmp")), "{name}: {eval_boundary}");
                 let escape = asm.split_once("owned_invoker_eval_escape:").unwrap().1;
                 assert_eq!(escape.matches("__rt_cleanup_invoke").count(), 2, "{name}: {eval_boundary}");
                 assert_eq!(escape.contains("__rt_throw_current"), !eval_boundary, "{name}: {eval_boundary}");

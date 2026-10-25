@@ -13,6 +13,7 @@
 
 use crate::support::*;
 
+mod buffers;
 mod json_enums;
 mod literal_catalog;
 
@@ -5506,7 +5507,7 @@ fn test_eval_float_pointer_builtins_keep_full_precision() {
     let out = compile_and_run(
         r#"<?php
 echo eval('$buf = buffer_new(4);
-$payload = ptr_offset($buf, 16);
+$payload = buffer_ptr($buf);
 ptr_write_f64($payload, 1.2345678901234567);
 var_dump(ptr_read_f64($payload) === 1.2345678901234567);
 ptr_write_f32($payload, 1.2345678901234567);
@@ -5527,7 +5528,7 @@ fn test_eval_dispatches_raw_memory_builtins() {
     let out = compile_and_run(
         r#"<?php
 echo eval('$buf = buffer_new(4);
-$payload = ptr_offset($buf, 16);
+$payload = buffer_ptr($buf);
 echo buffer_len($buf) . ":";
 ptr_set($payload, 123456789);
 echo ptr_get($payload) . ":";

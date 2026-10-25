@@ -1,6 +1,7 @@
 //! Purpose:
 //! Small-function inliner (module-level EIR pass). Inlines `Call` and
-//! `FunctionVariantCall` sites targeting user functions whose body is <=24
+//! `FunctionVariantCall` sites targeting user functions, and statically bound
+//! `MethodCall` sites targeting instance methods, whose body is <=24
 //! non-Nop instructions, is non-recursive (directly or mutually), has no
 //! exception handler ops, is not a generator or fiber wrapper, and exposes a
 //! provably ownership-safe destructor-free boundary/body.
@@ -12,10 +13,19 @@
 //! - Pure transform on &mut Module returning a change flag; clones only small
 //!   callees; splices blocks at the call site using a continuation block param
 //!   for the return join.
-//! - Candidate callees are `module.functions` entries only (no methods,
-//!   closures, builtins or externs); hosts also include the other body tables.
-//! - Recursion (direct or mutual) is excluded up front via a call-graph cycle
-//!   analysis, and a per-function fuel cap backstops termination. Call-site name
+//! - Candidate callees are `module.functions` entries and the instance methods
+//!   `methods::MethodTargets` binds statically (final class, final method, or no
+//!   vtable slot); closures, builtins and externs are never inlined. Hosts include
+//!   every body table. A method splice binds `$this` like any other borrowed
+//!   argument, reproduces the call's receiver null check (`Call to a member
+//!   function m() on null`), hides the method's local names from the host, and
+//!   records the method's class in `Function::inlined_scopes` so scope-sensitive
+//!   codegen still resolves properties as the method would. Method bodies are
+//!   limited to frame-independent ops (see `methods`), and modules that can observe
+//!   PHP frames through backtraces keep every method call.
+//! - Recursion (direct or mutual, across functions and methods) is excluded up
+//!   front via a call-graph cycle analysis, and a per-function fuel cap
+//!   backstops termination. Call-site name
 //!   resolution uses snapshots taken before mutation, so the rewrite loop never
 //!   aliases `&Module` with the `&mut Function` it mutates.
 //! - Callees are restricted to a destructor-free boundary/body (scalars, strings,
@@ -53,9 +63,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ir::{
-    collect_dispatch_groups, BasicBlock, BlockId, Effects, Function, FunctionVariantLabel,
-    Immediate, InstId, Instruction, IrType, LocalKind, LocalSlotId, Module, Op, Ownership,
-    Terminator, Value, ValueDef, ValueId,
+    collect_dispatch_groups, BasicBlock, BlockId, DataId, DataPool, Effects, Function,
+    FunctionVariantLabel, Immediate, InstId, Instruction, IrType, LocalKind, LocalSlotId, Module,
+    Op, Ownership, Terminator, Value, ValueDef, ValueId,
 };
 use crate::ir_passes::cfg::has_exception_handlers;
 use crate::ir_passes::dominance::compute_dominance;
@@ -63,10 +73,16 @@ use crate::ir_passes::loops::compute_loops;
 use crate::ir_passes::rewrite::neutralize_to_nop;
 use crate::types::PhpType; // used for void stores and plain-scalar checks
 
+mod methods;
+mod recursion;
+
 /// Backstop cap on inlines performed into a single host. Recursive-cycle
 /// exclusion already guarantees termination over the acyclic candidate graph;
 /// this only bounds pathological code-size blowup and protects against bugs.
 const MAX_INLINES_PER_FUNCTION: usize = 10_000;
+
+/// Largest callee body, in non-`Nop` instructions, the inliner splices.
+const MAX_INLINE_INSTRUCTIONS: usize = 24;
 
 /// Returns true if `n` is a direct user-function call opcode we consider for inlining.
 fn is_user_call_op(op: Op) -> bool {
@@ -171,18 +187,28 @@ fn is_destructor_free(php_type: &PhpType) -> bool {
 /// By-ref/variadic parameters and special-kind locals (ref-cells, statics, globals,
 /// captures, iterator/generator state) are excluded because they need aliasing/persistence
 /// machinery the value-copy splice does not reproduce.
-fn callee_is_inline_safe(callee: &Function) -> bool {
+///
+/// `receiver` marks a method callee: its first parameter (and slot) is the `$this` object,
+/// exempt from the destructor-free rule. The receiver is a +0 borrow from the call site,
+/// exactly like any other parameter: the callee never acquires, stores, or releases it, so
+/// the splice cannot move the object's destructor. A method that returns or stores `$this`
+/// is still refused, by the return-type rule and by `callee_mutates_lifetime_tracked_parameter`.
+fn callee_is_inline_safe(callee: &Function, receiver: bool) -> bool {
     if !is_destructor_free(&callee.return_php_type) {
         return false;
     }
-    for param in &callee.params {
+    for (index, param) in callee.params.iter().enumerate() {
         if param.by_ref || param.variadic {
             return false;
+        }
+        if receiver && index == 0 {
+            continue;
         }
         if !is_destructor_free(&param.php_type) {
             return false;
         }
     }
+    let receiver_slot = receiver.then(|| LocalSlotId::from_raw(0));
     for local in &callee.locals {
         if !matches!(
             local.kind,
@@ -192,6 +218,9 @@ fn callee_is_inline_safe(callee: &Function) -> bool {
                 | LocalKind::NamedArgTemp
         ) {
             return false;
+        }
+        if receiver_slot == Some(local.id) {
+            continue;
         }
         if !is_destructor_free(&local.php_type) {
             return false;
@@ -204,54 +233,6 @@ fn callee_is_inline_safe(callee: &Function) -> bool {
         return false;
     }
     true
-}
-
-/// Builds the set of candidate function names that are recursive — directly or
-/// mutually — over the `module.functions` call graph (edges via resolvable
-/// `Call`/`FunctionVariantCall` sites). A function is recursive when it can reach
-/// itself; such functions are never inlined, which (with the per-function fuel cap)
-/// guarantees the inliner terminates instead of expanding a cycle forever.
-fn compute_recursive_functions(
-    functions: &[Function],
-    name_to_idx: &HashMap<String, usize>,
-    resolver: &CallTargetResolver,
-) -> HashSet<String> {
-    let n = functions.len();
-    let mut adjacency: Vec<Vec<usize>> = vec![Vec::new(); n];
-    for (i, func) in functions.iter().enumerate() {
-        for inst in &func.instructions {
-            if !is_user_call_op(inst.op) {
-                continue;
-            }
-            if let Some(target) = resolver.resolve(inst) {
-                if let Some(&j) = name_to_idx.get(&target) {
-                    adjacency[i].push(j);
-                }
-            }
-        }
-    }
-    let mut recursive = HashSet::new();
-    for start in 0..n {
-        // Depth-first reachability from `start`; if we re-reach it, it lies on a cycle.
-        let mut visited = vec![false; n];
-        let mut stack: Vec<usize> = adjacency[start].clone();
-        let mut reaches_self = false;
-        while let Some(node) = stack.pop() {
-            if node == start {
-                reaches_self = true;
-                break;
-            }
-            if visited[node] {
-                continue;
-            }
-            visited[node] = true;
-            stack.extend(adjacency[node].iter().copied());
-        }
-        if reaches_self {
-            recursive.insert(functions[start].name.clone());
-        }
-    }
-    recursive
 }
 
 /// Returns `(saw_value, saw_void)` over the callee's `Return` terminators.
@@ -286,7 +267,10 @@ fn callee_contains_a_loop(callee: &Function) -> bool {
 /// mutual), no try/catch, no generators/fibers, a 0-parameter entry block (EIR
 /// convention), and a provably ownership-safe plain-scalar boundary/body so the
 /// splice cannot leak refcounted state by skipping the callee epilogue.
-fn is_eligible_callee(callee: &Function, recursive: &HashSet<String>) -> bool {
+///
+/// `receiver` is true for a statically bound method body, whose `$this` parameter is the
+/// one object `callee_is_inline_safe` accepts.
+fn is_eligible_callee(callee: &Function, recursive: &HashSet<String>, receiver: bool) -> bool {
     if callee.flags.is_generator || callee.flags.is_fiber_wrapper {
         return false;
     }
@@ -345,7 +329,7 @@ fn is_eligible_callee(callee: &Function, recursive: &HashSet<String>) -> bool {
     if has_exception_handlers(callee) {
         return false;
     }
-    if count_non_nop_instructions(callee) > 24 {
+    if count_non_nop_instructions(callee) > MAX_INLINE_INSTRUCTIONS {
         return false;
     }
     if recursive.contains(&callee.name) {
@@ -356,7 +340,7 @@ fn is_eligible_callee(callee: &Function, recursive: &HashSet<String>) -> bool {
             return false;
         }
     }
-    if !callee_is_inline_safe(callee) {
+    if !callee_is_inline_safe(callee, receiver) {
         return false;
     }
     true
@@ -781,9 +765,17 @@ pub(super) fn remap_immediate_local(imm: &mut Immediate, local_map: &HashMap<Loc
 
 /// Clone callee body (blocks, values, instructions, locals) into host with fresh ids.
 /// Returns maps (old->new) and the remapped entry block id.
+///
+/// `method` marks a statically bound method body. Its locals are renamed to compiler-generated
+/// names, because they are frame storage of a call that no longer exists: left under their PHP
+/// names, a transplanted `$this` would answer the host's by-name receiver lookups and a
+/// transplanted parameter would join the host's eval scope and `get_defined_vars()`. Each
+/// spliced instruction also records the method's class in `Function::inlined_scopes`, so that
+/// codegen resolves its property reads in the scope the method body was written in.
 fn transplant_callee_body(
     host: &mut Function,
     callee: &Function,
+    method: bool,
 ) -> (HashMap<BlockId, BlockId>, HashMap<ValueId, ValueId>, HashMap<InstId, InstId>, HashMap<LocalSlotId, LocalSlotId>, BlockId) {
     let mut block_map: HashMap<BlockId, BlockId> = HashMap::new();
     let mut value_map: HashMap<ValueId, ValueId> = HashMap::new();
@@ -811,12 +803,12 @@ fn transplant_callee_body(
         } else {
             local.kind
         };
-        let new_id = host.add_local(
-            local.name.clone(),
-            local.ir_type,
-            local.php_type.clone(),
-            kind,
-        );
+        let name = if method {
+            local.name.as_deref().map(crate::names::generated_local_name)
+        } else {
+            local.name.clone()
+        };
+        let new_id = host.add_local(name, local.ir_type, local.php_type.clone(), kind);
         if excluded_from_cleanup.contains(&local.id) {
             host.no_epilogue_cleanup_slots.insert(new_id);
         }
@@ -855,6 +847,19 @@ fn transplant_callee_body(
             let old_inst = callee.instruction(old_iid).expect("callee inst exists");
             let new_iid = InstId::from_raw(host.instructions.len() as u32);
             inst_map.insert(old_iid, new_iid);
+
+            // A spliced method instruction keeps executing in the method's class, and a body
+            // spliced into the callee earlier keeps the scope it was recorded with.
+            let scope = callee
+                .inlined_scopes
+                .get(&old_iid)
+                .cloned()
+                .or_else(|| method.then(|| callee.lexical_class.clone()).flatten());
+            if let Some(scope) = scope {
+                if host.lexical_class.as_deref() != Some(scope.as_str()) {
+                    host.inlined_scopes.insert(new_iid, scope);
+                }
+            }
 
             // Compute the instruction index inside block while we can.
             let inst_idx_in_block = host
@@ -965,12 +970,14 @@ fn transplant_callee_body(
 
 /// Perform the splice + return translation + result rewrite + neutralization for one site.
 /// Returns true on success (always for eligible sites).
+///
+/// `method` is `Some` for a statically bound method body; see `MethodSplice`.
 fn apply_inline_at_site(
     host: &mut Function,
     call_block_idx: usize,
     call_inst_id: InstId,
     callee: &Function,
-    _target_name: &str,
+    method: Option<MethodSplice>,
 ) -> bool {
     // Snapshot state before heavy mutation for the call site.
     let call_inst = host
@@ -1003,7 +1010,7 @@ fn apply_inline_at_site(
 
     // Transplant callee body (adds blocks, values, instrs, locals, patches internal refs).
     let (_block_map, _value_map, _inst_map, local_map, remap_entry) =
-        transplant_callee_body(host, callee);
+        transplant_callee_body(host, callee, method.is_some());
 
     let transplanted_start = host.blocks.len() - callee.blocks.len();
 
@@ -1160,25 +1167,167 @@ fn apply_inline_at_site(
         }
     }
 
+    // A real method call checks its receiver before entering the body; the splice keeps
+    // that check, ahead of every callee instruction and after the arguments it evaluated.
+    if let Some(message) = method.and_then(|splice| splice.null_receiver_message) {
+        emit_receiver_null_guard(host, call_block_idx, &call_inst, remap_entry, message);
+    }
+
     // No local re-validation here: the driver re-validates the whole module after
     // `inline_small_functions` (and every function after each pass) in debug builds,
     // so we avoid paying for `validate_function` — or panicking — in `--release`.
     true
 }
 
+/// What a method splice adds to the ordinary function splice.
+struct MethodSplice {
+    /// Interned `Call to a member function m() on null` message for the receiver check, or
+    /// `None` when the receiver is the host method's own `$this`, which is never null.
+    null_receiver_message: Option<DataId>,
+}
+
+/// Prepares the method-specific half of a splice for the `method_call` at `call`.
+///
+/// The message spells the method exactly as the call site does, matching the `Error` codegen's
+/// own receiver guard raises (`emit_method_call_on_null_fatal`).
+fn method_splice(host: &Function, call: InstId, data: &mut DataPool) -> MethodSplice {
+    let inst = host.instruction(call).expect("selected method call exists");
+    let receiver = *inst
+        .operands
+        .first()
+        .expect("a resolved method call carries its receiver");
+    if methods::receiver_is_host_this(host, receiver) {
+        return MethodSplice { null_receiver_message: None };
+    }
+    let method = methods::call_method_name(inst, &data.strings)
+        .unwrap_or_default()
+        .to_string();
+    let message = data.intern_string(&format!("Call to a member function {method}() on null"));
+    MethodSplice { null_receiver_message: Some(message) }
+}
+
+/// Replaces the call block's jump into a spliced method body with the receiver null check a
+/// real call performs: a null receiver raises the catchable `Error` (or the uncaught fatal)
+/// through `throw_error`, exactly as `guard_static_method_receiver` does, and every other
+/// receiver enters the body.
+fn emit_receiver_null_guard(
+    host: &mut Function,
+    call_block_idx: usize,
+    call_inst: &Instruction,
+    callee_entry: BlockId,
+    message: DataId,
+) {
+    let receiver = call_inst.operands[0];
+    let call_block = host.blocks[call_block_idx].id;
+
+    let is_null_inst = InstId::from_raw(host.instructions.len() as u32);
+    let is_null = ValueId::from_raw(host.values.len() as u32);
+    let index = host.blocks[call_block_idx].instructions.len() as u32;
+    host.values.push(Value {
+        ir_type: IrType::I64,
+        php_type: PhpType::Bool,
+        def: ValueDef::Instruction {
+            block: call_block,
+            index,
+            inst: is_null_inst,
+        },
+        ownership: Ownership::NonHeap,
+    });
+    host.instructions.push(Instruction::new(
+        Op::IsNull,
+        vec![receiver],
+        None,
+        Some(is_null),
+        IrType::I64,
+        PhpType::Bool,
+        Ownership::NonHeap,
+        Op::IsNull.default_effects(),
+        call_inst.span,
+    ));
+    host.blocks[call_block_idx].instructions.push(is_null_inst);
+
+    let null_block = BlockId::from_raw(host.blocks.len() as u32);
+    let throw_inst = InstId::from_raw(host.instructions.len() as u32);
+    host.instructions.push(Instruction::new(
+        Op::ThrowError,
+        Vec::new(),
+        Some(Immediate::Data(message)),
+        None,
+        IrType::Void,
+        PhpType::Void,
+        Ownership::NonHeap,
+        Op::ThrowError.default_effects(),
+        call_inst.span,
+    ));
+    let mut block = BasicBlock::new(null_block, "inline_null_receiver".to_string(), Vec::new());
+    block.instructions.push(throw_inst);
+    block.terminator = Some(Terminator::Unreachable);
+    host.blocks.push(block);
+
+    host.blocks[call_block_idx].terminator = Some(Terminator::CondBr {
+        cond: is_null,
+        then_target: null_block,
+        then_args: Vec::new(),
+        else_target: callee_entry,
+        else_args: Vec::new(),
+    });
+}
+
+/// Callee tables and analyses shared by every host of one inliner round.
+///
+/// Everything here is an owned pre-mutation snapshot, so hosts can be borrowed mutably
+/// while it is read.
+struct Callees<'a> {
+    /// Snapshot of `module.functions`, indexed by `CalleeRef::Function`.
+    functions: &'a [Function],
+    /// Function name to its index in `functions`.
+    name_to_idx: &'a HashMap<String, usize>,
+    /// Function call-site name resolution.
+    resolver: &'a CallTargetResolver,
+    /// Statically bound method targets and their body snapshots.
+    methods: &'a methods::MethodTargets,
+    /// Names of recursive callees, which are never inlined.
+    recursive: &'a HashSet<String>,
+}
+
+/// One resolved inline candidate: a free function or a statically bound method body.
+#[derive(Clone, Copy)]
+enum CalleeRef {
+    /// Index into `Callees::functions`.
+    Function(usize),
+    /// Index into `MethodTargets::bodies`.
+    Method(usize),
+}
+
+impl Callees<'_> {
+    /// Resolves a call-site instruction to the snapshot body it would execute, if any.
+    fn resolve(&self, host: &Function, inst: &Instruction, strings: &[String]) -> Option<CalleeRef> {
+        if is_user_call_op(inst.op) {
+            let name = self.resolver.resolve(inst)?;
+            return self.name_to_idx.get(&name).map(|&index| CalleeRef::Function(index));
+        }
+        self.methods
+            .resolve(host, inst, strings)
+            .map(CalleeRef::Method)
+    }
+
+    /// Returns the snapshot body of a resolved candidate.
+    fn body(&self, callee: CalleeRef) -> &Function {
+        match callee {
+            CalleeRef::Function(index) => &self.functions[index],
+            CalleeRef::Method(index) => &self.methods.bodies()[index],
+        }
+    }
+}
+
 /// Scan one host and inline all eligible call sites, re-scanning after each splice.
 ///
-/// Resolution uses the pre-built `resolver` and `recursive` snapshots, so the loop
-/// never borrows the surrounding `Module` and can hold `&mut Function` soundly. Site
+/// Resolution uses the pre-built `callees` snapshots, so the loop never borrows the
+/// surrounding `Module` and can hold `&mut Function` soundly; `data` is the module literal
+/// pool, read for method names and extended with method splices' null-receiver messages. Site
 /// selection only picks sites for which `apply_inline_at_site` is infallible. The
 /// `fuel` cap backstops termination; recursive callees are already excluded.
-fn inline_into_function(
-    host: &mut Function,
-    name_to_idx: &HashMap<String, usize>,
-    all_functions: &[Function],
-    resolver: &CallTargetResolver,
-    recursive: &HashSet<String>,
-) -> bool {
+fn inline_into_function(host: &mut Function, callees: &Callees<'_>, data: &mut DataPool) -> bool {
     let mut any = false;
     let mut fuel = MAX_INLINES_PER_FUNCTION;
     loop {
@@ -1186,98 +1335,103 @@ fn inline_into_function(
         // an existing loop and can itself contain further eligible call sites.
         let dominance = compute_dominance(host);
         let loops = compute_loops(host, &dominance);
-        let mut site: Option<(usize, InstId, String, usize)> = None; // (block_idx, inst_id, name, callee_idx)
+        let mut site: Option<(usize, InstId, CalleeRef)> = None; // (block_idx, inst_id, callee)
         'search: for (bidx, block) in host.blocks.iter().enumerate() {
             for &iid in &block.instructions {
-                if let Some(inst) = host.instruction(iid) {
-                    if is_user_call_op(inst.op) {
-                        let has_result = inst.result.is_some() && !inst.result_type.is_void();
-                        if let Some(tname) = resolver.resolve(inst) {
-                            if let Some(&cidx) = name_to_idx.get(&tname) {
-                                let callee = &all_functions[cidx];
-                                if is_eligible_callee(callee, recursive)
-                                    && (loops.loop_depth(block.id) == 0
-                                        || !callee_stores_a_refcounted_local(callee))
-                                    && site_is_inlinable(callee, has_result, inst.result_ownership)
-                                    && call_args_bind_directly(host, inst, callee)
-                                    && call_string_args_are_stable(host, inst, callee)
-                                {
-                                    site = Some((bidx, iid, tname, cidx));
-                                    break 'search;
-                                }
-                            }
-                        }
-                    }
+                let Some(inst) = host.instruction(iid) else {
+                    continue;
+                };
+                let Some(target) = callees.resolve(host, inst, &data.strings) else {
+                    continue;
+                };
+                let callee = callees.body(target);
+                let has_result = inst.result.is_some() && !inst.result_type.is_void();
+                let receiver = matches!(target, CalleeRef::Method(_));
+                if is_eligible_callee(callee, callees.recursive, receiver)
+                    && (loops.loop_depth(block.id) == 0
+                        || !callee_stores_a_refcounted_local(callee))
+                    && site_is_inlinable(callee, has_result, inst.result_ownership)
+                    && call_args_bind_directly(host, inst, callee)
+                    && call_string_args_are_stable(host, inst, callee)
+                {
+                    site = Some((bidx, iid, target));
+                    break 'search;
                 }
             }
         }
-        if let Some((bidx, iid, tname, cidx)) = site {
-            if fuel == 0 {
-                // Backstop only: cycle exclusion already guarantees termination, so a
-                // real program never exhausts this fuel before running out of sites.
-                break;
-            }
-            fuel -= 1;
-            let callee = all_functions[cidx].clone();
-            apply_inline_at_site(host, bidx, iid, &callee, &tname);
-            any = true;
-            // Re-scan to find subsequent sites in the updated structure.
-            continue;
+        let Some((bidx, iid, target)) = site else {
+            break;
+        };
+        if fuel == 0 {
+            // Backstop only: cycle exclusion already guarantees termination, so a
+            // real program never exhausts this fuel before running out of sites.
+            break;
         }
-        break;
+        fuel -= 1;
+        let callee = callees.body(target).clone();
+        let method = match target {
+            CalleeRef::Function(_) => None,
+            CalleeRef::Method(_) => Some(method_splice(host, iid, data)),
+        };
+        apply_inline_at_site(host, bidx, iid, &callee, method);
+        any = true;
+        // Re-scan to find subsequent sites in the updated structure.
     }
     any
 }
 
-/// Entry point: inline eligible small functions at user call sites in the module.
-/// Processes user functions, methods, closures etc. as hosts; only `module.functions`
-/// are candidates. Resolution data and the recursive-function set are snapshotted up
-/// front, so the mutating loops use plain disjoint borrows (no `unsafe`).
+/// Entry point: inline eligible small functions and statically bound methods at call sites.
+/// Processes user functions, methods, closures etc. as hosts; candidates are
+/// `module.functions` and the method bodies `methods::MethodTargets` selects. Resolution data
+/// and the recursive-callee set are snapshotted up front, so the mutating loop borrows the
+/// body tables and the literal pool disjointly (no `unsafe`).
 pub(crate) fn inline_small_functions(module: &mut Module) -> bool {
     if module.functions.is_empty() {
         return false;
     }
     let name_to_idx = build_name_to_index(module);
     let resolver = CallTargetResolver::new(module);
+    let methods = methods::MethodTargets::new(module);
 
     // Snapshot callee bodies once (small); we only inline from the pre-mutation bodies,
     // and repeated inlining inside one host re-scans the updated host only.
     let callee_snapshots: Vec<Function> = module.functions.clone();
-    let recursive = compute_recursive_functions(&callee_snapshots, &name_to_idx, &resolver);
+    let recursive = recursion::compute_recursive_callees(module, &name_to_idx, &resolver, &methods);
+    let callees = Callees {
+        functions: &callee_snapshots,
+        name_to_idx: &name_to_idx,
+        resolver: &resolver,
+        methods: &methods,
+        recursive: &recursive,
+    };
+
+    // Every body table can host call sites to small helpers. They are distinct module
+    // fields from the literal pool, so iterating them mutably beside it is sound.
+    let Module {
+        functions,
+        class_methods,
+        closures,
+        fiber_wrappers,
+        callback_wrappers,
+        extern_callback_trampolines,
+        runtime_callable_invokers,
+        data,
+        ..
+    } = module;
     let mut changed = false;
-
-    // Hosts in `module.functions`: indexed access yields a disjoint `&mut` each
-    // iteration, while `resolver`/`callee_snapshots`/`recursive` are owned and borrow
-    // nothing from `module`.
-    let host_count = module.functions.len();
-    for h in 0..host_count {
-        if inline_into_function(
-            &mut module.functions[h],
-            &name_to_idx,
-            &callee_snapshots,
-            &resolver,
-            &recursive,
-        ) {
-            changed = true;
-        }
-    }
-
-    // Other body tables can host call sites to small helpers too. They are distinct
-    // module fields, so iterating them mutably is sound without raw pointers.
-    for host in module
-        .class_methods
+    for host in functions
         .iter_mut()
-        .chain(module.closures.iter_mut())
-        .chain(module.fiber_wrappers.iter_mut())
-        .chain(module.callback_wrappers.iter_mut())
-        .chain(module.extern_callback_trampolines.iter_mut())
-        .chain(module.runtime_callable_invokers.iter_mut())
+        .chain(class_methods.iter_mut())
+        .chain(closures.iter_mut())
+        .chain(fiber_wrappers.iter_mut())
+        .chain(callback_wrappers.iter_mut())
+        .chain(extern_callback_trampolines.iter_mut())
+        .chain(runtime_callable_invokers.iter_mut())
     {
-        if inline_into_function(host, &name_to_idx, &callee_snapshots, &resolver, &recursive) {
+        if inline_into_function(host, &callees, data) {
             changed = true;
         }
     }
-
     changed
 }
 

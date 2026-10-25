@@ -39,3 +39,19 @@ $current = new ScopedLog("second");
 // The "second" log above is still referenced by $current here, so its
 // destructor runs last, during program shutdown.
 echo "done\n";
+
+// A destructor can throw while the runtime still completes protected cleanup.
+class FailingResource
+{
+    public function __destruct()
+    {
+        throw new RuntimeException("resource cleanup failed");
+    }
+}
+
+$resources = [new FailingResource()];
+try {
+    unset($resources);
+} catch (RuntimeException $error) {
+    echo $error->getMessage(), "\n";
+}

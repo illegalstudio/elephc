@@ -91,7 +91,7 @@ pub fn emit_throw_current(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "xzr", "_concat_off", 0);
     emitter.instruction(&format!("add x0, x19, #{}", TRY_HANDLER_JMP_BUF_OFFSET)); // x0 = jmp_buf base stored inside the active handler record
     emitter.instruction("mov x1, #1");                                          // longjmp return value = 1 to indicate exceptional control flow
-    emitter.bl_c("longjmp"); // transfer control directly back to the saved catch resume point
+    emitter.resume_exception_handler();                                         // transfer control directly back to the saved catch resume point
 
     // -- uncaught exceptions terminate the process with a fatal message --
     emitter.label("__rt_throw_current_uncaught");
@@ -124,7 +124,7 @@ fn emit_throw_current_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_store_zero_to_symbol(emitter, "_concat_off", 0);
     emitter.instruction(&format!("lea rdi, [r12 + {}]", TRY_HANDLER_JMP_BUF_OFFSET)); // rdi = jmp_buf base stored inside the active handler record
     emitter.instruction("mov esi, 1");                                          // longjmp return value = 1 to indicate exceptional control flow
-    emitter.bl_c("longjmp"); // transfer control directly back to the saved catch resume point
+    emitter.resume_exception_handler();                                         // transfer control directly back to the saved catch resume point
 
     emitter.label("__rt_throw_current_uncaught");
     emitter.instruction("jmp __rt_dispatch_uncaught_exception");                // invoke a registered PHP handler or report the uncaught Throwable

@@ -30,6 +30,43 @@ fn test_mixed_literal_spread_preserves_nested_element_type() {
     }
 }
 
+/// The checker types each spread source of an indexed literal once. `[...E, null]` typed `E` in
+/// its hash-spread scan and again in the element merge that followed, so nesting the literal
+/// under a lazy merge (`$maybe ?? [...E, null]`, `$flag ? [...E, null] : []`) doubled the work at
+/// every level. Indexed sources reach the list merge; hash sources (`["k" => ...]`) reach the
+/// associative one, which the codegen timing tests do not cover. Checking alone, each 24-deep
+/// nesting must finish well inside the bound with the type a single level already settles on.
+#[test]
+fn test_nested_spread_literal_merges_type_in_linear_time() {
+    let mut indexed_coalesce = String::from("[$argc]");
+    let mut indexed_ternary = String::from("[$argc]");
+    let mut hash_coalesce = String::from("[\"k\" => $argc]");
+    let mut hash_ternary = String::from("[\"k\" => $argc]");
+    for _ in 0..24 {
+        indexed_coalesce = format!("($maybe ?? [...{indexed_coalesce}, null])");
+        indexed_ternary = format!("($flag ? [...{indexed_ternary}, null] : [])");
+        hash_coalesce = format!("($maybe ?? [...{hash_coalesce}, null])");
+        hash_ternary = format!("($flag ? [...{hash_ternary}, null] : [])");
+    }
+    let source = format!(
+        "<?php\n$maybe = $argc > 100 ? null : [];\n$flag = $argc > 0;\n$a = {indexed_coalesce};\n$b = {indexed_ternary};\n$c = {hash_coalesce};\n$d = {hash_ternary};\n"
+    );
+    let started = std::time::Instant::now();
+    let checked = check_source_full(&source).expect("nested spread literals type-check");
+    let elapsed = started.elapsed();
+    let mixed_list = PhpType::Array(Box::new(PhpType::Mixed));
+    assert_eq!(checked.global_env.get("a"), Some(&mixed_list));
+    assert_eq!(checked.global_env.get("b"), Some(&mixed_list));
+    // A hash spread makes each level a hash, and joining a hash with the `[]` arm (or with the
+    // `array<never>` left of `??`) widens to `mixed`; spreading `mixed` keeps it a hash.
+    assert_eq!(checked.global_env.get("c"), Some(&PhpType::Mixed));
+    assert_eq!(checked.global_env.get("d"), Some(&PhpType::Mixed));
+    assert!(
+        elapsed < std::time::Duration::from_secs(30),
+        "nested spread literal typing took {elapsed:?}"
+    );
+}
+
 /// Direct scalar property references need writeback support distinct from nested array origins.
 #[test]
 fn test_error_by_ref_argument_rejects_direct_property_storage() {
