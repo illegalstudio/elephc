@@ -101,7 +101,9 @@ echo $doc->saveXML();
         "{target}: native property projection body");
     assert!(assembly.contains("_class_debug_projection_ptrs"), "{target}: native debug dispatch metadata");
     assert!(assembly.contains(&crate::names::method_symbol("SimpleXMLElement", "__elephc_debug_projection")),
-        "{target}: zero-argument owned native debug projection");
+        "{target}: owned native debug projection adapter");
+    assert!(assembly.contains(&crate::names::method_symbol("SimpleXMLElement", "__elephc_debug_info")),
+        "{target}: separate zero-argument native debug hook");
     assert!(assembly.contains(&crate::names::method_symbol("SimpleXMLElement", "__elephc_clone_initialize")),
         "{target}: native clone handler body");
 }

@@ -645,21 +645,23 @@ pub(crate) fn emit_runtime_data_user(
     }
 
     // Native property projections retain PHP's own interface membership.
-    for (table, method) in [
-        ("_class_array_projection_ptrs", "__elephc_array"),
-        ("_class_debug_projection_ptrs", "__elephc_debug_projection"),
+    for (table, methods) in [
+        ("_class_array_projection_ptrs", &["__elephc_array"][..]),
+        ("_class_debug_projection_ptrs", &["__elephc_debug_info", "__elephc_debug_projection"][..]),
     ] {
         out.push_str(&format!(".globl {table}\n{table}:\n"));
         if let Some(max_class_id) = max_class_id {
-            let key = php_symbol_key(method);
             for class_id in 0..=max_class_id {
-                let entry = class_name_by_id.get(&class_id)
-                    .filter(|name| crate::types::builtin_classes::has_native_dimensions(name, classes))
-                    .and_then(|name| classes.get(*name))
-                    .filter(|info| info.methods.contains_key(&key))
-                    .map(|info| source_instance_method_entry(info, &key, classes))
-                    .transpose()?.unwrap_or_else(|| "0".into());
-                out.push_str(&format!("    .quad {entry}\n"));
+                for method in methods {
+                    let key = php_symbol_key(method);
+                    let entry = class_name_by_id.get(&class_id)
+                        .filter(|name| crate::types::builtin_classes::has_native_dimensions(name, classes))
+                        .and_then(|name| classes.get(*name))
+                        .filter(|info| info.methods.contains_key(&key))
+                        .map(|info| source_instance_method_entry(info, &key, classes))
+                        .transpose()?.unwrap_or_else(|| "0".into());
+                    out.push_str(&format!("    .quad {entry}\n"));
+                }
             }
         }
     }

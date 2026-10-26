@@ -518,11 +518,23 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     }
     public function __elephc_json(): mixed { return (object)$this->__elephc_array(); }
     public function __debugInfo(): ?array { return $this->__elephc_projection(true); }
-    public function __elephc_debug_projection(): array<string, mixed> {
-        $projection = $this->__debugInfo();
+    public function __elephc_debug_info(): mixed {
+        try { return $this->__debugInfo(); }
+        catch (Throwable $error) {
+            $message = 'Warning: Uncaught ' . get_class($error) . ': ' . $error->getMessage()
+                . ' in ' . $error->getFile() . ':' . $error->getLine()
+                . "\nStack trace:\n" . $error->getTraceAsString() . "\n  thrown\n";
+            __elephc_simplexml_warning($message);
+            throw $error;
+        }
+    }
+    public function __elephc_debug_projection(mixed $projection): array<string, mixed> {
         $result = ["__elephc_projection_seed" => null];
         unset($result["__elephc_projection_seed"]);
-        if ($projection !== null) {
+        if ($projection === null) {
+            __elephc_simplexml_warning('Deprecated: Returning null from ' . get_class($this)
+                . "::__debugInfo() is deprecated, return an empty array instead\n");
+        } else {
             foreach ($projection as $key => $value) { $result[(string)$key] = $value; }
         }
         return $result;

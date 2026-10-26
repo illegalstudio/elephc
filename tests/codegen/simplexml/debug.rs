@@ -23,6 +23,12 @@ fn test_simplexml_native_debug_projection_bundle() {
 class RecursiveXmlDebug extends SimpleXMLElement {
     public function __debugInfo(): ?array { return ['self' => $this]; }
 }
+class GuardedXmlDebug extends SimpleXMLElement {
+    public function __debugInfo(): ?array { var_dump($this); return ['visible' => 1]; }
+}
+class NullXmlDebug extends SimpleXMLElement {
+    public function __debugInfo(): ?array { return null; }
+}
 "###;
     let body = r###"$xml = new SimpleXMLElement('<r a="1"><b>2</b><b>3</b></r>');
 foreach ([$xml, $xml->children(), $xml->b] as $node) {
@@ -40,6 +46,18 @@ echo json_encode(print_r([$recursive, $recursive], true)), "\n";
 ob_start(); var_dump([$recursive, $recursive]); $dump = ob_get_clean();
 echo (int)str_contains($dump, '*RECURSION*'), (int)!str_contains($dump, '__elephc_'), "\n";
 unset($xml, $node, $recursive, $dump);
+ob_start(); var_dump(new GuardedXmlDebug('<r/>')); $dump = ob_get_clean();
+echo (int)str_contains($dump, '*RECURSION*'), (int)str_contains($dump, '["visible"]=>'), "\n";
+$node = new NullXmlDebug('<r/>');
+set_error_handler(function(int $level, string $message): bool {
+    echo 'null:', $level, ':', (int)str_starts_with($message, 'Returning null from NullXmlDebug::__debugInfo()'), '|'; return true;
+});
+echo json_encode(print_r($node, true)), "\n";
+restore_error_handler();
+set_error_handler(function(int $level, string $message): bool { throw new RuntimeException('null-handler'); });
+try { print_r($node, true); } catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
+restore_error_handler(); echo 'after-null', "\n";
+unset($node, $dump);
 "###;
     let quoted_body = body.replace('\\', "\\\\").replace('\'', "\\'");
     let source = format!("<?php\n{definitions}\n{body}\n$source = $argc > 0 ? '{quoted_body}' : '';\neval($source);");
@@ -79,6 +97,9 @@ string(5) "inner"
 111
 "Array\n(\n    [0] => RecursiveXmlDebug Object\n        (\n            [self] => RecursiveXmlDebug Object\n *RECURSION*\n        )\n\n    [1] => RecursiveXmlDebug Object\n        (\n            [self] => RecursiveXmlDebug Object\n *RECURSION*\n        )\n\n)\n"
 11
+11
+null:8192:1|"NullXmlDebug Object\n(\n)\n"
+null-handler|after-null
 "###.replace(" =>\n", " => \n");
     assert_eq!(out.stdout, expected.repeat(2));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
@@ -92,11 +113,15 @@ fn test_simplexml_native_debug_hook_exception_is_fatal() {
 class ThrowingXmlDebug extends SimpleXMLElement {
     public function __debugInfo(): ?array { throw new RuntimeException('debug'); }
 }
+set_error_handler(function(int $level, string $message): bool {
+    echo 'warn:', $level, ':', (int)str_starts_with($message, 'Uncaught RuntimeException: debug'), '|'; return true;
+});
 try { echo print_r(new ThrowingXmlDebug('<r/>'), true); }
 catch (Throwable $error) { echo 'caught-hook|'; }
 echo 'after-hook|';
 "#);
     assert!(!out.success);
+    assert!(out.stdout.starts_with("warn:2:1|"), "{}", out.stdout);
     assert!(!out.stdout.contains("caught-hook|") && !out.stdout.contains("after-hook|"), "{}", out.stdout);
     assert!(out.stderr.contains("__debuginfo() must return an array"), "{}", out.stderr);
 }
