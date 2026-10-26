@@ -28,15 +28,17 @@ try { xml_set_element_handler($bad, $callback, null); } catch (TypeError $error)
 $callback(xml_parser_create(), 'r', []);
 $parser = xml_parser_create();
 xml_set_element_handler($parser, function (XMLParser $active, string $name, array $attributes): void {
-    $values = [];
+    $values = ['before']; $before = $values;
+    set_error_handler(function(int $level, string $message): bool { throw new Error($message); });
     try { xml_parse_into_struct($active, str_repeat('x', 64), $values); }
-    catch (Error $error) { echo 'struct-caught|'; }
+    catch (Error $error) { echo 'struct-caught|', $before[0], '|'; }
+    restore_error_handler();
 }, null);
 xml_parse($parser, '<r/>', true);
 echo $calls;
 "#);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "caught|used|struct-caught|1");
+    assert_eq!(out.stdout, "caught|used|struct-caught|before|1");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 

@@ -188,6 +188,8 @@ pub enum BuiltinArgumentLowering {
     /// the receiver and the replacement, which is why it is a registry-owned strategy rather
     /// than a per-argument rule.
     ArraySplice,
+    /// Keep write-only output operands boxed so reading their place creates no payload lease.
+    WriteOnlyMixedOutputs(&'static [usize]),
     /// Type an unannotated `xml_set_*_handler()` closure's parameters from the SAX event
     /// it receives, so the EIR closure signature matches what the checker hook validated.
     XmlHandlerSetter,
