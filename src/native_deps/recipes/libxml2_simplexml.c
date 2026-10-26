@@ -187,14 +187,14 @@ void *elephc_libxml2_v1_sx_add(void *raw, const char *qualified, const char *val
     const xmlChar *name = (const xmlChar *)(colon ? colon + 1 : qualified);
     xmlChar *prefix = colon ? xmlStrndup((const xmlChar *)qualified, (int)(colon - qualified)) : NULL;
     xmlNsPtr ns = NULL;
-    if (has_uri && *uri) {
+    if (has_uri && (*uri || attribute)) {
         ns = xmlSearchNsByHref(parent->doc, parent, (const xmlChar *)uri);
     } else if (!has_uri) {
         ns = attribute ? NULL : parent->ns;
     }
     xmlNodePtr result;
     if (attribute) {
-        if (has_uri && *uri && !ns) ns = xmlNewNs(parent, (const xmlChar *)uri, prefix);
+        if (has_uri && !ns) ns = xmlNewNs(parent, (const xmlChar *)uri, prefix);
         result = (xmlNodePtr)xmlNewNsProp(parent, ns, name, (const xmlChar *)value);
     } else {
         result = xmlNewChild(parent, ns, name, has_value ? (const xmlChar *)value : NULL);

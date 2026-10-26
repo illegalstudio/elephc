@@ -147,6 +147,40 @@ echo $xml->asXML();
     assert_eq!(out, "<?xml version=\"1.0\"?>\n<r xmlns:p=\"urn:p\" id=\"1\" offset=\"2\" list=\"3\" p:a=\"4\"><p:child>v</p:child></r>\n");
 }
 
+/// Explicit empty attribute namespaces preserve bindings and distinguish omitted namespaces.
+#[test]
+fn test_simplexml_add_attribute_explicit_empty_namespace() {
+    if skip_without_xml_native("test_simplexml_add_attribute_explicit_empty_namespace") { return; }
+    let out = compile_and_run(r#"<?php
+set_error_handler(function(int $level, string $message): bool { echo 'warning|'; return true; });
+$plain = new SimpleXMLElement('<a/>');
+$plain->addAttribute('b', 'c', '');
+echo $plain->asXML();
+$prefixed = new SimpleXMLElement('<a xmlns="urn:x"/>');
+$prefixed->addAttribute('p:b', '2', '');
+echo $prefixed->asXML();
+$existing = new SimpleXMLElement('<a b="old"/>');
+$existing->addAttribute('b', 'new', '');
+echo $existing->asXML();
+$duplicate = new SimpleXMLElement('<a/>');
+$duplicate->addAttribute('b', 'first', '');
+$duplicate->addAttribute('b', 'second', '');
+echo $duplicate->asXML();
+$omitted = new SimpleXMLElement('<a/>');
+$omitted->addAttribute('b', 'first', '');
+$omitted->addAttribute('b', 'second');
+echo $omitted->asXML();
+restore_error_handler();
+"#);
+    assert_eq!(out, concat!(
+        "<?xml version=\"1.0\"?>\n<a xmlns=\"\" b=\"c\"/>\n",
+        "<?xml version=\"1.0\"?>\n<a xmlns=\"urn:x\" xmlns:p=\"\" p:b=\"2\"/>\n",
+        "<?xml version=\"1.0\"?>\n<a xmlns=\"\" b=\"old\" b=\"new\"/>\n",
+        "warning|<?xml version=\"1.0\"?>\n<a xmlns=\"\" b=\"first\"/>\n",
+        "<?xml version=\"1.0\"?>\n<a xmlns=\"\" b=\"first\" b=\"second\"/>\n",
+    ));
+}
+
 /// Write and add failures use E_WARNING, preserve appending, and validate names with ValueError.
 #[test]
 fn test_simplexml_mutation_warning_contract() {

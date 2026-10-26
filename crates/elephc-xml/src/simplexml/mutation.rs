@@ -58,7 +58,12 @@ impl View {
             let local = name.split_once(':').map(|(_, local)| local).unwrap_or(name);
             let mut current = unsafe { ffi::attrs(parent) };
             while !current.is_null() {
-                if unsafe { string(ffi::name(current)) == local && string(ffi::ns(current, 0)) == uri } {
+                let current_uri = unsafe { ffi::ns(current, 0) };
+                let same_namespace = match namespace {
+                    None => current_uri.is_null(),
+                    Some(uri) => !current_uri.is_null() && unsafe { string(current_uri) == uri },
+                };
+                if same_namespace && unsafe { string(ffi::name(current)) == local } {
                     return Err(AddError::DuplicateAttribute);
                 }
                 current = unsafe { ffi::next(current) };
