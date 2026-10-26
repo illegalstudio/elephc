@@ -9,6 +9,47 @@
 
 use super::*;
 
+/// Projection string, list, and leaf predicates follow PHP's distinct XML tree checks.
+#[test]
+fn simplexml_projection_predicates_distinguish_text_cdata_and_named_lists() {
+    for (source, name, expected) in [
+        ("<r>text</r>", "", [1, 0, 1]),
+        ("<r> \t\r\n</r>", "", [0, 0, 0]),
+        ("<r><![CDATA[text]]></r>", "", [0, 0, 0]),
+        ("<r>text<b>nested</b></r>", "", [1, 0, 0]),
+        ("<r><i>a</i><i>c</i></r>", "i", [1, 1, 1]),
+        ("<r><i>a<b>z</b></i><i>c</i></r>", "i", [1, 0, 0]),
+        ("<r><i><![CDATA[a]]></i><i>c</i></r>", "i", [0, 1, 0]),
+        ("<r><i> </i><i>c</i></r>", "i", [0, 1, 0]),
+        ("<r><i/><i>c</i></r>", "i", [0, 0, 0]),
+        ("<r><i>a</i></r>", "i", [1, 0, 1]),
+    ] {
+        let source = cstring(source);
+        let empty = cstring("");
+        let root = unsafe { abi::elephc_xml_sx_load(source.as_ptr(), source.as_bytes().len() as i64,
+            0, empty.as_ptr(), 0, empty.as_ptr()) };
+        assert_ne!(root, 0);
+        let name = cstring(name);
+        let selected = if name.as_bytes().is_empty() { root } else { unsafe {
+            abi::elephc_xml_sx_select(root, 2, name.as_ptr(), empty.as_ptr(), 0, 0)
+        } };
+        let actual = [6, 10, 11].map(|op| abi::elephc_xml_sx_int(selected, op));
+        assert_eq!(actual, expected, "{}", source.to_string_lossy());
+        if selected != root { abi::elephc_xml_sx_free(selected); }
+        abi::elephc_xml_sx_free(root);
+    }
+}
+
+/// Element projections include comments and PIs without changing public children iteration.
+#[test]
+fn simplexml_projection_nodes_preserve_miscellaneous_children_and_namespace_filters() {
+    let root = parse(b"<r xmlns:p='urn:p'><!--c--><?pi x?><p:a>hidden</p:a><a>visible</a>text<![CDATA[cdata]]></r>", 0, "", false).unwrap();
+    let projection = root.select(9, "", "", false, 0);
+    let kinds: Vec<_> = projection.nodes().into_iter().map(|node| unsafe { ffi::node_type(node) }).collect();
+    assert_eq!(kinds, [8, 7, 1]);
+    assert_eq!(root.select(7, "", "", false, 0).item_count(), 1);
+}
+
 /// Live iteration reads sibling links after mutations rather than taking a stale snapshot.
 #[test]
 fn simplexml_cursor_observes_live_sibling_mutation() {

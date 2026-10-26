@@ -10,6 +10,9 @@
 use std::ffi::{c_char, c_int, c_void};
 pub(super) type Node = *mut c_void;
 extern "C" {
+    /// Checks XML whitespace through libxml2's public opaque-node API.
+    #[link_name = "xmlIsBlankNode"]
+    pub(super) fn is_blank(node: Node) -> c_int;
     /// Deep-copies one detached node into another document using libxml2's public opaque API.
     #[link_name = "xmlDocCopyNode"]
     pub(super) fn copy_node(node: Node, doc: Node, extended: c_int) -> Node;

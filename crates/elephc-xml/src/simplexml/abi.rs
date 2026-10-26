@@ -90,7 +90,7 @@ pub extern "C" fn elephc_xml_sx_free(handle: i64) {
 #[no_mangle]
 pub extern "C" fn elephc_xml_sx_clone(handle: i64) -> i64 { guard(|| view(handle).and_then(|v| v.deep_clone()).map(insert).unwrap_or(0)) }
 /// Selects children (0), attributes (1), a property (2), an attribute (3), or offset (4).
-/// Internal modes 7/8 preserve the existing namespace filter for projections and iteration.
+/// Internal modes 7/8 preserve namespace filters; mode 9 also projects comments and PIs.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_xml_sx_select(handle: i64, kind: i64, name: *const c_char, ns: *const c_char, prefix: i64, index: i64) -> i64 {
     guard(|| view(handle).map(|v| {
@@ -117,8 +117,7 @@ pub extern "C" fn elephc_xml_sx_int(handle: i64, operation: i64) -> i64 {
         4 => v.first().map(|n| unsafe { ffi::node_type(n) as i64 }).unwrap_or(0),
         5 => match v.scope { Scope::Children(_, None) => 1, Scope::Children(_, Some(_)) => 2,
             Scope::Attributes(_, None) => 3, Scope::Attributes(_, Some(_)) => 4, _ => 0 },
-        6 => v.first().map(|n| unsafe { let child = ffi::child(n);
-            i64::from(!child.is_null() && matches!(ffi::node_type(child), 3 | 4)) }).unwrap_or(0),
+        6 => v.first().map(|n| i64::from(projection_is_string(n))).unwrap_or(0),
         7 => v.first().map(|n| unsafe { i64::from(ffi::empty(n) != 0) }).unwrap_or(1),
         8 => v.first().map(|node| unsafe {
             let mut child = ffi::child(node);
@@ -126,8 +125,30 @@ pub extern "C" fn elephc_xml_sx_int(handle: i64, operation: i64) -> i64 {
             i64::from(!child.is_null())
         }).unwrap_or(0),
         9 => i64::from(v.first().is_some_and(|node| node == unsafe { ffi::root(v.doc.raw) })),
+        10 => v.first().map(|n| i64::from(projection_uses_items(n))).unwrap_or(0),
+        11 => v.first().map(|n| unsafe {
+            i64::from(projection_is_string(n) && ffi::next(ffi::child(n)).is_null())
+        }).unwrap_or(0),
         _ => 0,
     }).unwrap_or(0))
+}
+/// PHP projects an element as a string only when its first child is nonblank text.
+fn projection_is_string(node: Node) -> bool {
+    unsafe {
+        let child = ffi::child(node);
+        !child.is_null() && ffi::node_type(child) == 3 && ffi::is_blank(child) == 0
+    }
+}
+/// PHP projects a named list as items only for a first node with one childless child.
+fn projection_uses_items(node: Node) -> bool {
+    unsafe {
+        let child = ffi::child(node);
+        let parent = ffi::parent(node);
+        if child.is_null() || parent.is_null() || ffi::next(node).is_null() { return false; }
+        let first = ffi::child(parent);
+        ffi::next(child).is_null() && ffi::child(child).is_null()
+            && !first.is_null() && !ffi::next(first).is_null()
+    }
 }
 /// Copies string conversion (0), local name (1), or XML serialization (2).
 #[no_mangle]
