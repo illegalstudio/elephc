@@ -1882,3 +1882,29 @@ if ($o !== null) {
     );
     assert_eq!(out, "VVNV");
 }
+
+/// Mixed static appends preserve arrays, copies and ArrayAccess callbacks without XML enabled.
+#[test]
+fn test_mixed_static_property_append_array_and_object() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class MixedStaticAppend { public static mixed $items = []; }
+class MixedStaticAppendAccess implements ArrayAccess {
+    public array $items = [];
+    public function offsetSet(mixed $key, mixed $value): void { $this->items[] = $value; }
+    public function offsetGet(mixed $key): mixed { return null; }
+    public function offsetExists(mixed $key): bool { return false; }
+    public function offsetUnset(mixed $key): void {}
+}
+$copy = MixedStaticAppend::$items;
+MixedStaticAppend::$items[] = str_repeat('a', 4);
+echo count($copy), ':', implode(',', MixedStaticAppend::$items), '|';
+$object = new MixedStaticAppendAccess();
+MixedStaticAppend::$items = $object;
+MixedStaticAppend::$items[] = str_repeat('b', 4);
+echo implode(',', $object->items);
+MixedStaticAppend::$items = null;
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "0:aaaa|bbbb");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

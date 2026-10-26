@@ -1082,6 +1082,11 @@ fn lower_dynamic_property_fetch_without_native(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: LoweredValue,
     result_type: PhpType, mode: PropertyFetchMode, expr: &Expr,
 ) -> LoweredValue {
+    if mode == PropertyFetchMode::Probe && scalar_property_probe_receiver(ctx, object.value) {
+        release_coerced_source_if_owned(ctx, property, Some(expr.span));
+        release_owning_receiver_temporary(ctx, object, expr.span);
+        return emit_null_value(ctx, Some(expr.span));
+    }
     let result = ctx.emit_value(
         Op::DynamicPropGet,
         vec![object.value, property.value],
@@ -1160,8 +1165,16 @@ pub(super) fn property_probe_needs_runtime_name_form_for_type(receiver_ty: &PhpT
     singular_object_class(receiver_ty).is_none()
         && matches!(
             receiver_ty.codegen_repr(),
-            PhpType::Mixed | PhpType::Union(_)
+            PhpType::Mixed | PhpType::Union(_) | PhpType::Int | PhpType::Float | PhpType::Bool
+                | PhpType::Str | PhpType::Void | PhpType::Never | PhpType::TaggedScalar
         )
+}
+
+/// Scalar quiet property probes miss without interpreting raw words as object pointers.
+fn scalar_property_probe_receiver(ctx: &LoweringContext<'_, '_>, value: ValueId) -> bool {
+    matches!(ctx.builder.value_php_type(value).codegen_repr(),
+        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str | PhpType::Void
+            | PhpType::Never | PhpType::TaggedScalar)
 }
 
 /// Returns the lowering-visible PHP type of a probe receiver expression.

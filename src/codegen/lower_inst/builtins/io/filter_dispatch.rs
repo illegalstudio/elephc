@@ -16,6 +16,7 @@ pub(super) fn lower_dynamic_filter_attach(
 ) -> Result<()> {
     let stream = expect_operand(inst, 0)?;
     let filter = expect_operand(inst, 1)?;
+    // -- validate the descriptor before coercing the captured filter name --
     load_stream_fd_to_result(ctx, stream, "stream_filter_append")?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     load_string_to_result(ctx, filter, "stream_filter_append filter")?;
@@ -24,6 +25,7 @@ pub(super) fn lower_dynamic_filter_attach(
     abi::emit_push_reg_pair(ctx.emitter, ptr, len);
     let done = ctx.next_label("filter_dynamic_done");
     let mut matches = Vec::new();
+    // -- compare the captured name against the shared builtin filter catalog --
     for &(name, id) in BUILTIN_STREAM_FILTERS {
         let matched = ctx.next_label("filter_dynamic_builtin");
         let (label, length) = ctx.data.add_string(name.as_bytes());
@@ -42,7 +44,9 @@ pub(super) fn lower_dynamic_filter_attach(
         }
         abi::emit_call_label(ctx.emitter, "__rt_strcmp");
         match ctx.emitter.target.arch {
-            Arch::AArch64 => ctx.emitter.instruction(&format!("cbz x0, {matched}")),// select the matching builtin filter
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cbz x0, {matched}"));         // select the matching builtin filter
+            }
             Arch::X86_64 => {
                 ctx.emitter.instruction("test rax, rax");                       // compare the complete filter name
                 ctx.emitter.instruction(&format!("jz {matched}"));              // select the matching builtin filter
@@ -50,9 +54,11 @@ pub(super) fn lower_dynamic_filter_attach(
         }
         matches.push((matched, id));
     }
+    // -- retain ordinary user-filter lookup after builtin matches are exhausted --
     abi::emit_pop_reg_pair(ctx.emitter, ptr, len);
     finish_user_stream_filter_attach(ctx, inst)?;
     abi::emit_jump(ctx.emitter, &done);
+    // -- attach the selected builtin through the same path as literal names --
     for (matched, id) in matches {
         ctx.emitter.label(&matched);
         abi::emit_release_temporary_stack(ctx.emitter, 16);

@@ -483,3 +483,23 @@ echo "consumers:", count(iterator_to_array(factory())), ",", $n, "\n";
     );
     assert_eq!(out, "consumers:2,7\n");
 }
+
+/// Runtime-owned Generator cells must not be retained as borrowed compiled PHP returns.
+#[test]
+fn test_generator_foreach_owned_cells_fit_bounded_heap_without_debug() {
+    let out = compile_and_run_with_heap_size(r#"<?php
+function ownedCellGenerator(): Generator {
+    for ($i = 0; $i < 20000; $i++) { yield $i => [$i]; }
+}
+function consumeOwnedIterator(Iterator $source): int {
+    $count = 0;
+    foreach ($source as $key => $value) { $count++; }
+    return $count;
+}
+$count = 0;
+foreach (ownedCellGenerator() as $key => $value) { $count++; }
+unset($key, $value);
+echo $count, ':', consumeOwnedIterator(ownedCellGenerator());
+"#, 1_048_576);
+    assert_eq!(out, "20000:20000");
+}

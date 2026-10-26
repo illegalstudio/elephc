@@ -300,6 +300,13 @@ fn lower_array_access_from_values_with_receiver_pins(
     preserve_null: bool,
     receiver_pins: Vec<super::PinnedInFlightOwner>,
 ) -> LoweredValue {
+    if !warn_on_missing && matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(),
+        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void | PhpType::Never | PhpType::TaggedScalar)
+    {
+        super::unpin_in_flight_owners(ctx, receiver_pins, expr.span);
+        release_coerced_source_if_owned(ctx, index_value, Some(index.span));
+        return emit_null_value(ctx, Some(expr.span));
+    }
     let op = match array_value.ir_type {
         IrType::Heap(IrHeapKind::Array) => {
             // Nullable scalar keys carry an inline tag. Preserve null as the empty-string

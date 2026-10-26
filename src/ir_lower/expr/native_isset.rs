@@ -177,7 +177,8 @@ pub(super) fn array_access_expr_supports_native_isset_probe(
         _ => infer_expr_type_syntactic(array),
     }
     .codegen_repr();
-    matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+    matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Int
+        | PhpType::Float | PhpType::Bool | PhpType::Void | PhpType::Never | PhpType::TaggedScalar)
 }
 
 /// Lowers `isset($object->property)` without performing a normal property read first.

@@ -209,9 +209,13 @@ pub(super) fn lower_static_property_array_push(
         return;
     }
 
-    let property_value = load_static_property(ctx, receiver, property, span);
+    let boxed_property = static_property_type(ctx, receiver, property)
+        .filter(|ty| ty.codegen_repr() == PhpType::Mixed);
+    let property_value = if let Some(ty) = boxed_property.as_ref() {
+        separate_boxed_static_property(ctx, receiver, property, ty.clone(), span)
+    } else { load_static_property(ctx, receiver, property, span) };
     if super::native_dimension_append::lower(ctx, property_value, value, span, |ctx, array, value| {
-        if static_property_may_be_eval_dynamic(ctx, receiver) {
+        if boxed_property.is_some() || static_property_may_be_eval_dynamic(ctx, receiver) {
             ctx.emit_void(Op::MixedArrayAppend, vec![array.value, value.value], None,
                 Op::MixedArrayAppend.default_effects(), Some(span));
         } else {
@@ -225,7 +229,7 @@ pub(super) fn lower_static_property_array_push(
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
         return;
     }
-    if static_property_may_be_eval_dynamic(ctx, receiver) {
+    if boxed_property.is_some() || static_property_may_be_eval_dynamic(ctx, receiver) {
         ctx.emit_void(
             Op::MixedArrayAppend,
             vec![property_value.value, value.value],
@@ -233,7 +237,12 @@ pub(super) fn lower_static_property_array_push(
             Op::MixedArrayAppend.default_effects(),
             Some(span),
         );
-        store_static_property(ctx, receiver, property, property_value.value, span);
+        if boxed_property.is_none() {
+            store_static_property(ctx, receiver, property, property_value.value, span);
+        }
+        if ctx.value_is_owning_temporary(value) {
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+        }
         return;
     }
     ctx.emit_void(
@@ -535,6 +544,14 @@ fn separate_php_array_static_property(
     if !ty.is_php_array() {
         return None;
     }
+    Some(separate_boxed_static_property(ctx, receiver, property, ty, span))
+}
+
+/// Publishes an independent Mixed cell so appends preserve aliases and array copy-on-write.
+fn separate_boxed_static_property(
+    ctx: &mut LoweringContext<'_, '_>, receiver: &StaticReceiver, property: &str,
+    ty: PhpType, span: Span,
+) -> LoweredValue {
     let previous = load_static_property_as(ctx, receiver, property, ty.clone(), span);
     let separated = ctx.emit_value(
         Op::MixedClone,
@@ -545,7 +562,10 @@ fn separate_php_array_static_property(
         Some(span),
     );
     store_static_property(ctx, receiver, property, separated.value, span);
-    Some(separated)
+    let borrowed = ctx.emit_value(Op::Borrow, vec![separated.value], None,
+        ctx.builder.value_php_type(separated.value), Op::Borrow.default_effects(), Some(span));
+    ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+    borrowed
 }
 
 /// Returns true when a named static-property receiver may resolve through eval metadata.

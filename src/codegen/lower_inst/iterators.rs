@@ -1967,6 +1967,7 @@ fn emit_generator_interface_fast_path(
             ctx.emitter.instruction("cmp x10, x11");                            // compare receiver class id with Generator
             ctx.emitter.instruction(&format!("b.ne {}", not_generator));        // fall back to interface dispatch for non-Generator iterators
             abi::emit_call_label(ctx.emitter, helper);
+            crate::codegen::return_ownership::emit_status(ctx.emitter, true);
             ctx.emitter.instruction(&format!("b {}", done));                    // skip generic interface dispatch after the fast path
             ctx.emitter.label(&not_generator);
         }
@@ -1976,6 +1977,7 @@ fn emit_generator_interface_fast_path(
             ctx.emitter.instruction("cmp r10, r11");                            // compare receiver class id with Generator
             ctx.emitter.instruction(&format!("jne {}", not_generator));         // fall back to interface dispatch for non-Generator iterators
             abi::emit_call_label(ctx.emitter, helper);
+            crate::codegen::return_ownership::emit_status(ctx.emitter, true);
             ctx.emitter.instruction(&format!("jmp {}", done));                  // skip generic interface dispatch after the fast path
             ctx.emitter.label(&not_generator);
         }
@@ -2111,6 +2113,8 @@ fn emit_generator_iterator_runtime_call(
     let receiver_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     abi::load_at_offset(ctx.emitter, receiver_arg, offset - ITER_SOURCE_OFFSET_DELTA);
     abi::emit_call_label(ctx.emitter, helper);
+    // Runtime generator keys and values already transfer an owned Mixed cell.
+    crate::codegen::return_ownership::emit_status(ctx.emitter, true);
 }
 
 /// Lowers iterator cleanup for owned relocation anchors in the stack-resident state.

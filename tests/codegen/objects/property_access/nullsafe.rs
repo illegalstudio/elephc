@@ -688,3 +688,25 @@ var_dump(empty(mk()->p));
         "bool(true)\nbool(false)\nbool(true)\nbool(true)\nbool(true)\n"
     );
 }
+
+/// Typed scalar probes miss quietly, retaining key and dynamic-name evaluation order.
+#[test]
+fn test_typed_scalar_quiet_property_and_offset_probes() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function scalarProbeKey(): string { echo 'key|'; return str_repeat('x', 1); }
+function probeScalarInt(int $value): void {
+    var_dump(isset($value[scalarProbeKey()]), empty($value[scalarProbeKey()]));
+    echo $value->x ?? 'fallback', '|';
+    var_dump(isset($value->{scalarProbeKey()}), empty($value->{scalarProbeKey()}));
+}
+function probeScalarFloat(float $value): void { var_dump(isset($value['x']), empty($value->x)); }
+function probeScalarBool(bool $value): void { var_dump(isset($value['x']), empty($value->x)); }
+probeScalarInt($argc);
+probeScalarFloat(1.5);
+probeScalarBool(true);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, concat!("key|key|bool(false)\nbool(true)\nfallback|key|key|bool(false)\nbool(true)\n",
+        "bool(false)\nbool(true)\nbool(false)\nbool(true)\n"));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
