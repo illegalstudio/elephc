@@ -61,4 +61,3 @@ pub(super) fn with_compound_value(
     write(ctx, stored);
     retire_property_write_roots(ctx, roots, span);
 }
-
