@@ -537,6 +537,9 @@ fn lower_object_to_string(
         ctx.load_value_to_result(expect_operand(inst, 0)?)?;
         let receiver = abi::int_result_reg(ctx.emitter);
         emit_erased_object_string(ctx, receiver, &MixedStringContextMode::Result)?;
+        if let Some(result) = inst.result {
+            ctx.store_runtime_return_ownership(result);
+        }
         return store_if_result(ctx, inst);
     }
     if object_class_has_tostring(ctx, normalized) {

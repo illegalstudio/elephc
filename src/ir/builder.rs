@@ -270,7 +270,7 @@ impl<'f> Builder<'f> {
     pub fn prune_borrowed_local_load_release_ops(&mut self) {
         let mut prune = Vec::new();
         for (index, inst) in self.func.instructions.iter().enumerate() {
-            if inst.op != Op::Release {
+            if !matches!(inst.op, Op::Release | Op::ReleaseUnlessAliases) {
                 continue;
             }
             let Some(source) = inst.operands.first().copied() else {

@@ -217,6 +217,25 @@ function widenedForwardedStrings(): void {
         $text = [];
     }
 }
+
+/// A possibly aliasing raw string return cannot retire a borrowed by-value parameter.
+#[test]
+fn test_conditional_string_returns_preserve_borrowed_caller_argument() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function pickBorrowedString(string $text, int $flag): string {
+    if ($flag) { return $text; }
+    return str_repeat('z', 40);
+}
+function useBorrowedString(string $text, int $argc): void {
+    echo strlen(pickBorrowedString($text, $argc - 1)), ':', $text, '|';
+    echo strlen(pickBorrowedString($text, $argc)), ':', $text, '|';
+}
+useBorrowedString(str_repeat('a', 40), $argc);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, format!("40:{}|", "a".repeat(40)).repeat(2));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
 widenedForwardedStrings();
 "#);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);

@@ -57,7 +57,11 @@ fn publishes_runtime_ownership_status(func: &Function, value: ValueId) -> bool {
         return false;
     };
     func.value(source).is_some_and(|source| {
-        matches!(source.php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        match source.php_type.codegen_repr() {
+            PhpType::Mixed | PhpType::Union(_) => true,
+            PhpType::Object(class) => class.trim_start_matches('\\').is_empty(),
+            _ => false,
+        }
     })
 }
 
@@ -263,5 +267,27 @@ mod tests {
         let placement = allocate(&function, &Allocation::all_spilled());
 
         assert_eq!(placement.runtime_return_ownership_slot(result), Some(32));
+    }
+
+    /// Only an erased object cast publishes the formatter's dynamic string ownership marker.
+    #[test]
+    fn erased_object_string_cast_reserves_ownership_without_changing_concrete_calls() {
+        for class in ["", "ConcreteStringable"] {
+            let mut function = Function::new("cast".into(), IrType::Str, PhpType::Str);
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", vec![]);
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let source_type = PhpType::Object(class.into());
+            let source = builder.emit(Op::LoadGlobal, vec![],
+                Some(Immediate::GlobalName(DataId::from_raw(0))),
+                IrType::from_php(&source_type), source_type, Ownership::Borrowed).unwrap();
+            let result = builder.emit(Op::Cast, vec![source],
+                Some(Immediate::CastTarget(IrType::Str)),
+                IrType::Str, PhpType::Str, Ownership::MaybeOwned).unwrap();
+            let placement = allocate(&function, &Allocation::all_spilled());
+            assert_eq!(placement.runtime_return_ownership_slot(result),
+                if class.is_empty() { Some(32) } else { None }, "{class}");
+        }
     }
 }
