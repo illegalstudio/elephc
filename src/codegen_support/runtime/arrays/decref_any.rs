@@ -6,8 +6,8 @@
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::arrays`.
 //!
 //! Key details:
-//! - Packed integer arrays are not swept graph nodes, so even the final sweep must release
-//!   their real owners normally. Other graph children retain sweep-only suppression.
+//! - Arrays outside the collector's graph element tags (4 through 7) release normally,
+//!   including empty, string and scalar arrays held by unreachable objects or Mixed cells.
 //! - Decrement helpers are release paths for refcounted values and must balance recursive frees with GC cycle collection.
 
 use crate::codegen_support::{abi, emit::Emitter};
@@ -55,10 +55,13 @@ pub fn emit_decref_any(emitter: &mut Emitter) {
     emitter.instruction("and x13, x11, #0xff");                                 // isolate the low-byte heap kind tag
     emitter.instruction("cmp x13, #2");                                         // is this a refcounted indexed array?
     emitter.instruction("b.lo __rt_decref_any_dispatch");                       // strings should still be freed immediately
-    // -- integer leaves are released normally because the collector never sweeps them --
+    // -- non-graph arrays are released normally because the collector never sweeps them --
     emitter.instruction("b.ne __rt_decref_any_graph_kind");                     // other heap kinds keep their existing graph classification
     emitter.instruction("ubfx x14, x11, #8, #7");                               // isolate array value_type without the COW or collector flags
-    emitter.instruction("cbz x14, __rt_decref_any_dispatch");                   // packed integers cannot form cycles and still own their array buffer
+    emitter.instruction("cmp x14, #4");                                         // graph arrays begin with nested indexed-array payloads
+    emitter.instruction("b.lo __rt_decref_any_dispatch");                       // scalar and string arrays still need ordinary refcount release
+    emitter.instruction("cmp x14, #7");                                         // boxed Mixed is the last array layout swept independently
+    emitter.instruction("b.hi __rt_decref_any_dispatch");                       // empty and other non-graph arrays must release their own storage
     emitter.label("__rt_decref_any_graph_kind");
     emitter.instruction(&format!("cmp x13, #{REFERENCE_CELL_HEAP_KIND}"));      // owned reference cells are collector graph nodes
     emitter.instruction("b.eq __rt_decref_any_graph_child");                    // apply sweep suppression to reference cells
@@ -155,7 +158,10 @@ fn emit_decref_any_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, r10");                                        // preserve the full header while selecting array storage
     emitter.instruction("shr r11, 8");                                          // move the array value_type into the low bits
     emitter.instruction("and r11d, 0x7f");                                      // exclude the persistent COW and transient collector flags
-    emitter.instruction("jz __rt_decref_any_dispatch");                         // packed integer arrays require ordinary refcount release
+    emitter.instruction("cmp r11d, 4");                                         // graph arrays begin with nested indexed-array payloads
+    emitter.instruction("jb __rt_decref_any_dispatch");                         // scalar and string arrays still need ordinary refcount release
+    emitter.instruction("cmp r11d, 7");                                         // boxed Mixed is the last array layout swept independently
+    emitter.instruction("ja __rt_decref_any_dispatch");                         // empty and other non-graph arrays must release their own storage
     emitter.instruction("mov r11d, 2");                                         // restore the concrete kind before the existing graph-range test
     emitter.label("__rt_decref_any_graph_kind");
     emitter.instruction("cmp r11d, 5");                                         // the collector directly reclaims array, hash, object, and Mixed nodes

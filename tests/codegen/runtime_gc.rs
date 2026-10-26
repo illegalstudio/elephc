@@ -24,6 +24,7 @@ mod ref_local_append;
 mod string_offset_lifetime;
 #[path = "runtime_gc/stream_filter_owners.rs"]
 mod stream_filter_owners;
+mod leaf_array_cycles;
 #[path = "runtime_gc/json_decode_owners.rs"]
 mod json_decode_owners;
 #[path = "runtime_gc/string_append.rs"]
