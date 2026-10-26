@@ -305,7 +305,7 @@ fn lower_array_access_from_values_with_receiver_pins(
     {
         super::unpin_in_flight_owners(ctx, receiver_pins, expr.span);
         release_coerced_source_if_owned(ctx, index_value, Some(index.span));
-        return emit_null_value(ctx, Some(expr.span));
+        return lower_null(ctx, expr);
     }
     let op = match array_value.ir_type {
         IrType::Heap(IrHeapKind::Array) => {

@@ -1085,7 +1085,7 @@ fn lower_dynamic_property_fetch_without_native(
     if mode == PropertyFetchMode::Probe && scalar_property_probe_receiver(ctx, object.value) {
         release_coerced_source_if_owned(ctx, property, Some(expr.span));
         release_owning_receiver_temporary(ctx, object, expr.span);
-        return emit_null_value(ctx, Some(expr.span));
+        return lower_null(ctx, expr);
     }
     let result = ctx.emit_value(
         Op::DynamicPropGet,
