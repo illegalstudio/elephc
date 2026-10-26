@@ -399,6 +399,7 @@ eval($source);
 #[test]
 fn test_eval_declared_stringable_crosses_native_string_contexts() {
     let out = compile_and_run_with_heap_debug(r###"<?php
+debug_backtrace();
 function nativeMixedEvalString(mixed $value): string { return (string)$value; }
 function nativeObjectEvalString(object $value): string { return (string)$value; }
 $source = $argc > 0 ? '

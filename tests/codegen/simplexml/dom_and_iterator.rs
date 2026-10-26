@@ -22,7 +22,7 @@ fn import_failure_assembly(assembly: &str) -> String {
     }
     let lines: Vec<_> = assembly.lines().collect();
     for (index, line) in lines.iter().enumerate() {
-        if line.contains("_fn_simplexml_import_dom")
+        if line.contains(&elephc::names::function_symbol("simplexml_import_dom"))
             && matches!(line.split_whitespace().next(), Some("bl" | "call"))
         {
             result.push_str(&lines[index.saturating_sub(24)..(index + 28).min(lines.len())].join("\n"));

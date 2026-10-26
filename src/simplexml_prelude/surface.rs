@@ -632,7 +632,7 @@ function __elephc_simplexml_bind_dom(DOMNode $node, SimpleXMLElement $view): voi
 function simplexml_import_dom(object $node, ?string $class_name = "SimpleXMLElement"): ?SimpleXMLElement {
     $class = __elephc_simplexml_class($class_name);
     if ($node instanceof DOMNode) { return __elephc_simplexml_import_node($node, $class); }
-    throw new TypeError("simplexml_import_dom(): Argument #1 ($node) must be a valid XML node");
+    throw new TypeError('simplexml_import_dom(): Argument #1 ($node) must be a valid XML node');
 }
 function __elephc_simplexml_import_node(DOMNode $node, string $class): ?SimpleXMLElement {
     $bound = $node->__elephc_simplexml;
