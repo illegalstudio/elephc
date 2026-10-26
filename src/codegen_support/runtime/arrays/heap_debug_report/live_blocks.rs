@@ -180,7 +180,8 @@ fn emit_type_identity(emitter: &mut Emitter) {
 
 /// Reads the first word of a block whose header, minimum payload and end were already checked.
 fn emit_first_payload_word(emitter: &mut Emitter) {
-    abi::load_at_offset(emitter, abi::int_result_reg(emitter), 8);
+    let value = abi::int_result_reg(emitter);
+    abi::load_at_offset(emitter, value, 8);
     match emitter.target.arch {
         Arch::AArch64 => emitter.instruction("ldr x0, [x0, #16]"),              // skip the validated sixteen-byte header
         Arch::X86_64 => emitter.instruction("mov rax, QWORD PTR [rax + 16]"),    // skip the validated sixteen-byte header
