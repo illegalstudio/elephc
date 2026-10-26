@@ -2596,6 +2596,9 @@ impl RuntimeFnId {
                 // or input resource temporary through a returned argument alias.
                 | RuntimeFnId::Fopen
                 | RuntimeFnId::StreamGetContents
+                // Filter attachment boxes a fresh resource or false; names are only compared.
+                | RuntimeFnId::StreamFilterAppend
+                | RuntimeFnId::StreamFilterPrepend
                 // These mixed-return helpers always allocate a new result cell. Date
                 // decomposition boxes a newly allocated hash, `strtotime` boxes its scalar
                 // answer, `hrtime` boxes either a scalar or a new hash, and grapheme reversal
@@ -3453,6 +3456,8 @@ mod tests {
             RuntimeFnId::Hrtime,
             RuntimeFnId::GraphemeStrrev,
             RuntimeFnId::StripTags,
+            RuntimeFnId::StreamFilterAppend,
+            RuntimeFnId::StreamFilterPrepend,
         ] {
             assert_eq!(target.result_ownership(), BuiltinResultOwnership::Fresh);
         }

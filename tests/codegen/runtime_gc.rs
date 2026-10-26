@@ -22,6 +22,8 @@ mod borrowed_string_reads;
 mod ref_local_append;
 #[path = "runtime_gc/string_offset_lifetime.rs"]
 mod string_offset_lifetime;
+#[path = "runtime_gc/stream_filter_owners.rs"]
+mod stream_filter_owners;
 #[path = "runtime_gc/json_decode_owners.rs"]
 mod json_decode_owners;
 #[path = "runtime_gc/string_append.rs"]
