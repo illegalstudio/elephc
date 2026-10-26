@@ -226,6 +226,27 @@ widenedForwardedStrings();
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Boxed string passthroughs own their result cells even when the argument is borrowed.
+#[test]
+fn test_boxed_string_passthrough_results_own_return_cells() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function mixedBorrowedString(string $text): mixed { return $text; }
+function nullableBorrowedString(string $text): ?string { return $text; }
+function unionBorrowedString(string $text): string|false { return $text; }
+function inspectBorrowedStringBoxes(string $text): void {
+    for ($i = 0; $i < 4; $i++) {
+        echo strlen((string)mixedBorrowedString($text)), ':';
+        echo strlen((string)nullableBorrowedString($text)), ':';
+        echo strlen((string)unionBorrowedString($text)), '|';
+    }
+}
+inspectBorrowedStringBoxes(str_repeat('s', 32));
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "32:32:32|".repeat(4));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A possibly aliasing raw string return cannot retire a borrowed by-value parameter.
 #[test]
 fn test_conditional_string_returns_preserve_borrowed_caller_argument() {
