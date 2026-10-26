@@ -9,6 +9,37 @@
 
 use crate::support::*;
 
+/// Iterator steps create subclass wrappers eagerly and native methods bypass other public overrides.
+#[test]
+fn test_simplexml_iterator_eager_destruction_and_native_method_hooks() {
+    if skip_without_xml_native("test_simplexml_iterator_eager_destruction_and_native_method_hooks") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class EagerXmlCursor extends SimpleXMLElement {
+    public function __destruct() { echo '[', parent::getName(), ']'; }
+}
+$xml = new EagerXmlCursor('<r><a/><b/></r>');
+$xml->rewind(); echo 'rewound|';
+$xml->next(); echo 'advanced|';
+$xml->next(); echo 'ended|'; unset($xml);
+echo '|';
+class HookXmlCursor extends SimpleXMLElement {
+    public function valid(): bool { echo 'valid|'; return parent::valid(); }
+    public function current(): SimpleXMLElement { echo 'current|'; return parent::current(); }
+    public function getName(): string { echo 'name|'; return parent::getName(); }
+    public function count(): int { echo 'count|'; return parent::count(); }
+}
+$xml = new HookXmlCursor('<r><a><v/></a><b/></r>');
+$xml->rewind(); echo $xml->key(), ':'; var_dump($xml->hasChildren());
+$child = $xml->getChildren(); echo get_class($child), '|'; unset($child);
+$xml->next(); echo $xml->key(), ':'; var_dump($xml->hasChildren());
+$xml->next(); var_dump($xml->getChildren());
+echo (int)$xml->valid();
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "rewound|[a]advanced|[b]ended|[r]|a:bool(true)\nHookXmlCursor|b:bool(false)\nNULL\nvalid|0");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// XPath results reset namespace filters and nested groups retain their selected parent element.
 #[test]
 fn test_simplexml_xpath_filters_and_detached_nested_groups() {

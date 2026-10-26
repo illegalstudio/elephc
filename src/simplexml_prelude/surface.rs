@@ -548,18 +548,21 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $this->__elephc_current = null; $this->__elephc_position = 0;
         $handle = $this->__elephc_handle;
         elephc_xml_sx_iterator($handle, 0);
+        if (elephc_xml_sx_iterator($handle, 2) !== 0) { $this->__elephc_iterator_current(); }
     }
     public function next(): void {
         $this->__elephc_current = null; $this->__elephc_position = $this->__elephc_position + 1;
         $handle = $this->__elephc_handle;
         elephc_xml_sx_iterator($handle, 1);
+        if (elephc_xml_sx_iterator($handle, 2) !== 0) { $this->__elephc_iterator_current(); }
     }
     public function valid(): bool {
         $handle = $this->__elephc_handle;
         return $this->__elephc_position >= 0 && elephc_xml_sx_iterator($handle, 2) !== 0;
     }
-    public function current(): SimpleXMLElement {
-        if (!$this->valid()) { throw new Error("Iterator not initialized or already consumed"); }
+    private function __elephc_iterator_current(): SimpleXMLElement {
+        $handle = $this->__elephc_handle;
+        if (elephc_xml_sx_iterator($handle, 2) === 0) { throw new Error("Iterator not initialized or already consumed"); }
         $cached = $this->__elephc_current;
         if ($cached instanceof SimpleXMLElement) { return $cached; }
         $handle = $this->__elephc_handle;
@@ -568,12 +571,23 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $this->__elephc_current = $current;
         return $current;
     }
-    public function key(): string { return $this->current()->getName(); }
-    public function hasChildren(): bool { return $this->valid() && $this->current()->count() > 0; }
+    public function current(): SimpleXMLElement { return $this->__elephc_iterator_current(); }
+    public function key(): string {
+        $current = $this->__elephc_iterator_current();
+        $handle = $current->__elephc_handle;
+        return elephc_xml_sx_string($handle, 1);
+    }
+    public function hasChildren(): bool {
+        $handle = $this->__elephc_handle;
+        if (elephc_xml_sx_iterator($handle, 2) === 0) { return false; }
+        $current = $this->__elephc_iterator_current();
+        $child = $current->__elephc_handle;
+        return elephc_xml_sx_int($child, 0) > 0;
+    }
     public function getChildren(): ?SimpleXMLElement {
         $handle = $this->__elephc_handle;
-        if (!$this->valid() || elephc_xml_sx_int($handle, 5) >= 3) { return null; }
-        return $this->current();
+        if (elephc_xml_sx_iterator($handle, 2) === 0 || elephc_xml_sx_int($handle, 5) >= 3) { return null; }
+        return $this->__elephc_iterator_current();
     }
 }
 
