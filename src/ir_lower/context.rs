@@ -5122,10 +5122,20 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
     fn emit_user_call(
         &mut self,
         name: &str,
-        operands: Vec<ValueId>,
+        mut operands: Vec<ValueId>,
         php_type: PhpType,
         span: Option<Span>,
     ) -> crate::builtins::semantics::LoweredBuiltinValue {
+        let signature = self.functions.get(name).cloned();
+        let at = span.unwrap_or_else(Span::dummy);
+        let expression = Expr::new(ExprKind::Null, at);
+        let actual_count = operands.len();
+        let extra = crate::ir_lower::expr::object_operators::append_hidden_arguments(
+            self, signature.as_ref(), &mut operands, actual_count, &expression,
+        );
+        let pins = if extra.is_empty() { Vec::new() } else {
+            crate::ir_lower::expr::pin_in_flight_owners(self, &operands, at)
+        };
         let data = self.intern_function_name(name);
         let lowered = LoweringContext::emit_value(
             self,
@@ -5136,6 +5146,8 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
             crate::ir_lower::effects_lookup::user_call_effects(name),
             span,
         );
+        crate::ir_lower::expr::unpin_in_flight_owners(self, pins, at);
+        for value in extra { crate::ir_lower::ownership::release_if_owned(self, value, Some(at)); }
         crate::builtins::semantics::LoweredBuiltinValue {
             value: lowered.value,
         }

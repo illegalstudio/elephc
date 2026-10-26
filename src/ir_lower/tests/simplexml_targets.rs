@@ -16,6 +16,10 @@ $xml['id'] = 'b';
 $xml->item[] = 9;
 function appendIntegerToXmlOrArray(mixed $container): void { $container[] = 9; }
 appendIntegerToXmlOrArray([]);
+$sax = xml_parser_create();
+xml_set_element_handler($sax, function ($parser, $name, $attributes) {}, null);
+$values = []; $index = [];
+echo xml_parse_into_struct($sax, '<r/>', $values, $index);
 $cloned = clone $xml;
 $cloned->item[0] = 'copy';
 echo (string)$xml->item[0], ':', (string)$cloned->item[0];

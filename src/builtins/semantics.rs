@@ -360,6 +360,7 @@ pub trait BuiltinLoweringContext {
     /// prelude) under its canonical lowercase name. The operands must already have the
     /// callee's parameter representations: this is the composition primitive for a
     /// builtin whose semantics live in prelude-declared PHP, not a coercing call.
+    /// The caller supplies visible parameters; lowering adds hidden backtrace argument metadata.
     fn emit_user_call(
         &mut self,
         name: &str,
