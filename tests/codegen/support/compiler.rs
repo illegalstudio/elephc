@@ -800,6 +800,14 @@ pub(crate) fn compile_and_run_per_argv(source: &str, argvs: &[&[&str]]) -> Vec<S
         .collect()
 }
 
+/// Compiles once without heap debugging and captures each run, including nonzero exits.
+pub(crate) fn compile_and_run_capture_per_argv(
+    source: &str,
+    argvs: &[&[&str]],
+) -> Vec<ProgramOutput> {
+    compile_and_capture_per_argv(source, false, argvs).0
+}
+
 /// Heap-debug counterpart of [`compile_and_run_per_argv`]: compiles `source` once with heap
 /// debugging and returns every run's captured output, one per argument vector, without asserting
 /// success, so a fixture can check each arm's output and leak summary.

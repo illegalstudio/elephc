@@ -125,23 +125,25 @@ null-handler|after-null
 fn test_simplexml_native_debug_hook_exception_is_fatal_bundle() {
     if skip_without_xml_native("test_simplexml_native_debug_hook_exception_is_fatal_bundle") { return; }
     for opaque_eval in [false, true] {
-        for operation in ["print_r", "var_dump"] {
-            let error_class = if opaque_eval { "EvalXmlDebugError" } else { "RuntimeException" };
-            let error_declaration = if opaque_eval { "class EvalXmlDebugError extends RuntimeException {}" } else { "" };
-            let body = format!(r#"{error_declaration}
+        let error_class = if opaque_eval { "EvalXmlDebugError" } else { "RuntimeException" };
+        let error_declaration = if opaque_eval { "class EvalXmlDebugError extends RuntimeException {}" } else { "" };
+        let body = format!(r#"{error_declaration}
 class ThrowingXmlDebug extends SimpleXMLElement {{
     public function __debugInfo(): ?array {{ throw new {error_class}('debug'); }}
 }}
 set_error_handler(function(int $level, string $message): bool {{ echo 'unexpected-handler|'; return true; }});
-try {{ {operation}(new ThrowingXmlDebug('<r/>')); }}
-catch (Throwable $error) {{ echo 'caught-hook|'; }}
+try {{
+    if ($argc === 1) {{ print_r(new ThrowingXmlDebug('<r/>')); }}
+    else {{ var_dump(new ThrowingXmlDebug('<r/>')); }}
+}} catch (Throwable $error) {{ echo 'caught-hook|'; }}
 echo 'after-hook|';
 "#);
-            let source = if opaque_eval {
-                let quoted = body.replace('\\', "\\\\").replace('\'', "\\'");
-                format!("<?php $anchor = new SimpleXMLElement('<r/>'); $source = $argc > 0 ? '{quoted}' : ''; eval($source);")
-            } else { format!("<?php {body}") };
-            let out = compile_and_run_capture(&source);
+        let source = if opaque_eval {
+            let quoted = body.replace('\\', "\\\\").replace('\'', "\\'");
+            format!("<?php $anchor = new SimpleXMLElement('<r/>'); $source = $argc > 0 ? '{quoted}' : ''; eval($source);")
+        } else { format!("<?php {body}") };
+        let runs = compile_and_run_capture_per_argv(&source, &[&[], &["x"]]);
+        for (operation, out) in ["print_r", "var_dump"].into_iter().zip(runs) {
             assert!(!out.success, "{operation} eval={opaque_eval}");
             assert!(!out.stdout.contains("unexpected-handler|") && !out.stdout.contains("caught-hook|") && !out.stdout.contains("after-hook|"), "{}", out.stdout);
             assert!(out.stderr.contains(&format!("Warning: Uncaught {error_class}: debug")), "{}", out.stderr);

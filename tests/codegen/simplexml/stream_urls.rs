@@ -219,6 +219,7 @@ fn test_simplexml_throwing_stream_uri_owners_isolated_bundle() {
     let runs = compile_and_run_with_heap_debug_per_argv(r#"<?php
 class IsolatedThrowingXmlInput {
     public mixed $context = null;
+    public function url_stat(string $path, int $flags): array { return ['mode' => 0100644]; }
     public function stream_open(string $path, string $mode, int $options, mixed &$opened_path): bool { return true; }
     public function stream_read(int $count): string { throw new RuntimeException('read'); }
     public function stream_eof(): bool { return false; }
