@@ -10,7 +10,7 @@
 
 use crate::ir::{Immediate, Op};
 
-/// Keeps unchanged and equal targets while rejecting conflicting reflected classes.
+/// Keeps common targets and retains both guarded stores when reflected classes conflict.
 #[test]
 fn reflection_static_writes_preserve_conditional_targets() {
     let source = r#"<?php
@@ -49,7 +49,7 @@ siblingReflectionTargets($argc > 1);
         for (name, expected) in [
             ("unchangedReflectionTarget", vec!["BranchReflectedA::value"]),
             ("equalReflectionTargets", vec!["BranchReflectedB::value"]),
-            ("conflictingReflectionTargets", vec![]),
+            ("conflictingReflectionTargets", vec!["BranchReflectedA::value", "BranchReflectedB::value"]),
             ("siblingReflectionTargets", vec!["BranchReflectedA::value"]),
         ] {
             let function = module.functions.iter().find(|function| function.name == name).unwrap();
