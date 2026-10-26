@@ -25,7 +25,16 @@ impl PropertyWriteReceiver {
     pub(crate) fn new(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span) -> Self {
         let nullable_class = nullable_write_class(ctx, value);
         ctx.with_independent_write_receiver(|ctx| {
-            let provisional_unbox = ctx.value_is_owned_unboxed_local_load(value.value);
+            // PHP cannot rebind `$this`, so its concrete parameter slot never widens to
+            // Mixed. Keep that borrowed load visible to buffer-property loop hoisting.
+            let immutable_this = ctx.builder.function().flags.is_method
+                && ctx.builder.value_defining_instruction(value.value).is_some_and(|inst| {
+                    inst.op == Op::LoadLocal
+                        && matches!(inst.immediate, Some(Immediate::LocalSlot(slot))
+                            if ctx.local_slots.get("this") == Some(&slot))
+                });
+            let provisional_unbox = !immutable_this
+                && ctx.value_is_owned_unboxed_local_load(value.value);
             let value = if provisional_unbox {
                 // A final Mixed slot owns its cell while the typed load owns another payload
                 // reference. Move that provisional lease into an independently pinnable value.
