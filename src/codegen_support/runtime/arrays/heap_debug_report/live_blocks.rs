@@ -127,18 +127,25 @@ fn emit_type_identity(emitter: &mut Emitter) {
     abi::load_at_offset(emitter, value, 48);
     match emitter.target.arch {
         Arch::AArch64 => {
+            emitter.instruction("cmp x0, #2");                                  // recognize indexed arrays with bounded scalar metadata
+            emitter.instruction("b.eq __rt_heap_debug_live_array");             // array lengths distinguish collectors from stored child lists
             emitter.instruction("cmp x0, #4");                                  // recognize native object allocations
             emitter.instruction("b.eq __rt_heap_debug_live_class");             // only object payloads carry a class id
             emitter.instruction("cmp x0, #5");                                  // recognize boxed Mixed allocations
             emitter.instruction("b.eq __rt_heap_debug_live_tag");               // only Mixed payloads carry a value tag
         }
         Arch::X86_64 => {
+            emitter.instruction("cmp rax, 2");                                  // recognize indexed arrays with bounded scalar metadata
+            emitter.instruction("je __rt_heap_debug_live_array");               // array lengths distinguish collectors from stored child lists
             emitter.instruction("cmp rax, 4");                                  // recognize native object allocations
             emitter.instruction("je __rt_heap_debug_live_class");               // only object payloads carry a class id
             emitter.instruction("cmp rax, 5");                                  // recognize boxed Mixed allocations
             emitter.instruction("je __rt_heap_debug_live_tag");                 // only Mixed payloads carry a value tag
         }
     }
+    abi::emit_jump(emitter, "__rt_heap_debug_live_type_done");
+    emitter.label("__rt_heap_debug_live_array");
+    emit_array_identity(emitter);
     abi::emit_jump(emitter, "__rt_heap_debug_live_type_done");
     emitter.label("__rt_heap_debug_live_class");
     write_label(emitter, "_heap_dbg_block_class", 10);
@@ -177,6 +184,45 @@ fn emit_type_identity(emitter: &mut Emitter) {
     emitter.label("__rt_heap_debug_live_tag_valid");
     write_integer(emitter);
     emitter.label("__rt_heap_debug_live_type_done");
+}
+
+/// Reports array metadata only when the complete header and element capacity fit its block.
+fn emit_array_identity(emitter: &mut Emitter) {
+    let value = abi::int_result_reg(emitter);
+    abi::load_at_offset(emitter, value, 40);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x0, #40");                                 // require the allocation header and all three array header words
+            emitter.instruction("b.lo __rt_heap_debug_live_type_done");         // malformed short arrays have no safe metadata to report
+            emitter.instruction("sub x9, x0, #40");                             // isolate the available element payload bytes
+            emitter.instruction("lsr x9, x9, #3");                              // bound capacity by the minimum eight-byte element width
+            abi::load_at_offset(emitter, "x0", 8);
+            emitter.instruction("ldr x10, [x0, #24]");                          // read array capacity from its validated header
+            emitter.instruction("cmp x10, x9");                                 // capacity must fit the physical allocation
+            emitter.instruction("b.hi __rt_heap_debug_live_type_done");         // skip invalid capacities without reading any element
+            emitter.instruction("ldr x0, [x0, #16]");                           // read array length without following child pointers
+            emitter.instruction("cmp x0, x10");                                 // length cannot exceed the validated capacity
+            emitter.instruction("b.hi __rt_heap_debug_live_type_done");         // do not report malformed metadata as a meaningful length
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp rax, 40");                                 // require the allocation header and all three array header words
+            emitter.instruction("jb __rt_heap_debug_live_type_done");           // malformed short arrays have no safe metadata to report
+            emitter.instruction("mov r10, rax");                                // preserve the validated footprint while loading its header
+            emitter.instruction("sub r10, 40");                                 // isolate the available element payload bytes
+            emitter.instruction("shr r10, 3");                                  // bound capacity by the minimum eight-byte element width
+            abi::load_at_offset(emitter, "rax", 8);
+            emitter.instruction("mov r11, QWORD PTR [rax + 24]");               // read array capacity from its validated header
+            emitter.instruction("cmp r11, r10");                                // capacity must fit the physical allocation
+            emitter.instruction("ja __rt_heap_debug_live_type_done");           // skip invalid capacities without reading any element
+            emitter.instruction("mov rax, QWORD PTR [rax + 16]");               // read array length without following child pointers
+            emitter.instruction("cmp rax, r11");                                // length cannot exceed the validated capacity
+            emitter.instruction("ja __rt_heap_debug_live_type_done");           // do not report malformed metadata as a meaningful length
+        }
+    }
+    abi::store_at_offset(emitter, value, 64);
+    write_label(emitter, "_heap_dbg_block_length", 8);
+    abi::load_at_offset(emitter, value, 64);
+    write_integer(emitter);
 }
 
 /// Adds a static class name only when its id addresses a row in the generated metadata table.
@@ -267,8 +313,9 @@ mod tests {
             let asm = emitter.output();
             assert!(asm.contains("_heap_off") && asm.contains("__rt_heap_debug_live_blocks_next:"), "{target}");
             assert!(asm.contains("cmp x0, #64") || asm.contains("cmp rax, 64"), "{target}");
-            assert_eq!(asm.matches("__rt_itoa").count(), 6, "{target}");
+            assert_eq!(asm.matches("__rt_itoa").count(), 7, "{target}");
             assert!(asm.contains("_heap_dbg_block_class") && asm.contains("_heap_dbg_block_tag"), "{target}");
+            assert!(asm.contains("_heap_dbg_block_length"), "{target}");
             assert!(asm.contains("_class_name_count") && asm.contains("_class_name_entries"), "{target}");
             assert!(!asm.contains("__rt_heap_alloc") && !asm.contains("__rt_incref"), "{target}");
             assert_eq!("HEAP DEBUG: live offset=".len(), 24);
