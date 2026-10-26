@@ -351,7 +351,7 @@ storeReflectedStaticBytes("\x07\x00\x00\x00HPLEZ" . str_repeat("q", 4000));
 /// Isolates each reflected byte store and early static retirement before shutdown cycle collection.
 #[test]
 fn test_reflection_static_byte_stores_and_shutdown_owners_isolated_bundle() {
-    let runs = compile_and_run_with_heap_debug_per_argv(r#"<?php
+    let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(r#"<?php
 class IsolatedReflectedStaticBytes {
     public static mixed $kept;
     public static string $typedClass = "";
@@ -431,7 +431,7 @@ echo 'shutdown|';
             failures.push(format!("mode={mode} success={} stdout={:?} expected={expected:?}\n{}", out.success, out.stdout, out.stderr));
         }
     }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert!(failures.is_empty(), "{}\nReflected byte store assembly:\n{}", failures.join("\n"), selected_function_assembly(&assembly, &[elephc::names::function_symbol("storeIsolatedReflectedStaticBytes")]));
 }
 
 /// Nested parent creation persists direct byte keys before hash insertion.

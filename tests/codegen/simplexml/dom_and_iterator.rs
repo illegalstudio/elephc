@@ -222,11 +222,19 @@ if ($argc === 1) {
 } elseif ($argc === 9) {
     $source = $argc > 0 ? '$document = new DOMDocument(); $document->loadHTML("<html><body><p>x</p></body></html>"); echo $document->documentElement->nodeName;' : '';
     eval($source);
-} else {
+} elseif ($argc === 10) {
     $document = new DOMDocument(); $list = new DOMNodeList([$document]); echo $list->length;
+} elseif ($argc === 11) {
+    $list = new DOMNodeList([]); $list->__construct([]); $list->__construct([]); echo $list->length;
+} elseif ($argc === 12) {
+    $document = new DOMDocument(); $document->childNodes = new DOMNodeList([]); echo $document->childNodes->length;
+} else {
+    $document = new DOMDocument(); $document->childNodes = new DOMNodeList([$document]);
+    $document->childNodes = new DOMNodeList([]); echo $document->childNodes->length;
 }
-"###, &[&[], &["x"], &["x", "x"], &["x", "x", "x"], &["x", "x", "x", "x"], &["x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x", "x", "x"]]);
-    let expected = ["0", "111", "html", "old:before|html", "html|html", "html", "html", "0", "html", "1"];
+"###, &[&[], &["x"], &["x", "x"], &["x", "x", "x"], &["x", "x", "x", "x"], &["x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x"]]);
+    let expected = ["0", "111", "html", "old:before|html", "html|html", "html", "html", "0", "html", "1", "0", "0", "0"];
+    assert_eq!(runs.len(), expected.len());
     let mut failures = Vec::new();
     for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {
         if !out.success || out.stdout != expected || !out.stderr.contains("HEAP DEBUG: leak summary: clean") {

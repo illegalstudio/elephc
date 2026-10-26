@@ -13,7 +13,7 @@ use crate::support::*;
 #[test]
 fn test_simplexml_dimension_write_owners_isolated_bundle() {
     if skip_without_xml_native("test_simplexml_dimension_write_owners_isolated_bundle") { return; }
-    let runs = compile_and_run_with_heap_debug_per_argv(r#"<?php
+    let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(r#"<?php
 function appendIsolatedXmlMixed(mixed $view): void { $view[] = 'a'; }
 function freshIsolatedXmlString(): string { return str_repeat('x', 3); }
 function freshIsolatedXmlMixed(string $value): mixed { return str_repeat($value, 1); }
@@ -100,5 +100,11 @@ elseif ($argc === 2) {
             failures.push(format!("mode={mode} success={} stdout={:?} expected={expected:?}\n{}", out.success, out.stdout, out.stderr));
         }
     }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    let symbols = ["_main".into(),
+        elephc::names::method_symbol("SimpleXMLElement", "__elephc_append"),
+        elephc::names::method_symbol("SimpleXMLElement", "__elephc_property_write_fetch"),
+        elephc::names::method_symbol("SimpleXMLElement", "__elephc_offset_set"),
+        elephc::names::function_symbol("freshIsolatedXmlMixed"),
+    ];
+    assert!(failures.is_empty(), "{}\nDimension owner assembly:\n{}", failures.join("\n"), selected_function_assembly(&assembly, &symbols));
 }

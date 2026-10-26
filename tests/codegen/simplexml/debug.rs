@@ -73,7 +73,7 @@ unset($node, $echoed, $result, $dump, $flag);
 "###;
     let quoted_body = body.replace('\\', "\\\\").replace('\'', "\\'");
     let source = format!("<?php\n{definitions}\n{body}\n$source = $argc > 0 ? '{quoted_body}' : '';\neval($source);");
-    let out = compile_and_run_with_heap_debug(&source);
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(&source);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
     let expected = r###""SimpleXMLElement Object\n(\n    [@attributes] => Array\n        (\n            [a] => 1\n        )\n\n    [b] => Array\n        (\n            [0] => 2\n            [1] => 3\n        )\n\n)\n"
 111
@@ -117,7 +117,7 @@ null-handler|after-null
 1
 "###.replace(" =>\n", " => \n");
     assert_eq!(out.stdout, expected.repeat(2));
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\nDebug composite assembly:\n{}", out.stderr, selected_function_assembly(&assembly, &["_main".into()]));
 }
 
 /// Throwing debug hooks bypass user handlers and remain fatal in AOT and dynamic eval.
@@ -185,7 +185,7 @@ unset($node, $dump);
 "###;
     let quoted = body.replace('\\', "\\\\").replace('\'', "\\'");
     let source = format!("<?php $anchor = new SimpleXMLElement('<r/>'); $source = $argc > 0 ? '{quoted}' : ''; eval($source); unset($anchor);");
-    let out = compile_and_run_with_heap_debug(&source);
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(&source);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, r###""EvalXmlDebug Object\n(\n    [0] => zero\n    [k] => 1\n)\n"
 111
@@ -193,5 +193,5 @@ unset($node, $dump);
 null:8192:1|"EvalNullXmlDebug Object\n(\n)\n"
 eval-null|after
 "###);
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\nDebug composite assembly:\n{}", out.stderr, selected_function_assembly(&assembly, &["_main".into()]));
 }

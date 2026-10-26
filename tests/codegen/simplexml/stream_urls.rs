@@ -252,13 +252,21 @@ elseif ($argc === 3) {
     catch (RuntimeException $error) { echo $error->getMessage(); }
 } elseif ($argc === 7) {
     try { throwImmutableXmlUri($uri); } catch (RuntimeException $error) { echo $error->getMessage(); }
-} else {
+} elseif ($argc === 8) {
     try { throwMutableXmlUri($uri, $argc < 0); }
+    catch (RuntimeException $error) { echo $error->getMessage(); }
+} elseif ($argc === 9) { echo (int)file_exists($uri); }
+elseif ($argc === 10) {
+    $dynamicUri = str_repeat($uri, 1); echo (int)file_exists($dynamicUri);
+} else {
+    $stream = fopen($uri, 'rb');
+    try { __elephc_simplexml_read_stream($stream); }
     catch (RuntimeException $error) { echo $error->getMessage(); }
 }
 stream_wrapper_unregister('isolatedxml');
-"#, &[&[], &["x"], &["x", "x"], &["x", "x", "x"], &["x", "x", "x", "x"], &["x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x"]]);
-    let expected = ["registered", "close|", "read|close|", "read", "read", "read", "read", "read"];
+"#, &[&[], &["x"], &["x", "x"], &["x", "x", "x"], &["x", "x", "x", "x"], &["x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x"]]);
+    let expected = ["registered", "close|", "read|close|", "read", "read", "read", "read", "read", "1", "1", "read"];
+    assert_eq!(runs.len(), expected.len());
     let mut failures = Vec::new();
     for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {
         if !out.success || out.stdout != expected || !out.stderr.contains("HEAP DEBUG: leak summary: clean") {

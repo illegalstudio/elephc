@@ -12,7 +12,7 @@ use crate::support::*;
 /// Fresh attachment results release dynamic names while callbacks keep their own params.
 #[test]
 fn test_dynamic_stream_filter_names_and_user_params_owners_bundle() {
-    let runs = compile_and_run_with_heap_debug_per_argv(r#"<?php
+    let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(r#"<?php
 class OwnedStreamParamsFilter extends php_user_filter {
     public static bool $throwOnClose = false;
     public function onCreate(): bool { echo strlen($this->params['prefix']), '|'; return true; }
@@ -55,9 +55,15 @@ try { fclose($stream); } catch (RuntimeException $error) { echo 'caught|'; }
 "#, &[&[], &["x"], &["x", "x"], &["x", "x", "x"], &["x", "x", "x", "x"], &["x", "x", "x", "x", "x"]]);
     let expected = ["40|40|hello>close|drop|", "40|fresh|hello>close|drop|", "missing|hello", "40|all|hello>>close|drop|", "40|throw|hello>close|drop|caught|", "40|40|both|hello>>close|drop|close|drop|"];
     assert_eq!(runs.len(), expected.len());
+    let mut failures = Vec::new();
     for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {
-        assert!(out.success, "mode={mode} stdout={:?}\nstderr={}", out.stdout, out.stderr);
-        assert_eq!(out.stdout, expected, "mode={mode} stderr={}", out.stderr);
-        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "mode={mode} {}", out.stderr);
+        if !out.success || out.stdout != expected || !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
+            failures.push(format!("mode={mode} success={} stdout={:?} expected={expected:?}\n{}", out.success, out.stdout, out.stderr));
+        }
     }
+    let symbols = ["filter", "onCreate", "onClose", "__destruct"].map(|method|
+        elephc::names::method_symbol("OwnedStreamParamsFilter", method));
+    let mut symbols = symbols.to_vec();
+    symbols.push("_main".into());
+    assert!(failures.is_empty(), "{}\nFilter parameter assembly:\n{}", failures.join("\n"), selected_function_assembly(&assembly, &symbols));
 }

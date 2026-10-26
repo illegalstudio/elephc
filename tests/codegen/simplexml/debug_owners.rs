@@ -20,7 +20,7 @@ class OwnerCallbackXmlDebug extends SimpleXMLElement {
 class OwnerRecursiveXmlDebug extends SimpleXMLElement { public function __debugInfo(): ?array { return ['self' => $this]; } }
 class OwnerGuardedXmlDebug extends SimpleXMLElement { public function __debugInfo(): ?array { echo 'GUARD|'; var_dump($this); return ['visible' => 1]; } }
 class OwnerNullXmlDebug extends SimpleXMLElement { public function __debugInfo(): ?array { return null; } }
-class OwnerPlainDebug { public function __debugInfo(): ?array { return ['visible' => 1]; } }
+class OwnerPlainDebug { public int $visible = 1; public function __debugInfo(): ?array { return ['visible' => $this->visible]; } }
 $xml = new SimpleXMLElement('<r id="1"><b>2</b><b>3</b></r>');
 if ($argc === 1) { echo strlen(print_r($xml, true)); }
 elseif ($argc === 2) { ob_start(); var_dump($xml); $dump = ob_get_clean(); echo (int)str_contains($dump, 'string(1) "2"'); }
