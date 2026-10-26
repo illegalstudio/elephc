@@ -244,3 +244,30 @@ useBorrowedString(str_repeat('a', 40), $argc);
     assert_eq!(out.stdout, format!("40:{}|", "a".repeat(40)).repeat(2));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Case transforms transfer their owned bytes into mixed arrays while scratch transforms copy.
+#[test]
+fn test_owned_case_transform_results_in_mixed_arrays_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function transformedPair(string $text): mixed { return [strtolower($text), 0]; }
+function checkCaseArrayOwners(string $text): void {
+    for ($i = 0; $i < 4; $i++) {
+        $values = [strtolower($text), 0];
+        $values[] = strtoupper($text);
+        $values[] = strrev($text);
+        $values[] = $text;
+        $pair = transformedPair($text);
+        $noise = strrev(str_repeat('x', 100));
+        echo substr((string)$values[0], 0, 2), ':';
+        echo substr((string)$values[2], 0, 2), ':';
+        echo substr((string)$values[3], 0, 2), ':';
+        echo substr((string)$values[4], 0, 2), ':';
+        echo substr((string)$pair[0], 0, 2), '|';
+    }
+}
+checkCaseArrayOwners(str_repeat('Ab', 40));
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "ab:AB:bA:Ab:ab|".repeat(4));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

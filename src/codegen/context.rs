@@ -1688,6 +1688,11 @@ impl<'a> FunctionContext<'a> {
             .function
             .instruction(inst)
             .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+        if let Some(Immediate::RuntimeCall(RuntimeCallTarget::UnaryString(runtime))) = inst.immediate {
+            // Case transforms persist their result before returning. A consuming
+            // container must take that owner instead of copying and abandoning it.
+            return Ok(runtime.returns_owned_string());
+        }
         Ok(matches!(
             inst.op,
             Op::Acquire
