@@ -56,7 +56,15 @@ pub(in crate::interpreter) fn empty(
             Err(status) => return Err(status),
         }
         let index = index.ok_or(EvalStatus::RuntimeFatal)?;
-        Some(values.operator_method_call(object, "__elephc_dimension_empty", vec![index])?)
+        let outcome = values.operator_method_call(object, "__elephc_dimension_empty", vec![index.borrowed()]);
+        let released = if index.is_borrowed() { Ok(()) } else { values.release(index) };
+        match outcome {
+            Ok(value) => match released {
+                Ok(()) => Some(value),
+                Err(status) => { let _ = values.release(value); return Err(status); },
+            },
+            Err(status) => return Err(status),
+        }
     };
     let Some(result) = result else { return Ok(None); };
     let empty = values.truthy(result);

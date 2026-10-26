@@ -655,7 +655,7 @@ function __elephc_simplexml_import_node(DOMNode $node, string $class): ?SimpleXM
         $handle = $bound->__elephc_handle_value();
         return __elephc_simplexml_wrap(elephc_xml_sx_alias($handle), $class);
     }
-    $result = simplexml_load_string($document->saveXML(), $class);
+    $result = __elephc_simplexml_import_document($document, $class);
     if (!($result instanceof SimpleXMLElement)) { return null; }
     __elephc_simplexml_bind_dom($document, $result);
     $bound = $node->__elephc_simplexml;
@@ -664,5 +664,8 @@ function __elephc_simplexml_import_node(DOMNode $node, string $class): ?SimpleXM
         return __elephc_simplexml_wrap(elephc_xml_sx_alias($handle), $class);
     }
     return null;
+}
+function __elephc_simplexml_import_document(DOMDocument $document, string $class): ?SimpleXMLElement {
+    return simplexml_load_string($document->saveXML(), $class);
 }
 "###;

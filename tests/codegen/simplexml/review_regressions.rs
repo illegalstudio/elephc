@@ -181,3 +181,30 @@ restore_error_handler();
         "SimpleXMLElement::addAttribute(): Argument #1 ($qualifiedName) must not be empty|stopped:3",
     ));
 }
+
+/// Eval empty releases fresh dimension keys, retains borrowed keys, and cleans a throwing cast.
+#[test]
+fn test_simplexml_eval_empty_dimension_key_owners() {
+    if skip_without_xml_native("test_simplexml_eval_empty_dimension_key_owners") { return; }
+    let out = compile_and_run_with_heap_debug(r###"<?php
+$source = $argc > 0 ? '
+class ThrowingXmlEmptyKey {
+    public function __toString(): string { throw new RuntimeException("cast"); }
+    public function __destruct() { echo "drop|"; }
+}
+function freshXmlEmptyKey(): mixed { return new ThrowingXmlEmptyKey(); }
+$xml = new SimpleXMLElement("<r z=\"0\"/>");
+$key = "z";
+for ($i = 0; $i < 32; $i++) {
+    if (!empty($xml["missing" . str_repeat("x", 40)]) || !empty($xml[$key])) { echo "wrong|"; }
+}
+try { empty($xml[freshXmlEmptyKey()]); }
+catch (RuntimeException $error) { echo $error->getMessage(), "|"; }
+echo $key;
+' : '';
+eval($source);
+"###);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "drop|cast|z");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
