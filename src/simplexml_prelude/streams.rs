@@ -14,7 +14,7 @@ extern "System" { function elephc_runtime_simplexml_stream_close_mode(int $mode)
 
 function __elephc_simplexml_file_handle(string $filename, int $options, string $ns, bool $prefix, string $caller): int {
     $nul = strpos($filename, "\0");
-    if ($nul !== false) { $filename = substr($filename, 0, (int)$nul); }
+    if ($nul !== false) { $filename = substr($filename, 0, intval($nul)); }
     if (str_contains($filename, '%00')) {
         __elephc_simplexml_warning('Warning: ' . $caller . ': URI must not contain percent-encoded NUL bytes' . "\n");
         return elephc_xml_sx_load_stream($filename, '', -1, $options, $ns, (int)$prefix);
