@@ -138,7 +138,7 @@ pub(crate) fn emit_native_debug(emitter: &mut Emitter) {
     abi::emit_pop_call_operand_owner(emitter);
     abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 0), 2);
     abi::emit_symbol_address(emitter, abi::int_arg_reg_name(emitter.target, 1), "_native_debug_info_fatal");
-    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 2), 48);
+    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 2), elephc_builtin_contract::NATIVE_DEBUG_INFO_FATAL.len() as i64);
     abi::emit_call_label(emitter, &emitter.target.extern_symbol("write"));
     abi::emit_exit(emitter, 255);
     emitter.label("__rt_native_debug_miss");

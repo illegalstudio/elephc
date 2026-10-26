@@ -55,6 +55,13 @@ node text. Array casts, `get_object_vars()`, `__debugInfo()`, and JSON encoding 
 properties, including `@attributes` and repeated children. DOM imports share
 their document, so edits through either API remain visible through the other.
 
+`print_r()` and `var_dump()` render SimpleXML's native debug projection, including
+subclass `__debugInfo()` overrides, both in compiled code and opaque dynamic
+`eval()`. Nested debug calls share the native recursion guard. `var_dump()` streams
+the prefix before invoking a user hook; `print_r()` captures the complete result
+before echoing or returning it. A throwing debug hook is fatal, while an exception
+from a diagnostic handler for a null debug result remains catchable.
+
 The loading functions return `false` when parsing fails. A constructor with
 invalid XML throws `Exception`. The optional class name lets the loading
 functions return a subclass of `SimpleXMLElement`. File factories and the

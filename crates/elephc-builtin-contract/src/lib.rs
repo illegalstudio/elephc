@@ -76,3 +76,6 @@ pub use support::{
     eval_constant_support, eval_execution, eval_support, BackendImplementation,
     BackendSupport, BuiltinBackend, EvalAdapterReason, EvalExecution, UnsupportedReason,
 };
+
+/// Terminal diagnostic shared by native and eval debug hook exception boundaries.
+pub const NATIVE_DEBUG_INFO_FATAL: &str = "Fatal error: __debuginfo() must return an array\n";

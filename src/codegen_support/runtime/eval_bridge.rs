@@ -49,6 +49,7 @@ pub(crate) fn emit_eval_value_runtime(emitter: &mut Emitter, features: RuntimeFe
     backtrace::emit_backtrace_entry_wrapper(emitter);
     lifecycle::emit(emitter);
     output::emit(emitter);
+    debug::emit(emitter);
     array_next_index::emit(emitter);
     callable_adapter::emit(emitter);
     if features.mbstring || features.eval_bridge { string_literal::emit(emitter); }
@@ -97,6 +98,7 @@ mod reference_values;
 mod callable_adapter;
 mod lifecycle;
 mod output;
+mod debug;
 mod mbstring;
 pub(crate) mod string_literal;
 mod aarch64_casts;

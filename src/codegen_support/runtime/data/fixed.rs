@@ -69,7 +69,7 @@ pub(crate) fn emit_runtime_data_fixed(
 ) -> String {
     let mut out = String::new();
     out.push_str(".data\n");
-    out.push_str("_native_debug_info_fatal:\n    .ascii \"Fatal error: __debuginfo() must return an array\\n\"\n");
+    out.push_str(&format!("_native_debug_info_fatal:\n    .ascii {:?}\n", elephc_builtin_contract::NATIVE_DEBUG_INFO_FATAL));
     out.push_str(&comm_directive("_concat_buf", 65536, target));
     out.push_str(&comm_directive("_concat_off", 8, target));
     out.push_str(&comm_directive("_mbstring_catalog_array", 8, target));

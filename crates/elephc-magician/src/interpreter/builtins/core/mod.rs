@@ -58,6 +58,7 @@ mod ob_list_handlers;
 mod ob_start;
 mod object_inventory;
 mod print_r;
+mod native_debug;
 mod restore_error_handler;
 mod restore_exception_handler;
 mod runtime_introspection;

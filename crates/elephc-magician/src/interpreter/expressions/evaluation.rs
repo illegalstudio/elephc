@@ -151,6 +151,10 @@ pub(super) fn eval_cast_expr(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     with_eval_operands(&[expr], context, scope, values, |args, context, _, values| {
         match target {
+            EvalCastType::Array => {
+                if let Some(result) = super::super::runtime_ops::object_operators::numeric_cast(values, args[0], elephc_builtin_contract::ObjectCast::Array)? { return Ok(result); }
+                values.cast_array(args[0])
+            }
             EvalCastType::Int => {
                 if let Some(result) = super::super::runtime_ops::object_operators::numeric_cast(values, args[0], elephc_builtin_contract::ObjectCast::Int)? { return Ok(result); }
                 values.cast_int(args[0])

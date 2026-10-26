@@ -47,6 +47,20 @@ pub trait RuntimeValueOps {
         self.method_call(object, method, args)
     }
 
+    /// Converts a borrowed value into an independently owned PHP array.
+    fn cast_array(&mut self, _value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        Err(EvalStatus::UnsupportedConstruct)
+    }
+
+    /// Checks the shared native formatter recursion stack before invoking a debug hook.
+    fn debug_guard_find(&mut self, _object: RuntimeCellHandle) -> Result<bool, EvalStatus> { Ok(false) }
+
+    /// Pushes one native formatter receiver, returning the previous shared depth when supported.
+    fn debug_guard_push(&mut self, _object: RuntimeCellHandle) -> Result<Option<u64>, EvalStatus> { Ok(None) }
+
+    /// Restores a previously acquired native formatter recursion depth.
+    fn debug_guard_restore(&mut self, _depth: u64) -> Result<(), EvalStatus> { Ok(()) }
+
     /// Applies the shared internal-class handler before scalar runtime arithmetic.
     fn add(&mut self, left: RuntimeCellHandle, right: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
         if let Some(result) = object_operators::arithmetic(self, elephc_builtin_contract::ObjectArithmetic::Add, left, right)? {

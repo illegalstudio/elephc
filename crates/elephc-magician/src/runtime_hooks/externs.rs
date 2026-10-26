@@ -17,6 +17,11 @@ use crate::value::RuntimeCell;
 
 #[cfg(not(test))]
 unsafe extern "C" {
+    /// Casts one borrowed Mixed value to a fresh boxed PHP array.
+    pub(super) fn __elephc_eval_value_cast_array(value: *mut RuntimeCell) -> *mut RuntimeCell;
+    /// Shares find (0), push (1), and saved-depth restore (2) with the native debug walk.
+    pub(super) fn __elephc_eval_debug_guard(value: *mut RuntimeCell, operation: u64, depth: u64) -> u64;
+
     /// Boxes a borrowed persistent native descriptor for a lazy Reflection default factory.
     pub(super) fn __elephc_eval_value_callable_from_raw(descriptor: usize) -> *mut RuntimeCell;
     /// Wraps a PHP value in an independently owned runtime reference cell.

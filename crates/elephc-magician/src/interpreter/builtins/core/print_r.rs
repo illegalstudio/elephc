@@ -105,7 +105,10 @@ fn eval_print_r_value_result(
     if return_output {
         Ok(output)
     } else {
-        values.echo(output)?;
+        let echoed = values.echo(output);
+        let released = eval_release_value(context, values, output);
+        echoed?;
+        released?;
         values.bool_value(true)
     }
 }
@@ -155,22 +158,15 @@ fn eval_print_r_append_array(
     output.extend_from_slice(b"(\n");
     let len = values.array_len(value)?;
     for position in 0..len {
-        let key = values.array_iter_key(value, position)?;
-        let element = values.array_get(value, key)?;
-        eval_print_r_append_indent(depth + 1, output);
-        output.extend_from_slice(b"[");
-        output.extend_from_slice(&values.string_bytes(key)?);
-        output.extend_from_slice(b"] => ");
-        eval_print_r_append_value(
-            element,
-            context,
-            values,
-            depth + 1,
-            arrays_seen,
-            objects_seen,
-            output,
-        )?;
-        output.extend_from_slice(b"\n");
+        super::native_debug::with_entry(value, position, context, values, |key, element, context, values| {
+            eval_print_r_append_indent(depth + 1, output);
+            output.extend_from_slice(b"[");
+            output.extend_from_slice(&values.string_bytes(key)?);
+            output.extend_from_slice(b"] => ");
+            eval_print_r_append_value(element, context, values, depth + 1, arrays_seen, objects_seen, output)?;
+            output.extend_from_slice(b"\n");
+            Ok(())
+        })?;
     }
     eval_print_r_append_indent(depth, output);
     output.extend_from_slice(b")\n");
@@ -190,6 +186,9 @@ fn eval_print_r_append_object(
 ) -> Result<(), EvalStatus> {
     let identity = eval_debug_object_identity(value, values);
     let object_key = identity.unwrap_or(value.as_ptr() as usize as u64) as usize;
+    if runtime_ops::simplexml_properties::is_native(values, value, "")? {
+        return eval_print_r_append_native_object(value, identity, object_key, context, values, depth, arrays_seen, objects_seen, output);
+    }
     if objects_seen.contains(&object_key) {
         output.extend_from_slice(b"*RECURSION*");
         return Ok(());
@@ -220,6 +219,52 @@ fn eval_print_r_append_object(
     output.extend_from_slice(b")\n");
     objects_seen.pop();
     Ok(())
+}
+
+/// Renders native debug properties after an unprotected hook, matching PHP print_r.
+fn eval_print_r_append_native_object(
+    value: RuntimeCellHandle,
+    identity: Option<u64>,
+    object_key: usize,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+    depth: usize,
+    arrays_seen: &mut Vec<usize>,
+    objects_seen: &mut Vec<usize>,
+    output: &mut Vec<u8>,
+) -> Result<(), EvalStatus> {
+    let class_name = eval_debug_object_class_name(value, identity, context, values)?;
+    if objects_seen.contains(&object_key) || values.debug_guard_find(value)? {
+        output.extend_from_slice(class_name.as_bytes());
+        output.extend_from_slice(b" Object\n *RECURSION*");
+        return Ok(());
+    }
+    super::native_debug::with_projection(value, context, values, |hash, context, values| {
+        objects_seen.push(object_key);
+        let result = super::native_debug::with_guard(value, context, values, |context, values| {
+            output.extend_from_slice(class_name.as_bytes());
+            output.extend_from_slice(b" Object\n");
+            eval_print_r_append_indent(depth, output);
+            output.extend_from_slice(b"(\n");
+            let len = values.array_len(hash)?;
+            for position in 0..len {
+                super::native_debug::with_entry(hash, position, context, values, |key, element, context, values| {
+                    eval_print_r_append_indent(depth + 1, output);
+                    output.extend_from_slice(b"[");
+                    output.extend_from_slice(&values.string_bytes(key)?);
+                    output.extend_from_slice(b"] => ");
+                    eval_print_r_append_value(element, context, values, depth + 1, arrays_seen, objects_seen, output)?;
+                    output.extend_from_slice(b"\n");
+                    Ok(())
+                })?;
+            }
+            eval_print_r_append_indent(depth, output);
+            output.extend_from_slice(b")\n");
+            Ok(())
+        });
+        objects_seen.pop();
+        result
+    })
 }
 
 /// Appends one object property key for `print_r()`.

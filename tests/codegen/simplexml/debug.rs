@@ -24,7 +24,7 @@ class RecursiveXmlDebug extends SimpleXMLElement {
     public function __debugInfo(): ?array { return ['self' => $this]; }
 }
 class GuardedXmlDebug extends SimpleXMLElement {
-    public function __debugInfo(): ?array { var_dump($this); return ['visible' => 1]; }
+    public function __debugInfo(): ?array { echo 'GUARD|'; var_dump($this); return ['visible' => 1]; }
 }
 class NullXmlDebug extends SimpleXMLElement {
     public function __debugInfo(): ?array { return null; }
@@ -50,7 +50,7 @@ ob_start(); var_dump([$recursive, $recursive]); $dump = ob_get_clean();
 echo (int)str_contains($dump, '*RECURSION*'), (int)!str_contains($dump, '__elephc_'), "\n";
 unset($xml, $node, $recursive, $dump);
 ob_start(); var_dump(new GuardedXmlDebug('<r/>')); $dump = ob_get_clean();
-echo (int)str_contains($dump, '*RECURSION*'), (int)str_contains($dump, '["visible"]=>'), "\n";
+echo (int)str_contains($dump, '*RECURSION*'), (int)str_contains($dump, '["visible"]=>'), (int)(substr_count($dump, 'GUARD|') === 1), "\n";
 $node = new NullXmlDebug('<r/>');
 set_error_handler(function(int $level, string $message): bool {
     echo 'null:', $level, ':', (int)str_starts_with($message, 'Returning null from NullXmlDebug::__debugInfo()'), '|'; return true;
@@ -109,7 +109,7 @@ string(5) "inner"
 111
 "Array\n(\n    [0] => RecursiveXmlDebug Object\n        (\n            [self] => RecursiveXmlDebug Object\n *RECURSION*\n        )\n\n    [1] => RecursiveXmlDebug Object\n        (\n            [self] => RecursiveXmlDebug Object\n *RECURSION*\n        )\n\n)\n"
 11
-11
+111
 null:8192:1|"NullXmlDebug Object\n(\n)\n"
 null-handler|after-null
 "string(5) \"inner\"\nArray\n(\n    [k] => CallbackXmlDebug Object\n        (\n            [visible] => Array\n(\n    [inside] => 7\n)\n\n            [zero] => 0\n        )\n\n)\n"

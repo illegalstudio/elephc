@@ -113,3 +113,23 @@ override|{"0":"native"}|["native"]
     assert_eq!(out.stdout, expected.repeat(2));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Runtime array casts preserve scalar values and independently owned array storage.
+#[test]
+fn test_simplexml_eval_array_cast_scalars_and_cow_bundle() {
+    if skip_without_xml_native("test_simplexml_eval_array_cast_scalars_and_cow_bundle") { return; }
+    let body = r###"foreach ([null, false, true, 7, 2.5, 'x', [], ['k' => 1], $xml] as $value) {
+    $array = (array)$value; echo json_encode($array), '|'; unset($array);
+}
+$original = ['k' => 1]; $copy = (array)$original; $copy['k'] = 2;
+echo json_encode($original), ':', json_encode($copy), "\n";
+unset($value, $original, $copy);
+"###;
+    let quoted_body = body.replace('\\', "\\\\").replace('\'', "\\'");
+    let source = format!("<?php $xml = new SimpleXMLElement('<r a=\"1\"><b>2</b></r>');\n{body}\n$source = $argc > 0 ? '{quoted_body}' : ''; eval($source); unset($xml);");
+    let out = compile_and_run_with_heap_debug(&source);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    let expected = "[]|[false]|[true]|[7]|[2.5]|[\"x\"]|[]|{\"k\":1}|{\"@attributes\":{\"a\":\"1\"},\"b\":\"2\"}|{\"k\":1}:{\"k\":2}\n";
+    assert_eq!(out.stdout, expected.repeat(2));
+    assert_no_heap_leaks(&out);
+}
