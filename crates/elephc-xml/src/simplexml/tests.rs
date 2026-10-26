@@ -9,6 +9,38 @@
 
 use super::*;
 
+/// Live iteration reads sibling links after mutations rather than taking a stale snapshot.
+#[test]
+fn simplexml_cursor_observes_live_sibling_mutation() {
+    let root = parse(b"<r><i>a</i><i>b</i><i>c</i></r>", 0, "", false).unwrap();
+    let items = root.select(2, "i", "", false, 0);
+    let mut cursor = iteration::Cursor::new(&items);
+    assert_eq!(unsafe { owned_string(ffi::text(cursor.current().unwrap())) }, "a");
+    items.remove(4, "", 1);
+    cursor.advance();
+    assert_eq!(unsafe { owned_string(ffi::text(cursor.current().unwrap())) }, "c");
+    root.add("i", Some("d"), None, false).unwrap();
+    cursor.advance();
+    assert_eq!(unsafe { owned_string(ffi::text(cursor.current().unwrap())) }, "d");
+    root.detach(cursor.current().unwrap());
+    cursor.advance();
+    assert!(cursor.current().is_none());
+}
+
+/// Explicit XPath vectors and live sibling cursors stay linear on large selections.
+#[test]
+fn simplexml_large_cursor_and_xpath_items() {
+    let source = format!("<r>{}</r>", "<i>x</i>".repeat(50_000));
+    let root = parse(source.as_bytes(), 0, "", false).unwrap();
+    let items = root.select(2, "i", "", false, 0);
+    let mut cursor = iteration::Cursor::new(&items);
+    let mut count = 0;
+    while cursor.current().is_some() { count += 1; cursor.advance(); }
+    assert_eq!(count, 50_000);
+    let xpath = root.with_scope(Scope::XPath(Rc::new(root.xpath("//i").unwrap())));
+    for index in 0..50_000 { assert!(xpath.item(index).is_some()); }
+}
+
 /// Child selectors observe later appends and indexed writes escape raw text.
 #[test]
 fn simplexml_live_selection_and_mutation() {

@@ -13,6 +13,7 @@ mod abi;
 mod cloning;
 mod diagnostics;
 mod ffi;
+mod iteration;
 mod mutation;
 mod query;
 
@@ -81,10 +82,7 @@ impl View {
                 let mut cursor = unsafe { if attrs { ffi::attrs(node) } else { ffi::child(node) } };
                 let mut out = Vec::new();
                 while !cursor.is_null() {
-                    let kind = unsafe { ffi::node_type(cursor) };
-                    if kind == (if attrs { 2 } else { 1 })
-                        && self.ns.matches(cursor)
-                        && name.as_ref().is_none_or(|name| unsafe { borrowed_string_matches(ffi::name(cursor), name) })
+                    if iteration::node_matches(cursor, if attrs { 2 } else { 1 }, &self.ns, name.as_deref())
                     { out.push(cursor); }
                     cursor = unsafe { ffi::next(cursor) };
                 }
@@ -107,9 +105,7 @@ impl View {
                 let mut node = unsafe { if attrs { ffi::attrs(parent) } else { ffi::child(parent) } };
                 let mut position = 0;
                 while !node.is_null() {
-                    if unsafe { ffi::node_type(node) } == (if attrs { 2 } else { 1 })
-                        && self.ns.matches(node)
-                        && name.as_ref().is_none_or(|name| unsafe { borrowed_string_matches(ffi::name(node), name) })
+                    if iteration::node_matches(node, if attrs { 2 } else { 1 }, &self.ns, name.as_deref())
                     {
                         if position == index { return Some(node); }
                         position += 1;
@@ -127,19 +123,30 @@ impl View {
             view.nodes()
         } else { self.nodes() }
     }
+    /// Counts stable explicit lists without copying them into a temporary vector.
+    fn item_count(&self) -> usize {
+        match &self.scope {
+            Scope::Nodes(nodes) | Scope::XPath(nodes) => nodes.len(),
+            _ => self.items().len(),
+        }
+    }
     /// Materializes an XPath attribute as a filtered attribute list, preserving ordinary offsets.
     fn item(&self, index: usize) -> Option<Self> {
         let node = if matches!(self.scope, Scope::Node(_) | Scope::Index(..)) {
             self.select(7, "", "", false, 0).node_at(index)?
         } else { self.node_at(index)? };
+        Some(self.item_view(node))
+    }
+    /// Wraps the current cursor node with the same XPath attribute semantics as indexed access.
+    fn item_view(&self, node: Node) -> Self {
         if matches!(self.scope, Scope::XPath(_)) && unsafe { ffi::node_type(node) } == 2 {
             let parent = self.with_scope(Scope::Node(unsafe { ffi::parent(node) }));
             let name = unsafe { string(ffi::name(node)) };
             let mut selected = self.with_scope(Scope::Attributes(Rc::new(parent), Some(name)));
             selected.ns = Namespace { value: unsafe { string(ffi::ns(node, 0)) }, prefix: false };
-            return Some(selected);
+            return selected;
         }
-        Some(self.with_scope(Scope::Node(node)))
+        self.with_scope(Scope::Node(node))
     }
     /// Builds a new wrapper with its own empty XPath context, sharing only native storage.
     fn with_scope(&self, scope: Scope) -> Self {

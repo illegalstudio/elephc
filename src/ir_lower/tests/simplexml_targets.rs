@@ -95,6 +95,7 @@ echo $doc->saveXML();
     assert!(assembly.contains("elephc_xml_sx_load_stream"), "{target}: PHP stream parser boundary");
     assert!(assembly.contains("elephc_xml_sx_load_file"), "{target}: native file parser boundary");
     assert!(assembly.contains("elephc_xml_sx_compare"), "{target}: XML node comparison boundary");
+    assert!(assembly.contains("elephc_xml_sx_iterator"), "{target}: linear native iterator boundary");
     assert!(assembly.contains(&crate::names::method_symbol("SimpleXMLElement", "__elephc_array")),
         "{target}: native property projection body");
     assert!(assembly.contains(&crate::names::method_symbol("SimpleXMLElement", "__elephc_clone_initialize")),

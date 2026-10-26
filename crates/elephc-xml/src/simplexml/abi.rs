@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 #[derive(Default)]
-struct Registry { next: i64, views: HashMap<i64, View> }
+struct Registry { next: i64, views: HashMap<i64, View>, cursors: HashMap<i64, iteration::Cursor> }
 thread_local! {
     static REGISTRY: RefCell<Registry> = RefCell::new(Registry::default());
     static OUTPUT: RefCell<CString> = RefCell::new(CString::default());
@@ -79,7 +79,13 @@ pub unsafe extern "C" fn elephc_xml_sx_load_stream(filename: *const c_char, data
 pub extern "C" fn elephc_xml_sx_diagnostics() -> *const c_char { guard(|| output(diagnostics::take())) }
 /// Releases one wrapper; the document dies only after its final selection is released.
 #[no_mangle]
-pub extern "C" fn elephc_xml_sx_free(handle: i64) { guard(|| REGISTRY.with(|r| { r.borrow_mut().views.remove(&handle); })); }
+pub extern "C" fn elephc_xml_sx_free(handle: i64) {
+    guard(|| REGISTRY.with(|r| {
+        let mut registry = r.borrow_mut();
+        registry.cursors.remove(&handle);
+        registry.views.remove(&handle);
+    }));
+}
 /// Returns a fresh handle over an independent document and any detached aliased nodes.
 #[no_mangle]
 pub extern "C" fn elephc_xml_sx_clone(handle: i64) -> i64 { guard(|| view(handle).and_then(|v| v.deep_clone()).map(insert).unwrap_or(0)) }
@@ -100,14 +106,14 @@ pub unsafe extern "C" fn elephc_xml_sx_select(handle: i64, kind: i64, name: *con
 #[no_mangle]
 pub extern "C" fn elephc_xml_sx_int(handle: i64, operation: i64) -> i64 {
     guard(|| view(handle).map(|v| match operation {
-        0 | 2 => v.items().len() as i64,
+        0 | 2 => v.item_count() as i64,
         1 => i64::from(v.first().is_some()),
         3 => if matches!(v.scope, Scope::Node(_) | Scope::Index(..)) {
             i64::from(!v.items().is_empty() || v.first().is_some_and(|n| unsafe {
                 ffi::node_type(n) == 2 || !owned_string(ffi::text(n)).is_empty()
                     || (ffi::node_type(n) == 1 && !ffi::attrs(n).is_null())
             }))
-        } else { i64::from(!v.nodes().is_empty()) },
+        } else { i64::from(v.first().is_some()) },
         4 => v.first().map(|n| unsafe { ffi::node_type(n) as i64 }).unwrap_or(0),
         5 => match v.scope { Scope::Children(_, None) => 1, Scope::Children(_, Some(_)) => 2,
             Scope::Attributes(_, None) => 3, Scope::Attributes(_, Some(_)) => 4, _ => 0 },
@@ -132,6 +138,33 @@ pub extern "C" fn elephc_xml_sx_string(handle: i64, operation: i64) -> *const c_
 #[no_mangle]
 pub extern "C" fn elephc_xml_sx_item(handle: i64, index: i64) -> i64 {
     guard(|| view(handle).and_then(|v| v.item(index.max(0) as usize)).map(insert).unwrap_or(0))
+}
+/// Rewinds (0), advances (1), checks validity (2), or wraps the current cursor node (3).
+#[no_mangle]
+pub extern "C" fn elephc_xml_sx_iterator(handle: i64, operation: i64) -> i64 {
+    guard(|| match operation {
+        0 => {
+            let Some(view) = view(handle) else { return 0; };
+            let cursor = iteration::Cursor::new(&view);
+            REGISTRY.with(|r| { r.borrow_mut().cursors.insert(handle, cursor); });
+            1
+        }
+        1 => {
+            REGISTRY.with(|r| {
+                if let Some(cursor) = r.borrow_mut().cursors.get_mut(&handle) { cursor.advance(); }
+            });
+            1
+        }
+        2 => REGISTRY.with(|r| i64::from(r.borrow().cursors.get(&handle)
+            .and_then(iteration::Cursor::current).is_some())),
+        3 => {
+            let node = REGISTRY.with(|r| r.borrow().cursors.get(&handle)
+                .and_then(iteration::Cursor::current));
+            let Some(node) = node else { return 0; };
+            view(handle).map(|view| insert(view.item_view(node))).unwrap_or(0)
+        }
+        _ => 0,
+    })
 }
 /// Writes a property/offset, removes one selection (10+kind), or adds a child/attribute.
 #[no_mangle]

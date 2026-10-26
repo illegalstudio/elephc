@@ -187,6 +187,56 @@ elseif ($argc === 4) {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// Native cursors preserve PHP live sibling mutation, initialization, clone and alias behavior.
+#[test]
+fn test_simplexml_iterator_mutations_and_aliases_bundle() {
+    if skip_without_xml_native("test_simplexml_iterator_mutations_and_aliases_bundle") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$xml = new SimpleXMLElement('<r><i>a</i><i>b</i><i>c</i></r>');
+$n = 0;
+foreach ($xml->i as $item) { echo (string)$item, ','; if ($n++ === 0) { $cached = $item; unset($xml->i[0]); } }
+echo '|';
+$xml = new SimpleXMLElement('<r><i>a</i><i>b</i><i>c</i></r>'); $n = 0;
+foreach ($xml->i as $item) { echo (string)$item, ','; if ($n++ === 0) { unset($xml->i[1]); } }
+echo '|';
+$xml = new SimpleXMLElement('<r><i>a</i><i>b</i><i>c</i></r>'); $n = 0;
+foreach ($xml->i as $item) { echo (string)$item, ','; if ($n++ === 0) { $xml->addChild('i', 'd'); } }
+echo '|';
+$xml = new SimpleXMLElement('<r><i>a</i><i>b</i><i>c</i></r>'); $view = $xml->i;
+$view->rewind(); echo (string)$view->current(), ':';
+unset($xml->i[0]); echo (int)$view->valid(), ':'; $view->next(); echo (int)$view->valid(), '|';
+$xml = new SimpleXMLElement('<r><i>a</i><i>b</i></r>'); $view = $xml->i;
+echo (int)$view->valid(), ':'; $view->next(); echo (int)$view->valid(), '|';
+$view->rewind(); $view->next(); $copy = clone $view;
+echo (int)$copy->valid(), ':', (string)$view->current(), '|';
+$view->rewind(); $alias = $view; $alias->next(); echo (string)$view->current(), '|';
+$first = $xml->i; $second = $xml->i; $first->rewind(); $second->rewind(); $second->next();
+echo (string)$first->current(), ':', (string)$second->current(), '|';
+$attributes = new SimpleXMLElement('<r a="1" b="2" c="3"/>'); $n = 0;
+foreach ($attributes->attributes() as $key => $attribute) {
+    echo $key, '=', (string)$attribute, ',';
+    if ($n++ === 0) { unset($attributes['a']); }
+}
+echo '|', (string)$cached;
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "a,|a,c,|a,b,c,d,|a:1:0|0:0|0:b|b|a:b|a=1,|a");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Large sibling sets must complete within the ordinary CI budget instead of quadratic scans.
+#[test]
+fn test_simplexml_large_sibling_iteration() {
+    if skip_without_xml_native("test_simplexml_large_sibling_iteration") { return; }
+    let out = compile_and_run(r#"<?php
+$xml = new SimpleXMLElement('<r>' . str_repeat('<i>x</i>', 50000) . '</r>');
+$count = 0;
+foreach ($xml->i as $item) { $count++; }
+echo $count;
+"#);
+    assert_eq!(out, "50000");
+}
+
 /// Native XML capability preserves ordinary virtual getters through boxed storage.
 #[test]
 fn test_simplexml_boxed_ordinary_property_getter() {

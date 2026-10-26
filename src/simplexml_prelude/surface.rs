@@ -25,6 +25,7 @@ extern "elephc_xml" {
     function elephc_xml_sx_string(int $handle, int $operation): string;
     function elephc_xml_sx_xml_hex(int $handle, int $whole): string;
     function elephc_xml_sx_item(int $handle, int $index): int;
+    function elephc_xml_sx_iterator(int $handle, int $operation): int;
     function elephc_xml_sx_mutate(int $handle, int $operation, string $key, string $value, string $ns, int $flags, int $index): int;
     function elephc_xml_sx_register(int $handle, string $prefix, string $uri): int;
     function elephc_xml_sx_xpath(int $handle, string $expression): int;
@@ -543,19 +544,26 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $node->__elephc_simplexml = $this;
         return $node;
     }
-    public function rewind(): void { $this->__elephc_current = null; $this->__elephc_position = 0; }
-    public function next(): void { $this->__elephc_current = null; $this->__elephc_position = $this->__elephc_position + 1; }
+    public function rewind(): void {
+        $this->__elephc_current = null; $this->__elephc_position = 0;
+        $handle = $this->__elephc_handle;
+        elephc_xml_sx_iterator($handle, 0);
+    }
+    public function next(): void {
+        $this->__elephc_current = null; $this->__elephc_position = $this->__elephc_position + 1;
+        $handle = $this->__elephc_handle;
+        elephc_xml_sx_iterator($handle, 1);
+    }
     public function valid(): bool {
         $handle = $this->__elephc_handle;
-        return $this->__elephc_position >= 0 && $this->__elephc_position < elephc_xml_sx_int($handle, 2);
+        return $this->__elephc_position >= 0 && elephc_xml_sx_iterator($handle, 2) !== 0;
     }
     public function current(): SimpleXMLElement {
         if (!$this->valid()) { throw new Error("Iterator not initialized or already consumed"); }
         $cached = $this->__elephc_current;
         if ($cached instanceof SimpleXMLElement) { return $cached; }
         $handle = $this->__elephc_handle;
-        $position = $this->__elephc_position;
-        $child = elephc_xml_sx_item($handle, $position);
+        $child = elephc_xml_sx_iterator($handle, 3);
         $current = __elephc_simplexml_wrap($child, get_class($this));
         $this->__elephc_current = $current;
         return $current;
