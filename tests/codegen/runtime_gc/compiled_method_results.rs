@@ -30,6 +30,7 @@ class CompiledMethodBoxSource implements CompiledMethodBoxProtocol {
     public function freshText(int $n): string { return str_repeat('a', $n); }
     public function borrowedText(): string { return $this->text; }
     public function scratchText(string $value): string { return trim($value); }
+    public function concatenatedText(int $n): string { return str_repeat('d', $n) . str_repeat('e', $n); }
     public function adaptedText(int $n): string {
         $args = func_get_args(); return str_repeat('c', (int)$args[0]);
     }
@@ -46,6 +47,7 @@ class CompiledMethodBoxOther {
     public function freshText(int $n): int { return $n; }
     public function borrowedText(): int { return 0; }
     public function scratchText(string $value): int { return 0; }
+    public function concatenatedText(int $n): int { return $n; }
     public function adaptedText(int $n): int { return $n; }
     public function adaptedBorrowedText(): int { return 0; }
     public function freshArray(): int { return 0; }
@@ -64,12 +66,19 @@ function useCompiledMethodBox(mixed $source, int $n): void {
 function useCompiledMethodProtocol(CompiledMethodBoxProtocol $source): void {
     echo $source->adaptedText(4), ':', strlen($source->adaptedBorrowedText()), '|';
 }
+function useCompiledMethodConcat(mixed $source): void {
+    $large = $source->concatenatedText(40000);
+    $churn = str_repeat('z', 80000);
+    echo strlen($large), ':', substr((string)$large, 0, 1), ':', substr((string)$large, -1), '|';
+    echo strlen($churn), '|';
+}
 $source = new CompiledMethodBoxSource();
 for ($i = 0; $i < 3; $i++) { useCompiledMethodBox($source, 10 + $i); }
 useCompiledMethodProtocol($source);
+useCompiledMethodConcat($source);
 echo strlen($source->text), ':', count($source->items);
 "#);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "10:32:x:10:32:2:2:stdClass:bool(true)\n11:32:x:11:32:2:2:stdClass:bool(true)\n12:32:x:12:32:2:2:stdClass:bool(true)\ncccc:32|32:2");
+    assert_eq!(out.stdout, "10:32:x:10:32:2:2:stdClass:bool(true)\n11:32:x:11:32:2:2:stdClass:bool(true)\n12:32:x:12:32:2:2:stdClass:bool(true)\ncccc:32|80000:d:e|80000|32:2");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

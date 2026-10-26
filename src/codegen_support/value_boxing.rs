@@ -305,7 +305,10 @@ pub(crate) fn emit_box_current_php_return_as_mixed(
         emitter.label(owned_label);
         if representation == PhpType::Str {
             // Fresh string helpers may use concat scratch. Persist first, then
-            // validating release retires only an actual heap allocation.
+            // validating release retires only an actual heap allocation. Claim
+            // transient concat storage so persistence duplicates rather than
+            // adopting the exact block that the original owner will release.
+            abi::emit_call_label(emitter, "__rt_str_claim");
             let (pointer, _) = abi::string_result_regs(emitter);
             abi::emit_push_reg(emitter, pointer);
             emit_box_current_value_as_mixed(emitter, ty);
