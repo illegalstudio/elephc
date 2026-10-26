@@ -60,6 +60,7 @@ mod type_predicates;
 pub(crate) mod is_numeric;
 pub(crate) mod json;
 pub(crate) mod math;
+pub(crate) mod memory;
 pub(crate) mod object_props;
 pub(crate) mod opcache_runtime;
 pub(crate) mod openssl;

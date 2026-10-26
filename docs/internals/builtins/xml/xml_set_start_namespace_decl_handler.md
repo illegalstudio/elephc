@@ -2,7 +2,7 @@
 title: "xml_set_start_namespace_decl_handler() - internals"
 description: "Compiler internals for xml_set_start_namespace_decl_handler(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1036
+  order: 1041
 ---
 
 ## `xml_set_start_namespace_decl_handler()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/xml/xml_set_start_namespace_decl_handler.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/xml/xml_set_start_namespace_decl_handler.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:706](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L706) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:708](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L708) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

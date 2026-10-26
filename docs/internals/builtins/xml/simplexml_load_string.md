@@ -2,7 +2,7 @@
 title: "simplexml_load_string() - internals"
 description: "Compiler internals for simplexml_load_string(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1015
+  order: 1020
 ---
 
 ## `simplexml_load_string()` - internals

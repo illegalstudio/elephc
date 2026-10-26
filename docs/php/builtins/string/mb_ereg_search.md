@@ -2,7 +2,7 @@
 title: "mb_ereg_search()"
 description: "Searches the retained multibyte subject and advances the shared byte position."
 sidebar:
-  order: 850
+  order: 855
 ---
 
 ## mb_ereg_search()

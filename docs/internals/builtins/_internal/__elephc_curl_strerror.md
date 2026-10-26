@@ -2,7 +2,7 @@
 title: "__elephc_curl_strerror() - internals"
 description: "Compiler internals for __elephc_curl_strerror(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1139
+  order: 1144
 ---
 
 ## `__elephc_curl_strerror()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/curl/__elephc_curl_strerror.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/curl/__elephc_curl_strerror.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:706](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L706) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:708](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L708) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

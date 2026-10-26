@@ -2,7 +2,7 @@
 title: "xmlwriter_start_attribute_ns()"
 description: "Starts a namespaced attribute."
 sidebar:
-  order: 1056
+  order: 1061
 ---
 
 ## xmlwriter_start_attribute_ns()

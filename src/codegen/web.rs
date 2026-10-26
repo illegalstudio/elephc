@@ -368,6 +368,7 @@ fn emit_heap_arena_reset(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, value, "_gc_allocs", 0);
     abi::emit_store_reg_to_symbol(emitter, value, "_gc_frees", 0);
     abi::emit_store_zero_to_symbol(emitter, "_gc_live", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_gc_peak", 0);
 }
 
 #[cfg(test)]
@@ -388,9 +389,10 @@ mod handler_reset_tests {
             let allocs = asm.find("_gc_allocs").unwrap();
             let frees = asm.find("_gc_frees").unwrap();
             let live = asm.find("_gc_live").unwrap();
-            assert!(heap_reset < allocs && allocs < frees && frees < live, "{name}");
+            let peak = asm.find("_gc_peak").unwrap();
+            assert!(heap_reset < allocs && allocs < frees && frees < live && live < peak, "{name}");
             assert!(bases < extent_reset, "{name}: live bases must retire before the extent resets");
-            assert!(!asm.contains("__rt_heap_alloc") && !asm.contains("_gc_peak"), "{name}");
+            assert!(!asm.contains("__rt_heap_alloc"), "{name}");
         }
     }
 

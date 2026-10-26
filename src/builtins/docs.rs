@@ -188,6 +188,7 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
     let argument_lowering = match semantics.argument_lowering {
         BuiltinArgumentLowering::Standard => "standard",
         BuiltinArgumentLowering::PreserveValues => "preserve_values",
+        BuiltinArgumentLowering::PreserveUncoerced => "preserve_uncoerced",
         BuiltinArgumentLowering::MaterializeDefaults => "materialize_defaults",
         BuiltinArgumentLowering::Count => "count",
         BuiltinArgumentLowering::Date => "date",

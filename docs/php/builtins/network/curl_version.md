@@ -2,7 +2,7 @@
 title: "curl_version()"
 description: "Gets cURL version information."
 sidebar:
-  order: 729
+  order: 734
 ---
 
 ## curl_version()

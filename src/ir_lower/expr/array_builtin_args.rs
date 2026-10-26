@@ -285,12 +285,14 @@ fn lower_planned_builtin_call_args(
         crate::builtins::semantics::BuiltinArgumentLowering::Standard
         | crate::builtins::semantics::BuiltinArgumentLowering::MaterializeDefaults
         | crate::builtins::semantics::BuiltinArgumentLowering::PreserveValues
+        | crate::builtins::semantics::BuiltinArgumentLowering::PreserveUncoerced
         | crate::builtins::semantics::BuiltinArgumentLowering::BareArrayValues { .. }
         | crate::builtins::semantics::BuiltinArgumentLowering::WeakStringUnion { .. }
     ) {
         if let Some(sig) = sig {
             if let Some(operands) = dynamic_spreads::lower_boxed_spread_args(ctx, sig, args, name,
-                argument_lowering == crate::builtins::semantics::BuiltinArgumentLowering::PreserveValues) {
+                matches!(argument_lowering, crate::builtins::semantics::BuiltinArgumentLowering::PreserveValues
+                    | crate::builtins::semantics::BuiltinArgumentLowering::PreserveUncoerced)) {
                 return operands;
             }
         }
@@ -299,7 +301,8 @@ fn lower_planned_builtin_call_args(
         && !capture_regex_output
         && !matches!(argument_lowering,
             crate::builtins::semantics::BuiltinArgumentLowering::PcntlPreserveOmitted
-            | crate::builtins::semantics::BuiltinArgumentLowering::PreserveValues)
+            | crate::builtins::semantics::BuiltinArgumentLowering::PreserveValues
+            | crate::builtins::semantics::BuiltinArgumentLowering::PreserveUncoerced)
     {
         if let Some(sig) = sig {
             if let Some(operands) = lower_positional_spread_args_with_signature(
@@ -313,6 +316,13 @@ fn lower_planned_builtin_call_args(
         }
     }
     let lowered = match argument_lowering {
+        crate::builtins::semantics::BuiltinArgumentLowering::PreserveUncoerced => {
+            let storage = sig.cloned().map(|mut sig| {
+                sig.declared_params.fill(false);
+                sig
+            });
+            lower_args_with_signature_options(ctx, storage.as_ref(), args, true, false)
+        }
         crate::builtins::semantics::BuiltinArgumentLowering::PreserveValues => {
             lower_builtin_args_preserving_values(ctx, &canonical, sig, args)
         }

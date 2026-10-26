@@ -2,7 +2,7 @@
 title: "session_id()"
 description: "Reads or sets the current session id."
 sidebar:
-  order: 998
+  order: 1003
 ---
 
 ## session_id()

@@ -2,7 +2,7 @@
 title: "__elephc_class_is_abstract() - internals"
 description: "Compiler internals for __elephc_class_is_abstract(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1096
+  order: 1101
 ---
 
 ## `__elephc_class_is_abstract()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/__elephc_class_is_abstract.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_class_is_abstract.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:706](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L706) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:708](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L708) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

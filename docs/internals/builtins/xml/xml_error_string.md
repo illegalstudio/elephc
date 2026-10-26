@@ -2,7 +2,7 @@
 title: "xml_error_string() - internals"
 description: "Compiler internals for xml_error_string(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1016
+  order: 1021
 ---
 
 ## `xml_error_string()` - internals

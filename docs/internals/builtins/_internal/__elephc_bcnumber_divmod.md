@@ -2,7 +2,7 @@
 title: "__elephc_bcnumber_divmod() - internals"
 description: "Compiler internals for __elephc_bcnumber_divmod(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1085
+  order: 1090
 ---
 
 ## `__elephc_bcnumber_divmod()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/__elephc_bcnumber_divmod.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/__elephc_bcnumber_divmod.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:706](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L706) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:708](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L708) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

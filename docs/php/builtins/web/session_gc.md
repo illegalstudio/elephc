@@ -2,7 +2,7 @@
 title: "session_gc()"
 description: "Runs session garbage collection and returns how many sessions it removed."
 sidebar:
-  order: 996
+  order: 1001
 ---
 
 ## session_gc()

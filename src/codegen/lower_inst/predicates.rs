@@ -59,7 +59,9 @@ pub(in crate::codegen::lower_inst) fn emit_value_truthiness(
             emit_float_result_nonzero_bool(ctx);
         }
         PhpType::Str => emit_string_truthiness(ctx, value)?,
-        PhpType::TaggedScalar => emit_tagged_scalar_truthiness(ctx, value)?,
+        ty if ty.codegen_repr() == PhpType::TaggedScalar => {
+            emit_tagged_scalar_truthiness(ctx, value)?;
+        }
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
             emit_array_truthiness(ctx, value)?;
         }

@@ -127,6 +127,7 @@ mod eval_array_references;
 mod gc_collect_cycles;
 mod gc_collect_cycles_x86_64;
 mod gc_control;
+mod memory;
 mod gc_destructors;
 mod gc_weak_observers;
 mod gc_exceptions;
@@ -445,6 +446,7 @@ pub use hash_chunk::emit_hash_chunk;
 pub use gc_collect_cycles::emit_gc_collect_cycles;
 /// Emit garbage collection cycle collector.
 pub use gc_control::emit_gc_control;
+pub use memory::emit_memory;
 /// Emits pinned destructor snapshots for both cycle collectors.
 pub use gc_destructors::emit_gc_destructors;
 /// Emits eval-owned object GC edges and final-release dispatch.

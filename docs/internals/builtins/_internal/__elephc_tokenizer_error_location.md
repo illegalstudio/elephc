@@ -2,7 +2,7 @@
 title: "__elephc_tokenizer_error_location() - internals"
 description: "Compiler internals for __elephc_tokenizer_error_location(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1192
+  order: 1197
 ---
 
 ## `__elephc_tokenizer_error_location()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/__elephc_tokenizer_error_location.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_tokenizer_error_location.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:706](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L706) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:708](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L708) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

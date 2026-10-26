@@ -2,7 +2,7 @@
 title: "var_export() - internals"
 description: "Compiler internals for var_export(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 983
+  order: 988
 ---
 
 ## `var_export()` - internals

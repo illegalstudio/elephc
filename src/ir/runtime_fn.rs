@@ -773,6 +773,16 @@ pub enum RuntimeFnId {
     JsonLastErrorMsg,
     JsonValidate,
     Localtime,
+    /// Native heap metric operation `memory_get_allocations`.
+    MemoryGetAllocations,
+    /// Native heap metric operation `memory_get_frees`.
+    MemoryGetFrees,
+    /// Native heap metric operation `memory_get_peak_usage`.
+    MemoryGetPeakUsage,
+    /// Native heap metric operation `memory_get_usage`.
+    MemoryGetUsage,
+    /// Native heap metric operation `memory_reset_peak_usage`.
+    MemoryResetPeakUsage,
     Microtime,
     Mktime,
     Passthru,
@@ -1101,6 +1111,10 @@ impl RuntimeFnId {
             return;
         }
         match self {
+            RuntimeFnId::MemoryGetUsage | RuntimeFnId::MemoryGetPeakUsage => {
+                // Preserve dynamic flags until the builtin can reject non-scalar values.
+                set_callable_param_type(sig, 0, PhpType::Mixed);
+            }
             RuntimeFnId::Count => truncate_callable_params(sig, 1),
             RuntimeFnId::CloneWith => {
                 set_callable_param_type(sig, 0, PhpType::Mixed);
@@ -1509,6 +1523,21 @@ impl RuntimeFnId {
             // Both resolve the handle (a stale one is fatal) and read the descriptor.
             RuntimeFnId::BufferLen | RuntimeFnId::BufferPtr => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::MAY_FATAL.bits(),
+            ),
+            // Heap samples observe allocation and release boundaries, including peak resets.
+            RuntimeFnId::MemoryGetUsage | RuntimeFnId::MemoryGetPeakUsage => {
+                crate::ir::Effects::from_bits_retain(
+                    crate::ir::Effects::READS_GLOBAL.bits() | crate::ir::Effects::READS_HEAP.bits()
+                        | crate::ir::Effects::MAY_WARN.bits() | crate::ir::Effects::MAY_THROW.bits(),
+                )
+            }
+            RuntimeFnId::MemoryGetAllocations | RuntimeFnId::MemoryGetFrees => {
+                crate::ir::Effects::from_bits_retain(
+                    crate::ir::Effects::READS_GLOBAL.bits() | crate::ir::Effects::READS_HEAP.bits(),
+                )
+            }
+            RuntimeFnId::MemoryResetPeakUsage => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_GLOBAL.bits() | crate::ir::Effects::WRITES_GLOBAL.bits(),
             ),
             // `getmypid()` is not a constant: a `pcntl_fork()` child reads its own id.
             RuntimeFnId::Time | RuntimeFnId::Getmypid => crate::ir::Effects::READS_PROCESS,
@@ -2118,6 +2147,11 @@ impl RuntimeFnId {
                 | RuntimeFnId::CloneWith
                 | RuntimeFnId::Count
                 | RuntimeFnId::Getmypid
+                | RuntimeFnId::MemoryGetAllocations
+                | RuntimeFnId::MemoryGetFrees
+                | RuntimeFnId::MemoryGetPeakUsage
+                | RuntimeFnId::MemoryGetUsage
+                | RuntimeFnId::MemoryResetPeakUsage
                 | RuntimeFnId::Gettype
                 | RuntimeFnId::InArray
                 | RuntimeFnId::Trim
@@ -2147,7 +2181,13 @@ impl RuntimeFnId {
                 )
             }),
             RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct | RuntimeFnId::Getmypid
-            | RuntimeFnId::Gettype | RuntimeFnId::InArray => true,
+            | RuntimeFnId::Gettype | RuntimeFnId::InArray
+            | RuntimeFnId::MemoryGetAllocations
+            | RuntimeFnId::MemoryGetFrees
+            | RuntimeFnId::MemoryGetPeakUsage
+            | RuntimeFnId::MemoryGetUsage
+            | RuntimeFnId::MemoryResetPeakUsage
+            => true,
             RuntimeFnId::Trim => source.is_none_or(|ty| matches!(ty, PhpType::Str)),
             _ => false,
         }
@@ -2305,7 +2345,12 @@ impl RuntimeFnId {
         // for `Strpos` and `Strtr` below.
         if matches!(
             self,
-            RuntimeFnId::IntvalBase
+            RuntimeFnId::MemoryGetAllocations
+                | RuntimeFnId::MemoryGetFrees
+                | RuntimeFnId::MemoryGetPeakUsage
+                | RuntimeFnId::MemoryGetUsage
+                | RuntimeFnId::MemoryResetPeakUsage
+                | RuntimeFnId::IntvalBase
                 | RuntimeFnId::TokenizerErrorLocation
                 // Both array mutators answer the resulting element count. The returned
                 // machine integer cannot keep any variadic value operand alive.
@@ -3315,6 +3360,11 @@ impl RuntimeFnId {
             RuntimeFnId::JsonLastErrorMsg => "json_last_error_msg",
             RuntimeFnId::JsonValidate => "json_validate",
             RuntimeFnId::Localtime => "localtime",
+            RuntimeFnId::MemoryGetAllocations => "memory_get_allocations",
+            RuntimeFnId::MemoryGetFrees => "memory_get_frees",
+            RuntimeFnId::MemoryGetPeakUsage => "memory_get_peak_usage",
+            RuntimeFnId::MemoryGetUsage => "memory_get_usage",
+            RuntimeFnId::MemoryResetPeakUsage => "memory_reset_peak_usage",
             RuntimeFnId::Microtime => "microtime",
             RuntimeFnId::Mktime => "mktime",
             RuntimeFnId::Passthru => "passthru",

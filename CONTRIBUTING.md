@@ -249,10 +249,11 @@ Some directories are also published as their own repositories in the
 | `showcases/doom` | [getelephc/doom](https://github.com/getelephc/doom) | `preserve` |
 
 Develop them here. After a push to `main` that touches one of them,
-`.github/workflows/mirrors.yml` publishes the directory with
-`.github/scripts/publish_subtree_mirror.sh`, authenticated as the `elephc-bot`
-GitHub App. A mirror takes no direct commits: the publish stops instead of
-overwriting one, and the mirror closes pull requests with a pointer here.
+`.github/workflows/mirrors.yml` publishes the directory with the shared
+`illegalstudio/.github/actions/subtree-mirror` action, authenticated as the
+`elephc-bot` GitHub App. A mirror takes no direct commits: the publish stops
+instead of overwriting one, and the mirror closes pull requests with a pointer
+here.
 
 A mirrored directory must work as a repository root, so its README, license and
 CI belong inside it. Its `.github/workflows` are inert here and run in the mirror.

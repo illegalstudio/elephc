@@ -2,7 +2,7 @@
 title: "__elephc_curl_easy_upkeep() - internals"
 description: "Compiler internals for __elephc_curl_easy_upkeep(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1116
+  order: 1121
 ---
 
 ## `__elephc_curl_easy_upkeep()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/curl/__elephc_curl_easy_upkeep.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/curl/__elephc_curl_easy_upkeep.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:706](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L706) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:708](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L708) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

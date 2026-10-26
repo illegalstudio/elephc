@@ -397,6 +397,9 @@ pub(super) fn root_non_aliasing_callback_operands(
                 // Descriptor merge wrappers extract owned Mixed cells from their variadic
                 // pack. Invalid runtime tags throw before ordinary post-call releases.
                 || target == crate::ir::RuntimeFnId::ArrayMerge
+                // Query flags can throw for containers or invoke a NAN warning handler.
+                || matches!(target, crate::ir::RuntimeFnId::MemoryGetUsage
+                    | crate::ir::RuntimeFnId::MemoryGetPeakUsage)
         }
         _ => matches!(
             def.spec.semantics.argument_lowering,

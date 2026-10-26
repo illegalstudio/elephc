@@ -22721,6 +22721,159 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         requirements: &[],
     },
     BuiltinContract {
+        id: BuiltinId::from_canonical_name("memory_get_allocations"),
+        name: "memory_get_allocations",
+        area: Area::System,
+        module: PhpModule::Elephc,
+        since: None,
+        kind: BuiltinKind::Function,
+        params: &[],
+        variadic: None,
+        variadic_by_ref: false,
+        min_args: None,
+        max_args: None,
+        arity_error: None,
+        returns: TypeSpec::Int,
+        by_ref_return: false,
+        summary: "Returns the cumulative number of successful native heap allocations, including reused blocks. Direct native reads do not allocate; eval boxes the sampled count.",
+        examples: &[r#"```php
+$before = memory_get_allocations();
+$values = array_fill(0, 10000, 1);
+$after = memory_get_allocations();
+echo $after - $before;
+```"#],
+        php_manual: None,
+        deprecation: None,
+        extension: true,
+        internal: false,
+        requirements: &[],
+    },
+    BuiltinContract {
+        id: BuiltinId::from_canonical_name("memory_get_frees"),
+        name: "memory_get_frees",
+        area: Area::System,
+        module: PhpModule::Elephc,
+        since: None,
+        kind: BuiltinKind::Function,
+        params: &[],
+        variadic: None,
+        variadic_by_ref: false,
+        min_args: None,
+        max_args: None,
+        arity_error: None,
+        returns: TypeSpec::Int,
+        by_ref_return: false,
+        summary: "Returns the cumulative number of native heap blocks released. Direct native reads do not allocate; eval boxes the sampled count.",
+        examples: &[r#"```php
+$values = array_fill(0, 10000, 1);
+$before = memory_get_frees();
+unset($values);
+$after = memory_get_frees();
+echo $after - $before;
+```"#],
+        php_manual: None,
+        deprecation: None,
+        extension: true,
+        internal: false,
+        requirements: &[],
+    },
+    BuiltinContract {
+        id: BuiltinId::from_canonical_name("memory_get_peak_usage"),
+        name: "memory_get_peak_usage",
+        area: Area::System,
+        module: PhpModule::Standard,
+        since: None,
+        kind: BuiltinKind::Function,
+        params: &[
+            ParamSpec {
+                name: "real_usage",
+                ty: TypeSpec::Bool,
+                default: Some(DefaultSpec::Bool(false)),
+                by_ref: false,
+            },
+        ],
+        variadic: None,
+        variadic_by_ref: false,
+        min_args: None,
+        max_args: None,
+        arity_error: None,
+        returns: TypeSpec::Int,
+        by_ref_return: false,
+        summary: "Returns peak live native heap bytes, including block headers and allocator rounding. With real_usage=true returns the fixed heap arena capacity, including unused space. Excludes concat scratch, libc, and Rust bridge allocations.",
+        examples: &[r#"```php
+memory_reset_peak_usage();
+$values = array_fill(0, 10000, 1);
+unset($values);
+echo memory_get_peak_usage();
+```"#],
+        php_manual: Some("function.memory-get-peak-usage"),
+        deprecation: None,
+        extension: false,
+        internal: false,
+        requirements: &[],
+    },
+    BuiltinContract {
+        id: BuiltinId::from_canonical_name("memory_get_usage"),
+        name: "memory_get_usage",
+        area: Area::System,
+        module: PhpModule::Standard,
+        since: None,
+        kind: BuiltinKind::Function,
+        params: &[
+            ParamSpec {
+                name: "real_usage",
+                ty: TypeSpec::Bool,
+                default: Some(DefaultSpec::Bool(false)),
+                by_ref: false,
+            },
+        ],
+        variadic: None,
+        variadic_by_ref: false,
+        min_args: None,
+        max_args: None,
+        arity_error: None,
+        returns: TypeSpec::Int,
+        by_ref_return: false,
+        summary: "Returns live native heap bytes, including block headers and allocator rounding. With real_usage=true returns the fixed heap arena capacity, including unused space. Excludes concat scratch, libc, and Rust bridge allocations.",
+        examples: &[r#"```php
+$before = memory_get_usage();
+$values = array_fill(0, 10000, 1);
+echo memory_get_usage() - $before;
+```"#],
+        php_manual: Some("function.memory-get-usage"),
+        deprecation: None,
+        extension: false,
+        internal: false,
+        requirements: &[],
+    },
+    BuiltinContract {
+        id: BuiltinId::from_canonical_name("memory_reset_peak_usage"),
+        name: "memory_reset_peak_usage",
+        area: Area::System,
+        module: PhpModule::Standard,
+        since: Some(PhpVersion::Php82),
+        kind: BuiltinKind::Function,
+        params: &[],
+        variadic: None,
+        variadic_by_ref: false,
+        min_args: None,
+        max_args: None,
+        arity_error: None,
+        returns: TypeSpec::Void,
+        by_ref_return: false,
+        summary: "Resets the live native heap peak to current usage. The reserved arena capacity and cumulative allocation/free counters are unchanged.",
+        examples: &[r#"```php
+memory_reset_peak_usage();
+$values = array_fill(0, 10000, 1);
+echo memory_get_peak_usage();
+```"#],
+        php_manual: Some("function.memory-reset-peak-usage"),
+        deprecation: None,
+        extension: false,
+        internal: false,
+        requirements: &[],
+    },
+    BuiltinContract {
         id: BuiltinId::from_canonical_name("method_exists"),
         name: "method_exists",
         area: Area::Callables,

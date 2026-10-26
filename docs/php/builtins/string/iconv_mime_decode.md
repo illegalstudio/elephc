@@ -2,7 +2,7 @@
 title: "iconv_mime_decode()"
 description: "Decodes one MIME header field into the requested character encoding."
 sidebar:
-  order: 818
+  order: 823
 ---
 
 ## iconv_mime_decode()

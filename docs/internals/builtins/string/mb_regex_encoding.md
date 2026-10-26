@@ -2,7 +2,7 @@
 title: "mb_regex_encoding() - internals"
 description: "Compiler internals for mb_regex_encoding(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 871
+  order: 876
 ---
 
 ## `mb_regex_encoding()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_regex_encoding.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_regex_encoding.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:706](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L706) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:708](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L708) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

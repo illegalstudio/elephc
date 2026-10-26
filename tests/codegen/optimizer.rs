@@ -116,3 +116,6 @@ mod numeric_continuation;
 mod reused_loop_counters;
 #[path = "optimizer/loop_counter_checked_bounds.rs"]
 mod loop_counter_checked_bounds;
+
+#[path = "optimizer/memory_metrics.rs"]
+mod memory_metrics;

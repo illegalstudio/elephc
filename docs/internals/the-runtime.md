@@ -790,14 +790,21 @@ Extern callback trampolines use the same descriptor invoker from a C-facing entr
 
 ## Array routines
 
-**Source:** `src/codegen_support/runtime/arrays/` (210 top-level Rust files plus 9 nested target/debug/test helpers)
+**Source:** `src/codegen_support/runtime/arrays/` (212 top-level Rust files plus 14 nested target/debug/test helpers)
 
 ### Core allocation
+
+The five `__rt_memory_*` helpers are constant-time leaf routines that never allocate or scan the heap. They preserve registers other than the result and scratch registers (`x9`-`x11` on AArch64, `r10`-`r11` on x86_64); condition flags are clobbered.
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
 | `__rt_heap_alloc` | Free-list + bump allocator with a 16-byte `[size:4][refcount:4][kind:8]` header | `x0` = size | `x0` = pointer |
 | `__rt_heap_grow_tail` | Extend a live bump-tail allocation in place, updating its payload size and live/peak byte counters without counting a new allocation | `x0` = pointer, `x1` = requested payload bytes | unchanged pointer on success, null when the caller must fall back |
+| `__rt_memory_get_usage` | Read current live bytes, including block headers and allocator rounding, or reserved arena capacity | `x0` / `rdi` = `real_usage` flag | `x0` / `rax` = `_gc_live`, or `_heap_max` for a nonzero flag |
+| `__rt_memory_get_peak_usage` | Read peak live bytes, or reserved arena capacity | `x0` / `rdi` = `real_usage` flag | `x0` / `rax` = `_gc_peak`, or `_heap_max` for a nonzero flag |
+| `__rt_memory_reset_peak_usage` | Copy `_gc_live` into `_gc_peak` without changing allocation/free counters | None | No PHP return value |
+| `__rt_memory_get_allocations` | Read the cumulative allocation event counter | None | `x0` / `rax` = `_gc_allocs` |
+| `__rt_memory_get_frees` | Read the cumulative free event counter | None | `x0` / `rax` = `_gc_frees` |
 | `__rt_heap_free` | Return block to free list (bump reset if last block) | `x0` = pointer | — |
 | `__rt_heap_free_safe` | Free only if pointer is in heap range | `x0` = pointer | — |
 | `__rt_heap_debug_fail` | Print a heap-debug fatal error and terminate immediately | `x1` = msg ptr, `x2` = msg len | — |

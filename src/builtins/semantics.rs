@@ -157,6 +157,8 @@ pub enum BuiltinArgumentLowering {
     Standard,
     /// Preserve concrete values and nullable types for runtime PHP parameter conversion.
     PreserveValues,
+    /// Keep source storage without scalar binding or runtime-parser capture allocations.
+    PreserveUncoerced,
     /// Materialize every regular default through shared planning, including positional calls.
     MaterializeDefaults,
     /// Drop the unsupported statically-default count mode after shared planning.

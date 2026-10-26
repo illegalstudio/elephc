@@ -330,6 +330,8 @@ mod array_builtins;
 mod nested_write_review;
 #[path = "error_tests/registry_arity.rs"]
 mod registry_arity;
+#[path = "error_tests/memory_metrics.rs"]
+mod memory_metrics;
 #[path = "error_tests/callables.rs"]
 mod callables;
 #[path = "error_tests/never.rs"]

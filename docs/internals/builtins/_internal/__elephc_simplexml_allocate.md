@@ -2,7 +2,7 @@
 title: "__elephc_simplexml_allocate() - internals"
 description: "Compiler internals for __elephc_simplexml_allocate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1189
+  order: 1194
 ---
 
 ## `__elephc_simplexml_allocate()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/__elephc_simplexml_allocate.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/__elephc_simplexml_allocate.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:706](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L706) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:708](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L708) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

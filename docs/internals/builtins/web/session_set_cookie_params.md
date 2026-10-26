@@ -2,7 +2,7 @@
 title: "session_set_cookie_params() - internals"
 description: "Compiler internals for session_set_cookie_params(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1005
+  order: 1010
 ---
 
 ## `session_set_cookie_params()` - internals

@@ -197,6 +197,8 @@ mod split_remainders;
 mod implode_boxed_operand;
 #[path = "runtime_gc/heap_codegen.rs"]
 mod heap_codegen;
+#[path = "runtime_gc/memory_metrics.rs"]
+mod memory_metrics;
 #[path = "runtime_gc/resource_scope_cleanup.rs"]
 mod resource_scope_cleanup;
 #[path = "runtime_gc/resource_inventory.rs"]

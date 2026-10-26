@@ -2,7 +2,7 @@
 title: "curl_multi_setopt() - internals"
 description: "Compiler internals for curl_multi_setopt(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 714
+  order: 719
 ---
 
 ## `curl_multi_setopt()` - internals

@@ -2,7 +2,7 @@
 title: "pcntl_wifexited() - internals"
 description: "Compiler internals for pcntl_wifexited(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 674
+  order: 679
 ---
 
 ## `pcntl_wifexited()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/pcntl_wifexited.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/pcntl_wifexited.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:706](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L706) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:708](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L708) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

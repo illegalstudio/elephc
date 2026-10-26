@@ -79,9 +79,9 @@ fn declared_builtin_registry_marks_only_pre_dispatched_adapters_without_direct_h
         );
 }
 
-/// Verifies implemented runtime bindings use shared dispatch and unsupported contracts stay absent.
+/// Limits runtime-backed adapters to reviewed signature gaps; other bindings use shared dispatch.
 #[test]
-fn runtime_builtin_bindings_keep_only_intval_and_round_adapters() {
+fn runtime_builtin_bindings_keep_only_reviewed_signature_adapters() {
     for runtime_id in elephc_builtin_contract::RuntimeBuiltinId::ALL {
         let contract = elephc_builtin_contract::lookup_id(runtime_id.builtin_id())
             .expect("runtime builtin contract must exist");
@@ -98,6 +98,8 @@ fn runtime_builtin_bindings_keep_only_intval_and_round_adapters() {
             runtime_id,
             elephc_builtin_contract::RuntimeBuiltinId::Intval
                 | elephc_builtin_contract::RuntimeBuiltinId::Round
+                | elephc_builtin_contract::RuntimeBuiltinId::MemoryGetUsage
+                | elephc_builtin_contract::RuntimeBuiltinId::MemoryGetPeakUsage
         ) {
             assert!(spec.direct.is_some(), "{} needs a direct adapter", spec.name);
             assert!(spec.values.is_some(), "{} needs a values adapter", spec.name);

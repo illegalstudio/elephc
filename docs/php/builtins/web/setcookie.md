@@ -2,7 +2,7 @@
 title: "setcookie()"
 description: "Adds a Set-Cookie header, URL-encoding the value."
 sidebar:
-  order: 1011
+  order: 1016
 ---
 
 ## setcookie()

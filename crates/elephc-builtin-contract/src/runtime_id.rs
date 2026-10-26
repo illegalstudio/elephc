@@ -193,6 +193,16 @@ pub enum RuntimeBuiltinId {
     MbConvertVariables = 87,
     /// Records the scanned source line and empty filename of a tokenizer ParseError.
     TokenizerErrorLocation = 88,
+    /// Native heap metric `memory_get_allocations`.
+    MemoryGetAllocations = 89,
+    /// Native heap metric `memory_get_frees`.
+    MemoryGetFrees = 90,
+    /// Native heap metric `memory_get_peak_usage`.
+    MemoryGetPeakUsage = 91,
+    /// Native heap metric `memory_get_usage`.
+    MemoryGetUsage = 92,
+    /// Native heap metric `memory_reset_peak_usage`.
+    MemoryResetPeakUsage = 93,
 }
 
 /// Status returned by `__elephc_runtime_builtin_call_v1`.
@@ -224,7 +234,7 @@ impl RuntimeBuiltinStatus {
 
 impl RuntimeBuiltinId {
     /// Every version-one runtime builtin in stable ABI order.
-    pub const ALL: [Self; 88] = [
+    pub const ALL: [Self; 93] = [
         Self::Boolval,
         Self::Floatval,
         Self::Intval,
@@ -313,6 +323,11 @@ impl RuntimeBuiltinId {
         Self::MbSendMail,
         Self::MbConvertVariables,
         Self::TokenizerErrorLocation,
+        Self::MemoryGetAllocations,
+        Self::MemoryGetFrees,
+        Self::MemoryGetPeakUsage,
+        Self::MemoryGetUsage,
+        Self::MemoryResetPeakUsage,
     ];
 
     /// Every operation currently implemented by the optional mbstring engine.
@@ -486,6 +501,12 @@ impl RuntimeBuiltinId {
             Self::MbParseStr => "mb_parse_str",
             Self::SharedIni => "__elephc_shared_ini",
             Self::TokenizerErrorLocation => "__elephc_tokenizer_error_location",
+            Self::MemoryGetAllocations => "memory_get_allocations",
+            Self::MemoryGetFrees => "memory_get_frees",
+            Self::MemoryGetPeakUsage => "memory_get_peak_usage",
+            Self::MemoryGetUsage => "memory_get_usage",
+            Self::MemoryResetPeakUsage => "memory_reset_peak_usage",
+
             Self::MbOutputHandler => "mb_output_handler",
             Self::MbEregReplaceCallback => "mb_ereg_replace_callback",
             Self::MbSendMail => "mb_send_mail",
@@ -591,6 +612,12 @@ impl RuntimeBuiltinId {
             86 => Some(Self::MbSendMail),
             87 => Some(Self::MbConvertVariables),
             88 => Some(Self::TokenizerErrorLocation),
+            89 => Some(Self::MemoryGetAllocations),
+            90 => Some(Self::MemoryGetFrees),
+            91 => Some(Self::MemoryGetPeakUsage),
+            92 => Some(Self::MemoryGetUsage),
+            93 => Some(Self::MemoryResetPeakUsage),
+
             _ => None,
         }
     }
@@ -659,6 +686,8 @@ impl RuntimeBuiltinId {
             Self::MbSendMail => arg_count >= 3 && arg_count <= 5,
             Self::MbEncodeNumericentity => arg_count >= 2 && arg_count <= 4,
             Self::MbDecodeNumericentity => arg_count >= 2 && arg_count <= 3,
+            Self::MemoryGetUsage | Self::MemoryGetPeakUsage => arg_count <= 1,
+            Self::MemoryGetAllocations | Self::MemoryGetFrees | Self::MemoryResetPeakUsage => arg_count == 0,
             Self::ObGetLevel
             | Self::ObGetLength
             | Self::ObClean
@@ -695,6 +724,9 @@ mod tests {
                 | RuntimeBuiltinId::Fmod
                 | RuntimeBuiltinId::Pow
                 | RuntimeBuiltinId::ArrayKeyExists => 2,
+                RuntimeBuiltinId::MemoryGetUsage | RuntimeBuiltinId::MemoryGetPeakUsage
+                | RuntimeBuiltinId::MemoryGetAllocations | RuntimeBuiltinId::MemoryGetFrees
+                | RuntimeBuiltinId::MemoryResetPeakUsage => 0,
                 RuntimeBuiltinId::ObGetLevel
                 | RuntimeBuiltinId::ObGetLength
                 | RuntimeBuiltinId::ObClean

@@ -2,7 +2,7 @@
 title: "mb_strtoupper()"
 description: "Converts every character to its Unicode uppercase mapping."
 sidebar:
-  order: 891
+  order: 896
 ---
 
 ## mb_strtoupper()

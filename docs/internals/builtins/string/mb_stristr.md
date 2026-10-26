@@ -2,7 +2,7 @@
 title: "mb_stristr() - internals"
 description: "Compiler internals for mb_stristr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 882
+  order: 887
 ---
 
 ## `mb_stristr()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_stristr.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_stristr.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:706](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L706) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:708](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L708) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

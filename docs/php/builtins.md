@@ -648,6 +648,11 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`http_response_code()`](./builtins/misc/http_response_code.md) | `(int $response_code = 0): int` | `int` | ✓ | ✓ |
 | [`ini_restore()`](./builtins/misc/ini_restore.md) | `(string $option): void` | `void` | ✓ | - |
 | [`isset()`](./builtins/misc/isset.md) | `(mixed $var, ...$vars): bool` | `bool` | ✓ | ✓ |
+| [`memory_get_allocations()`](./builtins/misc/memory_get_allocations.md) | `(): int` | `int` | ✓ | ✓ |
+| [`memory_get_frees()`](./builtins/misc/memory_get_frees.md) | `(): int` | `int` | ✓ | ✓ |
+| [`memory_get_peak_usage()`](./builtins/misc/memory_get_peak_usage.md) | `(bool $real_usage = false): int` | `int` | ✓ | ✓ |
+| [`memory_get_usage()`](./builtins/misc/memory_get_usage.md) | `(bool $real_usage = false): int` | `int` | ✓ | ✓ |
+| [`memory_reset_peak_usage()`](./builtins/misc/memory_reset_peak_usage.md) | `(): void` | `void` | ✓ | ✓ |
 | [`opcache_compile_file()`](./builtins/misc/opcache_compile_file.md) | `(mixed $filename): bool` | `bool` | ✓ | ✓ |
 | [`opcache_get_configuration()`](./builtins/misc/opcache_get_configuration.md) | `(): array|false` | `array|false` | ✓ | ✓ |
 | [`opcache_get_status()`](./builtins/misc/opcache_get_status.md) | `(mixed $include_scripts = true): mixed` | `mixed` | ✓ | ✓ |

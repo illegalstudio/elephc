@@ -2,7 +2,7 @@
 title: "mb_lcfirst() - internals"
 description: "Compiler internals for mb_lcfirst(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 864
+  order: 869
 ---
 
 ## `mb_lcfirst()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_lcfirst.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_lcfirst.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:706](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L706) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:708](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L708) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

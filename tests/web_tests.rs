@@ -2999,3 +2999,6 @@ echo count($c4), "|", count($_GET), "\n";
     assert!(r1.ends_with(expected), "first response body: {:?}", r1);
     assert!(r2.ends_with(expected), "second response body: {:?}", r2);
 }
+
+#[path = "web/memory_metrics.rs"]
+mod memory_metrics;

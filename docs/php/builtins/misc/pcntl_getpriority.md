@@ -2,7 +2,7 @@
 title: "pcntl_getpriority()"
 description: "Returns a process, process-group, or user scheduling priority, or false on failure."
 sidebar:
-  order: 655
+  order: 660
 ---
 
 ## pcntl_getpriority()

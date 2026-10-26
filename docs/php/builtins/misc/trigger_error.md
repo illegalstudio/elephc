@@ -2,7 +2,7 @@
 title: "trigger_error()"
 description: "Raises a user-level error, warning, or notice."
 sidebar:
-  order: 690
+  order: 695
 ---
 
 ## trigger_error()

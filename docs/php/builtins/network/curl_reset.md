@@ -2,7 +2,7 @@
 title: "curl_reset()"
 description: "Resets all options of a libcurl session handle."
 sidebar:
-  order: 717
+  order: 722
 ---
 
 ## curl_reset()

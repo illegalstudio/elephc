@@ -806,6 +806,34 @@ The runtime routine `__rt_heap_free`:
 
 The variant `__rt_heap_free_safe` validates that the pointer is within `_heap_buf` range before freeing — safe to call with garbage, null, or `.data` section pointers.
 
+### Reading heap usage inside a program
+
+`memory_get_usage(bool $real_usage = false): int` returns live native heap bytes.
+`memory_get_peak_usage(bool $real_usage = false): int` returns their high watermark.
+Both include allocator rounding and the 16-byte header of each live block, including
+internal runtime allocations. Released blocks stop contributing to live usage even
+when cached for reuse. In-place growth updates the same byte counters without
+counting as a new allocation.
+
+With `real_usage: true`, both functions return the full fixed arena capacity selected
+by `--heap-size`, including its free space. The arena is reserved in BSS for the
+lifetime of the program. This value is neither resident set size nor the bump offset.
+`memory_reset_peak_usage(): void` resets the live-byte watermark to current live
+usage. It cannot shrink the arena, so the reserved-byte peak stays constant.
+
+The elephc extensions `memory_get_allocations(): int` and `memory_get_frees(): int`
+read cumulative successful allocation and release counts. Reusing a cached or
+free-list block counts as an allocation. These counters survive peak resets and
+are hidden by `--strict-php`. All five native operations take constant time and
+allocate no memory, allowing before/after samples around frame phases. See
+`examples/memory-phases/main.php` for a 10,000-entity example.
+
+These measurements cover `_heap_buf`, not concat scratch, stack storage, other
+BSS buffers, libc allocations, or Rust bridge and interpreter allocations. In
+`eval()`, the functions sample the same native heap before boxing their result.
+Eval argument/result cells and callable machinery can themselves allocate, so
+interpreted measurements include that overhead where it uses the native heap.
+
 ### Heap debug mode
 
 Passing `--heap-debug` enables additional runtime verification without changing normal ownership behavior:
@@ -814,12 +842,12 @@ Passing `--heap-debug` enables additional runtime verification without changing 
 - `__rt_incref` / `__rt_decref_*` reject zero-refcount heap blocks before mutating them (`bad refcount`)
 - `__rt_heap_alloc` / `__rt_heap_free` validate the ordered free list plus the segregated small-bin chains and trap on out-of-range, overlapping, cyclic, mis-sized, or merely-adjacent free blocks (`free-list corruption`)
 - `__rt_heap_free` poisons freed payload bytes with `0xA5`, so stale raw reads stand out immediately in debug repros
-- process exit prints a heap-debug summary with alloc/free counts, live blocks, live bytes, a leak summary line, and the peak live-byte watermark
+- process exit prints a heap-debug summary with alloc/free counts, live blocks, live bytes, a leak summary line, and the live-byte watermark since the latest explicit or request reset
 - non-clean summaries also report up to 64 live block headers: heap-relative offset, total bytes, heap kind, and reference count, without printing payload contents
 
 When one of these checks trips, the program exits with a fatal heap-debug error instead of continuing with corrupted allocator state.
 
-In full-reset `--web` mode, the next request reclaims the previous PHP heap arena after typed cleanup. This bulk release brings cumulative frees up to cumulative allocations and resets live bytes to zero; the process peak watermark is retained. Per-request counter differences therefore describe the current arena, not blocks already reclaimed by earlier resets.
+In full-reset `--web` mode, the next request reclaims the previous PHP heap arena after typed cleanup. This bulk release brings cumulative frees up to cumulative allocations and resets live bytes and their peak watermark to zero for the next request. Per-request counter differences therefore describe the current arena, not blocks already reclaimed by earlier resets.
 
 ### When memory is freed
 

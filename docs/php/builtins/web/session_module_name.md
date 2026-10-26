@@ -2,7 +2,7 @@
 title: "session_module_name()"
 description: "Reads or sets the session save handler module."
 sidebar:
-  order: 999
+  order: 1004
 ---
 
 ## session_module_name()

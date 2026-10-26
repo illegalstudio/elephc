@@ -2,7 +2,7 @@
 title: "passthru()"
 description: "Executes an external program and passes its output directly."
 sidebar:
-  order: 757
+  order: 762
 ---
 
 ## passthru()
