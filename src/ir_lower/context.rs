@@ -4751,12 +4751,18 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         span: Option<Span>,
     ) -> LoweredValue {
         let release_source = self.value_is_owning_temporary(value);
+        // Boxing an existing cell is only a pointer move. Create a distinct owner
+        // before releasing a temporary source or lending a borrowed caller's cell.
+        let source = self.builder.value_php_type(value.value).codegen_repr();
+        let op = if matches!(source, PhpType::Mixed | PhpType::Union(_)) {
+            Op::MixedClone
+        } else { Op::MixedBox };
         let boxed = self.emit_value(
-            Op::MixedBox,
+            op,
             vec![value.value],
             None,
             php_type,
-            Op::MixedBox.default_effects(),
+            op.default_effects(),
             span,
         );
         if release_source {

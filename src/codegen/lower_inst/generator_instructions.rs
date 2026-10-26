@@ -84,7 +84,7 @@ pub(super) fn lower_generator_yield(ctx: &mut FunctionContext<'_>, inst: &Instru
 
 /// A fresh single-use Mixed cell transfers its one reference into the suspended generator.
 fn yield_cell_transfers_ownership(ctx: &FunctionContext<'_>, key: ValueId) -> Result<bool> {
-    if ctx.value_php_type(key)?.codegen_repr() != PhpType::Mixed
+    if !matches!(ctx.value_php_type(key)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
         || ctx.value_ownership(key)? != crate::ir::Ownership::Owned
     { return Ok(false); }
     Ok(ctx.function.value_use_counts().get(&key).copied() == Some(1))

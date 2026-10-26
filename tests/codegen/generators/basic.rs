@@ -511,7 +511,9 @@ fn test_generator_fresh_yield_values_heap_clean() {
 class FreshYieldValue {
     public function __destruct() { echo 'drop|'; }
 }
+function freshYieldBox(): mixed { return ['boxed']; }
 function freshYieldValues(): Generator {
+    yield freshYieldBox();
     yield ['array'];
     yield str_repeat('s', 40);
     yield new FreshYieldValue();
@@ -523,6 +525,6 @@ $abandoned->rewind();
 unset($abandoned);
 "#);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "array|string|FreshYieldValue|drop|");
+    assert_eq!(out.stdout, "array|array|string|FreshYieldValue|drop|");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
