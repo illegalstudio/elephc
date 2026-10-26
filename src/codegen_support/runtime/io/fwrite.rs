@@ -50,13 +50,14 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.instruction("b __rt_user_wrapper_fwrite");                          // wrapper fd: tail-call stream_write (uncond → cross-atom safe)
     emitter.label("__rt_fwrite_real_fd");
 
-    // Frame (48 bytes): [0]=fd [8]=pointer [16]=length [32]=x29 [40]=x30.
+    // Frame (48 bytes): [0]=fd/count [8]=pointer [16]=length [24]=filter owner [32]=x29 [40]=x30.
     emitter.instruction("sub sp, sp, #48");                                     // frame for the saved write state
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // establish the helper frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the file descriptor
     emitter.instruction("str x1, [sp, #8]");                                    // save the payload pointer
     emitter.instruction("str x2, [sp, #16]");                                   // save the payload length
+    emitter.instruction("str xzr, [sp, #24]");                                  // ordinary writes borrow their payload from the caller
 
     // -- look up the write filter for this descriptor --
     abi::emit_symbol_address(emitter, "x9", "_stream_write_filters");
@@ -136,6 +137,7 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #16]");                                   // payload len → third arg
     emitter.instruction("mov x3, #1");                                          // direction = 1 (write)
     emitter.instruction("bl __rt_apply_user_stream_filter");                    // x1/x2 ← user filter's transformed payload
+    emitter.instruction("str x1, [sp, #24]");                                   // retain the independent filter result until the write completes
     emitter.instruction("str x1, [sp, #8]");                                    // overwrite the payload-ptr slot with the filter result
     emitter.instruction("str x2, [sp, #16]");                                   // overwrite the payload-len slot with the filter result
     emitter.instruction("b __rt_fwrite_direct");                                // fall through to the standard direct-write path
@@ -157,6 +159,10 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.label("__rt_fwrite_syscall");
     emitter.syscall(4);
     emitter.label("__rt_fwrite_return");
+    emitter.instruction("str x0, [sp, #0]");                                    // preserve the write count across filtered payload cleanup
+    emitter.instruction("ldr x0, [sp, #24]");                                   // only user filters publish an independently owned payload
+    emitter.instruction("bl __rt_heap_free_safe");                              // retire filtered heap bytes and ignore brigade scratch or null
+    emitter.instruction("ldr x0, [sp, #0]");                                    // restore the observable byte count
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the frame
     emitter.instruction("ret");                                                 // return the byte count from write
@@ -189,6 +195,7 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the file descriptor
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the payload pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the payload length
+    emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // ordinary writes borrow their payload from the caller
 
     // -- look up the write filter for this descriptor --
     abi::emit_symbol_address(emitter, "r9", "_stream_write_filters");           // write-filter table base
@@ -265,6 +272,7 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // payload len → third arg
     emitter.instruction("mov ecx, 1");                                          // direction = 1 (write)
     emitter.instruction("call __rt_apply_user_stream_filter");                  // rax/rdx ← user filter's transformed payload
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // retain the independent filter result until the write completes
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // overwrite the payload-ptr slot with the filter result
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // overwrite the payload-len slot with the filter result
     emitter.instruction("jmp __rt_fwrite_direct_x86");                          // fall through to the standard direct-write path
@@ -285,6 +293,10 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_fwrite_syscall_x86");
     emitter.instruction("call write");                                          // write the payload through libc write()
     emitter.label("__rt_fwrite_return_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the write count across filtered payload cleanup
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // only user filters publish an independently owned payload
+    emitter.instruction("call __rt_heap_free_safe");                            // retire filtered heap bytes and ignore brigade scratch or null
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // restore the observable byte count
     emitter.instruction("add rsp, 32");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the byte count from write

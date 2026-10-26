@@ -59,7 +59,7 @@ siblingReflectionTargets($argc > 1);
                 let Some(Immediate::Data(data)) = inst.immediate else { panic!("missing static target"); };
                 module.data.strings[data.as_raw() as usize].as_str()
             }).collect();
-            assert_eq!(writes, expected.into_iter().collect(), "{target}: {name}");
+            assert_eq!(writes, expected.into_iter().collect::<std::collections::BTreeSet<_>>(), "{target}: {name}");
         }
     }
 }

@@ -217,10 +217,9 @@ pub fn emit_resolve_user_filter_id(emitter: &mut Emitter) {
 ///
 /// Input:  AArch64 x0=fd x1=buf_ptr x2=buf_len x3=dir (0=read, 1=write).
 ///         x86_64  rdi=fd rsi=buf_ptr rdx=buf_len rcx=dir.
-/// Output: x1/x2 (rax/rdx on x86_64) hold the post-filter string — the
-///         same pair the method returned. When the instance or method
-///         is absent the helper passes through `(buf_ptr, buf_len)`
-///         unchanged so the caller's write/read sees the raw buffer.
+/// Output: x1/x2 (rax/rdx on x86_64) hold an independent post-filter string.
+///         Simple callbacks transfer owned returns and persist borrowed returns.
+///         The brigade path returns its non-heap output scratch buffer.
 pub fn emit_apply_user_stream_filter(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_apply_user_stream_filter_linux_x86_64(emitter);
@@ -275,12 +274,16 @@ pub fn emit_apply_user_stream_filter(emitter: &mut Emitter) {
 
     // -- call filter($this=x0, string=x1/x2) → returns string in x1/x2 --
     emitter.instruction("blr x8");                                              // invoke the user filter method
+    abi::emit_branch_if_php_return_owned(emitter, "__rt_aufs_owned");
+    abi::emit_call_label(emitter, "__rt_str_persist");
+    emitter.label("__rt_aufs_owned");
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #16");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the post-filter string in x1/x2
 
     emitter.label("__rt_aufs_passthrough");
-    // x1/x2 already hold the original buf/len; nothing to do.
+    // An absent callback still returns independently releasable bytes.
+    abi::emit_call_label(emitter, "__rt_str_persist");
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #16");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the original buf/len unchanged
@@ -343,6 +346,9 @@ fn emit_apply_user_stream_filter_linux_x86_64(emitter: &mut Emitter) {
 
     // -- call filter($this=rdi, string=rsi/rdx) → returns string in rax/rdx --
     emitter.instruction("call r10");                                            // invoke the user filter method
+    abi::emit_branch_if_php_return_owned(emitter, "__rt_aufs_owned_x86");
+    abi::emit_call_label(emitter, "__rt_str_persist");
+    emitter.label("__rt_aufs_owned_x86");
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the post-filter string in rax/rdx
 
@@ -350,6 +356,7 @@ fn emit_apply_user_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     // rsi=buf, rdx=len; expose them as the elephc string-result pair.
     emitter.instruction("mov rax, rsi");                                        // copy buf pointer into the string-result ptr register
     // rdx already holds the length in the string-result len register.
+    abi::emit_call_label(emitter, "__rt_str_persist");
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the original buf/len unchanged
 }

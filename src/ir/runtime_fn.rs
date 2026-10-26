@@ -2722,6 +2722,9 @@ impl RuntimeFnId {
         } else if matches!(
             self,
             RuntimeFnId::BaseConvert
+                // Reads produce independent scratch or heap bytes. User-filter callbacks
+                // transfer owned returns and persist borrowed strings before returning.
+                | RuntimeFnId::Fread
                 // Type names live in static data, never in the inspected value. A possible
                 // alias would suppress cleanup of boxed array/property read temporaries.
                 | RuntimeFnId::Gettype
@@ -3471,7 +3474,7 @@ mod tests {
         ] {
             assert_eq!(target.result_ownership(), BuiltinResultOwnership::Fresh);
         }
-        for target in [RuntimeFnId::StrRepeat, RuntimeFnId::StrReplace] {
+        for target in [RuntimeFnId::StrRepeat, RuntimeFnId::StrReplace, RuntimeFnId::Fread] {
             assert_eq!(
                 target.result_ownership(),
                 BuiltinResultOwnership::Independent

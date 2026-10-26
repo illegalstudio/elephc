@@ -166,7 +166,7 @@ pub fn emit_user_wrapper_fread(emitter: &mut Emitter) {
 
     // Frame: 64 bytes. [sp, #0..16] saved x29/x30, [sp, #16..24] saved fd,
     //   [sp, #24..32] saved requested length, [sp, #32..40] the boxed result,
-    //   [sp, #40..56] the converted string pair.
+    //   [sp, #40..56] the converted string pair, [sp, #56] return ownership.
     emitter.instruction("sub sp, sp, #64");                                     // helper frame for the wrapper dispatch
     emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
@@ -180,19 +180,24 @@ pub fn emit_user_wrapper_fread(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #24]");                                   // reload the requested byte count
     emitter.instruction(&format!("tbnz x13, #{}, __rt_uwfread_boxed", VTABLE_SLOT_READ));// a `string|false` return arrives boxed instead
     emitter.instruction("blr x11");                                             // invoke stream_read on the wrapper object
+    abi::emit_branch_if_php_return_owned(emitter, "__rt_uwfread_owned");
+    abi::emit_call_label(emitter, "__rt_str_persist");
+    emitter.label("__rt_uwfread_owned");
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the wrapper's string result to the caller
 
     emitter.label("__rt_uwfread_boxed");
     emitter.instruction("blr x11");                                             // invoke stream_read; x0 = owned Mixed cell
+    emitter.instruction("str x15, [sp, #56]");                                  // preserve the callback's cell ownership before conversion
     emitter.instruction("str x0, [sp, #32]");                                   // keep the boxed result across the conversion
     emitter.instruction("bl __rt_mixed_cast_string");                           // x1/x2 = owned string; false unboxes to the empty-string result
     emitter.instruction("stp x1, x2, [sp, #40]");                               // save the converted pair across the box release
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the boxed result the method handed us
     emitter.instruction("cbz x0, __rt_uwfread_boxed_done");                     // a null box owns nothing to release
-    emitter.instruction("str xzr, [x0]");                                       // retag the box as an int: its payload now belongs to the pair above
-    emitter.instruction("bl __rt_mixed_free_deep");                             // release the box storage only, never the string being returned
+    emitter.instruction("ldr x15, [sp, #56]");                                  // restore the callback's cell ownership after conversion
+    emitter.instruction("cbz x15, __rt_uwfread_boxed_done");                    // a borrowed cell stays with its original owner
+    emitter.instruction("bl __rt_decref_mixed");                                // the detached cast result does not consume the cell's original payload
     emitter.label("__rt_uwfread_boxed_done");
     emitter.instruction("ldp x1, x2, [sp, #40]");                               // restore the converted read result
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
@@ -227,12 +232,16 @@ fn emit_user_wrapper_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("bt r8, {}", VTABLE_SLOT_READ));               // does this class return a boxed `string|false`?
     emitter.instruction("jc __rt_uwfread_boxed_x86");                           // convert the boxed result instead of reading the pair
     emitter.instruction("call r11");                                            // invoke stream_read on the wrapper object
+    abi::emit_branch_if_php_return_owned(emitter, "__rt_uwfread_owned_x86");
+    abi::emit_call_label(emitter, "__rt_str_persist");
+    emitter.label("__rt_uwfread_owned_x86");
     emitter.instruction("mov rsp, rbp");                                        // discard the helper slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the wrapper's string result to the caller
 
     emitter.label("__rt_uwfread_boxed_x86");
     emitter.instruction("call r11");                                            // invoke stream_read; rax = owned Mixed cell
+    abi::emit_store_php_return_status(emitter, 48);
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // keep the boxed result across the conversion
     emitter.instruction("mov rdi, rax");                                        // pass the boxed cell to the string cast
     emitter.instruction("call __rt_mixed_cast_string");                         // rax/rdx = owned string; false unboxes to the empty-string result
@@ -241,8 +250,10 @@ fn emit_user_wrapper_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the boxed result the method handed us
     emitter.instruction("test rax, rax");                                       // a null box owns nothing to release
     emitter.instruction("jz __rt_uwfread_boxed_done_x86");                      // skip the release for a null box
-    emitter.instruction("mov QWORD PTR [rax], 0");                              // retag the box as an int: its payload now belongs to the pair above
-    emitter.instruction("call __rt_mixed_free_deep");                           // release the box storage only, never the string being returned
+    abi::emit_load_php_return_status(emitter, 48);
+    emitter.instruction("test r11, r11");                                       // inspect the callback's saved cell ownership
+    emitter.instruction("jz __rt_uwfread_boxed_done_x86");                      // a borrowed cell stays with its original owner
+    emitter.instruction("call __rt_decref_mixed");                              // the detached cast result does not consume the cell's original payload
     emitter.label("__rt_uwfread_boxed_done_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // restore the converted read pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // restore the converted read length
@@ -965,62 +976,36 @@ fn emit_x86_method_lookup(emitter: &mut Emitter, missing_label: &str, vtable_slo
 #[cfg(test)]
 mod tests {
     use crate::codegen_support::emit::Emitter;
-    use crate::codegen_support::platform::{Arch, Platform, Target};
+    use crate::codegen_support::platform::{Arch, Target};
 
     use super::*;
-
-    /// Emits `__rt_user_wrapper_fread` for one target.
-    fn emit_for(platform: Platform, arch: Arch) -> String {
-        let mut emitter = Emitter::new(Target::new(platform, arch));
-        emit_user_wrapper_fread(&mut emitter);
-        emitter.output()
-    }
 
     /// The read helper dispatches both result shapes on BOTH architectures.
     ///
     /// Companion to the directory guard: the behaviour test for the manual's
     /// `stream_read(): string|false` runs only on the host architecture, and a conversion
-    /// present on one target and missing on the other reads a boxed cell as a string pointer —
+    /// present on one target and missing on the other reads a boxed cell as a string pointer,
     /// the exact silent corruption this change removes.
     #[test]
     fn the_read_helper_dispatches_both_result_shapes_on_both_architectures() {
-        for (platform, arch, boxed_label, retag) in [
-            (
-                Platform::MacOS,
-                Arch::AArch64,
-                "__rt_uwfread_boxed:\n",
-                "str xzr, [x0]\n",
-            ),
-            (
-                Platform::Linux,
-                Arch::X86_64,
-                "__rt_uwfread_boxed_x86:\n",
-                "mov QWORD PTR [rax], 0\n",
-            ),
-        ] {
-            let asm = emit_for(platform, arch);
-            assert!(
-                asm.contains(boxed_label),
-                "{arch:?}: the boxed-result path must be emitted:\n{asm}"
-            );
-            assert!(
-                asm.contains("__rt_mixed_cast_string"),
-                "{arch:?}: the boxed result must be converted, not read as a pair:\n{asm}"
-            );
-            let retag_at = asm
-                .find(retag)
-                .unwrap_or_else(|| panic!("{arch:?}: the cell must be retagged before release:\n{asm}"));
-            let free_at = asm
-                .find("__rt_mixed_free_deep")
-                .unwrap_or_else(|| panic!("{arch:?}: the boxed path releases the cell:\n{asm}"));
-            assert!(
-                retag_at < free_at,
-                "{arch:?}: the retag must precede the release, or the released string is the one \
-                 being returned:\n{asm}"
-            );
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emit_user_wrapper_fread(&mut emitter);
+            let asm = emitter.output();
+            let boxed_label = if target.arch == Arch::X86_64 {
+                "__rt_uwfread_boxed_x86:\n"
+            } else { "__rt_uwfread_boxed:\n" };
+            assert!(asm.contains(boxed_label), "{name}: boxed dispatch: {asm}");
+            let cast = asm.find("__rt_mixed_cast_string").expect("boxed string conversion");
+            let release = asm.find("__rt_decref_mixed").expect("owned cell retirement");
+            assert!(cast < release, "{name}: detach bytes before retiring their source: {asm}");
+            assert!(!asm.contains("__rt_mixed_free_deep"), "{name}: never discard the original payload: {asm}");
+            assert!(asm.contains("__rt_uwfread_owned") && asm.contains("__rt_str_persist"),
+                "{name}: borrowed byte returns need an independent owner: {asm}");
             assert!(
                 asm.contains("__rt_uwfread_empty"),
-                "{arch:?}: the missing-method fallback must survive:\n{asm}"
+                "{name}: the missing-method fallback must survive:\n{asm}"
             );
         }
     }

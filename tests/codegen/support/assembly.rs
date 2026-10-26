@@ -20,7 +20,7 @@ pub(crate) fn selected_function_assembly(assembly: &str, symbols: &[String]) -> 
     for requested in symbols {
         let symbol = if matches!(requested.as_str(), "main" | "_main") {
             [requested.as_str(), if requested == "main" { "_main" } else { "main" }]
-                .into_iter().find(|name| globals.contains(name)).unwrap_or(requested)
+                .into_iter().find(|name| globals.contains(name)).unwrap_or(requested.as_str())
         } else { requested.as_str() };
         let label = format!("{symbol}:");
         let Some(start) = lines.iter().position(|line| line.trim().eq_ignore_ascii_case(&label)) else {

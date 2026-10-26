@@ -86,3 +86,74 @@ try { fclose($stream); } catch (RuntimeException $error) { echo 'caught|'; }
     symbols.push("_main".into());
     assert!(failures.is_empty(), "{}\nFilter parameter assembly:\n{}", failures.join("\n"), selected_function_assembly(&assembly, &symbols));
 }
+
+/// Callback bytes are independent for borrowed, owned and input-alias returns in both directions.
+#[test]
+fn test_stream_filter_string_result_owners_bundle() {
+    let runs = compile_and_run_with_heap_debug_per_argv(r#"<?php
+class StreamResultOwnerFilter extends php_user_filter {
+    private string $bytes = 'borrowed-bytes';
+    public function filter(string $data): string {
+        if ($this->params === 'owned') { return str_repeat('f', 17); }
+        if ($this->params === 'borrowed') { return $this->bytes; }
+        return $data;
+    }
+}
+stream_filter_register('owner.result', 'StreamResultOwnerFilter');
+$stream = fopen('php://memory', 'w+');
+$kind = ($argc === 1 || $argc === 4) ? 'owned' : (($argc === 2 || $argc === 5) ? 'borrowed' : 'alias');
+if ($argc <= 3) {
+    stream_filter_append($stream, 'owner.result', STREAM_FILTER_WRITE, $kind);
+    fwrite($stream, 'input'); rewind($stream);
+} else {
+    fwrite($stream, 'input'); rewind($stream);
+    stream_filter_append($stream, 'owner.result', STREAM_FILTER_READ, $kind);
+}
+$bytes = fread($stream, 64); echo $bytes; fclose($stream); unset($bytes);
+"#, &[&[], &["x"], &["x", "x"], &["x", "x", "x"], &["x", "x", "x", "x"], &["x", "x", "x", "x", "x"]]);
+    for (index, out) in runs.iter().enumerate() {
+        assert!(out.success, "mode={index}: {}", out.stderr);
+        assert_eq!(out.stdout, ["fffffffffffffffff", "borrowed-bytes", "input"][index % 3], "mode={index}");
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "mode={index}: {}", out.stderr);
+    }
+}
+
+/// Raw and boxed wrapper results detach borrowed bytes and retire every owned source cell.
+#[test]
+fn test_stream_wrapper_string_result_owners_bundle() {
+    let runs = compile_and_run_with_heap_debug_per_argv(r#"<?php
+class WrapperResultOwnerBase {
+    public mixed $context = null;
+    public static bool $fresh = false;
+    protected bool $read = false;
+    public function stream_open(string $path, string $mode, int $options, mixed &$opened): bool { return true; }
+    public function stream_eof(): bool { return $this->read; }
+}
+class RawWrapperResultOwner extends WrapperResultOwnerBase {
+    private string $bytes = 'borrowed-bytes';
+    public function stream_read(int $count): string {
+        if ($this->read) { return ''; } $this->read = true;
+        if (self::$fresh) { return str_repeat('f', 17); }
+        return $this->bytes;
+    }
+}
+class BoxedWrapperResultOwner extends WrapperResultOwnerBase {
+    private mixed $bytes = 'borrowed-bytes';
+    public function stream_read(int $count): mixed {
+        if ($this->read) { return false; } $this->read = true;
+        if (self::$fresh) { return str_repeat('f', 17); }
+        return $this->bytes;
+    }
+}
+WrapperResultOwnerBase::$fresh = $argc === 1 || $argc === 3;
+stream_wrapper_register('ownerresult', $argc <= 2 ? 'RawWrapperResultOwner' : 'BoxedWrapperResultOwner');
+$stream = fopen('ownerresult://bytes', 'rb');
+echo fread($stream, 64), '|', strlen(fread($stream, 64)); fclose($stream);
+stream_wrapper_unregister('ownerresult');
+"#, &[&[], &["x"], &["x", "x"], &["x", "x", "x"]]);
+    for (index, out) in runs.iter().enumerate() {
+        assert!(out.success, "mode={index}: {}", out.stderr);
+        assert_eq!(out.stdout, if index % 2 == 0 { "fffffffffffffffff|0" } else { "borrowed-bytes|0" }, "mode={index}");
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "mode={index}: {}", out.stderr);
+    }
+}
