@@ -602,12 +602,22 @@ pub(crate) fn lower_throw_access_error(
     message: &str,
     span: Span,
 ) {
+    lower_throw_access_exception(ctx, "Error", message, span);
+}
+
+/// Lowers a statically-decided access violation as a named catchable exception.
+pub(crate) fn lower_throw_access_exception(
+    ctx: &mut LoweringContext<'_, '_>,
+    exception_class: &str,
+    message: &str,
+    span: Span,
+) {
     if ctx.builder.insertion_block_is_terminated() {
         return;
     }
     let error_expr = Expr::new(
         ExprKind::NewObject {
-            class_name: crate::names::Name::unqualified("Error"),
+            class_name: crate::names::Name::unqualified(exception_class),
             args: vec![Expr::new(ExprKind::StringLiteral(message.to_string()), span)],
         },
         span,

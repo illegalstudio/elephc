@@ -284,7 +284,7 @@ fn insert_builtin_reflection_class(
     class_name: &str,
     classes: &mut BTreeSet<String>,
 ) {
-    let Some(canonical) = canonical_builtin_reflection_class_name(class_name) else {
+    let Some(canonical) = builtin_reflection_ancestor(module, class_name) else {
         return;
     };
     if !module.class_infos.contains_key(canonical) || !classes.insert(canonical.to_string()) {
@@ -303,6 +303,18 @@ fn insert_builtin_reflection_class(
     for dependency in dependencies {
         insert_builtin_reflection_class(module, &dependency, classes);
     }
+}
+
+/// Resolves a builtin Reflection class directly or through a user subclass's parent chain.
+fn builtin_reflection_ancestor(module: &Module, class_name: &str) -> Option<&'static str> {
+    let mut current = class_name.trim_start_matches('\\');
+    for _ in 0..=module.class_infos.len() {
+        if let Some(canonical) = canonical_builtin_reflection_class_name(current) {
+            return Some(canonical);
+        }
+        current = module.class_infos.get(current)?.parent.as_deref()?;
+    }
+    None
 }
 
 /// Adds the Reflection classes codegen can hand back through a getter the program names.

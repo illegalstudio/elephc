@@ -9,6 +9,32 @@
 
 use super::*;
 
+/// Compact empty and populated metadata maps retain growth and copy-on-write behavior.
+#[test]
+fn test_reflection_compact_metadata_maps_grow_without_mutating_snapshots() {
+    let out = compile_and_run(r#"<?php
+class EmptyMetadataMap {}
+class PopulatedMetadataMap {
+    const A = 1, B = 2, C = 3;
+    public int $value = 7;
+}
+$empty = new ReflectionClass('EmptyMetadataMap');
+$values = $empty->getConstants();
+$copy = $values;
+for ($i = 0; $i < 20; $i++) { $values['entry' . $i] = $i; }
+echo count($values), ':', $values['entry19'], ':', count($copy), ':', count($empty->getConstants()), '|';
+$populated = new ReflectionClass('PopulatedMetadataMap');
+$constants = $populated->getConstants();
+$constants['D'] = 4;
+echo count($constants), ':', $constants['A'], ':', $constants['C'], ':', count($populated->getConstants()), '|';
+$defaults = $populated->getDefaultProperties();
+$defaults['value'] = 9;
+$defaults['extra'] = 11;
+echo $defaults['value'], ':', $defaults['extra'], ':', $populated->getDefaultProperties()['value'];
+"#);
+    assert_eq!(out, "20:19:0:0|4:1:3:3|9:11:7");
+}
+
 /// Parameter dumps keep the already normalized PHP profile keys, including nested arrays.
 #[test]
 fn test_reflection_constant_array_profile_keys_match_parameter_dump() {

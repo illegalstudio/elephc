@@ -80,6 +80,7 @@ mod static_nested_updates;
 mod reference_cells;
 mod reference_detach;
 mod reference_property_payload;
+mod reflection_mirror_ownership;
 mod reference_return_boundaries;
 mod callable_operand_owners;
 mod capture_view_owners;
@@ -349,6 +350,28 @@ fn native_reflection_program_lowers_reachable_builtin_methods() {
         r#"<?php
 class Plain {}
 $reflection = new ReflectionClass('Plain');
+echo $reflection->getName();
+"#,
+    );
+    let method_names = module
+        .class_methods
+        .iter()
+        .map(|function| function.name.as_str())
+        .collect::<HashSet<_>>();
+    assert!(method_names.contains("ReflectionClass::__construct"));
+    assert!(method_names.contains("ReflectionClass::getName"));
+}
+
+/// Verifies a user Reflection subclass retains the builtin constructor and inherited methods.
+#[test]
+fn native_reflection_subclass_lowers_reachable_builtin_methods() {
+    let module = lower_source(
+        r#"<?php
+class ReflectedTarget {}
+class UserReflection extends ReflectionClass {
+    public function __construct(string $name) { parent::__construct($name); }
+}
+$reflection = new UserReflection(ReflectedTarget::class);
 echo $reflection->getName();
 "#,
     );

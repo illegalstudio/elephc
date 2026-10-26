@@ -48,6 +48,30 @@ $class = new ReflectionClass(Defaults::class);
 $constant = $class->getReflectionConstant("OPTIONS");
 echo "Reflected options: ", json_encode($constant->getValue()), "\n";
 echo "All constants: ", json_encode($class->getConstants()), "\n";
+
+// A custom reflector keeps its defaults and runs its constructor after forwarding
+// the leading metadata argument unchanged to the builtin constructor.
+class LabeledReflection extends ReflectionClass
+{
+    private string $prefix = 'class';
+    public string $label = 'unlabeled';
+
+    public function __construct(string $name, string $label)
+    {
+        parent::__construct($name);
+        $this->label = $label;
+    }
+
+    public function describe(): string
+    {
+        return $this->prefix . ' ' . $this->getName() . ': ' . $this->label;
+    }
+}
+
+$labeled = new LabeledReflection(Defaults::class, 'configured');
+echo $labeled->describe(), "\n";
+echo "Public reflector properties: ", json_encode(get_object_vars($labeled)), "\n";
+
 // `__toString()` renders PHP's own dump, which is the fastest way to see
 // everything a reflector holds. The only line PHP prints that elephc does not
 // is `@@ <file> <line> - <line>`: a compiled binary has no honest answer for

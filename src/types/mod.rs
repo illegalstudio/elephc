@@ -44,6 +44,8 @@ pub(crate) mod object_operators;
 mod return_alias;
 /// Type checker result types and the `check` entry point.
 mod result;
+/// Shared builtin Reflection ancestry for public metadata property write handlers.
+pub(crate) mod reflection_properties;
 /// Class, interface, enum, and FFI schema definitions.
 mod schema;
 /// Function signature representation and builtin signature helpers.

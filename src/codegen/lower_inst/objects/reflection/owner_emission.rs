@@ -10,13 +10,58 @@
 
 use super::*;
 
+/// Releases generic defaults in the builtin Reflection prefix before metadata replaces them.
+///
+/// A user subclass is allocated through the ordinary object path, which initializes inherited
+/// strings, arrays, objects, and boxed values. Reflection metadata writers expect the zeroed
+/// builtin allocation shape, so every inherited owner slot is retired by its declared storage
+/// type and reset before those writers run. User-declared suffix slots remain untouched.
+pub(super) fn clear_reflection_owner_prefix(
+    ctx: &mut FunctionContext<'_>,
+    owner_class_name: &str,
+    object: ValueId,
+) -> Result<()> {
+    let class_info = ctx
+        .module
+        .class_infos
+        .get(owner_class_name)
+        .ok_or_else(|| CodegenIrError::unsupported(format!("unknown class {}", owner_class_name)))?;
+    let slots = class_info
+        .properties
+        .iter()
+        .enumerate()
+        .map(|(index, (name, ty))| {
+            let owned_reference = class_info.owned_reference_properties.contains(name);
+            (8 + index * 16, ty.codegen_repr(), owned_reference)
+        })
+        .collect::<Vec<_>>();
+    for (offset, ty, owned_reference) in slots {
+        ctx.load_value_to_result(object)?;
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        let object_reg = abi::secondary_scratch_reg(ctx.emitter);
+        abi::emit_push_reg(ctx.emitter, result_reg);
+        abi::emit_load_from_address(ctx.emitter, result_reg, result_reg, offset);
+        if owned_reference {
+            abi::emit_call_label(ctx.emitter, "__rt_reference_cell_release");
+        } else if ty == PhpType::Str {
+            abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+        } else {
+            abi::emit_decref_if_refcounted(ctx.emitter, &ty);
+        }
+        abi::emit_pop_reg(ctx.emitter, object_reg);
+        abi::emit_store_zero_to_address(ctx.emitter, object_reg, offset);
+        abi::emit_store_zero_to_address(ctx.emitter, object_reg, offset + 8);
+        abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
+    }
+    Ok(())
+}
+
 /// Allocates and populates one builtin Reflection owner object from metadata.
 pub(super) fn emit_reflection_owner_object(
     ctx: &mut FunctionContext<'_>,
     class_name: &str,
     metadata: &ReflectionOwnerMetadata,
 ) -> Result<()> {
-    let is_reflection_class_owner = matches!(class_name, "ReflectionClass" | "ReflectionObject");
     let (class_id, property_count, uninitialized_marker_offsets) = {
         let class_info = ctx
             .module
@@ -37,9 +82,35 @@ pub(super) fn emit_reflection_owner_object(
         &uninitialized_marker_offsets,
         &[],
     )?;
+    emit_reflection_owner_metadata(ctx, class_name, metadata)
+}
+
+/// Populates Reflection metadata on an object already held in the integer result register.
+/// Builtin-owner offsets keep same-named private properties declared by a user subclass intact.
+pub(super) fn emit_reflection_owner_metadata(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    metadata: &ReflectionOwnerMetadata,
+) -> Result<()> {
+    let object_class_name = class_name;
+    let owner_class_name = reflection_owner_base_class(ctx, object_class_name)
+        .unwrap_or_else(|| object_class_name.to_string());
+    let class_name = owner_class_name.as_str();
+    let is_reflection_class_owner =
+        matches!(class_name, "ReflectionClass" | "ReflectionObject");
     if let Some(reflected_name) = metadata.reflected_name.as_deref() {
         emit_reflection_owner_string_property_by_name(ctx, class_name, "__name", reflected_name)?;
-        if is_reflection_class_owner || class_name == "ReflectionEnum" {
+        let public_name_offset = ctx
+            .module
+            .class_infos
+            .get(object_class_name)
+            .and_then(|info| info.property_offsets.get("name").copied());
+        if let Some(offset) = public_name_offset {
+            if owner_class_name != "ReflectionParameter" {
+                emit_reflection_literal_string_property(ctx, reflected_name, offset, offset + 8);
+            }
+        }
+        if is_reflection_class_owner || owner_class_name == "ReflectionEnum" {
             emit_reflection_class_name_parts(ctx, class_name, reflected_name)?;
         }
         if is_reflection_class_owner {
@@ -155,11 +226,11 @@ pub(super) fn emit_reflection_owner_object(
                 "ReflectionProperty",
                 &metadata.property_members,
             )?;
-        } else if class_name == "ReflectionFunction" {
+        } else if owner_class_name == "ReflectionFunction" {
             let (_, short_name) = reflection_name_parts(reflected_name);
             emit_reflection_owner_string_property_by_name(ctx, class_name, "__short_name", short_name)?;
         }
-        if class_name == "ReflectionEnum" {
+        if owner_class_name == "ReflectionEnum" {
             let case_names = metadata
                 .enum_case_members
                 .iter()
@@ -178,7 +249,7 @@ pub(super) fn emit_reflection_owner_object(
             )?;
             emit_reflection_member_array_property_by_name(
                 ctx,
-                "ReflectionEnum",
+                class_name,
                 "__cases",
                 case_class,
                 &metadata.enum_case_members,
@@ -196,15 +267,15 @@ pub(super) fn emit_reflection_owner_object(
                 metadata.type_metadata.as_ref(),
             )?;
         }
-        if class_name == "ReflectionFunction" {
+        if owner_class_name == "ReflectionFunction" {
             emit_reflection_function_name_parts(ctx, reflected_name)?;
         }
-        if class_name == "ReflectionMethod" {
+        if owner_class_name == "ReflectionMethod" {
             emit_reflection_method_name_parts(ctx, reflected_name)?;
         }
     }
     emit_reflection_attrs_property(ctx, class_name, &metadata.attr_names, &metadata.attr_args)?;
-    if is_reflection_class_owner || class_name == "ReflectionEnum" {
+    if is_reflection_class_owner || owner_class_name == "ReflectionEnum" {
         emit_reflection_owner_bool_property(ctx, class_name, "__is_final", metadata.is_final)?;
         emit_reflection_owner_bool_property(ctx, class_name, "__is_abstract", metadata.is_abstract)?;
         emit_reflection_owner_bool_property(ctx, class_name, "__is_interface", metadata.is_interface)?;
@@ -229,7 +300,7 @@ pub(super) fn emit_reflection_owner_object(
         emit_reflection_owner_int_property(ctx, class_name, "__modifiers", metadata.modifiers)?;
     }
     if matches!(
-        class_name,
+        owner_class_name.as_str(),
         "ReflectionMethod"
             | "ReflectionProperty"
             | "ReflectionClassConstant"
@@ -241,18 +312,19 @@ pub(super) fn emit_reflection_owner_object(
             class_name,
             metadata.parent_class_name.as_deref(),
         )?;
-        if matches!(class_name, "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase") {
+        if matches!(owner_class_name.as_str(), "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase") {
             emit_reflection_enum_property(ctx, class_name, metadata.parent_class_name.as_deref())?;
         }
     }
-    if matches!(class_name, "ReflectionFunction" | "ReflectionMethod") {
+    if matches!(owner_class_name.as_str(), "ReflectionFunction" | "ReflectionMethod") {
         // The `__string` slot backs `__toString()`. Both owners declared it and nothing ever
         // filled it, so `(string) $method` answered the empty string (#1080).
-        let is_internal = reflection_function_or_method_is_internal(ctx, class_name, &metadata);
+        let is_internal =
+            reflection_function_or_method_is_internal(ctx, &owner_class_name, metadata);
         let reflected_name = metadata.reflected_name.as_deref().unwrap_or("");
         let rendered = if let Some(rendered) = metadata.rendered_to_string.clone() {
             rendered
-        } else if class_name == "ReflectionMethod" {
+        } else if owner_class_name == "ReflectionMethod" {
             reflection_method_to_string(
                 reflected_name,
                 metadata.parent_class_name.as_deref(),
@@ -326,7 +398,7 @@ pub(super) fn emit_reflection_owner_object(
         )?;
     }
     if matches!(
-        class_name,
+        owner_class_name.as_str(),
         "ReflectionClassConstant" | "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase"
     ) {
         if let Some(value) = &metadata.constant_value {
@@ -335,7 +407,7 @@ pub(super) fn emit_reflection_owner_object(
             emit_reflection_owner_mixed_property_from_result(ctx, class_name, "__value")?;
         }
     }
-    if class_name == "ReflectionClassConstant" {
+    if owner_class_name == "ReflectionClassConstant" {
         emit_reflection_owner_bool_property(
             ctx,
             class_name,
@@ -344,7 +416,7 @@ pub(super) fn emit_reflection_owner_object(
         )?;
         emit_reflection_owner_type_property(ctx, class_name, metadata.type_metadata.as_ref())?;
     }
-    if class_name == "ReflectionEnumBackedCase" {
+    if owner_class_name == "ReflectionEnumBackedCase" {
         if let Some(value) = &metadata.backing_value {
             abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
             emit_reflection_constant_value_as_mixed(ctx, value);
@@ -352,7 +424,7 @@ pub(super) fn emit_reflection_owner_object(
         }
     }
     if matches!(
-        class_name,
+        owner_class_name.as_str(),
         "ReflectionClassConstant" | "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase"
     ) {
         emit_reflection_owner_bool_property(
@@ -363,7 +435,7 @@ pub(super) fn emit_reflection_owner_object(
         )?;
         emit_reflection_owner_int_property(ctx, class_name, "__modifiers", metadata.modifiers)?;
     }
-    if class_name == "ReflectionMethod" {
+    if owner_class_name == "ReflectionMethod" {
         emit_reflection_owner_int_property(ctx, class_name, "__modifiers", metadata.modifiers)?;
         emit_reflection_owner_bool_property(
             ctx,
@@ -373,7 +445,7 @@ pub(super) fn emit_reflection_owner_object(
         )?;
         emit_reflection_method_prototype_property(ctx, metadata.prototype_member.as_deref())?;
     }
-    if class_name == "ReflectionProperty" {
+    if owner_class_name == "ReflectionProperty" {
         emit_reflection_owner_int_property(ctx, class_name, "__modifiers", metadata.modifiers)?;
         emit_reflection_owner_type_property(ctx, class_name, metadata.type_metadata.as_ref())?;
         emit_reflection_owner_type_property_by_name(
@@ -418,7 +490,7 @@ pub(super) fn emit_reflection_owner_object(
             &property_string,
         )?;
     }
-    if class_name == "ReflectionParameter" {
+    if owner_class_name == "ReflectionParameter" {
         if let Some(parameter) = metadata.parameter_members.first() {
             emit_reflection_parameter_properties(ctx, parameter)?;
         }
@@ -523,4 +595,3 @@ pub(super) fn reflection_name_parts(reflected_name: &str) -> (&str, &str) {
         None => ("", reflected_name),
     }
 }
-

@@ -1145,7 +1145,7 @@ pub(crate) fn is_unset_call(name: &str) -> bool {
     name.trim_start_matches('\\').eq_ignore_ascii_case("unset")
 }
 
-/// Records an access violation that must lower to a catchable `Error` throw.
+/// Records an access violation that must lower to a catchable exception throw.
 ///
 /// Refuses a span that identifies no single node. `throw_access_sites` is read back by lowering
 /// as `get(&span)` for the node being lowered, so an entry filed under a span many nodes share

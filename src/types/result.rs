@@ -26,7 +26,7 @@ pub(crate) type LoopStorageTypes = HashMap<(String, Span), TypeEnv>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// Describes a statically-known access violation that PHP raises as a catchable
-/// `Error` at runtime instead of a compile-time rejection.
+/// exception at runtime instead of a compile-time rejection.
 pub struct ThrowAccessInfo {
     /// Source span of the offending call/assignment, used as the lookup key.
     pub span: Span,
@@ -35,7 +35,7 @@ pub struct ThrowAccessInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-/// Categorizes statically-decided access violations lowered to runtime `Error` throws.
+/// Categorizes statically-decided access violations lowered to runtime exception throws.
 pub enum ThrowAccessKind {
     /// A private/protected method call from an inaccessible scope.
     PrivateMethod {
@@ -54,6 +54,11 @@ pub enum ThrowAccessKind {
         property: String,
         /// The setter-access Error for first initialization, or `None` when it is allowed.
         initialization_error: Option<String>,
+    },
+    /// A direct write to one of Reflection's internal public metadata mirrors.
+    ReflectionReadOnlyProperty {
+        /// Property name without the leading `$`.
+        property: String,
     },
 }
 
@@ -104,7 +109,7 @@ pub struct CheckResult {
     pub extern_globals: HashMap<String, PhpType>,
     pub required_libraries: Vec<String>,
     pub warnings: Vec<CompileWarning>,
-    /// Statically-decided access violations lowered to runtime `Error` throws,
+    /// Statically-decided access violations lowered to runtime exception throws,
     /// keyed by the source span of the offending call/assignment.
     pub throw_access_sites: HashMap<Span, ThrowAccessInfo>,
     /// Authoritative checker result types for builtin calls, keyed by call span.

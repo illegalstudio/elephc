@@ -490,12 +490,12 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
-    out.push_str(".globl _class_reflection_parameter_cast_public_flags\n_class_reflection_parameter_cast_public_flags:\n");
+    out.push_str(".globl _class_reflection_public_cast_flags\n_class_reflection_public_cast_flags:\n");
     if let Some(max_class_id) = max_class_id {
         for class_id in 0..=max_class_id {
             let flag = class_name_by_id
                 .get(&class_id)
-                .is_some_and(|class_name| class_name.as_str() == "ReflectionParameter");
+                .is_some_and(|class_name| REFLECTION_CLASS_NAMES.contains(&class_name.as_str()));
             out.push_str(&format!("    .quad {}\n", u8::from(flag)));
         }
     }
@@ -1318,10 +1318,9 @@ pub(crate) fn emit_runtime_data_user(
             out.push('\n');
         }
 
-        // Serialize property-info table: one row per declared property in
-        // declaration order with the PHP-mangled serialize key bytes, the
-        // property's byte offset within the object, and its runtime value tag.
-        // __rt_serialize_object / __rt_unserialize_object walk this by class id.
+        // Serialize property-info table: one row per declared property in declaration order,
+        // including PHP-mangled private keys. The cast walker separately hides Reflection's
+        // compiler-owned private rows by checking each row's declaring class.
         for (prop_index, (prop_name, _)) in class_info.properties.iter().enumerate() {
             let (metadata, owner_name) = physical_property_slot_metadata(
                 classes, class_info, class_name, prop_index, prop_name,
@@ -3697,9 +3696,9 @@ fn var_dump_descriptor_rows(
 /// `__`-prefixed slot is compiler storage that backs an accessor (`getName()` reads
 /// `__name`). Every object renderer that walks the full declared-property list must
 /// therefore omit them. This is the renderer-side counterpart of the cast-path filter
-/// `_class_reflection_parameter_cast_public_flags` in `runtime/objects/object_vars.rs`,
-/// which today covers only `ReflectionParameter`; `var_dump`, `print_r` and `var_export`
-/// all read the rows filtered here, so the three renderers stay in agreement.
+/// `_class_reflection_public_cast_flags` in `runtime/objects/object_vars.rs`, which applies
+/// the same public-only policy to every builtin Reflection owner. `var_dump`, `print_r` and
+/// `var_export` all read the rows filtered here, so the object views stay in agreement.
 ///
 /// WHY THE DECLARING CLASS. A user class may legitimately declare its own private
 /// `__`-prefixed property, and PHP's `var_dump` shows it. The skip is therefore gated on

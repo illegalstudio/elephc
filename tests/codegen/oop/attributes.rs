@@ -4502,3 +4502,508 @@ eval('echo implode(",", array_keys((new ReflectionClass("E"))->getConstants())),
          B,X,A\n"
     );
 }
+
+
+/// Reflection casts and get_object_vars expose only PHP's public name/class fields.
+#[test]
+fn test_reflection_builtin_public_properties_are_projected() {
+    let out = compile_and_run(
+        r#"<?php
+#[Attribute] class PublicViewAttribute {}
+#[PublicViewAttribute] class PublicViewBase { public int $field = 1; public const VALUE = 7; public function inherited() {} }
+class PublicViewChild extends PublicViewBase { public function own() {} }
+class PublicViewReflectionChild extends ReflectionClass { private string $custom; }
+enum PublicViewUnit { case Case; }
+enum PublicViewBacked: string { case Case = 'value'; }
+function public_view_target(int $value) {}
+function public_view_union(int|string $value) {}
+interface PublicViewContract {}
+class PublicViewImplementation implements PublicViewContract {}
+function public_view_intersection(PublicViewImplementation&PublicViewContract $value) {}
+$attribute = (new ReflectionClass(PublicViewBase::class))->getAttributes()[0];
+$reflectionSubclass = new PublicViewReflectionChild(PublicViewChild::class);
+(new ReflectionProperty(PublicViewReflectionChild::class, 'custom'))->setValue($reflectionSubclass, 'user');
+$values = [
+    'attribute' => $attribute,
+    'class' => new ReflectionClass(PublicViewChild::class),
+    'object' => new ReflectionObject(new PublicViewChild()),
+    'enum' => new ReflectionEnum(PublicViewBacked::class),
+    'function' => new ReflectionFunction('public_view_target'),
+    'method' => new ReflectionMethod(PublicViewChild::class, 'inherited'),
+    'property' => new ReflectionProperty(PublicViewChild::class, 'field'),
+    'parameter' => new ReflectionParameter('public_view_target', 'value'),
+    'named-type' => (new ReflectionParameter('public_view_target', 'value'))->getType(),
+    'union-type' => (new ReflectionParameter('public_view_union', 'value'))->getType(),
+    'intersection-type' => (new ReflectionParameter('public_view_intersection', 'value'))->getType(),
+    'constant' => new ReflectionClassConstant(PublicViewChild::class, 'VALUE'),
+    'unit' => new ReflectionEnumUnitCase(PublicViewUnit::class, 'Case'),
+    'backed' => new ReflectionEnumBackedCase(PublicViewBacked::class, 'Case'),
+];
+foreach ($values as $label => $value) {
+    echo $label, ':', json_encode((array)$value), '|', json_encode(get_object_vars($value)), "\n";
+}
+echo 'subclass:', json_encode((array)$reflectionSubclass), '|', json_encode(get_object_vars($reflectionSubclass)), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "attribute:{\"name\":\"PublicViewAttribute\"}|{\"name\":\"PublicViewAttribute\"}\n\
+class:{\"name\":\"PublicViewChild\"}|{\"name\":\"PublicViewChild\"}\n\
+object:{\"name\":\"PublicViewChild\"}|{\"name\":\"PublicViewChild\"}\n\
+enum:{\"name\":\"PublicViewBacked\"}|{\"name\":\"PublicViewBacked\"}\n\
+function:{\"name\":\"public_view_target\"}|{\"name\":\"public_view_target\"}\n\
+method:{\"name\":\"inherited\",\"class\":\"PublicViewBase\"}|{\"name\":\"inherited\",\"class\":\"PublicViewBase\"}\n\
+property:{\"name\":\"field\",\"class\":\"PublicViewBase\"}|{\"name\":\"field\",\"class\":\"PublicViewBase\"}\n\
+parameter:{\"name\":\"value\"}|{\"name\":\"value\"}\n\
+named-type:[]|[]\n\
+union-type:[]|[]\n\
+intersection-type:[]|[]\n\
+constant:{\"name\":\"VALUE\",\"class\":\"PublicViewBase\"}|{\"name\":\"VALUE\",\"class\":\"PublicViewBase\"}\n\
+unit:{\"name\":\"Case\",\"class\":\"PublicViewUnit\"}|{\"name\":\"Case\",\"class\":\"PublicViewUnit\"}\n\
+backed:{\"name\":\"Case\",\"class\":\"PublicViewBacked\"}|{\"name\":\"Case\",\"class\":\"PublicViewBacked\"}\n\
+subclass:{\"name\":\"PublicViewChild\",\"\\u0000PublicViewReflectionChild\\u0000custom\":\"user\"}|{\"name\":\"PublicViewChild\"}\n"
+    );
+}
+
+/// User subclasses of ReflectionClass, ReflectionObject, and ReflectionEnum are populated by
+/// the Reflection owner path, so they must carry the builtin's patched member types: with the
+/// unpatched indexed-array tags, `getInterfaces()` failed to type-check and releasing the object
+/// freed its name-keyed maps as packed arrays. Expected output measured on PHP 8.5.
+#[test]
+fn test_reflection_user_subclasses_share_builtin_member_types() {
+    let out = compile_and_run(
+        r#"<?php
+interface SubclassMarker {}
+trait SubclassHelper { public function help() {} }
+class SubclassTarget implements SubclassMarker {
+    use SubclassHelper;
+    public int $field = 1;
+    public static int $count = 3;
+    public function go(int $a) {}
+}
+enum SubclassBacked: string { case One = 'one'; }
+class SubclassOfClass extends ReflectionClass {
+    private string $mine = 'c';
+    private array $__interfaces = ['user'];
+    public function mine(): string { return $this->mine; }
+    public function shadow(): string { return $this->__interfaces[0]; }
+}
+class SubclassOfObject extends ReflectionObject {}
+class SubclassOfEnum extends ReflectionEnum {}
+$values = [
+    'class' => new SubclassOfClass('SubclassTarget'),
+    'object' => new SubclassOfObject(new SubclassTarget()),
+    'enum' => new SubclassOfEnum('SubclassBacked'),
+];
+foreach ($values as $label => $value) {
+    echo $label, ' ', get_class($value), ' ', $value->name, ' ', $value->getName(), ' ',
+        json_encode(get_object_vars($value)), "\n";
+}
+$class = $values['class'];
+echo json_encode(array_keys($class->getInterfaces())), ' ',
+    json_encode(array_keys($class->getTraits())), ' ',
+    json_encode($class->getStaticProperties()), ' ', count($class->getMethods()), ' ',
+    $class->mine(), ' ', $class->shadow(), "\n";
+echo json_encode(array_keys($values['object']->getInterfaces())), "\n";
+unset($values, $class);
+$bare = new SubclassOfClass('SubclassTarget');
+unset($bare);
+echo "done\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "class SubclassOfClass SubclassTarget SubclassTarget {\"name\":\"SubclassTarget\"}\n\
+object SubclassOfObject SubclassTarget SubclassTarget {\"name\":\"SubclassTarget\"}\n\
+enum SubclassOfEnum SubclassBacked SubclassBacked {\"name\":\"SubclassBacked\"}\n\
+[\"SubclassMarker\"] [\"SubclassHelper\"] {\"count\":3} 2 c user\n\
+[\"SubclassMarker\"]\n\
+done\n"
+    );
+}
+
+/// Reflection subclasses use ordinary allocation before metadata population, preserving user
+/// defaults, owned reference cells, dynamic-property storage, and constructor execution.
+#[test]
+fn test_reflection_subclass_preserves_normal_construction() {
+    let out = compile_and_run(
+        r#"<?php
+class ExpandedReflectionTarget {}
+
+#[AllowDynamicProperties]
+class ExpandedReflectionBase extends ReflectionClass {
+    public function __construct(string $name) { parent::__construct($name); }
+}
+class ExpandedReflectionClass extends ExpandedReflectionBase {
+    private string $mine = 'default';
+    public string $label = 'before';
+    public string $ownedValue = 'seed';
+
+    public function __construct(string $name, string $label) {
+        parent::__construct($name);
+        $this->label = $label;
+        $this->dynamicValue = 'tail';
+    }
+
+    public function mine(): string { return $this->mine; }
+    public function &owned(): string { return $this->ownedValue; }
+}
+
+$reflection = new ExpandedReflectionClass(ExpandedReflectionTarget::class, 'constructed');
+$alias =& $reflection->owned();
+$alias = 'changed';
+echo $reflection->getName(), '|', $reflection->name, '|', $reflection->mine(), '|',
+    $reflection->label, '|', $reflection->dynamicValue, '|', $reflection->ownedValue, "\n";
+unset($alias, $reflection);
+echo "done\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "ExpandedReflectionTarget|ExpandedReflectionTarget|default|constructed|tail|changed\n\
+done\n"
+    );
+}
+
+/// Reflection subclass metadata replaces generic defaults without leaking their old owners.
+#[test]
+fn test_reflection_subclass_metadata_releases_initialized_prefix_defaults() {
+    /// Returns the final live-block count from one heap-debug run.
+    fn live_blocks(out: &crate::support::ProgramOutput) -> u64 {
+        let marker = "live_blocks=";
+        let start = out
+            .stderr
+            .rfind(marker)
+            .unwrap_or_else(|| panic!("no heap debug summary in stderr: {}", out.stderr))
+            + marker.len();
+        let rest = &out.stderr[start..];
+        let end = rest
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(rest.len());
+        rest[..end].parse().expect("live_blocks is a number")
+    }
+
+    /// Measures per-construction leak growth while cancelling fixed Reflection caches.
+    fn live_block_growth(class_declaration: &str, allocation: &str) -> u64 {
+        let source = r#"<?php
+class ReflectionPrefixTarget {
+    public function action(): void {}
+}
+__CLASS_DECLARATION__
+$iterations = $argc > 2 ? 20 : 1;
+for ($i = 0; $i < $iterations; $i++) {
+    $class = __ALLOCATION__;
+    echo $class->name, "\n";
+    unset($class);
+}
+"#
+        .replace("__CLASS_DECLARATION__", class_declaration)
+        .replace("__ALLOCATION__", allocation);
+        let outputs = compile_and_run_with_heap_debug_per_argv(
+            &source,
+            &[&[], &["many", "iterations"]],
+        );
+        let [few, many] = outputs.as_slice() else {
+            panic!("expected two heap-debug runs")
+        };
+        assert!(few.success, "{}", few.stderr);
+        assert!(many.success, "{}", many.stderr);
+        assert_eq!(few.stdout, "ReflectionPrefixTarget\n");
+        assert_eq!(
+            many.stdout,
+            "ReflectionPrefixTarget\n".repeat(20),
+            "{}",
+            many.stderr
+        );
+        live_blocks(many)
+            .checked_sub(live_blocks(few))
+            .expect("more Reflection constructions cannot reduce live blocks")
+    }
+
+    let builtin_growth = live_block_growth(
+        "",
+        "new ReflectionClass(ReflectionPrefixTarget::class)",
+    );
+    let subclass_growth = live_block_growth(
+        r#"class ReflectionPrefixClass extends ReflectionClass {
+    public function __construct(string $name) { parent::__construct($name); }
+}"#,
+        "new ReflectionPrefixClass(ReflectionPrefixTarget::class)",
+    );
+    assert_eq!(
+        subclass_growth, builtin_growth,
+        "Reflection subclass construction leaked defaults beyond the builtin owner's growth \
+         ({subclass_growth} versus {builtin_growth} live blocks across nineteen extra instances)"
+    );
+}
+
+/// Reflection subclass constructors must expose the metadata arguments they forward unchanged.
+#[test]
+fn test_reflection_subclass_rejects_unprovable_constructor_forwarding() {
+    let sources = [
+        r#"<?php
+class ReflectionForwardTarget {}
+class ReflectionMissingForward extends ReflectionClass {
+    public function __construct(string $name) {}
+}
+new ReflectionMissingForward(ReflectionForwardTarget::class);
+"#,
+        r#"<?php
+class ReflectionForwardTarget {}
+class ReflectionReorderedForward extends ReflectionClass {
+    public function __construct(string $ignored, string $name) {
+        parent::__construct($name);
+    }
+}
+new ReflectionReorderedForward('ignored', ReflectionForwardTarget::class);
+"#,
+        r#"<?php
+class ReflectionForwardTarget {}
+class ReflectionHardcodedForward extends ReflectionClass {
+    public function __construct(string $name) {
+        parent::__construct(ReflectionForwardTarget::class);
+    }
+}
+new ReflectionHardcodedForward('stdClass');
+"#,
+        r#"<?php
+class ReflectionForwardTarget {}
+class ReflectionTransformingParent extends ReflectionClass {
+    public function __construct(string $name) {
+        parent::__construct('stdClass');
+    }
+}
+class ReflectionNestedForward extends ReflectionTransformingParent {
+    public function __construct(string $name) {
+        parent::__construct($name);
+    }
+}
+new ReflectionNestedForward(ReflectionForwardTarget::class);
+"#,
+    ];
+    for source in sources {
+        let error = compile_source_expect_backend_error(source);
+        assert!(
+            error.contains(
+                "must directly forward the leading ReflectionClass constructor parameters unchanged to parent::__construct() as its first action"
+            ),
+            "unexpected backend diagnostic: {error}"
+        );
+    }
+}
+
+/// Direct writes to Reflection public metadata mirrors throw without changing their values.
+#[test]
+fn test_reflection_public_mirror_direct_writes_throw_reflection_exception() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectionMirrorTarget {
+    public int $field = 1;
+    public function action(): void {}
+}
+class ReflectionMirrorSubclass extends ReflectionClass {}
+function reflectionReplacement(): string { echo 'rhs|'; return 'changed'; }
+$class = new ReflectionClass(ReflectionMirrorTarget::class);
+try { $class->name = reflectionReplacement(); }
+catch (ReflectionException $error) { echo $error->getMessage(), '|'; }
+echo $class->name, "\n";
+$subclass = new ReflectionMirrorSubclass(ReflectionMirrorTarget::class);
+try { $subclass->name = reflectionReplacement(); }
+catch (ReflectionException $error) { echo $error->getMessage(), '|'; }
+echo $subclass->name, "\n";
+$method = new ReflectionMethod(ReflectionMirrorTarget::class, 'action');
+try { $method->class = reflectionReplacement(); }
+catch (ReflectionException $error) { echo $error->getMessage(), '|'; }
+try { $method->name = reflectionReplacement(); }
+catch (ReflectionException $error) { echo $error->getMessage(), '|'; }
+echo $method->class, '|', $method->name;
+"#,
+    );
+    assert_eq!(
+        out,
+        "rhs|Cannot set read-only property ReflectionClass::$name|ReflectionMirrorTarget\n\
+rhs|Cannot set read-only property ReflectionMirrorSubclass::$name|ReflectionMirrorTarget\n\
+rhs|Cannot set read-only property ReflectionMethod::$class|rhs|Cannot set read-only property ReflectionMethod::$name|ReflectionMirrorTarget|action"
+    );
+}
+
+/// Direct coalesce assignments throw while coalesce updates skip an initialized mirror.
+#[test]
+fn test_reflection_public_mirror_coalesce_write_modes() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectionCoalesceMirrorTarget { public function action(): void {} }
+$method = new ReflectionMethod(ReflectionCoalesceMirrorTarget::class, 'action');
+try { $method->name = $method->name ?? 'changed'; }
+catch (ReflectionException $error) { echo $error->getMessage(), '|'; }
+$method->name ??= 'changed';
+echo $method->name, '|';
+unset($method->name);
+try { $method->name ??= 'changed'; }
+catch (ReflectionException $error) { echo $error->getMessage(), '|'; }
+echo $method->getName();
+"#,
+    );
+    assert_eq!(out,
+        "Cannot set read-only property ReflectionMethod::$name|action|Cannot set read-only property ReflectionMethod::$name|action");
+}
+
+/// Each destructured property write retains its own target and left-to-right throw order.
+#[test]
+fn test_reflection_public_mirror_destructuring_write_order() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectionListMirrorTarget { public function action(): void {} }
+class ReflectionListMirrorBox { public string $value = 'before'; }
+$box = new ReflectionListMirrorBox();
+$method = new ReflectionMethod(ReflectionListMirrorTarget::class, 'action');
+try { [$box->value, $method->name] = ['after', 'changed']; }
+catch (ReflectionException $error) { echo $box->value, '|', $error->getMessage(), '|'; }
+try { [$method->class, $method->name] = ['changed', 'changed']; }
+catch (ReflectionException $error) { echo $error->getMessage(), '|'; }
+echo $method->class, '|', $method->name;
+"#,
+    );
+    assert_eq!(out,
+        "after|Cannot set read-only property ReflectionMethod::$name|Cannot set read-only property ReflectionMethod::$class|ReflectionListMirrorTarget|action");
+}
+
+/// Invalid nullable and union receivers fail after RHS effects with the ordinary write Error.
+#[test]
+fn test_reflection_public_mirror_invalid_receiver_write_error() {
+    let out = compile_and_run(
+        r#"<?php
+function reflectionInvalidReceiverRhs(): string { echo 'rhs|'; return 'changed'; }
+function writeNullableReflectionMirror(?ReflectionClass $reflection): void {
+    try { $reflection->name = reflectionInvalidReceiverRhs(); }
+    catch (Throwable $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
+}
+function writeUnionReflectionMirror(ReflectionClass|false $reflection): void {
+    try { $reflection->name = reflectionInvalidReceiverRhs(); }
+    catch (Throwable $error) { echo get_class($error), ':', $error->getMessage(); }
+}
+class ReflectionNullableMirrorTarget {}
+writeNullableReflectionMirror(null);
+writeNullableReflectionMirror(new ReflectionClass(ReflectionNullableMirrorTarget::class));
+writeUnionReflectionMirror(false);
+echo '|';
+writeUnionReflectionMirror(new ReflectionClass(ReflectionNullableMirrorTarget::class));
+"#,
+    );
+    assert_eq!(out,
+        "rhs|Error:Attempt to assign property \"name\" on null|rhs|ReflectionException:Cannot set read-only property ReflectionClass::$name|rhs|Error:Attempt to assign property \"name\" on false|rhs|ReflectionException:Cannot set read-only property ReflectionClass::$name");
+}
+
+/// Shared trait spans must not apply a Reflection write handler to ordinary class copies.
+#[test]
+fn test_reflection_public_mirror_shared_trait_write_handlers() {
+    let out = compile_and_run(
+        r#"<?php
+trait ReflectionTraitMirrorWrites {
+    public function rename(string $value): void { $this->name = $value; }
+    public function initializeName(): void { $this->name ??= 'fallback'; }
+}
+class ReflectionTraitMirrorPlain {
+    use ReflectionTraitMirrorWrites;
+    public string $name = 'before';
+}
+class ReflectionTraitMirrorMissing {
+    use ReflectionTraitMirrorWrites;
+    public ?string $name = null;
+}
+class ReflectionTraitMirrorFirst extends ReflectionClass { use ReflectionTraitMirrorWrites; }
+class ReflectionTraitMirrorSecond extends ReflectionClass { use ReflectionTraitMirrorWrites; }
+class ReflectionTraitMirrorTarget {}
+$plain = new ReflectionTraitMirrorPlain();
+$plain->rename('after');
+echo $plain->name, '|';
+$missing = new ReflectionTraitMirrorMissing();
+$missing->initializeName();
+echo $missing->name, '|';
+$first = new ReflectionTraitMirrorFirst(ReflectionTraitMirrorTarget::class);
+try { $first->rename('changed'); }
+catch (ReflectionException $error) { echo $error->getMessage(), '|'; }
+$second = new ReflectionTraitMirrorSecond(ReflectionTraitMirrorTarget::class);
+try { $second->rename('changed'); }
+catch (ReflectionException $error) { echo $error->getMessage(); }
+"#,
+    );
+    assert_eq!(out,
+        "after|fallback|Cannot set read-only property ReflectionTraitMirrorFirst::$name|Cannot set read-only property ReflectionTraitMirrorSecond::$name");
+}
+
+/// Compound writes mutate Reflection's public mirrors without changing private metadata.
+#[test]
+fn test_reflection_public_mirror_compound_writes_remain_mutable() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectionCompoundMirrorTarget {
+    public function action(): void {}
+}
+$method = new ReflectionMethod(ReflectionCompoundMirrorTarget::class, 'action');
+$method->name .= '!';
+$method->class .= '?';
+echo $method->name, '|', $method->class, '|';
+echo $method->getName(), '|', $method->getDeclaringClass()->getName();
+"#,
+    );
+    assert_eq!(
+        out,
+        "action!|ReflectionCompoundMirrorTarget?|action|ReflectionCompoundMirrorTarget"
+    );
+}
+
+/// Compound expressions and incdec stay mutable while plain expression assignments throw.
+#[test]
+fn test_reflection_public_mirror_compound_expressions_remain_mutable() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectionExpressionMirrorTarget {
+    public function action(string $value): void {}
+}
+class ReflectionExpressionMirrorCounter extends ReflectionClass {
+    public int $class = 4;
+}
+$method = new ReflectionMethod(ReflectionExpressionMirrorTarget::class, 'action');
+echo $method->name .= '!', '|';
+$class = ($method->class .= '?');
+echo $class, '|';
+$parameter = $method->getParameters()[0];
+echo $parameter->name .= '*', '|';
+try { echo ($method->name = $method->name . 'changed'); }
+catch (ReflectionException $error) { echo $error->getMessage(), '|'; }
+$counter = new ReflectionExpressionMirrorCounter(ReflectionExpressionMirrorTarget::class);
+echo $counter->class++, '|', ++$counter->class, '|';
+echo $method->getName(), '|', $parameter->getName();
+"#,
+    );
+    assert_eq!(out,
+        "action!|ReflectionExpressionMirrorTarget?|value*|Cannot set read-only property ReflectionMethod::$name|4|6|action|value");
+}
+
+/// Direct mirror writes use Reflection ancestry and report the receiver's runtime subclass.
+#[test]
+fn test_reflection_public_mirror_direct_write_names_runtime_subclass() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectionRuntimeMirrorTarget {}
+class ReflectionRuntimeMirrorSubclass extends ReflectionClass {
+    public string $class = '';
+}
+function writeReflectionMirrors(ReflectionClass $reflection): void {
+    try { $reflection->name = 'changed'; }
+    catch (ReflectionException $error) { echo $error->getMessage(); }
+}
+$reflection = new ReflectionRuntimeMirrorSubclass(ReflectionRuntimeMirrorTarget::class);
+writeReflectionMirrors($reflection);
+echo '|';
+try { $reflection->class = 'changed'; }
+catch (ReflectionException $error) { echo $error->getMessage(); }
+"#,
+    );
+    assert_eq!(
+        out,
+        "Cannot set read-only property ReflectionRuntimeMirrorSubclass::$name|\
+Cannot set read-only property ReflectionRuntimeMirrorSubclass::$class"
+    );
+}

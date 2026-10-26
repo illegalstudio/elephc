@@ -26041,6 +26041,175 @@ echo $declaring->getName();');
     );
 }
 
+/// Eval-created Reflection owners populate the same public metadata mirrors as AOT owners.
+#[test]
+fn test_eval_reflection_public_name_and_class_mirrors_are_populated() {
+    let out = compile_and_run_capture(
+        r#"<?php
+#[Attribute]
+class EvalReflectionMirrorAttribute {}
+#[EvalReflectionMirrorAttribute]
+class EvalReflectionMirrorTarget {
+    public const FLAG = 7;
+    public int $field = 1;
+    public function action(): void {}
+}
+$code = $argc > 1 ? $argv[1] : '$class = new ReflectionClass("EvalReflectionMirrorTarget");
+$method = new ReflectionMethod("EvalReflectionMirrorTarget", "action");
+$property = new ReflectionProperty("EvalReflectionMirrorTarget", "field");
+$constant = new ReflectionClassConstant("EvalReflectionMirrorTarget", "FLAG");
+$attribute = $class->getAttributes()[0];
+echo $class->name . "|";
+echo $method->name . ":" . $method->class . "|";
+echo $property->name . ":" . $property->class . "|";
+echo $constant->name . ":" . $constant->class . "|";
+echo $attribute->name . ":" . $attribute->getName();';
+eval($code);
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "EvalReflectionMirrorTarget|action:EvalReflectionMirrorTarget|field:EvalReflectionMirrorTarget|FLAG:EvalReflectionMirrorTarget|EvalReflectionMirrorAttribute:EvalReflectionMirrorAttribute"
+    );
+}
+
+/// Eval Reflection mirrors own independent strings across unset and reference mutation.
+#[test]
+fn test_eval_reflection_public_mirror_mutation_preserves_private_metadata() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+#[Attribute]
+class EvalReflectionMutableMirrorAttribute {}
+#[EvalReflectionMutableMirrorAttribute]
+class EvalReflectionMutableMirrorTarget {
+    public function action(string $value): void {}
+}
+function inspectEvalReflectionMethod(ReflectionMethod $method): void {
+    unset($method->name);
+    echo $method->getName(), '|';
+    $classAlias =& $method->class;
+    $classAlias = 'changed';
+    echo $method->getDeclaringClass()->getName(), '|';
+}
+function inspectEvalReflectionParameter(ReflectionParameter $parameter): void {
+    $parameterAlias =& $parameter->name;
+    $parameterAlias = 'changed';
+    echo $parameter->getName(), '|';
+}
+function inspectEvalReflectionAttributeReference(ReflectionAttribute $attribute): void {
+    $attributeAlias =& $attribute->name;
+    $attributeAlias = 'changed';
+    echo $attribute->getName();
+}
+$methodCode = $argc > 1 ? $argv[1] : 'return new ReflectionMethod("EvalReflectionMutableMirrorTarget", "action");';
+$method = eval($methodCode);
+if ($method instanceof ReflectionMethod) { inspectEvalReflectionMethod($method); }
+$parameterCode = $argc > 1 ? $argv[1] : 'return (new ReflectionMethod("EvalReflectionMutableMirrorTarget", "action"))->getParameters()[0];';
+$parameter = eval($parameterCode);
+if ($parameter instanceof ReflectionParameter) { inspectEvalReflectionParameter($parameter); }
+$attributeCode = $argc > 1 ? $argv[1] : 'return (new ReflectionClass("EvalReflectionMutableMirrorTarget"))->getAttributes()[0];';
+$attribute = eval($attributeCode);
+if ($attribute instanceof ReflectionAttribute) { inspectEvalReflectionAttributeReference($attribute); }
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout,
+        out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "action|EvalReflectionMutableMirrorTarget|value|EvalReflectionMutableMirrorAttribute"
+    );
+
+    let unset_out = compile_and_run_with_heap_debug(
+        r#"<?php
+#[Attribute]
+class EvalReflectionUnsetMirrorAttribute {}
+#[EvalReflectionUnsetMirrorAttribute]
+class EvalReflectionUnsetMirrorTarget {}
+function inspectEvalReflectionAttributeUnset(ReflectionAttribute $attribute): void {
+    unset($attribute->name);
+    echo $attribute->getName();
+}
+$attributeCode = $argc > 1 ? $argv[1] : 'return (new ReflectionClass("EvalReflectionUnsetMirrorTarget"))->getAttributes()[0];';
+$attribute = eval($attributeCode);
+if ($attribute instanceof ReflectionAttribute) { inspectEvalReflectionAttributeUnset($attribute); }
+"#,
+    );
+    assert!(
+        unset_out.success,
+        "program failed: stdout={:?} stderr={}",
+        unset_out.stdout,
+        unset_out.stderr
+    );
+    assert_eq!(
+        unset_out.stdout,
+        "EvalReflectionUnsetMirrorAttribute"
+    );
+}
+
+/// Eval mirrors reject direct writes after RHS effects but permit compound writes and unset.
+#[test]
+fn test_eval_reflection_public_mirror_write_rules() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalMirrorWriteTarget {
+    public function action(string $value): void {}
+}
+class EvalMirrorWriteBase extends ReflectionClass {}
+class EvalMirrorWriteSubclass extends EvalMirrorWriteBase {
+    public string $class = '';
+}
+class EvalMirrorPlainNative {
+    public string $name = '';
+    public string $class = '';
+}
+$fromAot = new EvalMirrorWriteSubclass(EvalMirrorWriteTarget::class);
+$plainNative = new EvalMirrorPlainNative();
+$code = $argc > 1 ? $argv[1] : <<<'PHP'
+function evalMirrorWriteRhs(): string { echo 'rhs|'; return 'changed'; }
+try { $fromAot->name = evalMirrorWriteRhs(); }
+catch (ReflectionException $error) { echo $error->getMessage(), '|'; }
+try { $fromAot->class = 'changed'; }
+catch (ReflectionException $error) { echo $error->getMessage(), '|'; }
+$fromAot->name .= '!';
+echo $fromAot->name, '|', $fromAot->getName(), '|';
+$created = new ReflectionMethod('EvalMirrorWriteTarget', 'action');
+try { $created->class = evalMirrorWriteRhs(); }
+catch (ReflectionException $error) { echo $error->getMessage(), '|'; }
+$created->name .= '?';
+echo $created->name, '|';
+$property = 'name';
+try { $created->{$property} = 'changed'; }
+catch (ReflectionException $error) { echo $error->getMessage(), '|'; }
+echo $created->name, '|';
+unset($created->name);
+echo $created->getName(), '|', $created->getDeclaringClass()->getName(), '|';
+$plainNative->name = 'native';
+$plainNative->class = 'class';
+class EvalMirrorPlainDynamic {
+    public string $name = '';
+    public string $class = '';
+}
+$plainDynamic = new EvalMirrorPlainDynamic();
+$plainDynamic->name = 'dynamic';
+$plainDynamic->class = 'class';
+echo $plainNative->name, ':', $plainNative->class, '|', $plainDynamic->name, ':', $plainDynamic->class;
+PHP;
+eval($code);
+"#,
+    );
+    assert_eq!(out,
+        "rhs|Cannot set read-only property EvalMirrorWriteSubclass::$name|Cannot set read-only property EvalMirrorWriteSubclass::$class|EvalMirrorWriteTarget!|EvalMirrorWriteTarget|rhs|Cannot set read-only property ReflectionMethod::$class|action?|Cannot set read-only property ReflectionMethod::$name|action?|action|EvalMirrorWriteTarget|native:class|dynamic:class");
+}
+
 /// Verifies eval ReflectionFunction preserves rich eval-declared function signatures.
 #[test]
 fn test_eval_reflection_function_reports_signature_metadata() {

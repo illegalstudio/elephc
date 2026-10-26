@@ -10,7 +10,7 @@
 
 use crate::errors::CompileError;
 use crate::names::{php_symbol_key, property_hook_get_method, property_hook_set_method};
-use crate::parser::ast::Expr;
+use crate::parser::ast::{is_compound_property_assignment_self_read, Expr};
 use crate::span::Span;
 use crate::types::{
     merge_array_key_types, normalized_array_key_type, static_array_key_forces_hash_storage,
@@ -32,18 +32,19 @@ pub(super) fn check_property_assign(
     value: &Expr,
     span: Span,
     env: &mut TypeEnv,
+    compound_property_update: bool,
 ) -> Result<(), CompileError> {
     let obj_ty = checker.infer_type_with_assignment_effects(object, env)?;
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     if let PhpType::Object(class_name) = &obj_ty {
-        check_object_property_write(checker, object, class_name, property, value, &val_ty, span)?;
+        check_object_property_write(checker, object, class_name, property, value, &val_ty, span, compound_property_update)?;
         refine_object_property_type(checker, class_name, property, &val_ty);
     } else if let Some(class_name) = checker.union_single_object_class(&obj_ty) {
         // A factory-style `Object|false` receiver still targets the one object
         // class when the runtime value is an object. Validate writes against that
         // class so readonly/visibility/type rules are not silently bypassed merely
         // because the success value has not yet been narrowed with instanceof.
-        check_object_property_write(checker, object, &class_name, property, value, &val_ty, span)?;
+        check_object_property_write(checker, object, &class_name, property, value, &val_ty, span, compound_property_update)?;
         refine_object_property_type(checker, &class_name, property, &val_ty);
     }
     // A boxed `Mixed` receiver names no class, so the reservation is recorded for every class
@@ -319,6 +320,7 @@ fn check_object_property_write(
     value: &Expr,
     val_ty: &PhpType,
     span: Span,
+    compound_property_update: bool,
 ) -> Result<(), CompileError> {
     if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
         return Ok(());
@@ -409,6 +411,22 @@ fn check_object_property_write(
         validate_object_property_access(
             checker, class_name, property, !(readonly_null_coalesce || readonly_write_guard), span,
         )?;
+        if reflection_public_mirror_property(checker, class_name, property)
+            && !compound_property_update
+            && !is_compound_property_assignment_self_read(value, object, property, span, &[])
+        {
+            crate::types::checker::record_throw_access_site(
+                &mut checker.throw_access_sites,
+                span,
+                crate::types::ThrowAccessInfo {
+                    span,
+                    kind: crate::types::ThrowAccessKind::ReflectionReadOnlyProperty {
+                        property: property.to_string(),
+                    },
+                },
+            );
+            return Ok(());
+        }
         if readonly_write_guard {
             let setter = class_info.property_set_visibilities.get(property)
                 .or_else(|| class_info.property_visibilities.get(property))
@@ -486,6 +504,22 @@ fn check_object_property_write(
         }
     }
     Ok(())
+}
+
+/// Returns whether a declared property is one of PHP Reflection's direct-write-only mirrors.
+///
+/// These properties are not ordinary language-level `readonly` properties: PHP permits
+/// `unset()`, reference binding, and compound mutation, but a direct assignment raises
+/// `ReflectionException`. PHP applies the rule from the runtime object's Reflection ancestry,
+/// even when a user subclass redeclares `name` or `class` itself.
+fn reflection_public_mirror_property(
+    checker: &Checker,
+    class_name: &str,
+    property: &str,
+) -> bool {
+    crate::types::reflection_properties::class_has_public_mirror_write_handler(
+        &checker.classes, class_name, property,
+    )
 }
 
 /// Validates that the current context can access a named property, checking visibility and class scope.

@@ -111,7 +111,12 @@ impl Checker {
         };
 
         let stmt = Stmt::new(stmt_kind, span);
-        self.check_assignment_like_stmt(&stmt, env)?;
+        let compound_property_update = if let ExprKind::PropertyAccess { object, property } = &target.kind {
+            crate::parser::ast::is_compound_property_assignment_self_read(
+                value, object, property, span, prelude,
+            )
+        } else { false };
+        self.check_assignment_like_stmt_with_property_update(&stmt, env, compound_property_update)?;
         let result_expr = match result_target {
             Some(result_target) if result_target != target => result_target,
             _ => value,

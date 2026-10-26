@@ -15,7 +15,7 @@ use crate::codegen::platform::Arch;
 use crate::codegen::literal_defaults::{
     emit_boxed_bool_literal_to_result, emit_boxed_float_literal_to_result,
     emit_boxed_int_literal_to_result, emit_boxed_null_literal_to_result,
-    emit_boxed_string_literal_default_to_result, emit_empty_assoc_array_literal_to_result,
+    emit_boxed_string_literal_default_to_result,
     emit_string_bytes_default_to_result,
 };
 use crate::codegen::{
@@ -94,7 +94,10 @@ use callable_to_string::*;
 use type_object_emit::*;
 use flags_offsets::*;
 
-pub(super) use owner_dispatch::{is_reflection_owner_class, lower_reflection_owner_new};
+pub(super) use owner_dispatch::{
+    is_reflection_owner_class, lower_reflection_owner_new, populate_reflection_owner_new,
+    reflection_owner_base_class,
+};
 
 /// Compile-time metadata used to populate one Reflection owner object.
 struct ReflectionOwnerMetadata {

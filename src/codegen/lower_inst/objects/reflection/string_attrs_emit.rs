@@ -10,47 +10,38 @@
 
 use super::*;
 
-/// Writes a heap-persisted string into the current Reflection object result slot.
+/// Stores immutable AOT metadata without allocating a copy for every nested reflector.
 pub(super) fn emit_reflection_string_property(
     ctx: &mut FunctionContext<'_>,
     value: &str,
     low_offset: usize,
     high_offset: usize,
 ) {
-    emit_reflection_bytes_property(ctx, value.as_bytes(), low_offset, high_offset);
+    emit_reflection_literal_string_property(ctx, value, low_offset, high_offset);
 }
 
-/// Writes exact PHP bytes into the current Reflection object's string property.
-fn emit_reflection_bytes_property(
-    ctx: &mut FunctionContext<'_>, value: &[u8], low_offset: usize, high_offset: usize,
+/// Writes immutable metadata into a Reflection property without a heap copy.
+///
+/// Static metadata uses the same storage as declared string defaults: mutation copies
+/// non-heap bytes and release skips them. Eval-created names retain independent owned copies.
+/// Expects the object in the integer result register and leaves it there.
+pub(super) fn emit_reflection_literal_string_property(
+    ctx: &mut FunctionContext<'_>,
+    value: &str,
+    low_offset: usize,
+    high_offset: usize,
 ) {
-    let (label, len) = ctx.data.add_string(value);
-    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_push_reg(ctx.emitter, result_reg);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_symbol_address(ctx.emitter, "x1", &label);
-            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
-            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
-            abi::emit_pop_reg(ctx.emitter, object_reg);
-            abi::emit_store_to_address(ctx.emitter, "x1", object_reg, low_offset);
-            abi::emit_store_to_address(ctx.emitter, "x2", object_reg, high_offset);
-        }
-        Arch::X86_64 => {
-            abi::emit_symbol_address(ctx.emitter, "rax", &label);
-            abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
-            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
-            abi::emit_pop_reg(ctx.emitter, object_reg);
-            abi::emit_store_to_address(ctx.emitter, "rax", object_reg, low_offset);
-            abi::emit_store_to_address(ctx.emitter, "rdx", object_reg, high_offset);
-        }
-    }
-    abi::emit_push_reg(ctx.emitter, object_reg);
-    abi::emit_pop_reg(ctx.emitter, result_reg);
+    let (label, len) = ctx.data.add_string(value.as_bytes());
+    let object_reg = abi::int_result_reg(ctx.emitter);
+    let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let length_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, pointer_reg, &label);
+    abi::emit_load_int_immediate(ctx.emitter, length_reg, len as i64);
+    abi::emit_store_to_address(ctx.emitter, pointer_reg, object_reg, low_offset);
+    abi::emit_store_to_address(ctx.emitter, length_reg, object_reg, high_offset);
 }
 
-/// Writes a heap-persisted string into a named Reflection owner property slot.
+/// Stores an immutable string in a named Reflection owner property slot.
 pub(super) fn emit_reflection_owner_string_property_by_name(
     ctx: &mut FunctionContext<'_>,
     class_name: &str,
@@ -101,6 +92,8 @@ pub(super) fn emit_reflection_attrs_property(
     attr_names: &[String],
     attr_args: &[Option<Vec<AttrArgEntry>>],
 ) -> Result<()> {
+    let target_owner = reflection_owner_base_class(ctx, class_name)
+        .unwrap_or_else(|| class_name.to_string());
     let (attrs_low_offset, attrs_high_offset) = reflection_attrs_offsets(ctx, class_name)?;
     let result_reg = abi::int_result_reg(ctx.emitter);
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
@@ -112,7 +105,7 @@ pub(super) fn emit_reflection_attrs_property(
         ctx,
         attr_names,
         attr_args,
-        reflection_attribute_target_for_owner(class_name),
+        reflection_attribute_target_for_owner(&target_owner),
     )?;
     emit_box_current_owned_value_as_mixed(
         ctx.emitter,

@@ -11,7 +11,7 @@
 use crate::names::Name;
 use crate::span::Span;
 
-use super::{BinOp, Stmt, TypeExpr};
+use super::{BinOp, Stmt, StmtKind, TypeExpr};
 
 // --- Expressions ---
 
@@ -443,6 +443,48 @@ pub fn is_compound_assignment_self_read(
         }
         ExprKind::NullCoalesce { value: inner, .. } => {
             matches!(&inner.kind, ExprKind::Variable(v) if v == name)
+        }
+        _ => false,
+    }
+}
+
+/// Returns `true` when a property assignment value came from compound or incdec syntax.
+///
+/// The parser lowers `$object->property op= rhs` and property `++`/`--` to an ordinary
+/// `PropertyAssign` whose value reads the same property, sometimes through a prelude temporary.
+/// The synthetic operation keeps the assignment span, which distinguishes it from direct
+/// assignment such as `$object->property = $object->property . $rhs`.
+pub fn is_compound_property_assignment_self_read(
+    value: &Expr,
+    object: &Expr,
+    property: &str,
+    assignment_span: Span,
+    prelude: &[Stmt],
+) -> bool {
+    if value.span.line != assignment_span.line || value.span.col != assignment_span.col {
+        return false;
+    }
+    let same_property = |read: &Expr| matches!(
+        &read.kind,
+        ExprKind::PropertyAccess {
+            object: read_object,
+            property: read_property,
+        } if read_object.as_ref() == object && read_property == property
+    );
+    match &value.kind {
+        ExprKind::BinaryOp { left, .. } => same_property(left),
+        ExprKind::Variable(name) => prelude.iter().rev().find_map(|stmt| {
+            let StmtKind::Assign { name: bound, value } = &stmt.kind else { return None; };
+            (bound == name).then(|| is_compound_property_assignment_self_read(
+                value, object, property, assignment_span, &[],
+            ))
+        }).unwrap_or(false),
+        ExprKind::Assignment { value: operation, prelude, .. } => {
+            let (ExprKind::PreIncrement(old) | ExprKind::PostIncrement(old)
+                | ExprKind::PreDecrement(old) | ExprKind::PostDecrement(old)) = &operation.kind
+            else { return false; };
+            prelude.iter().any(|stmt| matches!(&stmt.kind,
+                StmtKind::Assign { name, value } if name == old && same_property(value)))
         }
         _ => false,
     }

@@ -32,36 +32,35 @@ unset($source);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// Eval-created ReflectionParameter public names add no retained string beyond eval metadata.
+/// Eval Reflection metadata retains exactly one owned public name per reflected owner.
 #[test]
 fn test_eval_reflection_parameter_public_name_releases_string_owner() {
-    let baseline = compile_and_run_with_heap_debug(r#"<?php
-eval('function eval_parameter_owner_target(string $argument) {}');
-echo 'baseline';
-"#);
-    assert!(baseline.success, "stdout={:?}\nstderr={}", baseline.stdout, baseline.stderr);
-    assert_eq!(baseline.stdout, "baseline");
-    let baseline_live_blocks = eval_operand_owner_live_blocks(&baseline.stderr);
-
-    let out = compile_and_run_with_heap_debug(r#"<?php
-eval('function eval_parameter_owner_target(string $argument) {} $parameter = new ReflectionParameter("eval_parameter_owner_target", "argument"); return $parameter;');
-if ($parameter->name !== 'argument') { echo 'bad'; }
+    let runs = compile_and_run_with_heap_debug_per_argv(r#"<?php
+$removeName = $argc > 1;
+eval($argc > 0 ? 'function eval_parameter_owner_target(string $argument) {}
+$parameter = new ReflectionParameter("eval_parameter_owner_target", "argument");
+$function = $parameter->getDeclaringFunction();
+if ($parameter->name !== "argument" || $function->name !== "eval_parameter_owner_target") { echo "bad"; }
+if ($removeName) { unset($parameter->name, $function->name); }
+unset($function);
+return $parameter;' : '');
 unset($parameter);
 echo 'done';
-"#);
-    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "done");
-    // The baseline declares the same eval function and builds no ReflectionParameter, so it
-    // measures eval's own metadata only. An AOT ReflectionParameter would put its leaked metadata
-    // subtree (#1352) in the baseline, and that subtree's size changes whenever Reflection gains a
-    // property. The retained metadata now also owns two nonempty dump strings, for the parameter
-    // and its declaring function: 23 blocks in total. With dump storage disabled the same program
-    // retains 21 blocks. An extra public-name temporary owner must still fail this exact count.
+"#, &[&[], &["unset-name"]]);
+    for out in &runs {
+        assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+        assert_eq!(out.stdout, "done");
+    }
+    // The pre-existing metadata retention (#1352) includes the parameter and its declaring
+    // function. Their independently owned public names add two legitimate payloads to the
+    // legacy 23-block graph. Removing both names isolates those additions from orphaned
+    // temporaries without treating the whole retained graph as a new public-name leak.
+    assert_eq!(eval_operand_owner_live_blocks(&runs[1].stderr), 23, "{}", runs[1].stderr);
     assert_eq!(
-        eval_operand_owner_live_blocks(&out.stderr),
-        baseline_live_blocks + 23,
-        "discarded ReflectionParameter objects must release their public-name string: {}",
-        out.stderr,
+        eval_operand_owner_live_blocks(&runs[0].stderr),
+        eval_operand_owner_live_blocks(&runs[1].stderr) + 2,
+        "only the two public metadata names may add retained owners: normal={}\ncontrol={}",
+        runs[0].stderr, runs[1].stderr,
     );
 }
 

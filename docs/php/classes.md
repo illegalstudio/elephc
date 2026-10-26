@@ -1339,6 +1339,10 @@ foreach (class_get_attributes('Greeter') as $attr) {
 // Version: [1.0][1]
 ```
 
+User subclasses of the supported Reflection owner classes use ordinary object allocation, so their property defaults, reference cells, dynamic properties, and constructors remain active. A custom constructor must call `parent::__construct()` as its first action and pass the built-in constructor's leading parameters unchanged and in order. Elephc rejects other constructor shapes because it cannot prove that the metadata populated before the user constructor matches the arguments eventually forwarded to PHP's Reflection owner.
+
+The public `name` and `class` metadata properties are populated in both AOT and eval-created Reflection objects. As in PHP, assigning directly to one raises `ReflectionException`; compound writes and `unset()` retain their distinct behavior and are not treated as language-level `readonly` operations. Reference binding to native Reflection properties inside eval is not yet supported.
+
 Reflection is also available for class members:
 
 ```php
@@ -1657,6 +1661,14 @@ name with `isBuiltin()` false.
 | `ReflectionUnionType::allowsNull()` | `bool` | True when the union includes `null` |
 | `ReflectionIntersectionType::getTypes()` | `ReflectionNamedType[]` | The named members of a supported intersection |
 | `ReflectionIntersectionType::allowsNull()` | `bool` | Always false for supported intersections |
+
+Builtin Reflection objects expose PHP's public `name` and `class` mirrors through property access,
+array casts, `get_object_vars()`, `var_dump()`, `print_r()`, and `var_export()` while keeping
+compiler-only private backing slots hidden. User subclasses of supported Reflection owners retain
+their ordinary property defaults, reference-property storage, dynamic-property capacity, and user
+constructors while receiving the same compile-time Reflection metadata as the builtin owner. As in
+PHP, `unset()` and compound writes mutate only the public mirror, while plain
+direct assignment raises `ReflectionException`; private metadata getters remain unchanged.
 
 Limitations today:
 - All arguments to `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, and `new ReflectionClass/Function/Method/Property/Parameter(...)` must be compile-time class/member/function strings or literal parameter selectors. `ClassName::class` is accepted for supported class-name arguments, and normal named-argument / static associative-spread normalization runs before the literal-string check. `ReflectionClass` can resolve statically known classes, enums, interfaces, traits, and statically typed object expressions, including anonymous-class objects; class-attribute materialization is currently backed by class/enum metadata. Dynamic class, method, property, function, parameter, or attribute names require a runtime name->id lookup table that is not yet implemented.
