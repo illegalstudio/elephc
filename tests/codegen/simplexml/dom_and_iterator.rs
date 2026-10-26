@@ -9,6 +9,29 @@
 
 use crate::support::*;
 
+/// Keeps failed remote DOM imports reviewable without dumping eval's complete method catalog.
+fn import_failure_assembly(assembly: &str) -> String {
+    let mut result = String::new();
+    for name in ["simplexml_import_dom", "__elephc_simplexml_class"] {
+        let start = format!("{}:\n", elephc::names::function_symbol(name));
+        let end = format!("{}:", elephc::names::function_epilogue_symbol(name));
+        if let Some((_, body)) = assembly.split_once(&start) {
+            result.push_str(&start);
+            result.push_str(body.split_once(&end).map_or(body, |(body, _)| body));
+        }
+    }
+    let lines: Vec<_> = assembly.lines().collect();
+    for (index, line) in lines.iter().enumerate() {
+        if line.contains("_fn_simplexml_import_dom")
+            && matches!(line.trim_start().split_whitespace().next(), Some("bl" | "call"))
+        {
+            result.push_str(&lines[index.saturating_sub(24)..(index + 28).min(lines.len())].join("\n"));
+            result.push('\n');
+        }
+    }
+    result
+}
+
 /// Dynamic method syntax and callback arrays inject the XML loader used by DOMDocument.
 #[test]
 fn test_simplexml_dynamic_dom_load_xml() {
@@ -72,7 +95,7 @@ eval($source);
 #[test]
 fn test_simplexml_dom_namespace_and_iterator_bundle() {
     if skip_without_xml_native("test_simplexml_dom_namespace_and_iterator_bundle") { return; }
-    let out = compile_and_run_with_heap_debug(r###"<?php
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(r###"<?php
 set_error_handler(function(int $level, string $message): bool { echo $level, ':', $message, '|'; return true; });
 $doc = new DOMDocument(); $doc->loadXML('<r xmlns:p="urn:p" p:id="8">text<c/></r>');
 $text = $doc->documentElement->childNodes->item(0);
@@ -114,7 +137,7 @@ restore_error_handler();
     let missing = "2:simplexml_import_dom(): Imported Node must have associated Document|NULL\n";
     let consumed = "Iterator not initialized or already consumed|";
     let parse = "2:DOMDocument::loadXML(): Premature end of data in tag r line 1 in Entity, line: 1|bool(false)\n";
-    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert!(out.success, "stdout={} stderr={}\nDOM import assembly:\n{}", out.stdout, out.stderr, import_failure_assembly(&assembly));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
     assert_eq!(out.stdout, format!("{invalid}{missing}{invalid}simplexml_import_dom(): Argument #1 ($node) must be a valid XML node|2:SimpleXMLElement::xpath(): Undefined namespace prefix: q|bool(false)\n1|{{\"p\":\"urn:p\"}}|{{\"p\":\"urn:p\"}}|[]|{}{parse}8:DOMDocument::loadXML(): Unsupported version '1.1' in Entity, line: 1|bool(true)\nDOMDocument::loadXML(): Argument #1 ($source) must not be empty|caught|caught|{invalid}{parse}{consumed}", consumed.repeat(4)));
 }

@@ -201,8 +201,10 @@ for ($i = 0; $i < 32; $i++) {
     if (isset((new SimpleXMLElement("<r/>"))["missing"]) || !empty((new SimpleXMLElement("<r/>"))["missing"])) { echo "wrong|"; }
     if (!empty($xml?->missing["key" . str_repeat("x", 40)])) { echo "wrong|"; }
 }
+echo "empty|";
 try { empty($xml[freshXmlEmptyKey()]); }
 catch (RuntimeException $error) { echo $error->getMessage(), "|"; }
+echo "isset|";
 try { isset($xml[freshXmlEmptyKey()]); }
 catch (RuntimeException $error) { echo $error->getMessage(), "|"; }
 echo $key;
@@ -210,7 +212,7 @@ echo $key;
 eval($source);
 "###);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "drop|cast|drop|cast|z");
+    assert_eq!(out.stdout, "empty|drop|cast|isset|drop|cast|z");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
