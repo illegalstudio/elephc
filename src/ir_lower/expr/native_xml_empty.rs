@@ -153,15 +153,21 @@ fn dispatch(
     ctx.builder.terminate(Terminator::CondBr { cond: condition.value,
         then_target: native, then_args: vec![], else_target: regular, else_args: vec![] });
     ctx.builder.position_at_end(native);
-    let object = if singular_object_class(&ty).is_some_and(|(class, _)|
-        !crate::types::builtin_classes::has_native_dimensions(class, ctx.classes))
-    {
-        ctx.emit_value(Op::MixedBox, vec![object.value], None, PhpType::Mixed,
-            Op::MixedBox.default_effects(), Some(arg.span))
-    } else { borrow_native_xml_property_receiver(ctx, object, arg.span) };
+    let needs_box = singular_object_class(&ty).is_some_and(|(class, _)|
+        !crate::types::builtin_classes::has_native_dimensions(class, ctx.classes));
+    let (object, boxed_owner) = if needs_box {
+        let boxed = ctx.emit_owned_value(Op::MixedBox, vec![object.value], None, PhpType::Mixed,
+            Op::MixedBox.default_effects(), Some(arg.span));
+        let (boxed, owner) = root_owned_call_operand(ctx, boxed, arg.span);
+        let borrowed = ctx.emit_value(Op::Borrow, vec![boxed.value], None, PhpType::Mixed,
+            Op::Borrow.default_effects(), Some(arg.span));
+        ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+        (borrowed, owner)
+    } else { (borrow_native_xml_property_receiver(ctx, object, arg.span), None) };
     let method = if dimension { "__elephc_dimension_empty" } else { "__elephc_property_empty" };
     let key_expr = Expr::new(ExprKind::Variable(key.name.clone()), arg.span);
     let value = lower_method_call_with_receiver(ctx, object, method, &[key_expr], Op::MethodCall, expr);
+    if let Some(owner) = boxed_owner { retire_owned_call_operand(ctx, owner, arg.span); }
     store_value_into_temp(ctx, &temp, PhpType::Bool, value, arg.span);
     branch_to(ctx, merge);
     let native_slots = ctx.initialized_slots_snapshot();

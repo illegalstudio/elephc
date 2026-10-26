@@ -153,3 +153,23 @@ echo '|', (int)empty($probe[replaceProbeXml($probe)]), ':', $probe->getName();
         "Cannot unset offset in a non-array variable|Cannot unset string offsets|new:0:1|receiver|key:0|0:probe|1:probe"));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+/// Opaque object receiver boxes stay rooted when a native empty key conversion throws.
+#[test]
+fn test_simplexml_object_empty_box_owners_survive_key_throws() {
+    if skip_without_xml_native("test_simplexml_object_empty_box_owners_survive_key_throws") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ThrowingNativeEmptyKey {
+    public function __toString(): string { throw new RuntimeException('caught'); }
+}
+function emptyObjectXmlDimension(object $value, mixed $key): bool { return empty($value[$key]); }
+$xml = new SimpleXMLElement('<r/>');
+for ($i = 0; $i < 4; $i++) {
+    echo (int)emptyObjectXmlDimension($xml, 'missing'), '|';
+    try { emptyObjectXmlDimension($xml, new ThrowingNativeEmptyKey()); }
+    catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
+}
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "1|caught|".repeat(4));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
