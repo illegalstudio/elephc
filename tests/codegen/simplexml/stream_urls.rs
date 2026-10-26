@@ -212,6 +212,61 @@ restore_error_handler();
     assert_eq!(out, "case|io|bool(false)\nr|simplexml_load_file(): Unable to locate filter \"not-a-filter\"|simplexml_load_file(): Unable to create filter (not-a-filter)|r|simplexml_load_file(): Unable to create or locate filter \"rejectedxmlfilter\"|simplexml_load_file(): Unable to create filter (rejectedxmlfilter)|r");
 }
 
+/// Separates wrapper lifecycle, read failures and mutable URI parameter cleanup on exception.
+#[test]
+fn test_simplexml_throwing_stream_uri_owners_isolated_bundle() {
+    if skip_without_xml_native("test_simplexml_throwing_stream_uri_owners_isolated_bundle") { return; }
+    let runs = compile_and_run_with_heap_debug_per_argv(r#"<?php
+class IsolatedThrowingXmlInput {
+    public mixed $context = null;
+    public function stream_open(string $path, string $mode, int $options, mixed &$opened_path): bool { return true; }
+    public function stream_read(int $count): string { throw new RuntimeException('read'); }
+    public function stream_eof(): bool { return false; }
+    public function stream_close(): void { echo 'close|'; }
+}
+function throwImmutableXmlUri(string $uri): void { throw new RuntimeException('read'); }
+function throwMutableXmlUri(string $uri, bool $change): void {
+    if ($change) { $uri = 'changed'; }
+    throw new RuntimeException('read');
+}
+stream_wrapper_register('isolatedxml', 'IsolatedThrowingXmlInput');
+$uri = 'isolatedxml://document';
+if ($argc === 1) { echo 'registered'; }
+elseif ($argc === 2) { $stream = fopen($uri, 'rb'); fclose($stream); }
+elseif ($argc === 3) {
+    $stream = fopen($uri, 'rb');
+    try { stream_get_contents($stream); } catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
+    fclose($stream);
+} elseif ($argc === 4) {
+    try { simplexml_load_file($uri); } catch (RuntimeException $error) { echo $error->getMessage(); }
+} elseif ($argc === 5) {
+    try { new SimpleXMLElement($uri, 0, true); }
+    catch (Exception $error) {
+        $previous = $error->getPrevious();
+        if ($previous instanceof RuntimeException) { echo $previous->getMessage(); }
+        else { echo 'missing-previous'; }
+    }
+} elseif ($argc === 6) {
+    try { __elephc_simplexml_stream_bytes($uri, 'simplexml_load_file()'); }
+    catch (RuntimeException $error) { echo $error->getMessage(); }
+} elseif ($argc === 7) {
+    try { throwImmutableXmlUri($uri); } catch (RuntimeException $error) { echo $error->getMessage(); }
+} else {
+    try { throwMutableXmlUri($uri, $argc < 0); }
+    catch (RuntimeException $error) { echo $error->getMessage(); }
+}
+stream_wrapper_unregister('isolatedxml');
+"#, &[&[], &["x"], &["x", "x"], &["x", "x", "x"], &["x", "x", "x", "x"], &["x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x"]]);
+    let expected = ["registered", "close|", "read|close|", "read", "read", "read", "read", "read"];
+    let mut failures = Vec::new();
+    for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {
+        if !out.success || out.stdout != expected || !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
+            failures.push(format!("mode={mode} success={} stdout={:?} expected={expected:?}\n{}", out.success, out.stdout, out.stderr));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 /// A read exception releases the wrapper owner without running stream_close on the pending throw.
 #[test]
 fn test_simplexml_stream_read_exception_cleanup() {

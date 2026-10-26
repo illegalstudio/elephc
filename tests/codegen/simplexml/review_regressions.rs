@@ -82,10 +82,10 @@ emptyNativeXmlDimension(['z' => '0']);
     assert_eq!(out, "110001|1011|0011|11|00|11");
 }
 
-/// Dynamic names run once, variable receivers load after the name, and nullsafe names stay lazy.
+/// Bundled AOT and eval probes preserve receiver rebinding, name order and nullsafe laziness.
 #[test]
-fn test_simplexml_empty_operand_order_and_eval() {
-    if skip_without_xml_native("test_simplexml_empty_operand_order_and_eval") { return; }
+fn test_simplexml_empty_operand_order_and_eval_bundle() {
+    if skip_without_xml_native("test_simplexml_empty_operand_order_and_eval_bundle") { return; }
     let out = compile_and_run_with_heap_debug(r###"<?php
 $xml = new SimpleXMLElement('<r><zero>1</zero></r>');
 function replaceEmptyXmlReceiver(): string {
