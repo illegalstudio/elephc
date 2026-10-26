@@ -22,7 +22,7 @@ fn stream_owner_assembly(assembly: &str) -> String {
         }
     }
     let lines: Vec<_> = assembly.lines().collect();
-    for (index, line) in lines.iter().enumerate().filter(|(_, line)|
+    for (index, _) in lines.iter().enumerate().filter(|(_, line)|
         line.trim_end().ends_with(':') && line.contains("mixed_method_SimpleXMLElement_")
     ).take(4) {
         selected.push_str(&lines[index..(index + 48).min(lines.len())].join("\n"));

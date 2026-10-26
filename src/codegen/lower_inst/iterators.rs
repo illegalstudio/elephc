@@ -1811,22 +1811,19 @@ fn box_iterator_method_result_if_needed(
 
 /// Boxes a compiled iterator return without consuming an owner on borrowed return paths.
 fn box_compiled_iterator_result(ctx: &mut FunctionContext<'_>, return_ty: &PhpType) {
-    if !Ownership::php_type_needs_lifetime_tracking(return_ty) {
-        emit_box_current_value_as_mixed(ctx.emitter, return_ty);
+    if return_ty.codegen_repr() != PhpType::Mixed {
+        let owned = ctx.next_label("iterator_value_owned");
+        let done = ctx.next_label("iterator_value_boxed");
+        crate::codegen_support::value_boxing::emit_box_current_php_return_as_mixed(
+            ctx.emitter, return_ty, &owned, &done,
+        );
         return;
     }
-    let owned = ctx.next_label("iterator_value_owned");
     let done = ctx.next_label("iterator_value_boxed");
-    crate::codegen::return_ownership::emit_branch_if_owned(ctx.emitter, &owned);
-    if return_ty.codegen_repr() == PhpType::Mixed {
-        abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
-    } else {
-        emit_box_current_value_as_mixed(ctx.emitter, return_ty);
-    }
-    abi::emit_jump(ctx.emitter, &done);
-    ctx.emitter.label(&owned);
-    emit_box_current_owned_value_as_mixed(ctx.emitter, return_ty);
+    crate::codegen::return_ownership::emit_branch_if_owned(ctx.emitter, &done);
+    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
     ctx.emitter.label(&done);
+    crate::codegen_support::abi::emit_php_return_status(ctx.emitter, true);
 }
 
 /// Lowers object iterator advancement using PHP's Iterator method protocol.
@@ -1917,10 +1914,14 @@ fn emit_object_iterator_method_call(
     let overflow_bytes = abi::materialize_outgoing_args(ctx.emitter, &assignments);
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    if let Some(helper) = IntrinsicCall::instance_method(&target.impl_class, &method_key)
-        .and_then(|intrinsic| intrinsic.runtime_helper())
+    if let Some((intrinsic, helper)) = IntrinsicCall::instance_method(&target.impl_class, &method_key)
+        .and_then(|intrinsic| intrinsic.runtime_helper().map(|helper| (intrinsic, helper)))
     {
         abi::emit_call_label(ctx.emitter, helper);
+        // Native SPL current/key helpers transfer a retained or fresh Mixed cell.
+        // They do not publish the private compiled-PHP marker themselves.
+        crate::codegen_support::abi::emit_php_return_status(ctx.emitter, matches!(intrinsic.kind(),
+            crate::intrinsics::IntrinsicCallKind::SplDllCurrent | crate::intrinsics::IntrinsicCallKind::SplDllKey));
     } else {
         emit_direct_resolved_method_call(ctx, &target)?;
     }
