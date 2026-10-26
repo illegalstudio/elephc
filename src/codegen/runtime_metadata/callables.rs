@@ -8,6 +8,7 @@
 //! - Excludes synthetic property initializers and preserves include-variant callable groups.
 
 use super::*;
+use crate::codegen::abi;
 
 /// Returns user functions visible to runtime callable-name metadata.
 pub(in crate::codegen) fn runtime_user_function_sigs(module: &Module) -> HashMap<String, FunctionSig> {
@@ -281,7 +282,7 @@ mod tests {
                     (false, true) => "mov x15, #1", (false, false) => "mov x15, xzr",
                 };
                 assert!(asm.find(call).unwrap() < asm.find(status).unwrap(), "{target}: status must survive helper clobbers");
-                assert!(asm.contains(if target == "linux-x86_64" { "[rbp + 16]" } else { "[x29, #16]" }),
+                assert!(asm.contains(if target == "linux-x86_64" { "[rbp + 16]" } else { "[x29, #32]" }),
                     "{target}: incoming stack arguments must be reloaded before forwarding");
             }
         }

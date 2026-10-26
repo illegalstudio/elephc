@@ -14,7 +14,6 @@ mod static_members;
 
 use super::function_variants;
 use crate::codegen::emit::Emitter;
-use crate::codegen::platform::Arch;
 use crate::intrinsics::IntrinsicCall;
 use crate::ir::{Function, Immediate, Module, Op, ValueDef};
 use crate::names::{method_symbol, php_symbol_key, static_method_symbol};
