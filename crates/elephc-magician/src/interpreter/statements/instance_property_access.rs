@@ -809,7 +809,7 @@ pub(in crate::interpreter) fn eval_property_isset_result(
     }
     let Ok(identity) = values.object_identity(object) else {
         let value = values.property_get(object, property_name)?;
-        return Ok(!values.is_null(value)?);
+        return eval_property_probe_value_is_set(value, context, values);
     };
     let Some(class) = context.dynamic_object_class(identity) else {
         // Native typed slots represent unset with an initialization marker.
@@ -819,7 +819,7 @@ pub(in crate::interpreter) fn eval_property_isset_result(
             return Ok(false);
         }
         let value = values.property_get(object, property_name)?;
-        return Ok(!values.is_null(value)?);
+        return eval_property_probe_value_is_set(value, context, values);
     };
     let object_class_name = class.name().to_string();
     if let Some((declaring_class, property)) =
@@ -834,7 +834,7 @@ pub(in crate::interpreter) fn eval_property_isset_result(
                 return Ok(false);
             }
             let value = eval_property_get_result(object, property_name, context, values)?;
-            return Ok(!values.is_null(value)?);
+            return eval_property_probe_value_is_set(value, context, values);
         }
         return eval_magic_property_isset(
             object,
@@ -847,7 +847,7 @@ pub(in crate::interpreter) fn eval_property_isset_result(
     }
     if eval_object_public_property_exists(object, property_name, values)? {
         let value = values.property_get(object, property_name)?;
-        return Ok(!values.is_null(value)?);
+        return eval_property_probe_value_is_set(value, context, values);
     }
     if let Some((declaring_class, visibility, _, is_static)) =
         eval_dynamic_class_native_property_metadata(
@@ -876,11 +876,22 @@ pub(in crate::interpreter) fn eval_property_isset_result(
             let value = eval_with_native_bridge_scope(&declaring_class, context, || {
                 values.property_get(object, property_name)
             })?;
-            return Ok(!values.is_null(value)?);
+            return eval_property_probe_value_is_set(value, context, values);
         }
     }
     eval_magic_property_isset(object, &object_class_name, property_name, context, values)
         .map(|result| result.unwrap_or(false))
+}
+
+/// Retires an owned probe result while preserving borrowed property-reference cells.
+fn eval_property_probe_value_is_set(
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let is_null = values.is_null(value);
+    let released = release_expr_result(value, context, values);
+    is_null.and_then(|is_null| released.map(|()| !is_null))
 }
 
 /// Evaluates PHP `unset($object->property)` across eval declarations and native storage.
