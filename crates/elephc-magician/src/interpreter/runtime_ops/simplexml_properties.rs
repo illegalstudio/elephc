@@ -41,7 +41,7 @@ pub(in crate::interpreter) fn dimension(
     values.operator_method_call(object, method, arguments).map(Some)
 }
 
-/// Tests native container emptiness without applying the object's boolean cast.
+/// Tests native container emptiness while borrowing the caller-owned receiver and index.
 pub(in crate::interpreter) fn empty(
     values: &mut impl RuntimeValueOps, object: RuntimeCellHandle,
     property: Option<&str>, index: Option<RuntimeCellHandle>,
@@ -56,15 +56,7 @@ pub(in crate::interpreter) fn empty(
             Err(status) => return Err(status),
         }
         let index = index.ok_or(EvalStatus::RuntimeFatal)?;
-        let outcome = values.operator_method_call(object, "__elephc_dimension_empty", vec![index.borrowed()]);
-        let released = if index.is_borrowed() { Ok(()) } else { values.release(index) };
-        match outcome {
-            Ok(value) => match released {
-                Ok(()) => Some(value),
-                Err(status) => { let _ = values.release(value); return Err(status); },
-            },
-            Err(status) => return Err(status),
-        }
+        Some(values.operator_method_call(object.borrowed(), "__elephc_dimension_empty", vec![index.borrowed()])?)
     };
     let Some(result) = result else { return Ok(None); };
     let empty = values.truthy(result);

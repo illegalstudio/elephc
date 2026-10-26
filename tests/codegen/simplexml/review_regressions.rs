@@ -199,6 +199,7 @@ for ($i = 0; $i < 32; $i++) {
     if (!empty($xml["missing" . str_repeat("x", 40)]) || !empty($xml[$key])) { echo "wrong|"; }
     if (isset($xml["missing" . str_repeat("x", 40)]) || !isset($xml[$key])) { echo "wrong|"; }
     if (isset((new SimpleXMLElement("<r/>"))["missing"]) || !empty((new SimpleXMLElement("<r/>"))["missing"])) { echo "wrong|"; }
+    if (!empty($xml?->missing["key" . str_repeat("x", 40)])) { echo "wrong|"; }
 }
 try { empty($xml[freshXmlEmptyKey()]); }
 catch (RuntimeException $error) { echo $error->getMessage(), "|"; }
