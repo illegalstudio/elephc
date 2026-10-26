@@ -56,7 +56,7 @@ pub(super) fn with_projection<V: RuntimeValueOps>(
 fn hook_failed(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
+) -> Result<(), EvalStatus> {
     let error = context.take_pending_throw();
     if let Some(error) = error {
         let _ = warn_hook_failure(error, context, values);
