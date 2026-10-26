@@ -13,13 +13,20 @@ use crate::support::*;
 /// Includes only stream helper bodies when a remote heap regression needs producer diagnostics.
 fn stream_owner_assembly(assembly: &str) -> String {
     let mut selected = String::new();
-    for name in ["__elephc_simplexml_file_handle", "__elephc_simplexml_stream_bytes", "__elephc_simplexml_data_bytes"] {
+    for name in ["__elephc_simplexml_file_handle", "__elephc_simplexml_stream_bytes", "__elephc_simplexml_data_bytes", "__elephc_simplexml_filter_bytes"] {
         let start = format!("{}:\n", elephc::names::function_symbol(name));
         let end = format!("{}:", elephc::names::function_epilogue_symbol(name));
         if let Some((_, body)) = assembly.split_once(&start) {
             selected.push_str(&start);
             selected.push_str(body.split_once(&end).map_or(body, |(body, _)| body));
         }
+    }
+    let lines: Vec<_> = assembly.lines().collect();
+    for (index, line) in lines.iter().enumerate().filter(|(_, line)|
+        line.trim_end().ends_with(':') && line.contains("mixed_method_SimpleXMLElement_")
+    ).take(4) {
+        selected.push_str(&lines[index..(index + 48).min(lines.len())].join("\n"));
+        selected.push('\n');
     }
     selected
 }
@@ -47,7 +54,7 @@ var_dump(simplexml_load_file('php://input', null, LIBXML_NOERROR | LIBXML_NOWARN
 #[test]
 fn test_simplexml_stream_document_owners_isolated_bundle() {
     if skip_without_xml_native("test_simplexml_stream_document_owners_isolated_bundle") { return; }
-    let runs = compile_and_run_with_heap_debug_per_argv(r###"<?php
+    let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(r###"<?php
 $seed = new SimpleXMLElement('<r/>');
 $uri = 'data://text/plain;base64,PHIvPg==';
 if ($argc === 1) { echo 'baseline'; }
@@ -59,13 +66,15 @@ elseif ($argc === 6) { echo simplexml_load_file('php://filter/read=string.tolowe
 elseif ($argc === 7) {
     $source = $argc > 0 ? 'echo simplexml_load_file($uri)->getName(), ":", (new SimpleXMLElement($uri, 0, true))->getName();' : '';
     eval($source);
-} else { var_dump(simplexml_load_file('php://input', null, LIBXML_NOERROR | LIBXML_NOWARNING)); }
+} elseif ($argc === 8) { var_dump(simplexml_load_file('php://input', null, LIBXML_NOERROR | LIBXML_NOWARNING)); }
+else { echo strlen(__elephc_simplexml_filter_bytes('php://filter/read=string.tolower/resource=data://text/plain,%3CR%3EYES%3C%2FR%3E', 'simplexml_load_file()')); }
 "###, &[
         &[], &["x"], &["x", "x"], &["x", "x", "x"],
         &["x", "x", "x", "x"], &["x", "x", "x", "x", "x"],
         &["x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x"],
+        &["x", "x", "x", "x", "x", "x", "x", "x"],
     ]);
-    let expected = ["baseline", "r", "r", "r", "one two", "r", "r:r", "bool(false)\n"];
+    let expected = ["baseline", "r", "r", "r", "one two", "r", "r:r", "bool(false)\n", "10"];
     assert_eq!(runs.len(), expected.len());
     let mut failures = Vec::new();
     for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {
@@ -73,7 +82,7 @@ elseif ($argc === 7) {
             failures.push(format!("mode={mode} success={} stdout={:?} expected={expected:?}\n{}", out.success, out.stdout, out.stderr));
         }
     }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert!(failures.is_empty(), "{}\nStream owner assembly:\n{}", failures.join("\n"), stream_owner_assembly(&assembly));
 }
 
 /// Registered PHP wrappers supply document bytes without any libxml global callback.

@@ -784,6 +784,7 @@ pub(crate) fn compile_and_run_with_heap_debug(source: &str) -> ProgramOutput {
 /// runs the same binary at `$argc == 1` and `$argc == 2`, so both arms run under CI.
 pub(crate) fn compile_and_run_per_argv(source: &str, argvs: &[&[&str]]) -> Vec<String> {
     compile_and_capture_per_argv(source, false, argvs)
+        .0
         .into_iter()
         .zip(argvs)
         .map(|(output, args)| {
@@ -806,6 +807,14 @@ pub(crate) fn compile_and_run_with_heap_debug_per_argv(
     source: &str,
     argvs: &[&[&str]],
 ) -> Vec<ProgramOutput> {
+    compile_and_capture_per_argv(source, true, argvs).0
+}
+
+/// Captures per-argument heap-debug runs and their shared assembly without recompiling.
+pub(crate) fn compile_and_run_with_heap_debug_and_asm_per_argv(
+    source: &str,
+    argvs: &[&[&str]],
+) -> (Vec<ProgramOutput>, String) {
     compile_and_capture_per_argv(source, true, argvs)
 }
 
@@ -814,7 +823,7 @@ fn compile_and_capture_per_argv(
     source: &str,
     heap_debug: bool,
     argvs: &[&[&str]],
-) -> Vec<ProgramOutput> {
+) -> (Vec<ProgramOutput>, String) {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
     let pid = std::process::id();
@@ -835,7 +844,7 @@ fn compile_and_capture_per_argv(
     );
 
     let _ = fs::remove_dir_all(&dir);
-    outputs
+    (outputs, user_asm)
 }
 
 /// Returns the exact user assembly with a heap-debug fixture's output for target-specific CI diagnostics.
