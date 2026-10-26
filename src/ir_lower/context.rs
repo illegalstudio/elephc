@@ -5134,7 +5134,8 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
             self, signature.as_ref(), &mut operands, actual_count, &expression,
         );
         let pins = if extra.is_empty() { Vec::new() } else {
-            crate::ir_lower::expr::pin_in_flight_owners(self, &operands, at)
+            let hidden = extra.iter().map(|value| value.value).collect::<Vec<_>>();
+            crate::ir_lower::expr::pin_in_flight_owners(self, &hidden, at)
         };
         let data = self.intern_function_name(name);
         let lowered = LoweringContext::emit_value(

@@ -14,6 +14,26 @@
 
 use crate::support::*;
 
+/// A composed prelude call owns only its hidden tail when a parser guard throws.
+#[test]
+fn test_xml_composed_helper_throw_keeps_caller_owners() {
+    if skip_without_xml_native("test_xml_composed_helper_throw_keeps_caller_owners") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function invalidComposedXmlParser(): mixed { return 123; }
+$bad = invalidComposedXmlParser();
+$calls = 0;
+$callback = function (XMLParser $parser, string $name, array $attributes) use (&$calls): void { $calls++; echo 'used|'; };
+try { xml_set_element_handler($bad, $callback, null); } catch (TypeError $error) { echo 'caught|'; }
+$callback(xml_parser_create(), 'r', []);
+$values = [];
+try { xml_parse_into_struct($bad, str_repeat('x', 64), $values); } catch (TypeError $error) { echo 'struct-caught|'; }
+echo $calls;
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "caught|used|struct-caught|1");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Backtrace argument capture keeps ordinary and optional handler parameters PHP-visible.
 #[test]
 fn test_xml_handler_closures_with_backtrace_capture() {
