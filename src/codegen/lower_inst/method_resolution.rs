@@ -300,7 +300,7 @@ pub(super) fn store_compiled_call_result(
     if (representation == PhpType::Mixed
         || !matches!(result_ty, PhpType::Mixed | PhpType::Union(_)))
         && result_ty.codegen_repr() == representation
-        && (representation.is_refcounted() || representation == PhpType::Str)
+        && (representation.is_refcounted() || matches!(representation, PhpType::Str | PhpType::Callable))
     {
         // Method-call temporaries own their result even when no ABI boxing is
         // needed. A borrowed static-property return must survive later writes.
@@ -316,7 +316,7 @@ pub(super) fn store_compiled_call_result(
     }
     if !matches!(result_ty, PhpType::Mixed | PhpType::Union(_))
         || representation == PhpType::Mixed
-        || !(representation.is_refcounted() || representation == PhpType::Str)
+        || !(representation.is_refcounted() || matches!(representation, PhpType::Str | PhpType::Callable))
     {
         return store_call_result(ctx, inst, return_ty);
     }

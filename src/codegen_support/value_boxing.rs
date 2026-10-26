@@ -298,7 +298,7 @@ pub(crate) fn emit_box_current_php_return_as_mixed(
 ) {
     let representation = ty.codegen_repr();
     if matches!(representation, PhpType::Mixed | PhpType::Union(_)) { return; }
-    if representation.is_refcounted() || representation == PhpType::Str {
+    if representation.is_refcounted() || matches!(representation, PhpType::Str | PhpType::Callable) {
         abi::emit_branch_if_php_return_owned(emitter, owned_label);
         emit_box_current_value_as_mixed(emitter, ty);
         abi::emit_jump(emitter, done_label);

@@ -105,6 +105,9 @@ class CompiledMethodBoxSource implements CompiledMethodBoxProtocol {
     public function borrowedArray(): array { return $this->items; }
     public function freshObject(): stdClass { return new stdClass(); }
     public function borrowedObject(): stdClass { return $this->object; }
+    public function callback(): callable {
+        $value = str_repeat('f', 24); return static fn(): int => strlen($value);
+    }
 }
 class CompiledMethodBoxOther {
     public function freshText(int $n): int { return $n; }
@@ -117,6 +120,7 @@ class CompiledMethodBoxOther {
     public function borrowedArray(): int { return 0; }
     public function freshObject(): int { return 0; }
     public function borrowedObject(): int { return 0; }
+    public function callback(): int { return 0; }
 }
 function useCompiledMethodBox(mixed $source, int $n): void {
     echo strlen($source->freshText($n)), ':', strlen($source->borrowedText()), ':';
@@ -124,6 +128,7 @@ function useCompiledMethodBox(mixed $source, int $n): void {
     echo strlen($source->adaptedText($n)), ':', strlen($source->adaptedBorrowedText()), ':';
     echo count($source->freshArray()), ':', count($source->borrowedArray()), ':';
     echo get_class($source->freshObject()), ':';
+    echo ($source->callback())(), ':';
     var_dump($source->borrowedObject() === $source->borrowedObject());
 }
 function useCompiledMethodProtocol(CompiledMethodBoxProtocol $source): void {
@@ -142,6 +147,6 @@ useCompiledMethodConcat($source);
 echo strlen($source->text), ':', count($source->items);
 "#);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "10:32:x:10:32:2:2:stdClass:bool(true)\n11:32:x:11:32:2:2:stdClass:bool(true)\n12:32:x:12:32:2:2:stdClass:bool(true)\ncccc:32|80000:d:e|80000|32:2");
+    assert_eq!(out.stdout, "10:32:x:10:32:2:2:stdClass:24:bool(true)\n11:32:x:11:32:2:2:stdClass:24:bool(true)\n12:32:x:12:32:2:2:stdClass:24:bool(true)\ncccc:32|80000:d:e|80000|32:2");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
