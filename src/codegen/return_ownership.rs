@@ -16,11 +16,16 @@
 
 use crate::codegen::abi;
 use crate::codegen::context::FunctionContext;
-use crate::codegen::emit::Emitter;
-use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
 use crate::ir::{LocalSlotId, Op, Ownership, ValueDef, ValueId};
 use crate::types::PhpType;
+
+pub(super) use crate::codegen_support::abi::{
+    emit_php_return_status as emit_status,
+    emit_store_php_return_status as emit_store_status,
+    emit_load_php_return_status as emit_load_status,
+    emit_branch_if_php_return_owned as emit_branch_if_owned,
+};
 
 /// Ownership state published with one by-value compiled PHP return.
 #[derive(Clone, Copy)]
@@ -206,60 +211,4 @@ fn acquire_loaded_block_argument(ctx: &mut FunctionContext<'_>, ty: &PhpType) ->
         }
     }
     Ok(())
-}
-
-/// Publishes whether this exact EIR return path transfers its result owner.
-pub(super) fn emit_status(emitter: &mut Emitter, owned: bool) {
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction(if owned {                                      // publish the exact EIR return-path ownership status
-                "mov x15, #1"
-            } else {
-                "mov x15, xzr"
-            });
-        }
-        Arch::X86_64 => {
-            emitter.instruction(if owned {                                      // publish the exact EIR return-path ownership status
-                "mov r11d, 1"
-            } else {
-                "xor r11d, r11d"
-            });
-        }
-    }
-}
-
-/// Preserves the internal marker before argument cleanup can issue another call.
-pub(super) fn emit_store_status(emitter: &mut Emitter, offset: usize) {
-    let status_reg = status_reg(emitter.target.arch);
-    abi::store_at_offset(emitter, status_reg, offset);
-}
-
-/// Restores a previously preserved internal marker.
-pub(super) fn emit_load_status(emitter: &mut Emitter, offset: usize) {
-    let status_reg = status_reg(emitter.target.arch);
-    abi::load_at_offset(emitter, status_reg, offset);
-}
-
-/// Branches when the current compiled PHP return transfers an existing owner.
-pub(super) fn emit_branch_if_owned(emitter: &mut Emitter, owned_label: &str) {
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction(&format!(                                       // transfer a result whose EIR return path already owns its storage
-                "cbnz x15, {}",
-                owned_label
-            ));
-        }
-        Arch::X86_64 => {
-            emitter.instruction("test r11, r11");                               // inspect the per-return EIR ownership status from the callable entry
-            emitter.instruction(&format!("jne {}", owned_label));               // transfer a result whose EIR return path already owns its storage
-        }
-    }
-}
-
-/// Returns the private caller-saved register used by the compiled PHP ABI.
-fn status_reg(arch: Arch) -> &'static str {
-    match arch {
-        Arch::AArch64 => "x15",
-        Arch::X86_64 => "r11",
-    }
 }

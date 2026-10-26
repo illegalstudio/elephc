@@ -306,26 +306,9 @@ pub(super) fn store_compiled_call_result(
     let owned = ctx.next_label("compiled_return_box_owned");
     let done = ctx.next_label("compiled_return_box_done");
     let box_ty = crate::types::mixed_box_php_type(return_ty);
-    crate::codegen::return_ownership::emit_branch_if_owned(ctx.emitter, &owned);
-    emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
-    abi::emit_jump(ctx.emitter, &done);
-    ctx.emitter.label(&owned);
-    if representation == PhpType::Str {
-        // Fresh string helpers can still return concat scratch. Persist first,
-        // then let the validating release retire only a real heap allocation.
-        let (pointer, _) = abi::string_result_regs(ctx.emitter);
-        abi::emit_push_reg(ctx.emitter, pointer);
-        emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
-        let result_reg = abi::int_result_reg(ctx.emitter);
-        abi::emit_push_reg(ctx.emitter, result_reg);
-        abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
-        abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
-        abi::emit_pop_reg(ctx.emitter, result_reg);
-        abi::emit_release_temporary_stack(ctx.emitter, 16);
-    } else {
-        emit_box_current_owned_value_as_mixed(ctx.emitter, &box_ty);
-    }
-    ctx.emitter.label(&done);
+    crate::codegen_support::value_boxing::emit_box_current_php_return_as_mixed(
+        ctx.emitter, &box_ty, &owned, &done,
+    );
     ctx.store_result_value(result)
 }
 

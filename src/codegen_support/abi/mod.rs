@@ -15,6 +15,7 @@ mod call_operand_scope;
 mod frame;
 pub(crate) mod immediate;
 mod registers;
+mod php_return;
 mod strings;
 mod symbols;
 #[cfg(test)]
@@ -81,3 +82,8 @@ pub use values::{
     emit_store, emit_unary_cleanup_preserving_exception, emit_write_stdout,
 };
 pub(crate) use values::refcount_release_helper;
+
+pub(crate) use php_return::{
+    emit_php_return_status, emit_store_php_return_status, emit_load_php_return_status,
+    emit_branch_if_php_return_owned,
+};

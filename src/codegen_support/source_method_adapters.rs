@@ -405,7 +405,8 @@ pub(crate) fn emit_method_adapter(
     }).collect::<Vec<_>>();
     let owner_offset = (incoming_types.len() + boxed_offsets.len() + 1) * 16;
     let return_offset = owner_offset + 16;
-    let frame_size = return_offset + 16;
+    let return_status_offset = return_offset + 16;
+    let frame_size = return_status_offset + 16;
 
     emitter.raw(".align 2");
     emitter.label_global(wrapper);
@@ -475,20 +476,8 @@ pub(crate) fn emit_method_adapter(
     } else {
         physical.return_type.codegen_repr()
     };
-    preserve_return_value(emitter, &physical_return, return_offset);
-    if plan.appends_collector() {
-        abi::emit_pop_call_operand_owner(emitter);
-        abi::load_at_offset(emitter, abi::int_result_reg(emitter), owner_offset);
-        abi::emit_store_zero_to_local_slot(emitter, owner_offset);
-        abi::emit_call_label(emitter, "__rt_decref_any");
-    }
-    for &offset in boxed_offsets.iter().rev() {
-        abi::emit_pop_call_operand_owner(emitter);
-        abi::load_at_offset(emitter, abi::int_result_reg(emitter), offset);
-        abi::emit_store_zero_to_local_slot(emitter, offset);
-        abi::emit_call_label(emitter, "__rt_decref_any");
-    }
-    restore_return_value(emitter, &physical_return, return_offset);
+    // Normalize while argument owners are still rooted: a borrowed return may
+    // refer to a boxed argument that adapter cleanup is about to retire.
     if box_return_as_mixed {
         if physical_return == PhpType::Void {
             abi::emit_load_int_immediate(
@@ -503,8 +492,28 @@ pub(crate) fn emit_method_adapter(
         } else {
             crate::types::mixed_box_php_type(&physical.return_type)
         };
-        super::value_boxing::emit_box_current_value_as_mixed(emitter, &box_ty);
+        super::value_boxing::emit_box_current_php_return_as_mixed(
+            emitter, &box_ty,
+            &format!("{wrapper}_return_box_owned"), &format!("{wrapper}_return_box_done"),
+        );
     }
+    let stored_return = if box_return_as_mixed { PhpType::Mixed } else { physical_return };
+    abi::emit_store_php_return_status(emitter, return_status_offset);
+    preserve_return_value(emitter, &stored_return, return_offset);
+    if plan.appends_collector() {
+        abi::emit_pop_call_operand_owner(emitter);
+        abi::load_at_offset(emitter, abi::int_result_reg(emitter), owner_offset);
+        abi::emit_store_zero_to_local_slot(emitter, owner_offset);
+        abi::emit_call_label(emitter, "__rt_decref_any");
+    }
+    for &offset in boxed_offsets.iter().rev() {
+        abi::emit_pop_call_operand_owner(emitter);
+        abi::load_at_offset(emitter, abi::int_result_reg(emitter), offset);
+        abi::emit_store_zero_to_local_slot(emitter, offset);
+        abi::emit_call_label(emitter, "__rt_decref_any");
+    }
+    restore_return_value(emitter, &stored_return, return_offset);
+    abi::emit_load_php_return_status(emitter, return_status_offset);
     abi::emit_frame_restore(emitter, frame_size);
     abi::emit_return(emitter);
     Ok(())
@@ -969,6 +978,41 @@ mod tests {
                 "movz x0, #0xfffe"
             };
             assert!(asm.contains(null_payload), "{target}");
+        }
+    }
+
+    /// Adapter cleanup preserves the PHP owner marker and boxed strings retire their raw owner.
+    #[test]
+    fn source_adapter_preserves_and_consumes_return_owners_on_all_targets() {
+        let mut caller = signature(vec![("value".into(), PhpType::Int)], None);
+        caller.return_type = PhpType::Str;
+        let mut physical = caller.clone();
+        physical.params[0].1 = PhpType::Mixed;
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            for boxed in [false, true] {
+                let mut emitter = Emitter::new(
+                    crate::codegen_support::platform::Target::parse(target).unwrap(),
+                );
+                emit_method_adapter(&mut emitter, "_owner_adapter", "_owner_implementation",
+                    MethodKind::Instance, &caller, &physical, boxed).unwrap();
+                let asm = emitter.output();
+                let call = asm.find(if target == "linux-x86_64" {
+                    "call _owner_implementation"
+                } else { "bl _owner_implementation" }).unwrap();
+                let save = asm[call..].find(if target == "linux-x86_64" {
+                    "mov QWORD PTR [rbp - 96], r11"
+                } else { "stur x15, [x29, #-96]" }).unwrap() + call;
+                let cleanup = asm[save..].find("__rt_decref_any").unwrap() + save;
+                let restore = asm[cleanup..].find(if target == "linux-x86_64" {
+                    "mov r11, QWORD PTR [rbp - 96]"
+                } else { "ldur x15, [x29, #-96]" }).unwrap() + cleanup;
+                assert!(call < save && save < cleanup && cleanup < restore, "{target}");
+                if boxed {
+                    let branch = asm[call..].find("_owner_adapter_return_box_owned").unwrap() + call;
+                    let release = asm[call..].find("__rt_heap_free_safe").unwrap() + call;
+                    assert!(branch < release && release < save, "{target}: box and retire while arguments are rooted");
+                }
+            }
         }
     }
 
