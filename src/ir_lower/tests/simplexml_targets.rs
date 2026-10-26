@@ -53,7 +53,7 @@ var_dump(empty($peer?->text[0]));
 function xmlEmptyObjectParameter(object $node): bool { return empty($node->item); }
 var_dump(xmlEmptyObjectParameter($xml));
 function xmlErasedStringParameter(object $node): string { return (string)$node; }
-echo xmlErasedStringParameter($xml->item[0]);
+echo xmlErasedStringParameter($xml);
 function xmlWriteOpaqueParameter(mixed $node): void { $node->other[0] = 'value'; }
 xmlWriteOpaqueParameter($xml);
 function xmlAppendOpaqueParameter(mixed $node): void { $node[] = 'appended'; }

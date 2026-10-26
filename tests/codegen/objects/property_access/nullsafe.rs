@@ -699,6 +699,19 @@ function probeScalarInt(int $value): void {
     echo $value->x ?? 'fallback', '|';
     var_dump(isset($value->{scalarProbeKey()}), empty($value->{scalarProbeKey()}));
 }
+
+/// Quiet probes through a false array element return PHP defaults without promoting the element.
+#[test]
+fn test_nested_false_quiet_probes_preserve_storage() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$items = [false];
+var_dump(isset($items[0][0]), empty($items[0][0]), $items[0][0] ?? 'fallback');
+var_dump($items);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "bool(false)\nbool(true)\nstring(8) \"fallback\"\narray(1) {\n  [0]=>\n  bool(false)\n}\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
 function probeScalarFloat(float $value): void { var_dump(isset($value['x']), empty($value->x)); }
 function probeScalarBool(bool $value): void { var_dump(isset($value['x']), empty($value->x)); }
 probeScalarInt($argc);
