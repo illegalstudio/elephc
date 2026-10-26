@@ -49,11 +49,11 @@ pub fn emit_pr_append(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("adds x0, x0, x10");                            // check the required capture size before any narrowing allocation
-            emitter.instruction("b.cs __rt_heap_exhausted");                    // reject a wrapped byte count through the shared fatal path
+            emitter.instruction("b.cs __rt_pr_append_overflow");                // reject a wrapped byte count through the shared fatal path
         }
         Arch::X86_64 => {
             emitter.instruction("add rax, r10");                                // check the required capture size before any narrowing allocation
-            emitter.instruction("jc __rt_heap_exhausted");                      // reject a wrapped byte count through the shared fatal path
+            emitter.instruction("jc __rt_pr_append_overflow");                  // reject a wrapped byte count through the shared fatal path
         }
     }
     abi::store_at_offset(emitter, result, 48);
@@ -81,13 +81,13 @@ pub fn emit_pr_append(emitter: &mut Emitter) {
             emitter.instruction("cmp x0, x10");                                 // stop doubling once the pending append fits
             emitter.instruction("b.hs __rt_pr_append_allocate");                // allocate the selected capacity
             emitter.instruction("adds x0, x0, x0");                             // double geometrically without wrapping
-            emitter.instruction("b.cs __rt_heap_exhausted");                    // reject capacity overflow instead of looping
+            emitter.instruction("b.cs __rt_pr_append_overflow");                // reject capacity overflow instead of looping
         }
         Arch::X86_64 => {
             emitter.instruction("cmp rax, r10");                                // stop doubling once the pending append fits
             emitter.instruction("jae __rt_pr_append_allocate");                 // allocate the selected capacity
             emitter.instruction("add rax, rax");                                // double geometrically without wrapping
-            emitter.instruction("jc __rt_heap_exhausted");                      // reject capacity overflow instead of looping
+            emitter.instruction("jc __rt_pr_append_overflow");                  // reject capacity overflow instead of looping
         }
     }
     abi::emit_jump(emitter, "__rt_pr_append_grow");
@@ -131,6 +131,8 @@ pub fn emit_pr_append(emitter: &mut Emitter) {
     emitter.label("__rt_pr_append_done");
     abi::emit_frame_restore(emitter, 80);
     abi::emit_return(emitter);
+    emitter.label("__rt_pr_append_overflow");
+    abi::emit_jump(emitter, "__rt_heap_allocation_failed");
 }
 
 /// Reloads one append spill into the selected target C argument register.
@@ -307,6 +309,24 @@ mod tests {
             for label in ["__rt_pr_append", "__rt_pr_write", "__rt_pr_finish", "__rt_pr_abort", "__rt_cleanup_print_r_capture"] {
                 assert!(asm.contains(&format!(".globl {label}\n")), "{target}: missing {label}");
             }
+        }
+    }
+
+    /// Overflow conditionals stay inside their atom and only a shared fatal entry escapes.
+    #[test]
+    fn pr_append_overflow_branches_stay_in_own_atom() {
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(target).unwrap());
+            emit_pr_append(&mut emitter);
+            let asm = emitter.output();
+            for line in asm.lines().map(str::trim) {
+                if let Some(destination) = line.strip_prefix("b.cs ").or_else(|| line.strip_prefix("jc ")) {
+                    let destination = destination.split_whitespace().next().unwrap();
+                    assert!(asm.contains(&format!("\n{destination}:\n")), "{target}: overflow leaves the append atom: {line}");
+                }
+            }
+            assert!(!asm.contains("__rt_heap_exhausted"), "{target}: private allocator label escaped");
+            assert!(asm.contains("__rt_heap_allocation_failed"), "{target}: missing shared fatal entry");
         }
     }
 
