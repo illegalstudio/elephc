@@ -76,6 +76,22 @@ pub(super) fn lower_lazy_isset_operand(
     match &arg.kind {
         ExprKind::ArrayAccess { array, index } => {
             if array_access_expr_satisfies_array_access(ctx, array) {
+                if matches!(array.kind, ExprKind::Variable(_)) {
+                    let (key, key_temp) = evaluate_once(ctx, index, arg);
+                    let owner = key_temp.as_ref().filter(|name|
+                        Ownership::php_type_needs_lifetime_tracking(&ctx.local_type(name)))
+                        .map(|name| ctx.local_slots[name]);
+                    if let Some(slot) = owner { register_owned_call_operand(ctx, slot, arg.span); }
+                    let value = if array_access_expr_satisfies_array_access(ctx, array) {
+                        let ty = array_cast_source::array_cast_source_type_for_ir(ctx, array);
+                        let object = lower_expr(ctx, array);
+                        native_dimension_probes::lower(ctx, object, &ty, &key,
+                            elephc_builtin_contract::ObjectDimension::Isset, arg)
+                    } else { lower_native_isset_offset_probe(ctx, array, &key, arg) };
+                    if let Some(slot) = owner { unregister_owned_call_operand(ctx, slot, arg.span); }
+                    release_evaluated_once(ctx, key_temp, arg.span);
+                    return Some(value);
+                }
                 let ty = array_cast_source::array_cast_source_type_for_ir(ctx, array);
                 let object = lower_expr(ctx, array);
                 return Some(native_dimension_probes::lower(ctx, object, &ty, index,

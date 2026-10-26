@@ -1083,7 +1083,7 @@ fn lower_dynamic_property_fetch_without_native(
     result_type: PhpType, mode: PropertyFetchMode, expr: &Expr,
 ) -> LoweredValue {
     if mode == PropertyFetchMode::Probe && scalar_property_probe_receiver(ctx, object.value) {
-        release_coerced_source_if_owned(ctx, property, Some(expr.span));
+        crate::ir_lower::ownership::release_if_owned(ctx, property, Some(expr.span));
         release_owning_receiver_temporary(ctx, object, expr.span);
         return lower_null(ctx, expr);
     }

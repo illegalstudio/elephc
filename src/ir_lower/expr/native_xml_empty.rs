@@ -35,8 +35,8 @@ pub(super) fn lower(
     };
     let ty = array_cast_source::array_cast_source_type_for_ir(ctx, object);
     if !may_be_native(ctx, &ty) { return None; }
-    let key_first = !dimension && !nullsafe && matches!(object.kind, ExprKind::Variable(_))
-        && !matches!(key.kind, ExprKind::StringLiteral(_));
+    let key_first = !nullsafe && matches!(object.kind, ExprKind::Variable(_))
+        && (dimension || !matches!(key.kind, ExprKind::StringLiteral(_)));
     let early_key = key_first.then(|| capture_key(ctx, &key, dimension));
     let value = lower_subscript_receiver_silently(ctx, object);
     let receiver = capture(ctx, value, arg.span);

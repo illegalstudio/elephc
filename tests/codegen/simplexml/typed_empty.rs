@@ -141,10 +141,15 @@ function computedUnsetKey(): string { echo '|key'; return 'a'; }
 unset(erasedUnsetXml($old)[computedUnsetKey()]);
 echo ':', (int)isset($old['a']);
 unset(simplexml_load_string('<r a="temporary"/>')['a']);
+function replaceProbeXml(mixed &$value): string { $value = new SimpleXMLElement('<probe/>'); return 'a'; }
+$probe = new SimpleXMLElement('<r a="value"/>');
+echo '|', (int)isset($probe[replaceProbeXml($probe)]), ':', $probe->getName();
+$probe = new SimpleXMLElement('<r a="value"/>');
+echo '|', (int)empty($probe[replaceProbeXml($probe)]), ':', $probe->getName();
 "#);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, concat!("0|0|0:1|8192|bool(false)\nNULL\n",
         "Cannot unset offset in a non-array variable|Cannot unset offset in a non-array variable|",
-        "Cannot unset offset in a non-array variable|Cannot unset string offsets|new:0:1|receiver|key:0"));
+        "Cannot unset offset in a non-array variable|Cannot unset string offsets|new:0:1|receiver|key:0|0:probe|1:probe"));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

@@ -16,6 +16,17 @@ pub(super) fn lower(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, source_type: &PhpType,
     index: &Expr, operation: ObjectDimension, expr: &Expr,
 ) -> LoweredValue {
+    let ty = ctx.builder.value_php_type(object.value);
+    let object = if !ctx.value_needs_release_after_use(object)
+        && Ownership::php_type_needs_lifetime_tracking(&ty)
+    {
+        if ty.codegen_repr() == PhpType::Mixed {
+            ctx.emit_owned_value(Op::MixedClone, vec![object.value], None, ty,
+                Op::MixedClone.default_effects(), Some(expr.span))
+        } else {
+            crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, object, Some(expr.span))
+        }
+    } else { object };
     let (object, owner) = root_owned_call_operand(ctx, object, expr.span);
     // Global storage erases object metadata to Mixed; retain the source type for
     // protocol selection while the captured value keeps its real boxed representation.
@@ -104,9 +115,41 @@ fn invoke(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, key: &Expr,
     operation: ObjectDimension, method: &str, expr: &Expr,
 ) -> LoweredValue {
-    let op = if value_is_nullable(ctx, object.value) { Op::NullsafeMethodCall }
-        else { Op::MethodCall };
-    let result = lower_method_call_with_receiver(ctx, object, method, &[key.clone()], op, expr);
+    if value_is_nullable(ctx, object.value) {
+        let is_null = ctx.emit_value(Op::IsNull, vec![object.value], None, PhpType::Bool,
+            Op::IsNull.default_effects(), Some(expr.span));
+        let absent = ctx.builder.create_named_block("dimension.probe.null", vec![]);
+        let present = ctx.builder.create_named_block("dimension.probe.nonnull", vec![]);
+        let merge = ctx.builder.create_named_block("dimension.probe.null.merge", vec![]);
+        let temp = ctx.declare_hidden_temp(PhpType::Bool);
+        let initial = ctx.initialized_slots_snapshot();
+        ctx.builder.terminate(Terminator::CondBr { cond: is_null.value,
+            then_target: absent, then_args: vec![], else_target: present, else_args: vec![] });
+        ctx.builder.position_at_end(absent);
+        let value = emit_bool_literal(ctx, false, Some(expr.span));
+        store_value_into_temp(ctx, &temp, PhpType::Bool, value, expr.span);
+        branch_to(ctx, merge);
+        let absent_slots = ctx.initialized_slots_snapshot();
+        ctx.builder.position_at_end(present);
+        ctx.restore_initialized_slots(initial.clone());
+        let value = invoke_nonnull(ctx, object, key, operation, method, expr);
+        store_value_into_temp(ctx, &temp, PhpType::Bool, value, expr.span);
+        branch_to(ctx, merge);
+        let present_slots = ctx.initialized_slots_snapshot();
+        ctx.builder.position_at_end(merge);
+        ctx.restore_initialized_slots(merge_initialized_slots_for_expr(&initial,
+            absent_slots, true, present_slots, true));
+        return take_owned_temp(ctx, &temp, expr.span);
+    }
+    invoke_nonnull(ctx, object, key, operation, method, expr)
+}
+
+/// Borrows captured operands only on the continuation where the receiver is non-null.
+fn invoke_nonnull(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, key: &Expr,
+    operation: ObjectDimension, method: &str, expr: &Expr,
+) -> LoweredValue {
+    let result = lower_method_call_with_receiver(ctx, object, method, &[key.clone()], Op::MethodCall, expr);
     if operation == ObjectDimension::Isset { ctx.truthy_consuming(result, Some(expr.span)) }
     else {
         crate::ir_lower::ownership::release_if_owned(ctx, result, Some(expr.span));
