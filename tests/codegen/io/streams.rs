@@ -8256,3 +8256,22 @@ fn test_stream_context_set_option_nested_hash_retain_does_not_leak() {
         "repeated stream_context_set_option() calls grew the live heap"
     );
 }
+
+/// Wrapper discovery snapshots live registrations and keeps names after unregister frees them.
+#[test]
+fn test_stream_get_wrappers_includes_registered_protocols() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class WrapperDiscovery {}
+stream_wrapper_register('discoveryone', 'WrapperDiscovery');
+stream_wrapper_register('discoverytwo', 'WrapperDiscovery');
+$list = stream_get_wrappers();
+var_dump(in_array('discoveryone', $list, true), in_array('discoverytwo', $list, true));
+stream_wrapper_unregister('discoveryone');
+stream_wrapper_unregister('discoverytwo');
+var_dump(in_array('discoveryone', stream_get_wrappers(), true), in_array('discoveryone', $list, true));
+unset($list);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "bool(true)\nbool(true)\nbool(false)\nbool(true)\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

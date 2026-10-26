@@ -110,7 +110,7 @@ pub(crate) fn lower_stream_get_meta_data(
     store_if_result(ctx, inst)
 }
 
-/// Lowers `stream_get_wrappers()` to the static built-in wrapper list.
+/// Returns builtin protocols plus the currently registered userspace protocols.
 pub(crate) fn lower_stream_get_wrappers(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -123,6 +123,7 @@ pub(crate) fn lower_stream_get_wrappers(
             "compress.zlib", "compress.bzip2", "phar", "glob",
         ],
     );
+    append_registered_wrappers(ctx);
     store_if_result(ctx, inst)
 }
 
@@ -168,4 +169,63 @@ pub(crate) fn lower_stream_get_filters(
         ],
     );
     store_if_result(ctx, inst)
+}
+
+/// Copies live registration names into the fresh array, preserving it across growth and calls.
+fn append_registered_wrappers(ctx: &mut FunctionContext<'_>) {
+    let scan = ctx.next_label("stream_wrappers_scan");
+    let next = ctx.next_label("stream_wrappers_next");
+    let done = ctx.next_label("stream_wrappers_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sub sp, sp, #32");                         // reserve the owned result and registry cursor
+            ctx.emitter.instruction("str x0, [sp]");                            // retain the array pointer across string appends
+            ctx.emitter.instruction("str xzr, [sp, #8]");                       // begin with the first registration slot
+            ctx.emitter.label(&scan);
+            ctx.emitter.instruction("ldr x9, [sp, #8]");                        // reload the cursor after any allocating append
+            ctx.emitter.instruction("cmp x9, #64");                             // bound the scan by the registration table capacity
+            ctx.emitter.instruction(&format!("b.hs {done}"));                   // finish after inspecting every slot
+            abi::emit_symbol_address(ctx.emitter, "x10", "_user_wrappers");
+            ctx.emitter.instruction("add x10, x10, x9, lsl #5");                // select one four-word protocol/class registration
+            ctx.emitter.instruction("ldr x1, [x10]");                           // borrow the registered protocol bytes
+            ctx.emitter.instruction(&format!("cbz x1, {next}"));                // empty slots contribute no protocol
+            ctx.emitter.instruction("ldr x2, [x10, #8]");                       // load the protocol byte length
+            ctx.emitter.instruction("ldr x0, [sp]");                            // pass the current growable result array
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
+            ctx.emitter.instruction("str x0, [sp]");                            // preserve the possibly relocated result
+            ctx.emitter.label(&next);
+            ctx.emitter.instruction("ldr x9, [sp, #8]");                        // reload the cursor clobbered by the runtime call
+            ctx.emitter.instruction("add x9, x9, #1");                          // advance to the next registration slot
+            ctx.emitter.instruction("str x9, [sp, #8]");                        // keep the cursor across the next append
+            ctx.emitter.instruction(&format!("b {scan}"));                      // inspect the next registration
+            ctx.emitter.label(&done);
+            ctx.emitter.instruction("ldr x0, [sp]");                            // return the independently owned protocol array
+            ctx.emitter.instruction("add sp, sp, #32");                         // retire the aligned temporary frame
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 32");                             // reserve aligned result and cursor storage
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // retain the fresh result across string appends
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], 0");              // begin with the first registration slot
+            ctx.emitter.label(&scan);
+            ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 8]");             // reload the cursor after an allocating append
+            ctx.emitter.instruction("cmp r9, 64");                              // bound the scan by the registration table capacity
+            ctx.emitter.instruction(&format!("jae {done}"));                    // finish after inspecting every slot
+            abi::emit_symbol_address(ctx.emitter, "r10", "_user_wrappers");
+            ctx.emitter.instruction("shl r9, 5");                               // scale the index by the four-word registration size
+            ctx.emitter.instruction("add r10, r9");                             // address the selected registration
+            ctx.emitter.instruction("mov rsi, QWORD PTR [r10]");                // borrow the registered protocol bytes
+            ctx.emitter.instruction("test rsi, rsi");                           // test whether this registration slot is occupied
+            ctx.emitter.instruction(&format!("jz {next}"));                     // empty slots contribute no protocol
+            ctx.emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");            // pass the protocol byte length
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                // pass the current growable result array
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // preserve the possibly relocated result
+            ctx.emitter.label(&next);
+            ctx.emitter.instruction("add QWORD PTR [rsp + 8], 1");              // advance the durable registration cursor
+            ctx.emitter.instruction(&format!("jmp {scan}"));                    // inspect the next registration
+            ctx.emitter.label(&done);
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // return the independently owned protocol array
+            ctx.emitter.instruction("add rsp, 32");                             // retire the aligned temporary frame
+        }
+    }
 }
