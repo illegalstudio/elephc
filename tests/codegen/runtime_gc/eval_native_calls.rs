@@ -399,7 +399,6 @@ eval($source);
 #[test]
 fn test_eval_declared_stringable_crosses_native_string_contexts() {
     let out = compile_and_run_with_heap_debug(r###"<?php
-debug_backtrace();
 function nativeMixedEvalString(mixed $value): string { return (string)$value; }
 function nativeObjectEvalString(object $value): string { return (string)$value; }
 $source = $argc > 0 ? '
@@ -414,11 +413,14 @@ class EvaluatedNativeString {
 }
 $held = new EvaluatedNativeString(false);
 echo strlen(nativeMixedEvalString($held)), ":", strlen(nativeObjectEvalString($held)), "|";
-try { nativeMixedEvalString(new EvaluatedNativeString(true)); }
+$throwing = new EvaluatedNativeString(true);
+try { nativeMixedEvalString($throwing); }
 catch (RuntimeException $error) { echo $error->getMessage(), "|"; unset($error); }
-try { nativeObjectEvalString(new EvaluatedNativeString(true)); }
+unset($throwing);
+$throwing = new EvaluatedNativeString(true);
+try { nativeObjectEvalString($throwing); }
 catch (RuntimeException $error) { echo $error->getMessage(), "|"; unset($error); }
-unset($held);
+unset($throwing, $held);
 ' : '';
 eval($source);
 "###);

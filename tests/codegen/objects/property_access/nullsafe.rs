@@ -700,6 +700,18 @@ function probeScalarInt(int $value): void {
     var_dump(isset($value->{scalarProbeKey()}), empty($value->{scalarProbeKey()}));
 }
 
+function probeScalarFloat(float $value): void { var_dump(isset($value['x']), empty($value->x)); }
+function probeScalarBool(bool $value): void { var_dump(isset($value['x']), empty($value->x)); }
+probeScalarInt($argc);
+probeScalarFloat(1.5);
+probeScalarBool(true);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, concat!("key|key|bool(false)\nbool(true)\nfallback|key|key|bool(false)\nbool(true)\n",
+        "bool(false)\nbool(true)\nbool(false)\nbool(true)\n"));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Quiet probes through a false array element return PHP defaults without promoting the element.
 #[test]
 fn test_nested_false_quiet_probes_preserve_storage() {
@@ -710,16 +722,5 @@ var_dump($items);
 "#);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "bool(false)\nbool(true)\nstring(8) \"fallback\"\narray(1) {\n  [0]=>\n  bool(false)\n}\n");
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
-}
-function probeScalarFloat(float $value): void { var_dump(isset($value['x']), empty($value->x)); }
-function probeScalarBool(bool $value): void { var_dump(isset($value['x']), empty($value->x)); }
-probeScalarInt($argc);
-probeScalarFloat(1.5);
-probeScalarBool(true);
-"#);
-    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, concat!("key|key|bool(false)\nbool(true)\nfallback|key|key|bool(false)\nbool(true)\n",
-        "bool(false)\nbool(true)\nbool(false)\nbool(true)\n"));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

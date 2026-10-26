@@ -218,6 +218,13 @@ function widenedForwardedStrings(): void {
     }
 }
 
+widenedForwardedStrings();
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "40:40|".repeat(4));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A possibly aliasing raw string return cannot retire a borrowed by-value parameter.
 #[test]
 fn test_conditional_string_returns_preserve_borrowed_caller_argument() {
@@ -234,11 +241,5 @@ useBorrowedString(str_repeat('a', 40), $argc);
 "#);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, format!("40:{}|", "a".repeat(40)).repeat(2));
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
-}
-widenedForwardedStrings();
-"#);
-    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "40:40|".repeat(4));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
