@@ -164,14 +164,16 @@ pub(in crate::interpreter) fn eval_array_access_isset_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
-    if !eval_array_access_object_matches(object, context, values)? {
-        return Err(EvalStatus::RuntimeFatal);
-    }
     let result = match super::super::super::runtime_ops::simplexml_properties::dimension(
         values, object, elephc_builtin_contract::ObjectDimension::Isset, vec![index.borrowed()],
     )? {
         Some(value) => value,
-        None => eval_method_call_result(object.borrowed(), "offsetExists", vec![index.borrowed()], context, values)?,
+        None => {
+            if !eval_array_access_object_matches(object, context, values)? {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            eval_method_call_result(object.borrowed(), "offsetExists", vec![index.borrowed()], context, values)?
+        }
     };
     let exists = values.truthy(result);
     let released = eval_release_value(context, values, result);
