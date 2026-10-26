@@ -12,6 +12,8 @@
 
 #[path = "runtime_gc/borrowed_numeric.rs"]
 mod borrowed_numeric;
+#[path = "runtime_gc/print_r_capture.rs"]
+mod print_r_capture;
 #[path = "runtime_gc/owned_tostring.rs"]
 mod owned_tostring;
 #[path = "runtime_gc/borrowed_string_reads.rs"]

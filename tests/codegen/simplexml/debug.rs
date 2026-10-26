@@ -29,6 +29,9 @@ class GuardedXmlDebug extends SimpleXMLElement {
 class NullXmlDebug extends SimpleXMLElement {
     public function __debugInfo(): ?array { return null; }
 }
+class EchoXmlDebug extends SimpleXMLElement {
+    public function __debugInfo(): ?array { echo "HOOK\n"; return ['v' => 1]; }
+}
 "###;
     let body = r###"$xml = new SimpleXMLElement('<r a="1"><b>2</b><b>3</b></r>');
 foreach ([$xml, $xml->children(), $xml->b] as $node) {
@@ -58,6 +61,15 @@ set_error_handler(function(int $level, string $message): bool { throw new Runtim
 try { print_r($node, true); } catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
 restore_error_handler(); echo 'after-null', "\n";
 unset($node, $dump);
+$node = new CallbackXmlDebug('<r/>');
+ob_start(); print_r(['k' => $node]); $echoed = ob_get_clean();
+echo json_encode($echoed), "\n";
+$flag = $argc < 0;
+ob_start(); $result = print_r(['k' => $node], $flag); $echoed = ob_get_clean();
+echo (int)($result === true), '|', json_encode($echoed), "\n";
+ob_start(); var_dump(['k' => new EchoXmlDebug('<r/>')]); $dump = ob_get_clean();
+echo (int)str_contains($dump, "[\"k\"]=>\n  HOOK\nobject(EchoXmlDebug)#"), "\n";
+unset($node, $echoed, $result, $dump, $flag);
 "###;
     let quoted_body = body.replace('\\', "\\\\").replace('\'', "\\'");
     let source = format!("<?php\n{definitions}\n{body}\n$source = $argc > 0 ? '{quoted_body}' : '';\neval($source);");
@@ -100,6 +112,9 @@ string(5) "inner"
 11
 null:8192:1|"NullXmlDebug Object\n(\n)\n"
 null-handler|after-null
+"string(5) \"inner\"\nArray\n(\n    [k] => CallbackXmlDebug Object\n        (\n            [visible] => Array\n(\n    [inside] => 7\n)\n\n            [zero] => 0\n        )\n\n)\n"
+1|"string(5) \"inner\"\nArray\n(\n    [k] => CallbackXmlDebug Object\n        (\n            [visible] => Array\n(\n    [inside] => 7\n)\n\n            [zero] => 0\n        )\n\n)\n"
+1
 "###.replace(" =>\n", " => \n");
     assert_eq!(out.stdout, expected.repeat(2));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);

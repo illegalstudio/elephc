@@ -173,16 +173,18 @@ fn emit_output_buffer_reset(emitter: &mut Emitter) {
     }
 }
 
-/// Restores the `print_r($value, true)` capture state to its process-start defaults.
+/// Restores print_r capture state to its process-start defaults.
 ///
-/// Return-mode rendering sets `_print_r_mode` and accumulates bytes into the static
-/// `_print_r_buf` through `_print_r_off`. A render interrupted before `__rt_pr_finish` would
+/// Rendering sets `_print_r_mode` and accumulates bytes in the raw heap buffer
+/// `_print_r_ptr`. A render interrupted before `__rt_pr_finish` would
 /// otherwise leave the mode set, so the next request's ordinary output would be captured into
 /// that stale buffer instead of reaching its response.
 fn emit_print_r_capture_reset(emitter: &mut Emitter) {
-    emitter.comment("reset any print_r return-mode capture abandoned by the previous request");
+    emitter.comment("reset any print_r capture abandoned by the previous request");
     abi::emit_store_zero_to_symbol(emitter, "_print_r_mode", 0);
     abi::emit_store_zero_to_symbol(emitter, "_print_r_off", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_print_r_ptr", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_print_r_cap", 0);
 }
 
 /// Clears transient request-owned pointers and counters that are not owned by static locals,
@@ -432,6 +434,8 @@ mod handler_reset_tests {
             for (label, position) in [
                 ("_ob_level", output_level),
                 ("_print_r_mode", print_r_mode),
+                ("_print_r_ptr", asm.find("_print_r_ptr").unwrap()),
+                ("_print_r_cap", asm.find("_print_r_cap").unwrap()),
                 ("_stream_context_options", stream_context),
             ] {
                 assert!(
@@ -446,6 +450,8 @@ mod handler_reset_tests {
             for (label, position) in [
                 ("_ob_level", final_output_level),
                 ("_print_r_mode", final_print_r_mode),
+                ("_print_r_ptr", asm.rfind("_print_r_ptr").unwrap()),
+                ("_print_r_cap", asm.rfind("_print_r_cap").unwrap()),
                 ("_stream_context_options", final_stream_context),
             ] {
                 assert!(

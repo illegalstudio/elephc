@@ -1400,7 +1400,7 @@ A `convert.iconv.*` write filter keeps its libc `iconv_t` open across writes. Ap
 
 Every terminal stdout write in a compiled program travels through one indirection, `__rt_stdout_write` (`io/stdout_write.rs`). Its branch order is part of the output contract:
 
-1. **print_r return-mode capture** — while `_print_r_mode` is set, append the bytes to `_print_r_buf` via `__rt_pr_append` instead of writing
+1. **print_r capture**: while `_print_r_mode` is set, append bytes to growable `_print_r_ptr` storage through `__rt_pr_append`.
 2. **user output-handler guard** — while `_ob_in_handler` is set, discard the bytes entirely (PHP discards output produced inside an `ob_start()` handler)
 3. **output-buffer capture** — while the `ob_*` stack is non-empty (`_ob_level` > 0), append the bytes to the top output buffer via `__rt_ob_append`
 4. **`--web` capture** — in `--web` builds only, a non-zero `elephc_web_capture` flag routes the bytes to `elephc_web_write`; default worker isolation buffers them, while pool/request isolation frames them onto the handler response stream
@@ -1410,13 +1410,16 @@ The `--web` capture branch is emitted only when compiling with `--web`, so ordin
 
 ### print_r rendering and capture routines
 
-`print_r()` uses walker helpers that mirror the var_dump family — `__rt_print_r_spaces`, `__rt_print_r_open` / `__rt_print_r_close`, `__rt_print_r_int_key` / `__rt_print_r_str_key`, `__rt_print_r_value`, `__rt_print_r_indexed`, and `__rt_print_r_hash` (whose entry lines come from `__rt_print_r_hash_entries`) — all writing through `__rt_pr_write`. Object bodies (`__rt_var_dump_object`, `__rt_print_r_object`, and the `__rt_obj_prop_*` accessors behind `var_export`) list the declared properties from the per-class descriptor, then the instance's dynamic-property hash in insertion order, located by `__rt_obj_dump_dyn_props` (`__rt_obj_dyn_prop_at` for indexed access). The `_class_dump_dyn_prop_flags` table gates that tail off for classes whose `__debugInfo()` folded into a projection. Return mode (`print_r($value, true)`) is backed by three capture helpers in `io/print_r_buffer.rs`:
+`print_r()` builds the complete rendering before returning or echoing it. Its recursive array and object walkers write through `__rt_pr_write`. Capture state consists of `_print_r_mode`, `_print_r_off`, `_print_r_ptr`, and `_print_r_cap`; raw heap storage grows geometrically. Finalization copies the captured bytes through the ordinary string metadata hooks, frees raw storage, and clears the capture state. Echo mode then writes the completed string through `__rt_stdout_write`, preserving output buffering and web responses.
+
+Ordinary object bodies use their property descriptors and dynamic-property hash. Native XML objects obtain an owned debug projection through a protected info hook and a separate projection adapter. The renderer retains the receiver and projection while walking it, shares the recursion guard, and moves capture ownership aside while PHP hooks or temporary destructors run.
 
 | Routine | What it does |
 |---|---|
-| `__rt_pr_append` | Append bytes to the 64KB `_print_r_buf` at `_print_r_off`, clamping to the remaining capacity so oversized captures truncate instead of overflowing |
-| `__rt_pr_write` | Walker-facing write wrapper: branch on `_print_r_mode` between the stdout path and `__rt_pr_append` |
-| `__rt_pr_finish` | Persist the captured bytes to an owned heap string via `__rt_str_persist` and reset the capture state |
+| `__rt_pr_append` | Append bytes to growable raw heap storage, checking the complete required size before allocation |
+| `__rt_pr_write` | Route walker output to capture or the existing terminal/output-buffer path |
+| `__rt_pr_finish` | Persist captured bytes as an owned string, free raw storage, and reset state |
+| `__rt_pr_abort` | Release an abandoned capture and clear state during exception cleanup |
 
 ### Output buffering (`ob_*`) routines
 
@@ -1700,9 +1703,10 @@ The runtime data layer lives in `src/codegen_support/runtime/data/`. `fixed.rs` 
 ```asm
 .comm _concat_buf, 65536     ; 64KB string buffer
 .comm _concat_off, 8         ; current offset into string buffer
-.comm _print_r_mode, 8       ; print_r($v, true) return-mode capture flag
+.comm _print_r_mode, 8       ; print_r rendering capture flag
 .comm _print_r_off, 8        ; print_r capture write offset
-.comm _print_r_buf, 65536    ; 64KB print_r return-mode capture buffer
+.comm _print_r_ptr, 8        ; owned raw print_r capture pointer
+.comm _print_r_cap, 8        ; allocated print_r capture capacity
 .comm _ob_level, 8           ; output-buffer (ob_*) stack depth
 .comm _ob_ptrs, 512          ; 64-slot ob buffer base pointers
 .comm _ob_lens, 512          ; 64-slot ob buffer used byte counts

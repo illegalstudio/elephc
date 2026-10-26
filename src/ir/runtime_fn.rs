@@ -2606,7 +2606,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::OpensslGetCipherMethods
                 | RuntimeFnId::ParseUrl
                 | RuntimeFnId::PregSplit
-                // print_r renders into the `_print_r_buf` capture buffer and `__rt_pr_finish`
+                // print_r renders into the `_print_r_ptr` raw buffer and `__rt_pr_finish`
                 // copies those bytes out through `__rt_str_persist`, so every mode returns
                 // storage that is freshly allocated and cannot alias an argument: return mode
                 // yields an owned heap string, echo mode a non-heap `true`, and the runtime-flag

@@ -49,101 +49,123 @@ use super::{expect_operand, store_if_result};
 ///   `lower_print_r_runtime_flag`.
 pub(crate) fn lower_print_r(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.is_empty() || inst.operands.len() > 2 {
-        return Err(CodegenIrError::unsupported(
-            "print_r() takes 1 or 2 arguments",
-        ));
+        return Err(CodegenIrError::unsupported("print_r() takes 1 or 2 arguments"));
     }
     let value = expect_operand(inst, 0)?;
     match inst.result_php_type.codegen_repr() {
-        PhpType::Str => {
-            ctx.emitter.blank();
-            ctx.emitter.comment("print_r(value, true) — return mode");
-            // -- reset the capture offset and enable buffer mode --
-            let zero_reg = abi::int_result_reg(ctx.emitter);
-            abi::emit_load_int_immediate(ctx.emitter, zero_reg, 0);
-            abi::emit_store_reg_to_symbol(ctx.emitter, zero_reg, "_print_r_off", 0);
-            abi::emit_load_int_immediate(ctx.emitter, zero_reg, 1);
-            abi::emit_store_reg_to_symbol(ctx.emitter, zero_reg, "_print_r_mode", 0);
-            // -- load the value into result regs and render it into the buffer --
-            let ty = loaded_php_semantic_type(ctx, value)?;
+        PhpType::Str | PhpType::Bool => {
+            let ty = save_print_r_operand(ctx, value)?;
+            begin_print_r_capture(ctx);
+            reload_print_r_operand(ctx, &ty);
             emit_print_r_loaded_value(ctx, &ty)?;
-            // -- finalize the captured bytes into an owned heap string --
             abi::emit_call_label(ctx.emitter, "__rt_pr_finish");
-            // -- result is in the platform string result regs (x1/x2 or rax/rdx) --
-            store_if_result(ctx, inst)
-        }
-        PhpType::Bool => {
-            ctx.emitter.blank();
-            ctx.emitter.comment("print_r()");
-            let ty = loaded_php_semantic_type(ctx, value)?;
-            emit_print_r_loaded_value(ctx, &ty)?;
-            // PHP `print_r` echo mode always returns true, regardless of the bytes
-            // written. The rendering above leaves the syscall/byte-count in the
-            // integer result register, so materialize a literal 1 before storing.
-            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+            abi::emit_pop_call_operand_owner(ctx.emitter);
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
+            if inst.result_php_type.codegen_repr() == PhpType::Bool {
+                echo_owned_print_r_capture(ctx);
+                let result = abi::int_result_reg(ctx.emitter);
+                abi::emit_load_int_immediate(ctx.emitter, result, 1);
+            }
             store_if_result(ctx, inst)
         }
         _ => lower_print_r_runtime_flag(ctx, inst, value),
     }
 }
 
-/// Lowers `print_r(value, $flag)` when the `$return` flag is only known at runtime.
-///
-/// The flag (0/1) is stored into `_print_r_mode` before rendering, so the shared
-/// write indirection (`__rt_pr_write` / `__rt_stdout_write`) routes every rendered
-/// byte to stdout (echo mode) or the capture buffer (return mode) on its own. A
-/// final branch on the stored mode boxes the result as `Mixed`: the finalized
-/// capture string (tag 1) in return mode, or PHP's `true` (tag 3) in echo mode —
-/// the call's static result type is `Mixed` because the value shape depends on the
-/// runtime flag. A missing flag operand (first-class-callable wrappers lower the
-/// one-argument form with a `Mixed` result type) defaults to echo mode, matching
-/// PHP's `$return = false`. `__rt_pr_finish` resets the mode and offset; the echo
-/// branch leaves them untouched (the stored flag was zero).
-///
-/// OWNERSHIP: the capture string from `__rt_pr_finish` is owned solely by this lowering.
-/// `__rt_mixed_from_value` copies it into the box instead of adopting it, and the EIR
-/// `release` for the call site frees the Mixed cell rather than the intermediate, so the
-/// return-mode branch frees the capture string itself once the box holds its own copy.
+/// Saves the complete operand before capture cleanup can clobber caller-saved SSA registers.
+fn save_print_r_operand(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<PhpType> {
+    let ty = loaded_php_semantic_type(ctx, value)?;
+    if matches!(ty, PhpType::Void | PhpType::Never) {
+        abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+    } else {
+        abi::emit_push_result_value(ctx.emitter, &ty);
+    }
+    Ok(ty)
+}
+
+/// Reloads the saved operand beneath the 48-byte capture cleanup record.
+fn reload_print_r_operand(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
+    match ty.codegen_repr() {
+        PhpType::Void | PhpType::Never => (),
+        PhpType::Str => {
+            let (pointer, length) = abi::string_result_regs(ctx.emitter);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, pointer, 48);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, length, 56);
+        }
+        PhpType::Float => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, abi::float_result_reg(ctx.emitter), 48);
+        }
+        PhpType::TaggedScalar => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 48);
+            let tag = crate::codegen_support::sentinels::tagged_scalar_tag_reg(ctx.emitter);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, tag, 56);
+        }
+        _ => abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 48),
+    }
+}
+
+/// Publishes the raw capture owner before rendering can invoke PHP debug hooks.
+fn begin_print_r_capture(ctx: &mut FunctionContext<'_>) {
+    let address = abi::tertiary_scratch_reg(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, address, "_print_r_ptr");
+    abi::emit_push_call_operand_owner(ctx.emitter, address, false);
+    abi::emit_symbol_address(ctx.emitter, address, "__rt_cleanup_print_r_capture");
+    abi::emit_store_to_sp(ctx.emitter, address, 8);
+    abi::emit_call_label(ctx.emitter, "__rt_pr_abort");
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, result, 1);
+    abi::emit_store_reg_to_symbol(ctx.emitter, result, "_print_r_mode", 0);
+}
+
+/// Writes the completed string once, retaining an unwind owner across output-buffer callbacks.
+fn echo_owned_print_r_capture(ctx: &mut FunctionContext<'_>) {
+    let (pointer, length) = abi::string_result_regs(ctx.emitter);
+    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+    abi::emit_store_to_sp(ctx.emitter, pointer, 0);
+    abi::emit_store_to_sp(ctx.emitter, length, 8);
+    let address = abi::tertiary_scratch_reg(ctx.emitter);
+    abi::emit_temporary_stack_address(ctx.emitter, address, 0);
+    abi::emit_push_call_operand_owner(ctx.emitter, address, false);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 48);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), 56);
+    abi::emit_call_label(ctx.emitter, "__rt_stdout_write");
+    abi::emit_pop_call_operand_owner(ctx.emitter);
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result, 0);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+}
+
+/// Captures both runtime flag modes before returning a string or echoing and boxing true.
 fn lower_print_r_runtime_flag(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    value: ValueId,
+    ctx: &mut FunctionContext<'_>, inst: &Instruction, value: ValueId,
 ) -> Result<()> {
-    ctx.emitter.blank();
-    ctx.emitter.comment("print_r(value, $flag) — runtime-selected mode");
-    // -- reset the capture offset, then store the flag as the capture mode --
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
-    abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, "_print_r_off", 0);
+    let result = abi::int_result_reg(ctx.emitter);
     match inst.operands.get(1).copied() {
         Some(flag) => {
-            let flag_ty = ctx.load_value_to_reg(flag, result_reg)?;
+            let flag_ty = ctx.load_value_to_reg(flag, result)?;
             if !matches!(flag_ty.codegen_repr(), PhpType::Bool | PhpType::Int) {
-                return Err(CodegenIrError::unsupported(format!(
-                    "print_r $return flag for PHP type {:?}",
-                    flag_ty
-                )));
+                return Err(CodegenIrError::unsupported(format!("print_r $return flag for PHP type {:?}", flag_ty)));
             }
         }
-        None => abi::emit_load_int_immediate(ctx.emitter, result_reg, 0),
+        None => abi::emit_load_int_immediate(ctx.emitter, result, 0),
     }
-    abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, "_print_r_mode", 0);
-    // -- render the value; the write indirection consults the mode per write --
-    let ty = loaded_php_semantic_type(ctx, value)?;
+    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+    abi::emit_store_to_sp(ctx.emitter, result, 0);
+    let ty = save_print_r_operand(ctx, value)?;
+    begin_print_r_capture(ctx);
+    reload_print_r_operand(ctx, &ty);
     emit_print_r_loaded_value(ctx, &ty)?;
-    // -- branch on the stored mode: finalize the capture or materialize `true` --
+    abi::emit_call_label(ctx.emitter, "__rt_pr_finish");
+    abi::emit_pop_call_operand_owner(ctx.emitter);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    let flag = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, flag, 0);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
     let echo_label = ctx.next_label("print_r_runtime_echo");
     let done_label = ctx.next_label("print_r_runtime_done");
-    abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, "_print_r_mode", 0);
-    emit_compare_reg_zero(ctx, result_reg);
+    emit_compare_reg_zero(ctx, flag);
     emit_branch_if_eq(ctx, &echo_label);
-    abi::emit_call_label(ctx.emitter, "__rt_pr_finish");
-    // `__rt_pr_finish` hands back a freshly allocated heap string, and the string arm of
-    // `__rt_mixed_from_value` persists (copies) that payload into the box's own storage rather
-    // than adopting it. The capture string therefore has exactly one owner — this lowering — and
-    // nothing downstream can free it, because the EIR `release` for this call site targets the
-    // Mixed cell, not the intermediate. Free it here, once the box owns its copy, or every
-    // runtime-flag `print_r($v, $flag)` leaks one block per call.
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("str x1, [sp, #-16]!");                     // spill the capture string pointer across the boxing call
@@ -171,6 +193,7 @@ fn lower_print_r_runtime_flag(
     }
     abi::emit_jump(ctx.emitter, &done_label);
     ctx.emitter.label(&echo_label);
+    echo_owned_print_r_capture(ctx);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x1, #1");                              // PHP echo mode always returns true

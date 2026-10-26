@@ -11,7 +11,7 @@
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::types::PhpType;
 
-const FRAME_BYTES: usize = 2304;
+const FRAME_BYTES: usize = 160;
 const RECEIVER: usize = 8;
 const BASE: usize = 16;
 const MODE: usize = 24;
@@ -19,15 +19,15 @@ const HOOK: usize = 32;
 const PROJECTION: usize = 40;
 // A cleanup callback receives the address of HASH. Following words are saved
 // indentation, recursion depth, and an independently retained receiver.
-const HASH: usize = 2288;
+const HASH: usize = 128;
 const INDENT: usize = HASH - 8;
 const SEEN: usize = HASH - 16;
 const OWNER: usize = HASH - 24;
 const BUFFER: usize = HASH - 32;
 const PRINT_MODE: usize = HASH - 40;
 const PRINT_OFFSET: usize = HASH - 48;
-const CELL: usize = HASH - 56;
-const SEEN_PREFIX: usize = HASH - 64;
+const CAPACITY: usize = HASH - 56;
+const CELL: usize = HASH - 64;
 
 /// Emits native snapshot dispatch and its non-escaping unwind cleanup callback.
 pub(crate) fn emit_native_debug(emitter: &mut Emitter) {
@@ -54,7 +54,6 @@ pub(crate) fn emit_native_debug(emitter: &mut Emitter) {
     abi::emit_store_zero_to_local_slot(emitter, OWNER);
     abi::emit_store_zero_to_local_slot(emitter, BUFFER);
     abi::emit_store_zero_to_local_slot(emitter, CELL);
-    copy_seen_state(emitter, true);
     let address = abi::tertiary_scratch_reg(emitter);
     abi::emit_frame_slot_address(emitter, address, HASH);
     abi::emit_push_call_operand_owner(emitter, address, false);
@@ -67,10 +66,9 @@ pub(crate) fn emit_native_debug(emitter: &mut Emitter) {
     abi::emit_branch_if_int_result_nonzero(emitter, "__rt_native_debug_hook_unprotected_object");
     load_argument(emitter, 0, RECEIVER);
     abi::emit_call_label(emitter, "__rt_vd_seen_push");
+    abi::emit_call_label(emitter, "__rt_vd_pad");
     emitter.label("__rt_native_debug_hook_unprotected_object");
     save_output_state(emitter);
-    abi::emit_load_int_immediate(emitter, result, 0);
-    abi::emit_store_reg_to_symbol(emitter, result, "_print_r_mode", 0);
     load_argument(emitter, 0, RECEIVER);
     load_argument(emitter, 1, HOOK);
     abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter.target, 2), CELL);
@@ -95,7 +93,10 @@ pub(crate) fn emit_native_debug(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_hash_count");
     abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 1), result);
     load_argument(emitter, 0, RECEIVER);
+    abi::emit_store_zero_to_symbol(emitter, "_vd_indent", 0);
     abi::emit_call_label(emitter, "__rt_var_dump_open_object_with_count");
+    abi::load_at_offset(emitter, abi::secondary_scratch_reg(emitter), INDENT);
+    abi::emit_store_reg_to_symbol(emitter, abi::secondary_scratch_reg(emitter), "_vd_indent", 0);
     abi::emit_call_label(emitter, "__rt_vd_indent_push");
     load_argument(emitter, 0, HASH);
     abi::emit_call_label(emitter, "__rt_var_dump_hash");
@@ -119,12 +120,7 @@ pub(crate) fn emit_native_debug(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_print_r_close");
 
     emitter.label("__rt_native_debug_rendered");
-    abi::load_at_offset(emitter, result, BUFFER);
-    abi::emit_store_zero_to_local_slot(emitter, BUFFER);
-    abi::emit_call_label(emitter, "__rt_heap_free_safe");
     save_output_state(emitter);
-    abi::emit_load_int_immediate(emitter, result, 0);
-    abi::emit_store_reg_to_symbol(emitter, result, "_print_r_mode", 0);
     restore_walk_state(emitter);
     for offset in [HASH, OWNER] {
         abi::load_at_offset(emitter, result, offset);
@@ -133,9 +129,6 @@ pub(crate) fn emit_native_debug(emitter: &mut Emitter) {
     }
     restore_output_state(emitter);
     restore_walk_state(emitter);
-    abi::load_at_offset(emitter, result, BUFFER);
-    abi::emit_store_zero_to_local_slot(emitter, BUFFER);
-    abi::emit_call_label(emitter, "__rt_heap_free_safe");
     abi::emit_pop_call_operand_owner(emitter);
     abi::emit_load_int_immediate(emitter, result, 1);
     abi::emit_jump(emitter, "__rt_native_debug_done");
@@ -212,7 +205,6 @@ fn load_argument(emitter: &mut Emitter, index: usize, offset: usize) {
 
 /// Restores the containing renderer after PHP callbacks or nested debug walks.
 fn restore_walk_state(emitter: &mut Emitter) {
-    copy_seen_state(emitter, false);
     let scratch = abi::secondary_scratch_reg(emitter);
     for (offset, symbol) in [(INDENT, "_vd_indent"), (SEEN, "_vd_seen_n")] {
         abi::load_at_offset(emitter, scratch, offset);
@@ -228,107 +220,52 @@ fn emit_native_debug_cleanup(emitter: &mut Emitter) {
     abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), 8);
     let state = abi::tertiary_scratch_reg(emitter);
     let result = abi::int_result_reg(emitter);
-    restore_callback_snapshot(emitter);
-    abi::emit_load_int_immediate(emitter, result, 0);
-    abi::emit_store_reg_to_symbol(emitter, result, "_print_r_mode", 0);
-    abi::emit_store_reg_to_symbol(emitter, result, "_print_r_off", 0);
-    for offset in [0, 24, 32, 56] {
+    restore_callback_walk(emitter);
+    discard_capture(emitter);
+    for (offset, release) in [(0, "__rt_decref_any"), (24, "__rt_decref_any"),
+        (32, "__rt_heap_free_safe"), (64, "__rt_decref_any")] {
         abi::load_at_offset(emitter, state, 8);
         abi::emit_load_from_address(emitter, result, state, offset);
         abi::emit_store_zero_to_address(emitter, state, offset);
-        abi::emit_unary_cleanup_preserving_exception(emitter, "__rt_decref_any", result);
+        abi::emit_unary_cleanup_preserving_exception(emitter, release, result);
     }
     restore_callback_walk(emitter);
-    // The aborted print_r call cannot reach its normal capture finalizer.
-    abi::emit_load_int_immediate(emitter, result, 0);
-    abi::emit_store_reg_to_symbol(emitter, result, "_print_r_mode", 0);
-    abi::emit_store_reg_to_symbol(emitter, result, "_print_r_off", 0);
+    discard_capture(emitter);
     abi::emit_frame_restore(emitter, 32);
     abi::emit_return(emitter);
 }
 
-/// Preserves the visited-pointer prefix because nested PHP debug calls reset this global stack.
-fn copy_seen_state(emitter: &mut Emitter, save: bool) {
-    let destination = abi::int_arg_reg_name(emitter.target, 0);
-    let source = abi::int_arg_reg_name(emitter.target, 1);
-    if save {
-        abi::emit_frame_slot_address(emitter, destination, SEEN_PREFIX);
-        abi::emit_symbol_address(emitter, source, "_vd_seen");
-    } else {
-        abi::emit_symbol_address(emitter, destination, "_vd_seen");
-        abi::emit_frame_slot_address(emitter, source, SEEN_PREFIX);
-    }
-    load_argument(emitter, 2, SEEN);
-    scale_copy_length(emitter);
-    abi::emit_call_label(emitter, &emitter.target.extern_symbol("memcpy"));
-}
-
-/// Converts the saved recursion depth to its pointer-array byte width.
-fn scale_copy_length(emitter: &mut Emitter) {
-    match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction("lsl x2, x2, #3"),                 // each saved visited pointer occupies eight bytes
-        Arch::X86_64 => emitter.instruction("shl rdx, 3"),                      // each saved visited pointer occupies eight bytes
-    }
-}
-
-/// Saves return-mode bytes before invoking PHP code that can start another print_r call.
+/// Moves the outer capture owner into the guarded frame before arbitrary PHP code runs.
 fn save_output_state(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
-    for (offset, symbol) in [(PRINT_MODE, "_print_r_mode"), (PRINT_OFFSET, "_print_r_off")] {
+    for (offset, symbol) in [(BUFFER, "_print_r_ptr"), (CAPACITY, "_print_r_cap"),
+        (PRINT_MODE, "_print_r_mode"), (PRINT_OFFSET, "_print_r_off")] {
         abi::emit_load_symbol_to_reg(emitter, result, symbol, 0);
         abi::store_at_offset(emitter, result, offset);
+        abi::emit_store_zero_to_symbol(emitter, symbol, 0);
     }
-    let (pointer, length) = abi::string_result_regs(emitter);
-    abi::emit_symbol_address(emitter, pointer, "_print_r_buf");
-    abi::load_at_offset(emitter, length, PRINT_OFFSET);
-    abi::emit_call_label(emitter, "__rt_str_persist");
-    abi::store_at_offset(emitter, pointer, BUFFER);
 }
 
-/// Restores print_r's destination and bytes without discarding its already rendered prefix.
+/// Transfers the saved capture owner back after nested PHP calls have finalized their own output.
 fn restore_output_state(emitter: &mut Emitter) {
-    abi::emit_symbol_address(emitter, abi::int_arg_reg_name(emitter.target, 0), "_print_r_buf");
-    load_argument(emitter, 1, BUFFER);
-    load_argument(emitter, 2, PRINT_OFFSET);
-    abi::emit_call_label(emitter, &emitter.target.extern_symbol("memcpy"));
+    discard_capture(emitter);
     let scratch = abi::secondary_scratch_reg(emitter);
-    for (offset, symbol) in [(PRINT_MODE, "_print_r_mode"), (PRINT_OFFSET, "_print_r_off")] {
+    for (offset, symbol) in [(BUFFER, "_print_r_ptr"), (CAPACITY, "_print_r_cap"),
+        (PRINT_MODE, "_print_r_mode"), (PRINT_OFFSET, "_print_r_off")] {
         abi::load_at_offset(emitter, scratch, offset);
         abi::emit_store_reg_to_symbol(emitter, scratch, symbol, 0);
     }
+    abi::emit_store_zero_to_local_slot(emitter, BUFFER);
 }
 
-/// Restores an unwind record's saved output bytes when allocation completed successfully.
-fn restore_callback_snapshot(emitter: &mut Emitter) {
-    restore_callback_walk(emitter);
-    let state = abi::tertiary_scratch_reg(emitter);
-    let result = abi::int_result_reg(emitter);
-    abi::load_at_offset(emitter, state, 8);
-    abi::emit_load_from_address(emitter, result, state, 32);
-    abi::emit_branch_if_int_result_zero(emitter, "__rt_native_debug_cleanup_no_buffer");
-    abi::emit_symbol_address(emitter, abi::int_arg_reg_name(emitter.target, 0), "_print_r_buf");
-    abi::emit_load_from_address(emitter, abi::int_arg_reg_name(emitter.target, 1), state, 32);
-    abi::emit_load_from_address(emitter, abi::int_arg_reg_name(emitter.target, 2), state, 48);
-    abi::emit_call_label(emitter, &emitter.target.extern_symbol("memcpy"));
-    emitter.label("__rt_native_debug_cleanup_no_buffer");
+/// Discards an abandoned raw capture without retaining a stale pointer across request reset.
+fn discard_capture(emitter: &mut Emitter) {
+    abi::emit_call_label(emitter, "__rt_pr_abort");
 }
 
-/// Restores the saved visited-pointer prefix and indentation even after cleanup destructors run.
+/// Restores indentation and recursion depth; balanced nested walks never overwrite the older prefix.
 fn restore_callback_walk(emitter: &mut Emitter) {
     let state = abi::tertiary_scratch_reg(emitter);
-    let arg0 = abi::int_arg_reg_name(emitter.target, 0);
-    let arg1 = abi::int_arg_reg_name(emitter.target, 1);
-    let arg2 = abi::int_arg_reg_name(emitter.target, 2);
-    abi::emit_symbol_address(emitter, arg0, "_vd_seen");
-    abi::load_at_offset(emitter, state, 8);
-    abi::emit_reg_move(emitter, arg1, state);
-    match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction("add x1, x1, #64"),                // the saved visited-pointer prefix follows the state words
-        Arch::X86_64 => emitter.instruction("add rsi, 64"),                     // the saved visited-pointer prefix follows the state words
-    }
-    abi::emit_load_from_address(emitter, arg2, state, 16);
-    scale_copy_length(emitter);
-    abi::emit_call_label(emitter, &emitter.target.extern_symbol("memcpy"));
     let scratch = abi::secondary_scratch_reg(emitter);
     for (offset, symbol) in [(8, "_vd_indent"), (16, "_vd_seen_n")] {
         abi::load_at_offset(emitter, state, 8);
