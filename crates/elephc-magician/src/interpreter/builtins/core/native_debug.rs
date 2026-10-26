@@ -59,9 +59,7 @@ fn hook_failed(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let error = context.take_pending_throw();
     if let Some(error) = error {
-        if let Ok(result) = values.operator_static_call("SimpleXMLElement", "__elephc_debug_warning", vec![error.borrowed()]) {
-            let _ = eval_release_value(context, values, result);
-        }
+        let _ = warn_hook_failure(error, context, values);
     }
     let fatal = values.fatal(elephc_builtin_contract::NATIVE_DEBUG_INFO_FATAL);
     // Native fatal exits here. Embedders may return an error and still need to retire the owner.
@@ -71,6 +69,22 @@ fn hook_failed(
     };
     fatal.and(released)?;
     Err(EvalStatus::RuntimeFatal)
+}
+
+/// Formats eval-defined exception names without consulting the native parent class id.
+fn warn_hook_failure(
+    error: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let identity = super::print_r::eval_debug_object_identity(error, values);
+    let name = super::print_r::eval_debug_object_class_name(error, identity, context, values)?;
+    let class = values.string(&name)?;
+    let warning = values.operator_static_call("SimpleXMLElement", "__elephc_debug_warning", vec![error.borrowed(), class.borrowed()]);
+    let class_released = eval_release_value(context, values, class);
+    let result = warning?;
+    let result_released = eval_release_value(context, values, result);
+    class_released.and(result_released)
 }
 
 /// Supplies the interpreter-visible class name for nullable hook diagnostics.

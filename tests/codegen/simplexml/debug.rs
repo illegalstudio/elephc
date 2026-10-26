@@ -126,8 +126,11 @@ fn test_simplexml_native_debug_hook_exception_is_fatal_bundle() {
     if skip_without_xml_native("test_simplexml_native_debug_hook_exception_is_fatal_bundle") { return; }
     for opaque_eval in [false, true] {
         for operation in ["print_r", "var_dump"] {
-            let body = format!(r#"class ThrowingXmlDebug extends SimpleXMLElement {{
-    public function __debugInfo(): ?array {{ throw new RuntimeException('debug'); }}
+            let error_class = if opaque_eval { "EvalXmlDebugError" } else { "RuntimeException" };
+            let error_declaration = if opaque_eval { "class EvalXmlDebugError extends RuntimeException {}" } else { "" };
+            let body = format!(r#"{error_declaration}
+class ThrowingXmlDebug extends SimpleXMLElement {{
+    public function __debugInfo(): ?array {{ throw new {error_class}('debug'); }}
 }}
 set_error_handler(function(int $level, string $message): bool {{ echo 'unexpected-handler|'; return true; }});
 try {{ {operation}(new ThrowingXmlDebug('<r/>')); }}
@@ -141,7 +144,7 @@ echo 'after-hook|';
             let out = compile_and_run_capture(&source);
             assert!(!out.success, "{operation} eval={opaque_eval}");
             assert!(!out.stdout.contains("unexpected-handler|") && !out.stdout.contains("caught-hook|") && !out.stdout.contains("after-hook|"), "{}", out.stdout);
-            assert!(out.stderr.contains("Warning: Uncaught RuntimeException: debug"), "{}", out.stderr);
+            assert!(out.stderr.contains(&format!("Warning: Uncaught {error_class}: debug")), "{}", out.stderr);
             assert!(out.stderr.contains("\n  thrown in ") && out.stderr.contains(" on line "), "{}", out.stderr);
             assert!(out.stderr.contains("__debuginfo() must return an array"), "{}", out.stderr);
         }

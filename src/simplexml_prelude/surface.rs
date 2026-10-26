@@ -521,12 +521,12 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     public function __elephc_debug_info(): mixed {
         try { return $this->__debugInfo(); }
         catch (Throwable $error) {
-            self::__elephc_debug_warning($error);
+            self::__elephc_debug_warning($error, get_class($error));
             throw $error;
         }
     }
-    public static function __elephc_debug_warning(Throwable $error): void {
-        $message = 'Warning: Uncaught ' . get_class($error) . ': ' . $error->getMessage()
+    public static function __elephc_debug_warning(Throwable $error, string $class): void {
+        $message = 'Warning: Uncaught ' . $class . ': ' . $error->getMessage()
             . ' in ' . $error->getFile() . ':' . $error->getLine()
             . "\nStack trace:\n" . $error->getTraceAsString()
             . "\n  thrown in " . $error->getFile() . ' on line ' . $error->getLine() . "\n";
