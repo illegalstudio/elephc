@@ -198,6 +198,7 @@ impl std::ops::Deref for TestLinkRequirements {
 /// Assemble `asm` to `obj_path` by piping the source through `as`'s stdin so
 /// no intermediate `.s` file is created.
 fn assemble_from_stdin(asm: &str, obj_path: &Path) {
+    let _phase = fixture_phase_timing("assemble");
     let mut cmd = Command::new(assembler_cmd());
     if target().platform == Platform::MacOS {
         cmd.args(["-arch", target().darwin_arch_name()]);
@@ -289,6 +290,7 @@ pub(crate) fn get_runtime_obj() -> &'static Path {
 /// shared on-disk cache behind it answers them across processes, which is what nextest's
 /// process-per-test model needs for the cache to pay off at all.
 pub(crate) fn runtime_obj_for_asm(runtime_asm: &str) -> std::path::PathBuf {
+    let _phase = fixture_phase_timing("runtime-obj");
     let hash = runtime_asm_hash(runtime_asm);
     let cache = RUNTIME_OBJS_BY_ASM.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
     let mut cache = cache.lock().expect("runtime asm cache poisoned");
@@ -1079,6 +1081,7 @@ pub(crate) fn link_binary(
     extra_link_paths: &[String],
     extra_frameworks: &[String],
 ) {
+    let _phase = fixture_phase_timing("link");
     let plan = test_link_plan(requirements, extra_link_paths, extra_frameworks);
     let actual_link_libs = named_libraries(&plan);
 
@@ -1503,6 +1506,7 @@ fn run_binary_with_env_and_args(
     env: &[(&str, &std::ffi::OsStr)],
     args: &[&str],
 ) -> Output {
+    let _phase = fixture_phase_timing("run");
     let mut output = if target().platform == Platform::Linux
         && target().arch == Arch::AArch64
         && cfg!(target_arch = "x86_64")

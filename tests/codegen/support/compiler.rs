@@ -288,6 +288,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     TestLinkRequirements,
 ) {
     elephc::codegen::set_null_repr(null_repr);
+    let frontend_phase = fixture_phase_timing("frontend");
     elephc::codegen::set_compile_profile(php_version, false);
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
@@ -406,8 +407,11 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
         .required_libraries
         .iter()
         .any(|lib| lib == "elephc_tls");
+    drop(frontend_phase);
+    let eir_phase = fixture_phase_timing("eir");
     let mut ir_module =
         lower_and_validate_ir_for_codegen_fixture(&optimized, &check_result, &synthetic_main);
+    drop(eir_phase);
     if with_regex {
         ir_module.required_runtime_features.regex = true;
     }
@@ -421,6 +425,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     // Honor ELEPHC_REGALLOC so the whole codegen suite can be run under both
     // the linear-scan allocator (default) and the stack fallback.
     let regalloc_linear = !matches!(std::env::var("ELEPHC_REGALLOC").as_deref(), Ok("stack"));
+    let codegen_phase = fixture_phase_timing("codegen");
     let generated_user_asm = elephc::codegen::generate_user_asm_from_ir_with_options_and_features(
         &ir_module,
         gc_stats,
@@ -435,14 +440,17 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
         false,
         elephc::codegen::WebIsolation::Worker,
     );
+    drop(codegen_phase);
     let mut runtime_features = ir_module.required_runtime_features;
     if let Ok(output) = &generated_user_asm {
         runtime_features.handler_state |= output.handler_state;
         runtime_features.object_clone |= output.object_clone;
     }
     let user_asm = generated_user_asm.map(|output| output.asm);
+    let runtime_phase = fixture_phase_timing("runtime-asm");
     let runtime_asm =
         elephc::codegen::generate_runtime_with_features(heap_size, target(), runtime_features);
+    drop(runtime_phase);
     let link_requirements = TestLinkRequirements::new(
         check_result.required_libraries,
         elephc::codegen::link_requirements_for_runtime_features(runtime_features),
