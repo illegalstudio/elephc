@@ -134,7 +134,7 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
     if matches!(target, CastType::String) {
         release_coerced_source_if_owned(ctx, value, Some(expr.span));
     } else if matches!(target, CastType::Int | CastType::Float | CastType::Bool)
-        && ctx.value_is_owning_temporary(value)
+        && ctx.value_needs_release_after_use(value)
     {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
     }
@@ -248,13 +248,13 @@ fn lower_object_cast(
     lower_function_call(ctx, &name, std::slice::from_ref(&argument), expr)
 }
 
-/// Releases an owning temporary when a scalar coercion cannot alias its source storage.
+/// Releases independent scalar-coercion sources, including boxes materialized by local loads.
 pub(super) fn release_coerced_source_if_owned(
     ctx: &mut LoweringContext<'_, '_>,
     source: LoweredValue,
     span: Option<crate::span::Span>,
 ) {
-    if !ctx.value_is_owning_temporary(source) {
+    if !ctx.value_needs_release_after_use(source) {
         return;
     }
     if !coerced_source_repr_is_releasable(&ctx.builder.value_php_type(source.value)) {

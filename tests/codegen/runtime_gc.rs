@@ -217,3 +217,4 @@ mod gc_incoming_cache;
 #[path = "runtime_gc/unshift_reference_cow.rs"]
 mod unshift_reference_cow;
 mod native_callback_results;
+mod entity_slot_owners;

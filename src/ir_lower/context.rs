@@ -3978,11 +3978,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.value_needs_release_after_use(value)
     }
 
-    /// Includes provisional string and callable unboxes without claiming their ownership can move.
+    /// Includes local-load conversions without claiming their ownership can move.
     ///
     /// A later store or eval barrier can widen a local to Mixed after a consumer is lowered.
-    /// Reading it then allocates a detached string or retains its callable payload. Emit a
-    /// provisional release and let finalization prune it when storage still lends the value.
+    /// Reading it then allocates a detached string or retains its callable payload. Conversely,
+    /// a concrete slot read as Mixed allocates a fresh box. Emit provisional cleanup and let
+    /// finalization prune it when the final storage instead lends the value.
     pub(crate) fn value_needs_release_after_use(&self, value: LoweredValue) -> bool {
         if self.write_operand_is_borrowed {
             return false;
@@ -3990,7 +3991,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if self.value_is_owning_temporary(value) {
             return true;
         }
-        if !matches!(self.builder.value_php_type(value.value).codegen_repr(), PhpType::Str | PhpType::Callable) {
+        let result_type = self.builder.value_php_type(value.value).codegen_repr();
+        if !matches!(result_type, PhpType::Str | PhpType::Callable | PhpType::Mixed) {
             return false;
         }
         let Some(inst) = self.builder.value_defining_instruction(value.value) else {
@@ -4006,6 +4008,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             return false;
         };
         matches!(self.builder.local_kind(slot), LocalKind::PhpLocal | LocalKind::StaticLocal)
+            && (result_type != PhpType::Mixed
+                || crate::ir::local_load_coercion_owns_result(
+                    &self.builder.local_php_type(slot), &result_type,
+                ))
     }
 
     /// Returns whether a container read now owns a caller reference.

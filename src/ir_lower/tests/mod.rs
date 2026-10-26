@@ -60,6 +60,7 @@ mod object_mixed_return_owners;
 mod numeric_string_comparisons;
 mod packed_record_addresses;
 mod fixed_layout_field_narrowing;
+mod scalar_load_owners;
 mod buffer_lengths;
 mod branch_conditions;
 mod boxed_array_write_owners;
