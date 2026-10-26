@@ -142,6 +142,34 @@ restore_error_handler();
     assert_eq!(out.stdout, format!("{invalid}{missing}{invalid}simplexml_import_dom(): Argument #1 ($node) must be a valid XML node|2:SimpleXMLElement::xpath(): Undefined namespace prefix: q|bool(false)\n1|{{\"p\":\"urn:p\"}}|{{\"p\":\"urn:p\"}}|[]|{}{parse}8:DOMDocument::loadXML(): Unsupported version '1.1' in Entity, line: 1|bool(true)\nDOMDocument::loadXML(): Argument #1 ($source) must not be empty|caught|caught|{invalid}{parse}{consumed}", consumed.repeat(4)));
 }
 
+/// Separates construction, selection, and foreach ownership in compiled and runtime-eval paths.
+#[test]
+fn test_simplexml_foreach_view_owners_isolated_bundle() {
+    if skip_without_xml_native("test_simplexml_foreach_view_owners_isolated_bundle") { return; }
+    let runs = compile_and_run_with_heap_debug_per_argv(r###"<?php
+$xml = new SimpleXMLElement('<r><item>a</item><item>b</item><item>c</item><item>d</item><item>e</item><item>f</item><item>g</item><item>h</item></r>');
+if ($argc === 1) { echo 'baseline'; }
+elseif ($argc === 2) { echo count($xml->item); }
+elseif ($argc === 3) { foreach ($xml->item as $item) { echo (string)$item, ','; } }
+elseif ($argc === 4) {
+    $items = $xml->item;
+    foreach ($items as $item) { echo (string)$item, ','; }
+} else {
+    $source = $argc > 0 ? 'foreach ($xml->item as $item) { echo (string)$item, ","; }' : '';
+    eval($source);
+}
+"###, &[&[], &["x"], &["x", "x"], &["x", "x", "x"], &["x", "x", "x", "x"]]);
+    let expected = ["baseline", "8", "a,b,c,d,e,f,g,h,", "a,b,c,d,e,f,g,h,", "a,b,c,d,e,f,g,h,"];
+    assert_eq!(runs.len(), expected.len());
+    let mut failures = Vec::new();
+    for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {
+        if !out.success || out.stdout != expected || !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
+            failures.push(format!("mode={mode} success={} stdout={:?} expected={expected:?}\n{}", out.success, out.stdout, out.stderr));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 /// Native XML capability preserves ordinary virtual getters through boxed storage.
 #[test]
 fn test_simplexml_boxed_ordinary_property_getter() {
