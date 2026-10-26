@@ -576,11 +576,22 @@ only reads state (or ends in a fatal error) does not block the rewrite.
 Generators, functions with `try`, dynamic `eval`, and programs that call
 `pcntl_async_signals()` are left alone.
 
+An integer accumulator such as `$found++` or `$sum += $b[$i]` also permits
+hoisting when the compiler proves every value stored in it is an integer or
+float. Overflow still promotes the accumulator to float. Allocating or retiring
+these numeric boxes cannot invalidate a buffer; a value that may contain an
+object, an escaped reference, or a conversion that can warn keeps the ordinary
+safety restrictions. Casts to int or bool qualify only for operands already
+known to be ints: float range checks and NaN-to-bool conversions can run a
+warning handler.
+Implicit bool checks of float or boxed numeric values retain the same barrier.
+
 Loops over a buffer property of `$this` or another invariant object receiver can
 also share one preheader read and resolution when no call, property write, free
 or other invalidating operation can change that property. This includes reads
-left by inlined accessor methods. Buffer acquire/release are word operations, and plain
-`$this` reads that may throw without running PHP do not invalidate descriptors.
+left by inlined accessor methods. Buffer acquire/release are word operations,
+and plain `$this` reads that may throw without running PHP do not invalidate
+descriptors.
 A body-only read moves behind a duplicate of the scalar entry condition, so a
 zero-trip loop never reads an uninitialized property. Conditional reads,
 faulting prefixes and header values used after the loop keep their original

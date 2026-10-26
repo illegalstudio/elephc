@@ -25,8 +25,15 @@ struct RefinementContext<'a> {
     data: &'a crate::ir::DataPool,
     classes: &'a HashMap<String, ClassInfo>,
     summaries: &'a HashMap<String, Effects>,
+    parameters: &'a HashMap<String, Vec<CallParameter>>,
     /// True when the runtime eval bridge can register subclasses absent from `classes`.
     has_dynamic_class_barrier: bool,
+}
+
+/// Caller-visible parameter facts needed to model backend call-boundary coercions.
+struct CallParameter {
+    php_type: PhpType,
+    by_ref: bool,
 }
 
 /// Refines every eligible instruction from whole-module callable and class metadata.
@@ -35,12 +42,28 @@ pub(super) fn refine_module(module: &mut Module) {
     let mut summaries = all_functions(module)
         .map(|function| (callable_key(&function.name), Effects::PURE))
         .collect::<HashMap<_, _>>();
+    let parameters = all_functions(module)
+        .map(|function| {
+            let hidden_prefix = usize::from(function.flags.is_static);
+            let parameters = function
+                .params
+                .iter()
+                .skip(hidden_prefix)
+                .map(|parameter| CallParameter {
+                    php_type: parameter.php_type.clone(),
+                    by_ref: parameter.by_ref,
+                })
+                .collect();
+            (callable_key(&function.name), parameters)
+        })
+        .collect::<HashMap<_, _>>();
 
     for iteration in 0..MAX_EFFECT_ITERATIONS {
         let context = RefinementContext {
             data: &module.data,
             classes: &module.class_infos,
             summaries: &summaries,
+            parameters: &parameters,
             has_dynamic_class_barrier,
         };
         let next = all_functions(module)
@@ -68,6 +91,7 @@ pub(super) fn refine_module(module: &mut Module) {
         data,
         classes,
         summaries: &summaries,
+        parameters: &parameters,
         has_dynamic_class_barrier,
     };
     for function in &mut module.functions {
@@ -160,9 +184,16 @@ fn refined_instruction_effects(
     context: &RefinementContext<'_>,
 ) -> Effects {
     match instruction.op {
-        Op::Call => direct_call_effects(instruction, context).unwrap_or(instruction.effects),
+        // Float and boxed truthiness may dispatch a PHP 8.5 NaN warning handler.
+        Op::IsTruthy if instruction.operands.first().and_then(|&value| function.value(value))
+            .is_none_or(|value| matches!(value.php_type, PhpType::Float | PhpType::Mixed | PhpType::Union(_))) => {
+            instruction.effects | Effects::MAY_WARN
+        }
+        Op::Call => {
+            direct_call_effects(function, instruction, context).unwrap_or(instruction.effects)
+        }
         Op::StaticMethodCall => {
-            static_call_effects(instruction, context).unwrap_or(instruction.effects)
+            static_call_effects(function, instruction, context).unwrap_or(instruction.effects)
         }
         Op::MethodCall | Op::NullsafeMethodCall => {
             instance_call_effects(function, instruction, context).unwrap_or(instruction.effects)
@@ -192,6 +223,7 @@ fn refined_instruction_effects(
 /// Resolves an explicitly named static receiver through its inherited implementation.
 /// Forwarding self/parent/static receivers and runtime-selected callables keep their defaults.
 fn static_call_effects(
+    function: &Function,
     instruction: &crate::ir::Instruction,
     context: &RefinementContext<'_>,
 ) -> Option<Effects> {
@@ -205,13 +237,13 @@ fn static_call_effects(
         .find(|(name, _)| php_symbol_key(name) == class_key)?;
     let method_key = php_symbol_key(method);
     let implementation = class.static_method_impl_classes.get(&method_key)?;
-    context.summaries
-        .get(&callable_key(&format!("{implementation}::{method_key}")))
-        .copied()
+    let target = callable_key(&format!("{implementation}::{method_key}"));
+    resolved_callable_effects(function, instruction, &target, context)
 }
 
 /// Resolves a direct user-function call through the function-name data pool.
 fn direct_call_effects(
+    function: &Function,
     instruction: &crate::ir::Instruction,
     context: &RefinementContext<'_>,
 ) -> Option<Effects> {
@@ -219,7 +251,7 @@ fn direct_call_effects(
         return None;
     };
     let name = context.data.function_names.get(name_id.as_raw() as usize)?;
-    context.summaries.get(&callable_key(name)).copied()
+    resolved_callable_effects(function, instruction, &callable_key(name), context)
 }
 
 /// Resolves and unions all concrete implementations reachable by one instance call.
@@ -240,9 +272,48 @@ fn instance_call_effects(
         let class = context.classes.get(&runtime_class)?;
         let implementation = class.method_impl_classes.get(&method_key)?;
         let target = callable_key(&format!("{implementation}::{method_key}"));
-        effects |= context.summaries.get(&target).copied()?;
+        effects |= resolved_callable_effects(function, instruction, &target, context)?;
     }
     Some(effects)
+}
+
+/// Combines one callee summary with warning effects from its caller-side argument coercions.
+fn resolved_callable_effects(
+    function: &Function,
+    instruction: &crate::ir::Instruction,
+    target: &str,
+    context: &RefinementContext<'_>,
+) -> Option<Effects> {
+    let summary = context.summaries.get(target).copied()?;
+    let parameters = context.parameters.get(target)?;
+    Some(summary | call_argument_coercion_effects(function, instruction, parameters))
+}
+
+/// Models warning-capable conversions performed only while the backend materializes call args.
+fn call_argument_coercion_effects(
+    function: &Function,
+    instruction: &crate::ir::Instruction,
+    parameters: &[CallParameter],
+) -> Effects {
+    let warns = instruction
+        .operands
+        .iter()
+        .zip(parameters)
+        .any(|(&operand, parameter)| {
+            !parameter.by_ref
+                && parameter.php_type == PhpType::Bool
+                && function.value(operand).is_none_or(|value| {
+                    matches!(
+                        value.php_type.codegen_repr(),
+                        PhpType::Mixed | PhpType::Union(_)
+                    )
+                })
+        });
+    if warns {
+        Effects::MAY_WARN
+    } else {
+        Effects::PURE
+    }
 }
 
 /// Resolves a named property read, including typed-slot throws and `__get` dispatch.
@@ -629,10 +700,12 @@ mod tests {
         let (function, receiver) = function_with_receiver(PhpType::Object("D".to_string()));
         let data = crate::ir::DataPool::default();
         let summaries = HashMap::new();
+        let parameters = HashMap::new();
         let context = RefinementContext {
             data: &data,
             classes: &classes,
             summaries: &summaries,
+            parameters: &parameters,
             has_dynamic_class_barrier: false,
         };
         for mode in [PropertyFetchMode::Read, PropertyFetchMode::Probe] {
@@ -676,8 +749,9 @@ mod tests {
             }
             crate::ir::validate_function(&function).unwrap();
             let classes = HashMap::new(); let summaries = HashMap::new();
+            let parameters = HashMap::new();
             let context = RefinementContext { data: &data, classes: &classes, summaries: &summaries,
-                has_dynamic_class_barrier: false };
+                parameters: &parameters, has_dynamic_class_barrier: false };
             let store = function.instructions.iter().find(|inst| inst.op == Op::PropSet).unwrap();
             let effects = refined_instruction_effects(&function, store, &context);
             assert_eq!(effects, if php_type == PhpType::Mixed { Op::PropSet.default_effects() }

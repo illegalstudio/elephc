@@ -22,6 +22,19 @@ function step(buffer<Particle> $p, int $count, float $dt): void
     }
 }
 
+// An integer accumulator may promote to float on overflow. Its numeric boxes cannot
+// invalidate the buffer, so this loop also resolves the handle once before it starts.
+function moving_count(buffer<Particle> $p, int $count): int
+{
+    $moving = 0;
+    for ($i = 0; $i < $count; $i++) {
+        if ($p[$i]->vx !== 0.0) {
+            $moving++;
+        }
+    }
+    return $moving;
+}
+
 $count = 8;
 $p = buffer_new<Particle>($count);
 for ($i = 0; $i < $count; $i++) {
@@ -37,6 +50,7 @@ for ($i = 0; $i < $count; $i++) {
     $sum += $p[$i]->x;
 }
 echo "particles=", $count, "; sum=", $sum, "\n";
+echo "moving=", moving_count($p, $count), "\n";
 buffer_free($p);
 
 // Arrays of buffers: a particle system per layer, stepped and summed through one list. The

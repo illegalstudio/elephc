@@ -20,10 +20,13 @@
 //!   allowlist: buffer element and packed field accesses, local loads, stores of scalar
 //!   locals, concat resets, and instructions whose effects only read state or fatal. That
 //!   includes a user function or method call whose refined effect summary is read-only. Any
-//!   other call, allocations, warnings, output and user-code releases or throws disqualify it.
+//!   other call, arbitrary allocations, warnings, output and user-code releases or throws
+//!   disqualify it. Reviewed numeric box operations also qualify when the shared numeric-domain
+//!   proof excludes every nonnumeric writer and reference alias: their allocation never runs
+//!   PHP or cycle collection, and their cleanup cannot execute a destructor.
 //!   In property-reuse modules, no-op buffer acquire/release, plain `$this` reads and foreign
-//!   buffer reads whose null-warning path immediately fatals are also buffer-preserving. Blocks that leave the
-//!   loop for good are outside the natural body, and coming
+//!   buffer reads whose null-warning path immediately fatals are also buffer-preserving.
+//!   Blocks that leave the loop for good are outside the natural body, and coming
 //!   back always passes the preheader, which resolves again.
 //! - The buffer operand must be loop-invariant: an SSA value defined outside the loop, or a
 //!   `load_local` of a slot nothing in the loop writes and no by-reference alias can reach.
@@ -63,6 +66,8 @@ use super::cfg::has_exception_handlers;
 use super::dominance::{compute_dominance, DominanceInfo};
 use super::loops::{compute_loops, NaturalLoop};
 use super::rewrite::{neutralize_to_nop, replace_all_uses, resolve_chains};
+
+mod numeric;
 
 /// Rewrites buffer accesses in every function-like body and reports whether anything changed.
 pub(super) fn hoist_buffer_resolution(module: &mut Module) -> bool {
@@ -124,6 +129,7 @@ fn hoist_loops(function: &mut Function, property_reuse: bool) -> bool {
     if loops.is_empty() {
         return false;
     }
+    let numeric = numeric::preserving_instructions(function);
     let escaping = super::by_ref_alias::address_escaping_slots(function);
     let written_anywhere = slots_named_in_function(function);
     let mut order: Vec<usize> = (0..loops.loops().len()).collect();
@@ -134,7 +140,7 @@ fn hoist_loops(function: &mut Function, property_reuse: bool) -> bool {
         let Some(preheader) = loop_ref.preheader else {
             continue;
         };
-        if !loop_preserves_buffers(function, loop_ref, property_reuse) {
+        if !loop_preserves_buffers(function, loop_ref, property_reuse, &numeric) {
             continue;
         }
         changed |= hoist_loop(
@@ -144,6 +150,7 @@ fn hoist_loops(function: &mut Function, property_reuse: bool) -> bool {
             &dominance,
             &escaping,
             &written_anywhere,
+            &numeric,
         );
     }
     changed
@@ -175,6 +182,7 @@ fn hoist_loop(
     dominance: &DominanceInfo,
     escaping: &HashSet<LocalSlotId>,
     written_anywhere: &HashSet<LocalSlotId>,
+    numeric: &HashSet<InstId>,
 ) -> bool {
     let written = slots_named_in_loop(function, loop_ref);
     let in_bounds = proven_in_bounds_indices(function, loop_ref, &written, escaping);
@@ -210,7 +218,7 @@ fn hoist_loop(
     // Each later group resolves after the previous one, keeping the descriptors in group order.
     let mut floor = 0;
     for (source, accesses) in groups {
-        let mut position = resolver_position(function, preheader, source, floor);
+        let mut position = resolver_position(function, preheader, source, floor, numeric);
         let handle = match source {
             HandleSource::Value(value) => value,
             HandleSource::Slot(slot) => {
@@ -402,14 +410,19 @@ fn exact_i64_constant(function: &Function, value: ValueId) -> Option<i64> {
 }
 
 /// Returns whether no instruction in the loop body can free, allocate, or rebind a buffer.
-fn loop_preserves_buffers(function: &Function, loop_ref: &NaturalLoop, property_reuse: bool) -> bool {
+fn loop_preserves_buffers(
+    function: &Function,
+    loop_ref: &NaturalLoop,
+    property_reuse: bool,
+    numeric: &HashSet<InstId>,
+) -> bool {
     loop_ref.blocks.iter().all(|&block| {
         function.blocks[block.as_raw() as usize]
             .instructions
             .iter()
             .all(|&inst_id| {
                 let inst = &function.instructions[inst_id.as_raw() as usize];
-                instruction_preserves_buffers(function, inst)
+                numeric.contains(&inst_id) || instruction_preserves_buffers(function, inst)
                     || (property_reuse
                         && super::buffer_property_reuse::keeps_reads_stable(function, inst))
             })
@@ -433,6 +446,9 @@ pub(super) fn instruction_preserves_buffers(function: &Function, inst: &Instruct
         | Op::BufferGetResolved
         | Op::BufferSetResolved => true,
         Op::StoreLocal => store_targets_scalar_local(function, inst),
+        // The NaN-to-bool warning can run handlers despite IsTruthy's read-only effects.
+        Op::IsTruthy if !inst.operands.first().and_then(|&value| function.value(value))
+            .is_some_and(|value| !matches!(value.php_type, PhpType::Float | PhpType::Mixed | PhpType::Union(_))) => false,
         Op::PropGet | Op::PropSet if function.is_packed_field_access(inst) => true,
         _ => inst
             .effects
@@ -549,6 +565,7 @@ fn resolver_position(
     preheader: BlockId,
     source: HandleSource,
     floor: usize,
+    numeric: &HashSet<InstId>,
 ) -> usize {
     let block = &function.blocks[preheader.as_raw() as usize];
     let mut position = floor;
@@ -560,7 +577,7 @@ fn resolver_position(
                 slots_named_as_storage(std::iter::once(inst)).contains(&slot)
             }
         };
-        if pinned || !instruction_preserves_buffers(function, inst) {
+        if pinned || (!numeric.contains(&inst_id) && !instruction_preserves_buffers(function, inst)) {
             position = index + 1;
         }
     }

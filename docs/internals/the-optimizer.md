@@ -660,6 +660,30 @@ alias reaches. Generators, functions with exception handlers or dynamic `eval`,
 and modules that call `pcntl_async_signals()` (whose backend dispatches signal
 handlers after every instruction) are skipped.
 
+Loop descriptor hoisting also accepts reviewed box operations whose complete
+value graph contains only integers and floats. `buffer_access/numeric.rs` reuses
+the shared numeric-domain proof for checked add/subtract/multiply, numeric
+increment/decrement, ordered comparisons, scalar casts, boxing and ownership
+operations. A boxed local's stores and cleanup qualify only when every writer
+is numeric, every read has a dominating initialization, and the slot cannot
+escape by reference. Thus `$found++` and `$sum += $b[$i]` can keep one descriptor
+outside the loop even when overflow promotes the accumulator to float. Numeric
+box allocation does not trigger cycle collection or PHP callbacks, and retiring
+a numeric box cannot run a destructor. General EIR effects stay conservative;
+unknown tags, object-bearing slots, reference aliases and arbitrary allocations
+still fail the buffer-preservation proof. This specialization does not extend
+the separate property-read motion or straight-line property-reuse allowlists.
+Explicit casts to int or bool qualify only when the operand is already an int.
+Float-to-int range checks and NaN-to-bool coercions can run a PHP error handler,
+so raw floats and boxed numeric operands keep these casts as barriers.
+Implicit truthiness checks of floats, Mixed values and unions are barriers too,
+because a NaN-to-bool warning handler can invalidate the buffer between accesses.
+Callable effect summaries retain this warning so a non-inlined predicate cannot
+hide the same invalidation from its caller's loop.
+The numeric-domain analysis caches slot access tables, escape and
+dominance information, and definitive failures for each immutable function.
+Positive cycle facts become reusable only after the entire query succeeds.
+
 In modules that allow property reuse, buffer acquire/release are no-op word
 operations, and plain named reads on `$this` can throw without changing buffers
 or running PHP. These operations also preserve descriptor validity. Before

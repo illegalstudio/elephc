@@ -4,13 +4,15 @@
 //! Called from:
 //! - `codegen::stack_numeric` before frame selection and scalar retirement.
 //! - `ir_passes::concat_reset` before treating numeric updates as scratch-inert.
+//! - `ir_passes::buffer_access::numeric` before treating numeric boxes as buffer-preserving.
 //!
 //! Key details:
 //! - Every local writer participates in the proof, including seeds and loop backedges.
 //! - Calls, parameters with unknown tags, references and nonnumeric values fail closed.
+//! - Immutable slot access facts and definitive rejections are shared across queries.
 
 use std::collections::{HashMap, HashSet};
-use crate::ir::{Function, Immediate, IrHeapKind, IrType, LocalKind, LocalSlotId, Op, ValueId};
+use crate::ir::{BlockId, Function, Immediate, IrHeapKind, IrType, LocalKind, LocalSlotId, Op, ValueId};
 use crate::types::PhpType;
 use crate::ir::MixedNumericOp;
 
@@ -43,7 +45,29 @@ pub(crate) struct NumericInputs<'a> {
     function: &'a Function,
     enabled: bool,
     proven: HashSet<ValueId>,
+    rejected: HashSet<ValueId>,
     working: HashMap<ValueId, bool>,
+    locals: NumericLocals,
+}
+
+/// Cached local facts; positive cycle assumptions are committed only after a whole query passes.
+#[derive(Default)]
+struct NumericLocals {
+    proven: HashSet<LocalSlotId>,
+    rejected: HashSet<LocalSlotId>,
+    working: HashSet<LocalSlotId>,
+    accesses: Option<Vec<LocalAccess>>,
+    escaping: Option<HashSet<LocalSlotId>>,
+    dominance: Option<crate::ir_passes::DominanceInfo>,
+}
+
+/// One slot's immutable writers, forbidden operations and live CFG access positions.
+#[derive(Default)]
+struct LocalAccess {
+    forbidden: bool,
+    writers: Vec<ValueId>,
+    stores: Vec<(BlockId, usize)>,
+    loads: Vec<(BlockId, usize)>,
 }
 
 impl<'a> NumericInputs<'a> {
@@ -51,10 +75,11 @@ impl<'a> NumericInputs<'a> {
     pub(crate) fn new(function: &'a Function) -> Self {
         let enabled = !function.instructions.iter().any(|inst| matches!(inst.op,
             Op::TryPushHandler | Op::CatchBind | Op::FinallyEnter));
-        Self { function, enabled, proven: HashSet::new(), working: HashMap::new() }
+        Self { function, enabled, proven: HashSet::new(), rejected: HashSet::new(),
+            working: HashMap::new(), locals: NumericLocals::default() }
     }
 
-    /// Publishes only complete successes; a failed query contributes no provisional facts.
+    /// Publishes only complete successes and definitive failures, never provisional facts.
     pub(crate) fn prove(&mut self, values: &[ValueId]) -> bool {
         self.query(values, true)
     }
@@ -62,16 +87,19 @@ impl<'a> NumericInputs<'a> {
     /// Avoids retaining a second value set when the caller needs only one query.
     fn query(&mut self, values: &[ValueId], retain: bool) -> bool {
         self.working.clear();
+        self.locals.working.clear();
         if !self.enabled { return false; }
-        let mut dominance = None;
         let mut slots = HashSet::new();
         let safe = values.iter().all(|&value| numeric(
-            self.function, value, &mut slots, &mut dominance, &self.proven, &mut self.working,
+            self.function, value, &mut slots, &mut self.locals, &self.proven, &self.rejected, &mut self.working,
         ));
         if safe && retain {
             self.proven.extend(self.working.iter().filter_map(|(&value, &safe)| safe.then_some(value)));
+            self.locals.proven.extend(self.locals.working.drain());
         }
+        self.rejected.extend(self.working.iter().filter_map(|(&value, &safe)| (!safe).then_some(value)));
         self.working.clear();
+        self.locals.working.clear();
         safe
     }
 
@@ -84,17 +112,18 @@ impl<'a> NumericInputs<'a> {
 /// Shares value decisions within one conjunctive proof, avoiding exponential shared-DAG walks.
 ///
 /// Local cycles may provisionally succeed while their writers are visited. Every writer
-/// must succeed for the whole proof to pass; a failed proof discards this entire cache.
-fn numeric(function: &Function, value: ValueId, slots: &mut HashSet<LocalSlotId>, dominance: &mut Option<crate::ir_passes::DominanceInfo>, proven: &HashSet<ValueId>, known: &mut HashMap<ValueId, bool>) -> bool {
+/// must succeed for the whole proof to pass; provisional successes never escape a failed query.
+fn numeric(function: &Function, value: ValueId, slots: &mut HashSet<LocalSlotId>, locals: &mut NumericLocals, proven: &HashSet<ValueId>, rejected: &HashSet<ValueId>, known: &mut HashMap<ValueId, bool>) -> bool {
     if proven.contains(&value) { return true; }
+    if rejected.contains(&value) { return false; }
     if let Some(&safe) = known.get(&value) { return safe; }
-    let safe = numeric_uncached(function, value, slots, dominance, proven, known);
+    let safe = numeric_uncached(function, value, slots, locals, proven, rejected, known);
     known.insert(value, safe);
     safe
 }
 
 /// Requires scalar metadata or a boxed value whose complete origin is numeric.
-fn numeric_uncached(function: &Function, value: ValueId, slots: &mut HashSet<LocalSlotId>, dominance: &mut Option<crate::ir_passes::DominanceInfo>, proven: &HashSet<ValueId>, known: &mut HashMap<ValueId, bool>) -> bool {
+fn numeric_uncached(function: &Function, value: ValueId, slots: &mut HashSet<LocalSlotId>, locals: &mut NumericLocals, proven: &HashSet<ValueId>, rejected: &HashSet<ValueId>, known: &mut HashMap<ValueId, bool>) -> bool {
     let Some(metadata) = function.value(value) else { return false; };
     if matches!((&metadata.ir_type, &metadata.php_type),
         (IrType::I64, PhpType::Int) | (IrType::F64, PhpType::Float))
@@ -109,16 +138,16 @@ fn numeric_uncached(function: &Function, value: ValueId, slots: &mut HashSet<Loc
     let Some(inst) = super::rewrite::defining_instruction(function, value) else { return false; };
     match inst.op {
         Op::Acquire | Op::MixedClone | Op::Move | Op::Borrow | Op::EnsureOwned | Op::MixedBox => {
-            inst.operands.first().is_some_and(|&value| numeric(function, value, slots, dominance, proven, known))
+            inst.operands.first().is_some_and(|&value| numeric(function, value, slots, locals, proven, rejected, known))
         }
         Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul => {
-            inst.operands.len() == 2 && inst.operands.iter().all(|&value| numeric(function, value, slots, dominance, proven, known))
+            inst.operands.len() == 2 && inst.operands.iter().all(|&value| numeric(function, value, slots, locals, proven, rejected, known))
         }
         Op::MixedNumericBinop if mixed(inst) => {
-            inst.operands.len() == 2 && inst.operands.iter().all(|&value| numeric(function, value, slots, dominance, proven, known))
+            inst.operands.len() == 2 && inst.operands.iter().all(|&value| numeric(function, value, slots, locals, proven, rejected, known))
         }
         Op::StrIncDec if increment(inst) => {
-            inst.operands.len() == 1 && numeric(function, inst.operands[0], slots, dominance, proven, known)
+            inst.operands.len() == 1 && numeric(function, inst.operands[0], slots, locals, proven, rejected, known)
         }
         Op::LoadLocal => {
             let Some(Immediate::LocalSlot(slot)) = inst.immediate else { return false; };
@@ -126,32 +155,35 @@ fn numeric_uncached(function: &Function, value: ValueId, slots: &mut HashSet<Loc
             if local.kind != LocalKind::PhpLocal || (slot.as_raw() as usize) < function.params.len() {
                 return false;
             }
-            // Active slots already passed the immutable access checks. Their outer
-            // visit still requires every writer and dominating initialization.
-            if slots.contains(&slot) { return true; }
+            if locals.rejected.contains(&slot) { return false; }
+            // Active and working slots are optimistic cycle facts, private to this query.
+            if locals.proven.contains(&slot) || locals.working.contains(&slot) || slots.contains(&slot) {
+                return true;
+            }
             #[cfg(test)]
             SLOT_VALIDATIONS.with(|checks| checks.set(checks.get() + 1));
-            if crate::ir_passes::address_escaping_slots(function).contains(&slot) {
+            if locals.escaping.get_or_insert_with(|| crate::ir_passes::address_escaping_slots(function)).contains(&slot) {
+                locals.rejected.insert(slot);
                 return false;
             }
-            if function.instructions.iter().any(|inst| {
-                inst.immediate == Some(Immediate::LocalSlot(slot))
-                    && !matches!(inst.op, Op::LoadLocal | Op::StoreLocal | Op::ReleaseLocalSlot)
-                    || matches!(inst.immediate, Some(Immediate::LocalSlotPair { first, second })
-                        if first == slot || second == slot)
-            }) {
+            let access = &locals.accesses.get_or_insert_with(|| local_accesses(function))[slot.as_raw() as usize];
+            if access.forbidden {
+                locals.rejected.insert(slot);
                 return false;
             }
+            let writers = access.writers.clone();
             slots.insert(slot);
-            let writers: Vec<_> = function.instructions.iter().filter(|inst| {
-                inst.immediate == Some(Immediate::LocalSlot(slot)) && inst.op == Op::StoreLocal
-            }).collect();
-            let safe = !writers.is_empty() && writers.iter().all(|writer| {
-                writer.operands.first().is_some_and(|&value| numeric(function, value, slots, dominance, proven, known))
-            }) && initialized(function, slot, dominance.get_or_insert_with(|| {
+            let safe = !writers.is_empty() && writers.iter().all(|&value| {
+                numeric(function, value, slots, locals, proven, rejected, known)
+            }) && initialized(&locals.accesses.as_ref().unwrap()[slot.as_raw() as usize], locals.dominance.get_or_insert_with(|| {
                 crate::ir_passes::compute_dominance(function)
             }));
             slots.remove(&slot);
+            if safe { locals.working.insert(slot); }
+            else {
+                // Failure with optimistic cycle assumptions is definitive for this immutable function.
+                locals.rejected.insert(slot);
+            }
             safe
         }
         _ => false,
@@ -161,23 +193,47 @@ fn numeric_uncached(function: &Function, value: ValueId, slots: &mut HashSet<Loc
 /// Requires a dominating store before every read, including reads feeding another slot's writer.
 /// The enclosing origin proof checks every stored value's numeric domain separately, so a
 /// computed numeric temporary can initialize its slot without requiring a literal seed.
-fn initialized(function: &Function, slot: LocalSlotId, dominance: &crate::ir_passes::DominanceInfo) -> bool {
-    let mut seeds = Vec::new();
-    let mut loads = Vec::new();
-    for block in &function.blocks {
-        for (position, &id) in block.instructions.iter().enumerate() {
-            let inst = &function.instructions[id.as_raw() as usize];
-            if inst.immediate != Some(Immediate::LocalSlot(slot)) { continue; }
-            if inst.op == Op::LoadLocal { loads.push((block.id, position)); }
-            if inst.op == Op::StoreLocal {
-                seeds.push((block.id, position));
-            }
-        }
-    }
-    loads.iter().all(|&(block, position)| seeds.iter().any(|&(seed_block, seed_position)| {
+fn initialized(access: &LocalAccess, dominance: &crate::ir_passes::DominanceInfo) -> bool {
+    access.loads.iter().all(|&(block, position)| access.stores.iter().any(|&(seed_block, seed_position)| {
         if seed_block == block { seed_position < position }
         else { dominance.dominates(seed_block, block) }
     }))
+}
+
+/// Indexes every slot once, retaining the old all-instructions writer and live-CFG seed policy.
+fn local_accesses(function: &Function) -> Vec<LocalAccess> {
+    let mut accesses: Vec<_> = (0..function.locals.len()).map(|_| LocalAccess::default()).collect();
+    for inst in &function.instructions {
+        match inst.immediate {
+            Some(Immediate::LocalSlot(slot)) => {
+                let Some(access) = accesses.get_mut(slot.as_raw() as usize) else { continue; };
+                match inst.op {
+                    Op::StoreLocal => match inst.operands.first() {
+                        Some(&value) => access.writers.push(value),
+                        None => access.forbidden = true,
+                    },
+                    Op::LoadLocal | Op::ReleaseLocalSlot => {},
+                    _ => access.forbidden = true,
+                }
+            }
+            Some(Immediate::LocalSlotPair { first, second }) => {
+                for slot in [first, second] {
+                    if let Some(access) = accesses.get_mut(slot.as_raw() as usize) { access.forbidden = true; }
+                }
+            }
+            _ => {},
+        }
+    }
+    for block in &function.blocks {
+        for (position, &id) in block.instructions.iter().enumerate() {
+            let inst = &function.instructions[id.as_raw() as usize];
+            let Some(Immediate::LocalSlot(slot)) = inst.immediate else { continue; };
+            let Some(access) = accesses.get_mut(slot.as_raw() as usize) else { continue; };
+            if inst.op == Op::LoadLocal { access.loads.push((block.id, position)); }
+            if inst.op == Op::StoreLocal { access.stores.push((block.id, position)); }
+        }
+    }
+    accesses
 }
 
 #[cfg(test)]
@@ -279,6 +335,34 @@ mod tests {
         assert!(!proof.prove(&[loaded, nonnumeric]));
         assert!(proof.proven.is_empty());
         assert!(proof.working.is_empty());
+        assert!(proof.locals.proven.is_empty());
+        assert!(proof.locals.working.is_empty());
         assert!(proof.prove(&[loaded]));
+    }
+
+    /// Distinct loads of one accepted or rejected slot reuse its complete eligibility decision.
+    #[test]
+    fn numeric_domain_reuses_slot_verdicts_for_independent_loads() {
+        for valid in [true, false] {
+            let (mut function, _, nonnumeric, _) = shared_cycle();
+            if !valid {
+                let seed = function.instructions.iter_mut().find(|inst| inst.op == Op::StoreLocal).unwrap();
+                seed.operands[0] = nonnumeric;
+            }
+            let end = function.blocks[0].terminator.take().unwrap();
+            let mut b = Builder::new(&mut function);
+            b.position_at_end(crate::ir::BlockId::from_raw(0));
+            let loads: Vec<_> = (0..128).map(|_| b.emit_load_local(
+                LocalSlotId::from_raw(0), IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed,
+            )).collect();
+            b.terminate(end);
+            let mut proof = NumericInputs::new(&function);
+            SLOT_VALIDATIONS.with(|checks| checks.set(0));
+            for load in loads {
+                assert_eq!(proof.prove(&[load]), valid);
+            }
+            assert_eq!(SLOT_VALIDATIONS.with(|checks| checks.get()), 1,
+                "accepted and rejected slots must not rescan the function for each read");
+        }
     }
 }

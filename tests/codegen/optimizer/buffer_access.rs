@@ -20,6 +20,8 @@
 
 use super::*;
 
+mod numeric_accumulators;
+
 /// One packed-record integration step in the shape of Ivory's `bench/integrate` hot loop.
 const INTEGRATE_SOURCE: &str = r#"<?php
 packed class Body { public float $x; public float $vx; }
@@ -142,13 +144,17 @@ fn function_ir(source: &str, optimized: bool, name: &str) -> String {
     function
 }
 
-/// Emits one named function's target assembly between its stable function markers.
+/// Emits one named function's target assembly, using library mode on iOS, between stable markers.
 fn function_assembly(source: &str, target: &str, name: &str) -> String {
     let dir = make_cli_test_dir("elephc_buffer_access_asm");
     let php_path = dir.join("main.php");
     fs::write(&php_path, source).expect("write PHP fixture");
-    let output = elephc_cli_command(&dir)
-        .args(["--emit-asm", "--target", target])
+    let mut command = elephc_cli_command(&dir);
+    command.args(["--emit-asm", "--target", target]);
+    if target.starts_with("ios-") {
+        command.args(["--emit", "staticlib"]);
+    }
+    let output = command
         .arg(&php_path)
         .output()
         .expect("emit target assembly");
@@ -523,8 +529,8 @@ echo total($b, 3), "\n";
 
 /// An inclusive same-buffer length loop keeps its bounds check and dies on index `len`.
 ///
-/// Its counter can pass `buffer_len()`, so it may stay a boxed int|float that keeps the loop
-/// unhoisted; either way no access may carry the in-range flag.
+/// Its counter can pass `buffer_len()`, so it may stay a boxed int|float even when numeric
+/// preservation permits descriptor hoisting. No access may carry the in-range flag.
 #[test]
 fn test_inclusive_same_buffer_bound_still_traps() {
     let source = r#"<?php
@@ -704,8 +710,9 @@ echo sum($b, 2), "\n";
 fn test_buffer_loops_example_hoists_resolution() {
     let source = include_str!("../../../examples/buffer-loops/main.php");
     assert!(function_ir(source, true, "step").contains("= buffer_resolve "));
+    assert!(function_ir(source, true, "moving_count").contains("= buffer_resolve "));
     let expected =
-        "particles=8; sum=380\nlayer 0: sum=300\nlayer 1: sum=308\nlayer 2: sum=316\nlayers=3; total=924\n";
+        "particles=8; sum=380\nmoving=5\nlayer 0: sum=300\nlayer 1: sum=308\nlayer 2: sum=316\nlayers=3; total=924\n";
     if std::env::var_os("ELEPHC_PHP_CHECK").is_some() {
         let model = source.replace("packed class ", "class ").replace("buffer<Particle>", "array")
             .replace("buffer_new<Particle>($count)", "array_map(fn($unused) => new Particle(), range(1, $count))")
