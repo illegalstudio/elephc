@@ -356,11 +356,10 @@ pub trait BuiltinLoweringContext {
         span: Option<Span>,
     ) -> LoweredBuiltinValue;
 
-    /// Emits a direct call to a PHP function declared by the program (or an injected
-    /// prelude) under its canonical lowercase name. The operands must already have the
-    /// callee's parameter representations: this is the composition primitive for a
-    /// builtin whose semantics live in prelude-declared PHP, not a coercing call.
-    /// The caller supplies visible parameters; lowering adds hidden backtrace argument metadata.
+    /// Emits a direct call to a PHP function declared by the program or an injected prelude.
+    /// The name is canonical lowercase and visible operands already use callee representations.
+    /// Lowering adds hidden backtrace metadata while preserving caller-owned operands.
+    /// This composes builtins whose semantics live in prelude-declared PHP.
     fn emit_user_call(
         &mut self,
         name: &str,
