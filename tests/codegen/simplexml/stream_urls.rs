@@ -150,16 +150,46 @@ class ThrowingXmlInput {
     public function stream_read(int $count): string { throw new RuntimeException('read'); }
     public function stream_eof(): bool { return false; }
     public function stream_close(): void { echo 'unexpected-close'; }
+    public function __destruct() {
+        global $nestedXmlStream;
+        if (is_resource($nestedXmlStream)) { fclose($nestedXmlStream); }
+    }
 }
+class NestedXmlInput {
+    public mixed $context = null;
+    public function stream_open(string $path, string $mode, int $options, mixed &$opened_path): bool { return true; }
+    public function stream_close(): void { echo 'nested-close|'; }
+}
+stream_wrapper_register('nestedxml', 'NestedXmlInput');
 stream_wrapper_register('throwingxml', 'ThrowingXmlInput');
+$nestedXmlStream = fopen('nestedxml://document', 'rb');
 try { simplexml_load_file('throwingxml://document'); } catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
 try { new SimpleXMLElement('throwingxml://document', 0, true); }
 catch (Exception $error) { echo $error->getMessage(), ':', get_class($error->getPrevious()); }
 stream_wrapper_unregister('throwingxml');
+stream_wrapper_unregister('nestedxml');
 "#);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "read|String could not be parsed as XML:RuntimeException");
+    assert_eq!(out.stdout, "nested-close|read|String could not be parsed as XML:RuntimeException");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Filter resources retain local file URL and localhost support in both public factories.
+#[test]
+fn test_simplexml_filtered_file_urls() {
+    if skip_without_xml_native("test_simplexml_filtered_file_urls") { return; }
+    let out = compile_and_run_capture(r#"<?php
+$path = tempnam(sys_get_temp_dir(), 'sxml-filter-');
+file_put_contents($path, '<R/>');
+try {
+    foreach (['file://' . $path, 'file://localhost' . $path] as $file) {
+        $uri = 'php://filter/read=string.tolower/resource=' . $file;
+        echo simplexml_load_file($uri)->getName(), ':', (new SimpleXMLElement($uri, 0, true))->getName(), '|';
+    }
+} finally { unlink($path); }
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "r:r|r:r|");
 }
 
 /// Invalid scalar stat results fail the XML open without dereferencing them as heap pointers.

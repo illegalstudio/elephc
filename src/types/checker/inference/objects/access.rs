@@ -136,7 +136,8 @@ impl Checker {
         }
         // `isset($n->p)` / `$n->p ?? $d` reach through a null receiver in PHP and answer
         // `false` / the default; only a probe context may do so.
-        if matches!(obj_ty, PhpType::Void) && self.null_probe_depth > 0 {
+        if self.null_probe_depth > 0 && matches!(obj_ty,
+            PhpType::Void | PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str | PhpType::Resource(_)) {
             return Ok(PhpType::Void);
         }
         Err(CompileError::new(
@@ -216,6 +217,7 @@ impl Checker {
 
         match obj_ty {
             PhpType::Object(_) | PhpType::Union(_) | PhpType::Mixed => Ok(PhpType::Mixed),
+            _ if self.null_probe_depth > 0 && !nullsafe => Ok(PhpType::Void),
             _ if nullsafe => {
                 self.nullsafe_object_receiver(&obj_ty, expr, "property access")?;
                 Ok(PhpType::Mixed)

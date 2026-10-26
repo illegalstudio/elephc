@@ -385,12 +385,9 @@ echo $root?->branch->label(noisy()) ?? "fallback";
 "#,
     );
     assert!(!out.success, "program unexpectedly succeeded");
-    assert_eq!(out.stdout, "");
-    assert!(
-        out.stderr.contains("Call to a member function label() on null"),
-        "{}",
-        out.stderr
-    );
+    assert_eq!(out.stdout,
+        "\nFatal error: Uncaught Error: Call to a member function label() on null\n");
+    assert_eq!(out.stderr, "");
 }
 
 /// Verifies nullsafe (?->) in the middle of a chain ($root->branch?->leaf->name)

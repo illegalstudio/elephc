@@ -26,8 +26,13 @@ $calls = 0;
 $callback = function (XMLParser $parser, string $name, array $attributes) use (&$calls): void { $calls++; echo 'used|'; };
 try { xml_set_element_handler($bad, $callback, null); } catch (TypeError $error) { echo 'caught|'; }
 $callback(xml_parser_create(), 'r', []);
-$values = [];
-try { xml_parse_into_struct($bad, str_repeat('x', 64), $values); } catch (TypeError $error) { echo 'struct-caught|'; }
+$parser = xml_parser_create();
+xml_set_element_handler($parser, function (XMLParser $active, string $name, array $attributes): void {
+    $values = [];
+    try { xml_parse_into_struct($active, str_repeat('x', 64), $values); }
+    catch (Error $error) { echo 'struct-caught|'; }
+}, null);
+xml_parse($parser, '<r/>', true);
 echo $calls;
 "#);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);

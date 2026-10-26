@@ -31,6 +31,12 @@ function __elephc_simplexml_stream_bytes(string $uri, string $caller): string|fa
     $separator = strpos($uri, '://');
     if ($separator === false) { return file_get_contents($uri); }
     $scheme = strtolower(substr($uri, 0, (int)$separator));
+    if ($scheme === 'file') {
+        $path = substr($uri, (int)$separator + 3);
+        if (str_starts_with($path, 'localhost/')) { $path = substr($path, 9); }
+        if (!str_starts_with($path, '/')) { return false; }
+        return file_get_contents($path);
+    }
     if ($scheme === 'data') { return __elephc_simplexml_data_bytes($uri, $caller); }
     if ($scheme === 'php') {
         $uri = 'php' . substr($uri, (int)$separator);
@@ -144,7 +150,7 @@ function __elephc_simplexml_read_stream(mixed $stream): string|false {
 }
 
 function __elephc_simplexml_close_stream(mixed $stream, bool $failed): void {
-    $previous = elephc_runtime_simplexml_stream_close_mode((int)$failed);
+    $previous = elephc_runtime_simplexml_stream_close_mode($failed ? get_resource_id($stream) : 0);
     try { fclose($stream); }
     finally { elephc_runtime_simplexml_stream_close_mode($previous); }
 }

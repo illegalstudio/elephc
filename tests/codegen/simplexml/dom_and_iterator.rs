@@ -78,7 +78,7 @@ $doc = new DOMDocument(); $doc->loadXML('<r xmlns:p="urn:p" p:id="8">text<c/></r
 $text = $doc->documentElement->childNodes[0];
 if ($text instanceof DOMNode) { var_dump(simplexml_import_dom($text)); }
 $unattached = (new ReflectionClass('DOMElement'))->newInstanceWithoutConstructor();
-var_dump(simplexml_import_dom($unattached));
+if ($unattached instanceof DOMNode) { var_dump(simplexml_import_dom($unattached)); }
 var_dump(simplexml_import_dom(new DOMDocument()));
 try { simplexml_import_dom(new stdClass()); } catch (TypeError $error) { echo $error->getMessage(), '|'; }
 $first = simplexml_import_dom($doc);

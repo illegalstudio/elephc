@@ -183,7 +183,8 @@ impl Checker {
             }
             // `isset($n['k'])` / `$n['k'] ?? $d` reach through a null base in PHP and
             // answer `false` / the default; only a probe context may do so.
-            PhpType::Void if self.null_probe_depth > 0 => Ok(PhpType::Void),
+            PhpType::Void | PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Resource(_)
+                if self.null_probe_depth > 0 => Ok(PhpType::Void),
             _ => Err(CompileError::new(expr.span, "Cannot index non-array")),
         }
     }

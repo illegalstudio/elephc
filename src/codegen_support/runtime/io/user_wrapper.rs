@@ -69,11 +69,23 @@ pub fn emit_user_wrapper_fclose(emitter: &mut Emitter) {
     emit_aarch64_handle_lookup(emitter, "__rt_uwfclose_done");                  // resolve the object and leave its slot index in x9
     emitter.instruction("str x0, [sp, #0]");                                    // transfer the handle's reference into local ownership
     emitter.instruction("str xzr, [x10, x9, lsl #3]");                          // retire the old slot before PHP can open another wrapper
+    emitter.instruction("mov x11, #0x40000000");                                // reconstruct the synthetic descriptor from its slot
+    emitter.instruction("orr x9, x9, x11");                                     // compare the complete descriptor rather than a reusable slot
+    emitter.instruction("mov x0, x9");                                          // resolve the descriptor's stable PHP resource identity
+    abi::emit_call_label(emitter, "__rt_resource_id_of");
+    abi::emit_load_symbol_to_reg(emitter, "x11", "_simplexml_unwind_stream", 0);
+    emitter.instruction("cmp x0, x11");                                         // does this incarnation own the pending XML read failure?
+    emitter.instruction("cset x11, eq");                                        // remember the policy before guard publication
+    emitter.instruction("str x11, [sp, #8]");                                   // preserve this stream's close policy across the guard
+    emitter.instruction("cbz x11, __rt_uwfclose_policy_ready");                 // unrelated streams retain their close callback
+    abi::emit_store_reg_to_symbol(emitter, "xzr", "_simplexml_unwind_stream", 0);
+    emitter.label("__rt_uwfclose_policy_ready");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // restore the object owner for exceptional cleanup
     guards::guard(emitter, 16, 48);
 
     // -- invoke an optional close method with exceptional object cleanup active --
     emitter.instruction("ldr x0, [sp, #0]");                                    // restore the wrapper receiver after publishing the guard
-    abi::emit_load_symbol_to_reg(emitter, "x9", "_stream_close_silent", 0);
+    emitter.instruction("ldr x9, [sp, #8]");                                    // only the detached failing stream suppresses its callback
     emitter.instruction("cbnz x9, __rt_uwfclose_release");                      // skip PHP callbacks while unwinding a native-extension exception
     emit_aarch64_method_lookup(emitter, "__rt_uwfclose_release", VTABLE_SLOT_CLOSE);
     emitter.instruction("blr x11");                                             // invoke stream_close on the wrapper object
@@ -103,12 +115,25 @@ fn emit_user_wrapper_fclose_linux_x86_64(emitter: &mut Emitter) {
     emit_x86_handle_lookup(emitter, "__rt_uwfclose_done_x86");                 // resolve the object and leave its slot index in r9
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // transfer the handle's reference into local ownership
     emitter.instruction("mov QWORD PTR [r10 + r9 * 8], 0");                     // allow callbacks to reuse the retired slot safely
-    emitter.instruction("mov rax, rdi");                                        // provide the object through the native owner-guard convention
+    emitter.instruction("or r9, 0x40000000");                                   // reconstruct the complete synthetic descriptor
+    emitter.instruction("mov rax, r9");                                         // resolve the descriptor's stable PHP resource identity
+    abi::emit_call_label(emitter, "__rt_resource_id_of");
+    abi::emit_load_symbol_to_reg(emitter, "r11", "_simplexml_unwind_stream", 0);
+    emitter.instruction("cmp rax, r11");                                        // match only the resource incarnation whose XML read failed
+    emitter.instruction("sete cl");                                             // materialize this stream's close policy
+    emitter.instruction("movzx ecx, cl");                                       // clear the remaining policy bits
+    emitter.instruction("mov QWORD PTR [rbp - 16], rcx");                       // preserve policy across guard publication
+    emitter.instruction("test rcx, rcx");                                       // may a nested close reuse this descriptor safely?
+    emitter.instruction("jz __rt_uwfclose_policy_ready_x86");                   // unrelated streams keep their close callbacks
+    emitter.instruction("xor r11d, r11d");                                      // consume suppression before releasing or invoking PHP
+    abi::emit_store_reg_to_symbol(emitter, "r11", "_simplexml_unwind_stream", 0);
+    emitter.label("__rt_uwfclose_policy_ready_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // provide the object through the native owner-guard convention
     guards::guard(emitter, 16, 48);
 
     // -- protect the wrapper while its optional close method executes --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the receiver after guard publication
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_stream_close_silent", 0);
+    emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // only the detached failing stream suppresses its callback
     emitter.instruction("test r9, r9");                                         // check the native-extension exception cleanup mode
     emitter.instruction("jnz __rt_uwfclose_release_x86");                       // release without stream_close during native-extension unwinding
     emit_x86_method_lookup(emitter, "__rt_uwfclose_release_x86", VTABLE_SLOT_CLOSE);
@@ -1001,24 +1026,24 @@ mod tests {
     }
 }
 
-/// Queries or swaps the extension cleanup mode through a leaf C ABI entry.
+/// Queries or swaps the failing XML stream descriptor through a leaf C ABI entry.
 pub(crate) fn emit_stream_close_mode(emitter: &mut Emitter) {
     let name = emitter.target.extern_symbol("elephc_runtime_simplexml_stream_close_mode");
     emitter.label_global(&name);
     let done = "__rt_stream_close_mode_done";
     match emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_load_symbol_to_reg(emitter, "x14", "_stream_close_silent", 0);
+            abi::emit_load_symbol_to_reg(emitter, "x14", "_simplexml_unwind_stream", 0);
             emitter.instruction(&format!("tbnz x0, #63, {done}"));              // a negative mode only reads the current cleanup policy
-            abi::emit_store_reg_to_symbol(emitter, "x0", "_stream_close_silent", 0);
+            abi::emit_store_reg_to_symbol(emitter, "x0", "_simplexml_unwind_stream", 0);
             emitter.label(done);
             emitter.instruction("mov x0, x14");                                 // return the previous mode through the C ABI
         }
         Arch::X86_64 => {
-            abi::emit_load_symbol_to_reg(emitter, "rax", "_stream_close_silent", 0);
+            abi::emit_load_symbol_to_reg(emitter, "rax", "_simplexml_unwind_stream", 0);
             emitter.instruction("test rdi, rdi");                               // a negative mode only reads the current cleanup policy
             emitter.instruction(&format!("js {done}"));                         // preserve the mode for read-only queries
-            abi::emit_store_reg_to_symbol(emitter, "rdi", "_stream_close_silent", 0);
+            abi::emit_store_reg_to_symbol(emitter, "rdi", "_simplexml_unwind_stream", 0);
             emitter.label(done);
         }
     }

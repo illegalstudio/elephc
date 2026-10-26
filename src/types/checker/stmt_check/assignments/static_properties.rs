@@ -94,7 +94,9 @@ pub(super) fn check_static_property_array_push(
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     let target = resolve_static_property_assignment_target(checker, receiver, property, span)?;
     if target.dynamic_eval_target || target.prop_ty.is_php_array()
-        || matches!(&target.prop_ty, PhpType::Object(name) if name.eq_ignore_ascii_case("WeakMap"))
+        || target.prop_ty == PhpType::Mixed
+        || matches!(&target.prop_ty, PhpType::Object(name) if name.eq_ignore_ascii_case("WeakMap")
+            || crate::types::builtin_classes::has_native_dimensions(name, &checker.classes))
     {
         return Ok(());
     }

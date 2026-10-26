@@ -78,7 +78,9 @@ pub(super) fn check_property_array_push(
         .filter(|_| matches!(&obj_ty, PhpType::Union(members)
             if members.iter().all(|ty| matches!(ty, PhpType::Object(_) | PhpType::Void))))
         .map(PhpType::Object).unwrap_or(obj_ty);
-    if matches!(&obj_ty, PhpType::Object(name) if name.is_empty() || checker.interfaces.contains_key(name)) {
+    if matches!(&obj_ty, PhpType::Object(name) if name.is_empty()
+        || checker.interfaces.contains_key(name)
+        || crate::types::checker::builtin_stdclass::is_stdclass(name)) {
         return Ok(());
     }
     match &obj_ty {
@@ -225,7 +227,9 @@ pub(super) fn check_property_array_assign(
             if members.iter().all(|ty| matches!(ty, PhpType::Object(_) | PhpType::Void))))
         .map(PhpType::Object).unwrap_or(obj_ty);
     if matches!(obj_ty, PhpType::Mixed)
-        || matches!(&obj_ty, PhpType::Object(name) if name.is_empty() || checker.interfaces.contains_key(name))
+        || matches!(&obj_ty, PhpType::Object(name) if name.is_empty()
+            || checker.interfaces.contains_key(name)
+            || crate::types::checker::builtin_stdclass::is_stdclass(name))
     {
         if !is_php_array_key_type(&normalized_idx_ty) {
             return Err(CompileError::new(span, "Array index must be integer"));

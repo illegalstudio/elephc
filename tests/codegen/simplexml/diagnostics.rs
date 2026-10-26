@@ -22,7 +22,8 @@ function inspectDerivedXPath(SimpleXMLElement $root, SimpleXMLElement $node): vo
 }
 $root = new SimpleXMLElement('<r xmlns:p="urn:p"><p:v>one</p:v><c/></r>');
 $root->registerXPathNamespace('q', 'urn:p');
-inspectDerivedXPath($root, $root->xpath('//c')[0]);
+$derived = $root->xpath('//c')[0];
+if ($derived instanceof SimpleXMLElement) { inspectDerivedXPath($root, $derived); }
 foreach ($root as $node) { inspectDerivedXPath($root, $node); }
 $added = $root->addChild('d');
 if ($added instanceof SimpleXMLElement) { inspectDerivedXPath($root, $added); }
