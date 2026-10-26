@@ -1799,8 +1799,10 @@ fn box_iterator_method_result_if_needed(
         return Ok(());
     };
     let result_ty = ctx.value_php_type(result)?;
-    if result_ty == PhpType::Mixed && return_ty.codegen_repr() != PhpType::Mixed {
+    if result_ty == PhpType::Mixed {
         // A `?ptr<T>` result keeps its union, so address 0 is PHP null.
+        // Source-declared arrays already use Mixed storage. Their borrowed return
+        // still needs a foreach owner even when no representation conversion is needed.
         let box_ty = crate::types::mixed_box_php_type(return_ty);
         box_compiled_iterator_result(ctx, &box_ty);
     }
