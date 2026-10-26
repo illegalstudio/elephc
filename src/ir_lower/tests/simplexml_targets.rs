@@ -42,6 +42,11 @@ function xmlUnionProbes(SimpleXMLElement|ArrayObject|null $node): void {
 xmlUnionProbes($xml);
 xmlUnionProbes(new ArrayObject(['id' => 'ordinary']));
 xmlUnionProbes(null);
+function exposeXmlProbeGlobal(): void { global $probeGlobalXml; echo $probeGlobalXml->getName(); }
+$probeGlobalXml = new SimpleXMLElement('<r id="global"/>');
+exposeXmlProbeGlobal();
+var_dump(isset($probeGlobalXml['id']));
+unset($probeGlobalXml['id']);
 class XmlEmptyScalarPeer { public string $text = '0'; }
 $peer = new XmlEmptyScalarPeer();
 var_dump(empty($peer?->text[0]));

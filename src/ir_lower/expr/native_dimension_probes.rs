@@ -13,10 +13,12 @@ use elephc_builtin_contract::ObjectDimension;
 
 /// Captures dimension operands and retires their owners after the selected protocol completes.
 pub(super) fn lower(
-    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, index: &Expr,
-    operation: ObjectDimension, expr: &Expr,
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, source_type: &PhpType,
+    index: &Expr, operation: ObjectDimension, expr: &Expr,
 ) -> LoweredValue {
     let (object, owner) = root_owned_call_operand(ctx, object, expr.span);
+    // Global storage erases object metadata to Mixed; retain the source type for
+    // protocol selection while the captured value keeps its real boxed representation.
     let ty = ctx.builder.value_php_type(object.value);
     let borrowed = ctx.emit_value(Op::Borrow, vec![object.value], None, ty.clone(),
         Op::Borrow.default_effects(), Some(expr.span));
@@ -26,13 +28,13 @@ pub(super) fn lower(
         Ownership::php_type_needs_lifetime_tracking(&ctx.local_type(name)))
         .map(|name| ctx.local_slots[name]);
     if let Some(slot) = key_owner { register_owned_call_operand(ctx, slot, expr.span); }
-    let native = native_dimension_method_for_type(ctx, &ty, operation);
+    let native = native_dimension_method_for_type(ctx, source_type, operation);
     let public = match operation {
         ObjectDimension::Isset => "offsetExists",
         ObjectDimension::Unset => "offsetUnset",
         _ => unreachable!("dimension probe operation"),
     };
-    let result = if native.is_none() && contains_xml(ctx, &ty) {
+    let result = if native.is_none() && contains_xml(ctx, source_type) {
         dispatch(ctx, borrowed, &key, operation, public, expr)
     } else {
         invoke(ctx, borrowed, &key, operation, native.unwrap_or(public), expr)

@@ -76,8 +76,9 @@ pub(super) fn lower_lazy_isset_operand(
     match &arg.kind {
         ExprKind::ArrayAccess { array, index } => {
             if array_access_expr_satisfies_array_access(ctx, array) {
+                let ty = array_cast_source::array_cast_source_type_for_ir(ctx, array);
                 let object = lower_expr(ctx, array);
-                return Some(native_dimension_probes::lower(ctx, object, index,
+                return Some(native_dimension_probes::lower(ctx, object, &ty, index,
                     elephc_builtin_contract::ObjectDimension::Isset, arg));
             }
             if !array_access_expr_supports_native_isset_probe(ctx, array) {

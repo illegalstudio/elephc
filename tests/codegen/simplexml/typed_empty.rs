@@ -94,3 +94,20 @@ probeXmlOrArrayAccess(new XmlDimensionProbePeer());
     ));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A known XML source keeps its native probe protocol when a main local uses boxed global storage.
+#[test]
+fn test_simplexml_main_global_dimension_probe_protocol() {
+    if skip_without_xml_native("test_simplexml_main_global_dimension_probe_protocol") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function exposeXmlProbeGlobal(): void { global $probeGlobalXml; echo $probeGlobalXml->getName(), '|'; }
+$probeGlobalXml = new SimpleXMLElement('<r id="global"/>');
+exposeXmlProbeGlobal();
+echo (int)isset($probeGlobalXml['id']), ':', (int)empty($probeGlobalXml['id']), '|';
+unset($probeGlobalXml['id']);
+echo (int)isset($probeGlobalXml['id']);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "r|1:0|0");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

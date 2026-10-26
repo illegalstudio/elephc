@@ -151,8 +151,9 @@ pub(super) fn lower_unset_array_access(
             _ => {}
         }
     }
+    let ty = array_cast_source::array_cast_source_type_for_ir(ctx, array);
     let object = lower_expr(ctx, array);
-    native_dimension_probes::lower(ctx, object, index,
+    native_dimension_probes::lower(ctx, object, &ty, index,
         elephc_builtin_contract::ObjectDimension::Unset, expr);
 }
 
