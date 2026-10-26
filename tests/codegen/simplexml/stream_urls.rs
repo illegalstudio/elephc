@@ -216,6 +216,8 @@ restore_error_handler();
 #[test]
 fn test_simplexml_throwing_stream_uri_owners_isolated_bundle() {
     if skip_without_xml_native("test_simplexml_throwing_stream_uri_owners_isolated_bundle") { return; }
+    let args: Vec<_> = (0..14).map(|count| vec!["x"; count]).collect();
+    let argvs: Vec<_> = args.iter().map(Vec::as_slice).collect();
     let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(r#"<?php
 class IsolatedThrowingXmlInput {
     public mixed $context = null;
@@ -258,14 +260,24 @@ elseif ($argc === 3) {
 } elseif ($argc === 9) { echo (int)file_exists($uri); }
 elseif ($argc === 10) {
     $dynamicUri = str_repeat($uri, 1); echo (int)file_exists($dynamicUri);
-} else {
+} elseif ($argc === 11) {
     $stream = fopen($uri, 'rb');
     try { __elephc_simplexml_read_stream($stream); }
     catch (RuntimeException $error) { echo $error->getMessage(); }
+} elseif ($argc === 12) {
+    echo (int)in_array('isolatedxml', stream_get_wrappers(), true);
+} elseif ($argc === 13) {
+    $dynamicUri = str_repeat($uri, 1);
+    $stream = fopen($dynamicUri, 'rb');
+    try { __elephc_simplexml_read_stream($stream); }
+    catch (RuntimeException $error) { echo $error->getMessage(); }
+} else {
+    $separator = strpos($uri, '://');
+    echo strtolower(substr($uri, 0, intval($separator)));
 }
 stream_wrapper_unregister('isolatedxml');
-"#, &[&[], &["x"], &["x", "x"], &["x", "x", "x"], &["x", "x", "x", "x"], &["x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x"]]);
-    let expected = ["registered", "close|", "read|close|", "read", "read", "read", "read", "read", "1", "1", "read"];
+"#, &argvs);
+    let expected = ["registered", "close|", "read|close|", "read", "read", "read", "read", "read", "1", "1", "read", "1", "read", "isolatedxml"];
     assert_eq!(runs.len(), expected.len());
     let mut failures = Vec::new();
     for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {
