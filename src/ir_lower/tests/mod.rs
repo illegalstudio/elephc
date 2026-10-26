@@ -81,6 +81,7 @@ mod reference_cells;
 mod reference_detach;
 mod reference_property_payload;
 mod reflection_mirror_ownership;
+mod reflection_branch_targets;
 mod reference_return_boundaries;
 mod callable_operand_owners;
 mod capture_view_owners;

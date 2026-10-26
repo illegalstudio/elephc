@@ -12,6 +12,8 @@
 //!   to synthesize block-parameter phis for every PHP variable yet.
 
 mod string_append;
+mod reflection_locals;
+pub(crate) use reflection_locals::ReflectionBindings;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
