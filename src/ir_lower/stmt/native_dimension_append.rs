@@ -85,6 +85,7 @@ fn emit_native(ctx: &mut LoweringContext<'_, '_>, array: LoweredValue, value: Lo
 /// Lends original operands without transferring their caller-owned cleanup responsibility.
 fn borrow(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span) -> LoweredValue {
     let ty = ctx.builder.value_php_type(value.value);
+    if !Ownership::php_type_needs_lifetime_tracking(&ty) { return value; }
     let borrowed = ctx.emit_value(Op::Borrow, vec![value.value], None, ty,
         Op::Borrow.default_effects(), Some(span));
     ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);

@@ -13,6 +13,9 @@ fn verify_simplexml_target(target: &str) {
 $xml = new SimpleXMLIterator('<r id="a"><item>42</item><item>3</item></r>');
 $xml->item[0] = '7';
 $xml['id'] = 'b';
+$xml->item[] = 9;
+function appendIntegerToXmlOrArray(mixed $container): void { $container[] = 9; }
+appendIntegerToXmlOrArray([]);
 $cloned = clone $xml;
 $cloned->item[0] = 'copy';
 echo (string)$xml->item[0], ':', (string)$cloned->item[0];
