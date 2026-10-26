@@ -7,7 +7,10 @@
 //! Key details:
 //! - Heap poisoning detects reads after an owning receiver has been released (issue #1908).
 
-use crate::support::{compile_and_run_with_heap_debug, compile_and_run_with_heap_debug_per_argv};
+use crate::support::{
+    compile_and_run_with_heap_debug, compile_and_run_with_heap_debug_and_asm_per_argv,
+    selected_function_assembly,
+};
 
 /// Borrowed local views are pinned before a later argument replaces their source string.
 #[test]
