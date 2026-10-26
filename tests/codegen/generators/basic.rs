@@ -507,7 +507,7 @@ echo $count, ':', consumeOwnedIterator(ownedCellGenerator());
 /// Fresh yielded containers transfer their original owner before suspension or abandonment.
 #[test]
 fn test_generator_fresh_yield_values_heap_clean() {
-    let out = compile_and_run_with_heap_debug(r#"<?php
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(r#"<?php
 class FreshYieldValue {
     public function __destruct() { echo 'drop|'; }
 }
@@ -528,5 +528,5 @@ unset($abandoned);
 "#);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "array|array|string|FreshYieldValue|drop|");
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\nGenerator ownership assembly:\n{}", out.stderr, assembly);
 }

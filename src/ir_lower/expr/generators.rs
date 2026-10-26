@@ -24,9 +24,9 @@ pub(super) fn lower_yield(ctx: &mut LoweringContext<'_, '_>, key: Option<&Expr>,
         let value = lower_expr(ctx, value);
         // Transfer fresh values into a single-use box before suspension. The runtime
         // owns that box while suspended, so no original temporary remains on the stack.
-        let boxed = matches!(ctx.builder.value_php_type(value.value).codegen_repr(),
-            PhpType::Mixed | PhpType::Union(_));
-        let value = if ctx.value_is_owning_temporary(value) && !boxed {
+        // A returned Mixed cell also needs a distinct suspension owner. Retire its
+        // producer reference now, so abandoning the coroutine cannot strand it.
+        let value = if ctx.value_is_owning_temporary(value) {
             ctx.box_value_as_mixed(value, PhpType::Mixed, Some(expr.span))
         } else { value };
         operands.push(value.value);
