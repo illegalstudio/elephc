@@ -12,8 +12,11 @@ use crate::support::*;
 
 /// Includes only stream helper bodies when a remote heap regression needs producer diagnostics.
 fn stream_owner_assembly(assembly: &str) -> String {
-    let symbols: Vec<_> = ["__elephc_simplexml_file_handle", "__elephc_simplexml_stream_bytes", "__elephc_simplexml_data_bytes", "__elephc_simplexml_filter_bytes"]
-        .into_iter().map(elephc::names::function_symbol).collect();
+    let symbols: Vec<_> = ["__elephc_simplexml_file_handle", "__elephc_simplexml_stream_bytes", "__elephc_simplexml_data_bytes", "__elephc_simplexml_filter_bytes", "__elephc_simplexml_read_stream", "__elephc_simplexml_close_stream"]
+        .into_iter().flat_map(|name| {
+            let symbol = elephc::names::function_symbol(name);
+            [symbol.clone(), format!("{symbol}__cdylib_exception_cleanup")]
+        }).collect();
     let mut selected = selected_function_assembly(assembly, &symbols);
     let lines: Vec<_> = assembly.lines().collect();
     for (index, _) in lines.iter().enumerate().filter(|(_, line)|
@@ -213,7 +216,7 @@ restore_error_handler();
 #[test]
 fn test_simplexml_throwing_stream_uri_owners_isolated_bundle() {
     if skip_without_xml_native("test_simplexml_throwing_stream_uri_owners_isolated_bundle") { return; }
-    let runs = compile_and_run_with_heap_debug_per_argv(r#"<?php
+    let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(r#"<?php
 class IsolatedThrowingXmlInput {
     public mixed $context = null;
     public function url_stat(string $path, int $flags): array { return ['mode' => 0100644]; }
@@ -262,7 +265,7 @@ stream_wrapper_unregister('isolatedxml');
             failures.push(format!("mode={mode} success={} stdout={:?} expected={expected:?}\n{}", out.success, out.stdout, out.stderr));
         }
     }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert!(failures.is_empty(), "{}\nThrowing stream assembly:\n{}", failures.join("\n"), stream_owner_assembly(&assembly));
 }
 
 /// A read exception releases the wrapper owner without running stream_close on the pending throw.
