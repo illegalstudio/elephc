@@ -359,7 +359,7 @@ impl Checker {
                         }
                         if is_empty {
                             let probe = null_probe::begin_null_probe_root(self, arg, env);
-                            let effects = self.infer_type_with_assignment_effects(arg, env);
+                            let effects = self.infer_null_probe_operand_with_effects(arg, env);
                             null_probe::end_null_probe_root(probe, env);
                             effects?;
                             continue;

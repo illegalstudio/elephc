@@ -159,3 +159,23 @@ checkTransientReuse();
     assert_eq!(out.stdout, ("70000:a|ZZZ;".repeat(6) + "40\n").repeat(2), "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Masked trim views must be persisted before their source-evaluation pins retire.
+#[test]
+fn test_masked_trim_argument_view_owners_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function maskedTrimOwner(string $text): void {
+    for ($i = 0; $i < 4; $i++) {
+        $left = ltrim($text, 'x');
+        $right = rtrim($text, 'x');
+        $both = trim($text, 'x');
+        $chopped = chop($text, 'x');
+        echo strlen($left), ':', strlen($right), ':', strlen($both), ':', strlen($chopped), '|';
+    }
+}
+maskedTrimOwner(str_repeat('x', 32) . 'v' . str_repeat('x', 32));
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "33:33:1:33|".repeat(4));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

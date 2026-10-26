@@ -404,7 +404,7 @@ pub(super) fn emit_builtin_call_value(
                 value: lowered.value,
                 ir_type: ctx.builder.value_type(lowered.value),
             };
-            // `substr()` can return an interior view into its source string. When source-order
+            // Substring and trim calls can return interior views into their source string. When source-order
             // evaluation transferred a pinned temporary into the final call operand, letting
             // that pin flow through the result would either leak its base allocation forever
             // or free an interior pointer. Persist the view before retiring the base owner so
@@ -412,9 +412,12 @@ pub(super) fn emit_builtin_call_value(
             let stabilizes_evaluation_pin = matches!(
                 def.spec.semantics.lowering,
                 crate::builtins::semantics::BuiltinLowering::Runtime(
-                    crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::Substr)
+                    crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::Substr
+                        | crate::ir::RuntimeFnId::Trim | crate::ir::RuntimeFnId::Ltrim
+                        | crate::ir::RuntimeFnId::Rtrim)
                         | crate::ir::RuntimeCallTarget::ProfiledFunction {
-                            target: crate::ir::RuntimeFnId::Substr,
+                            target: crate::ir::RuntimeFnId::Substr | crate::ir::RuntimeFnId::Trim
+                                | crate::ir::RuntimeFnId::Ltrim | crate::ir::RuntimeFnId::Rtrim,
                             ..
                         },
                 ),

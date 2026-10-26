@@ -133,6 +133,15 @@ fn dispatch(
     if !may_be_native(ctx, &ty) {
         return lower_regular(ctx, receiver, key, dimension, construct, arg, expr);
     }
+    if native_dimension_method_for_type(ctx, &ty,
+        elephc_builtin_contract::ObjectDimension::Get).is_some()
+    {
+        let method = if dimension { "__elephc_dimension_empty" } else { "__elephc_property_empty" };
+        let key_expr = Expr::new(ExprKind::Variable(key.name.clone()), arg.span);
+        let nullable = value_is_nullable(ctx, object.value);
+        let object = borrow_native_xml_property_receiver(ctx, object, arg.span);
+        return call_known_native(ctx, object, method, key_expr, nullable, expr);
+    }
     let class = ctx.intern_class_name("SimpleXMLElement");
     let condition = ctx.emit_value(Op::InstanceOf, vec![object.value], Some(Immediate::Data(class)),
         PhpType::Bool, Op::InstanceOf.default_effects(), Some(arg.span));
@@ -166,6 +175,40 @@ fn dispatch(
     ctx.restore_initialized_slots(merge_initialized_slots_for_expr(&initial,
         native_slots, true, regular_slots, true));
     take_owned_temp(ctx, &temp, arg.span)
+}
+
+/// Uses the native decision alone, with a boolean empty result on a real nullable receiver.
+fn call_known_native(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, method: &str, key: Expr,
+    nullable: bool, expr: &Expr,
+) -> LoweredValue {
+    if !nullable {
+        return lower_method_call_with_receiver(ctx, object, method, &[key], Op::MethodCall, expr);
+    }
+    let absent = ctx.builder.create_named_block("xml.empty.native.null", vec![]);
+    let present = ctx.builder.create_named_block("xml.empty.native.present", vec![]);
+    let merge = ctx.builder.create_named_block("xml.empty.native.merge", vec![]);
+    let temp = ctx.declare_hidden_temp(PhpType::Bool);
+    let missing = ctx.emit_value(Op::IsNull, vec![object.value], None, PhpType::Bool,
+        Op::IsNull.default_effects(), Some(expr.span));
+    let initial = ctx.initialized_slots_snapshot();
+    ctx.builder.terminate(Terminator::CondBr { cond: missing.value,
+        then_target: absent, then_args: vec![], else_target: present, else_args: vec![] });
+    ctx.builder.position_at_end(absent);
+    let value = emit_bool_literal(ctx, true, Some(expr.span));
+    store_value_into_temp(ctx, &temp, PhpType::Bool, value, expr.span);
+    branch_to(ctx, merge);
+    let absent_slots = ctx.initialized_slots_snapshot();
+    ctx.builder.position_at_end(present);
+    ctx.restore_initialized_slots(initial.clone());
+    let value = lower_method_call_with_receiver(ctx, object, method, &[key], Op::MethodCall, expr);
+    store_value_into_temp(ctx, &temp, PhpType::Bool, value, expr.span);
+    branch_to(ctx, merge);
+    let present_slots = ctx.initialized_slots_snapshot();
+    ctx.builder.position_at_end(merge);
+    ctx.restore_initialized_slots(merge_initialized_slots_for_expr(&initial,
+        absent_slots, true, present_slots, true));
+    take_owned_temp(ctx, &temp, expr.span)
 }
 
 /// Admits dynamic values, bare objects, and interfaces as well as concrete XML subclasses.

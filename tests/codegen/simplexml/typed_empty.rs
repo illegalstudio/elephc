@@ -45,3 +45,22 @@ echo (int)emptyXmlObject($ordinary);
     assert_eq!(out.stdout, "111111|0");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Native unions use internal adapters for isset, empty and unset, including real null receivers.
+#[test]
+fn test_simplexml_native_union_dimension_probes() {
+    if skip_without_xml_native("test_simplexml_native_union_dimension_probes") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function nativeUnionProbe(SimpleXMLElement|SimpleXMLIterator|null $node): void {
+    echo (int)isset($node['id']), ':', (int)empty($node['id']), '|';
+    unset($node['id']);
+    echo (int)isset($node['id']), '|';
+}
+nativeUnionProbe(null);
+nativeUnionProbe(new SimpleXMLElement('<r id="x"/>'));
+nativeUnionProbe(new SimpleXMLIterator('<r id="0"/>'));
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "0:1|0|1:0|0|1:1|0|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

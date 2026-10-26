@@ -23,13 +23,23 @@ pub(super) fn lower_native_isset_offset_probe(
     lower_native_isset_offset_probe_from_value(ctx, array_value, index, expr)
 }
 
-/// Lowers nullable native array/hash `isset` without evaluating the offset on null receivers.
+/// Lowers nullable native array/hash `isset` while evaluating the offset even on null receivers.
 pub(super) fn lower_nullable_native_isset_offset_probe(
     ctx: &mut LoweringContext<'_, '_>,
     array_value: LoweredValue,
     index: &Expr,
     expr: &Expr,
 ) -> LoweredValue {
+    let (array_value, receiver_owner) = root_owned_call_operand(ctx, array_value, expr.span);
+    let receiver_type = ctx.builder.value_php_type(array_value.value);
+    let borrowed = ctx.emit_value(Op::Borrow, vec![array_value.value], None, receiver_type,
+        Op::Borrow.default_effects(), Some(expr.span));
+    ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+    let (index, index_temp) = evaluate_once(ctx, index, expr);
+    let key_owner = index_temp.as_ref().filter(|name|
+        Ownership::php_type_needs_lifetime_tracking(&ctx.local_type(name)))
+        .map(|name| ctx.local_slots[name]);
+    if let Some(slot) = key_owner { register_owned_call_operand(ctx, slot, expr.span); }
     let is_null = ctx.emit_value(
         Op::IsNull,
         vec![array_value.value],
@@ -62,11 +72,14 @@ pub(super) fn lower_nullable_native_isset_offset_probe(
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(probe_block);
-    let checked = lower_native_isset_offset_probe_from_value(ctx, array_value, index, expr);
+    let checked = lower_native_isset_offset_probe_from_value(ctx, borrowed, &index, expr);
     store_value_into_temp(ctx, &temp_name, PhpType::Bool, checked, expr.span);
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);
+    if let Some(slot) = key_owner { unregister_owned_call_operand(ctx, slot, expr.span); }
+    release_evaluated_once(ctx, index_temp, expr.span);
+    if let Some(slot) = receiver_owner { retire_owned_call_operand(ctx, slot, expr.span); }
     take_owned_temp(ctx, &temp_name, expr.span)
 }
 

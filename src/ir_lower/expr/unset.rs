@@ -153,9 +153,8 @@ pub(super) fn lower_unset_array_access(
     }
     let object = lower_expr(ctx, array);
     let ty = ctx.builder.value_php_type(object.value);
-    let method = singular_object_class(&ty).and_then(|(class, _)|
-        crate::types::builtin_classes::native_dimension_method(class,
-            elephc_builtin_contract::ObjectDimension::Unset, ctx.classes)).unwrap_or("offsetUnset");
+    let method = native_dimension_method_for_type(ctx, &ty,
+        elephc_builtin_contract::ObjectDimension::Unset).unwrap_or("offsetUnset");
     let op = if value_is_nullable(ctx, object.value) {
         Op::NullsafeMethodCall
     } else { Op::MethodCall };
