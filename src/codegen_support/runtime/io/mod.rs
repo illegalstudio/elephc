@@ -92,6 +92,7 @@ mod https;
 mod notification;
 mod stream_wrapper_register;
 mod stream_wrapper_unregister;
+mod stream_registry_cleanup;
 mod http_build_request;
 mod stream_context_get_ssl_peer_name;
 mod apply_socket_opts;
@@ -255,6 +256,7 @@ pub(crate) use user_filter::{
     emit_user_filter_release_fd,
 };
 pub(crate) use user_filter_brigade::emit_user_filter_brigade_invoke;
+pub(crate) use stream_registry_cleanup::emit_stream_registry_cleanup;
 pub(crate) use user_wrapper::emit_stream_close_mode;
 pub(crate) use user_wrapper::{
     emit_box_wrapper_stat_result, emit_user_wrapper_fclose, emit_user_wrapper_feof,

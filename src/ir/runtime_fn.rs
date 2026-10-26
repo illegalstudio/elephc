@@ -2547,6 +2547,10 @@ impl RuntimeFnId {
                 | RuntimeFnId::Explode
                 | RuntimeFnId::Fgetcsv
                 | RuntimeFnId::FileGetContents
+                // Stream results own new cells and cannot retain the filename, mode,
+                // or input resource temporary through a returned argument alias.
+                | RuntimeFnId::Fopen
+                | RuntimeFnId::StreamGetContents
                 // These mixed-return helpers always allocate a new result cell. Date
                 // decomposition boxes a newly allocated hash, `strtotime` boxes its scalar
                 // answer, `hrtime` boxes either a scalar or a new hash, and grapheme reversal

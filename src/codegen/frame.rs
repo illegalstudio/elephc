@@ -269,6 +269,7 @@ fn module_uses_resource_inventory_cleanup(module: &Module) -> bool {
                 _ => return false,
             };
             id.produces_resource_inventory_entry()
+                || matches!(id, crate::ir::RuntimeFnId::StreamFilterRegister | crate::ir::RuntimeFnId::StreamWrapperRegister)
         })
 }
 

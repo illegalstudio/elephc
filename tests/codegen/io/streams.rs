@@ -8331,3 +8331,22 @@ echo get_resource_type(STDIN), ':', get_resource_type(STDOUT), ':', get_resource
     assert_eq!(out.stdout, "1|stream:stream:stream");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+/// Stream creation and reads retire fresh filename and handle argument copies independently.
+#[test]
+fn test_stream_fresh_arguments_do_not_alias_results() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$path = tempnam(sys_get_temp_dir(), 'stream-owner-');
+try {
+    for ($i = 0; $i < 4; $i++) {
+        $stream = fopen(substr('x' . $path, 1), 'w+');
+        fwrite($stream, 'value');
+        rewind($stream);
+        echo stream_get_contents($stream), '|';
+        fclose($stream);
+    }
+} finally { unlink($path); }
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "value|".repeat(4));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

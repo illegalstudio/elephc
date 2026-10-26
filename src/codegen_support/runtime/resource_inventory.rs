@@ -142,6 +142,7 @@ fn emit_reset_aarch64(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction("ldr x9, [sp, #0]");                                    // continue from the saved next pointer
     emitter.instruction("b __rt_resource_inventory_reset_loop");                // process the next incarnation
     emitter.label("__rt_resource_inventory_reset_done");
+    abi::emit_call_label(emitter, "__rt_stream_registry_cleanup");
     abi::emit_store_zero_to_symbol(emitter, "_resource_inventory_head", 0);
     abi::emit_store_zero_to_symbol(emitter, "_resource_inventory_tail", 0);
     abi::emit_load_int_immediate(emitter, "x9", 5);
@@ -455,6 +456,7 @@ fn emit_reset_x86_64(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // continue from the saved next pointer
     emitter.instruction("jmp __rt_resource_inventory_reset_loop_x86");          // process the next incarnation
     emitter.label("__rt_resource_inventory_reset_done_x86");
+    abi::emit_call_label(emitter, "__rt_stream_registry_cleanup");
     abi::emit_store_zero_to_symbol(emitter, "_resource_inventory_head", 0);
     abi::emit_store_zero_to_symbol(emitter, "_resource_inventory_tail", 0);
     abi::emit_load_int_immediate(emitter, "r10", 5);
