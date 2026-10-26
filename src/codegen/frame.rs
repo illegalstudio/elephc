@@ -698,6 +698,9 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     emit_main_static_local_cleanup(ctx);
     emit_main_global_epilogue_cleanup(ctx);
     emit_main_static_property_cleanup(ctx);
+    // Shutdown must retire unreachable cycles after every PHP root is gone,
+    // while destructors can still use registered streams and instrumentation.
+    abi::emit_call_label(ctx.emitter, "__rt_gc_collect_cycles_explicit");
     if module_uses_resource_inventory_cleanup(ctx.module) {
         abi::emit_call_label(ctx.emitter, "__rt_resource_inventory_reset");
     }

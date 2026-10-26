@@ -382,3 +382,25 @@ echo gc_collect_cycles() > 0 ? "collected" : "suppressed";
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "{}\nGenerated user assembly:\n{}", out.stderr, asm);
 }
+
+/// Shutdown collects native and eval-created cycles even when automatic collection is disabled.
+#[test]
+fn test_shutdown_collects_cycles_after_php_roots_are_released() {
+    let out = compile_and_run_with_heap_debug(r###"<?php
+class ShutdownCycleOwner {
+    public mixed $next = null;
+    public string $name;
+    public function __construct(string $name) { $this->name = $name; $this->next = $this; }
+    public function __destruct() { echo $this->name, '|'; }
+}
+gc_disable();
+function createShutdownCycle(): void { $cycle = new ShutdownCycleOwner('aot'); }
+createShutdownCycle();
+$source = $argc > 0 ? '$cycle = new ShutdownCycleOwner("eval");' : '';
+eval($source);
+echo 'end|';
+"###);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert!(matches!(out.stdout.as_str(), "end|aot|eval|" | "end|eval|aot|"), "{}", out.stdout);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

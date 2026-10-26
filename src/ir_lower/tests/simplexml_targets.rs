@@ -83,6 +83,7 @@ echo $doc->saveXML();
         }), "{target}: missing arithmetic adapter {expected}");
     }
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    assert!(assembly.contains("__rt_gc_collect_cycles_explicit"), "{target}: shutdown retires native document cycles");
     assert!(assembly.contains("elephc_xml_sx_load"), "{target}: document parsing boundary");
     assert!(assembly.contains("elephc_xml_sx_mutate"), "{target}: document mutation boundary");
     assert!(assembly.contains("elephc_xml_sx_diagnostics"), "{target}: native diagnostic transfer boundary");

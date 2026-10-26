@@ -10,11 +10,25 @@
 
 use crate::support::*;
 
+/// Includes only stream helper bodies when a remote heap regression needs producer diagnostics.
+fn stream_owner_assembly(assembly: &str) -> String {
+    let mut selected = String::new();
+    for name in ["__elephc_simplexml_file_handle", "__elephc_simplexml_stream_bytes", "__elephc_simplexml_data_bytes"] {
+        let start = format!("{}:\n", elephc::names::function_symbol(name));
+        let end = format!("{}:", elephc::names::function_epilogue_symbol(name));
+        if let Some((_, body)) = assembly.split_once(&start) {
+            selected.push_str(&start);
+            selected.push_str(body.split_once(&end).map_or(body, |(body, _)| body));
+        }
+    }
+    selected
+}
+
 /// Data and filtered URLs work through both factories and the shared eval prelude.
 #[test]
 fn test_simplexml_stream_data_and_filters_bundle() {
     if skip_without_xml_native("test_simplexml_stream_data_and_filters_bundle") { return; }
-    let out = compile_and_run_with_heap_debug(r###"<?php
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(r###"<?php
 $uri = 'data://text/plain;base64,PHIvPg==';
 echo simplexml_load_file($uri)->getName(), ':', (new SimpleXMLElement($uri, 0, true))->getName(), '|';
 echo (new SimpleXMLElement($uri . "\0ignored", 0, true))->getName(), '|';
@@ -26,14 +40,14 @@ var_dump(simplexml_load_file('php://input', null, LIBXML_NOERROR | LIBXML_NOWARN
 "###);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "r:r|r|one two|r|r:r|bool(false)\n");
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\nStream owner assembly:\n{}", out.stderr, stream_owner_assembly(&assembly));
 }
 
 /// Registered PHP wrappers supply document bytes without any libxml global callback.
 #[test]
 fn test_simplexml_registered_stream_document() {
     if skip_without_xml_native("test_simplexml_registered_stream_document") { return; }
-    let out = compile_and_run_with_heap_debug(r#"<?php
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(r#"<?php
 class XmlDocumentStream {
     public mixed $context = null;
     private int $position = 0;
@@ -55,7 +69,7 @@ stream_wrapper_unregister('xmldocument');
 "#);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "close|r|close|r");
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\nStream owner assembly:\n{}", out.stderr, stream_owner_assembly(&assembly));
 }
 
 /// HTTP URLs use PHP's network reader even though libxml2 has no built-in HTTP client.
