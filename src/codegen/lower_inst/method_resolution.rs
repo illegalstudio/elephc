@@ -323,7 +323,7 @@ pub(super) fn store_compiled_call_result(
     let owned = ctx.next_label("compiled_return_box_owned");
     let done = ctx.next_label("compiled_return_box_done");
     let box_ty = crate::types::mixed_box_php_type(return_ty);
-    crate::codegen_support::value_boxing::emit_box_current_php_return_as_mixed(
+    crate::codegen_support::emit_box_current_php_return_as_mixed(
         ctx.emitter, &box_ty, &owned, &done,
     );
     ctx.store_result_value(result)

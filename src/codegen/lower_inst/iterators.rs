@@ -26,11 +26,11 @@
 
 use crate::codegen::platform::Arch;
 use crate::codegen::{
-    abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
+    abi, emit_box_current_value_as_mixed,
     emit_box_runtime_payload_as_mixed,
 };
 use crate::intrinsics::IntrinsicCall;
-use crate::ir::{Immediate, Instruction, LocalSlotId, Op, Ownership, ValueDef, ValueId};
+use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
 use crate::names::php_symbol_key;
 use crate::types::PhpType;
 
@@ -1814,7 +1814,7 @@ fn box_compiled_iterator_result(ctx: &mut FunctionContext<'_>, return_ty: &PhpTy
     if return_ty.codegen_repr() != PhpType::Mixed {
         let owned = ctx.next_label("iterator_value_owned");
         let done = ctx.next_label("iterator_value_boxed");
-        crate::codegen_support::value_boxing::emit_box_current_php_return_as_mixed(
+        crate::codegen_support::emit_box_current_php_return_as_mixed(
             ctx.emitter, return_ty, &owned, &done,
         );
         return;

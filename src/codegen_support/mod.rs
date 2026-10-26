@@ -71,6 +71,7 @@ pub use runtime_features::{
 };
 pub(crate) use sentinels::NULL_SENTINEL;
 pub(crate) use value_boxing::{
+    emit_box_current_php_return_as_mixed,
     emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
     emit_box_runtime_payload_as_mixed, emit_release_pushed_refcounted_temp_after_array_push,
     container_value_tag, mixed_unbox_payload_reg, runtime_value_tag,
