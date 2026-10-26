@@ -154,7 +154,7 @@ pub(super) fn ident_eq(actual: &str, expected: &str) -> bool {
 }
 
 /// Returns true when PHP forbids a name for class, interface, trait, or enum declarations.
-pub(super) fn is_reserved_class_like_name(name: &str) -> bool {
+pub(crate) fn is_reserved_class_like_name(name: &str) -> bool {
     [
         "__halt_compiler",
         "abstract",

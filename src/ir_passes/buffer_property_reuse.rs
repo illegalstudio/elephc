@@ -31,11 +31,11 @@
 //!   `buffer_resolve` inserted right before that leader and become `buffer_*_resolved`, so a stale
 //!   handle still dies with the use-after-free fatal at the leader, as before.
 //! - Buffer `acquire`/`release` emit no code; a pair left with nothing but releases is dropped.
-//! - Only property reads on the method receiver `$this` are trusted, as candidates and inside a
-//!   region: effect refinement drops the null-receiver warning of any other receiver (a nullable
-//!   one, or a non-nullable parameter a dynamic call passed `null`), and that warning can run a
-//!   user error handler. Modules where a class declares `__get`, or where eval can declare one,
-//!   skip the phase, so no trusted property read dispatches to user code.
+//! - Foreign buffer reads qualify only when a checked access consumes their handle before any
+//!   observable operation or branch. A null receiver can warn and run an error handler, even with
+//!   a non-nullable static type, but that read returns handle zero and the access cannot return.
+//!   Relocated reads keep this first check before header re-evaluation. Other foreign property
+//!   reads still end the region. Modules with `__get` or eval skip the phase entirely.
 //! - Only handles read from a property are rewritten. Local buffer handles in straight-line code
 //!   keep their per-access form.
 
@@ -623,7 +623,8 @@ pub(super) fn keeps_reads_stable(function: &Function, inst: &Instruction) -> boo
     match inst.op {
         Op::Acquire | Op::Release => is_buffer_refcount_no_op(function, inst),
         Op::PropGet if !function.is_packed_field_access(inst) => {
-            is_plain_property_read(inst) && reads_the_method_receiver(function, inst)
+            is_plain_property_read(inst)
+                && (reads_the_method_receiver(function, inst) || is_buffer_property_read(function, inst))
         }
         op if may_run_user_code(op) => false,
         _ => instruction_preserves_buffers(function, inst),
@@ -679,7 +680,7 @@ fn is_plain_property_read(inst: &Instruction) -> bool {
 
 /// Returns whether a property read's receiver is the method's own `$this`, which PHP never lets
 /// be null, reassigned or bound by reference inside the method, so the read cannot warn.
-fn reads_the_method_receiver(function: &Function, inst: &Instruction) -> bool {
+pub(super) fn reads_the_method_receiver(function: &Function, inst: &Instruction) -> bool {
     function.flags.is_method
         && function.params.first().is_some_and(|param| param.name == "this")
         && inst
@@ -692,17 +693,20 @@ fn reads_the_method_receiver(function: &Function, inst: &Instruction) -> bool {
             })
 }
 
-/// Returns whether an instruction is a plain read of a buffer-typed property of `$this`.
+/// Accepts `$this` reads and foreign buffer reads whose null path cannot resume execution.
 pub(super) fn is_buffer_property_read(function: &Function, inst: &Instruction) -> bool {
     inst.op == Op::PropGet
         && inst.operands.len() == 1
         && !function.is_packed_field_access(inst)
         && is_plain_property_read(inst)
-        && reads_the_method_receiver(function, inst)
         && inst
             .result
             .and_then(|result| function.value(result))
             .is_some_and(|value| matches!(value.php_type.codegen_repr(), PhpType::Buffer(_)))
+        && (reads_the_method_receiver(function, inst)
+            // A relocated foreign read retained its checked entry access, possibly in a new block.
+            || inst.origin == Some(PassOrigin::BufferAccess)
+            || super::buffer_property_receivers::traps_on_null(function, inst))
 }
 
 /// Returns the buffer-typed property read a handle comes from, looking through buffer `acquire`s.

@@ -182,3 +182,18 @@ fn test_parse_array_implicit_after_max_key() {
     assert!(matches!(&entries[0], ArrayEntry::Keyed(key, _) if matches!(key.kind, ExprKind::IntLiteral(i64::MAX))));
     assert!(entries[1..].iter().all(|entry| matches!(entry, ArrayEntry::Value(_))));
 }
+
+/// Negative-key appends retain their source position until the PHP profile is known.
+#[test]
+fn test_parse_array_implicit_after_negative_key() {
+    let statements = parse_source("<?php echo [-5 => 'a', 'b', 'c'];");
+    let StmtKind::Echo(expr) = &statements[0].kind else { panic!("expected echo"); };
+    let ExprKind::ArrayLiteralMixed(entries) = &expr.kind else { panic!("expected ordered entries"); };
+    assert_eq!(entries.len(), 3);
+    assert!(matches!(&entries[0], ArrayEntry::Keyed(_, value)
+        if value.kind == ExprKind::StringLiteral("a".to_string())));
+    assert!(matches!(&entries[1], ArrayEntry::Value(value)
+        if value.kind == ExprKind::StringLiteral("b".to_string())));
+    assert!(matches!(&entries[2], ArrayEntry::Value(value)
+        if value.kind == ExprKind::StringLiteral("c".to_string())));
+}

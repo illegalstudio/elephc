@@ -678,8 +678,8 @@ fn parse_array_literal_with_terminator(
     *pos += 1;
     let mut elems = Vec::new();
     let mut assoc_elems = Vec::new();
-    // Non-empty only once a literal is found to mix a spread with an explicit key, which is the
-    // one shape neither `ArrayLiteral` nor `ArrayLiteralAssoc` can hold.
+    // Non-empty when an explicit key must stay ordered with a spread or with a bare entry whose
+    // implicit key depends on the selected PHP profile (negative integer keys before PHP 8.3).
     let mut mixed_elems: Vec<ArrayEntry> = Vec::new();
     let mut is_assoc = false;
     let mut first = true;
@@ -739,8 +739,8 @@ fn parse_array_literal_with_terminator(
                 mixed_elems.push(ArrayEntry::Keyed(expr, value));
             }
         } else if is_assoc {
-            if auto_key_overflowed && mixed_elems.is_empty() {
-                // Retain an actual append when no following key fits in the parser cursor.
+            if (auto_key_overflowed || next_auto_key < 0) && mixed_elems.is_empty() {
+                // Preserve implicit keys for profile-dependent negative cursors and overflow.
                 // Runtime construction raises overflow only if this value is evaluated.
                 migrate_assoc_pairs_to_mixed(&mut assoc_elems, &mut mixed_elems);
             }

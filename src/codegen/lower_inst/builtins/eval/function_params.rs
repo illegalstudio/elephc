@@ -293,7 +293,8 @@ pub(super) fn register_eval_native_function_param_default(
                 .extern_symbol("__elephc_eval_register_native_function_param_default_scalar")
         }
         EvalNativeCallableDefault::String(value) => {
-            let (default_label, default_len) = ctx.data.add_string(value.as_bytes());
+            let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
+            let (default_label, default_len) = ctx.data.add_string(&bytes);
             abi::emit_symbol_address(
                 ctx.emitter,
                 abi::int_arg_reg_name(ctx.emitter.target, 4),

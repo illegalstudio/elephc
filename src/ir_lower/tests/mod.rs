@@ -61,6 +61,7 @@ mod numeric_string_comparisons;
 mod packed_record_addresses;
 mod fixed_layout_field_narrowing;
 mod buffer_lengths;
+mod branch_conditions;
 mod boxed_array_write_owners;
 mod boxed_array_reduce;
 mod boxed_array_aggregates;

@@ -167,10 +167,10 @@ fn buffer_property_loop_header_read_keeps_unconditional_entry() {
     assert!(function.blocks[entry.as_raw() as usize].instructions.contains(&read));
 }
 
-/// Calls, frees, stores, conditional access, foreign receivers and live-out SSA refuse motion.
+/// Calls, frees, stores, conditional access and live-out SSA refuse motion.
 #[test]
 fn buffer_property_loop_unsafe_shapes_remain_in_place() {
-    for shape in [Shape::Call, Shape::Free, Shape::PropertyWrite, Shape::Conditional, Shape::LiveOut, Shape::OtherReceiver] {
+    for shape in [Shape::Call, Shape::Free, Shape::PropertyWrite, Shape::Conditional, Shape::LiveOut] {
         let (function, _, header, read) = fixture(shape);
         let (_, function) = optimize(function);
         let ValueDef::Instruction { block, .. } = function.values[function.instructions[read.as_raw() as usize].result.unwrap().as_raw() as usize].def
@@ -179,6 +179,53 @@ fn buffer_property_loop_unsafe_shapes_remain_in_place() {
         let loops = compute_loops(&function, &dominance);
         assert!(loops.loops().iter().find(|loop_ref| loop_ref.header == header).unwrap().contains(block));
     }
+}
+
+/// Stable foreign receivers retain the first checked access before returning to the header.
+#[test]
+fn buffer_object_loop_foreign_receiver_keeps_entry_access() {
+    for body_parameter in [false, true] {
+        let (mut function, _, header, read) = fixture(Shape::OtherReceiver);
+        if body_parameter {
+            let ValueDef::Instruction { block: body, .. } = function.values[function.instructions[read.as_raw() as usize].result.unwrap().as_raw() as usize].def
+                else { unreachable!("property is in the body"); };
+            let access = function.blocks[body.as_raw() as usize].instructions.iter().copied()
+                .find(|id| function.instructions[id.as_raw() as usize].op == Op::BufferSet).unwrap();
+            let initial = function.instructions[access.as_raw() as usize].operands[1];
+            let param = ValueId::from_raw(function.values.len() as u32);
+            function.values.push(Value {
+                def: ValueDef::BlockParam { block: body, index: 0 },
+                ..function.values[initial.as_raw() as usize].clone()
+            });
+            function.blocks[body.as_raw() as usize].params.push(param);
+            function.instructions[access.as_raw() as usize].operands[1] = param;
+            if let Some(Terminator::CondBr { then_args, .. }) = &mut function.blocks[header.as_raw() as usize].terminator {
+                *then_args = vec![initial];
+            }
+        }
+        let (changed, function) = optimize(function);
+        assert!(changed);
+        let dominance = compute_dominance(&function);
+        let loops = compute_loops(&function, &dominance);
+        let loop_ref = loops.loops().iter().find(|loop_ref| loop_ref.header == header).unwrap();
+        let entry = function.block(loop_ref.preheader.unwrap()).unwrap();
+        assert!(entry.instructions.contains(&read));
+        assert!(entry.instructions.iter().any(|id| function.instructions[id.as_raw() as usize].op == Op::BufferSet));
+        assert_eq!(function.instructions.iter().filter(|inst| inst.op == Op::BufferSetResolved).count(), 1);
+    }
+}
+
+/// Reference-cell receivers cannot be reloaded as plain object words in a preheader.
+#[test]
+fn buffer_object_loop_reference_receiver_remains_in_place() {
+    let (mut function, _, header, read) = fixture(Shape::OtherReceiver);
+    function.locals[2].kind = LocalKind::RefCell;
+    let (_, function) = optimize(function);
+    let ValueDef::Instruction { block, .. } = function.values[function.instructions[read.as_raw() as usize].result.unwrap().as_raw() as usize].def
+        else { unreachable!("property remains an instruction"); };
+    let dominance = compute_dominance(&function);
+    let loops = compute_loops(&function, &dominance);
+    assert!(loops.loops().iter().find(|loop_ref| loop_ref.header == header).unwrap().contains(block));
 }
 
 /// Entry and zero-trip exit arguments substitute the initial value for the header parameter.

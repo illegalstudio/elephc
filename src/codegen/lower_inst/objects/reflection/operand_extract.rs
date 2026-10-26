@@ -112,9 +112,9 @@ pub(super) fn const_parameter_selector_operand(
                 .data
                 .strings
                 .get(data.as_raw() as usize)
-                .cloned()
-                .map(ReflectionParameterSelector::Name)
                 .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))
+                .and_then(|value| reflection_literal_operand_string(value))
+                .map(ReflectionParameterSelector::Name)
         }
         _ => Err(CodegenIrError::unsupported(
             "ReflectionParameter constructor with non-literal parameter selector",
@@ -155,8 +155,8 @@ pub(super) fn const_data_operand(
             .data
             .strings
             .get(data.as_raw() as usize)
-            .cloned()
-            .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw())),
+            .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))
+            .and_then(|value| reflection_literal_operand_string(value)),
         Op::ConstClassName if allow_class_name => ctx
             .module
             .data
@@ -171,3 +171,9 @@ pub(super) fn const_data_operand(
     }
 }
 
+
+/// Converts a PHP literal selector to the UTF-8 spelling used by symbol metadata.
+fn reflection_literal_operand_string(value: &str) -> Result<String> {
+    String::from_utf8(elephc_builtin_contract::string_literal::literal_bytes(value))
+        .map_err(|_| CodegenIrError::unsupported("Reflection name argument is not valid UTF-8"))
+}

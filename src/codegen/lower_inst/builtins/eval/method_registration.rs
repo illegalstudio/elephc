@@ -520,7 +520,8 @@ pub(super) fn register_eval_native_method_param_default(
             }
         }
         EvalNativeCallableDefault::String(value) => {
-            let (default_label, default_len) = ctx.data.add_string(value.as_bytes());
+            let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
+            let (default_label, default_len) = ctx.data.add_string(&bytes);
             abi::emit_symbol_address(
                 ctx.emitter,
                 abi::int_arg_reg_name(ctx.emitter.target, 4),

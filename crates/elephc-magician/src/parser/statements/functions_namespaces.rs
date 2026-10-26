@@ -157,7 +157,7 @@ impl Parser {
             return Err(EvalParseError::UnexpectedToken);
         }
         let _ = self.consume(TokenKind::Backslash);
-        let TokenKind::Ident(first) = self.current() else {
+        let (TokenKind::Ident(first) | TokenKind::ReservedNameHead(first)) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
         };
         let mut name = first.clone();
@@ -166,7 +166,7 @@ impl Parser {
             if self.consume(TokenKind::LBrace) {
                 return Ok((name, true));
             }
-            let TokenKind::Ident(part) = self.current() else {
+            let (TokenKind::Ident(part) | TokenKind::ReservedNameHead(part)) = self.current() else {
                 return Err(EvalParseError::UnexpectedToken);
             };
             name.push('\\');

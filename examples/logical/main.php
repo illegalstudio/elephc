@@ -77,3 +77,12 @@ $ascending = $bonus > 5;
 $ordered = [3, 1, 2];
 $ascending ? sort($ordered) : rsort($ordered);
 echo "Guarded bonus: " . $bonus . ", ordered: " . implode(",", $ordered) . "\n";
+
+// Compound branch conditions skip later checks as soon as the answer is known.
+function can_dispatch(int $pending, bool $paused, bool $connected): bool {
+    if ($pending <= 0 || $paused || !$connected) {
+        return false;
+    }
+    return true;
+}
+echo "Can dispatch: " . (can_dispatch(count($scores), false, true) ? "yes" : "no") . "\n";

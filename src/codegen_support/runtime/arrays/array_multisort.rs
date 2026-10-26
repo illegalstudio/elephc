@@ -155,6 +155,8 @@ fn emit_array_multisort_boxed_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x9, [sp, #16]");                                   // preserve the common length across comparator calls
     emitter.instruction("cmp x9, #2");                                          // zero and one-row inputs are already ordered
     emitter.instruction("b.lt __rt_array_multisort_boxed_done");                // return success without reading any slot
+    emitter.instruction("sub x9, x9, #1");                                      // at most length - 1 passes order any consistent comparison
+    emitter.instruction("str x9, [sp, #56]");                                   // keep the remaining pass budget across comparator calls
 
     emitter.label("__rt_array_multisort_boxed_outer");
     emitter.instruction("str xzr, [sp, #24]");                                  // clear the swapped flag for this bubble pass
@@ -214,7 +216,11 @@ fn emit_array_multisort_boxed_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_array_multisort_boxed_inner");                  // continue the current bubble pass
     emitter.label("__rt_array_multisort_boxed_pass_end");
     emitter.instruction("ldr x9, [sp, #24]");                                   // inspect whether this pass moved any row
-    emitter.instruction("cbnz x9, __rt_array_multisort_boxed_outer");           // repeat until every tuple is ordered
+    emitter.instruction("cbz x9, __rt_array_multisort_boxed_done");             // no row moved in this pass: every tuple is ordered
+    emitter.instruction("ldr x9, [sp, #56]");                                   // reload the remaining pass budget
+    emitter.instruction("subs x9, x9, #1");                                     // spend one pass
+    emitter.instruction("str x9, [sp, #56]");                                   // keep the remaining pass budget
+    emitter.instruction("b.gt __rt_array_multisort_boxed_outer");               // repeat while the budget lasts; a NAN key stops here (#1353)
     emitter.label("__rt_array_multisort_boxed_done");
     emitter.instruction("mov x0, #1");                                          // report successful sorting, including empty arrays
     emitter.instruction("b __rt_array_multisort_boxed_return");                 // share the balanced frame epilogue
@@ -242,6 +248,8 @@ fn emit_array_multisort_boxed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // preserve the common length across comparator calls
     emitter.instruction("cmp r10, 2");                                          // zero and one-row inputs are already ordered
     emitter.instruction("jl __rt_array_multisort_boxed_done");                  // return success without reading any slot
+    emitter.instruction("lea r11, [r10 - 1]");                                  // at most length - 1 passes order any consistent comparison
+    emitter.instruction("mov QWORD PTR [rbp - 64], r11");                       // keep the remaining pass budget across comparator calls
 
     emitter.label("__rt_array_multisort_boxed_outer");
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // clear the swapped flag for this bubble pass
@@ -292,7 +300,9 @@ fn emit_array_multisort_boxed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_array_multisort_boxed_inner");                // continue the current bubble pass
     emitter.label("__rt_array_multisort_boxed_pass_end");
     emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // inspect whether this pass moved any row
-    emitter.instruction("jne __rt_array_multisort_boxed_outer");                // repeat until every tuple is ordered
+    emitter.instruction("je __rt_array_multisort_boxed_done");                  // no row moved in this pass: every tuple is ordered
+    emitter.instruction("sub QWORD PTR [rbp - 64], 1");                         // spend one pass
+    emitter.instruction("jg __rt_array_multisort_boxed_outer");                 // repeat while the budget lasts; a NAN key stops here (#1353)
     emitter.label("__rt_array_multisort_boxed_done");
     emitter.instruction("mov eax, 1");                                          // report successful sorting, including empty arrays
     emitter.instruction("jmp __rt_array_multisort_boxed_return");               // share the balanced frame epilogue

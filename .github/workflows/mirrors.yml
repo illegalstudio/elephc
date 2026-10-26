@@ -1,0 +1,98 @@
+name: Mirrors
+
+# Publishes directories of this repository to their read-only mirrors in the getelephc
+# organization (see "Read-only mirrors" in CONTRIBUTING.md). Pull requests only test the
+# publisher and dry-run every split; a push to the canonical `main` publishes.
+#
+# Publishing authenticates as the `elephc-bot` GitHub App, owned by getelephc, through the
+# organization secrets ELEPHC_BOT_APP_ID and ELEPHC_BOT_PRIVATE_KEY. Only the publish job,
+# which runs on pushes to the canonical `main`, uses them, and each token it mints is
+# limited to the one mirror it writes.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - showcases/doom/**
+      - .github/scripts/publish_subtree_mirror.sh
+      - .github/scripts/test_publish_subtree_mirror.sh
+      - .github/workflows/mirrors.yml
+  pull_request:
+    paths:
+      - showcases/doom/**
+      - .github/scripts/publish_subtree_mirror.sh
+      - .github/scripts/test_publish_subtree_mirror.sh
+      - .github/workflows/mirrors.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never cancel a publish half-way, and keep two pushes from racing on the same mirror.
+concurrency:
+  group: mirrors-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Test the mirror publisher
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The split walks the whole history of each directory.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Test the publisher
+        run: bash .github/scripts/test_publish_subtree_mirror.sh
+
+      - name: Dry-run the doom split
+        run: bash .github/scripts/publish_subtree_mirror.sh --prefix showcases/doom --repository getelephc/doom
+
+  publish:
+    name: Publish ${{ matrix.repository }}
+    needs: test
+    if: github.repository == 'illegalstudio/elephc' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # `history` is chosen once per mirror: preserve can later become flatten, never
+          # the reverse (see the header of publish_subtree_mirror.sh).
+          - prefix: showcases/doom
+            repository: getelephc/doom
+            name: doom
+            history: preserve
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Mint an elephc-bot token for the mirror
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ secrets.ELEPHC_BOT_APP_ID }}
+          private-key: ${{ secrets.ELEPHC_BOT_PRIVATE_KEY }}
+          owner: getelephc
+          repositories: ${{ matrix.name }}
+          permission-contents: write
+          # The mirrored directory carries its own .github/workflows.
+          permission-workflows: write
+
+      - name: Publish ${{ matrix.prefix }}
+        env:
+          MIRROR_TOKEN: ${{ steps.app-token.outputs.token }}
+          MIRROR_BOT_NAME: elephc-bot[bot]
+          MIRROR_BOT_EMAIL: 347869648+elephc-bot[bot]@users.noreply.github.com
+          PREFIX: ${{ matrix.prefix }}
+          REPOSITORY: ${{ matrix.repository }}
+          HISTORY: ${{ matrix.history }}
+        run: >-
+          bash .github/scripts/publish_subtree_mirror.sh --push
+          --prefix "$PREFIX" --repository "$REPOSITORY" --history "$HISTORY"

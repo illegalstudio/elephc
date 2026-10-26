@@ -141,14 +141,14 @@ pub(super) unsafe fn register_native_property_default_string_inner(
     default_ptr: *const u8,
     default_len: u64,
 ) -> Result<i32, ()> {
-    let Ok(default) = abi_name_to_string(default_ptr, default_len) else {
+    let Ok(default) = crate::ffi::util::abi_data_bytes(default_ptr, default_len) else {
         return Err(());
     };
     register_native_property_default_inner(
         ctx,
         property_key_ptr,
         property_key_len,
-        NativeCallableDefault::String(default),
+        NativeCallableDefault::from_php_bytes(default),
     )
 }
 

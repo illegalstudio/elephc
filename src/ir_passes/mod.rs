@@ -19,6 +19,7 @@ mod branch_simplify;
 mod buffer_access;
 mod buffer_property_reuse;
 mod buffer_property_loops;
+mod buffer_property_receivers;
 mod by_ref_alias;
 mod checked_int_sink;
 mod checked_numeric_chain;

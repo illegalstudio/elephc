@@ -290,7 +290,7 @@ impl Parser {
         position: EvalTypePosition,
     ) -> Result<Option<EvalParameterTypeVariant>, EvalParseError> {
         match self.current() {
-            TokenKind::Ident(_) | TokenKind::Backslash => {
+            TokenKind::Ident(_) | TokenKind::ReservedNameHead(_) | TokenKind::Backslash => {
                 let type_index = self.pos;
                 let name = self.parse_qualified_name()?;
                 if !name.absolute { self.mark_type_parameter_use(type_index, &name.name); }

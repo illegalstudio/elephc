@@ -1,0 +1,52 @@
+name: CI
+
+# Runs in the getelephc/doom mirror, where this directory is the repository root. In the
+# elephc repository this file is inert (GitHub reads workflows only from the root
+# .github), and elephc's own CI runs the same suite with the compiler it builds.
+#
+# The suite runs against the elephc nightly: this directory follows elephc's `main`, so it
+# may use compiler features that no tagged release has yet.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install the runtime's stream libraries
+        # The engine reads its WAD with file_get_contents() on a run-time path, which
+        # links elephc's stream layer (-lz -lbz2).
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libbz2-dev zlib1g-dev
+
+      - name: Install the elephc nightly
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARBALL: elephc-nightly-x86_64-unknown-linux-gnu.tar.gz
+        run: |
+          mkdir -p "$RUNNER_TEMP/elephc"
+          cd "$RUNNER_TEMP/elephc"
+          gh release download nightly --repo illegalstudio/elephc --pattern "$TARBALL" --pattern "$TARBALL.sha256"
+          sha256sum -c "$TARBALL.sha256"
+          tar xzf "$TARBALL"
+          echo "$RUNNER_TEMP/elephc" >> "$GITHUB_PATH"
+
+      - name: Show the compiler version
+        run: elephc --version
+
+      - name: Test
+        # Map changes, specials, pickups and rendering against a small WAD the tests write
+        # themselves: no SDL, display or DOOM1.WAD needed.
+        run: elephc test tests

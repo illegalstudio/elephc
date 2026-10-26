@@ -442,7 +442,7 @@ fn rewrite_expr(
             };
             let StaticReceiver::Named(name) = resolved
             else { unreachable!("constant receiver is bound to a class name") };
-            ExprKind::StringLiteral(name.as_str().trim_start_matches('\\').to_string())
+            ExprKind::StringLiteral(crate::names::class_name_literal(name.as_str()))
         }
         ExprKind::ObjectClassName { object } => ExprKind::ObjectClassName {
             object: Box::new(rewrite_expr(object, class_name, parent_name)?),

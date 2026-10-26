@@ -101,9 +101,13 @@ fn native_callable_array_default_element(
                 bytes, offset,
             )?))
         }
-        NATIVE_ARRAY_DEFAULT_KEY_STRING => Some(NativeCallableArrayDefaultKey::String(
-            native_attribute_take_string(bytes, offset)?,
-        )),
+        NATIVE_ARRAY_DEFAULT_KEY_STRING => {
+            let value = native_callable_take_string_bytes(bytes, offset)?;
+            Some(match String::from_utf8(value) {
+                Ok(value) => NativeCallableArrayDefaultKey::String(value),
+                Err(error) => NativeCallableArrayDefaultKey::Bytes(error.into_bytes()),
+            })
+        }
         _ => return None,
     };
     let value = native_callable_object_default_arg_value(bytes, offset)?;
@@ -147,7 +151,8 @@ fn native_callable_object_default_arg_value_for_tag(
             native_callable_scalar_default(kind, payload)
         }
         NATIVE_OBJECT_DEFAULT_ARG_STRING => {
-            native_attribute_take_string(bytes, offset).map(NativeCallableDefault::String)
+            let value = native_callable_take_string_bytes(bytes, offset)?;
+            Some(NativeCallableDefault::from_php_bytes(value))
         }
         NATIVE_OBJECT_DEFAULT_ARG_OBJECT => native_callable_object_default_from_bytes(bytes, offset),
         NATIVE_OBJECT_DEFAULT_ARG_ARRAY => native_callable_array_default_from_bytes(bytes, offset),
@@ -269,4 +274,10 @@ pub(super) fn split_three_part_property_key(
         && !declaring_class_like_name.is_empty()
         && !property_name.is_empty())
     .then_some((class_like_name, declaring_class_like_name, property_name))
+}
+
+/// Reads length-prefixed PHP bytes without applying the UTF-8 rule for symbol names.
+fn native_callable_take_string_bytes(bytes: &[u8], offset: &mut usize) -> Option<Vec<u8>> {
+    let len = usize::try_from(native_attribute_take_u32(bytes, offset)?).ok()?;
+    Some(native_attribute_take_bytes(bytes, offset, len)?.to_vec())
 }

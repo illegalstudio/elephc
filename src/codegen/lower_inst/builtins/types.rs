@@ -1634,6 +1634,9 @@ fn optional_const_string_operand(
     Ok(Some(values
         .get(data.as_raw() as usize)
         .cloned()
+        .map(|value| if inst_ref.op == Op::ConstStr {
+            crate::names::literal_symbol_name(&value).unwrap_or(value)
+        } else { value })
         .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))?))
 }
 

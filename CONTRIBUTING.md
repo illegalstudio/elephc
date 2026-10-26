@@ -239,6 +239,31 @@ The `actions/*` references stay on version tags. They are GitHub-owned — same
 origin as the runner and the workflow token — and their tags are immutable by
 convention, so the threat model is much weaker.
 
+### Read-only mirrors
+
+Some directories are also published as their own repositories in the
+[getelephc](https://github.com/getelephc) organization:
+
+| Directory | Mirror | History |
+|---|---|---|
+| `showcases/doom` | [getelephc/doom](https://github.com/getelephc/doom) | `preserve` |
+
+Develop them here. After a push to `main` that touches one of them,
+`.github/workflows/mirrors.yml` publishes the directory with
+`.github/scripts/publish_subtree_mirror.sh`, authenticated as the `elephc-bot`
+GitHub App. A mirror takes no direct commits: the publish stops instead of
+overwriting one, and the mirror closes pull requests with a pointer here.
+
+A mirrored directory must work as a repository root, so its README, license and
+CI belong inside it. Its `.github/workflows` are inert here and run in the mirror.
+
+To add a mirror, create the empty repository in getelephc, then add the directory
+to the workflow's `paths`, its dry run to the `test` job and an entry to the
+`publish` matrix. Choose its history once: `preserve` publishes the directory's
+own history with its authors, `flatten` publishes one commit by the bot per sync.
+A `preserve` mirror can later switch to `flatten`; the reverse would rewrite the
+mirror's history, so the publisher refuses it.
+
 ## Coding Style
 
 Try to follow the style already used throughout the codebase.

@@ -265,3 +265,14 @@ foreach ($spread_keys as $key => $value) {
     echo $key . "=" . $value . " ";
 }
 echo "\n";
+
+// sort() and rsort() order float elements as numbers, not as the bit patterns behind
+// them -- which is what puts the negatives in the right place.
+$temps = [3.5, -7.75, 0.0, 1.25, -0.5];
+sort($temps);
+echo "\nColdest first: ";
+foreach ($temps as $t) { echo $t, " "; }
+rsort($temps);
+echo "\nWarmest first: ";
+foreach ($temps as $t) { echo $t, " "; }
+echo "\n";

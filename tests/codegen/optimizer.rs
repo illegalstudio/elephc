@@ -26,6 +26,8 @@ mod strip_tags_effects;
 
 #[path = "optimizer/branch_simplification.rs"]
 mod branch_simplification;
+#[path = "optimizer/branch_conditions.rs"]
+mod branch_conditions;
 #[path = "optimizer/call_result_alias.rs"]
 mod call_result_alias;
 #[path = "optimizer/numeric_closure_calls.rs"]

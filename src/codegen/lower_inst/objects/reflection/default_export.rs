@@ -13,6 +13,7 @@
 //! - PHP folds what it can at compile time and exports the rest as written, and the dump shows
 //!   the difference: folded parameter arrays compact list keys, while a folded array inside
 //!   an AST export prints every key. Null and non-integral float keys keep the written AST.
+//! - Folded associative keys retain the parser/folder's profile-specific implicit numbering.
 //! - Anything outside the supported subset answers `None`, and the dump then falls back to the
 //!   evaluated value it printed before.
 //! - Exported strings retain the compiler's private byte markers until dump property emission.
@@ -239,10 +240,8 @@ impl DefaultExporter<'_> {
         let written: Vec<(Option<&Expr>, &Expr)> = match &expr.kind {
             ExprKind::ArrayLiteral(items) => items.iter().map(|item| (None, item)).collect(),
             ExprKind::ArrayLiteralAssoc(pairs) => {
-                pairs.iter().map(|(key, value)| {
-                    let implicit = key.span == value.span && matches!(key.kind, ExprKind::IntLiteral(_));
-                    ((!implicit).then_some(key), value)
-                }).collect()
+                // Parser and literal folding already assigned keys for the selected PHP profile.
+                pairs.iter().map(|(key, value)| (Some(key), value)).collect()
             }
             _ => return None,
         };

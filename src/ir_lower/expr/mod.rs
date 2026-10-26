@@ -45,6 +45,7 @@ pub(crate) mod object_operators;
 mod string_concat;
 mod comparisons;
 mod unary_logic;
+mod branch_conditions;
 mod lazy_branches;
 mod pipe;
 mod assignments;
@@ -204,6 +205,7 @@ pub(crate) use callable_resolution::{
     is_bound_closure_assignment_shape, lower_bound_closure_for_assignment,
 };
 pub(crate) use pending_owners::lower_with_pending_owners;
+pub(crate) use branch_conditions::lower_condition;
 pub(crate) use call_operand_owners::{
     pin_in_flight_owners, register_owned_call_operand, retire_owned_call_operand,
     root_owned_call_operand, unpin_in_flight_owners, unregister_owned_call_operand,

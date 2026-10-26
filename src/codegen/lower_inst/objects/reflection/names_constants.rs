@@ -278,7 +278,7 @@ pub(super) fn reflection_constant_value(
         ExprKind::ClassConstant { receiver } => {
             let class_name =
                 reflection_static_receiver_name(current_class, current_info, receiver)?;
-            Ok(ReflectionConstantValue::Str(class_name))
+            Ok(ReflectionConstantValue::Str(crate::names::class_name_literal(&class_name)))
         }
         ExprKind::ScopedConstantAccess { receiver, name } => reflection_scoped_constant_value(
             ctx,
@@ -288,21 +288,52 @@ pub(super) fn reflection_constant_value(
             name,
             depth + 1,
         ),
-        // A GLOBAL constant. Only the scoped form was folded, so a parameter declared
-        // `int $n = LIMIT` reached the reflector with no value: `isDefaultValueAvailable()`
-        // answered false and `getDefaultValue()` threw, where PHP answers `true` and `7`
-        // (#1080). The module carries the declared value, so this resolves the same way the
-        // class form does.
         ExprKind::ConstRef(name) => {
-            let key = name.as_str().trim_start_matches('\\');
-            let Some((value, _)) = ctx.module.global_constants.get(key) else {
-                return Err(CodegenIrError::unsupported(format!(
-                    "ReflectionClass constant metadata for undeclared constant {}",
-                    key
-                )));
-            };
-            let value = Expr::new(value.clone(), expr.span);
-            reflection_constant_value(ctx, current_class, current_info, &value, depth + 1)
+            reflection_global_constant_value(ctx, name, expr.span, depth)
+        }
+        ExprKind::ArrayLiteral(elements) => {
+            // A bare list may carry spread elements, which the parser leaves as `...source`
+            // expressions; normalize to the entry list and share the entry fold.
+            let entries: Vec<crate::parser::ast::ArrayEntry> = elements
+                .iter()
+                .map(|element| match &element.kind {
+                    ExprKind::Spread(_) => {
+                        crate::parser::ast::ArrayEntry::Spread(element.clone())
+                    }
+                    _ => crate::parser::ast::ArrayEntry::Value(element.clone()),
+                })
+                .collect();
+            reflection_constant_array_entries_fold(
+                ctx,
+                current_class,
+                current_info,
+                &entries,
+                depth,
+            )
+        }
+        ExprKind::ArrayLiteralAssoc(pairs) => {
+            let entries: Vec<crate::parser::ast::ArrayEntry> = pairs
+                .iter()
+                .map(|(key, value)| {
+                    crate::parser::ast::ArrayEntry::Keyed(key.clone(), value.clone())
+                })
+                .collect();
+            reflection_constant_array_entries_fold(
+                ctx,
+                current_class,
+                current_info,
+                &entries,
+                depth,
+            )
+        }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            reflection_constant_array_entries_fold(
+                ctx,
+                current_class,
+                current_info,
+                entries,
+                depth,
+            )
         }
         other => Err(CodegenIrError::unsupported(format!(
             "ReflectionClass constant metadata expression {:?}",
@@ -407,6 +438,34 @@ pub(super) fn reflection_scoped_constant_value(
     )))
 }
 
+/// Resolves and evaluates one global constant reference for static Reflection metadata.
+///
+/// The stored table carries no span of its own, so the synthesized expression takes
+/// `span`, the reference site. Nested expressions inside the stored kind keep their
+/// definition-site spans; only failures attributed to the top-level expression point at
+/// the reference.
+pub(super) fn reflection_global_constant_value(
+    ctx: &FunctionContext<'_>,
+    name: &crate::names::Name,
+    span: crate::span::Span,
+    depth: usize,
+) -> Result<ReflectionConstantValue> {
+    let expr_kind = ctx
+        .module
+        .global_constants
+        .get(name.as_str())
+        .or_else(|| ctx.module.global_constants.get(name.as_str().trim_start_matches('\\')))
+        .map(|(expr_kind, _)| expr_kind.clone())
+        .ok_or_else(|| {
+            CodegenIrError::unsupported(format!(
+                "ReflectionClass constant metadata for global constant {}",
+                name.as_str().trim_start_matches('\\')
+            ))
+        })?;
+    let expr = crate::parser::ast::Expr::new(expr_kind, span);
+    reflection_constant_value(ctx, "", None, &expr, depth + 1)
+}
+
 /// Returns an interface constant expression, including inherited parent interfaces.
 pub(super) fn reflection_interface_constant_expr(
     ctx: &FunctionContext<'_>,
@@ -467,6 +526,8 @@ pub(super) fn reflection_constant_value_kind(value: &ReflectionConstantValue) ->
         ReflectionConstantValue::Str(_) => "string",
         ReflectionConstantValue::Null => "null",
         ReflectionConstantValue::EnumCase { .. } => "enum-case",
+        ReflectionConstantValue::Array(_) => "array",
+        ReflectionConstantValue::AssocArray(_) => "assoc-array",
     }
 }
 

@@ -464,6 +464,13 @@ fn parse_atomic_type_expr(
     closes: &mut AngleCloses,
 ) -> Result<TypeExpr, CompileError> {
     match tokens.get(*pos).map(|(t, _)| t) {
+        // A builtin type word followed by `\` is the first segment of a class name, as in
+        // `Int\Money $m` or `Array\Cursor $c` (#826): it is a class type, not `int`/`array`.
+        Some(Token::Identifier(_))
+            if matches!(tokens.get(*pos + 1).map(|(t, _)| t), Some(Token::Backslash)) =>
+        {
+            parse_named_type_expr(tokens, pos, span, closes)
+        }
         Some(Token::Identifier(name)) if ident_matches(name, &["int", "integer"]) => {
             *pos += 1;
             Ok(TypeExpr::Int)
@@ -628,23 +635,33 @@ fn parse_atomic_type_expr(
             Ok(TypeExpr::Named(Name::unqualified("parent")))
         }
         Some(_) if name_starts_at(tokens, *pos) => {
-            let name = parse_name(tokens, pos, span, "Expected type name")?;
-            // `Box<>` lexes as the single `<>` token (PHP's `!=` alias), the same trap
-            // `array<>`, `ptr<>` and `buffer<>` each spring.
-            if *pos < tokens.len() && tokens[*pos].0 == Token::LessGreater {
-                return Err(CompileError::new(
-                    span,
-                    &format!("Expected a type argument inside {}<...>", name.as_str()),
-                ));
-            }
-            let args = parse_type_arguments(tokens, pos, span, closes)?;
-            if args.is_empty() {
-                return Ok(TypeExpr::Named(name));
-            }
-            Ok(TypeExpr::GenericClass { name, args })
+            parse_named_type_expr(tokens, pos, span, closes)
         }
         _ => Err(CompileError::new(span, "Expected type expression")),
     }
+}
+
+/// Parses a class type name and its optional generic arguments in any qualified form.
+fn parse_named_type_expr(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+    closes: &mut AngleCloses,
+) -> Result<TypeExpr, CompileError> {
+    let name = parse_name(tokens, pos, span, "Expected type name")?;
+    // `Box<>` lexes as the single `<>` token (PHP's `!=` alias), the same trap
+    // `array<>`, `ptr<>` and `buffer<>` each spring.
+    if *pos < tokens.len() && tokens[*pos].0 == Token::LessGreater {
+        return Err(CompileError::new(
+            span,
+            &format!("Expected a type argument inside {}<...>", name.as_str()),
+        ));
+    }
+    let args = parse_type_arguments(tokens, pos, span, closes)?;
+    if args.is_empty() {
+        return Ok(TypeExpr::Named(name));
+    }
+    Ok(TypeExpr::GenericClass { name, args })
 }
 
 /// Returns `true` if `name` matches any of the `keywords` case-insensitively.

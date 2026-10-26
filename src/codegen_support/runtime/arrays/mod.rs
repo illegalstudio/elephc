@@ -218,6 +218,8 @@ mod slice_bounds;
 mod sort_int;
 mod sort_str;
 mod undefined_array_key_warning;
+mod float_compare_slots;
+mod float_sort;
 mod php_compare_slots;
 mod usort;
 mod usort_str;
@@ -580,6 +582,10 @@ pub use sort_str::emit_sort_str;
 /// Emit undefined integer array key warning helper.
 pub use undefined_array_key_warning::emit_undefined_array_key_warning;
 pub use float_key_to_int::emit_float_key_to_int;
+/// Emit the raw-float comparators used by the stable float sorter.
+pub use float_compare_slots::emit_float_compare_slots;
+/// Emit PHP-compatible sorting for raw float arrays.
+pub use float_sort::emit_float_sort;
 /// Emit user-defined sort helper.
 pub use php_compare_slots::emit_php_compare_slots;
 pub use usort::emit_usort;

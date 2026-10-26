@@ -91,7 +91,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// BUMPED TO 20 to combine deferred-default errors with main's caller-scope access mask.
 /// BUMPED TO 21 to combine those deferred-default errors with retained readonly setter
 /// contracts, generic declarations, and caller-scope access masks from both branches.
-pub(crate) const FORMAT_VERSION: u32 = 21;
+/// BUMPED TO 22 because retained generic token streams now include ReservedNameHead.
+/// Older token variant indexes must not be decoded as this layout.
+pub(crate) const FORMAT_VERSION: u32 = 22;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///

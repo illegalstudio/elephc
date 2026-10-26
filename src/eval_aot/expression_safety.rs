@@ -109,7 +109,9 @@ where
             expr_is_eir_static_array_source_safe(array, support, facts, scope_reads)
                 && expr_is_eir_function_safe(index, support, facts, scope_reads)
         }
-        ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_) => {
+        ExprKind::ArrayLiteral(_)
+        | ExprKind::ArrayLiteralAssoc(_)
+        | ExprKind::ArrayLiteralMixed(_) => {
             expr_is_eir_static_array_source_safe(expr, support, facts, scope_reads)
         }
         ExprKind::FunctionCall { name, args } => {

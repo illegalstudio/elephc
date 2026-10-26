@@ -576,14 +576,19 @@ only reads state (or ends in a fatal error) does not block the rewrite.
 Generators, functions with `try`, dynamic `eval`, and programs that call
 `pcntl_async_signals()` are left alone.
 
-Loops over a buffer property of `$this` can also share one preheader read and
-resolution when no call, property write, free or other invalidating operation
-can change that property. Buffer acquire/release are word operations, and plain
+Loops over a buffer property of `$this` or another invariant object receiver can
+also share one preheader read and resolution when no call, property write, free
+or other invalidating operation can change that property. This includes reads
+left by inlined accessor methods. Buffer acquire/release are word operations, and plain
 `$this` reads that may throw without running PHP do not invalidate descriptors.
 A body-only read moves behind a duplicate of the scalar entry condition, so a
 zero-trip loop never reads an uninitialized property. Conditional reads,
 faulting prefixes and header values used after the loop keep their original
-form. See the [buffer property loop example](../../examples/buffer-property-loop/main.php).
+form. A foreign buffer read must reach its checked access before any observable
+operation or branch, so a null-receiver warning cannot resume execution with
+an invalid cached descriptor. Its first checked access stays in the guarded
+entry. See the [buffer property loop example](../../examples/buffer-property-loop/main.php)
+and the [direct and inlined object example](../../examples/buffer-object-loop/main.php).
 
 A method that reads the same buffer property of `$this` several times shares
 that work too, inside or outside a loop:
@@ -602,8 +607,9 @@ private buffer never aliases a shadowing private property in the child. Anything
 between the reads that could change the property or free
 the buffer keeps them apart: a store to that property or `unset()` on any
 object, a `buffer_free()`, any function or method call, a release, a warning or
-output. A property read on any other object counts too, because it warns when
-that object is `null`. A change to the index variable keeps the record addresses
+output. Other object property reads remain barriers unless they are buffer reads
+immediately consumed by a checked access: a null read then returns handle zero
+and the access fails before execution can continue. A change to the index variable keeps the record addresses
 apart. Programs where a class declares `__get`, or that evaluate code at run
 time, keep every read. See `examples/buffer-property-table/main.php`.
 

@@ -25,15 +25,7 @@ pub(super) fn lower_while(
     branch_to(ctx, header);
 
     ctx.builder.position_at_end(header);
-    let cond = lower_expr(ctx, condition);
-    let cond = ctx.truthy_consuming(cond, Some(condition.span));
-    ctx.builder.terminate(Terminator::CondBr {
-        cond: cond.value,
-        then_target: body_block,
-        then_args: Vec::new(),
-        else_target: exit,
-        else_args: Vec::new(),
-    });
+    lower_condition(ctx, condition, body_block, exit);
 
     retain_loop_body_facts(ctx, &closure_facts);
     ctx.builder.position_at_end(body_block);
@@ -84,15 +76,7 @@ pub(super) fn lower_do_while(
     branch_to(ctx, cond_block);
 
     ctx.builder.position_at_end(cond_block);
-    let cond = lower_expr(ctx, condition);
-    let cond = ctx.truthy_consuming(cond, Some(condition.span));
-    ctx.builder.terminate(Terminator::CondBr {
-        cond: cond.value,
-        then_target: body_block,
-        then_args: Vec::new(),
-        else_target: exit,
-        else_args: Vec::new(),
-    });
+    lower_condition(ctx, condition, body_block, exit);
     ctx.clear_static_callable_locals();
     ctx.builder.position_at_end(exit);
     ctx.clear_static_callable_locals();
@@ -147,19 +131,18 @@ fn lower_for_once(
     branch_to(ctx, header);
 
     ctx.builder.position_at_end(header);
-    let cond = if let Some(condition) = condition {
-        let cond = lower_expr(ctx, condition);
-        ctx.truthy_consuming(cond, Some(condition.span))
+    if let Some(condition) = condition {
+        lower_condition(ctx, condition, body_block, exit);
     } else {
-        emit_const_bool(ctx, true, None)
-    };
-    ctx.builder.terminate(Terminator::CondBr {
-        cond: cond.value,
-        then_target: body_block,
-        then_args: Vec::new(),
-        else_target: exit,
-        else_args: Vec::new(),
-    });
+        let cond = emit_const_bool(ctx, true, None);
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: cond.value,
+            then_target: body_block,
+            then_args: Vec::new(),
+            else_target: exit,
+            else_args: Vec::new(),
+        });
+    }
 
     retain_loop_body_facts(ctx, &closure_facts);
     ctx.builder.position_at_end(body_block);

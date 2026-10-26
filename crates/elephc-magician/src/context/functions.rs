@@ -17,6 +17,8 @@ pub enum EvalNativeGlobalConstant {
     Int(i64),
     Float(f64),
     String(String),
+    /// Binary PHP string constant with a payload that is not valid UTF-8.
+    Bytes(Vec<u8>),
     Resource(i64),
 }
 

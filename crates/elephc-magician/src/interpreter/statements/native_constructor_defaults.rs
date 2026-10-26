@@ -183,6 +183,7 @@ pub(in crate::interpreter) fn materialize_native_callable_default(
         NativeCallableDefault::Int(value) => values.int(*value),
         NativeCallableDefault::Float(value) => values.float(*value),
         NativeCallableDefault::String(value) => values.string(value),
+        NativeCallableDefault::Bytes(value) => values.string_bytes_value(value),
         NativeCallableDefault::EmptyArray => values.array_new(0),
         NativeCallableDefault::Array(elements) => {
             materialize_native_callable_array_default(elements, context, values)
@@ -225,7 +226,7 @@ where
     let has_string_key = elements.iter().any(|element| {
         matches!(
             element.key,
-            Some(NativeCallableArrayDefaultKey::String(_))
+            Some(NativeCallableArrayDefaultKey::String(_) | NativeCallableArrayDefaultKey::Bytes(_))
         )
     });
     let mut array = if has_string_key {
@@ -245,6 +246,7 @@ where
                     values.int(*value)
                 }
                 Some(NativeCallableArrayDefaultKey::String(value)) => values.string(value),
+                Some(NativeCallableArrayDefaultKey::Bytes(value)) => values.string_bytes_value(value),
                 None => {
                     let key = values.int(next_auto_key)?;
                     next_auto_key = next_auto_key.saturating_add(1);

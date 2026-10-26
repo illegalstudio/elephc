@@ -446,16 +446,16 @@ fn keeps_reads_apart_across_a_property_read_of_another_receiver() {
     });
 }
 
-/// Outside a method there is no `$this`, so nothing is shared.
+/// An ordinary object's immediately checked buffer reads can also share their successful path.
 #[test]
-fn leaves_functions_without_a_receiver_alone() {
+fn buffer_object_loop_shares_checked_reads_without_a_method_receiver() {
     let mut built = method(Second::SameRecord, |_, _, _| {});
     built.function.flags.is_method = false;
     built.function.params.clear();
     let (changed, function) = run(built.function);
-    assert!(!changed);
-    assert_eq!(count_property_reads(&function), 2);
-    assert_eq!(count_ops(&function, Op::BufferGet), 2);
+    assert!(changed);
+    assert_eq!(count_property_reads(&function), 1);
+    assert_eq!(count_ops(&function, Op::BufferGet), 1);
 }
 
 /// Even a user call whose effect summary is read-only keeps the reads apart: the region never

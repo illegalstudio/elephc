@@ -395,7 +395,9 @@ pub(super) fn reflection_default_value_to_string(
         ReflectionParameterDefaultValue::Int(value) => Some(value.to_string()),
         ReflectionParameterDefaultValue::Bool(value) => Some(value.to_string()),
         ReflectionParameterDefaultValue::Float(value) => Some(value.to_string()),
-        ReflectionParameterDefaultValue::Str(value) => Some(format!("'{value}'")),
+        ReflectionParameterDefaultValue::Str(value) => Some(elephc_builtin_contract::reflection_format::string(
+            &elephc_builtin_contract::string_literal::literal_bytes(value),
+        )),
         ReflectionParameterDefaultValue::Null => Some(String::from("NULL")),
         ReflectionParameterDefaultValue::Object { .. }
         | ReflectionParameterDefaultValue::DeferredError(_)

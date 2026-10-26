@@ -12,6 +12,20 @@
 //!   is ambiguous because mangled fragments contain `_`, which silently merged unrelated PHP
 //!   declarations onto one storage cell.
 
+/// Encodes a canonical class name as PHP literal text without confusing private-use characters.
+pub(crate) fn class_name_literal(name: &str) -> String {
+    let mut literal = String::new();
+    for character in name.trim_start_matches('\\').chars() {
+        elephc_builtin_contract::string_literal::push_literal_char(character, &mut literal);
+    }
+    literal
+}
+
+/// Recovers the UTF-8 spelling of a symbol referenced through a PHP string literal.
+pub(crate) fn literal_symbol_name(value: &str) -> Option<String> {
+    String::from_utf8(elephc_builtin_contract::string_literal::literal_bytes(value)).ok()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 /// Kind of PHP name based on how it was written in source.
 ///

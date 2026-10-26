@@ -275,13 +275,13 @@ impl Parser {
 
     /// Parses the backslash-separated segments of a name, without any leading separator.
     fn parse_qualified_name_segments(&mut self) -> Result<String, EvalParseError> {
-        let TokenKind::Ident(first) = self.current() else {
+        let (TokenKind::Ident(first) | TokenKind::ReservedNameHead(first)) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
         };
         let mut name = first.clone();
         self.advance();
         while self.consume(TokenKind::Backslash) {
-            let TokenKind::Ident(part) = self.current() else {
+            let (TokenKind::Ident(part) | TokenKind::ReservedNameHead(part)) = self.current() else {
                 return Err(EvalParseError::UnexpectedToken);
             };
             name.push('\\');

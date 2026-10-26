@@ -36,8 +36,9 @@ pub(super) fn lower_ternary_with_destination(
     expr: &Expr,
     destination: Option<&PhpType>,
 ) -> LoweredValue {
-    let cond = lower_expr(ctx, condition);
-    let cond = ctx.truthy_consuming(cond, Some(condition.span));
+    let then_block = ctx.builder.create_named_block("ternary.then", Vec::new());
+    let else_block = ctx.builder.create_named_block("ternary.else", Vec::new());
+    lower_condition(ctx, condition, then_block, else_block);
     let pointer_array_destination =
         destination.filter(|ty| crate::types::is_pointer_element_indexed_array(ty));
     let result_type = match pointer_array_destination.map(PhpType::codegen_repr) {
@@ -46,16 +47,7 @@ pub(super) fn lower_ternary_with_destination(
     };
     let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let split_initialized = ctx.initialized_slots_snapshot();
-    let then_block = ctx.builder.create_named_block("ternary.then", Vec::new());
-    let else_block = ctx.builder.create_named_block("ternary.else", Vec::new());
     let merge = ctx.builder.create_named_block("ternary.merge", Vec::new());
-    ctx.builder.terminate(Terminator::CondBr {
-        cond: cond.value,
-        then_target: then_block,
-        then_args: Vec::new(),
-        else_target: else_block,
-        else_args: Vec::new(),
-    });
 
     ctx.builder.position_at_end(then_block);
     ctx.restore_initialized_slots(split_initialized.clone());

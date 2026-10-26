@@ -14,6 +14,8 @@ pub mod checker;
 pub mod traits;
 /// Array key type inference, normalization, and PHP integer/string coercion rules.
 mod array_keys;
+/// Profile-aware normalization of statically keyed mixed array literals.
+mod array_literals;
 /// Whether an un-hinted declaration returns one of its untyped parameters; shared so the
 /// checker and EIR lowering cannot disagree about the recorded return type (issue #576).
 pub mod dynamic_params;
@@ -62,6 +64,7 @@ mod defined;
 /// Type checker diagnostics and warnings.
 mod warnings;
 
+pub(crate) use array_literals::{fold_spreadless_mixed_array_literal, php_float_array_key};
 pub(crate) use array_keys::{
     array_key_contiguity_is_unproven, array_key_type_from_value_type,
     empty_array_key_requires_hash_storage, is_php_integer_array_key,

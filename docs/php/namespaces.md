@@ -46,6 +46,17 @@ Supported forms: `use Foo\Bar;`, `use Foo\Bar as Baz;`, `use function`, `use con
 - A predefined constant can be written fully qualified too, as namespaced code often does to skip
   the namespace lookup: `\PHP_EOL`, `\PHP_INT_MAX`, `\M_PI`, `\STDERR`, `\true`, `\null`. Each
   names the same global constant as its bare spelling
+- A reserved word is an ordinary segment inside a qualified name, as in PHP 8:
+  `namespace Vendor\Default\Theme;`, `use Demo\Namespace\Subject;`, `new \Vendor\List\Item()`.
+  It can be the first segment too, in any position a name can stand, including right after a
+  `switch` case label, as a `match` arm pattern, after `else`/`endif`, and in a string's
+  `{$...}`: `Default\Palette::accent()`, `function f(Default\Palette $p)`,
+  `catch (Self\Failure $e)`, `public Static\Factory $f` (a typed property, not a static one),
+  `#[Default\Attr]`, `use Function\Registry;` (a class import). `eval()` code follows the same
+  rule. As in PHP, the word must touch the `\` (`new \Foo()` is still `new`). A reserved word
+  other than `namespace` can also be a whole namespace name (`namespace Default;`). Standing
+  alone elsewhere it is still the keyword, `namespace Namespace;` is refused, and a leading
+  `namespace\` is the relative-name prefix, never a segment spelled `namespace`
 - A relative name `namespace\helper()` names `helper` in the current namespace: inside
   `namespace Demo;` it is exactly `\Demo\helper()`, and in the global namespace it is `\helper()`.
   It works wherever a name does (calls, constants, `new`, static calls, `::class`, `instanceof`,

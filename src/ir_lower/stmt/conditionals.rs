@@ -68,8 +68,9 @@ fn lower_if_chain(
     arms: &mut Vec<IfArmExit>,
     span: Span,
 ) -> bool {
-    let cond_value = lower_expr(ctx, condition);
-    let cond_value = ctx.truthy_consuming(cond_value, Some(condition.span));
+    let then_block = ctx.builder.create_named_block("if.then", Vec::new());
+    let else_block = ctx.builder.create_named_block("if.else", Vec::new());
+    lower_condition(ctx, condition, then_block, else_block);
     let split_initialized = ctx.initialized_slots_snapshot();
     let split_types = ctx.local_types_snapshot();
     let split_static_callables = ctx.static_callable_locals_snapshot();
@@ -77,15 +78,6 @@ fn lower_if_chain(
     // Without this, `if (..) { $r = &$a[0]; } else { $r = &$o->p; }` would take whichever arm
     // was lowered last as the answer for both.
     let split_borrowed_refs = ctx.borrowed_element_ref_locals_snapshot();
-    let then_block = ctx.builder.create_named_block("if.then", Vec::new());
-    let else_block = ctx.builder.create_named_block("if.else", Vec::new());
-    ctx.builder.terminate(Terminator::CondBr {
-        cond: cond_value.value,
-        then_target: then_block,
-        then_args: Vec::new(),
-        else_target: else_block,
-        else_args: Vec::new(),
-    });
 
     ctx.builder.position_at_end(then_block);
     ctx.restore_initialized_slots(split_initialized.clone());

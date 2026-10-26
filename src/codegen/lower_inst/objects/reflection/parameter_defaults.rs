@@ -48,9 +48,8 @@ pub(super) fn reflection_parameter_default_value(
         return Ok(reflection_literal_parameter_default_value(&Expr::new(kind, default.span)));
     }
     match &default.kind {
-        // Constant metadata supports scalars but cannot represent array-valued constants.
-        // Keep their source export available without failing the whole compile, whether
-        // the constant is global or scoped. Scalar constants retain their folded value.
+        // Unsupported constant forms retain their source export without failing compilation.
+        // Representable scalar and array values share the recursive constant evaluator.
         ExprKind::ConstRef(_)
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. } => Ok(
@@ -93,7 +92,7 @@ pub(super) fn reflection_parameter_default_non_object_value(
         return Ok(reflection_literal_parameter_default_non_object_value(&Expr::new(kind, default.span)));
     }
     match &default.kind {
-        // Object default arguments use the same scalar-only constant metadata fallback.
+        // Object arguments share the supported constant-value fallback.
         ExprKind::ConstRef(_)
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. } => Ok(
@@ -145,6 +144,9 @@ pub(super) fn reflection_literal_parameter_default_value(
     {
         return Some(ReflectionParameterDefaultValue::Str(value));
     }
+    if let Some(folded) = crate::types::fold_spreadless_mixed_array_literal(&default.kind, crate::codegen_support::compile_php_version()) {
+        return reflection_literal_parameter_default_value(&Expr::new(folded, default.span));
+    }
     match &default.kind {
         ExprKind::IntLiteral(value) => Some(ReflectionParameterDefaultValue::Int(*value)),
         ExprKind::BoolLiteral(value) => Some(ReflectionParameterDefaultValue::Bool(*value)),
@@ -193,12 +195,19 @@ pub(super) fn reflection_default_array_key(key: &Expr) -> Option<ReflectionDefau
     match &key.kind {
         ExprKind::IntLiteral(value) => Some(ReflectionDefaultArrayKey::Int(*value)),
         ExprKind::BoolLiteral(value) => Some(ReflectionDefaultArrayKey::Int(i64::from(*value))),
-        ExprKind::FloatLiteral(value) => Some(ReflectionDefaultArrayKey::Int(*value as i64)),
+        ExprKind::FloatLiteral(value) => {
+            let key = crate::types::php_float_array_key(*value);
+            Some(ReflectionDefaultArrayKey::Int(key))
+        }
         ExprKind::StringLiteral(value) => reflection_default_string_array_key(value),
         ExprKind::Null => Some(ReflectionDefaultArrayKey::Str(String::new())),
         ExprKind::Negate(inner) => match &inner.kind {
             ExprKind::IntLiteral(value) => value.checked_neg().map(ReflectionDefaultArrayKey::Int),
-            ExprKind::FloatLiteral(value) => Some(ReflectionDefaultArrayKey::Int((-*value) as i64)),
+            ExprKind::FloatLiteral(value) => {
+                let negated = -*value;
+                let key = crate::types::php_float_array_key(negated);
+                Some(ReflectionDefaultArrayKey::Int(key))
+            }
             _ => None,
         },
         _ => None,
@@ -207,14 +216,13 @@ pub(super) fn reflection_default_array_key(key: &Expr) -> Option<ReflectionDefau
 
 /// Normalizes a string array key according to PHP integer-string key rules.
 pub(super) fn reflection_default_string_array_key(value: &str) -> Option<ReflectionDefaultArrayKey> {
-    if is_php_integer_array_key(value) {
-        value
-            .parse::<i64>()
-            .ok()
-            .map(ReflectionDefaultArrayKey::Int)
-    } else {
-        Some(ReflectionDefaultArrayKey::Str(value.to_string()))
+    let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
+    if let Ok(decoded) = std::str::from_utf8(&bytes) {
+        if is_php_integer_array_key(decoded) {
+            return decoded.parse::<i64>().ok().map(ReflectionDefaultArrayKey::Int);
+        }
     }
+    Some(ReflectionDefaultArrayKey::Str(value.to_string()))
 }
 
 /// Converts scalar/null constant metadata into a parameter default value.
@@ -230,10 +238,25 @@ pub(super) fn reflection_parameter_default_from_constant_value(
         ReflectionConstantValue::Str(value) => Some(ReflectionParameterDefaultValue::Str(value)),
         ReflectionConstantValue::Null => Some(ReflectionParameterDefaultValue::Null),
         ReflectionConstantValue::EnumCase { .. } => None,
+        ReflectionConstantValue::Array(elements) => elements
+            .into_iter()
+            .map(reflection_parameter_default_from_constant_value)
+            .collect::<Option<Vec<_>>>()
+            .map(ReflectionParameterDefaultValue::Array),
+        ReflectionConstantValue::AssocArray(entries) => entries
+            .into_iter()
+            .map(|entry| {
+                Some(ReflectionDefaultAssocEntry {
+                    key: entry.key,
+                    value: reflection_parameter_default_from_constant_value(entry.value)?,
+                })
+            })
+            .collect::<Option<Vec<_>>>()
+            .map(ReflectionParameterDefaultValue::AssocArray),
     }
 }
 
-/// Returns PHP's constant-name metadata for parameter defaults that name a class constant.
+/// Returns PHP's constant-name metadata for parameter defaults that name a constant.
 pub(super) fn reflection_parameter_default_constant_name(default: &Expr) -> Option<String> {
     match &default.kind {
         ExprKind::ConstRef(name) => Some(name.as_str().trim_start_matches('\\').to_string()),

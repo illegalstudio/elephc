@@ -577,3 +577,34 @@ fn generic_doc_comments_keep_lines_and_content() {
     assert!(matches!(tokens[1].kind(), TokenKind::Ident(name) if name == "function"));
     assert_eq!(tokens[1].line(), 3);
 }
+
+/// Verifies a reserved word glued to `\` and a further segment lexes as the head of a qualified
+/// name (#826), while the same word with a space before the `\`, an ordinary identifier, and a
+/// leading `namespace\` (the relative-name prefix) keep their `Ident` token.
+#[test]
+fn reserved_word_glued_into_a_name_is_a_name_head() {
+    let ident = |name: &str| TokenKind::Ident(name.to_string());
+    assert_eq!(
+        kinds(r"Function\Lib; use function \f; Vendor\Lib; namespace\x;"),
+        vec![
+            TokenKind::ReservedNameHead("Function".to_string()),
+            TokenKind::Backslash,
+            ident("Lib"),
+            TokenKind::Semicolon,
+            ident("use"),
+            ident("function"),
+            TokenKind::Backslash,
+            ident("f"),
+            TokenKind::Semicolon,
+            ident("Vendor"),
+            TokenKind::Backslash,
+            ident("Lib"),
+            TokenKind::Semicolon,
+            ident("namespace"),
+            TokenKind::Backslash,
+            ident("x"),
+            TokenKind::Semicolon,
+            TokenKind::Eof,
+        ]
+    );
+}

@@ -30,6 +30,8 @@ mod string_append;
 mod bcmath_number;
 #[path = "runtime_gc/basics.rs"]
 mod basics;
+#[path = "runtime_gc/branch_conditions.rs"]
+mod branch_conditions;
 #[path = "runtime_gc/large_unary_string_results.rs"]
 mod large_unary_string_results;
 #[path = "runtime_gc/static_local_initializers.rs"]

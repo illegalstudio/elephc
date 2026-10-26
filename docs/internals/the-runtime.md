@@ -906,6 +906,8 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_shuffle` / `__rt_array_rand` | Randomize order / pick random |
 | `__rt_random_u32` / `__rt_random_uniform` / `__rt_random_u64` / `__rt_random_uniform64` | Target-aware random primitives used by `rand()`, `random_int()`, `shuffle()`, and `array_rand()` |
 | `__rt_asort` / `__rt_arsort` | Sort an indexed array by value, ascending or descending |
+| `__rt_float_compare_slots` / `__rt_float_compare_slots_desc` | Tag raw payloads as floats and delegate to `__rt_php_compare`. Descending negates the result because `NAN` comparisons are not antisymmetric |
+| `__rt_sort_float` / `__rt_sort_mixed` | Sort homogeneous indexed float arrays and validated boxed scalar arrays with PHP's small-sort, insertion and median-partition comparison schedules, including `NAN` placement. One temporary ordinal sidecar keeps equal elements stable in both directions; payloads stay unboxed, and the sidecar is freed before returning |
 | `__rt_hash_ksort` / `__rt_hash_krsort` | Sort an associative array by key, ascending or descending. Both take PHP's `$flags` word in the second argument register |
 | `__rt_hash_key_sort_enter` | Shared key-sort prologue: resolves PHP's `$flags` into a small comparator selector once per call, the way `php_get_key_compare_func` does, and parks it clear of the direction and key/value mode bits |
 | `__rt_hash_asort` / `__rt_hash_arsort` | Sort an associative array by value while preserving keys, ascending or descending |

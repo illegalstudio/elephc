@@ -23,6 +23,9 @@ use crate::ir::Module;
 use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver};
 use crate::types::{is_php_integer_array_key, ClassInfo, InterfaceInfo};
 
+mod arrays;
+pub(in crate::codegen) use arrays::resolve_array_const_default;
+
 #[cfg(test)]
 mod tests;
 
@@ -171,7 +174,8 @@ fn resolve_constant_expression_const_default(
     match &expr.kind {
         ExprKind::ConstRef(name) => resolve_global_constant_default(context, name, depth + 1),
         ExprKind::ClassConstant { receiver } => {
-            resolve_static_receiver_name(context, receiver).map(ConstDefaultValue::String)
+            resolve_static_receiver_name(context, receiver)
+                .map(|name| ConstDefaultValue::String(crate::names::class_name_literal(&name)))
         }
         ExprKind::ScopedConstantAccess { receiver, name } => {
             resolve_scoped_constant_default(context, receiver, name, depth + 1)
@@ -471,101 +475,17 @@ fn resolve_object_const_default_arg(
     }
 }
 
-/// Resolves supported array-valued defaults into a constant value.
-pub(in crate::codegen) fn resolve_array_const_default(
-    expr: &Expr,
-    context: &ConstDefaultContext<'_>,
-    depth: usize,
-) -> Option<ConstDefaultValue> {
-    match &expr.kind {
-        ExprKind::ArrayLiteral(elements) => {
-            let mut default_elements = Vec::with_capacity(elements.len());
-            for element in elements {
-                if matches!(element.kind, ExprKind::Spread(_)) {
-                    return None;
-                }
-                default_elements.push(ConstDefaultArrayElement {
-                    key: None,
-                    default: resolve_const_default_at(element, context, depth + 1)?,
-                });
-            }
-            Some(ConstDefaultValue::Array(default_elements))
-        }
-        ExprKind::ArrayLiteralAssoc(elements) => {
-            let mut default_elements = Vec::with_capacity(elements.len());
-            for (key, value) in elements {
-                default_elements.push(ConstDefaultArrayElement {
-                    key: Some(resolve_array_const_default_key(key, context, depth + 1)?),
-                    default: resolve_const_default_at(value, context, depth + 1)?,
-                });
-            }
-            Some(ConstDefaultValue::Array(default_elements))
-        }
-        _ => None,
-    }
-}
-
-/// Resolves one supported static array key.
-fn resolve_array_const_default_key(
-    expr: &Expr,
-    context: &ConstDefaultContext<'_>,
-    depth: usize,
-) -> Option<ConstDefaultArrayKey> {
-    if let Some(key) = resolve_literal_array_const_default_key(expr) {
-        return Some(key);
-    }
-    match resolve_const_default_at(expr, context, depth + 1)? {
-        ConstDefaultValue::Scalar {
-            kind: CONST_DEFAULT_NULL,
-            ..
-        } => Some(ConstDefaultArrayKey::String(String::new())),
-        ConstDefaultValue::Scalar {
-            kind: CONST_DEFAULT_BOOL,
-            payload,
-        } => Some(ConstDefaultArrayKey::Int((payload != 0) as i64)),
-        ConstDefaultValue::Scalar {
-            kind: CONST_DEFAULT_INT,
-            payload,
-        } => Some(ConstDefaultArrayKey::Int(payload)),
-        ConstDefaultValue::Scalar {
-            kind: CONST_DEFAULT_FLOAT,
-            payload,
-        } => Some(ConstDefaultArrayKey::Int(
-            f64::from_bits(payload as u64) as i64
-        )),
-        ConstDefaultValue::String(value) => const_default_string_array_key(&value),
-        _ => None,
-    }
-}
-
-/// Resolves one literal static array key.
-pub(in crate::codegen) fn resolve_literal_array_const_default_key(
-    expr: &Expr,
-) -> Option<ConstDefaultArrayKey> {
-    match &expr.kind {
-        ExprKind::IntLiteral(value) => Some(ConstDefaultArrayKey::Int(*value)),
-        ExprKind::BoolLiteral(value) => Some(ConstDefaultArrayKey::Int(i64::from(*value))),
-        ExprKind::FloatLiteral(value) => Some(ConstDefaultArrayKey::Int(*value as i64)),
-        ExprKind::StringLiteral(value) => const_default_string_array_key(value),
-        ExprKind::Null => Some(ConstDefaultArrayKey::String(String::new())),
-        ExprKind::Negate(inner) => match &inner.kind {
-            ExprKind::IntLiteral(value) => value.checked_neg().map(ConstDefaultArrayKey::Int),
-            ExprKind::FloatLiteral(value) => Some(ConstDefaultArrayKey::Int((-*value) as i64)),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
 /// Normalizes one string array key to PHP's integer-key rules.
 pub(in crate::codegen) fn const_default_string_array_key(
     value: &str,
 ) -> Option<ConstDefaultArrayKey> {
-    if is_php_integer_array_key(value) {
-        value.parse::<i64>().ok().map(ConstDefaultArrayKey::Int)
-    } else {
-        Some(ConstDefaultArrayKey::String(value.to_string()))
+    let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
+    if let Ok(decoded) = std::str::from_utf8(&bytes) {
+        if is_php_integer_array_key(decoded) {
+            return decoded.parse::<i64>().ok().map(ConstDefaultArrayKey::Int);
+        }
     }
+    Some(ConstDefaultArrayKey::String(value.to_string()))
 }
 
 /// Resolves one global constant default expression.

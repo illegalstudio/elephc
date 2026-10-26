@@ -107,6 +107,7 @@ pub(super) fn scan_tokens_in_source(
         }
     }
 
+    super::qualified_names::identify_reserved_name_segments(&mut tokens);
     Ok(tokens)
 }
 

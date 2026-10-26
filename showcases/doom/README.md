@@ -1,10 +1,45 @@
-# DOOM: rendered in PHP, compiled to a native binary
+<p align="center">
+  <img src="https://raw.githubusercontent.com/illegalstudio/elephc/main/assets/logo-mark.png" alt="elephc logo" width="130">
+</p>
 
-This showcase plays the shareware episode of DOOM from the original `DOOM1.WAD`, entirely in PHP compiled to a standalone native binary by [elephc](https://github.com/illegalstudio/elephc).
+<h1 align="center">DOOM</h1>
 
-No interpreter. No VM. No runtime dependencies beyond SDL2.
+<p align="center">
+  <em>Rendered in PHP. Compiled to a native binary.</em>
+</p>
+
+<p align="center">
+  <a href="https://github.com/getelephc/doom/stargazers"><img src="https://img.shields.io/github/stars/getelephc/doom?style=flat-square&logo=github&logoColor=white&label=stars&color=B91C1C" alt="Stars"></a>
+  <a href="https://github.com/illegalstudio/elephc"><img src="https://img.shields.io/badge/built%20with-elephc-B91C1C?style=flat-square" alt="Built with elephc"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/getelephc/doom?style=flat-square&color=B91C1C" alt="License: MIT"></a>
+  <a href="https://x.com/nahime0"><img src="https://img.shields.io/badge/Follow-%40nahime0-B91C1C?style=flat-square&logo=x&logoColor=white" alt="Follow @nahime0 on X"></a>
+</p>
+
+<p align="center">
+  <strong>Pure PHP &middot; 320x200 at 35 tics per second &middot; about 2 ms per frame &middot; only SDL2 at run time</strong>
+</p>
+
+<p align="center">
+  The shareware episode of DOOM, played from the original <code>DOOM1.WAD</code>, written entirely in PHP and compiled to a standalone native binary by <a href="https://github.com/illegalstudio/elephc">elephc</a>. No interpreter, no VM, no runtime dependencies beyond SDL2.
+</p>
+
+<p align="center">
+  <a href="https://elephc.dev"><strong>elephc Official Website</strong></a>
+</p>
+
+---
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/getelephc/static/main/assets/doom/0.27.6/doom-readme-fluid.gif" alt="DOOM played by the PHP engine compiled with elephc" width="512">
+</p>
+
+<p align="center">
+  <a href="https://raw.githubusercontent.com/getelephc/static/main/assets/doom/0.27.6/doom-walkthrough.mp4">Download the walkthrough (MP4)</a>
+</p>
 
 The engine is written from the public descriptions of the WAD format and of how DOOM draws and moves (the Unofficial DOOM Specs and the DoomWiki), not translated from DOOM's source code.
+
+> This showcase is developed in [illegalstudio/elephc](https://github.com/illegalstudio/elephc/tree/main/showcases/doom). [getelephc/doom](https://github.com/getelephc/doom) is a read-only mirror published from there, so send changes to elephc.
 
 ## What it does
 
@@ -36,25 +71,29 @@ The engine is written from the public descriptions of the WAD format and of how 
 
 ## Build
 
-Requires SDL2 and a local copy of `DOOM1.WAD` (shareware).
+Requires [elephc](https://github.com/illegalstudio/elephc#install), SDL2 and a local copy of `DOOM1.WAD` (shareware). From this directory:
 
 ```bash
 # compile
-cargo run -- -l SDL2 -L /opt/homebrew/lib --heap-size=134217728 showcases/doom/main.php
+elephc -l SDL2 -L /opt/homebrew/lib --heap-size=134217728 main.php
 
 # run
-./showcases/doom/main
+./main
 ```
+
+In the elephc repository, build from its root with `cargo run -- -l SDL2 -L /opt/homebrew/lib --heap-size=134217728 showcases/doom/main.php` and run `./showcases/doom/main`.
 
 Download the shareware WAD: search for "DOOM1.WAD shareware" or extract it from the [original shareware release](https://doomwiki.org/wiki/DOOM1.WAD). Place it in this directory.
 
 ## Tests
 
 ```bash
-cargo run -- test showcases/doom/tests
+elephc test tests
 ```
 
-The suite needs neither SDL nor `DOOM1.WAD`: it writes a small WAD of its own (two rooms joined by a grate, a few objects, light tables that keep every color) and checks map changes, timed doors, objects on moving floors and ceilings, pickup reach and rendered frames read back from the 8-bit screen. CI runs it on every pull request.
+In the elephc repository, run `cargo run -- test showcases/doom/tests` from its root.
+
+The suite needs neither SDL nor `DOOM1.WAD`: it writes a small WAD of its own (two rooms joined by a grate, a few objects, light tables that keep every color) and checks map changes, timed doors, objects on moving floors and ceilings, pickup reach and rendered frames read back from the 8-bit screen. elephc's CI runs it on every pull request, and the mirror's CI runs it against the elephc nightly on every push.
 
 ## Controls
 

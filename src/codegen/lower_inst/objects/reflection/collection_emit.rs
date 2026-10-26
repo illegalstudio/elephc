@@ -222,7 +222,7 @@ pub(super) fn emit_reflection_string_assoc_array(
     emit_empty_assoc_array_literal_to_result(ctx, &PhpType::Str);
     for (key, value) in entries {
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-        emit_string_literal_default_to_result(ctx, value);
+        emit_string_bytes_default_to_result(ctx, value.as_bytes());
         emit_reflection_string_hash_insert(ctx, key);
     }
 }

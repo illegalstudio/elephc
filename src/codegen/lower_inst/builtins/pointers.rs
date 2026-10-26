@@ -514,6 +514,7 @@ fn const_string_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Str
         .strings
         .get(data.as_raw() as usize)
         .cloned()
+        .map(|value| crate::names::literal_symbol_name(&value).unwrap_or(value))
         .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))
 }
 

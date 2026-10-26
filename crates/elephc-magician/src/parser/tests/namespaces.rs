@@ -310,3 +310,75 @@ fn parse_fragment_rejects_use_import_inside_function_body() {
         Err(EvalParseError::UnsupportedConstruct)
     );
 }
+/// Verifies a reserved word glued into a qualified name is a name in eval code (#826): a
+/// statement led by `Function\...` is a call, not a function declaration, and
+/// `use Function\Lib\Foo;` imports the CLASS `Function\Lib\Foo` rather than the function
+/// `Lib\Foo`, matching PHP and the compiled path.
+#[test]
+fn parse_fragment_reads_reserved_word_first_segments_as_names() {
+    let program = parse_fragment(
+        br#"namespace Eval\Kw;
+use Function\Lib\Foo;
+\Function\Lib\g();
+return new Foo();"#,
+    )
+    .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[
+            EvalStmt::Expr(EvalExpr::Call {
+                name: "Function\\Lib\\g".to_string(),
+                args: Vec::new(),
+            }),
+            EvalStmt::Return(Some(EvalExpr::NewObject {
+                class_name: "Function\\Lib\\Foo".to_string(),
+                args: Vec::new(),
+            })),
+        ]
+    );
+    let program = parse_fragment(br#"Function\Lib\g();"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Expr(EvalExpr::Call {
+            name: "Function\\Lib\\g".to_string(),
+            args: Vec::new(),
+        })]
+    );
+}
+
+
+/// Reserved words in inner name segments survive namespace, import, type and static parsing.
+#[test]
+fn parse_fragment_reads_reserved_inner_name_segments() {
+    for source in [
+        r"namespace Vendor\Default\Theme; return new Box();",
+        r"use Vendor\Default\Theme\Box; return new Box();",
+        r"use Vendor\Default\Theme\{Box, function f}; return new Box();",
+        r"return new Vendor\Default\Theme\Box();",
+        r"return Vendor\Default\Theme\Box::make();",
+        r"Vendor\Default\Theme\Box::$hits = 1; Vendor\Default\Theme\Box::$hits++;",
+        r"function keep(Vendor\Default\Theme\Box $box): Vendor\Default\Theme\Box { return $box; }",
+        r"namespace Vendor; return new namespace\Default\Theme\Box();",
+    ] {
+        let program = parse_fragment(source.as_bytes()).expect(source);
+        assert!(format!("{program:?}").contains(r"Vendor\\Default\\Theme\\Box"), "{source}: {program:?}");
+    }
+}
+
+/// Cached generic templates retain reserved name tokens and their original source spelling.
+#[test]
+fn parse_fragment_reserved_name_tokens_survive_generic_serialization() {
+    let program = parse_fragment(
+        br"function keep<T>(T $value): T { Vendor\Default\Theme\Box::touch(); return $value; }",
+    ).expect("generic fragment should parse");
+    let EvalStmt::GenericDecl(template) = &program.statements()[0] else {
+        panic!("expected a retained generic template");
+    };
+    assert!(template.tokens.iter().any(|token| matches!(
+        token.kind(), crate::lexer::TokenKind::ReservedNameHead(name) if name == "Default"
+    )));
+    let encoded = bincode::serialize(&program).expect("template should serialize");
+    let decoded: crate::eval_ir::EvalProgram =
+        bincode::deserialize(&encoded).expect("template should deserialize");
+    assert_eq!(decoded.statements(), program.statements());
+}

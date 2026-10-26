@@ -671,6 +671,25 @@ its original instruction id and lexical scope. Calls, property writes, frees,
 conditional reads, faulting prefixes and live-out header SSA values prevent
 property motion. See `examples/buffer-property-loop/main.php`.
 
+The same body-read optimization handles an invariant object parameter such as
+`$table->slots[$i]`, including a read left by an inlined accessor. Borrowed
+inliner parameter copies with one dominating store are forwarded to their
+original SSA values. An accessor's invariant receiver null check moves behind
+the zero-trip guard and retains its original throwing edge and lexical scope.
+Object local receivers must use exact borrowed loads, remain unwritten in the
+loop, and have no by-reference parameter binding or escaping slot address.
+
+A foreign receiver's static object type alone does not prove it non-null:
+dynamic calls can supply null, and a property warning can run an error handler.
+Such a buffer read qualifies only when a checked access consumes its handle
+before any observable operation or branch. Null reads return handle zero, so
+the access must fail before execution could continue with a descriptor an error
+handler invalidated. When relocating this read, its first checked access and
+scalar prefix are copied to the taken-only entry too. This retains the original
+warning/fatal order before the header is re-evaluated.
+Subsequent iterations use the cached property handle and resolved descriptors.
+See `examples/buffer-object-loop/main.php` for direct and inlined entity filters.
+
 Raw packed-record addresses are shared before loop accesses become resolved
 forms. This preserves reuse of an address checked before the loop by an
 equivalent access in the body, including when its property handle was already
@@ -704,10 +723,10 @@ every opcode that can run user code (even a call whose effect summary is
 read-only, since summaries drop the callee's local effects and matched slots are
 not proven free of address escapes), plus
 the no-op `acquire` and `release` of a buffer handle and named property reads of
-`$this` refined to `reads_heap, may_throw`. Only the method receiver is trusted,
-as a candidate and inside a region: effect refinement drops the null-receiver
-warning of any other receiver (a nullable one, or a non-nullable parameter a
-dynamic call passed `null`), and that warning can run a user error handler.
+`$this` refined to `reads_heap, may_throw`. Foreign buffer reads also qualify
+when their null-warning path immediately reaches the checked access described
+above. Other foreign property reads remain barriers: effect refinement drops
+their null-receiver warning, which can run a user error handler and then return.
 Modules where a class declares `__get`, or where the eval bridge can declare one,
 skip the phase, so no trusted read dispatches to user code. A property store or
 `unset` on any object

@@ -373,7 +373,8 @@ pub(super) fn emit_const_default_to_result(
             PhpType::Array(Box::new(elem_ty))
         }
         InvokerDefaultValue::String(value) => {
-            let (label, len) = data.add_string(value.as_bytes());
+            let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
+            let (label, len) = data.add_string(&bytes);
             let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
             abi::emit_symbol_address(emitter, ptr_reg, &label);
             abi::emit_load_int_immediate(emitter, len_reg, len as i64);
@@ -695,7 +696,8 @@ fn emit_hash_key_aarch64(emitter: &mut Emitter, data: &mut DataSection, key: &Co
             abi::emit_load_int_immediate(emitter, "x2", -1);
         }
         ConstDefaultArrayKey::String(value) => {
-            let (label, len) = data.add_string(value.as_bytes());
+            let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
+            let (label, len) = data.add_string(&bytes);
             abi::emit_symbol_address(emitter, "x1", &label);
             abi::emit_load_int_immediate(emitter, "x2", len as i64);
             abi::emit_call_label(emitter, "__rt_hash_normalize_key");
@@ -711,7 +713,8 @@ fn emit_hash_key_x86_64(emitter: &mut Emitter, data: &mut DataSection, key: &Con
             abi::emit_load_int_immediate(emitter, "rdx", -1);
         }
         ConstDefaultArrayKey::String(value) => {
-            let (label, len) = data.add_string(value.as_bytes());
+            let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
+            let (label, len) = data.add_string(&bytes);
             abi::emit_symbol_address(emitter, "rax", &label);
             abi::emit_load_int_immediate(emitter, "rdx", len as i64);
             abi::emit_call_label(emitter, "__rt_hash_normalize_key");

@@ -162,12 +162,12 @@ impl Parser {
             TokenKind::Ident(name) if is_unsupported_statement_keyword(name) => {
                 Err(EvalParseError::UnsupportedConstruct)
             }
-            TokenKind::Ident(_) | TokenKind::Backslash
+            TokenKind::Ident(_) | TokenKind::ReservedNameHead(_) | TokenKind::Backslash
                 if self.current_starts_static_property_assignment() =>
             {
                 self.parse_static_property_set_stmt(true)
             }
-            TokenKind::Ident(_) | TokenKind::Backslash
+            TokenKind::Ident(_) | TokenKind::ReservedNameHead(_) | TokenKind::Backslash
                 if self.current_starts_static_property_postfix_inc_dec() =>
             {
                 self.parse_static_property_inc_dec_stmt(false, true)
