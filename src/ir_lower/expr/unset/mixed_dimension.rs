@@ -132,9 +132,9 @@ fn lower_scalar(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Sp
     ctx.builder.terminate(Terminator::CondBr { cond: is_string.value,
         then_target: string, then_args: vec![], else_target: other, else_args: vec![] });
     ctx.builder.position_at_end(string);
-    crate::ir_lower::stmt::lower_throw_access_error_expr(ctx, "Cannot unset string offsets", span);
+    crate::ir_lower::stmt::lower_throw_access_error(ctx, "Cannot unset string offsets", span);
     ctx.builder.position_at_end(other);
-    crate::ir_lower::stmt::lower_throw_access_error_expr(ctx, "Cannot unset offset in a non-array variable", span);
+    crate::ir_lower::stmt::lower_throw_access_error(ctx, "Cannot unset offset in a non-array variable", span);
     ctx.builder.position_at_end(done);
 }
 
