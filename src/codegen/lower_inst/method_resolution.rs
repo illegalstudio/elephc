@@ -297,6 +297,23 @@ pub(super) fn store_compiled_call_result(
     let Some(result) = inst.result else { return Ok(()); };
     let result_ty = ctx.value_php_type(result)?;
     let representation = return_ty.codegen_repr();
+    if (representation == PhpType::Mixed
+        || !matches!(result_ty, PhpType::Mixed | PhpType::Union(_)))
+        && result_ty.codegen_repr() == representation
+        && (representation.is_refcounted() || representation == PhpType::Str)
+    {
+        // Method-call temporaries own their result even when no ABI boxing is
+        // needed. A borrowed static-property return must survive later writes.
+        let owned = ctx.next_label("compiled_return_already_owned");
+        crate::codegen_support::abi::emit_branch_if_php_return_owned(ctx.emitter, &owned);
+        if representation == PhpType::Str {
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+        } else {
+            abi::emit_incref_if_refcounted(ctx.emitter, &representation);
+        }
+        ctx.emitter.label(&owned);
+        return ctx.store_result_value(result);
+    }
     if !matches!(result_ty, PhpType::Mixed | PhpType::Union(_))
         || representation == PhpType::Mixed
         || !(representation.is_refcounted() || representation == PhpType::Str)

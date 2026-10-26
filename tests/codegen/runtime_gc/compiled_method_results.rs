@@ -10,6 +10,33 @@
 
 use crate::support::*;
 
+/// Concrete method returns detach borrowed strings and retain borrowed objects before later writes.
+#[test]
+fn test_concrete_compiled_method_borrowed_static_results_survive_replacement() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class StaticRawReturnPayload {
+    public int $value;
+    public function __construct(int $value) { $this->value = $value; }
+}
+class StaticRawReturnState {
+    public static string $text = '';
+    public static StaticRawReturnPayload $payload;
+    public function text(): string { func_get_args(); return self::$text; }
+    public function payload(): StaticRawReturnPayload { func_get_args(); return self::$payload; }
+}
+StaticRawReturnState::$text = str_repeat('x', 32);
+StaticRawReturnState::$payload = new StaticRawReturnPayload(7);
+$source = new StaticRawReturnState();
+$text = $source->text(); $payload = $source->payload();
+StaticRawReturnState::$text = str_repeat('z', 32);
+StaticRawReturnState::$payload = new StaticRawReturnPayload(9);
+echo $text, ':', $payload->value, ':', strlen(StaticRawReturnState::$text), ':', StaticRawReturnState::$payload->value;
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, format!("{}:7:32:9", "x".repeat(32)));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Source and interface adapters preserve genuinely borrowed static-property return paths.
 #[test]
 fn test_compiled_method_adapters_preserve_borrowed_static_return_owners() {
