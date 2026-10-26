@@ -467,11 +467,9 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
                 if let Some(result) = result {
                     let arg_repr = ctx.builder.value_php_type(lowered.value).codegen_repr();
                     let result_repr = ctx.builder.value_php_type(result).codegen_repr();
-                    let owned_string_arg = arg_repr == PhpType::Str
-                        && matches!(
-                            ctx.builder.value_defining_op(lowered.value),
-                            Some(Op::EnsureOwned | Op::Acquire | Op::StrPersist)
-                        );
+                    // The enclosing gate includes provisional local reads and owned
+                    // user returns; final backend ownership still skips borrowed storage.
+                    let owned_string_arg = arg_repr == PhpType::Str;
                     let user_call_result = matches!(
                         ctx.builder.value_defining_op(result),
                         Some(

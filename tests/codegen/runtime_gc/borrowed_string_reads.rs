@@ -203,3 +203,23 @@ inspectPersistedArguments($argc);
     assert_eq!(out.stdout, "8:8:0|".repeat(4));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+/// Boxed user returns do not retain owned string calls or provisional unboxes of widened locals.
+#[test]
+fn test_owned_string_call_and_widened_local_arguments_boxed_returns_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function freshForwardedString(): string { return str_repeat('s', 40); }
+function boxForwardedString(string $text): mixed { return $text; }
+function widenedForwardedStrings(): void {
+    for ($i = 0; $i < 4; $i++) {
+        $text = freshForwardedString();
+        echo strlen((string)boxForwardedString($text)), ':';
+        echo strlen((string)boxForwardedString(freshForwardedString())), '|';
+        $text = [];
+    }
+}
+widenedForwardedStrings();
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "40:40|".repeat(4));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
