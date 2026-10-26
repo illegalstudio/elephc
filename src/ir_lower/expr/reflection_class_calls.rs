@@ -94,14 +94,18 @@ pub(super) fn lower_reflection_class_new_instance_without_constructor(
         return lower_reflection_class_new_instance_without_constructor_unsupported(ctx, expr);
     }
     let class_name = lower_property_get_from_value(ctx, object, "__name", Op::PropGet, expr);
-    ctx.emit_value(
+    let pins = pin_in_flight_owners(ctx, &[class_name.value], expr.span);
+    let result = ctx.emit_value(
         Op::DynamicObjectNewWithoutConstructorMixed,
         vec![class_name.value],
         None,
         PhpType::Mixed,
         Op::DynamicObjectNewWithoutConstructorMixed.default_effects(),
         Some(expr.span),
-    )
+    );
+    unpin_in_flight_owners(ctx, pins, expr.span);
+    crate::ir_lower::ownership::release_if_owned(ctx, class_name, Some(expr.span));
+    result
 }
 
 /// Lowers live static-property value access for statically-known `ReflectionClass` calls.

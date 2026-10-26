@@ -271,3 +271,29 @@ checkCaseArrayOwners(str_repeat('Ab', 40));
     assert_eq!(out.stdout, "ab:AB:bA:Ab:ab|".repeat(4));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Constructorless reflection retires detached class names and preserves named reflector owners.
+#[test]
+fn test_constructorless_reflection_class_name_owners_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ReflectedNameOwner {
+    public string $value = 'ready';
+    public function __construct() { echo 'unexpected-constructor|'; }
+}
+function makeReflectedNameOwner(): mixed {
+    return (new ReflectionClass(ReflectedNameOwner::class))->newInstanceWithoutConstructor();
+}
+$reflector = new ReflectionClass(ReflectedNameOwner::class);
+for ($i = 0; $i < 4; $i++) {
+    $inline = makeReflectedNameOwner();
+    $named = $reflector->newInstanceWithoutConstructor();
+    if ($inline instanceof ReflectedNameOwner && $named instanceof ReflectedNameOwner) {
+        echo $inline->value, ':', $named->value, '|';
+    }
+}
+echo $reflector->getName();
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "ready:ready|".repeat(4) + "ReflectedNameOwner");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
