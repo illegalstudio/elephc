@@ -10,6 +10,42 @@
 
 use crate::support::*;
 
+/// Source and interface adapters preserve genuinely borrowed static-property return paths.
+#[test]
+fn test_compiled_method_adapters_preserve_borrowed_static_return_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+interface StaticAdapterResultProtocol {
+    public function items(): mixed;
+    public function text(): mixed;
+}
+class StaticAdapterResultSource implements StaticAdapterResultProtocol {
+    public static array $items = [];
+    public static string $text = '';
+    public function items(): array { func_get_args(); return self::$items; }
+    public function text(): string { func_get_args(); return self::$text; }
+}
+class StaticAdapterResultOther {
+    public function items(): int { return 0; }
+    public function text(): int { return 0; }
+}
+function useStaticAdapterResult(mixed $source): void {
+    echo count($source->items()), ':', strlen($source->text()), '|';
+}
+function useStaticAdapterProtocol(StaticAdapterResultProtocol $source): void {
+    echo count($source->items()), ':', strlen($source->text()), '|';
+}
+StaticAdapterResultSource::$items = [1, 2, 3];
+StaticAdapterResultSource::$text = str_repeat('t', 32);
+$source = new StaticAdapterResultSource();
+useStaticAdapterResult($source); useStaticAdapterResult($source);
+useStaticAdapterProtocol($source); useStaticAdapterProtocol($source);
+echo count(StaticAdapterResultSource::$items), ':', strlen(StaticAdapterResultSource::$text), ':', StaticAdapterResultSource::$text;
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, format!("{}3:32:{}", "3:32|".repeat(4), "t".repeat(32)));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Generic method result boxing retires fresh raw owners and preserves borrowed payloads.
 #[test]
 fn test_compiled_method_results_box_fresh_and_borrowed_owners() {
