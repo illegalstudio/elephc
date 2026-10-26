@@ -39,6 +39,9 @@ pub(super) fn lower_generator_yield(ctx: &mut FunctionContext<'_>, inst: &Instru
 
     // -- materialize the yielded value as an owned Mixed cell and park it --
     match value_operand {
+        Some(value) if yield_cell_transfers_ownership(ctx, value)? => {
+            ctx.load_value_to_result(value)?;
+        }
         Some(value) => emit_value_as_owned_mixed(ctx, value)?,
         None => emit_owned_null_mixed(ctx),
     }
@@ -47,7 +50,7 @@ pub(super) fn lower_generator_yield(ctx: &mut FunctionContext<'_>, inst: &Instru
     // -- materialize the key: explicit owned Mixed cell, or NULL for auto-key --
     match key_operand {
         Some(key) => {
-            if yield_key_transfers_ownership(ctx, key)? {
+            if yield_cell_transfers_ownership(ctx, key)? {
                 ctx.load_value_to_result(key)?;
             } else {
                 emit_value_as_owned_mixed(ctx, key)?;
@@ -79,8 +82,8 @@ pub(super) fn lower_generator_yield(ctx: &mut FunctionContext<'_>, inst: &Instru
     store_call_result(ctx, inst, &PhpType::Mixed)
 }
 
-/// A fresh single-use Mixed key box transfers its one reference into the suspended generator.
-fn yield_key_transfers_ownership(ctx: &FunctionContext<'_>, key: ValueId) -> Result<bool> {
+/// A fresh single-use Mixed cell transfers its one reference into the suspended generator.
+fn yield_cell_transfers_ownership(ctx: &FunctionContext<'_>, key: ValueId) -> Result<bool> {
     if ctx.value_php_type(key)?.codegen_repr() != PhpType::Mixed
         || ctx.value_ownership(key)? != crate::ir::Ownership::Owned
     { return Ok(false); }

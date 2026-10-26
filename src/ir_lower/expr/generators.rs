@@ -21,7 +21,13 @@ pub(super) fn lower_yield(ctx: &mut LoweringContext<'_, '_>, key: Option<&Expr>,
         None
     };
     if let Some(value) = value {
-        operands.push(lower_expr(ctx, value).value);
+        let value = lower_expr(ctx, value);
+        // Transfer fresh values into a single-use box before suspension. The runtime
+        // owns that box while suspended, so no original temporary remains on the stack.
+        let value = if ctx.value_is_owning_temporary(value) {
+            ctx.box_value_as_mixed(value, PhpType::Mixed, Some(expr.span))
+        } else { value };
+        operands.push(value.value);
     }
     if key_owner.is_some() && ctx.builder.value_php_type(operands[0]).codegen_repr() == PhpType::Str {
         let owner = key_owner.take().unwrap();

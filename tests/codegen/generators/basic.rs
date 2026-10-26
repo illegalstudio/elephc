@@ -503,3 +503,26 @@ echo $count, ':', consumeOwnedIterator(ownedCellGenerator());
 "#, 1_048_576);
     assert_eq!(out, "20000:20000");
 }
+
+/// Fresh yielded containers transfer their original owner before suspension or abandonment.
+#[test]
+fn test_generator_fresh_yield_values_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class FreshYieldValue {
+    public function __destruct() { echo 'drop|'; }
+}
+function freshYieldValues(): Generator {
+    yield ['array'];
+    yield str_repeat('s', 40);
+    yield new FreshYieldValue();
+}
+foreach (freshYieldValues() as $value) { echo get_debug_type($value), '|'; }
+unset($value);
+$abandoned = freshYieldValues();
+$abandoned->rewind();
+unset($abandoned);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "array|string|FreshYieldValue|drop|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
