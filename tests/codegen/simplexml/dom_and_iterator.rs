@@ -47,6 +47,23 @@ echo $document->documentElement->textContent;
     assert_eq!(out, "bool(true)\nbool(true)\nbool(true)\ncallback");
 }
 
+/// Callable arrays inject native XML support without a direct or first-class loadXML call.
+#[test]
+fn test_simplexml_callable_array_dom_load_xml_detection() {
+    if skip_without_xml_native("test_simplexml_callable_array_dom_load_xml_detection") { return; }
+    let out = compile_and_run(r#"<?php
+$document = new DOMDocument();
+$load = [$document, 'loadXML'];
+var_dump($load('<r>stored</r>'));
+$results = array_map([$document, 'loadXML'], ['<r>mapped</r>']);
+echo $document->documentElement->textContent, '|';
+$closure = Closure::fromCallable([$document, 'loadXML']);
+var_dump($closure('<r>closed</r>'));
+echo $document->documentElement->textContent;
+"#);
+    assert_eq!(out, "bool(true)\nmapped|bool(true)\nclosed");
+}
+
 /// A by-reference callback can replace a non-DOM local before its first XML load.
 #[test]
 fn test_simplexml_dom_load_after_captured_reassignment() {

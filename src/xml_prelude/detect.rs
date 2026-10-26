@@ -317,7 +317,10 @@ impl Detector {
                 name_is_xml_function(name) || self.callback_call_refs_xml(name, args) || args.iter().any(|value| self.expr_refs_xml(value))
             }
             ExprKind::ClosureCall { args, .. } => args.iter().any(|value| self.expr_refs_xml(value)),
-            ExprKind::ArrayLiteral(items) => items.iter().any(|value| self.expr_refs_xml(value)),
+            ExprKind::ArrayLiteral(items) => {
+                (items.len() == 2 && self.dynamic_method_refs_xml(&items[0], &items[1]))
+                    || items.iter().any(|value| self.expr_refs_xml(value))
+            }
             ExprKind::ArrayLiteralAssoc(pairs) => pairs
                 .iter()
                 .any(|(key, value)| self.expr_refs_xml(key) || self.expr_refs_xml(value)),
@@ -823,6 +826,8 @@ mod tests {
             "if ($argc) { class Config { function loadXML(): void {} } } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); $cfg = new Config(); $cfg->loadXML();",
             "class Config { function loadXML(): void {} } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); (new Config())->{'loadXML'}();",
             "class Config { function loadXML(): void {} } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); call_user_func([new Config(), 'loadXML']);",
+            "class Config { function loadXML($xml): bool { return true; } } $doc = new DOMDocument(); $cfg = new Config(); $load = [$cfg, 'loadXML']; $load('<r/>');",
+            "class Config { function loadXML($xml): bool { return true; } } $doc = new DOMDocument(); $cfg = new Config(); array_map([$cfg, 'loadXML'], ['<r/>']);",
             "class Config { function loadXML(): void {} } function readValue($value): void {} $doc = new DOMDocument(); $cfg = new Config(); readValue(value: $cfg); $cfg->loadXML();",
             "class Config { function loadXML(): void {} } $doc = new DOMDocument(); while (($doc = new Config()) && $argc) {} $doc->loadXML();",
             "class Config { function loadXML(): void {} } $doc = new DOMDocument(); $alias =& $doc; $alias = new Config(); $doc->loadXML();",
@@ -858,6 +863,9 @@ mod tests {
             "$doc = new DOMDocument(); $doc?->{'loadXML'}('<r/>');",
             "$doc = new DOMDocument(); call_user_func([$doc, 'loadXML'], '<r/>');",
             "$doc = new DOMDocument(); call_user_func_array([$doc, 'loadXML'], ['<r/>']);",
+            "$doc = new DOMDocument(); $load = [$doc, 'loadXML']; $load('<r/>');",
+            "$doc = new DOMDocument(); array_map([$doc, 'loadXML'], ['<r/>']);",
+            "$doc = new DOMDocument(); $load = Closure::fromCallable([$doc, 'loadXML']); $load('<r/>');",
             "class Config {} $doc = new DOMDocument(); if ($argc) { $doc = new Config(); } $doc->loadXML('<r/>');",
             "class Config {} $doc = new Config(); $change = function () use (&$doc): void { $doc = new DOMDocument(); }; $doc = new Config(); $change(); $doc->loadXML('<r/>');",
             "class Config {} function change(&$value): void { $value = new DOMDocument(); } $doc = new Config(); change(value: $doc); $doc->loadXML('<r/>');",
