@@ -16,6 +16,7 @@ use crate::ir::{BlockId, Immediate, Op, PropertyFetchMode, Terminator};
 use crate::ir_lower::context::{LoweredValue, LoweringContext};
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
+use super::nullable_method_calls::terminate_method_call_on_null;
 
 use super::{
     branch_to, lower_array_access_from_value, lower_boxed_null,
@@ -556,11 +557,4 @@ fn guard_regular_method_receiver(
 
     ctx.builder.position_at_end(call_block);
     true
-}
-
-/// Emits the PHP fatal diagnostic for calling a method on null.
-fn terminate_method_call_on_null(ctx: &mut LoweringContext<'_, '_>, method: &str) {
-    let message = format!("Fatal error: Call to a member function {}() on null\n", method);
-    let message = ctx.intern_string(&message);
-    ctx.builder.terminate(Terminator::Fatal { message });
 }

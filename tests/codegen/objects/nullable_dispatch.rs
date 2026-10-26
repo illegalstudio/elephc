@@ -393,3 +393,18 @@ echo 'after';
         format!("{}after", "Attempt to assign property \"msg\" on null|".repeat(8)));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A real null after a nullsafe segment throws catchable Error before method arguments.
+#[test]
+fn test_nullsafe_mixed_child_method_error_is_catchable() {
+    let out = compile_and_run(r#"<?php
+class MixedChildHolder { public mixed $child = null; }
+function noisyMixedChildArgument(): int { echo 'argument|'; return 1; }
+$holder = new MixedChildHolder();
+try { $holder?->child->run(noisyMixedChildArgument()); }
+catch (Error $error) { echo $error->getMessage(), '|'; }
+finally { echo 'finally|'; }
+echo 'after';
+"#);
+    assert_eq!(out, "Call to a member function run() on null|finally|after");
+}

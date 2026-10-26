@@ -105,3 +105,27 @@ simplexml_load_file(): Argument #1 ($filename) must not contain any null bytes|l
 2:ctor-io|String could not be parsed as XML|caught|Exception:String could not be parsed as XML:RuntimeException|Exception:String could not be parsed as XML:RuntimeException|caught:new|caught:new|"###);
 }
 
+
+/// Unary and counter operators return numbers while postfix preserves the previous XML wrapper.
+#[test]
+fn test_simplexml_unary_and_counter_result_types() {
+    if skip_without_xml_native("test_simplexml_unary_and_counter_result_types") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class NumericXmlSubclass extends SimpleXMLElement {}
+function xmlCounterArgument(SimpleXMLElement $xml): void {
+    $before = $xml++;
+    echo get_class($before), ':', (string)$before, ':', gettype($xml), ':', $xml, '|';
+    echo ++$xml, ':', --$xml, '|';
+}
+$xml = new SimpleXMLElement('<r>2</r>');
+echo -$xml, ':', gettype(-$xml), '|';
+$child = new NumericXmlSubclass('<r>3.5</r>');
+echo -$child, ':', gettype(-$child), '|';
+xmlCounterArgument($xml);
+xmlCounterArgument($child);
+echo (string)$xml, ':', (string)$child;
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "-2:integer|-3.5:double|SimpleXMLElement:2:integer:3|4:3|NumericXmlSubclass:3.5:double:4.5|5.5:4.5|2:3.5");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

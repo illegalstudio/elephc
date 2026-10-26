@@ -35,8 +35,10 @@ impl Checker {
             ExprKind::Variable(name) => self.variable_type_or_eval_dynamic(name, expr.span, env),
             ExprKind::Negate(inner) => {
                 let ty = self.infer_type(inner, env)?;
-                if crate::types::object_operators::binary_plan(&crate::parser::ast::BinOp::Sub, &PhpType::Int, &ty).is_some() {
-                    return Ok(ty);
+                if let Some(plan) = crate::types::object_operators::binary_plan_with_classes(
+                    &crate::parser::ast::BinOp::Sub, &PhpType::Int, &ty, &self.classes,
+                ) {
+                    return Ok(plan.result_type(&crate::parser::ast::BinOp::Sub));
                 }
                 match ty {
                     PhpType::Int => {
@@ -70,7 +72,16 @@ impl Checker {
                 Ok(PhpType::Int)
             }
             ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => match env.get(name) {
-                Some(ty) if crate::types::object_operators::operator_class(ty).is_some() => Ok(ty.clone()),
+                Some(ty) if crate::types::object_operators::binary_plan_with_classes(
+                    &crate::parser::ast::BinOp::Add, ty, &PhpType::Int, &self.classes,
+                ).is_some() => {
+                    let plan = crate::types::object_operators::binary_plan_with_classes(
+                        &crate::parser::ast::BinOp::Add, ty, &PhpType::Int, &self.classes,
+                    ).unwrap();
+                    let result = plan.result_type(&crate::parser::ast::BinOp::Add);
+                    if result.is_int_float_union() { self.record_string_incdec_local(name); }
+                    Ok(result)
+                },
                 Some(PhpType::Int) => Ok(PhpType::Mixed),
                 Some(PhpType::Mixed) => Ok(PhpType::Mixed),
                 // PHP's string increment can change the value's type (`"9"++` is
@@ -100,7 +111,17 @@ impl Checker {
                 )),
             },
             ExprKind::PostIncrement(name) | ExprKind::PostDecrement(name) => match env.get(name) {
-                Some(ty) if crate::types::object_operators::operator_class(ty).is_some() => Ok(ty.clone()),
+                Some(ty) if crate::types::object_operators::binary_plan_with_classes(
+                    &crate::parser::ast::BinOp::Add, ty, &PhpType::Int, &self.classes,
+                ).is_some() => {
+                    let plan = crate::types::object_operators::binary_plan_with_classes(
+                        &crate::parser::ast::BinOp::Add, ty, &PhpType::Int, &self.classes,
+                    ).unwrap();
+                    if plan.result_type(&crate::parser::ast::BinOp::Add).is_int_float_union() {
+                        self.record_string_incdec_local(name);
+                    }
+                    Ok(ty.clone())
+                },
                 Some(PhpType::Int)
                 | Some(PhpType::Bool)
                 | Some(PhpType::False)
