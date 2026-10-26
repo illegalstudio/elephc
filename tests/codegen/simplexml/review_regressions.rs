@@ -195,10 +195,15 @@ class ThrowingXmlEmptyKey {
 }
 function freshXmlEmptyKey(): mixed { return new ThrowingXmlEmptyKey(); }
 $key = "z";
+echo "probes|";
 for ($i = 0; $i < 32; $i++) {
+    if ($i === 0) { echo "empty-loop|"; }
     if (!empty($xml["missing" . str_repeat("x", 40)]) || !empty($xml[$key])) { echo "wrong|"; }
+    if ($i === 0) { echo "isset-loop|"; }
     if (isset($xml["missing" . str_repeat("x", 40)]) || !isset($xml[$key])) { echo "wrong|"; }
+    if ($i === 0) { echo "fresh-loop|"; }
     if (isset((new SimpleXMLElement("<r/>"))["missing"]) || !empty((new SimpleXMLElement("<r/>"))["missing"])) { echo "wrong|"; }
+    if ($i === 0) { echo "chain-loop|"; }
     if (!empty($xml?->missing["key" . str_repeat("x", 40)])) { echo "wrong|"; }
 }
 echo "empty|";
@@ -212,7 +217,7 @@ echo $key;
 eval($source);
 "###);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "empty|drop|cast|isset|drop|cast|z");
+    assert_eq!(out.stdout, "probes|empty-loop|isset-loop|fresh-loop|chain-loop|empty|drop|cast|isset|drop|cast|z");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
