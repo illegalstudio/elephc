@@ -35,6 +35,13 @@ foreach ($xml->item as $key => $node) { echo $key, (string)$node, (int)$node, (f
 var_dump((bool)$xml->missing);
 var_dump(empty($xml->item), empty($xml['id']), empty($xml?->missing));
 var_dump(empty($xml?->item['id']), empty($xml?->item->missing));
+function xmlUnionProbes(SimpleXMLElement|ArrayObject|null $node): void {
+    var_dump(isset($node['id']), empty($node['id']));
+    unset($node['id']);
+}
+xmlUnionProbes($xml);
+xmlUnionProbes(new ArrayObject(['id' => 'ordinary']));
+xmlUnionProbes(null);
 class XmlEmptyScalarPeer { public string $text = '0'; }
 $peer = new XmlEmptyScalarPeer();
 var_dump(empty($peer?->text[0]));

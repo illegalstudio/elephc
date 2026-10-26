@@ -56,6 +56,7 @@ mod function_calls;
 mod eval_barriers;
 mod lazy_isset;
 mod native_isset;
+mod native_dimension_probes;
 mod native_xml_empty;
 mod callable_probes;
 mod descriptor_invoke;

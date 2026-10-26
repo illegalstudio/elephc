@@ -152,14 +152,8 @@ pub(super) fn lower_unset_array_access(
         }
     }
     let object = lower_expr(ctx, array);
-    let ty = ctx.builder.value_php_type(object.value);
-    let method = native_dimension_method_for_type(ctx, &ty,
-        elephc_builtin_contract::ObjectDimension::Unset).unwrap_or("offsetUnset");
-    let op = if value_is_nullable(ctx, object.value) {
-        Op::NullsafeMethodCall
-    } else { Op::MethodCall };
-    // Lower the key before the backend's null guard: PHP evaluates it even for null.
-    lower_method_call_with_receiver(ctx, object, method, &[index.clone()], op, expr);
+    native_dimension_probes::lower(ctx, object, index,
+        elephc_builtin_contract::ObjectDimension::Unset, expr);
 }
 
 /// Detaches the declared array cell before sparse removal and roots an owned key across callbacks.

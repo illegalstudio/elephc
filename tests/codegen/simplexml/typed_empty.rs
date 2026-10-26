@@ -64,3 +64,33 @@ nativeUnionProbe(new SimpleXMLIterator('<r id="0"/>'));
     assert_eq!(out.stdout, "0:1|0|1:0|0|1:1|0|");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Native XML and public ArrayAccess arms preserve their distinct isset and unset protocols.
+#[test]
+fn test_simplexml_arrayaccess_union_dimension_probes() {
+    if skip_without_xml_native("test_simplexml_arrayaccess_union_dimension_probes") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class XmlDimensionProbePeer implements ArrayAccess {
+    private bool $present = true;
+    public function offsetExists(mixed $offset): bool { echo 'exists|'; return $this->present; }
+    public function offsetGet(mixed $offset): mixed { echo 'get|'; return '1'; }
+    public function offsetSet(mixed $offset, mixed $value): void {}
+    public function offsetUnset(mixed $offset): void { echo 'unset|'; $this->present = false; }
+}
+function xmlDimensionProbeKey(): string { echo 'key|'; return 'id'; }
+function probeXmlOrArrayAccess(SimpleXMLElement|XmlDimensionProbePeer|null $node): void {
+    echo (int)isset($node[xmlDimensionProbeKey()]), ':', (int)empty($node['id']), '|';
+    unset($node[xmlDimensionProbeKey()]);
+    echo (int)isset($node['id']), '|';
+}
+probeXmlOrArrayAccess(null);
+probeXmlOrArrayAccess(new SimpleXMLElement('<r id="1"/>'));
+probeXmlOrArrayAccess(new XmlDimensionProbePeer());
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, concat!(
+        "key|0:1|key|0|key|1:0|key|0|",
+        "key|exists|1:exists|get|0|key|unset|exists|0|",
+    ));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

@@ -76,27 +76,9 @@ pub(super) fn lower_lazy_isset_operand(
     match &arg.kind {
         ExprKind::ArrayAccess { array, index } => {
             if array_access_expr_satisfies_array_access(ctx, array) {
-                let ty = super::array_cast_source::array_cast_source_type_for_ir(ctx, array);
-                let method = native_dimension_method_for_type(ctx, &ty,
-                    elephc_builtin_contract::ObjectDimension::Isset).unwrap_or("offsetExists");
                 let object = lower_expr(ctx, array);
-                let (object, owner) = root_owned_call_operand(ctx, object, arg.span);
-                let borrowed = ctx.emit_value(Op::Borrow, vec![object.value], None,
-                    ctx.builder.value_php_type(object.value), Op::Borrow.default_effects(), Some(arg.span));
-                ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
-                let (key, key_temp) = evaluate_once(ctx, index, arg);
-                let key_owner = key_temp.as_ref().filter(|name|
-                    Ownership::php_type_needs_lifetime_tracking(&ctx.local_type(name)))
-                    .map(|name| ctx.local_slots[name]);
-                if let Some(slot) = key_owner { register_owned_call_operand(ctx, slot, arg.span); }
-                let op = if value_is_nullable(ctx, borrowed.value) { Op::NullsafeMethodCall }
-                    else { Op::MethodCall };
-                let result = lower_method_call_with_receiver(ctx, borrowed, method, &[key], op, arg);
-                let result = ctx.truthy_consuming(result, Some(arg.span));
-                if let Some(slot) = key_owner { unregister_owned_call_operand(ctx, slot, arg.span); }
-                release_evaluated_once(ctx, key_temp, arg.span);
-                if let Some(slot) = owner { retire_owned_call_operand(ctx, slot, arg.span); }
-                return Some(result);
+                return Some(native_dimension_probes::lower(ctx, object, index,
+                    elephc_builtin_contract::ObjectDimension::Isset, arg));
             }
             if !array_access_expr_supports_native_isset_probe(ctx, array) {
                 return None;
