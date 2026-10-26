@@ -33,7 +33,7 @@ var_dump(simplexml_load_file('php://input', null, LIBXML_NOERROR | LIBXML_NOWARN
 #[test]
 fn test_simplexml_registered_stream_document() {
     if skip_without_xml_native("test_simplexml_registered_stream_document") { return; }
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run_with_heap_debug(r#"<?php
 class XmlDocumentStream {
     public mixed $context = null;
     private int $position = 0;
@@ -53,7 +53,9 @@ echo simplexml_load_file('xmldocument://document')->getName(), '|';
 echo (new SimpleXMLElement('xmldocument://document', 0, true))->getName();
 stream_wrapper_unregister('xmldocument');
 "#);
-    assert_eq!(out, "close|r|close|r");
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "close|r|close|r");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
 /// HTTP URLs use PHP's network reader even though libxml2 has no built-in HTTP client.
@@ -106,4 +108,77 @@ catch (Exception $error) { echo get_class($error), ':', $error->getMessage(), ':
 restore_error_handler();
 "#);
     assert_eq!(out, "nul|io|bool(false)\nException:String could not be parsed as XML:RuntimeException");
+}
+
+/// PHP schemes are case insensitive, while uppercase data fails and unknown filters only warn.
+#[test]
+fn test_simplexml_stream_scheme_and_filter_warning_contract() {
+    if skip_without_xml_native("test_simplexml_stream_scheme_and_filter_warning_contract") { return; }
+    let out = compile_and_run(r#"<?php
+set_error_handler(function(int $level, string $message): bool {
+    if (str_contains($message, 'Failed to open stream: operation failed')) { echo 'case|'; }
+    elseif (str_contains($message, 'I/O warning')) { echo 'io|'; }
+    else { echo $message, '|'; }
+    return true;
+});
+var_dump(simplexml_load_file('DATA://text/plain,%3Cr%2F%3E'));
+echo simplexml_load_file('PHP://filter/read=string.tolower/resource=data://text/plain,%3CR%2F%3E')->getName(), '|';
+echo simplexml_load_file('php://filter/read=not-a-filter/resource=data://text/plain,%3Cr%2F%3E')->getName(), '|';
+class RejectedXmlFilter extends php_user_filter {
+    public function onCreate(): bool { return false; }
+    public function filter($in, $out, &$consumed, bool $closing): int { return PSFS_PASS_ON; }
+}
+stream_filter_register('rejectedxmlfilter', 'RejectedXmlFilter');
+echo simplexml_load_file('php://filter/read=rejectedxmlfilter/resource=data://text/plain,%3Cr%2F%3E')->getName();
+restore_error_handler();
+"#);
+    assert_eq!(out, "case|io|bool(false)\nr|simplexml_load_file(): Unable to locate filter \"not-a-filter\"|simplexml_load_file(): Unable to create filter (not-a-filter)|r|simplexml_load_file(): Unable to create or locate filter \"rejectedxmlfilter\"|simplexml_load_file(): Unable to create filter (rejectedxmlfilter)|r");
+}
+
+/// A read exception releases the wrapper owner without running stream_close on the pending throw.
+#[test]
+fn test_simplexml_stream_read_exception_cleanup() {
+    if skip_without_xml_native("test_simplexml_stream_read_exception_cleanup") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ThrowingXmlInput {
+    public mixed $context = null;
+    public string $owned = '';
+    public function url_stat(string $path, int $flags): array { return ['mode' => 0100644]; }
+    public function stream_open(string $path, string $mode, int $options, mixed &$opened_path): bool {
+        $this->owned = str_repeat('x', 128); return true;
+    }
+    public function stream_read(int $count): string { throw new RuntimeException('read'); }
+    public function stream_eof(): bool { return false; }
+    public function stream_close(): void { echo 'unexpected-close'; }
+}
+stream_wrapper_register('throwingxml', 'ThrowingXmlInput');
+try { simplexml_load_file('throwingxml://document'); } catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
+try { new SimpleXMLElement('throwingxml://document', 0, true); }
+catch (Exception $error) { echo $error->getMessage(), ':', get_class($error->getPrevious()); }
+stream_wrapper_unregister('throwingxml');
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "read|String could not be parsed as XML:RuntimeException");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Invalid scalar stat results fail the XML open without dereferencing them as heap pointers.
+#[test]
+fn test_simplexml_stream_invalid_stat_result() {
+    if skip_without_xml_native("test_simplexml_stream_invalid_stat_result") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ScalarXmlStat {
+    public mixed $context = null;
+    public function url_stat(string $path, int $flags): bool { return true; }
+    public function stream_open(string $path, string $mode, int $options, mixed &$opened_path): bool { echo 'unexpected-open'; return true; }
+}
+stream_wrapper_register('scalarxmlstat', 'ScalarXmlStat');
+set_error_handler(function(int $level, string $message): bool { return true; });
+var_dump(simplexml_load_file('scalarxmlstat://document'));
+restore_error_handler();
+stream_wrapper_unregister('scalarxmlstat');
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "bool(false)\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

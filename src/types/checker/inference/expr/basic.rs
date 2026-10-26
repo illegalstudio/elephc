@@ -79,7 +79,10 @@ impl Checker {
                         &crate::parser::ast::BinOp::Add, ty, &PhpType::Int, &self.classes,
                     ).unwrap();
                     let result = plan.result_type(&crate::parser::ast::BinOp::Add);
-                    if result.is_int_float_union() { self.record_string_incdec_local(name); }
+                    if result.is_int_float_union() {
+                        self.reject_unboxable_native_incdec(name, ty, expr.span)?;
+                        self.record_string_incdec_local(name);
+                    }
                     Ok(result)
                 },
                 Some(PhpType::Int) => Ok(PhpType::Mixed),
@@ -118,6 +121,7 @@ impl Checker {
                         &crate::parser::ast::BinOp::Add, ty, &PhpType::Int, &self.classes,
                     ).unwrap();
                     if plan.result_type(&crate::parser::ast::BinOp::Add).is_int_float_union() {
+                        self.reject_unboxable_native_incdec(name, ty, expr.span)?;
                         self.record_string_incdec_local(name);
                     }
                     Ok(ty.clone())

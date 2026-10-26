@@ -9,6 +9,8 @@
 //! - URI bytes are passed with their original URL to a per-context libxml input loader.
 
 pub(super) const SOURCE: &str = r###"
+extern "System" { function elephc_runtime_simplexml_stream_close_mode(int $mode): int; }
+
 function __elephc_simplexml_file_handle(string $filename, int $options, string $ns, bool $prefix, string $caller): int {
     $nul = strpos($filename, "\0");
     if ($nul !== false) { $filename = substr($filename, 0, (int)$nul); }
@@ -31,6 +33,7 @@ function __elephc_simplexml_stream_bytes(string $uri, string $caller): string|fa
     $scheme = strtolower(substr($uri, 0, (int)$separator));
     if ($scheme === 'data') { return __elephc_simplexml_data_bytes($uri, $caller); }
     if ($scheme === 'php') {
+        $uri = 'php' . substr($uri, (int)$separator);
         if ($uri === 'php://input') {
             $input = file_get_contents('php://input');
             return $input === false ? '' : $input;
@@ -56,14 +59,13 @@ function __elephc_simplexml_stream_bytes(string $uri, string $caller): string|fa
     if (!file_exists($uri)) { return false; }
     $stream = fopen($uri, 'rb');
     if ($stream === false) { return false; }
-    $data = stream_get_contents($stream);
-    fclose($stream);
-    return $data;
+    return __elephc_simplexml_read_stream($stream);
 }
 
 function __elephc_simplexml_data_failure(string $uri, string $caller, string $reason): false {
     $function = substr($caller, 0, strlen($caller) - 2);
-    __elephc_simplexml_warning('Warning: ' . $function . '(' . $uri . '): Failed to open stream: rfc2397: ' . $reason . "\n");
+    $prefix = $reason === 'operation failed' ? '' : 'rfc2397: ';
+    __elephc_simplexml_warning('Warning: ' . $function . '(' . $uri . '): Failed to open stream: ' . $prefix . $reason . "\n");
     return false;
 }
 
@@ -112,13 +114,38 @@ function __elephc_simplexml_filter_bytes(string $uri, string $caller): string|fa
     if ($stream === false) { return false; }
     fwrite($stream, $data);
     rewind($stream);
-    foreach (explode('/', $filters) as $filter_list) {
-        if (str_starts_with($filter_list, 'write=')) { continue; }
-        if (str_starts_with($filter_list, 'read=')) { $filter_list = substr($filter_list, 5); }
-        foreach (explode('|', $filter_list) as $filter) { stream_filter_append($stream, $filter, STREAM_FILTER_READ); }
-    }
-    $filtered = stream_get_contents($stream);
-    fclose($stream);
-    return $filtered;
+    $failed = false;
+    try {
+        foreach (explode('/', $filters) as $filter_list) {
+            if (str_starts_with($filter_list, 'write=')) { continue; }
+            if (str_starts_with($filter_list, 'read=')) { $filter_list = substr($filter_list, 5); }
+            foreach (explode('|', $filter_list) as $filter) {
+                if (stream_filter_append($stream, $filter, STREAM_FILTER_READ) === false) {
+                    $known = false;
+                    foreach (stream_get_filters() as $pattern) {
+                        if (fnmatch($pattern, $filter)) { $known = true; }
+                    }
+                    $reason = $known ? 'Unable to create or locate filter "' : 'Unable to locate filter "';
+                    __elephc_simplexml_warning('Warning: ' . $caller . ': ' . $reason . $filter . '"' . "\n");
+                    __elephc_simplexml_warning('Warning: ' . $caller . ': Unable to create filter (' . $filter . ')' . "\n");
+                }
+            }
+        }
+        return stream_get_contents($stream);
+    } catch (Throwable $error) { $failed = true; throw $error; }
+    finally { __elephc_simplexml_close_stream($stream, $failed); }
+}
+
+function __elephc_simplexml_read_stream(mixed $stream): string|false {
+    $failed = false;
+    try { return stream_get_contents($stream); }
+    catch (Throwable $error) { $failed = true; throw $error; }
+    finally { __elephc_simplexml_close_stream($stream, $failed); }
+}
+
+function __elephc_simplexml_close_stream(mixed $stream, bool $failed): void {
+    $previous = elephc_runtime_simplexml_stream_close_mode((int)$failed);
+    try { fclose($stream); }
+    finally { elephc_runtime_simplexml_stream_close_mode($previous); }
 }
 "###;

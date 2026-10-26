@@ -304,12 +304,18 @@ leaked block and byte totals), not guarantees.
 
 ## Differences from PHP
 
+- SimpleXML `++` and `--` replace a local object value with a number. Typed
+  by-reference parameters and static locals are rejected at compile time because
+  their storage cannot change to the numeric representation. Copy the object
+  into a plain local before applying the counter operator.
 - SimpleXML URL inputs are buffered before parsing. Registered wrapper close
   callbacks run after reading, before parser diagnostics are dispatched. External
   DTDs and entities use libxml2's native file loader, so PHP stream wrappers apply
   to the main document only. `php://fd` and compressed stream URLs are not
   supported by the SimpleXML reader. Network read failures use the stream
-  layer's warning text before the native SimpleXML I/O warning.
+  layer's warning text before the native SimpleXML I/O warning. Stream and filter
+  registrations used by the native prelude must come from compiled PHP; Magician's
+  eval-local registrations remain in its separate stream context.
 
 - The parser is libxml2 2.15.3 itself, driven through the same push-parser
   entry points php-src's `ext/xml` uses, so event boundaries, positions, error

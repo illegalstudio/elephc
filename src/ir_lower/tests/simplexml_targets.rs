@@ -75,6 +75,7 @@ echo $doc->saveXML();
     assert!(assembly.contains("elephc_xml_sx_mutate"), "{target}: document mutation boundary");
     assert!(assembly.contains("elephc_xml_sx_diagnostics"), "{target}: native diagnostic transfer boundary");
     assert!(assembly.contains("elephc_xml_sx_load_dom"), "{target}: DOM structured parsing boundary");
+    assert!(assembly.contains("elephc_runtime_simplexml_stream_close_mode"), "{target}: stream cleanup C ABI boundary");
     assert!(assembly.contains("elephc_xml_sx_load_stream"), "{target}: PHP stream parser boundary");
     assert!(assembly.contains("elephc_xml_sx_load_file"), "{target}: native file parser boundary");
     assert!(assembly.contains("elephc_xml_sx_compare"), "{target}: XML node comparison boundary");

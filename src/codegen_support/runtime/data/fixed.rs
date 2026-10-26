@@ -1402,6 +1402,7 @@ pub(crate) fn emit_runtime_data_fixed(
     // registrations, each entry 32 bytes (protocol_ptr/len + class_ptr/len).
     // Slot is free when protocol_ptr is null. 64 × 32 = 2048 bytes.
     out.push_str(&comm_directive("_user_wrappers", 2048, target));
+    out.push_str(&comm_directive("_stream_close_silent", 8, target));
     // _user_wrapper_handles: USER_WRAPPER_HANDLES_CAP = 256 active stream-handle
     // slots, each storing the wrapper object pointer keyed by synthetic fd
     // `USER_WRAPPER_FD_BASE + slot_index`. Slot is free when the stored pointer

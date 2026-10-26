@@ -30,6 +30,7 @@
 //!   declare `: string`/`: int`/`: bool` on the methods they implement.
 
 use crate::codegen_support::runtime::data::USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET;
+use crate::codegen_support::runtime::exceptions::guards;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 const FD_BASE_LOW16: u32 = 0x4000;
@@ -46,7 +47,7 @@ const VTABLE_SLOT_LOCK: usize = 11;
 const VTABLE_SLOT_TRUNCATE: usize = 12;
 
 /// `__rt_user_wrapper_fclose`: invoke the wrapper's `stream_close` (if any)
-/// and free the handle slot. Always returns 1 (`true`) once the slot is
+/// and release its object owner. Always returns 1 (`true`) once the slot is
 /// freed, mirroring PHP's "fclose succeeded as far as we can tell" semantics
 /// for wrappers; an empty slot still returns 1 so callers see consistent
 /// fclose-after-fclose behavior.
@@ -60,27 +61,32 @@ pub fn emit_user_wrapper_fclose(emitter: &mut Emitter) {
     emitter.comment("--- runtime: user_wrapper_fclose ---");
     emitter.label_global("__rt_user_wrapper_fclose");
 
-    // Frame: 32 bytes. [sp, #0..16] saved x29/x30. [sp, #16..24] saved fd.
-    emitter.instruction("sub sp, sp, #32");                                     // helper frame for the wrapper dispatch
-    emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
-    emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
-    emitter.instruction("str x0, [sp, #16]");                                   // save the synthetic file descriptor
+    // Frame: object at 0, exception guard at 16..48, saved x29/x30 at 48..64.
+    // -- transfer the table owner before callbacks can reuse its handle slot --
+    emitter.instruction("sub sp, sp, #64");                                     // reserve the object owner and exception activation
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #48");                                    // establish the helper frame pointer
+    emit_aarch64_handle_lookup(emitter, "__rt_uwfclose_done");                  // resolve the object and leave its slot index in x9
+    emitter.instruction("str x0, [sp, #0]");                                    // transfer the handle's reference into local ownership
+    emitter.instruction("str xzr, [x10, x9, lsl #3]");                          // retire the old slot before PHP can open another wrapper
+    guards::guard(emitter, 16, 48);
 
-    emit_aarch64_handle_lookup(emitter, "__rt_uwfclose_clear");                 // resolve obj into x0, fall through to slot-clear on missing handles
-    emit_aarch64_method_lookup(emitter, "__rt_uwfclose_clear", VTABLE_SLOT_CLOSE); // resolve stream_close method pointer into x11
-
-    // -- call stream_close($this) --
+    // -- invoke an optional close method with exceptional object cleanup active --
+    emitter.instruction("ldr x0, [sp, #0]");                                    // restore the wrapper receiver after publishing the guard
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_stream_close_silent", 0);
+    emitter.instruction("cbnz x9, __rt_uwfclose_release");                      // skip PHP callbacks while unwinding a native-extension exception
+    emit_aarch64_method_lookup(emitter, "__rt_uwfclose_release", VTABLE_SLOT_CLOSE);
     emitter.instruction("blr x11");                                             // invoke stream_close on the wrapper object
 
-    emitter.label("__rt_uwfclose_clear");
-    // -- free the handle slot so the synthetic fd cannot be reused stale --
-    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the synthetic file descriptor
-    emit_aarch64_slot_from_fd(emitter, "x0", "x9");                             // x9 = fd & 0x3f, the handle slot index
-    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_handles");
-    emitter.instruction("str xzr, [x10, x9, lsl #3]");                          // clear the freed handle slot
+    // -- consume the detached owner even when stream_close is absent --
+    emitter.label("__rt_uwfclose_release");
+    guards::unguard(emitter, 16, 48);
+    emitter.instruction("ldr x0, [sp, #0]");                                    // recover the owner after removing exceptional cleanup
+    emitter.instruction("bl __rt_decref_object");                               // release properties and run the last owner's destructor
+    emitter.label("__rt_uwfclose_done");
     emitter.instruction("mov x0, #1");                                          // fclose() on a wrapper always reports success
-    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #32");                                     // release the helper frame
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return to the inline fclose dispatch site
 }
 
@@ -90,25 +96,32 @@ fn emit_user_wrapper_fclose_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: user_wrapper_fclose ---");
     emitter.label_global("__rt_user_wrapper_fclose");
 
+    // -- detach the handle owner before invoking reentrant PHP callbacks --
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
-    emitter.instruction("sub rsp, 16");                                         // helper frame for the wrapper dispatch
-    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the synthetic file descriptor
+    emitter.instruction("sub rsp, 48");                                         // reserve the object owner and a 32-byte exception guard
+    emit_x86_handle_lookup(emitter, "__rt_uwfclose_done_x86");                 // resolve the object and leave its slot index in r9
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // transfer the handle's reference into local ownership
+    emitter.instruction("mov QWORD PTR [r10 + r9 * 8], 0");                     // allow callbacks to reuse the retired slot safely
+    emitter.instruction("mov rax, rdi");                                        // provide the object through the native owner-guard convention
+    guards::guard(emitter, 16, 48);
 
-    emit_x86_handle_lookup(emitter, "__rt_uwfclose_clear_x86");                 // resolve obj into rdi, fall through on missing handles
-    emit_x86_method_lookup(emitter, "__rt_uwfclose_clear_x86", VTABLE_SLOT_CLOSE); // resolve stream_close method pointer into r11
-
-    // -- call stream_close($this) --
+    // -- protect the wrapper while its optional close method executes --
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the receiver after guard publication
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_stream_close_silent", 0);
+    emitter.instruction("test r9, r9");                                         // check the native-extension exception cleanup mode
+    emitter.instruction("jnz __rt_uwfclose_release_x86");                       // release without stream_close during native-extension unwinding
+    emit_x86_method_lookup(emitter, "__rt_uwfclose_release_x86", VTABLE_SLOT_CLOSE);
     emitter.instruction("call r11");                                            // invoke stream_close on the wrapper object
 
-    emitter.label("__rt_uwfclose_clear_x86");
-    // -- free the handle slot so the synthetic fd cannot be reused stale --
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the synthetic file descriptor
-    emit_x86_slot_from_fd(emitter, "rdi", "r9");                                // r9 = fd & 0x3f, the handle slot index
-    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
-    emitter.instruction("mov QWORD PTR [r10 + r9 * 8], 0");                     // clear the freed handle slot
+    // -- consume the owner after unlinking its exceptional cleanup activation --
+    emitter.label("__rt_uwfclose_release_x86");
+    guards::unguard(emitter, 16, 48);
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // restore the native object-release argument
+    emitter.instruction("call __rt_decref_object");                             // release the wrapper and its property owners exactly once
+    emitter.label("__rt_uwfclose_done_x86");
     emitter.instruction("mov eax, 1");                                          // fclose() on a wrapper always reports success
-    emitter.instruction("add rsp, 16");                                         // release the helper frame
+    emitter.instruction("add rsp, 48");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to the inline fclose dispatch site
 }
@@ -140,7 +153,7 @@ pub fn emit_user_wrapper_fread(emitter: &mut Emitter) {
 
     // -- call stream_read($this, $count); the result shape follows the method's return type --
     emitter.instruction("ldr x1, [sp, #24]");                                   // reload the requested byte count
-    emitter.instruction(&format!("tbnz x13, #{}, __rt_uwfread_boxed", VTABLE_SLOT_READ)); // a `string|false` return arrives boxed instead
+    emitter.instruction(&format!("tbnz x13, #{}, __rt_uwfread_boxed", VTABLE_SLOT_READ));// a `string|false` return arrives boxed instead
     emitter.instruction("blr x11");                                             // invoke stream_read on the wrapper object
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release the helper frame
@@ -671,10 +684,13 @@ pub fn emit_box_wrapper_stat_result(emitter: &mut Emitter) {
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
 
     emitter.instruction("cbz x0, __rt_bwsr_false");                             // scalar false/null return → boxed false
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the returned value's heap-kind word
+    emitter.instruction("str x0, [sp, #16]");                                   // preserve the erased return while validating whether it is heap-backed
+    abi::emit_call_label(emitter, "__rt_heap_kind");                            // reject scalar and foreign returns before probing heap metadata
+    emitter.instruction("mov x9, x0");                                          // retain the validated kind tag
+    emitter.instruction("ldr x0, [sp, #16]");                                   // restore the original array or Mixed pointer
     emitter.instruction("and x9, x9, #0xff");                                   // isolate the low heap-kind byte
     emitter.instruction("cmp x9, #5");                                          // already a boxed Mixed cell (e.g. array|false return)?
-    emitter.instruction("b.eq __rt_bwsr_ret");                                  // return it verbatim — ownership transfers to the caller
+    emitter.instruction("b.eq __rt_bwsr_ret");                                  // return it verbatim , ownership transfers to the caller
     emitter.instruction("mov x1, x0");                                          // raw array/hash pointer → mixed payload low word
     emitter.instruction("cmp x9, #3");                                          // associative hash (the usual string-keyed stat array)?
     emitter.instruction("mov x0, #5");                                          // runtime tag 5 = associative array
@@ -722,10 +738,13 @@ fn emit_box_wrapper_stat_result_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("test rax, rax");                                       // scalar false/null return?
     emitter.instruction("jz __rt_bwsr_false_x86");                              // → boxed false
-    emitter.instruction("mov r9, QWORD PTR [rax - 8]");                         // load the returned value's heap-kind word
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the erased return across the safe heap-kind query
+    abi::emit_call_label(emitter, "__rt_heap_kind");                            // reject scalar and foreign returns before probing heap metadata
+    emitter.instruction("mov r9, rax");                                         // retain the validated kind tag
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // restore the original array or Mixed pointer
     emitter.instruction("and r9, 0xff");                                        // isolate the low heap-kind byte
     emitter.instruction("cmp r9, 5");                                           // already a boxed Mixed cell (e.g. array|false return)?
-    emitter.instruction("je __rt_bwsr_ret_x86");                                // return it verbatim — ownership transfers to the caller
+    emitter.instruction("je __rt_bwsr_ret_x86");                                // return it verbatim , ownership transfers to the caller
     emitter.instruction("mov rdi, rax");                                        // raw array/hash pointer → mixed payload low word (before rax is reused for the tag)
     emitter.instruction("cmp r9, 3");                                           // associative hash (the usual string-keyed stat array)?
     emitter.instruction("mov eax, 5");                                          // runtime tag 5 = associative array
@@ -825,7 +844,7 @@ fn emit_user_wrapper_fstat_linux_x86_64(emitter: &mut Emitter) {
 /// handle slot index in `dst`. The shift-and-subtract sequence keeps the
 /// constant out of an immediate field (it does not fit a 12-bit cmp/sub).
 fn emit_aarch64_slot_from_fd(emitter: &mut Emitter, src: &str, dst: &str) {
-    emitter.instruction(&format!("mov w{}, #{:#x}", dst.trim_start_matches('x'), FD_BASE_LOW16)); // load the high half of USER_WRAPPER_FD_BASE
+    emitter.instruction(&format!("mov w{}, #{:#x}", dst.trim_start_matches('x'), FD_BASE_LOW16));// load the high half of USER_WRAPPER_FD_BASE
     emitter.instruction(&format!("lsl {}, {}, #16", dst, dst));                 // shift into bits 30..16 to form 0x40000000
     emitter.instruction(&format!("sub {}, {}, {}", dst, src, dst));             // dst = fd - USER_WRAPPER_FD_BASE → handle slot index
 }
@@ -882,7 +901,7 @@ fn emit_aarch64_method_lookup(emitter: &mut Emitter, missing_label: &str, vtable
     emitter.instruction("ldr x10, [x0]");                                       // class_id stored at the head of every wrapper object
     abi::emit_symbol_address(emitter, "x11", "_user_wrapper_vtable_ptrs");
     emitter.instruction("ldr x11, [x11, x10, lsl #3]");                         // per-class user-wrapper vtable for the resolved class
-    emitter.instruction(&format!("ldr x13, [x11, #{}]", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET)); // boxed-result mask, read before x11 is reused
+    emitter.instruction(&format!("ldr x13, [x11, #{}]", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET));// boxed-result mask, read before x11 is reused
     emitter.instruction(&format!("ldr x11, [x11, #{}]", vtable_slot * 8));      // load the requested wrapper method pointer
     emitter.instruction(&format!("cbz x11, {}", missing_label));                // method absent: take the fallback path
 }
@@ -912,8 +931,8 @@ fn emit_x86_method_lookup(emitter: &mut Emitter, missing_label: &str, vtable_slo
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // class_id stored at the head of every wrapper object
     abi::emit_symbol_address(emitter, "r11", "_user_wrapper_vtable_ptrs");      // base of the per-class user-wrapper vtable pointer table
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // per-class user-wrapper vtable for the resolved class
-    emitter.instruction(&format!("mov r8, QWORD PTR [r11 + {}]", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET)); // boxed-result mask, read before r11 is reused
-    emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", vtable_slot * 8)); // load the requested wrapper method pointer
+    emitter.instruction(&format!("mov r8, QWORD PTR [r11 + {}]", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET));// boxed-result mask, read before r11 is reused
+    emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", vtable_slot * 8));// load the requested wrapper method pointer
     emitter.instruction("test r11, r11");                                       // is the method missing?
     emitter.instruction(&format!("jz {}", missing_label));                      // method absent: take the fallback
 }
@@ -979,5 +998,47 @@ mod tests {
                 "{arch:?}: the missing-method fallback must survive:\n{asm}"
             );
         }
+    }
+}
+
+/// Queries or swaps the extension cleanup mode through a leaf C ABI entry.
+pub(crate) fn emit_stream_close_mode(emitter: &mut Emitter) {
+    let name = emitter.target.extern_symbol("elephc_runtime_simplexml_stream_close_mode");
+    emitter.label_global(&name);
+    let done = "__rt_stream_close_mode_done";
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_symbol_to_reg(emitter, "x14", "_stream_close_silent", 0);
+            emitter.instruction(&format!("tbnz x0, #63, {done}"));              // a negative mode only reads the current cleanup policy
+            abi::emit_store_reg_to_symbol(emitter, "x0", "_stream_close_silent", 0);
+            emitter.label(done);
+            emitter.instruction("mov x0, x14");                                 // return the previous mode through the C ABI
+        }
+        Arch::X86_64 => {
+            abi::emit_load_symbol_to_reg(emitter, "rax", "_stream_close_silent", 0);
+            emitter.instruction("test rdi, rdi");                               // a negative mode only reads the current cleanup policy
+            emitter.instruction(&format!("js {done}"));                         // preserve the mode for read-only queries
+            abi::emit_store_reg_to_symbol(emitter, "rdi", "_stream_close_silent", 0);
+            emitter.label(done);
+        }
+    }
+    emitter.instruction("ret");                                                 // return the mode without invoking PHP callbacks
+}
+
+/// Every target exports the C cleanup control and protects the wrapper owner around callbacks.
+#[cfg(test)]
+#[test]
+fn simplexml_stream_cleanup_exports_on_all_targets() {
+    use crate::codegen_support::platform::Target;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let mut emitter = Emitter::new(target);
+        emit_stream_close_mode(&mut emitter);
+        emit_user_wrapper_fclose(&mut emitter);
+        let assembly = emitter.output();
+        assert!(assembly.contains(&target.extern_symbol("elephc_runtime_simplexml_stream_close_mode")), "{name}: C cleanup entry");
+        assert!(assembly.contains("__rt_exception_guard_owned"), "{name}: exceptional wrapper owner");
+        assert!(assembly.contains("__rt_exception_unguard_owned"), "{name}: normal owner transfer");
+        assert!(assembly.contains("__rt_decref_object"), "{name}: wrapper storage release");
     }
 }

@@ -235,3 +235,15 @@ fn simplexml_load_string_rejects_array_data() {
 fn simplexml_constructor_requires_data() {
     expect_xml_error("<?php new SimpleXMLElement();", "__construct");
 }
+
+/// Native counters refuse reference/static layouts which cannot store their numeric replacement.
+#[test]
+fn simplexml_counter_rejects_unboxable_storage() {
+    for source in [
+        "<?php function bump(SimpleXMLElement &$xml): void { $xml++; } $xml = new SimpleXMLElement('<r>2</r>'); bump($xml);",
+        "<?php class CounterXml extends SimpleXMLElement {} function bump(CounterXml &$xml): void { --$xml; } $xml = new CounterXml('<r>2</r>'); bump($xml);",
+        "<?php function bump(): void { static $xml; $xml = new SimpleXMLElement('<r>2</r>'); ++$xml; } bump();",
+    ] {
+        expect_xml_error(source, "Copy it into a plain local first");
+    }
+}

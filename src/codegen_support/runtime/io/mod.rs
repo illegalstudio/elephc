@@ -255,6 +255,7 @@ pub(crate) use user_filter::{
     emit_user_filter_release_fd,
 };
 pub(crate) use user_filter_brigade::emit_user_filter_brigade_invoke;
+pub(crate) use user_wrapper::emit_stream_close_mode;
 pub(crate) use user_wrapper::{
     emit_box_wrapper_stat_result, emit_user_wrapper_fclose, emit_user_wrapper_feof,
     emit_user_wrapper_fflush, emit_user_wrapper_flock, emit_user_wrapper_fread,

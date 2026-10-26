@@ -8275,3 +8275,21 @@ unset($list);
     assert_eq!(out.stdout, "bool(true)\nbool(true)\nbool(false)\nbool(true)\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Filter discovery includes userspace names and wildcard patterns as independent string copies.
+#[test]
+fn test_stream_get_filters_includes_registered_patterns() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class FilterDiscovery extends php_user_filter {
+    public function filter($in, $out, &$consumed, bool $closing): int { return PSFS_PASS_ON; }
+}
+stream_filter_register('discoveryfilter', 'FilterDiscovery');
+stream_filter_register('discoveryfilter.*', 'FilterDiscovery');
+$filters = stream_get_filters();
+var_dump(in_array('discoveryfilter', $filters, true), in_array('discoveryfilter.*', $filters, true));
+unset($filters);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "bool(true)\nbool(true)\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
