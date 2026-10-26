@@ -59,6 +59,21 @@ pub unsafe extern "C" fn elephc_xml_sx_load_dom(data: *const c_char, length: i64
 pub unsafe extern "C" fn elephc_xml_sx_load_file(filename: *const c_char, options: i64, ns: *const c_char, prefix: i64) -> i64 {
     guard(|| parse_file(filename, options, &string(ns), prefix != 0).map(insert).unwrap_or(0))
 }
+/// Adopts PHP stream bytes without losing the original URL or native I/O diagnostics.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_xml_sx_load_stream(filename: *const c_char, data: *const c_char,
+    length: i64, options: i64, ns: *const c_char, prefix: i64) -> i64 {
+    guard(|| {
+        diagnostics::reset();
+        crate::ffi::init_library();
+        if filename.is_null() || data.is_null() || length < -1 || length > i32::MAX as i64 { return 0; }
+        let Ok(options) = i32::try_from(options) else { return 0; };
+        let mut messages = std::ptr::null_mut();
+        let raw = ffi::parse_stream(filename, data, length as i32, options, &mut messages);
+        diagnostics::capture(messages);
+        from_document(raw, &string(ns), prefix != 0).map(insert).unwrap_or(0)
+    })
+}
 /// Consumes formatted diagnostics before user warning handlers can run nested native operations.
 #[no_mangle]
 pub extern "C" fn elephc_xml_sx_diagnostics() -> *const c_char { guard(|| output(diagnostics::take())) }

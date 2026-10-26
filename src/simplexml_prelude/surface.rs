@@ -13,6 +13,7 @@ extern "elephc_xml" {
     function elephc_xml_sx_load(string $data, int $length, int $options, string $ns, int $prefix, string $url): int;
     function elephc_xml_sx_load_dom(string $data, int $length, int $options): int;
     function elephc_xml_sx_load_file(string $filename, int $options, string $ns, int $prefix): int;
+    function elephc_xml_sx_load_stream(string $filename, string $data, int $length, int $options, string $ns, int $prefix): int;
     function elephc_xml_sx_diagnostics(): string;
     function elephc_xml_sx_free(int $handle): void;
     function elephc_xml_sx_clone(int $handle): int;
@@ -145,10 +146,14 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     }
     public function __elephc_handle_value(): int { return $this->__elephc_handle; }
     public function __construct(string $data, int $options = 0, bool $dataIsURL = false, string $namespaceOrPrefix = "", bool $isPrefix = false) {
-        if ($dataIsURL) {
-            $handle = elephc_xml_sx_load_file($data, $options, $namespaceOrPrefix, (int)$isPrefix);
-        } else {
-            $handle = elephc_xml_sx_load($data, strlen($data), $options, $namespaceOrPrefix, (int)$isPrefix, "");
+        try {
+            if ($dataIsURL) {
+                $handle = __elephc_simplexml_file_handle($data, $options, $namespaceOrPrefix, $isPrefix, 'SimpleXMLElement::__construct()');
+            } else {
+                $handle = elephc_xml_sx_load($data, strlen($data), $options, $namespaceOrPrefix, (int)$isPrefix, "");
+            }
+        } catch (Throwable $error) {
+            throw new Exception("String could not be parsed as XML", 0, $error);
         }
         if ($handle !== 0) { $this->__elephc_attach($handle); }
         try { __elephc_simplexml_report_diagnostics('SimpleXMLElement::__construct()'); }
@@ -567,7 +572,7 @@ function simplexml_load_string(string $data, ?string $class_name = "SimpleXMLEle
 function simplexml_load_file(string $filename, ?string $class_name = "SimpleXMLElement", int $options = 0, string $namespace_or_prefix = "", bool $is_prefix = false): SimpleXMLElement|false {
     if (strpos($filename, "\0") !== false) { throw new ValueError('simplexml_load_file(): Argument #1 ($filename) must not contain any null bytes'); }
     $class = __elephc_simplexml_class($class_name);
-    $handle = elephc_xml_sx_load_file($filename, $options, $namespace_or_prefix, (int)$is_prefix);
+    $handle = __elephc_simplexml_file_handle($filename, $options, $namespace_or_prefix, $is_prefix, 'simplexml_load_file()');
     if ($handle === 0) {
         __elephc_simplexml_report_diagnostics('simplexml_load_file()');
         return false;

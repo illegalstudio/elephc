@@ -82,6 +82,36 @@ void *elephc_libxml2_v1_sx_parse_file(const char *filename, int options, char **
     xmlFreeParserCtxt(context);
     return doc;
 }
+/* Serve the main document from PHP stream bytes, retaining native relative-resource loading. */
+struct sx_stream_input { const char *data; int length; int consumed; };
+/* One parser owns this loader; no libxml global or thread-default callbacks are replaced. */
+static xmlParserErrors sx_stream_resource(void *raw, const char *url, const char *public_id,
+        xmlResourceType type, xmlParserInputFlags flags, xmlParserInputPtr *out) {
+    struct sx_stream_input *input = raw;
+    (void)public_id;
+    (void)type;
+    *out = NULL;
+    if (input->consumed) return xmlNewInputFromUrl(url, flags, out);
+    input->consumed = 1;
+    if (input->length < 0) return XML_IO_ENOENT;
+    *out = xmlNewInputFromMemory(url, input->data, (size_t)input->length, XML_INPUT_BUF_STATIC);
+    return *out ? XML_ERR_OK : XML_ERR_NO_MEMORY;
+}
+/* Keep xmlCtxtReadFile responsible for source URLs and native I/O warning formatting. */
+void *elephc_libxml2_v1_sx_parse_stream(const char *filename, const char *data, int length,
+        int options, char **diagnostics) {
+    *diagnostics = NULL;
+    xmlParserCtxtPtr context = xmlNewParserCtxt();
+    if (!context) return NULL;
+    struct sx_diagnostics capture = { xmlBufferCreate(), options, 1, context };
+    struct sx_stream_input input = { data, length, 0 };
+    xmlCtxtSetErrorHandler(context, sx_diagnostic_error, &capture);
+    xmlCtxtSetResourceLoader(context, sx_stream_resource, &input);
+    xmlDocPtr doc = xmlCtxtReadFile(context, filename, NULL, options);
+    sx_diagnostic_finish(&capture, diagnostics);
+    xmlFreeParserCtxt(context);
+    return doc;
+}
 void elephc_libxml2_v1_sx_doc_free(void *doc) { xmlFreeDoc(doc); }
 void *elephc_libxml2_v1_sx_root(void *doc) { return xmlDocGetRootElement(doc); }
 void *elephc_libxml2_v1_sx_child(void *node) { return ((xmlNodePtr)node)->children; }

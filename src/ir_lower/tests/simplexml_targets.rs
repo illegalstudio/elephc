@@ -11,6 +11,7 @@
 fn verify_simplexml_target(target: &str) {
     let module = super::lower_source_at_for_target(r###"<?php
 debug_backtrace();
+$uriRoot = simplexml_load_file('data://text/plain;base64,PHIvPg==');
 $xml = new SimpleXMLIterator('<r id="a"><item>42</item><item>3</item></r>');
 $xml->item[0] = '7';
 $xml['id'] = 'b';
@@ -61,6 +62,7 @@ echo $doc->saveXML();
     assert!(assembly.contains("elephc_xml_sx_mutate"), "{target}: document mutation boundary");
     assert!(assembly.contains("elephc_xml_sx_diagnostics"), "{target}: native diagnostic transfer boundary");
     assert!(assembly.contains("elephc_xml_sx_load_dom"), "{target}: DOM structured parsing boundary");
+    assert!(assembly.contains("elephc_xml_sx_load_stream"), "{target}: PHP stream parser boundary");
     assert!(assembly.contains("elephc_xml_sx_load_file"), "{target}: native file parser boundary");
     assert!(assembly.contains("elephc_xml_sx_compare"), "{target}: XML node comparison boundary");
     assert!(assembly.contains(&crate::names::method_symbol("SimpleXMLElement", "__elephc_array")),

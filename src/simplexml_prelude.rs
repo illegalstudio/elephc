@@ -8,6 +8,7 @@
 //! - Parsing is cached; declarations compile through the ordinary EIR pipeline.
 
 mod surface;
+mod streams;
 use crate::parser::ast::Program;
 use std::sync::OnceLock;
 
@@ -15,7 +16,8 @@ use std::sync::OnceLock;
 pub(crate) fn declarations() -> Program {
     static DECLARATIONS: OnceLock<Program> = OnceLock::new();
     DECLARATIONS.get_or_init(|| {
-        let tokens = crate::lexer::tokenize(surface::SOURCE).expect("SimpleXML prelude tokenizes");
+        let source = format!("{}\n{}", surface::SOURCE, streams::SOURCE);
+        let tokens = crate::lexer::tokenize(&source).expect("SimpleXML prelude tokenizes");
         crate::parser::parse_internal(&tokens).expect("SimpleXML prelude parses")
     }).clone()
 }

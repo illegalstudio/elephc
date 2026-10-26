@@ -57,7 +57,11 @@ their document, so edits through either API remain visible through the other.
 
 The loading functions return `false` when parsing fails. A constructor with
 invalid XML throws `Exception`. The optional class name lets the loading
-functions return a subclass of `SimpleXMLElement`.
+functions return a subclass of `SimpleXMLElement`. File factories and the
+constructor's `dataIsURL` mode read local files, `data://`, HTTP/HTTPS, FTP/FTPS,
+PHAR and registered PHP stream wrappers. Standard-input, memory/temp and
+`php://filter` URLs use the existing PHP stream implementation. The original
+URL remains available to libxml2 for diagnostics and relative references.
 
 ## Enabling xml
 
@@ -299,6 +303,13 @@ leaked block and byte totals), not guarantees.
   layer), as described under [Enabling xml](#enabling-xml).
 
 ## Differences from PHP
+
+- SimpleXML URL inputs are buffered before parsing. Registered wrapper close
+  callbacks run after reading, before parser diagnostics are dispatched. External
+  DTDs and entities use libxml2's native file loader, so PHP stream wrappers apply
+  to the main document only. `php://fd` and compressed stream URLs are not
+  supported by the SimpleXML reader. Network read failures use the stream
+  layer's warning text before the native SimpleXML I/O warning.
 
 - The parser is libxml2 2.15.3 itself, driven through the same push-parser
   entry points php-src's `ext/xml` uses, so event boundaries, positions, error

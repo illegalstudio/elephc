@@ -280,3 +280,24 @@ fn simplexml_write_fetch_and_absent_read_views() {
     assert!(root.add_checked("1abc", Some("v"), None, false).is_ok());
     assert!(root.add_checked("1abc", Some("a"), None, true).is_ok());
 }
+
+/// Stream parsing keeps source URLs and diagnostics inside one parser context.
+#[test]
+fn simplexml_stream_input_keeps_parser_url() {
+    let url = cstring("data://text/plain,source");
+    let ns = cstring("");
+    let bytes = b"<r>";
+    unsafe {
+        assert_eq!(abi::elephc_xml_sx_load_stream(url.as_ptr(), bytes.as_ptr().cast(), bytes.len() as i64, 0, ns.as_ptr(), 0), 0);
+        let diagnostics = string(abi::elephc_xml_sx_diagnostics());
+        assert!(diagnostics.contains("data://text/plain,source"), "{diagnostics}");
+        assert!(diagnostics.contains("Premature end"), "{diagnostics}");
+        let bytes = b"<r/>";
+        let handle = abi::elephc_xml_sx_load_stream(url.as_ptr(), bytes.as_ptr().cast(), bytes.len() as i64, 0, ns.as_ptr(), 0);
+        assert_ne!(handle, 0);
+        assert!(string(abi::elephc_xml_sx_diagnostics()).is_empty());
+        abi::elephc_xml_sx_free(handle);
+        assert_eq!(abi::elephc_xml_sx_load_stream(url.as_ptr(), bytes.as_ptr().cast(), -1, 0, ns.as_ptr(), 0), 0);
+        assert!(string(abi::elephc_xml_sx_diagnostics()).contains("I/O warning"));
+    }
+}

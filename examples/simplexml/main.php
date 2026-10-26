@@ -12,3 +12,7 @@ foreach ($catalog->xpath('//product[price < 2]') as $product) {
     echo 'Under EUR 2: ', (string)$product->name, "\n";
 }
 echo $catalog->asXML();
+
+// The same factories accept PHP data URLs.
+$inline = simplexml_load_file('data://text/plain;base64,PHIvPg==');
+if ($inline instanceof SimpleXMLElement) { echo 'Inline document: ', $inline->getName(), "\n"; }
