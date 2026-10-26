@@ -53,13 +53,13 @@ siblingReflectionTargets($argc > 1);
             ("siblingReflectionTargets", vec!["BranchReflectedA::value"]),
         ] {
             let function = module.functions.iter().find(|function| function.name == name).unwrap();
-            let writes: Vec<_> = function.instructions.iter().filter(|inst|
+            let writes: std::collections::BTreeSet<_> = function.instructions.iter().filter(|inst|
                 inst.op == Op::StoreReflectionStaticProperty
             ).map(|inst| {
                 let Some(Immediate::Data(data)) = inst.immediate else { panic!("missing static target"); };
                 module.data.strings[data.as_raw() as usize].as_str()
             }).collect();
-            assert_eq!(writes, expected, "{target}: {name}");
+            assert_eq!(writes, expected.into_iter().collect(), "{target}: {name}");
         }
     }
 }

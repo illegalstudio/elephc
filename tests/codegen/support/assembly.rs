@@ -17,7 +17,11 @@ pub(crate) fn selected_function_assembly(assembly: &str, symbols: &[String]) -> 
         line.strip_prefix(".globl ").or_else(|| line.strip_prefix(".global ")).map(str::trim)
     }).collect();
     let mut output = String::new();
-    for symbol in symbols {
+    for requested in symbols {
+        let symbol = if matches!(requested.as_str(), "main" | "_main") {
+            [requested.as_str(), if requested == "main" { "_main" } else { "main" }]
+                .into_iter().find(|name| globals.contains(name)).unwrap_or(requested)
+        } else { requested.as_str() };
         let label = format!("{symbol}:");
         let Some(start) = lines.iter().position(|line| line.trim().eq_ignore_ascii_case(&label)) else {
             output.push_str(&format!("missing assembly symbol: {symbol}\n"));
@@ -113,5 +117,18 @@ mod tests {
         assert!(selected.contains("assembly lines omitted"), "{selected}");
         assert!(!selected.contains("UNRELATED_BODY"), "{selected}");
         assert!(selected.lines().count() < 200, "{}", selected.lines().count());
+    }
+
+    /// Main diagnostics resolve the emitted entry-point spelling on Linux and Darwin.
+    #[test]
+    fn selected_function_assembly_resolves_main_entry_point() {
+        for symbol in ["main", "_main"] {
+            let assembly = format!(".globl {symbol}\n{symbol}:\n    bl __rt_decref_mixed\n    ret\n");
+            for requested in ["main", "_main"] {
+                let selected = selected_function_assembly(&assembly, &[requested.into()]);
+                assert!(selected.contains("bl __rt_decref_mixed"), "{selected}");
+                assert!(!selected.contains("missing assembly symbol"), "{selected}");
+            }
+        }
     }
 }
