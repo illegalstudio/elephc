@@ -90,7 +90,7 @@ pub extern "C" fn elephc_xml_sx_free(handle: i64) {
 #[no_mangle]
 pub extern "C" fn elephc_xml_sx_clone(handle: i64) -> i64 { guard(|| view(handle).and_then(|v| v.deep_clone()).map(insert).unwrap_or(0)) }
 /// Selects children (0), attributes (1), a property (2), an attribute (3), or offset (4).
-/// Internal modes 7/8 preserve namespace filters; mode 9 also projects comments and PIs.
+/// Internal modes 7/8 preserve filters; modes 9/10 project child nodes or a selected sibling tail.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_xml_sx_select(handle: i64, kind: i64, name: *const c_char, ns: *const c_char, prefix: i64, index: i64) -> i64 {
     guard(|| view(handle).map(|v| {
@@ -109,10 +109,7 @@ pub extern "C" fn elephc_xml_sx_int(handle: i64, operation: i64) -> i64 {
         0 | 2 => v.item_count() as i64,
         1 => i64::from(v.first().is_some()),
         3 => if matches!(v.scope, Scope::Node(_) | Scope::Index(..)) {
-            i64::from(!v.items().is_empty() || v.first().is_some_and(|n| unsafe {
-                ffi::node_type(n) == 2 || !owned_string(ffi::text(n)).is_empty()
-                    || (ffi::node_type(n) == 1 && !ffi::attrs(n).is_null())
-            }))
+            i64::from(v.first().is_some_and(|node| node_is_truthy(&v, node)))
         } else { i64::from(v.first().is_some()) },
         4 => v.first().map(|n| unsafe { ffi::node_type(n) as i64 }).unwrap_or(0),
         5 => match v.scope { Scope::Children(_, None) => 1, Scope::Children(_, Some(_)) => 2,
@@ -131,6 +128,32 @@ pub extern "C" fn elephc_xml_sx_int(handle: i64, operation: i64) -> i64 {
         }).unwrap_or(0),
         _ => 0,
     }).unwrap_or(0))
+}
+/// Tests native property presence without treating CDATA or comment content as element text.
+fn node_is_truthy(view: &View, node: Node) -> bool {
+    unsafe {
+        if ffi::node_type(node) == 2 { return true; }
+        if ffi::node_type(node) == 1 {
+            let mut attr = ffi::attrs(node);
+            while !attr.is_null() {
+                if view.ns.matches(attr) { return true; }
+                attr = ffi::next(attr);
+            }
+        }
+        let first = ffi::child(node);
+        let mut child = first;
+        while !child.is_null() {
+            let kind = ffi::node_type(child);
+            if kind == 3 && child == first && ffi::next(child).is_null() {
+                return !owned_string(ffi::full_text(child)).is_empty();
+            }
+            if !matches!(kind, 3 | 4) && (kind != 1 || view.ns.matches(child))
+                && !ffi::name(child).is_null() { return true; }
+            if kind == 17 { break; }
+            child = ffi::next(child);
+        }
+        false
+    }
 }
 /// PHP projects an element as a string only when its first child is nonblank text.
 fn projection_is_string(node: Node) -> bool {

@@ -39,6 +39,25 @@ foreach ([
     echo json_encode($xml), '|', json_encode((array)$xml), '|', json_encode($xml->__debugInfo()), '|';
     echo json_encode($xml->children()), '|', json_encode((array)$xml->children()), "\n";
 }
+foreach ([
+    '<r a="1"><!--x--><a>1</a><!--c--><?pi y?><b>2</b>text</r>',
+    '<r a="1"><!--only--></r>',
+    '<r xmlns:p="urn:p" a="1" p:b="2"><p:z>0</p:z><a>1</a><!--c--></r>'
+] as $source) {
+    $xml = new SimpleXMLElement($source);
+    $children = $xml->children();
+    echo json_encode($children), '|', json_encode((array)$children), '|', json_encode(get_object_vars($children)), '|', json_encode($children->__debugInfo()), "\n";
+    $children = $xml->children('urn:p');
+    echo json_encode($children), '|', json_encode($children->__debugInfo()), "\n";
+}
+$xml = new SimpleXMLElement('<!DOCTYPE r [<!ENTITY e "x"><!ENTITY f "y">]><r>&e;</r>');
+echo json_encode($xml), "\n";
+foreach (['<r><![CDATA[x]]></r>', '<r><!--c--></r>', '<r><?pi x?></r>', '<r> </r>', '<r/>', '<r xmlns:p="urn:p" p:a="1"/>', '<r xmlns:p="urn:p"><p:c/></r>'] as $source) {
+    $xml = new SimpleXMLElement($source);
+    echo (int)(bool)$xml, (int)(bool)new SimpleXMLElement($source, 0, false, 'urn:p'), '|';
+}
+$xml = new SimpleXMLElement('<r><!--c--><?pi x?></r>');
+echo (int)(bool)$xml->xpath('//comment()')[0], (int)(bool)$xml->xpath('//processing-instruction()')[0], "\n";
 "###;
     let quoted_body = body.replace('\\', "\\\\").replace('\'', "\\'");
     let source = format!("<?php\n{body}\n$source = $argc > 0 ? '{quoted_body}' : '';\neval($source);");
@@ -64,6 +83,14 @@ foreach ([
 {"comment":{}}|{"comment":{}}|{"comment":{}}|{}|[]
 {"pi":{}}|{"pi":{}}|{"pi":{}}|{}|[]
 {"comment":{},"pi":{},"a":"visible"}|{"comment":{},"pi":{},"a":"visible"}|{"comment":{},"pi":{},"a":"visible"}|{"a":"visible"}|{"a":"visible"}
+{"a":"1","comment":{},"pi":{},"b":"2"}|{"a":"1","comment":{},"pi":{},"b":"2"}|{"a":"1","comment":{},"pi":{},"b":"2"}|{"@attributes":{"a":"1"},"a":"1","comment":{},"pi":{},"b":"2"}
+{}|[]
+{}|[]|[]|{"@attributes":{"a":"1"}}
+{}|[]
+{"a":"1","comment":{}}|{"a":"1","comment":{}}|{"a":"1","comment":{}}|{"@attributes":{"a":"1"},"a":"1","comment":{}}
+{"z":"0","comment":{}}|{"@attributes":{"b":"2"},"z":"0","comment":{}}
+{"e":{"e":"x"}}
+00|11|11|11|00|01|01|00
 "###;
     assert_eq!(out.stdout, expected.repeat(2));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);

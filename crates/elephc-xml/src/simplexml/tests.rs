@@ -50,6 +50,45 @@ fn simplexml_projection_nodes_preserve_miscellaneous_children_and_namespace_filt
     assert_eq!(root.select(7, "", "", false, 0).item_count(), 1);
 }
 
+/// Children projections retain the sibling tail while entity references stop at their declaration.
+#[test]
+fn simplexml_projection_tail_and_entity_declaration_boundary() {
+    let root = parse(b"<r><!--before--><a>1</a><!--after--><?pi x?><b>2</b></r>", 0, "", false).unwrap();
+    let children = root.select(0, "", "", false, 0).select(10, "", "", false, 0);
+    let names: Vec<_> = children.nodes().into_iter().map(|node| unsafe { string(ffi::name(node)) }).collect();
+    assert_eq!(names, ["a", "comment", "pi", "b"]);
+    let root = parse(b"<!DOCTYPE r [<!ENTITY e 'x'><!ENTITY f 'y'>]><r>&e;</r>", 0, "", false).unwrap();
+    let entity = root.select(9, "", "", false, 0).item(0).unwrap();
+    let declarations = entity.select(9, "", "", false, 0).nodes();
+    assert_eq!(declarations.len(), 1);
+    assert_eq!(unsafe { string(ffi::name(declarations[0])) }, "e");
+}
+
+/// Boolean conversion observes selected attributes and child node kinds, not CDATA contents.
+#[test]
+fn simplexml_truthiness_respects_node_kinds_and_namespaces() {
+    for (source, namespace, expected) in [
+        ("<r><![CDATA[x]]></r>", "", 0),
+        ("<r><!--c--></r>", "", 1),
+        ("<r><?pi x?></r>", "", 1),
+        ("<r> </r>", "", 1),
+        ("<r/>", "", 0),
+        ("<r xmlns:p='urn:p' p:a='1'/>", "", 0),
+        ("<r xmlns:p='urn:p' p:a='1'/>", "urn:p", 1),
+        ("<r xmlns:p='urn:p'><p:c/></r>", "", 0),
+        ("<r xmlns:p='urn:p'><p:c/></r>", "urn:p", 1),
+    ] {
+        let source = cstring(source);
+        let namespace = cstring(namespace);
+        let empty = cstring("");
+        let root = unsafe { abi::elephc_xml_sx_load(source.as_ptr(), source.as_bytes().len() as i64,
+            0, namespace.as_ptr(), 0, empty.as_ptr()) };
+        assert_ne!(root, 0);
+        assert_eq!(abi::elephc_xml_sx_int(root, 3), expected, "{}", source.to_string_lossy());
+        abi::elephc_xml_sx_free(root);
+    }
+}
+
 /// Live iteration reads sibling links after mutations rather than taking a stale snapshot.
 #[test]
 fn simplexml_cursor_observes_live_sibling_mutation() {

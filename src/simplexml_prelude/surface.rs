@@ -438,6 +438,9 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         return $namespaces;
     }
     public function __elephc_array(): array<string, mixed> {
+        return $this->__elephc_projection(false);
+    }
+    private function __elephc_projection(bool $debug): array<string, mixed> {
         $handle = $this->__elephc_handle;
         $mode = elephc_xml_sx_int($handle, 5);
         $base = __elephc_simplexml_wrap(elephc_xml_sx_projection_base($handle), get_class($this));
@@ -454,7 +457,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         }
         $base_handle = $base->__elephc_handle_value();
         $attributes = __elephc_simplexml_wrap(elephc_xml_sx_select($base_handle, 8, "", "", 0, 0), get_class($this));
-        if ($mode !== 1 && $attributes instanceof SimpleXMLElement) {
+        if (($debug || $mode !== 1) && $attributes instanceof SimpleXMLElement) {
             if ($attributes->count() > 0) {
                 $values = ["__elephc_projection_seed" => ""];
                 unset($values["__elephc_projection_seed"]);
@@ -468,8 +471,9 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
             foreach ($values as $index => $value) { $result[$index] = $value; }
             return $result;
         }
-        $child_kind = $mode === 1 ? 7 : 9;
-        $children = __elephc_simplexml_wrap(elephc_xml_sx_select($base_handle, $child_kind, "", "", 0, 0), get_class($this));
+        $child_kind = $mode === 1 ? 10 : 9;
+        $child_source = $mode === 1 ? $handle : $base_handle;
+        $children = __elephc_simplexml_wrap(elephc_xml_sx_select($child_source, $child_kind, "", "", 0, 0), get_class($this));
         if ($children instanceof SimpleXMLElement) {
             if ($children->count() > 0) {
                 foreach ($children as $name => $child) {
@@ -511,7 +515,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         return $values;
     }
     public function __elephc_json(): mixed { return (object)$this->__elephc_array(); }
-    public function __debugInfo(): ?array { return $this->__elephc_array(); }
+    public function __debugInfo(): ?array { return $this->__elephc_projection(true); }
     public function __elephc_dom_text(): string {
         $handle = $this->__elephc_handle;
         return elephc_xml_sx_string($handle, 3);

@@ -171,14 +171,16 @@ impl View {
                 let owner = if let Scope::Children(owner, None) = &self.scope { owner.clone() } else { parent };
                 Scope::Children(owner, Some(name.into()))
             },
-            6 | 9 => {
+            6 | 9 | 10 => {
                 let mut nodes = Vec::new();
-                let mut next = self.first().map(|n| unsafe { ffi::child(n) }).unwrap_or(std::ptr::null_mut());
+                let mut next = self.first().map(|n| if kind == 10 { n } else { unsafe { ffi::child(n) } })
+                    .unwrap_or(std::ptr::null_mut());
                 while !next.is_null() {
                     let node_type = unsafe { ffi::node_type(next) };
                     if kind == 6 || (!matches!(node_type, 3 | 4) && (node_type != 1 || self.ns.matches(next))) {
                         nodes.push(next);
                     }
+                    if kind != 6 && node_type == 17 { break; }
                     next = unsafe { ffi::next(next) };
                 }
                 Scope::Nodes(Rc::new(nodes))
