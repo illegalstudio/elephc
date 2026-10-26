@@ -158,6 +158,7 @@ fn emit_type_identity(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(emitter, value, -1);
     emitter.label("__rt_heap_debug_live_class_valid");
     write_integer(emitter);
+    emit_class_name(emitter);
     abi::emit_jump(emitter, "__rt_heap_debug_live_type_done");
     emitter.label("__rt_heap_debug_live_tag");
     write_label(emitter, "_heap_dbg_block_tag", 5);
@@ -176,6 +177,40 @@ fn emit_type_identity(emitter: &mut Emitter) {
     emitter.label("__rt_heap_debug_live_tag_valid");
     write_integer(emitter);
     emitter.label("__rt_heap_debug_live_type_done");
+}
+
+/// Adds a static class name only when its id addresses a row in the generated metadata table.
+fn emit_class_name(emitter: &mut Emitter) {
+    emit_first_payload_word(emitter);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_symbol_to_reg(emitter, "x9", "_class_name_count", 0);
+            emitter.instruction("cmp x0, x9");                                  // validate the id again after integer output clobbered its registers
+            emitter.instruction("b.hs __rt_heap_debug_live_type_done");        // no class-name pointer is read for an invalid id
+        }
+        Arch::X86_64 => {
+            abi::emit_load_symbol_to_reg(emitter, "r10", "_class_name_count", 0);
+            emitter.instruction("cmp rax, r10");                                // validate the id again after integer output clobbered its registers
+            emitter.instruction("jae __rt_heap_debug_live_type_done");         // no class-name pointer is read for an invalid id
+        }
+    }
+    write_label(emitter, "_heap_dbg_block_class_name", 7);
+    emit_first_payload_word(emitter);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(emitter, "x9", "_class_name_entries");
+            emitter.instruction("add x9, x9, x0, lsl #4");                     // address the validated sixteen-byte class-name row
+            emitter.instruction("ldp x1, x2, [x9]");                           // borrow the generated name pointer and exact length
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(emitter, "r10", "_class_name_entries");
+            emitter.instruction("shl rax, 4");                                 // scale the validated class id by the row size
+            emitter.instruction("add r10, rax");                               // select this program's static class-name row
+            emitter.instruction("mov rax, QWORD PTR [r10]");                   // borrow the generated name pointer
+            emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");               // borrow the generated name length
+        }
+    }
+    write_string(emitter);
 }
 
 /// Reads the first word of a block whose header, minimum payload and end were already checked.
@@ -234,7 +269,7 @@ mod tests {
             assert!(asm.contains("cmp x0, #64") || asm.contains("cmp rax, 64"), "{target}");
             assert_eq!(asm.matches("__rt_itoa").count(), 6, "{target}");
             assert!(asm.contains("_heap_dbg_block_class") && asm.contains("_heap_dbg_block_tag"), "{target}");
-            assert!(asm.contains("_class_name_count"), "{target}");
+            assert!(asm.contains("_class_name_count") && asm.contains("_class_name_entries"), "{target}");
             assert!(!asm.contains("__rt_heap_alloc") && !asm.contains("__rt_incref"), "{target}");
             assert_eq!("HEAP DEBUG: live offset=".len(), 24);
         }
