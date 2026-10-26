@@ -276,9 +276,13 @@ checkCaseArrayOwners(str_repeat('Ab', 40));
 #[test]
 fn test_constructorless_reflection_class_name_owners_heap_clean() {
     let out = compile_and_run_with_heap_debug(r#"<?php
-class ReflectedNameOwner {
+class ReflectedNameBase {
+    public function accept(ReflectedNameBase $other): ReflectedNameBase { return $other; }
+}
+class ReflectedNameOwner extends ReflectedNameBase {
     public string $value = 'ready';
     public function __construct() { echo 'unexpected-constructor|'; }
+    public function accept(ReflectedNameBase $other): ReflectedNameBase { return $other; }
 }
 function makeReflectedNameOwner(): mixed {
     return (new ReflectionClass(ReflectedNameOwner::class))->newInstanceWithoutConstructor();
