@@ -53,6 +53,7 @@ pub(super) fn lower(
 /// Detects a native XML arm that cannot share the ordinary ArrayAccess method name.
 fn contains_xml(ctx: &LoweringContext<'_, '_>, ty: &PhpType) -> bool {
     match ty {
+        PhpType::Mixed => ctx.classes.contains_key("SimpleXMLElement"),
         PhpType::Object(class) => crate::types::builtin_classes::native_dimension_method(
             class, ObjectDimension::Get, ctx.classes) == Some("__elephc_dimension_get"),
         PhpType::Union(members) => members.iter().any(|ty| contains_xml(ctx, ty)),

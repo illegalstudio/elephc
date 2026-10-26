@@ -8,6 +8,7 @@
 //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
 
 use super::*;
+mod mixed_dimension;
 
 /// Lowers supported `unset(...)` targets without evaluating them as ordinary call args.
 pub(super) fn lower_unset_locals(
@@ -48,6 +49,7 @@ pub(super) fn unset_target_supported(ctx: &LoweringContext<'_, '_>, arg: &Expr) 
         ExprKind::ArrayAccess { array, .. } => {
             unset_array_access_has_object_receiver(ctx, array)
                 || unset_array_access_has_local_array_receiver(ctx, array)
+                || mixed_dimension::supports(ctx, array)
         }
         ExprKind::PropertyAccess { object, property }
         | ExprKind::NullsafePropertyAccess { object, property } => {
@@ -126,6 +128,28 @@ pub(super) fn lower_unset_array_access(
     index: &Expr,
     expr: &Expr,
 ) {
+    if matches!(array.kind, ExprKind::Variable(_))
+        && unset_array_access_has_object_receiver(ctx, array)
+    {
+        let (key, key_temp) = evaluate_once(ctx, index, expr);
+        let owner = key_temp.as_ref().filter(|name|
+            Ownership::php_type_needs_lifetime_tracking(&ctx.local_type(name)))
+            .map(|name| ctx.local_slots[name]);
+        if let Some(slot) = owner { register_owned_call_operand(ctx, slot, expr.span); }
+        lower_unset_array_access_from_key(ctx, array, &key, expr);
+        if let Some(slot) = owner { unregister_owned_call_operand(ctx, slot, expr.span); }
+        release_evaluated_once(ctx, key_temp, expr.span);
+    } else { lower_unset_array_access_from_key(ctx, array, index, expr); }
+}
+
+/// Selects storage after any object-variable key side effects have completed.
+fn lower_unset_array_access_from_key(
+    ctx: &mut LoweringContext<'_, '_>, array: &Expr, index: &Expr, expr: &Expr,
+) {
+    if mixed_dimension::supports(ctx, array) {
+        mixed_dimension::lower(ctx, array, index, expr);
+        return;
+    }
     if let ExprKind::Variable(name) = &array.kind {
         if ctx.local_type(name).is_php_array()
             || (ctx.is_ref_bound_local(name)

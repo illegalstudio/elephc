@@ -111,3 +111,40 @@ echo (int)isset($probeGlobalXml['id']);
     assert_eq!(out.stdout, "r|1:0|0");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+/// Erased variables dispatch unset to XML, public ArrayAccess, arrays, or PHP scalar diagnostics.
+#[test]
+fn test_simplexml_mixed_unset_selects_current_receiver() {
+    if skip_without_xml_native("test_simplexml_mixed_unset_selects_current_receiver") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function removeMixedXmlOffset(mixed &$value): void { unset($value['a']); }
+$xml = new SimpleXMLElement('<r a="old"/>');
+removeMixedXmlOffset($xml); echo (int)isset($xml['a']), '|';
+$ordinary = new ArrayObject(['a' => 'old']);
+removeMixedXmlOffset($ordinary); echo count($ordinary), '|';
+$array = ['a' => 'old']; $alias = $array;
+removeMixedXmlOffset($array); echo count($array), ':', count($alias), '|';
+set_error_handler(function(int $level, string $message): bool { echo $level, '|'; return true; });
+$scalar = false; removeMixedXmlOffset($scalar); var_dump($scalar);
+restore_error_handler();
+$scalar = null; removeMixedXmlOffset($scalar); var_dump($scalar);
+foreach ([true, 1, 1.0, 'abc'] as $scalar) {
+    try { removeMixedXmlOffset($scalar); }
+    catch (Error $error) { echo $error->getMessage(), '|'; }
+}
+function replaceUnsetXml(mixed &$value): string { $value = new SimpleXMLElement('<new a="value"/>'); return 'a'; }
+$current = new SimpleXMLElement('<old a="value"/>');
+$old = $current;
+unset($current[replaceUnsetXml($current)]);
+echo $current->getName(), ':', (int)isset($current['a']), ':', (int)isset($old['a']);
+function erasedUnsetXml(SimpleXMLElement $value): mixed { echo '|receiver'; return $value; }
+function computedUnsetKey(): string { echo '|key'; return 'a'; }
+unset(erasedUnsetXml($old)[computedUnsetKey()]);
+echo ':', (int)isset($old['a']);
+unset(simplexml_load_string('<r a="temporary"/>')['a']);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, concat!("0|0|0:1|8192|bool(false)\nNULL\n",
+        "Cannot unset offset in a non-array variable|Cannot unset offset in a non-array variable|",
+        "Cannot unset offset in a non-array variable|Cannot unset string offsets|new:0:1|receiver|key:0"));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
