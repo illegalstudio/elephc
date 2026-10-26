@@ -31,6 +31,7 @@ pub(super) fn lower(
     // Global storage erases object metadata to Mixed; retain the source type for
     // protocol selection while the captured value keeps its real boxed representation.
     let ty = ctx.builder.value_php_type(object.value);
+    let nullable = value_is_nullable(ctx, object.value) || ty.codegen_repr() == PhpType::Mixed;
     let borrowed = if Ownership::php_type_needs_lifetime_tracking(&ty) {
         // Object unions use boxed storage and the dynamic method-call ABI.
         let borrow_type = if matches!(ty, PhpType::Union(_)) { PhpType::Mixed } else { ty };
@@ -51,9 +52,9 @@ pub(super) fn lower(
         _ => unreachable!("dimension probe operation"),
     };
     let result = if native.is_none() && contains_xml(ctx, source_type) {
-        dispatch(ctx, borrowed, &key, operation, public, expr)
+        dispatch(ctx, borrowed, &key, operation, public, nullable, expr)
     } else {
-        invoke(ctx, borrowed, &key, operation, native.unwrap_or(public), expr)
+        invoke(ctx, borrowed, &key, operation, native.unwrap_or(public), nullable, expr)
     };
     if let Some(slot) = key_owner { unregister_owned_call_operand(ctx, slot, expr.span); }
     release_evaluated_once(ctx, key_temp, expr.span);
@@ -75,7 +76,7 @@ fn contains_xml(ctx: &LoweringContext<'_, '_>, ty: &PhpType) -> bool {
 /// Guards heterogeneous object unions without compiling a public offset method on XML.
 fn dispatch(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, key: &Expr,
-    operation: ObjectDimension, public: &str, expr: &Expr,
+    operation: ObjectDimension, public: &str, nullable: bool, expr: &Expr,
 ) -> LoweredValue {
     let class = ctx.intern_class_name("SimpleXMLElement");
     let native = ctx.emit_value(Op::InstanceOf, vec![object.value], Some(Immediate::Data(class)),
@@ -94,13 +95,13 @@ fn dispatch(
         ObjectDimension::Unset => "__elephc_dimension_unset",
         _ => unreachable!("dimension probe operation"),
     };
-    let value = invoke(ctx, receiver, key, operation, method, expr);
+    let value = invoke(ctx, receiver, key, operation, method, false, expr);
     store_value_into_temp(ctx, &temp, PhpType::Bool, value, expr.span);
     branch_to(ctx, merge);
     let native_slots = ctx.initialized_slots_snapshot();
     ctx.builder.position_at_end(no);
     ctx.restore_initialized_slots(initial.clone());
-    let value = invoke(ctx, object, key, operation, public, expr);
+    let value = invoke(ctx, object, key, operation, public, nullable, expr);
     store_value_into_temp(ctx, &temp, PhpType::Bool, value, expr.span);
     branch_to(ctx, merge);
     let public_slots = ctx.initialized_slots_snapshot();
@@ -113,9 +114,9 @@ fn dispatch(
 /// Calls one protocol with an already captured key and a false result for nullable absence.
 fn invoke(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, key: &Expr,
-    operation: ObjectDimension, method: &str, expr: &Expr,
+    operation: ObjectDimension, method: &str, nullable: bool, expr: &Expr,
 ) -> LoweredValue {
-    if value_is_nullable(ctx, object.value) {
+    if nullable {
         let is_null = ctx.emit_value(Op::IsNull, vec![object.value], None, PhpType::Bool,
             Op::IsNull.default_effects(), Some(expr.span));
         let absent = ctx.builder.create_named_block("dimension.probe.null", vec![]);
