@@ -131,5 +131,5 @@ unset($value, $original, $copy);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
     let expected = "[]|[false]|[true]|[7]|[2.5]|[\"x\"]|[]|{\"k\":1}|{\"@attributes\":{\"a\":\"1\"},\"b\":\"2\"}|{\"k\":1}:{\"k\":2}\n";
     assert_eq!(out.stdout, expected.repeat(2));
-    assert_no_heap_leaks(&out);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

@@ -191,5 +191,5 @@ unset($node, $dump);
 null:8192:1|"EvalNullXmlDebug Object\n(\n)\n"
 eval-null|after
 "###);
-    assert_no_heap_leaks(&out);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
