@@ -570,7 +570,11 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     }
     public function key(): string { return $this->current()->getName(); }
     public function hasChildren(): bool { return $this->valid() && $this->current()->count() > 0; }
-    public function getChildren(): ?SimpleXMLElement { if (!$this->valid()) { return null; } return $this->current(); }
+    public function getChildren(): ?SimpleXMLElement {
+        $handle = $this->__elephc_handle;
+        if (!$this->valid() || elephc_xml_sx_int($handle, 5) >= 3) { return null; }
+        return $this->current();
+    }
 }
 
 class SimpleXMLIterator extends SimpleXMLElement {}

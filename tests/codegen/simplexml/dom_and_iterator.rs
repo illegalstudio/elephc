@@ -9,6 +9,30 @@
 
 use crate::support::*;
 
+/// XPath results reset namespace filters and nested groups retain their selected parent element.
+#[test]
+fn test_simplexml_xpath_filters_and_detached_nested_groups() {
+    if skip_without_xml_native("test_simplexml_xpath_filters_and_detached_nested_groups") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$xml = simplexml_load_string('<r xmlns:p="urn:p"><p:a><b>B</b><p:c>C</p:c></p:a></r>', null, 0, 'p', true);
+foreach ($xml->xpath('//p:a')[0] as $key => $value) { echo $key, '=', $value; }
+echo '|';
+$xml = new SimpleXMLElement('<r id="v"><a><i>1</i><i>2</i></a><a><i>3</i></a></r>');
+$attributes = $xml->attributes(); $attributes->rewind();
+var_dump($attributes->hasChildren(), $attributes->getChildren());
+$group = $xml->a; $nested = $xml->a->i;
+$children = $xml->a->children(); $attributes = $xml->a->attributes();
+unset($xml->a[0]);
+echo count($group), ':', count($nested), ':', count($children), ':', count($attributes), '|';
+foreach ($nested as $value) { echo $value; }
+$copied = clone $nested;
+echo '|'; foreach ($copied as $value) { echo $value; }
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "b=B|bool(false)\nNULL\n1:2:2:0|12|12");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Keeps failed remote DOM imports reviewable without dumping eval's complete method catalog.
 fn import_failure_assembly(assembly: &str) -> String {
     let mut result = String::new();

@@ -15,11 +15,12 @@ impl View {
     pub(super) fn deep_clone(&self) -> Option<Self> {
         let raw = unsafe { ffi::copy(self.doc.raw) };
         if raw.is_null() { return None; }
-        let doc = Rc::new(Document { raw, detached: RefCell::new(vec![]) });
+        let doc = Rc::new(Document { raw, detached: RefCell::new(vec![]), detached_set: RefCell::new(HashSet::new()) });
         for node in self.doc.detached.borrow().iter() {
             let copy = unsafe { ffi::copy_node(*node, raw, 1) };
             if copy.is_null() { return None; }
             doc.detached.borrow_mut().push(copy);
+            doc.detached_set.borrow_mut().insert(copy);
         }
         Some(self.remap(doc))
     }

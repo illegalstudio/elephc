@@ -39,6 +39,36 @@ fn simplexml_large_cursor_and_xpath_items() {
     assert_eq!(count, 50_000);
     let xpath = root.with_scope(Scope::XPath(Rc::new(root.xpath("//i").unwrap())));
     for index in 0..50_000 { assert!(xpath.item(index).is_some()); }
+    root.remove(2, "i", 0);
+    assert_eq!(items.item_count(), 0);
+    assert_eq!(root.doc.detached.borrow().len(), 50_000);
+}
+
+/// Nested groups keep their resolved parent while direct named groups stay live at the root.
+#[test]
+fn simplexml_nested_groups_retain_original_parent() {
+    let root = parse(b"<r><a><i>1</i><i>2</i></a><a><i>3</i></a></r>", 0, "", false).unwrap();
+    let group = root.select(2, "a", "", false, 0);
+    let nested = group.select(2, "i", "", false, 0);
+    let children = group.select(0, "", "", false, 0);
+    group.remove(4, "", 0);
+    assert_eq!(group.item_count(), 1);
+    assert_eq!(nested.item_count(), 2);
+    assert_eq!(children.item_count(), 2);
+    assert_eq!(unsafe { owned_string(ffi::text(nested.first().unwrap())) }, "1");
+    let copied = nested.deep_clone().unwrap();
+    assert_eq!(copied.item_count(), 2);
+}
+
+/// XPath element wrappers start with the default namespace filter instead of inheriting a prefix.
+#[test]
+fn simplexml_xpath_element_resets_namespace_filter() {
+    let root = parse(b"<r xmlns:p='urn:p'><p:a><b>B</b><p:c>C</p:c></p:a></r>", 0, "p", true).unwrap();
+    let results = root.with_scope(Scope::XPath(Rc::new(root.xpath("//p:a").unwrap())));
+    let result = results.item(0).unwrap();
+    let current = iteration::Cursor::new(&result).current().unwrap();
+    assert_eq!(unsafe { string(ffi::name(current)) }, "b");
+    assert_eq!(unsafe { owned_string(ffi::text(current)) }, "B");
 }
 
 /// Child selectors observe later appends and indexed writes escape raw text.

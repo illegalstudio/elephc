@@ -18,13 +18,13 @@ mod mutation;
 mod query;
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::ffi::{c_char, CStr, CString};
 use std::rc::Rc;
 use ffi::Node;
 
 /// Owns a libxml2 document and nodes removed while wrappers still reference them.
-struct Document { raw: Node, detached: RefCell<Vec<Node>> }
+struct Document { raw: Node, detached: RefCell<Vec<Node>>, detached_set: RefCell<HashSet<Node>> }
 impl Drop for Document {
     /// Releases detached subtrees before the document's namespace and dictionary storage.
     fn drop(&mut self) {
@@ -146,7 +146,9 @@ impl View {
             selected.ns = Namespace { value: unsafe { string(ffi::ns(node, 0)) }, prefix: false };
             return selected;
         }
-        self.with_scope(Scope::Node(node))
+        let mut selected = self.with_scope(Scope::Node(node));
+        if matches!(self.scope, Scope::XPath(_)) { selected.ns = Namespace::default(); }
+        selected
     }
     /// Builds a new wrapper with its own empty XPath context, sharing only native storage.
     fn with_scope(&self, scope: Scope) -> Self {
@@ -155,7 +157,11 @@ impl View {
     }
     /// Builds children, attributes, named properties, or a numeric offset selection.
     fn select(&self, kind: i64, name: &str, ns: &str, prefix: bool, index: usize) -> Self {
-        let parent = Rc::new(self.clone());
+        // The child group stays live within its original element. Resolve an
+        // existing parent now so removing its ancestor cannot rebind this group.
+        // Missing ancestors retain their lazy path for chained writes.
+        let parent = Rc::new(self.first().map(|node| self.with_scope(Scope::Node(node)))
+            .unwrap_or_else(|| self.clone()));
         let scope = match kind {
             0 | 7 => Scope::Children(parent, None),
             1 | 8 => Scope::Attributes(parent, None),
@@ -183,7 +189,7 @@ impl View {
     }
     /// Detaches a node without freeing memory still visible to another wrapper.
     fn detach(&self, node: Node) {
-        if self.doc.detached.borrow().contains(&node) { return; }
+        if !self.doc.detached_set.borrow_mut().insert(node) { return; }
         unsafe { ffi::unlink(node); }
         self.doc.detached.borrow_mut().push(node);
     }
@@ -261,7 +267,7 @@ unsafe fn parse_file(filename: *const c_char, options: i64, namespace: &str, pre
 fn from_document(raw: Node, namespace: &str, prefix: bool) -> Option<View> {
     if raw.is_null() { return None; }
     let root = unsafe { ffi::root(raw) };
-    let doc = Rc::new(Document { raw, detached: RefCell::new(vec![]) });
+    let doc = Rc::new(Document { raw, detached: RefCell::new(vec![]), detached_set: RefCell::new(HashSet::new()) });
     if root.is_null() { return None; }
     Some(View { doc, scope: Scope::Node(root), identity: root, ns: Namespace { value: namespace.into(), prefix },
         xpath_ns: Rc::new(RefCell::new(BTreeMap::new())) })
