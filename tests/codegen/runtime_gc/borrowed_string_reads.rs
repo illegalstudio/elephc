@@ -179,3 +179,27 @@ maskedTrimOwner(str_repeat('x', 32) . 'v' . str_repeat('x', 32));
     assert_eq!(out.stdout, "33:33:1:33|".repeat(4));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Persisted slices remain independently owned when user functions return boxed string unions.
+#[test]
+fn test_persisted_string_arguments_nullable_returns_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function maybePersistedString(bool $keep, string $text): string|false {
+    if ($keep) { return $text; }
+    return false;
+}
+function nullablePersistedString(string $text): ?string { return $text; }
+function inspectPersistedArguments(int $argc): void {
+    $subject = str_repeat('ab', 32);
+    for ($i = 0; $i < 4; $i++) {
+        echo strlen((string)nullablePersistedString(substr($subject, 1, 8))), ':';
+        echo strlen((string)maybePersistedString($argc > 0, substr($subject, 2, 8))), ':';
+        echo strlen((string)maybePersistedString($argc < 0, substr($subject, 3, 8))), '|';
+    }
+}
+inspectPersistedArguments($argc);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "8:8:0|".repeat(4));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
