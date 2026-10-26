@@ -127,16 +127,16 @@ fn emit_type_identity(emitter: &mut Emitter) {
     abi::load_at_offset(emitter, value, 48);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("cmp x0, #4");                                 // recognize native object allocations
-            emitter.instruction("b.eq __rt_heap_debug_live_class");            // only object payloads carry a class id
-            emitter.instruction("cmp x0, #5");                                 // recognize boxed Mixed allocations
-            emitter.instruction("b.eq __rt_heap_debug_live_tag");              // only Mixed payloads carry a value tag
+            emitter.instruction("cmp x0, #4");                                  // recognize native object allocations
+            emitter.instruction("b.eq __rt_heap_debug_live_class");             // only object payloads carry a class id
+            emitter.instruction("cmp x0, #5");                                  // recognize boxed Mixed allocations
+            emitter.instruction("b.eq __rt_heap_debug_live_tag");               // only Mixed payloads carry a value tag
         }
         Arch::X86_64 => {
-            emitter.instruction("cmp rax, 4");                                 // recognize native object allocations
-            emitter.instruction("je __rt_heap_debug_live_class");              // only object payloads carry a class id
-            emitter.instruction("cmp rax, 5");                                 // recognize boxed Mixed allocations
-            emitter.instruction("je __rt_heap_debug_live_tag");                // only Mixed payloads carry a value tag
+            emitter.instruction("cmp rax, 4");                                  // recognize native object allocations
+            emitter.instruction("je __rt_heap_debug_live_class");               // only object payloads carry a class id
+            emitter.instruction("cmp rax, 5");                                  // recognize boxed Mixed allocations
+            emitter.instruction("je __rt_heap_debug_live_tag");                 // only Mixed payloads carry a value tag
         }
     }
     abi::emit_jump(emitter, "__rt_heap_debug_live_type_done");
@@ -147,12 +147,12 @@ fn emit_type_identity(emitter: &mut Emitter) {
         Arch::AArch64 => {
             abi::emit_load_symbol_to_reg(emitter, "x9", "_class_name_count", 0);
             emitter.instruction("cmp x0, x9");                                  // accept only ids represented in this program's class table
-            emitter.instruction("b.lo __rt_heap_debug_live_class_valid");      // prevent malformed metadata from exposing a pointer
+            emitter.instruction("b.lo __rt_heap_debug_live_class_valid");       // prevent malformed metadata from exposing a pointer
         }
         Arch::X86_64 => {
             abi::emit_load_symbol_to_reg(emitter, "r10", "_class_name_count", 0);
             emitter.instruction("cmp rax, r10");                                // accept only ids represented in this program's class table
-            emitter.instruction("jb __rt_heap_debug_live_class_valid");        // prevent malformed metadata from exposing a pointer
+            emitter.instruction("jb __rt_heap_debug_live_class_valid");         // prevent malformed metadata from exposing a pointer
         }
     }
     abi::emit_load_int_immediate(emitter, value, -1);
@@ -166,7 +166,7 @@ fn emit_type_identity(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("cmp x0, #11");                                 // runtime tags run from int zero through invoker reference eleven
-            emitter.instruction("b.ls __rt_heap_debug_live_tag_valid");        // report a type discriminant rather than arbitrary payload contents
+            emitter.instruction("b.ls __rt_heap_debug_live_tag_valid");         // report a type discriminant rather than arbitrary payload contents
         }
         Arch::X86_64 => {
             emitter.instruction("cmp rax, 11");                                 // runtime tags run from int zero through invoker reference eleven
@@ -186,12 +186,12 @@ fn emit_class_name(emitter: &mut Emitter) {
         Arch::AArch64 => {
             abi::emit_load_symbol_to_reg(emitter, "x9", "_class_name_count", 0);
             emitter.instruction("cmp x0, x9");                                  // validate the id again after integer output clobbered its registers
-            emitter.instruction("b.hs __rt_heap_debug_live_type_done");        // no class-name pointer is read for an invalid id
+            emitter.instruction("b.hs __rt_heap_debug_live_type_done");         // no class-name pointer is read for an invalid id
         }
         Arch::X86_64 => {
             abi::emit_load_symbol_to_reg(emitter, "r10", "_class_name_count", 0);
             emitter.instruction("cmp rax, r10");                                // validate the id again after integer output clobbered its registers
-            emitter.instruction("jae __rt_heap_debug_live_type_done");         // no class-name pointer is read for an invalid id
+            emitter.instruction("jae __rt_heap_debug_live_type_done");          // no class-name pointer is read for an invalid id
         }
     }
     write_label(emitter, "_heap_dbg_block_class_name", 7);
@@ -199,15 +199,15 @@ fn emit_class_name(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_symbol_address(emitter, "x9", "_class_name_entries");
-            emitter.instruction("add x9, x9, x0, lsl #4");                     // address the validated sixteen-byte class-name row
-            emitter.instruction("ldp x1, x2, [x9]");                           // borrow the generated name pointer and exact length
+            emitter.instruction("add x9, x9, x0, lsl #4");                      // address the validated sixteen-byte class-name row
+            emitter.instruction("ldp x1, x2, [x9]");                            // borrow the generated name pointer and exact length
         }
         Arch::X86_64 => {
             abi::emit_symbol_address(emitter, "r10", "_class_name_entries");
-            emitter.instruction("shl rax, 4");                                 // scale the validated class id by the row size
-            emitter.instruction("add r10, rax");                               // select this program's static class-name row
-            emitter.instruction("mov rax, QWORD PTR [r10]");                   // borrow the generated name pointer
-            emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");               // borrow the generated name length
+            emitter.instruction("shl rax, 4");                                  // scale the validated class id by the row size
+            emitter.instruction("add r10, rax");                                // select this program's static class-name row
+            emitter.instruction("mov rax, QWORD PTR [r10]");                    // borrow the generated name pointer
+            emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                // borrow the generated name length
         }
     }
     write_string(emitter);
@@ -219,7 +219,7 @@ fn emit_first_payload_word(emitter: &mut Emitter) {
     abi::load_at_offset(emitter, value, 8);
     match emitter.target.arch {
         Arch::AArch64 => emitter.instruction("ldr x0, [x0, #16]"),              // skip the validated sixteen-byte header
-        Arch::X86_64 => emitter.instruction("mov rax, QWORD PTR [rax + 16]"),    // skip the validated sixteen-byte header
+        Arch::X86_64 => emitter.instruction("mov rax, QWORD PTR [rax + 16]"),   // skip the validated sixteen-byte header
     }
 }
 
