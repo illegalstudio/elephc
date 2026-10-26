@@ -9,6 +9,23 @@
 
 use crate::support::*;
 
+/// A caught dimension Error retires the unboxed receiver without consuming its live local.
+#[test]
+fn test_simplexml_nullable_property_receiver_survives_caught_dimension_error() {
+    if skip_without_xml_native("test_simplexml_nullable_property_receiver_survives_caught_dimension_error") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$xml = new SimpleXMLElement('<r><item>first</item></r>');
+try { $xml->item[null] = 'wrong'; }
+catch (ValueError $error) { echo $xml->getName(), ':', (string)$xml->item; }
+$xml = null;
+echo ':', (int)($xml === null);
+unset($xml, $error);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "r:first:1");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Final nullable storage releases the temporary object extracted for an ordinary append.
 #[test]
 fn test_simplexml_append_from_nullable_local_releases_unboxed_receiver() {

@@ -25,7 +25,14 @@ impl PropertyWriteReceiver {
     pub(crate) fn new(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span) -> Self {
         let nullable_class = nullable_write_class(ctx, value);
         ctx.with_independent_write_receiver(|ctx| {
-            let value = if ctx.builder.value_defining_op(value.value) == Some(Op::LoadStaticProperty) {
+            let provisional_unbox = ctx.value_is_owned_unboxed_local_load(value.value);
+            let value = if provisional_unbox {
+                // A final Mixed slot owns its cell while the typed load owns another payload
+                // reference. Move that provisional lease into an independently pinnable value.
+                let retained = crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, value, Some(span));
+                crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+                retained
+            } else if ctx.builder.value_defining_op(value.value) == Some(Op::LoadStaticProperty) {
                 crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, value, Some(span))
             } else { value };
             let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value.value], span);
