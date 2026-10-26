@@ -7,6 +7,7 @@
 //! Key details:
 //! - Native file parsing retains local-path diagnostics and relative-entity resolution.
 //! - URI bytes are passed with their original URL to a per-context libxml input loader.
+//! - Strpos positions use the scalar integer builtin so boxed int/false values need no object dispatch.
 
 pub(super) const SOURCE: &str = r###"
 extern "System" { function elephc_runtime_simplexml_stream_close_mode(int $mode): int; }
@@ -30,16 +31,16 @@ function __elephc_simplexml_file_handle(string $filename, int $options, string $
 function __elephc_simplexml_stream_bytes(string $uri, string $caller): string|false {
     $separator = strpos($uri, '://');
     if ($separator === false) { return file_get_contents($uri); }
-    $scheme = strtolower(substr($uri, 0, (int)$separator));
+    $scheme = strtolower(substr($uri, 0, intval($separator)));
     if ($scheme === 'file') {
-        $path = substr($uri, (int)$separator + 3);
+        $path = substr($uri, intval($separator) + 3);
         if (str_starts_with($path, 'localhost/')) { $path = substr($path, 9); }
         if (!str_starts_with($path, '/')) { return false; }
         return file_get_contents($path);
     }
     if ($scheme === 'data') { return __elephc_simplexml_data_bytes($uri, $caller); }
     if ($scheme === 'php') {
-        $uri = 'php' . substr($uri, (int)$separator);
+        $uri = 'php' . substr($uri, intval($separator));
         if ($uri === 'php://input') {
             $input = file_get_contents('php://input');
             return $input === false ? '' : $input;
@@ -54,7 +55,7 @@ function __elephc_simplexml_stream_bytes(string $uri, string $caller): string|fa
         return false;
     }
     if ($scheme === 'http' || $scheme === 'https' || $scheme === 'ftp' || $scheme === 'ftps' || $scheme === 'phar') {
-        $normalized = $scheme . substr($uri, (int)$separator);
+        $normalized = $scheme . substr($uri, intval($separator));
         return file_get_contents($normalized);
     }
     if ($scheme === 'compress.zlib' || $scheme === 'compress.bzip2') { return false; }
@@ -80,8 +81,8 @@ function __elephc_simplexml_data_bytes(string $uri, string $caller): string|fals
     $rest = substr($uri, 7);
     $comma = strpos($rest, ',');
     if ($comma === false) { return __elephc_simplexml_data_failure($uri, $caller, 'no comma in URL'); }
-    $metadata = substr($rest, 0, (int)$comma);
-    $payload = substr($rest, (int)$comma + 1);
+    $metadata = substr($rest, 0, intval($comma));
+    $payload = substr($rest, intval($comma) + 1);
     $base64 = false;
     if ($metadata !== '') {
         $semi = strpos($metadata, ';');
@@ -90,7 +91,7 @@ function __elephc_simplexml_data_bytes(string $uri, string $caller): string|fals
             if ($slash === false) { return __elephc_simplexml_data_failure($uri, $caller, 'illegal media type'); }
         } else {
             if (($slash === false || $slash > $semi) && $metadata !== ';base64') { return __elephc_simplexml_data_failure($uri, $caller, 'illegal media type'); }
-            foreach (explode(';', substr($metadata, (int)$semi + 1)) as $parameter) {
+            foreach (explode(';', substr($metadata, intval($semi) + 1)) as $parameter) {
                 if ($base64) { return __elephc_simplexml_data_failure($uri, $caller, 'illegal parameter'); }
                 if (strpos($parameter, '=') === false) {
                     if ($parameter !== 'base64') { return __elephc_simplexml_data_failure($uri, $caller, 'illegal parameter'); }
@@ -112,8 +113,8 @@ function __elephc_simplexml_filter_bytes(string $uri, string $caller): string|fa
     if (str_starts_with($spec, 'resource=')) { return __elephc_simplexml_stream_bytes(substr($spec, 9), $caller); }
     $resource = strpos($spec, '/resource=');
     if ($resource === false) { return false; }
-    $filters = substr($spec, 0, (int)$resource);
-    $source = substr($spec, (int)$resource + 10);
+    $filters = substr($spec, 0, intval($resource));
+    $source = substr($spec, intval($resource) + 10);
     $data = __elephc_simplexml_stream_bytes($source, $caller);
     if ($data === false) { return false; }
     $stream = fopen('php://temp', 'w+');
