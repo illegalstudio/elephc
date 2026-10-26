@@ -89,6 +89,29 @@ fn simplexml_truthiness_respects_node_kinds_and_namespaces() {
     }
 }
 
+/// Children selections include their parent's attributes in PHP boolean conversion.
+#[test]
+fn simplexml_children_truthiness_includes_selected_parent_attributes() {
+    for (source, namespace, expected) in [
+        ("<r a='1'/>", "", 1),
+        ("<r a='1'><!--c--></r>", "", 1),
+        ("<r xmlns:p='urn:p' p:a='1'/>", "urn:p", 1),
+        ("<r xmlns:p='urn:p' p:a='1'/>", "", 0),
+        ("<r/>", "", 0),
+    ] {
+        let source = cstring(source);
+        let namespace = cstring(namespace);
+        let empty = cstring("");
+        let root = unsafe { abi::elephc_xml_sx_load(source.as_ptr(), source.as_bytes().len() as i64,
+            0, empty.as_ptr(), 0, empty.as_ptr()) };
+        assert_ne!(root, 0);
+        let children = unsafe { abi::elephc_xml_sx_select(root, 0, empty.as_ptr(), namespace.as_ptr(), 0, 0) };
+        assert_eq!(abi::elephc_xml_sx_int(children, 3), expected, "{}", source.to_string_lossy());
+        abi::elephc_xml_sx_free(children);
+        abi::elephc_xml_sx_free(root);
+    }
+}
+
 /// Live iteration reads sibling links after mutations rather than taking a stale snapshot.
 #[test]
 fn simplexml_cursor_observes_live_sibling_mutation() {

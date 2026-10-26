@@ -48,11 +48,11 @@ unset($xml, $node, $recursive, $dump);
     let expected = r###""SimpleXMLElement Object\n(\n    [@attributes] => Array\n        (\n            [a] => 1\n        )\n\n    [b] => Array\n        (\n            [0] => 2\n            [1] => 3\n        )\n\n)\n"
 111
 \SimpleXMLElement::__set_state(array(
-   '@attributes' => 
+   '@attributes' =>
   array (
     'a' => '1',
   ),
-   'b' => 
+   'b' =>
   array (
     0 => '2',
     1 => '3',
@@ -61,7 +61,7 @@ unset($xml, $node, $recursive, $dump);
 "SimpleXMLElement Object\n(\n    [@attributes] => Array\n        (\n            [a] => 1\n        )\n\n    [b] => Array\n        (\n            [0] => 2\n            [1] => 3\n        )\n\n)\n"
 111
 \SimpleXMLElement::__set_state(array(
-   'b' => 
+   'b' =>
   array (
     0 => '2',
     1 => '3',
@@ -79,7 +79,7 @@ string(5) "inner"
 111
 "Array\n(\n    [0] => RecursiveXmlDebug Object\n        (\n            [self] => RecursiveXmlDebug Object\n *RECURSION*\n        )\n\n    [1] => RecursiveXmlDebug Object\n        (\n            [self] => RecursiveXmlDebug Object\n *RECURSION*\n        )\n\n)\n"
 11
-"###;
+"###.replace(" =>\n", " => \n");
     assert_eq!(out.stdout, expected.repeat(2));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

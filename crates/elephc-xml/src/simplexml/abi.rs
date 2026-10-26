@@ -110,6 +110,8 @@ pub extern "C" fn elephc_xml_sx_int(handle: i64, operation: i64) -> i64 {
         1 => i64::from(v.first().is_some()),
         3 => if matches!(v.scope, Scope::Node(_) | Scope::Index(..)) {
             i64::from(v.first().is_some_and(|node| node_is_truthy(&v, node)))
+        } else if let Scope::Children(owner, None) = &v.scope {
+            i64::from(v.first().is_some() || owner.first().is_some_and(|node| has_selected_attributes(&v, node)))
         } else { i64::from(v.first().is_some()) },
         4 => v.first().map(|n| unsafe { ffi::node_type(n) as i64 }).unwrap_or(0),
         5 => match v.scope { Scope::Children(_, None) => 1, Scope::Children(_, Some(_)) => 2,
@@ -133,13 +135,7 @@ pub extern "C" fn elephc_xml_sx_int(handle: i64, operation: i64) -> i64 {
 fn node_is_truthy(view: &View, node: Node) -> bool {
     unsafe {
         if ffi::node_type(node) == 2 { return true; }
-        if ffi::node_type(node) == 1 {
-            let mut attr = ffi::attrs(node);
-            while !attr.is_null() {
-                if view.ns.matches(attr) { return true; }
-                attr = ffi::next(attr);
-            }
-        }
+        if has_selected_attributes(view, node) { return true; }
         let first = ffi::child(node);
         let mut child = first;
         while !child.is_null() {
@@ -151,6 +147,18 @@ fn node_is_truthy(view: &View, node: Node) -> bool {
                 && !ffi::name(child).is_null() { return true; }
             if kind == 17 { break; }
             child = ffi::next(child);
+        }
+        false
+    }
+}
+/// Tests parent attributes using the selection's namespace, including attribute-only children views.
+fn has_selected_attributes(view: &View, node: Node) -> bool {
+    unsafe {
+        if ffi::node_type(node) != 1 { return false; }
+        let mut attr = ffi::attrs(node);
+        while !attr.is_null() {
+            if view.ns.matches(attr) { return true; }
+            attr = ffi::next(attr);
         }
         false
     }

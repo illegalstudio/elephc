@@ -13,6 +13,10 @@ use crate::support::*;
 #[test]
 fn test_simplexml_projection_whitespace_cdata_and_named_lists_bundle() {
     if skip_without_xml_native("test_simplexml_projection_whitespace_cdata_and_named_lists_bundle") { return; }
+    let definitions = r###"class XmlProjectionStringOverride extends SimpleXMLElement {
+    public function __toString(): string { return 'override'; }
+}
+"###;
     let body = r###"$catalog = new SimpleXMLElement("<catalog>\n  <product sku=\"A1\">\n    <name>Notebook</name>\n  </product>\n  <product sku=\"B2\">\n    <name>Pen</name>\n  </product>\n</catalog>");
 echo json_encode($catalog), "\n", json_encode((array)$catalog), "\n";
 echo json_encode($catalog->product), "\n", json_encode((array)$catalog->product), "\n";
@@ -58,9 +62,20 @@ foreach (['<r><![CDATA[x]]></r>', '<r><!--c--></r>', '<r><?pi x?></r>', '<r> </r
 }
 $xml = new SimpleXMLElement('<r><!--c--><?pi x?></r>');
 echo (int)(bool)$xml->xpath('//comment()')[0], (int)(bool)$xml->xpath('//processing-instruction()')[0], "\n";
+$xml = new XmlProjectionStringOverride('<r a="native"><i>a</i><i>b</i></r>');
+echo (string)$xml->i, '|', json_encode($xml), '|', json_encode((array)$xml->i), '|', json_encode((array)$xml['a']), '|', json_encode($xml->__debugInfo()), "\n";
+$xml = new XmlProjectionStringOverride('<r>native</r>');
+echo (string)$xml, '|', json_encode($xml), '|', json_encode((array)$xml), "\n";
+foreach (['<r a="1"/>', '<r a="1"><!--c--></r>', '<r xmlns:p="urn:p" p:a="1"/>', '<r/>'] as $source) {
+    $xml = new SimpleXMLElement($source);
+    $children = $xml->children();
+    $namespaced = $xml->children('urn:p');
+    echo (int)(bool)$children, (int)empty($children), (int)(bool)$namespaced, (int)empty($namespaced), '|';
+}
+echo "\n";
 "###;
     let quoted_body = body.replace('\\', "\\\\").replace('\'', "\\'");
-    let source = format!("<?php\n{body}\n$source = $argc > 0 ? '{quoted_body}' : '';\neval($source);");
+    let source = format!("<?php\n{definitions}\n{body}\n$source = $argc > 0 ? '{quoted_body}' : '';\neval($source);");
     let out = compile_and_run_with_heap_debug(&source);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
     let expected = r###"{"product":[{"@attributes":{"sku":"A1"},"name":"Notebook"},{"@attributes":{"sku":"B2"},"name":"Pen"}]}
@@ -91,6 +106,9 @@ echo (int)(bool)$xml->xpath('//comment()')[0], (int)(bool)$xml->xpath('//process
 {"z":"0","comment":{}}|{"@attributes":{"b":"2"},"z":"0","comment":{}}
 {"e":{"e":"x"}}
 00|11|11|11|00|01|01|00
+override|{"@attributes":{"a":"native"},"i":["a","b"]}|["a","b"]|["native"]|{"@attributes":{"a":"native"},"i":["a","b"]}
+override|{"0":"native"}|["native"]
+1001|1001|0110|0101|
 "###;
     assert_eq!(out.stdout, expected.repeat(2));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);

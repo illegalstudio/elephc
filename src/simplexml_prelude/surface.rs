@@ -452,7 +452,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
             return $result;
         }
         if ($mode !== 3 && elephc_xml_sx_int($handle, 4) === 2) {
-            $result["0"] = (string)$this;
+            $result["0"] = elephc_xml_sx_string($handle, 0);
             return $result;
         }
         $base_handle = $base->__elephc_handle_value();
@@ -461,7 +461,9 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
             if ($attributes->count() > 0) {
                 $values = ["__elephc_projection_seed" => ""];
                 unset($values["__elephc_projection_seed"]);
-                foreach ($attributes as $name => $attribute) { $values[$name] = (string)$attribute; }
+                foreach ($attributes as $name => $attribute) {
+                    $values[$name] = elephc_xml_sx_string($attribute->__elephc_handle_value(), 0);
+                }
                 $result["@attributes"] = $values;
             }
         }
@@ -478,7 +480,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
             if ($children->count() > 0) {
                 foreach ($children as $name => $child) {
                     $raw = $child->__elephc_handle_value();
-                    $value = elephc_xml_sx_int($raw, 6) !== 0 ? (string)$child : $child;
+                    $value = elephc_xml_sx_int($raw, 6) !== 0 ? elephc_xml_sx_string($raw, 0) : $child;
                     if (array_key_exists($name, $result)) {
                         $old = $result[$name];
                         if (!is_array($old)) { $old = [$old]; }
@@ -489,7 +491,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
                 return $result;
             }
         }
-        if ($mode !== 1 && elephc_xml_sx_int($base_handle, 11) !== 0) { $result["0"] = (string)$base; }
+        if ($mode !== 1 && elephc_xml_sx_int($base_handle, 11) !== 0) { $result["0"] = elephc_xml_sx_string($base_handle, 0); }
         return $result;
     }
     private function __elephc_projection_values(bool $attributes): array<string, mixed> {
