@@ -18,6 +18,16 @@ pub(crate) struct FixturePhaseTiming {
     started: Instant,
 }
 
+impl FixturePhaseTiming {
+    /// Records assembler input size only for fixtures whose phase diagnostics are enabled.
+    pub(crate) fn assembly_input(&self, assembly: &str) {
+        write_phase_line(&format!(
+            "fixture-phase {} {} input_bytes={} input_lines={}\n",
+            self.fixture, self.phase, assembly.len(), assembly.lines().count(),
+        ));
+    }
+}
+
 /// Starts a phase only for explicitly selected libtest thread names, defaulting to silence.
 pub(crate) fn fixture_phase_timing(phase: &'static str) -> Option<FixturePhaseTiming> {
     let filter = std::env::var("ELEPHC_FIXTURE_PHASE_TIMING").ok()?;
