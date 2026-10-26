@@ -301,3 +301,37 @@ echo $reflector->getName();
     assert_eq!(out.stdout, "ready:ready|".repeat(4) + "ReflectedNameOwner");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Reflector class-name leases survive argument and constructor throws without consuming borrows.
+#[test]
+fn test_reflection_constructor_class_name_owners_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ReflectedConstructedNameOwner {
+    public int $count;
+    public function __construct(int $count = 7) {
+        if ($count < 0) { throw new RuntimeException('ctor'); }
+        $this->count = $count;
+    }
+}
+function throwingReflectedNameArgument(): int { throw new RuntimeException('arg'); }
+$reflector = new ReflectionClass(ReflectedConstructedNameOwner::class);
+for ($i = 0; $i < 4; $i++) {
+    $inline = (new ReflectionClass(ReflectedConstructedNameOwner::class))->newInstance();
+    $named = $reflector->newInstance(9);
+    $array = (new ReflectionClass(ReflectedConstructedNameOwner::class))->newInstanceArgs([11]);
+    if ($inline instanceof ReflectedConstructedNameOwner
+        && $named instanceof ReflectedConstructedNameOwner
+        && $array instanceof ReflectedConstructedNameOwner) {
+        echo $inline->count, ':', $named->count, ':', $array->count, '|';
+    }
+    try { (new ReflectionClass(ReflectedConstructedNameOwner::class))->newInstance(-1); }
+    catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
+    try { (new ReflectionClass(ReflectedConstructedNameOwner::class))->newInstance(throwingReflectedNameArgument()); }
+    catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
+}
+echo $reflector->getName();
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "7:9:11|ctor|arg|".repeat(4) + "ReflectedConstructedNameOwner");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
