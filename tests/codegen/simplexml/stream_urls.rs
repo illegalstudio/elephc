@@ -212,3 +212,21 @@ stream_wrapper_unregister('scalarxmlstat');
     assert_eq!(out.stdout, "bool(false)\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Reading empty stdin closes each temporary wrapper without closing STDIN or retaining resources.
+#[test]
+fn test_simplexml_stdin_factories_retire_temporary_streams() {
+    if skip_without_xml_native("test_simplexml_stdin_factories_retire_temporary_streams") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$input = STDIN;
+$before = count(get_resources('stream'));
+$options = LIBXML_NOERROR | LIBXML_NOWARNING;
+var_dump(simplexml_load_file('php://stdin', null, $options));
+try { new SimpleXMLElement('php://stdin', $options, true); }
+catch (Exception $error) { echo 'caught|'; }
+echo get_resource_type($input), ':', count(get_resources('stream')) - $before;
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "bool(false)\ncaught|stream:0");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

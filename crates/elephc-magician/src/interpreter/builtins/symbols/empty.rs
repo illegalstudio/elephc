@@ -175,13 +175,23 @@ pub(in crate::interpreter) fn eval_empty_arg(
         return Ok(!values.truthy(value)?);
     }
     if let EvalExpr::ArrayGet { array, index } = arg {
-        let array = eval_expr(array, context, scope, values)?;
-        let index = eval_expr(index, context, scope, values)?;
-        if values.type_tag(array)? == EVAL_TAG_OBJECT {
-            return eval_array_access_empty_result(array, index, context, values);
-        }
-        let value = values.array_get(array, index)?;
-        return Ok(!values.truthy(value)?);
+        let mut empty = false;
+        with_eval_void_operands(&[array.as_ref(), index.as_ref()], context, scope, values,
+            |args, context, _, values| {
+                let array = args[0].borrowed();
+                let index = args[1].borrowed();
+                if values.type_tag(array)? == EVAL_TAG_OBJECT {
+                    empty = eval_array_access_empty_result(array, index, context, values)?;
+                } else {
+                    let value = values.array_get(array, index)?;
+                    let answer = values.truthy(value).map(|truthy| !truthy);
+                    let released = eval_release_value(context, values, value);
+                    empty = answer?;
+                    released?;
+                }
+                Ok(())
+            })?;
+        return Ok(empty);
     }
     let value = eval_expr(arg, context, scope, values)?;
     Ok(!values.truthy(value)?)

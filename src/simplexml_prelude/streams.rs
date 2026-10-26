@@ -47,7 +47,7 @@ function __elephc_simplexml_stream_bytes(string $uri, string $caller): string|fa
         if ($uri === 'php://stdin') {
             $stream = fopen('php://stdin', 'rb');
             if ($stream === false) { return false; }
-            return stream_get_contents($stream);
+            return __elephc_simplexml_read_stream($stream);
         }
         if ($uri === 'php://memory' || $uri === 'php://temp' || str_starts_with($uri, 'php://temp/')) { return ''; }
         if (str_starts_with($uri, 'php://filter/')) { return __elephc_simplexml_filter_bytes($uri, $caller); }

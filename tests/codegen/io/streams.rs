@@ -8313,3 +8313,21 @@ readDynamicBuiltinFilter('string.rot13', false);
 "#);
     assert_eq!(out, "abc|ABC|NoP|");
 }
+
+/// PHP standard-stream wrappers own duplicates, so closing them preserves the process streams.
+#[test]
+fn test_php_standard_stream_handles_close_independently() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$input = fopen('php://stdin', 'rb');
+echo (int)(get_resource_id($input) !== get_resource_id(STDIN)), '|';
+fclose($input);
+$output = fopen('php://stdout', 'wb');
+fclose($output);
+$error = fopen('php://stderr', 'wb');
+fclose($error);
+echo get_resource_type(STDIN), ':', get_resource_type(STDOUT), ':', get_resource_type(STDERR);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "1|stream:stream:stream");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

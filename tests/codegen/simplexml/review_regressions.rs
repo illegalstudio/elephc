@@ -187,24 +187,54 @@ restore_error_handler();
 fn test_simplexml_eval_empty_dimension_key_owners() {
     if skip_without_xml_native("test_simplexml_eval_empty_dimension_key_owners") { return; }
     let out = compile_and_run_with_heap_debug(r###"<?php
+$xml = new SimpleXMLElement('<r z="0"/>');
 $source = $argc > 0 ? '
 class ThrowingXmlEmptyKey {
     public function __toString(): string { throw new RuntimeException("cast"); }
     public function __destruct() { echo "drop|"; }
 }
 function freshXmlEmptyKey(): mixed { return new ThrowingXmlEmptyKey(); }
-$xml = new SimpleXMLElement("<r z=\"0\"/>");
 $key = "z";
 for ($i = 0; $i < 32; $i++) {
     if (!empty($xml["missing" . str_repeat("x", 40)]) || !empty($xml[$key])) { echo "wrong|"; }
+    if (isset($xml["missing" . str_repeat("x", 40)]) || !isset($xml[$key])) { echo "wrong|"; }
+    if (isset((new SimpleXMLElement("<r/>"))["missing"]) || !empty((new SimpleXMLElement("<r/>"))["missing"])) { echo "wrong|"; }
 }
 try { empty($xml[freshXmlEmptyKey()]); }
+catch (RuntimeException $error) { echo $error->getMessage(), "|"; }
+try { isset($xml[freshXmlEmptyKey()]); }
 catch (RuntimeException $error) { echo $error->getMessage(), "|"; }
 echo $key;
 ' : '';
 eval($source);
 "###);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "drop|cast|z");
+    assert_eq!(out.stdout, "drop|cast|drop|cast|z");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Ordinary eval ArrayAccess empty keeps a fresh key through both offsetExists and offsetGet.
+#[test]
+fn test_eval_arrayaccess_probe_key_owners() {
+    let out = compile_and_run_with_heap_debug(r###"<?php
+class ProbeIndexLeaseArray implements ArrayAccess {
+    public function offsetExists(mixed $offset): bool { return strlen((string)$offset) > 0; }
+    public function offsetGet(mixed $offset): mixed { return substr((string)$offset, 0, 1); }
+    public function offsetSet(mixed $offset, mixed $value): void {}
+    public function offsetUnset(mixed $offset): void {}
+}
+$object = new ProbeIndexLeaseArray();
+$source = $argc > 0 ? '
+$checks = 0;
+for ($i = 0; $i < 32; $i++) {
+    $checks += (int)isset($object["key" . str_repeat("x", 40)]);
+    $checks += (int)empty($object["0key" . str_repeat("x", 40)]);
+}
+echo $checks;
+' : '';
+eval($source);
+"###);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "64");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
