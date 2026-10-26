@@ -187,7 +187,7 @@ eval($source);
 #[test]
 fn test_simplexml_dom_reload_owners_isolated_bundle() {
     if skip_without_xml_native("test_simplexml_dom_reload_owners_isolated_bundle") { return; }
-    let runs = compile_and_run_with_heap_debug_per_argv(r###"<?php
+    let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(r###"<?php
 if ($argc === 1) {
     $document = new DOMDocument(); echo $document->childNodes->length;
 } elseif ($argc === 2) {
@@ -233,7 +233,14 @@ if ($argc === 1) {
             failures.push(format!("mode={mode} success={} stdout={:?} expected={expected:?}\n{}", out.success, out.stdout, out.stderr));
         }
     }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    let symbols = [
+        elephc::names::method_symbol("DOMDocument", "loadHTML"),
+        elephc::names::method_symbol("DOMNode", "__propset_childNodes"),
+        elephc::names::join_php_symbol("_method_source_abi", &["DOMNode", "__propset_childNodes"]),
+        elephc::names::method_symbol("DOMNodeList", "__construct"),
+        elephc::names::join_php_symbol("_method_source_abi", &["DOMNodeList", "__construct"]),
+    ];
+    assert!(failures.is_empty(), "{}\nDOM replacement assembly:\n{}", failures.join("\n"), selected_function_assembly(&assembly, &symbols));
 }
 
 /// DOM failures warn before returning, imported wrappers isolate prefixes, and iterator errors match PHP.

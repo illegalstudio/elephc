@@ -21,6 +21,7 @@ mod comparisons_and_files;
 mod stream_urls;
 mod projections;
 mod debug;
+mod debug_owners;
 
 /// Verifies SimpleXML parsing and properties against PHP's observable output.
 #[test]

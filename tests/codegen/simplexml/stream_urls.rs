@@ -12,15 +12,9 @@ use crate::support::*;
 
 /// Includes only stream helper bodies when a remote heap regression needs producer diagnostics.
 fn stream_owner_assembly(assembly: &str) -> String {
-    let mut selected = String::new();
-    for name in ["__elephc_simplexml_file_handle", "__elephc_simplexml_stream_bytes", "__elephc_simplexml_data_bytes", "__elephc_simplexml_filter_bytes"] {
-        let start = format!("{}:\n", elephc::names::function_symbol(name));
-        let end = format!("{}:", elephc::names::function_epilogue_symbol(name));
-        if let Some((_, body)) = assembly.split_once(&start) {
-            selected.push_str(&start);
-            selected.push_str(body.split_once(&end).map_or(body, |(body, _)| body));
-        }
-    }
+    let symbols: Vec<_> = ["__elephc_simplexml_file_handle", "__elephc_simplexml_stream_bytes", "__elephc_simplexml_data_bytes", "__elephc_simplexml_filter_bytes"]
+        .into_iter().map(elephc::names::function_symbol).collect();
+    let mut selected = selected_function_assembly(assembly, &symbols);
     let lines: Vec<_> = assembly.lines().collect();
     for (index, _) in lines.iter().enumerate().filter(|(_, line)|
         line.trim_end().ends_with(':') && line.contains("mixed_method_SimpleXMLElement_")
@@ -79,11 +73,13 @@ elseif ($argc === 10) {
     $filter_name = strtolower('STRING.TOLOWER');
     stream_filter_append($stream, $filter_name, STREAM_FILTER_READ);
     echo stream_get_contents($stream); fclose($stream);
-} else {
+} elseif ($argc === 13) {
     foreach (explode('/', 'read=string.tolower') as $filter_list) {
         if (str_starts_with($filter_list, 'read=')) { $filter_list = substr($filter_list, 5); }
         foreach (explode('|', $filter_list) as $filter) { echo $filter; }
     }
+} else {
+    echo strlen(__elephc_simplexml_filter_bytes('php://filter/read=string.tolower/resource=data://text/plain,%3CR%3EYES%3C%2FR%3E   ', 'simplexml_load_file()'));
 }
 "###, &[
         &[], &["x"], &["x", "x"], &["x", "x", "x"],
@@ -94,8 +90,9 @@ elseif ($argc === 10) {
         &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x"],
         &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x"],
         &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x"],
+        &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x"],
     ]);
-    let expected = ["baseline", "r", "r", "r", "one two", "r", "r:r", "bool(false)\n", "10", "<R>YES</R>", "<r>yes</r>", "<r>yes</r>", "string.tolower"];
+    let expected = ["baseline", "r", "r", "r", "one two", "r", "r:r", "bool(false)\n", "10", "<R>YES</R>", "<r>yes</r>", "<r>yes</r>", "string.tolower", "13"];
     assert_eq!(runs.len(), expected.len());
     let mut failures = Vec::new();
     for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {

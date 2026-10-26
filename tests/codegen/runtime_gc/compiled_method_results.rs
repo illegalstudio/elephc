@@ -14,7 +14,7 @@ use crate::support::*;
 /// Separates generic substitution, borrowed string returns and inline receiver cleanup.
 #[test]
 fn test_compiled_method_string_return_owners_isolated_bundle() {
-    let runs = compile_and_run_with_heap_debug_per_argv(r#"<?php
+    let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(r#"<?php
 function isolatedReturnIdentity<T>(T $value): T { return $value; }
 function isolatedStringIdentity(string $value): string { return $value; }
 class IsolatedGenericReturn<T> {
@@ -42,7 +42,14 @@ elseif ($argc === 6) {
             failures.push(format!("mode={mode} success={} stdout={:?}\n{}", out.success, out.stdout, out.stderr));
         }
     }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    let symbols = [
+        elephc::names::function_symbol("isolatedStringIdentity"),
+        elephc::names::method_symbol("IsolatedStringReturn", "get"),
+        elephc::names::method_symbol("IsolatedStringReturn", "__construct"),
+        "main".into(),
+        "_main".into(),
+    ];
+    assert!(failures.is_empty(), "{}\nString return assembly:\n{}", failures.join("\n"), selected_function_assembly(&assembly, &symbols));
 }
 
 /// A method's independent callable result does not inherit and strand a fresh argument owner.

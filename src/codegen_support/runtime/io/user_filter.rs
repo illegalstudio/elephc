@@ -646,113 +646,91 @@ fn emit_resolve_user_filter_id_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to the caller
 }
 
-/// `__rt_user_filter_release_fd`: for an fd that's about to be closed
-/// or filter-removed, run `onClose()` on every attached user-filter
-/// instance and clear the per-direction registry. Called by both
-/// `fclose()` and `stream_filter_remove()` so they share one code path.
-///
-/// Input:  AArch64 x0 = fd; x86_64 rdi = fd.
-/// Output: nothing (returns to caller). x0/rax preserved.
+/// Detaches each unique user-filter instance and runs onClose before retiring its owner.
+/// Both direction slots are cleared before callbacks; scoped owners cover callback exceptions.
+/// Input: first C argument is the descriptor. Output: integer result preserves that descriptor.
 pub fn emit_user_filter_release_fd(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
-        emit_user_filter_release_fd_linux_x86_64(emitter);
-        return;
-    }
-
     emitter.blank();
     emitter.comment("--- runtime: user_filter_release_fd ---");
     emitter.label_global("__rt_user_filter_release_fd");
+    abi::emit_frame_prologue(emitter, 64);
+    abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), 8);
+    detach_filter_instances(emitter);
 
-    // Frame: 32 bytes — saved fd + x29/x30.
-    emitter.instruction("sub sp, sp, #32");                                     // allocate runtime stack frame
-    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
-    emitter.instruction("mov x29, sp");                                         // establish runtime frame pointer
-    emitter.instruction("str x0, [sp, #0]");                                    // save fd across the onClose calls
-
-    for dir in 0..2usize {
-        let skip = format!("__rt_ufrf_dir{}_skip", dir);
-        let no_method = format!("__rt_ufrf_dir{}_no_method", dir);
-        emitter.instruction("ldr x0, [sp, #0]");                                // fd
-        emitter.instruction("add x10, x0, x0");                                 // fd*2
-        if dir == 1 {
-            emitter.instruction("add x10, x10, #1");                            // + read/write direction
-        }
-        abi::emit_symbol_address(emitter, "x9", "_user_filter_instances");
-        emitter.instruction("ldr x11, [x9, x10, lsl #3]");                      // obj at instances[slot]
-        emitter.instruction(&format!("cbz x11, {}", skip));                     // no instance attached → skip
-        // Look up onClose method (vtable slot 2 = offset 16).
-        emitter.instruction("ldr x12, [x11]");                                  // class_id at obj head
-        abi::emit_symbol_address(emitter, "x13", "_user_filter_vtable_ptrs");
-        emitter.instruction("ldr x13, [x13, x12, lsl #3]");                     // per-class vtable
-        emitter.instruction("ldr x14, [x13, #16]");                             // slot 2 = onClose method ptr
-        emitter.instruction(&format!("cbz x14, {}", no_method));                // method absent → just clear the slot
-        emitter.instruction("mov x0, x11");                                     // $this for the call
-        emitter.instruction("blr x14");                                         // call onClose($this) — return discarded
-        emitter.label(&no_method);
-        // Clear the instance slot now that onClose has run (or was absent).
-        emitter.instruction("ldr x0, [sp, #0]");                                // reload fd (clobbered by the call)
-        emitter.instruction("add x10, x0, x0");                                 // advance runtime pointer or counter
-        if dir == 1 {
-            emitter.instruction("add x10, x10, #1");                            // advance runtime pointer or counter
-        }
-        abi::emit_symbol_address(emitter, "x9", "_user_filter_instances");
-        emitter.instruction("str xzr, [x9, x10, lsl #3]");                      // store runtime value
-        emitter.label(&skip);
+    // Publish in reverse callback order so each normal retirement removes the top record.
+    for offset in [24, 16] {
+        let address = abi::tertiary_scratch_reg(emitter);
+        abi::emit_frame_slot_address(emitter, address, offset);
+        abi::emit_push_call_operand_owner(emitter, address, false);
     }
-
-    emitter.instruction("ldr x0, [sp, #0]");                                    // restore caller's x0 = fd
-    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #32");                                     // release runtime stack frame
-    emitter.instruction("ret");                                                 // return to caller
+    for (direction, offset) in [16, 24].into_iter().enumerate() {
+        let done = format!("__rt_ufrf_dir{direction}_closed");
+        abi::load_at_offset(emitter, abi::int_result_reg(emitter), offset);
+        abi::emit_branch_if_int_result_zero(emitter, &done);
+        emit_filter_on_close(emitter, &done);
+        emitter.label(&done);
+        abi::emit_pop_call_operand_owner(emitter);
+        abi::load_at_offset(emitter, abi::int_result_reg(emitter), offset);
+        abi::emit_store_zero_to_local_slot(emitter, offset);
+        abi::emit_call_label(emitter, "__rt_decref_any");
+    }
+    abi::load_at_offset(emitter, abi::int_result_reg(emitter), 8);
+    abi::emit_frame_restore(emitter, 64);
+    abi::emit_return(emitter);
 }
 
-/// Emits the Linux x86_64 stream runtime helper for user filter release fd.
-fn emit_user_filter_release_fd_linux_x86_64(emitter: &mut Emitter) {
-    emitter.blank();
-    emitter.comment("--- runtime: user_filter_release_fd ---");
-    emitter.label_global("__rt_user_filter_release_fd");
-
-    emitter.instruction("push rbp");                                            // save caller frame pointer
-    emitter.instruction("mov rbp, rsp");                                        // establish runtime frame pointer
-    emitter.instruction("sub rsp, 16");                                         // allocate runtime stack frame
-    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save fd
-
-    for dir in 0..2usize {
-        let skip = format!("__rt_ufrf_dir{}_skip_x86", dir);
-        let no_method = format!("__rt_ufrf_dir{}_no_method_x86", dir);
-        emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                    // fd
-        emitter.instruction("mov r10, rdi");                                    // move runtime value between registers
-        emitter.instruction("add r10, r10");                                    // fd*2
-        if dir == 1 {
-            emitter.instruction("add r10, 1");                                  // advance runtime pointer or counter
+/// Moves the registry's two direction owners into frame slots, deduplicating a shared instance.
+fn detach_filter_instances(emitter: &mut Emitter) {
+    abi::load_at_offset(emitter, abi::int_result_reg(emitter), 8);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(emitter, "x9", "_user_filter_instances");
+            emitter.instruction("add x9, x9, x0, lsl #4");                      // address the descriptor's adjacent read and write slots
+            emitter.instruction("ldp x10, x11, [x9]");                          // capture both registry pointers before callbacks can reenter
+            emitter.instruction("stp xzr, xzr, [x9]");                          // detach both slots before closing either instance
+            emitter.instruction("cmp x10, x11");                                // STREAM_FILTER_ALL stores one owner in two direction slots
+            emitter.instruction("csel x11, xzr, x11, eq");                      // keep a shared instance only in the first owning slot
+            abi::store_at_offset(emitter, "x10", 16);
+            abi::store_at_offset(emitter, "x11", 24);
         }
-        abi::emit_symbol_address(emitter, "r9", "_user_filter_instances");      // load runtime data address
-        emitter.instruction("mov r11, QWORD PTR [r9 + r10 * 8]");               // obj
-        emitter.instruction("test r11, r11");                                   // check whether the runtime value is zero
-        emitter.instruction(&format!("jz {}", skip));                           // branch when the checked value is zero or equal
-        emitter.instruction("mov r12, QWORD PTR [r11]");                        // class_id
-        abi::emit_symbol_address(emitter, "r13", "_user_filter_vtable_ptrs");   // load runtime data address
-        emitter.instruction("mov r13, QWORD PTR [r13 + r12 * 8]");              // vtable
-        emitter.instruction("mov r14, QWORD PTR [r13 + 16]");                   // slot 2 = onClose
-        emitter.instruction("test r14, r14");                                   // check whether the runtime value is zero
-        emitter.instruction(&format!("jz {}", no_method));                      // branch when the checked value is zero or equal
-        emitter.instruction("mov rdi, r11");                                    // $this
-        emitter.instruction("call r14");                                        // call external helper
-        emitter.label(&no_method);
-        // Clear the slot.
-        emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                    // prepare SysV call argument
-        emitter.instruction("mov r10, rdi");                                    // move runtime value between registers
-        emitter.instruction("add r10, r10");                                    // advance runtime pointer or counter
-        if dir == 1 {
-            emitter.instruction("add r10, 1");                                  // advance runtime pointer or counter
+        Arch::X86_64 => {
+            abi::emit_symbol_address(emitter, "r9", "_user_filter_instances");
+            emitter.instruction("shl rax, 4");                                  // two eight-byte direction slots belong to each descriptor
+            emitter.instruction("add r9, rax");                                 // address this descriptor's registry pair
+            emitter.instruction("mov r10, QWORD PTR [r9]");                     // preserve the read instance before clearing the registry
+            emitter.instruction("mov r11, QWORD PTR [r9 + 8]");                 // preserve the write instance before clearing the registry
+            emitter.instruction("mov QWORD PTR [r9], 0");                       // detach the read instance before any PHP callback
+            emitter.instruction("mov QWORD PTR [r9 + 8], 0");                   // detach the write instance before any PHP callback
+            emitter.instruction("cmp r10, r11");                                // detect the one owner shared by STREAM_FILTER_ALL
+            emitter.instruction("jne __rt_ufrf_distinct_instances");            // distinct direction instances each keep their own owner
+            emitter.instruction("xor r11d, r11d");                              // retire a shared pointer exactly once
+            emitter.label("__rt_ufrf_distinct_instances");
+            abi::store_at_offset(emitter, "r10", 16);
+            abi::store_at_offset(emitter, "r11", 24);
         }
-        abi::emit_symbol_address(emitter, "r9", "_user_filter_instances");      // load runtime data address
-        emitter.instruction("mov QWORD PTR [r9 + r10 * 8], 0");                 // store runtime value
-        emitter.label(&skip);
     }
+}
 
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // preserve fd
-    emitter.instruction("add rsp, 16");                                         // release runtime stack frame
-    emitter.instruction("pop rbp");                                             // restore caller frame pointer
-    emitter.instruction("ret");                                                 // return to caller
+/// Calls a detached instance's optional onClose hook using caller-saved lookup registers.
+fn emit_filter_on_close(emitter: &mut Emitter, done: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x9, [x0]");                                // read the instance's class id while its stack owner is published
+            abi::emit_symbol_address(emitter, "x10", "_user_filter_vtable_ptrs");
+            emitter.instruction("ldr x9, [x10, x9, lsl #3]");                   // select the class's stream-filter method table
+            emitter.instruction("ldr x9, [x9, #16]");                           // load the optional onClose entry
+            emitter.instruction(&format!("cbz x9, {done}"));                    // a missing hook still retires the instance owner
+            emitter.instruction("blr x9");                                      // call onClose with the instance in x0
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov rcx, QWORD PTR [rax]");                    // read the instance's class id without changing callee-saved registers
+            abi::emit_symbol_address(emitter, "r9", "_user_filter_vtable_ptrs");
+            emitter.instruction("mov r11, QWORD PTR [r9 + rcx * 8]");           // select the class's stream-filter method table
+            emitter.instruction("mov r11, QWORD PTR [r11 + 16]");               // load the optional onClose entry
+            emitter.instruction("test r11, r11");                               // a missing hook still retires the instance owner
+            emitter.instruction(&format!("jz {done}"));                         // skip only the absent PHP callback
+            emitter.instruction("mov rdi, rax");                                // pass the rooted instance as the PHP receiver
+            emitter.instruction("call r11");                                    // call onClose while both remaining owners are unwind-visible
+        }
+    }
 }
