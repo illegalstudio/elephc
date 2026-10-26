@@ -26,22 +26,21 @@ pub(super) fn with_guard<V: RuntimeValueOps>(
     result.and(restored)
 }
 
-/// Calls the protected info hook, projects its result, and owns the hash through rendering.
+/// Dispatches the PHP hook through eval, projects its result, and owns the rendering hash.
 pub(super) fn with_projection<V: RuntimeValueOps>(
     object: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
     values: &mut V,
     render: impl FnOnce(RuntimeCellHandle, &mut ElephcEvalContext, &mut V) -> Result<(), EvalStatus>,
 ) -> Result<(), EvalStatus> {
-    let info = match values.operator_method_call(object, "__elephc_debug_info", vec![]) {
+    let info = match values.operator_method_call(object, "__debugInfo", vec![]) {
         Ok(info) => info,
         Err(EvalStatus::UncaughtThrowable) => {
-            values.fatal(elephc_builtin_contract::NATIVE_DEBUG_INFO_FATAL)?;
-            return Err(EvalStatus::RuntimeFatal);
+            return hook_failed(context, values);
         }
         Err(status) => return Err(status),
     };
-    let projection = values.operator_method_call(object, "__elephc_debug_projection", vec![info.borrowed()]);
+    let projection = project_info(object, info, context, values);
     let info_released = eval_release_value(context, values, info);
     let hash = projection?;
     if let Err(status) = info_released {
@@ -51,6 +50,47 @@ pub(super) fn with_projection<V: RuntimeValueOps>(
     let result = render(hash, context, values);
     let released = eval_release_value(context, values, hash);
     result.and(released)
+}
+
+/// Shares native warning formatting while retaining the original error until the fatal boundary.
+fn hook_failed(
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let error = context.take_pending_throw();
+    if let Some(error) = error {
+        if let Ok(result) = values.operator_static_call("SimpleXMLElement", "__elephc_debug_warning", vec![error.borrowed()]) {
+            let _ = eval_release_value(context, values, result);
+        }
+    }
+    let fatal = values.fatal(elephc_builtin_contract::NATIVE_DEBUG_INFO_FATAL);
+    // Native fatal exits here. Embedders may return an error and still need to retire the owner.
+    let released = match error {
+        Some(error) => eval_release_value(context, values, error),
+        None => Ok(()),
+    };
+    fatal.and(released)?;
+    Err(EvalStatus::RuntimeFatal)
+}
+
+/// Supplies the interpreter-visible class name for nullable hook diagnostics.
+fn project_info(
+    object: RuntimeCellHandle,
+    info: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let identity = super::print_r::eval_debug_object_identity(object, values);
+    let class_name = super::print_r::eval_debug_object_class_name(object, identity, context, values)?;
+    let class = values.string(&class_name)?;
+    let projection = values.operator_static_call("SimpleXMLElement", "__elephc_debug_project", vec![info.borrowed(), class.borrowed()]);
+    let class_released = eval_release_value(context, values, class);
+    let hash = projection?;
+    if let Err(status) = class_released {
+        let _ = eval_release_value(context, values, hash);
+        return Err(status);
+    }
+    Ok(hash)
 }
 
 /// Owns each acquired snapshot key and value until their nested rendering has finished.

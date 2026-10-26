@@ -120,23 +120,73 @@ null-handler|after-null
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// A throwing debug hook is fatal even inside a PHP try block, matching PHP internals.
+/// Throwing debug hooks bypass user handlers and remain fatal in AOT and dynamic eval.
 #[test]
-fn test_simplexml_native_debug_hook_exception_is_fatal() {
-    if skip_without_xml_native("test_simplexml_native_debug_hook_exception_is_fatal") { return; }
-    let out = compile_and_run_capture(r#"<?php
-class ThrowingXmlDebug extends SimpleXMLElement {
-    public function __debugInfo(): ?array { throw new RuntimeException('debug'); }
-}
-set_error_handler(function(int $level, string $message): bool {
-    echo 'warn:', $level, ':', (int)str_starts_with($message, 'Uncaught RuntimeException: debug'), '|'; return true;
-});
-try { echo print_r(new ThrowingXmlDebug('<r/>'), true); }
-catch (Throwable $error) { echo 'caught-hook|'; }
+fn test_simplexml_native_debug_hook_exception_is_fatal_bundle() {
+    if skip_without_xml_native("test_simplexml_native_debug_hook_exception_is_fatal_bundle") { return; }
+    for opaque_eval in [false, true] {
+        for operation in ["print_r", "var_dump"] {
+            let body = format!(r#"class ThrowingXmlDebug extends SimpleXMLElement {{
+    public function __debugInfo(): ?array {{ throw new RuntimeException('debug'); }}
+}}
+set_error_handler(function(int $level, string $message): bool {{ echo 'unexpected-handler|'; return true; }});
+try {{ {operation}(new ThrowingXmlDebug('<r/>')); }}
+catch (Throwable $error) {{ echo 'caught-hook|'; }}
 echo 'after-hook|';
 "#);
-    assert!(!out.success);
-    assert!(out.stdout.starts_with("warn:2:1|"), "{}", out.stdout);
-    assert!(!out.stdout.contains("caught-hook|") && !out.stdout.contains("after-hook|"), "{}", out.stdout);
-    assert!(out.stderr.contains("__debuginfo() must return an array"), "{}", out.stderr);
+            let source = if opaque_eval {
+                let quoted = body.replace('\\', "\\\\").replace('\'', "\\'");
+                format!("<?php $anchor = new SimpleXMLElement('<r/>'); $source = $argc > 0 ? '{quoted}' : ''; eval($source);")
+            } else { format!("<?php {body}") };
+            let out = compile_and_run_capture(&source);
+            assert!(!out.success, "{operation} eval={opaque_eval}");
+            assert!(!out.stdout.contains("unexpected-handler|") && !out.stdout.contains("caught-hook|") && !out.stdout.contains("after-hook|"), "{}", out.stdout);
+            assert!(out.stderr.contains("Warning: Uncaught RuntimeException: debug"), "{}", out.stderr);
+            assert!(out.stderr.contains("\n  thrown in ") && out.stderr.contains(" on line "), "{}", out.stderr);
+            assert!(out.stderr.contains("__debuginfo() must return an array"), "{}", out.stderr);
+        }
+    }
+}
+
+/// Classes declared inside opaque eval use their own debug hook and diagnostic class name.
+#[test]
+fn test_simplexml_eval_declared_debug_overrides_bundle() {
+    if skip_without_xml_native("test_simplexml_eval_declared_debug_overrides_bundle") { return; }
+    let body = r###"class EvalXmlDebug extends SimpleXMLElement {
+    public function __debugInfo(): ?array { return [0 => 'zero', 'k' => 1]; }
+}
+class EvalGuardedXmlDebug extends SimpleXMLElement {
+    public function __debugInfo(): ?array { echo 'GUARD|'; var_dump($this); return ['g' => 1]; }
+}
+class EvalNullXmlDebug extends SimpleXMLElement {
+    public function __debugInfo(): ?array { return null; }
+}
+$node = new EvalXmlDebug('<r><ignored>parent</ignored></r>');
+echo json_encode(print_r($node, true)), "\n";
+ob_start(); var_dump($node); $dump = ob_get_clean();
+echo (int)str_contains($dump, 'object(EvalXmlDebug)#'), (int)str_contains($dump, "[0]=>\n"), (int)str_contains($dump, '["k"]=>'), "\n";
+ob_start(); var_dump(new EvalGuardedXmlDebug('<r/>')); $dump = ob_get_clean();
+echo (int)(substr_count($dump, 'GUARD|') === 1), (int)str_contains($dump, '*RECURSION*'), "\n";
+$node = new EvalNullXmlDebug('<r/>');
+set_error_handler(function(int $level, string $message): bool {
+    echo 'null:', $level, ':', (int)str_starts_with($message, 'Returning null from EvalNullXmlDebug::__debugInfo()'), '|'; return true;
+});
+echo json_encode(print_r($node, true)), "\n";
+restore_error_handler();
+set_error_handler(function(int $level, string $message): bool { throw new RuntimeException('eval-null'); });
+try { print_r($node, true); } catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
+restore_error_handler(); echo 'after', "\n";
+unset($node, $dump);
+"###;
+    let quoted = body.replace('\\', "\\\\").replace('\'', "\\'");
+    let source = format!("<?php $anchor = new SimpleXMLElement('<r/>'); $source = $argc > 0 ? '{quoted}' : ''; eval($source); unset($anchor);");
+    let out = compile_and_run_with_heap_debug(&source);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, r###""EvalXmlDebug Object\n(\n    [0] => zero\n    [k] => 1\n)\n"
+111
+11
+null:8192:1|"EvalNullXmlDebug Object\n(\n)\n"
+eval-null|after
+"###);
+    assert_no_heap_leaks(&out);
 }

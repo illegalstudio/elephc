@@ -521,18 +521,27 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     public function __elephc_debug_info(): mixed {
         try { return $this->__debugInfo(); }
         catch (Throwable $error) {
-            $message = 'Warning: Uncaught ' . get_class($error) . ': ' . $error->getMessage()
-                . ' in ' . $error->getFile() . ':' . $error->getLine()
-                . "\nStack trace:\n" . $error->getTraceAsString() . "\n  thrown\n";
-            __elephc_simplexml_warning($message);
+            self::__elephc_debug_warning($error);
             throw $error;
         }
     }
+    public static function __elephc_debug_warning(Throwable $error): void {
+        $message = 'Warning: Uncaught ' . get_class($error) . ': ' . $error->getMessage()
+            . ' in ' . $error->getFile() . ':' . $error->getLine()
+            . "\nStack trace:\n" . $error->getTraceAsString()
+            . "\n  thrown in " . $error->getFile() . ' on line ' . $error->getLine() . "\n";
+        set_error_handler(null);
+        try { __elephc_simplexml_warning($message); }
+        finally { restore_error_handler(); }
+    }
     public function __elephc_debug_projection(mixed $projection): array<string, mixed> {
+        return self::__elephc_debug_project($projection, get_class($this));
+    }
+    public static function __elephc_debug_project(mixed $projection, string $class): array<string, mixed> {
         $result = ["__elephc_projection_seed" => null];
         unset($result["__elephc_projection_seed"]);
         if ($projection === null) {
-            __elephc_simplexml_warning('Deprecated: Returning null from ' . get_class($this)
+            __elephc_simplexml_warning('Deprecated: Returning null from ' . $class
                 . "::__debugInfo() is deprecated, return an empty array instead\n");
         } else {
             foreach ($projection as $key => $value) { $result[(string)$key] = $value; }
