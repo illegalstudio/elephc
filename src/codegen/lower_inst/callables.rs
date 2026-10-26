@@ -35,7 +35,7 @@ use super::{
     emit_runtime_descriptor_with_receiver_capture, emit_runtime_extern_wrapper_inline,
     emit_static_method_descriptor_entry_wrapper, expect_operand, function_signature_from_eir,
     materialize_direct_call_args, materialize_method_call_args_with_receiver_reg_and_refs,
-    runtime_builtin_wrapper_sig, store_call_result,
+    runtime_builtin_wrapper_sig, store_compiled_call_result,
 };
 use crate::codegen::{CodegenIrError, Result};
 
@@ -2397,7 +2397,7 @@ fn emit_runtime_array_instance_method_call(
     emit_direct_resolved_method_call(ctx, &resolved)?;
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
-    store_call_result(ctx, inst, &target.sig.return_type)?;
+    store_compiled_call_result(ctx, inst, &target.sig.return_type, target.sig.by_ref_return)?;
     emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     emit_ref_arg_writebacks(ctx, &call_args)
 }

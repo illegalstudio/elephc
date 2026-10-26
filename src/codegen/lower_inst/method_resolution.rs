@@ -280,6 +280,55 @@ pub(super) fn store_call_result(
     Ok(())
 }
 
+/// Boxes a compiled PHP return while retiring only the owner its callee transfers.
+///
+/// Runtime intrinsics do not publish the private PHP marker and keep using
+/// `store_call_result`. Consume the marker before boxing calls can clobber it.
+pub(super) fn store_compiled_call_result(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    return_ty: &PhpType,
+    by_ref_return: bool,
+) -> Result<()> {
+    if by_ref_return {
+        if let Some(result) = inst.result { ctx.store_int_result_value(result)?; }
+        return Ok(());
+    }
+    let Some(result) = inst.result else { return Ok(()); };
+    let result_ty = ctx.value_php_type(result)?;
+    let representation = return_ty.codegen_repr();
+    if !matches!(result_ty, PhpType::Mixed | PhpType::Union(_))
+        || representation == PhpType::Mixed
+        || !(representation.is_refcounted() || representation == PhpType::Str)
+    {
+        return store_call_result(ctx, inst, return_ty);
+    }
+    let owned = ctx.next_label("compiled_return_box_owned");
+    let done = ctx.next_label("compiled_return_box_done");
+    let box_ty = crate::types::mixed_box_php_type(return_ty);
+    crate::codegen::return_ownership::emit_branch_if_owned(ctx.emitter, &owned);
+    emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&owned);
+    if representation == PhpType::Str {
+        // Fresh string helpers can still return concat scratch. Persist first,
+        // then let the validating release retire only a real heap allocation.
+        let (pointer, _) = abi::string_result_regs(ctx.emitter);
+        abi::emit_push_reg(ctx.emitter, pointer);
+        emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        abi::emit_push_reg(ctx.emitter, result_reg);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
+        abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+        abi::emit_pop_reg(ctx.emitter, result_reg);
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+    } else {
+        emit_box_current_owned_value_as_mixed(ctx.emitter, &box_ty);
+    }
+    ctx.emitter.label(&done);
+    ctx.store_result_value(result)
+}
+
 /// Stores a resolved method call's result, honoring by-reference returns.
 ///
 /// A by-reference-returning method hands back a single-word reference-cell pointer in the
@@ -290,13 +339,7 @@ pub(super) fn store_method_call_result(
     inst: &Instruction,
     target: &MethodCallTarget,
 ) -> Result<()> {
-    if target.by_ref_return {
-        if let Some(result) = inst.result {
-            ctx.store_int_result_value(result)?;
-        }
-        return Ok(());
-    }
-    store_call_result(ctx, inst, &target.return_ty)
+    store_compiled_call_result(ctx, inst, &target.return_ty, target.by_ref_return)
 }
 
 /// Resolves an instruction data immediate as a method name.

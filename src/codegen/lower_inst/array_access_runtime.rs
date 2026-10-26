@@ -348,7 +348,7 @@ pub(super) fn lower_boxed_array_access_interface_call(
         iterators::emit_interface_dispatch_call(ctx, &interface_name, &method_key, None)?;
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
-    store_call_result(ctx, inst, &return_ty)?;
+    store_compiled_call_result(ctx, inst, &return_ty, callee_sig.by_ref_return)?;
     // Interface implementations use ordinary PHP parameter shadows, not argument-owner transfer.
     emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     emit_ref_arg_writebacks(ctx, &call_args)
@@ -394,7 +394,7 @@ pub(super) fn store_runtime_object_call_result(
     return_ty: &PhpType,
 ) -> Result<()> {
     if return_ty.codegen_repr() != PhpType::Mixed {
-        return store_call_result(ctx, inst, return_ty);
+        return store_compiled_call_result(ctx, inst, return_ty, false);
     }
     let Some(result) = inst.result else {
         return Ok(());

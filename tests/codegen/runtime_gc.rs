@@ -170,6 +170,7 @@ mod class_name_owners;
 mod handler_registration_owners;
 mod closure_reference_owners;
 mod boxed_array_call_results;
+mod compiled_method_results;
 mod mixed_parameters;
 mod issue_551_ownership;
 mod object_mixed_return_owners;
