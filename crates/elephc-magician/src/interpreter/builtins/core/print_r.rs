@@ -163,7 +163,7 @@ fn eval_print_r_append_array(
             output.extend_from_slice(b"[");
             output.extend_from_slice(&values.string_bytes(key)?);
             output.extend_from_slice(b"] => ");
-            eval_print_r_append_value(element, context, values, depth + 1, arrays_seen, objects_seen, output)?;
+            eval_print_r_append_value(element, context, values, depth + 2, arrays_seen, objects_seen, output)?;
             output.extend_from_slice(b"\n");
             Ok(())
         })?;
@@ -208,7 +208,7 @@ fn eval_print_r_append_object(
             property.value,
             context,
             values,
-            depth + 1,
+            depth + 2,
             arrays_seen,
             objects_seen,
             output,
@@ -253,7 +253,7 @@ fn eval_print_r_append_native_object(
                     output.extend_from_slice(b"[");
                     output.extend_from_slice(&values.string_bytes(key)?);
                     output.extend_from_slice(b"] => ");
-                    eval_print_r_append_value(element, context, values, depth + 1, arrays_seen, objects_seen, output)?;
+                    eval_print_r_append_value(element, context, values, depth + 2, arrays_seen, objects_seen, output)?;
                     output.extend_from_slice(b"\n");
                     Ok(())
                 })?;

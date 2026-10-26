@@ -14,6 +14,25 @@ mod depth;
 mod deep;
 mod key_errors;
 
+/// Hash storage emits a JSON list only for consecutive integer keys in insertion order.
+#[test]
+fn execute_program_json_encode_compacts_list_shaped_hashes() {
+    let program = parse_fragment(br#"
+$items = ['seed' => true]; unset($items['seed']); echo json_encode($items), '|';
+$items[0] = 'a'; $items[1] = 'b'; echo json_encode($items), '|';
+echo json_encode($items, JSON_FORCE_OBJECT), '|';
+unset($items[0]); echo json_encode($items), '|';
+echo json_encode([1 => 'b', 0 => 'a']), '|';
+echo json_encode(['00' => 'z']), '|';
+return json_encode([-1 => 'n', 0 => 'a']);
+"#).expect("parse list-shaped hash fixture");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("encode hash shapes");
+    assert_eq!(values.output, r#"[]|["a","b"]|{"0":"a","1":"b"}|{"1":"b"}|{"1":"b","0":"a"}|{"00":"z"}|"#);
+    assert_eq!(values.get(result), FakeValue::String(r#"{"-1":"n","0":"a"}"#.into()));
+}
+
 /// Verifies dynamic builtin calls inside eval dispatch through runtime value hooks.
 #[test]
 fn execute_program_dispatches_simple_builtins() {

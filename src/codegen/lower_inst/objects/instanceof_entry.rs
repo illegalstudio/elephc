@@ -9,6 +9,26 @@
 
 use super::*;
 
+/// Tests a boxed `is_a` subject through the same class metadata as named `instanceof`.
+pub(in crate::codegen::lower_inst) fn lower_mixed_is_a_literal_target(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    value: ValueId,
+    class_name: &str,
+) -> Result<()> {
+    let normalized = class_name.trim_start_matches('\\');
+    let canonical = ctx.module.class_infos.keys().chain(ctx.module.interface_infos.keys())
+        .find(|name| name.eq_ignore_ascii_case(normalized))
+        .map(String::as_str).unwrap_or(normalized);
+    if let Some((target_id, target_kind)) = classify_named_target(ctx, canonical) {
+        ctx.load_value_to_reg(value, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+        emit_match_call(ctx, target_id, target_kind, "__rt_mixed_instanceof");
+    } else {
+        emit_false(ctx);
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Lowers named `instanceof` using runtime class/interface metadata.
 pub(in crate::codegen::lower_inst) fn lower_instanceof(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;

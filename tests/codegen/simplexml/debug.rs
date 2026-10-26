@@ -50,7 +50,7 @@ ob_start(); var_dump([$recursive, $recursive]); $dump = ob_get_clean();
 echo (int)str_contains($dump, '*RECURSION*'), (int)!str_contains($dump, '__elephc_'), "\n";
 unset($xml, $node, $recursive, $dump);
 ob_start(); var_dump(new GuardedXmlDebug('<r/>')); $dump = ob_get_clean();
-echo (int)str_contains($dump, '*RECURSION*'), (int)str_contains($dump, '["visible"]=>'), (int)(substr_count($dump, 'GUARD|') === 1), "\n";
+echo (int)str_contains($dump, '*RECURSION*'), (int)str_contains($dump, '["visible"]=>'), (int)(count(explode('GUARD|', $dump)) === 2), "\n";
 $node = new NullXmlDebug('<r/>');
 set_error_handler(function(int $level, string $message): bool {
     echo 'null:', $level, ':', (int)str_starts_with($message, 'Returning null from NullXmlDebug::__debugInfo()'), '|'; return true;
@@ -169,7 +169,7 @@ echo json_encode(print_r($node, true)), "\n";
 ob_start(); var_dump($node); $dump = ob_get_clean();
 echo (int)str_contains($dump, 'object(EvalXmlDebug)#'), (int)str_contains($dump, "[0]=>\n"), (int)str_contains($dump, '["k"]=>'), "\n";
 ob_start(); var_dump(new EvalGuardedXmlDebug('<r/>')); $dump = ob_get_clean();
-echo (int)(substr_count($dump, 'GUARD|') === 1), (int)str_contains($dump, '*RECURSION*'), "\n";
+echo (int)(count(explode('GUARD|', $dump)) === 2), (int)str_contains($dump, '*RECURSION*'), "\n";
 $node = new EvalNullXmlDebug('<r/>');
 set_error_handler(function(int $level, string $message): bool {
     echo 'null:', $level, ':', (int)str_starts_with($message, 'Returning null from EvalNullXmlDebug::__debugInfo()'), '|'; return true;

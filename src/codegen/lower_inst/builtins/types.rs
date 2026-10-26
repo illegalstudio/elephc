@@ -648,11 +648,16 @@ pub(crate) fn lower_is_a_relation(
             return class_string_relation::lower(ctx, inst, object, &target_class, exclude_self);
         }
     }
-    if matches!(ctx.value_php_type(object)?, PhpType::Mixed | PhpType::Union(_))
-        && super::has_eval_context(ctx)
-    {
+    if matches!(ctx.value_php_type(object)?, PhpType::Mixed | PhpType::Union(_)) {
         if let Some(target_class) = optional_const_string_operand(ctx, target)? {
-            return super::lower_eval_object_is_a(ctx, inst, object, &target_class, exclude_self);
+            if super::has_eval_context(ctx) {
+                return super::lower_eval_object_is_a(ctx, inst, object, &target_class, exclude_self);
+            }
+            if !exclude_self {
+                return super::super::objects::lower_mixed_is_a_literal_target(
+                    ctx, inst, object, &target_class,
+                );
+            }
         }
     }
     // `$allow_string` decides whether a string first operand names a class, and the two builtins

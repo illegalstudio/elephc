@@ -7,8 +7,43 @@
 //! Key details:
 //! - Conflicting candidate signatures force generic dispatch without runtime eval.
 //! - Covers fresh, borrowed and scratch strings plus fresh and borrowed containers.
+//! - Explicit variadics keep argument introspection compatible with interface dispatch.
 
 use crate::support::*;
+
+/// Separates generic substitution, borrowed string returns and inline receiver cleanup.
+#[test]
+fn test_compiled_method_string_return_owners_isolated_bundle() {
+    let runs = compile_and_run_with_heap_debug_per_argv(r#"<?php
+function isolatedReturnIdentity<T>(T $value): T { return $value; }
+function isolatedStringIdentity(string $value): string { return $value; }
+class IsolatedGenericReturn<T> {
+    public function __construct(private T $value) {}
+    public function get(): T { return isolatedReturnIdentity($this->value); }
+    public function direct(): T { return $this->value; }
+}
+class IsolatedStringReturn {
+    public function __construct(private string $value) {}
+    public function get(): string { return isolatedStringIdentity($this->value); }
+    public function direct(): string { return $this->value; }
+}
+if ($argc === 1) { echo (new IsolatedGenericReturn('x'))->get(); }
+elseif ($argc === 2) { echo (new IsolatedStringReturn('x'))->get(); }
+elseif ($argc === 3) { echo (new IsolatedGenericReturn('x'))->direct(); }
+elseif ($argc === 4) { echo isolatedReturnIdentity('x'); }
+elseif ($argc === 5) { echo (new IsolatedStringReturn('x'))->direct(); }
+elseif ($argc === 6) {
+    $value = new IsolatedGenericReturn('x'); echo $value->get(); unset($value);
+} else { $value = new IsolatedGenericReturn('x'); echo 'x'; unset($value); }
+"#, &[&[], &["x"], &["x", "x"], &["x", "x", "x"], &["x", "x", "x", "x"], &["x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x"]]);
+    let mut failures = Vec::new();
+    for (mode, out) in runs.iter().enumerate() {
+        if !out.success || out.stdout != "x" || !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
+            failures.push(format!("mode={mode} success={} stdout={:?}\n{}", out.success, out.stdout, out.stderr));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
 
 /// A method's independent callable result does not inherit and strand a fresh argument owner.
 #[test]
@@ -64,18 +99,18 @@ echo $text, ':', $payload->value, ':', strlen(StaticRawReturnState::$text), ':',
 fn test_compiled_method_adapters_preserve_borrowed_static_return_owners() {
     let out = compile_and_run_with_heap_debug(r#"<?php
 interface StaticAdapterResultProtocol {
-    public function items(): mixed;
-    public function text(): mixed;
+    public function items(mixed ...$extra): mixed;
+    public function text(mixed ...$extra): mixed;
 }
 class StaticAdapterResultSource implements StaticAdapterResultProtocol {
     public static array $items = [];
     public static string $text = '';
-    public function items(): array { func_get_args(); return self::$items; }
-    public function text(): string { func_get_args(); return self::$text; }
+    public function items(mixed ...$extra): array { func_get_args(); return self::$items; }
+    public function text(mixed ...$extra): string { func_get_args(); return self::$text; }
 }
 class StaticAdapterResultOther {
-    public function items(): int { return 0; }
-    public function text(): int { return 0; }
+    public function items(mixed ...$extra): int { return 0; }
+    public function text(mixed ...$extra): int { return 0; }
 }
 function useStaticAdapterResult(mixed $source): void {
     echo count($source->items()), ':', strlen($source->text()), '|';
@@ -100,8 +135,8 @@ echo count(StaticAdapterResultSource::$items), ':', strlen(StaticAdapterResultSo
 fn test_compiled_method_results_box_fresh_and_borrowed_owners() {
     let out = compile_and_run_with_heap_debug(r#"<?php
 interface CompiledMethodBoxProtocol {
-    public function adaptedText(int $n): mixed;
-    public function adaptedBorrowedText(): mixed;
+    public function adaptedText(int $n, mixed ...$extra): mixed;
+    public function adaptedBorrowedText(mixed ...$extra): mixed;
 }
 class CompiledMethodBoxSource implements CompiledMethodBoxProtocol {
     public string $text;
@@ -116,10 +151,10 @@ class CompiledMethodBoxSource implements CompiledMethodBoxProtocol {
     public function borrowedText(): string { return $this->text; }
     public function scratchText(string $value): string { return trim($value); }
     public function concatenatedText(int $n): string { return str_repeat('d', $n) . str_repeat('e', $n); }
-    public function adaptedText(int $n): string {
+    public function adaptedText(int $n, mixed ...$extra): string {
         $args = func_get_args(); return str_repeat('c', (int)$args[0]);
     }
-    public function adaptedBorrowedText(): string {
+    public function adaptedBorrowedText(mixed ...$extra): string {
         if (count(func_get_args()) === 0) { return $this->text; }
         return 'unused';
     }
@@ -136,8 +171,8 @@ class CompiledMethodBoxOther {
     public function borrowedText(): int { return 0; }
     public function scratchText(string $value): int { return 0; }
     public function concatenatedText(int $n): int { return $n; }
-    public function adaptedText(int $n): int { return $n; }
-    public function adaptedBorrowedText(): int { return 0; }
+    public function adaptedText(int $n, mixed ...$extra): int { return $n; }
+    public function adaptedBorrowedText(mixed ...$extra): int { return 0; }
     public function freshArray(): int { return 0; }
     public function borrowedArray(): int { return 0; }
     public function freshObject(): int { return 0; }

@@ -81,6 +81,19 @@ pub(in crate::interpreter) fn numeric_cast(
     values.operator_method_call(value, method, vec![]).map(Some)
 }
 
+/// Selects an internal JSON adapter without invoking it before the encoder's recursion guard.
+pub(in crate::interpreter) fn json_method(
+    values: &mut (impl RuntimeValueOps + ?Sized), value: RuntimeCellHandle,
+) -> Result<Option<&'static str>, EvalStatus> {
+    let class = match operator_class(values, value) {
+        Ok(class) => class,
+        // Embedders without native class capabilities keep ordinary property encoding.
+        Err(EvalStatus::UnsupportedConstruct) => return Ok(None),
+        Err(status) => return Err(status),
+    };
+    Ok(class.and_then(|class| class.operators).and_then(|operators| operators.json))
+}
+
 /// Compares values and materializes either a signed integer or a PHP boolean result.
 pub(super) fn comparison(
     values: &mut (impl RuntimeValueOps + ?Sized), op: EvalBinOp,

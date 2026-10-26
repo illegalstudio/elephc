@@ -50,7 +50,7 @@ var_dump(simplexml_load_file('php://input', null, LIBXML_NOERROR | LIBXML_NOWARN
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\nStream owner assembly:\n{}", out.stderr, stream_owner_assembly(&assembly));
 }
 
-/// Isolates stream factories in separate processes while compiling the shared eval catalog once.
+/// Isolates stream factories, filter dispatch and string processing with one shared eval catalog.
 #[test]
 fn test_simplexml_stream_document_owners_isolated_bundle() {
     if skip_without_xml_native("test_simplexml_stream_document_owners_isolated_bundle") { return; }
@@ -67,14 +67,35 @@ elseif ($argc === 7) {
     $source = $argc > 0 ? 'echo simplexml_load_file($uri)->getName(), ":", (new SimpleXMLElement($uri, 0, true))->getName();' : '';
     eval($source);
 } elseif ($argc === 8) { var_dump(simplexml_load_file('php://input', null, LIBXML_NOERROR | LIBXML_NOWARNING)); }
-else { echo strlen(__elephc_simplexml_filter_bytes('php://filter/read=string.tolower/resource=data://text/plain,%3CR%3EYES%3C%2FR%3E', 'simplexml_load_file()')); }
+elseif ($argc === 9) { echo strlen(__elephc_simplexml_filter_bytes('php://filter/read=string.tolower/resource=data://text/plain,%3CR%3EYES%3C%2FR%3E', 'simplexml_load_file()')); }
+elseif ($argc === 10) {
+    echo __elephc_simplexml_filter_bytes('php://filter/resource=data://text/plain,%3CR%3EYES%3C%2FR%3E', 'simplexml_load_file()');
+} elseif ($argc === 11) {
+    $stream = fopen('php://temp', 'w+'); fwrite($stream, '<R>YES</R>'); rewind($stream);
+    stream_filter_append($stream, 'string.tolower', STREAM_FILTER_READ);
+    echo stream_get_contents($stream); fclose($stream);
+} elseif ($argc === 12) {
+    $stream = fopen('php://temp', 'w+'); fwrite($stream, '<R>YES</R>'); rewind($stream);
+    $filter_name = strtolower('STRING.TOLOWER');
+    stream_filter_append($stream, $filter_name, STREAM_FILTER_READ);
+    echo stream_get_contents($stream); fclose($stream);
+} else {
+    foreach (explode('/', 'read=string.tolower') as $filter_list) {
+        if (str_starts_with($filter_list, 'read=')) { $filter_list = substr($filter_list, 5); }
+        foreach (explode('|', $filter_list) as $filter) { echo $filter; }
+    }
+}
 "###, &[
         &[], &["x"], &["x", "x"], &["x", "x", "x"],
         &["x", "x", "x", "x"], &["x", "x", "x", "x", "x"],
         &["x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x"],
         &["x", "x", "x", "x", "x", "x", "x", "x"],
+        &["x", "x", "x", "x", "x", "x", "x", "x", "x"],
+        &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x"],
+        &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x"],
+        &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x"],
     ]);
-    let expected = ["baseline", "r", "r", "r", "one two", "r", "r:r", "bool(false)\n", "10"];
+    let expected = ["baseline", "r", "r", "r", "one two", "r", "r:r", "bool(false)\n", "10", "<R>YES</R>", "<r>yes</r>", "<r>yes</r>", "string.tolower"];
     assert_eq!(runs.len(), expected.len());
     let mut failures = Vec::new();
     for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {

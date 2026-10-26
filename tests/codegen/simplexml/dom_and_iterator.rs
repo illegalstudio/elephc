@@ -122,18 +122,18 @@ echo $document->documentElement->textContent;
     assert_eq!(out, "bool(true)\nbool(true)\nbool(true)\ncallback");
 }
 
-/// Callable arrays inject native XML support without a direct or first-class loadXML call.
+/// Callable arrays inject native XML support, and eval's callable factory shares the DOM receiver.
 #[test]
-fn test_simplexml_callable_array_dom_load_xml_detection() {
-    if skip_without_xml_native("test_simplexml_callable_array_dom_load_xml_detection") { return; }
+fn test_simplexml_callable_array_dom_load_xml_detection_bundle() {
+    if skip_without_xml_native("test_simplexml_callable_array_dom_load_xml_detection_bundle") { return; }
     let out = compile_and_run(r#"<?php
 $document = new DOMDocument();
 $load = [$document, 'loadXML'];
 var_dump($load('<r>stored</r>'));
 $results = array_map([$document, 'loadXML'], ['<r>mapped</r>']);
 echo $document->documentElement->textContent, '|';
-$closure = Closure::fromCallable([$document, 'loadXML']);
-var_dump($closure('<r>closed</r>'));
+$source = $argc > 0 ? '$closure = Closure::fromCallable([$document, "loadXML"]); var_dump($closure("<r>closed</r>"));' : '';
+eval($source);
 echo $document->documentElement->textContent;
 "#);
     assert_eq!(out, "bool(true)\nmapped|bool(true)\nclosed");
@@ -210,12 +210,23 @@ if ($argc === 1) {
     $imported = simplexml_import_dom($document);
     $document->loadHTML('<html><body><p>second</p></body></html>');
     echo $imported->getName(), '|', $document->documentElement->nodeName;
-} else {
+} elseif ($argc === 6) {
     $source = $argc > 0 ? '$document = new DOMDocument(); $document->loadXML("<old/>"); $document->loadHTML("<html><body><p>new</p></body></html>"); echo $document->documentElement->nodeName;' : '';
     eval($source);
+} elseif ($argc === 7) {
+    $document = new DOMDocument(); $document->loadHTML('<html><body><p>x</p></body></html>');
+    echo $document->documentElement->nodeName;
+} elseif ($argc === 8) {
+    $document = new DOMDocument(); $document->loadHTML('<html><body><p>x</p></body></html>');
+    $document->childNodes = new DOMNodeList([]); echo $document->childNodes->length;
+} elseif ($argc === 9) {
+    $source = $argc > 0 ? '$document = new DOMDocument(); $document->loadHTML("<html><body><p>x</p></body></html>"); echo $document->documentElement->nodeName;' : '';
+    eval($source);
+} else {
+    $document = new DOMDocument(); $list = new DOMNodeList([$document]); echo $list->length;
 }
-"###, &[&[], &["x"], &["x", "x"], &["x", "x", "x"], &["x", "x", "x", "x"], &["x", "x", "x", "x", "x"]]);
-    let expected = ["0", "111", "html", "old:before|html", "html|html", "html"];
+"###, &[&[], &["x"], &["x", "x"], &["x", "x", "x"], &["x", "x", "x", "x"], &["x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x", "x", "x"]]);
+    let expected = ["0", "111", "html", "old:before|html", "html|html", "html", "html", "0", "html", "1"];
     let mut failures = Vec::new();
     for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {
         if !out.success || out.stdout != expected || !out.stderr.contains("HEAP DEBUG: leak summary: clean") {

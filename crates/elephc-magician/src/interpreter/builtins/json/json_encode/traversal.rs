@@ -144,14 +144,35 @@ impl<V: RuntimeValueOps> EvalJsonTraversal<'_, V> {
                 },
                 false,
             )?,
-            EVAL_TAG_ASSOC => self.start_container(
-                value, depth, EvalJsonContainerKind::AssocArray, false,
-            )?,
+            EVAL_TAG_ASSOC => {
+                let kind = if self.associative_is_list(value)? {
+                    EvalJsonContainerKind::IndexedArray { force_object: false }
+                } else { EvalJsonContainerKind::AssocArray };
+                self.start_container(value, depth, kind, false)?;
+            }
             EVAL_TAG_OBJECT => self.encode_object(value, depth)?,
             EVAL_TAG_NULL | EVAL_TAG_RESOURCE => self.output.extend_from_slice(b"null"),
             _ => return Err(EvalStatus::UnsupportedConstruct.into()),
         }
         Ok(())
+    }
+
+    /// Recognizes PHP lists while retiring each acquired hash key even on an inspection error.
+    fn associative_is_list(&mut self, value: RuntimeCellHandle) -> EvalJsonEncodeResult<bool> {
+        if self.flags & EVAL_JSON_FORCE_OBJECT != 0 { return Ok(false); }
+        for position in 0..self.values.array_len(value)? {
+            let key = self.values.array_iter_key(value, position)?;
+            let matches = match self.values.type_tag(key) {
+                Ok(EVAL_TAG_INT) => self.values.raw_value_word(key)
+                    .map(|word| word == position as u64),
+                Ok(_) => Ok(false),
+                Err(status) => Err(status),
+            }.map_err(EvalJsonEncodeFailure::Runtime);
+            if !release_encoded_value(key, matches, self.context, self.values)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     /// Selects an object's PHP representation and schedules owned results safely.
@@ -160,6 +181,9 @@ impl<V: RuntimeValueOps> EvalJsonTraversal<'_, V> {
             EvalJsonObjectEncoding::Properties => self.start_container(
                 value, depth, EvalJsonContainerKind::ObjectProperties, false,
             ),
+            EvalJsonObjectEncoding::NativeOperator(method) => {
+                self.encode_object_hook(value, depth, Some(method))
+            }
             EvalJsonObjectEncoding::BackedEnum(backing) => {
                 self.work.push(EvalJsonAction::Release(backing));
                 self.work.push(EvalJsonAction::Encode { value: backing, depth });
@@ -177,16 +201,17 @@ impl<V: RuntimeValueOps> EvalJsonTraversal<'_, V> {
                 )
             }
             EvalJsonObjectEncoding::SerializableEnum => {
-                self.encode_serializable_enum(value, depth)
+                self.encode_object_hook(value, depth, None)
             }
         }
     }
 
-    /// Invokes one enum serializer and schedules its owned result at the same depth.
-    fn encode_serializable_enum(
+    /// Invokes one guarded object serializer and schedules its owned result at the same depth.
+    fn encode_object_hook(
         &mut self,
         value: RuntimeCellHandle,
         depth: usize,
+        native_method: Option<&str>,
     ) -> EvalJsonEncodeResult {
         let identity = self.values.object_identity(value)? as usize;
         if self.active.contains(&identity) {
@@ -200,13 +225,16 @@ impl<V: RuntimeValueOps> EvalJsonTraversal<'_, V> {
         self.active.insert(identity);
         self.work.push(EvalJsonAction::Leave(identity));
 
-        let result = eval_method_call_result(
-            value, "jsonSerialize", Vec::new(), self.context, self.values,
-        )?;
+        let result = match native_method {
+            Some(method) => self.values.operator_method_call(value, method, Vec::new())?,
+            None => eval_method_call_result(
+                value, "jsonSerialize", Vec::new(), self.context, self.values,
+            )?,
+        };
         self.work.push(EvalJsonAction::Release(result));
         let returns_receiver = self.values.type_tag(result)? == EVAL_TAG_OBJECT
             && self.values.object_identity(result)? as usize == identity;
-        if returns_receiver {
+        if returns_receiver && native_method.is_none() {
             // Native enum iterators do not expose their synthetic name/value properties.
             let native_receiver = dynamic_object_is_a(
                 result, "UnitEnum", false, self.context, self.values,
