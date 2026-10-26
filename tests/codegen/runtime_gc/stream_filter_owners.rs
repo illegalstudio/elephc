@@ -15,7 +15,13 @@ fn test_dynamic_stream_filter_names_and_user_params_owners_bundle() {
     let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(r#"<?php
 class OwnedStreamParamsFilter extends php_user_filter {
     public static bool $throwOnClose = false;
-    public function onCreate(): bool { echo strlen($this->params['prefix']), '|'; return true; }
+    public static bool $throwOnCreate = false;
+    public static bool $rejectOnCreate = false;
+    public function onCreate(): bool {
+        echo strlen($this->params['prefix']), '|';
+        if (self::$throwOnCreate) { throw new RuntimeException('create'); }
+        return !self::$rejectOnCreate;
+    }
     public function filter(string $data): string { return $data . $this->params['suffix']; }
     public function onClose(): void {
         echo 'close|';
@@ -23,7 +29,9 @@ class OwnedStreamParamsFilter extends php_user_filter {
     }
     public function __destruct() { echo 'drop|'; }
 }
+class OwnedStreamDefaultFilter extends OwnedStreamParamsFilter { public mixed $params = 'initial'; }
 stream_filter_register('xml.owner.params', 'OwnedStreamParamsFilter');
+stream_filter_register('xml.owner.defaults', 'OwnedStreamDefaultFilter');
 $stream = fopen('php://memory', 'r+');
 $name = strtolower('XML.OWNER.PARAMS');
 if ($argc === 1) {
@@ -45,15 +53,26 @@ if ($argc === 1) {
     OwnedStreamParamsFilter::$throwOnClose = true;
     stream_filter_append($stream, $name, STREAM_FILTER_WRITE, ['prefix' => str_repeat('p', 40), 'suffix' => '>']);
     echo 'throw|';
-} else {
+} elseif ($argc === 6) {
     stream_filter_append($stream, $name, STREAM_FILTER_WRITE, ['prefix' => str_repeat('p', 40), 'suffix' => '>']);
     stream_filter_append($stream, $name, STREAM_FILTER_READ, ['prefix' => str_repeat('p', 40), 'suffix' => '>']);
     echo 'both|';
+} elseif ($argc === 7) {
+    stream_filter_append($stream, 'xml.owner.defaults', STREAM_FILTER_WRITE, ['prefix' => str_repeat('p', 40), 'suffix' => '>']);
+    echo 'default|';
+} elseif ($argc === 8) {
+    OwnedStreamParamsFilter::$throwOnCreate = true;
+    try { stream_filter_append($stream, $name, STREAM_FILTER_WRITE, ['prefix' => str_repeat('p', 40), 'suffix' => '>']); }
+    catch (RuntimeException $error) { echo 'created|'; }
+} else {
+    OwnedStreamParamsFilter::$rejectOnCreate = true;
+    $attached = stream_filter_append($stream, $name, STREAM_FILTER_WRITE, ['prefix' => str_repeat('p', 40), 'suffix' => '>']);
+    echo $attached === false ? 'rejected|' : 'wrong|';
 }
 fwrite($stream, 'hello'); rewind($stream); echo fread($stream, 64);
 try { fclose($stream); } catch (RuntimeException $error) { echo 'caught|'; }
-"#, &[&[], &["x"], &["x", "x"], &["x", "x", "x"], &["x", "x", "x", "x"], &["x", "x", "x", "x", "x"]]);
-    let expected = ["40|40|hello>close|drop|", "40|fresh|hello>close|drop|", "missing|hello", "40|all|hello>>close|drop|", "40|throw|hello>close|drop|caught|", "40|40|both|hello>>close|drop|close|drop|"];
+"#, &[&[], &["x"], &["x", "x"], &["x", "x", "x"], &["x", "x", "x", "x"], &["x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x", "x"]]);
+    let expected = ["40|40|hello>close|drop|", "40|fresh|hello>close|drop|", "missing|hello", "40|all|hello>>close|drop|", "40|throw|hello>close|drop|caught|", "40|40|both|hello>>close|drop|close|drop|", "40|default|hello>close|drop|", "40|drop|created|hello", "40|drop|rejected|hello"];
     assert_eq!(runs.len(), expected.len());
     let mut failures = Vec::new();
     for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {
