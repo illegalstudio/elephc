@@ -76,8 +76,9 @@ fn test_simplexml_dom_namespace_and_iterator_bundle() {
 set_error_handler(function(int $level, string $message): bool { echo $level, ':', $message, '|'; return true; });
 $doc = new DOMDocument(); $doc->loadXML('<r xmlns:p="urn:p" p:id="8">text<c/></r>');
 $text = $doc->documentElement->childNodes[0];
-var_dump(simplexml_import_dom($text));
-var_dump(simplexml_import_dom(new DOMElement('a')));
+if ($text instanceof DOMNode) { var_dump(simplexml_import_dom($text)); }
+$unattached = (new ReflectionClass('DOMElement'))->newInstanceWithoutConstructor();
+var_dump(simplexml_import_dom($unattached));
 var_dump(simplexml_import_dom(new DOMDocument()));
 try { simplexml_import_dom(new stdClass()); } catch (TypeError $error) { echo $error->getMessage(), '|'; }
 $first = simplexml_import_dom($doc);
@@ -101,7 +102,7 @@ var_dump($bad->loadXML('<?xml version="1.1"?><r/>'));
 try { $bad->loadXML(''); } catch (ValueError $error) { echo $error->getMessage(), '|'; }
 restore_error_handler();
 set_error_handler(function(int $level, string $message): bool { throw new RuntimeException('caught'); });
-try { simplexml_import_dom($text); } catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
+try { if ($text instanceof DOMNode) { simplexml_import_dom($text); } } catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
 try { $bad->loadXML('<?xml version="1.1"?><r/>'); } catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
 restore_error_handler();
 set_error_handler(function(int $level, string $message): bool { echo $level, ':', $message, '|'; return true; });
@@ -116,4 +117,20 @@ restore_error_handler();
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
     assert_eq!(out.stdout, format!("{invalid}{missing}{invalid}simplexml_import_dom(): Argument #1 ($node) must be a valid XML node|2:SimpleXMLElement::xpath(): Undefined namespace prefix: q|bool(false)\n1|{{\"p\":\"urn:p\"}}|{{\"p\":\"urn:p\"}}|[]|{}{parse}8:DOMDocument::loadXML(): Unsupported version '1.1' in Entity, line: 1|bool(true)\nDOMDocument::loadXML(): Argument #1 ($source) must not be empty|caught|caught|{invalid}{parse}{consumed}", consumed.repeat(4)));
+}
+
+/// Native XML capability preserves ordinary virtual getters through boxed storage.
+#[test]
+fn test_simplexml_boxed_ordinary_property_getter() {
+    if skip_without_xml_native("test_simplexml_boxed_ordinary_property_getter") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class OrdinaryXmlGetter { public string $value { get { return 'getter'; } } }
+function readOrdinaryXmlGetter(mixed $object): void { echo $object->value; }
+$xml = new SimpleXMLElement('<r/>');
+readOrdinaryXmlGetter(new OrdinaryXmlGetter());
+echo '|', $xml->getName();
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "getter|r");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

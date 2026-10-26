@@ -10,6 +10,7 @@
 use super::*;
 
 mod native_xml_reads;
+mod runtime_hooks;
 
 /// Borrows guarded XML storage, narrowing opaque object metadata while preserving boxed unions.
 pub(crate) fn borrow_native_xml_property_receiver(
@@ -449,6 +450,14 @@ pub(crate) fn lower_property_get_from_value(
 
 /// Lowers one property read after optional native-object dispatch has been selected.
 fn lower_property_get_without_native_dispatch(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, op: Op, expr: &Expr,
+) -> LoweredValue {
+    if let Some(value) = runtime_hooks::lower(ctx, object, property, op, expr) { return value; }
+    lower_property_get_without_runtime_hooks(ctx, object, property, op, expr)
+}
+
+/// Reads a concrete getter or physical property after boxed getter candidates are exhausted.
+fn lower_property_get_without_runtime_hooks(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, op: Op, expr: &Expr,
 ) -> LoweredValue {
     if op == Op::NullsafePropGet && value_is_definitely_null(ctx, object.value) {

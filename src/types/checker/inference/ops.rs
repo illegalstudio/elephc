@@ -36,7 +36,7 @@ impl Checker {
     ) -> Result<PhpType, CompileError> {
         let lt = self.infer_type(left, env)?;
         let rt = self.infer_type(right, env)?;
-        if let Some(plan) = crate::types::object_operators::binary_plan(op, &lt, &rt) {
+        if let Some(plan) = crate::types::object_operators::binary_plan_with_classes(op, &lt, &rt, &self.classes) {
             return Ok(plan.result_type(op));
         }
         if matches!(op, BinOp::Div | BinOp::Mod)

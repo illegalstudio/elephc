@@ -53,3 +53,13 @@ fn assemble_distant_reader(entry: &str) {
     let result = child.wait_with_output().unwrap();
     assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
 }
+
+/// Metadata-only traces keep caller arity unchanged and do not add hidden argument owners.
+#[test]
+fn ignored_backtrace_arguments_need_no_hidden_collector() {
+    let module = super::lower_source_at("<?php function metadataTrace(int $value): array { return debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS); } echo count(metadataTrace($argc));",
+        std::path::Path::new("main.php"), std::path::Path::new("."));
+    let function = module.functions.iter().find(|function| function.name == "metadataTrace").unwrap();
+    assert_eq!(function.params.len(), 1);
+    assert!(!function.params.iter().any(|param| param.name == crate::func_args::HIDDEN_ARGS_PARAM));
+}

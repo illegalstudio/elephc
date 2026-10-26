@@ -10,6 +10,7 @@
 /// Compiles the same complete SimpleXML fixture through one supported target's emitter.
 fn verify_simplexml_target(target: &str) {
     let module = super::lower_source_at_for_target(r###"<?php
+debug_backtrace();
 $xml = new SimpleXMLIterator('<r id="a"><item>42</item><item>3</item></r>');
 $xml->item[0] = '7';
 $xml['id'] = 'b';

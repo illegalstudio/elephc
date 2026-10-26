@@ -86,7 +86,7 @@ pub(super) fn program_uses_xml(program: &[Stmt]) -> bool {
         program.to_vec(), xml_functions(), &classes,
     )
     .is_ok_and(|resolved| {
-        let detector = Detector { dom: super::dom_receiver::DomReceiver::new(&resolved, dom_available), frames: Vec::new() };
+        let detector = Detector { dom: super::dom_receiver::DomReceiver::new(&resolved, dom_available), frames: Vec::new(), finalizers: Vec::new() };
         resolved.iter().any(|stmt| detector.stmt_refs_xml(stmt))
     })
 }
@@ -178,6 +178,7 @@ fn packed_field_refs_xml(field: &PackedField) -> bool {
 struct Detector {
     dom: super::dom_receiver::DomReceiver,
     frames: Vec<flow::FlowFrame>,
+    finalizers: Vec<flow::Finalizer>,
 }
 
 impl Detector {
@@ -188,7 +189,7 @@ impl Detector {
         body: &[Stmt],
         capture: bool,
     ) -> bool {
-        let detector = Self { dom: self.dom.nested(params, capture), frames: Vec::new() };
+        let detector = Self { dom: self.dom.nested(params, capture), frames: Vec::new(), finalizers: Vec::new() };
         body.iter().any(|stmt| detector.stmt_refs_xml(stmt))
     }
 
@@ -432,8 +433,8 @@ impl Detector {
     fn stmt_refs_xml(&self, stmt: &Stmt) -> bool {
         let result = match &stmt.kind {
             // Statements with no xml-name position and no child expr/stmt.
-            StmtKind::Break(levels) => { self.record_exit(*levels, false); false },
-            StmtKind::Continue(levels) => { self.record_exit(*levels, true); false },
+            StmtKind::Break(levels) => self.record_exit(*levels, false),
+            StmtKind::Continue(levels) => self.record_exit(*levels, true),
             StmtKind::RefAssign { .. }
             | StmtKind::IncludeOnceMark { .. }
             | StmtKind::NamespaceDecl { .. }
@@ -502,9 +503,11 @@ impl Detector {
                 let exceptional = self.dom.exception_observer();
                 let mut success = self.fork();
                 success.dom.watch_exceptions(exceptional.clone());
+                success.push_finalizer(finally_body.as_deref());
                 if success.body_refs_xml(try_body) { return true; }
                 for catch in catches {
-                    let branch = self.fork();
+                    let mut branch = self.fork();
+                    branch.push_finalizer(finally_body.as_deref());
                     branch.dom.replace(&exceptional);
                     if catch.exception_types.iter().any(name_is_xml_class) || branch.body_refs_xml(&catch.body) { return true; }
                     success.dom.join(&branch.dom);
@@ -542,7 +545,7 @@ impl Detector {
                     || implements.iter().any(name_is_xml_class)
                     || trait_uses.iter().any(trait_use_refs_xml)
                     || properties.iter().any(|value| self.class_property_refs_xml(value))
-                    || methods.iter().any(|value| Self { dom: self.dom.in_class(name), frames: Vec::new() }.class_method_refs_xml(value))
+                    || methods.iter().any(|value| Self { dom: self.dom.in_class(name), frames: Vec::new(), finalizers: Vec::new() }.class_method_refs_xml(value))
                     || constants.iter().any(|value| self.class_const_refs_xml(value))
             }
             // An enum carries the same member kinds as a class (methods, constants, trait
@@ -562,7 +565,7 @@ impl Detector {
                     || cases.iter().any(|value| self.enum_case_refs_xml(value))
                     || implements.iter().any(name_is_xml_class)
                     || trait_uses.iter().any(trait_use_refs_xml)
-                    || methods.iter().any(|value| Self { dom: self.dom.in_class(name), frames: Vec::new() }.class_method_refs_xml(value))
+                    || methods.iter().any(|value| Self { dom: self.dom.in_class(name), frames: Vec::new(), finalizers: Vec::new() }.class_method_refs_xml(value))
                     || constants.iter().any(|value| self.class_const_refs_xml(value))
             }
             StmtKind::PackedClassDecl { fields, .. } => fields.iter().any(packed_field_refs_xml),
@@ -576,7 +579,7 @@ impl Detector {
             } => {
                 extends.iter().any(name_is_xml_class)
                     || properties.iter().any(|value| self.class_property_refs_xml(value))
-                    || methods.iter().any(|value| Self { dom: self.dom.in_class(name), frames: Vec::new() }.class_method_refs_xml(value))
+                    || methods.iter().any(|value| Self { dom: self.dom.in_class(name), frames: Vec::new(), finalizers: Vec::new() }.class_method_refs_xml(value))
                     || constants.iter().any(|value| self.class_const_refs_xml(value))
             }
             StmtKind::TraitDecl {
@@ -589,7 +592,7 @@ impl Detector {
             } => {
                 trait_uses.iter().any(trait_use_refs_xml)
                     || properties.iter().any(|value| self.class_property_refs_xml(value))
-                    || methods.iter().any(|value| Self { dom: self.dom.in_class(name), frames: Vec::new() }.class_method_refs_xml(value))
+                    || methods.iter().any(|value| Self { dom: self.dom.in_class(name), frames: Vec::new(), finalizers: Vec::new() }.class_method_refs_xml(value))
                     || constants.iter().any(|value| self.class_const_refs_xml(value))
             }
             StmtKind::PropertyAssign { object, value, .. } => {
@@ -825,6 +828,8 @@ mod tests {
             "class Config { function loadXML(): void {} } $doc = new DOMDocument(); $alias =& $doc; $alias = new Config(); $doc->loadXML();",
             "class Config { function loadXML(): void {} } $doc = new DOMDocument(); while (($doc = new Config()) && $argc) { $doc = new Config(); break; } $doc->loadXML();",
             "class Config { function loadXML(): void {} } $doc = new DOMDocument(); do { $doc = new Config(); break; } while ($argc); $doc->loadXML();",
+            "class Config { function loadXML(): void {} } $doc = new DOMDocument(); while (($doc = new Config()) && $argc) { try { $doc = new DOMDocument(); break; } finally { $doc = new Config(); } } $doc->loadXML();",
+            "class Config { function loadXML(): void {} } $doc = new Config(); while ($argc) { try { $doc = new DOMDocument(); continue; } finally { $doc = new Config(); } } $doc->loadXML();",
         ] {
             assert!(!program_uses_xml(&parse(&format!("<?php {source}"))), "{source}");
         }
@@ -866,6 +871,8 @@ mod tests {
             "class Config {} $doc = new DOMDocument(); for (; ($doc = new Config()) && $argc;) { $doc = new DOMDocument(); break; } $doc->loadXML('<r/>');",
             "class Config {} $doc = new Config(); while ($argc) { while ($argc) { $doc = new DOMDocument(); break 2; } $doc = new Config(); } $doc->loadXML('<r/>');",
             "class Config {} $doc = new Config(); while ($argc) { $doc->loadXML('<r/>'); while ($argc) { $doc = new DOMDocument(); continue 2; } $doc = new Config(); }",
+            "class Config {} $doc = new Config(); while (($doc = new Config()) && $argc) { try { $doc = new Config(); break; } finally { $doc = new DOMDocument(); } } $doc->loadXML('<r/>');",
+            "class Config {} $doc = new Config(); while ($argc) { try { while ($argc) { break; } $doc->loadXML('<r/>'); } finally { $doc = new DOMDocument(); } }",
         ] {
             assert!(program_uses_xml(&parse(&format!("<?php {source}"))), "{source}");
         }

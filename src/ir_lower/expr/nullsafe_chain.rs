@@ -486,7 +486,8 @@ fn guard_nullsafe_chain_receiver(
         branch_to(ctx, null_block);
         return false;
     }
-    if !value_is_nullable(ctx, current.value) {
+    if !value_is_nullable(ctx, current.value)
+        && !matches!(ctx.builder.value_php_type(current.value).codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
         return true;
     }
     let is_null = ctx.emit_value(
@@ -528,7 +529,8 @@ fn guard_regular_method_receiver(
         terminate_method_call_on_null(ctx, method);
         return false;
     }
-    if !value_is_nullable(ctx, current.value) {
+    if !value_is_nullable(ctx, current.value)
+        && !matches!(ctx.builder.value_php_type(current.value).codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
         return true;
     }
     let is_null = ctx.emit_value(

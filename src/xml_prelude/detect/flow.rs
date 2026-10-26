@@ -9,7 +9,7 @@
 //! - Loop input facts reach a finite fixed point before leaving the loop.
 
 use crate::names::Name;
-use crate::parser::ast::{Expr, ExprKind, Stmt};
+use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 use super::Detector;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -24,6 +24,22 @@ pub(super) struct FlowFrame {
     continues: Option<ExitFacts>,
 }
 
+/// Cleanup body crossed when a saved exit leaves its protected statement.
+#[derive(Clone)]
+pub(super) struct Finalizer { depth: usize, body: Rc<Vec<Stmt>> }
+
+/// Recognizes a cleanup body which replaces every incoming completion.
+fn replaces_completion(body: &[Stmt]) -> bool {
+    body.last().is_some_and(|stmt| match &stmt.kind {
+        StmtKind::Break(_) | StmtKind::Continue(_) | StmtKind::Return(_) => true,
+        StmtKind::ExprStmt(expr) => matches!(expr.kind, ExprKind::Throw(_)),
+        StmtKind::If { then_body, elseif_clauses, else_body: Some(else_body), .. } =>
+            replaces_completion(then_body) && replaces_completion(else_body)
+                && elseif_clauses.iter().all(|(_, body)| replaces_completion(body)),
+        _ => false,
+    })
+}
+
 /// Accumulates one possible exit without adding an artificial entry path.
 fn collect_exit(destination: &ExitFacts, receiver: &DomReceiver) {
     let mut destination = destination.borrow_mut();
@@ -33,14 +49,29 @@ fn collect_exit(destination: &ExitFacts, receiver: &DomReceiver) {
 
 impl Detector {
     /// Creates an independent control-flow path in the same lexical scope.
-    pub(super) fn fork(&self) -> Self { Self { dom: self.dom.clone(), frames: self.frames.clone() } }
+    pub(super) fn fork(&self) -> Self { Self { dom: self.dom.clone(), frames: self.frames.clone(), finalizers: self.finalizers.clone() } }
 
-    /// Routes a numbered break/continue to its enclosing loop or switch.
-    pub(super) fn record_exit(&self, levels: usize, continuing: bool) {
-        let Some(index) = self.frames.len().checked_sub(levels.max(1)) else { return; };
+    /// Marks cleanup which an exit out of this try statement must execute.
+    pub(super) fn push_finalizer(&mut self, body: Option<&[Stmt]>) {
+        if let Some(body) = body.filter(|body| !body.is_empty()) {
+            self.finalizers.push(Finalizer { depth: self.frames.len(), body: Rc::new(body.to_vec()) });
+        }
+    }
+
+    /// Routes a numbered exit after all crossed finally bodies have updated its facts.
+    pub(super) fn record_exit(&self, levels: usize, continuing: bool) -> bool {
+        let Some(index) = self.frames.len().checked_sub(levels.max(1)) else { return false; };
+        let mut path = self.fork();
+        for (position, finalizer) in self.finalizers.iter().enumerate().rev() {
+            if index >= finalizer.depth { continue; }
+            path.finalizers.truncate(position);
+            if path.body_refs_xml(&finalizer.body) { return true; }
+            if replaces_completion(&finalizer.body) { return false; }
+        }
         let frame = &self.frames[index];
         let destination = if continuing { frame.continues.as_ref().unwrap_or(&frame.breaks) } else { &frame.breaks };
-        collect_exit(destination, &self.dom);
+        collect_exit(destination, &path.dom);
+        false
     }
 
     /// Visits one sequential body without adding an artificial lexical scope.

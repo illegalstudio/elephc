@@ -28,9 +28,46 @@ pub(crate) fn operator_class(ty: &PhpType) -> Option<&'static ClassContract> {
     }
 }
 
+/// Resolves inherited adapters and nullable selections using the checked class graph.
+pub(crate) fn binary_plan_with_classes(
+    op: &BinOp, left: &PhpType, right: &PhpType,
+    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+) -> Option<ObjectOperatorPlan> {
+    let normalize = |ty: &PhpType| normalize_operator_type(ty, classes);
+    binary_plan(op, &normalize(left), &normalize(right))
+}
+
+/// Replaces a native subclass by its declaring ancestor without erasing nullable branches.
+fn normalize_operator_type(ty: &PhpType, classes: &std::collections::HashMap<String, crate::types::ClassInfo>) -> PhpType {
+    match ty {
+        PhpType::Object(name) => {
+            let mut name = name.as_str();
+            for _ in 0..=classes.len() {
+                let Some(info) = classes.get(name) else { break; };
+                if info.is_internal && operator_class(&PhpType::Object(name.into())).is_some() {
+                    return PhpType::Object(name.into());
+                }
+                let Some(parent) = info.parent.as_deref() else { break; };
+                name = parent;
+            }
+            ty.clone()
+        }
+        PhpType::Union(members) => PhpType::Union(members.iter().map(|member| normalize_operator_type(member, classes)).collect()),
+        _ => ty.clone(),
+    }
+}
+
+/// Finds one possible native class without treating a nullable value as a definite object.
+fn possible_operator_class(ty: &PhpType) -> Option<&'static ClassContract> {
+    operator_class(ty).or_else(|| match ty {
+        PhpType::Union(members) => members.iter().find_map(possible_operator_class),
+        _ => None,
+    })
+}
+
 /// Selects the class handler and checks that the other operand belongs to its domain.
 pub(crate) fn binary_plan(op: &BinOp, left: &PhpType, right: &PhpType) -> Option<ObjectOperatorPlan> {
-    let class = operator_class(left).or_else(|| operator_class(right))?;
+    let class = possible_operator_class(left).or_else(|| possible_operator_class(right))?;
     binary_plan_for_class(class, op, left, right)
 }
 
@@ -42,7 +79,11 @@ fn binary_plan_for_class(class: &'static ClassContract, op: &BinOp, left: &PhpTy
         || matches!(ty, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str | PhpType::Mixed | PhpType::TaggedScalar)
         || (*ty == PhpType::Void && operators.arithmetic_result == elephc_builtin_contract::ObjectArithmeticResult::Number)
         || matches!(ty, PhpType::Object(name) if name.eq_ignore_ascii_case(class.name));
-    if !accepts(left) || !accepts(right) { return None; }
+    let accepted = |ty: &PhpType| match ty {
+        PhpType::Union(members) => members.iter().all(accepts),
+        _ => accepts(ty),
+    };
+    if !accepted(left) || !accepted(right) { return None; }
     let arithmetic = match op {
         BinOp::Add => Some(ObjectArithmetic::Add),
         BinOp::Sub => Some(ObjectArithmetic::Sub),

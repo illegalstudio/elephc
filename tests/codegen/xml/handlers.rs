@@ -19,6 +19,7 @@ use crate::support::*;
 fn test_xml_composed_helper_throw_keeps_caller_owners() {
     if skip_without_xml_native("test_xml_composed_helper_throw_keeps_caller_owners") { return; }
     let out = compile_and_run_with_heap_debug(r#"<?php
+debug_backtrace();
 function invalidComposedXmlParser(): mixed { return 123; }
 $bad = invalidComposedXmlParser();
 $calls = 0;
@@ -39,6 +40,7 @@ echo $calls;
 fn test_xml_handler_closures_with_backtrace_capture() {
     if skip_without_xml_native("test_xml_handler_closures_with_backtrace_capture") { return; }
     let out = compile_and_run_with_heap_debug(r#"<?php
+debug_backtrace();
 $parser = xml_parser_create();
 xml_set_element_handler($parser,
     function (XMLParser $parser, string $name, array $attributes): void { echo $name, ':', $attributes['ID'], '|'; },

@@ -152,6 +152,14 @@ pub(super) fn lower_property_array_assign(
     );
 }
 
+/// Keeps scalar buffer updates on their existing typed read/step/store path.
+fn known_buffer_property(ctx: &LoweringContext<'_, '_>, object: &Expr, property: &str) -> bool {
+    let name = match &object.kind { ExprKind::This => "this", ExprKind::Variable(name) => name, _ => return false };
+    let Some(PhpType::Object(class)) = ctx.local_load_php_type(name) else { return false; };
+    ctx.classes.get(&class).and_then(|info| info.visible_property(property))
+        .is_some_and(|(_, (_, ty))| matches!(ty.codegen_repr(), PhpType::Buffer(_)))
+}
+
 /// How a property-array element write may store a typed scalar buffer update.
 #[derive(Clone, Copy)]
 pub(super) enum PropertyElementUpdate {
@@ -224,7 +232,7 @@ pub(super) fn lower_property_array_assign_with_update(
     let index_expression = index;
     let source_value = compound.map_or(value, |(_, rhs)| rhs);
     let mut roots = Vec::new();
-    let (mut receiver, index, value) = if deferred_property_receiver(object) {
+    let (mut receiver, index, value) = if deferred_property_receiver(object) && !known_buffer_property(ctx, object, property) {
         let source = match update {
             PropertyElementUpdate::Stored(stored) => PropertyWriteValue::Stored(stored),
             PropertyElementUpdate::Written | PropertyElementUpdate::IncDec(_) => {

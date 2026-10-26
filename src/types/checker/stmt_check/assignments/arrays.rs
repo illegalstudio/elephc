@@ -258,6 +258,11 @@ pub(super) fn check_nested_array_assign(
             if matches!(array.kind, ExprKind::ArrayAccess { .. })
                 && members.iter().all(|member| matches!(member,
                     PhpType::Bool | PhpType::False | PhpType::Void)) => Ok(()),
+        PhpType::Union(members) if members.iter().all(|member| match member {
+            PhpType::Void => true,
+            PhpType::Object(name) => crate::types::builtin_classes::has_native_dimensions(name, &checker.classes),
+            _ => false,
+        }) => Ok(()),
         PhpType::Str => Err(CompileError::new(
             span,
             "String offset assignment is not supported",
