@@ -75,7 +75,7 @@ fn test_simplexml_dom_namespace_and_iterator_bundle() {
     let out = compile_and_run_with_heap_debug(r###"<?php
 set_error_handler(function(int $level, string $message): bool { echo $level, ':', $message, '|'; return true; });
 $doc = new DOMDocument(); $doc->loadXML('<r xmlns:p="urn:p" p:id="8">text<c/></r>');
-$text = $doc->documentElement->childNodes[0];
+$text = $doc->documentElement->childNodes->item(0);
 if ($text instanceof DOMNode) { var_dump(simplexml_import_dom($text)); }
 $unattached = (new ReflectionClass('DOMElement'))->newInstanceWithoutConstructor();
 if ($unattached instanceof DOMNode) { var_dump(simplexml_import_dom($unattached)); }

@@ -32,9 +32,12 @@ pub(super) fn lower_nullable_native_isset_offset_probe(
 ) -> LoweredValue {
     let (array_value, receiver_owner) = root_owned_call_operand(ctx, array_value, expr.span);
     let receiver_type = ctx.builder.value_php_type(array_value.value);
-    let borrowed = ctx.emit_value(Op::Borrow, vec![array_value.value], None, receiver_type,
-        Op::Borrow.default_effects(), Some(expr.span));
-    ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+    let borrowed = if Ownership::php_type_needs_lifetime_tracking(&receiver_type) {
+        let borrowed = ctx.emit_value(Op::Borrow, vec![array_value.value], None, receiver_type,
+            Op::Borrow.default_effects(), Some(expr.span));
+        ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+        borrowed
+    } else { array_value };
     let (index, index_temp) = evaluate_once(ctx, index, expr);
     let key_owner = index_temp.as_ref().filter(|name|
         Ownership::php_type_needs_lifetime_tracking(&ctx.local_type(name)))

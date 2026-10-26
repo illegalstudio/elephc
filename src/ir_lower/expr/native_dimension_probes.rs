@@ -20,9 +20,14 @@ pub(super) fn lower(
     // Global storage erases object metadata to Mixed; retain the source type for
     // protocol selection while the captured value keeps its real boxed representation.
     let ty = ctx.builder.value_php_type(object.value);
-    let borrowed = ctx.emit_value(Op::Borrow, vec![object.value], None, ty.clone(),
-        Op::Borrow.default_effects(), Some(expr.span));
-    ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+    let borrowed = if Ownership::php_type_needs_lifetime_tracking(&ty) {
+        // Object unions use boxed storage and the dynamic method-call ABI.
+        let borrow_type = if matches!(ty, PhpType::Union(_)) { PhpType::Mixed } else { ty };
+        let borrowed = ctx.emit_value(Op::Borrow, vec![object.value], None, borrow_type,
+            Op::Borrow.default_effects(), Some(expr.span));
+        ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+        borrowed
+    } else { object };
     let (key, key_temp) = evaluate_once(ctx, index, expr);
     let key_owner = key_temp.as_ref().filter(|name|
         Ownership::php_type_needs_lifetime_tracking(&ctx.local_type(name)))

@@ -414,10 +414,11 @@ pub(super) fn emit_builtin_call_value(
                 crate::builtins::semantics::BuiltinLowering::Runtime(
                     crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::Substr
                         | crate::ir::RuntimeFnId::Trim | crate::ir::RuntimeFnId::Ltrim
-                        | crate::ir::RuntimeFnId::Rtrim)
+                        | crate::ir::RuntimeFnId::Rtrim | crate::ir::RuntimeFnId::Chop)
                         | crate::ir::RuntimeCallTarget::ProfiledFunction {
                             target: crate::ir::RuntimeFnId::Substr | crate::ir::RuntimeFnId::Trim
-                                | crate::ir::RuntimeFnId::Ltrim | crate::ir::RuntimeFnId::Rtrim,
+                                | crate::ir::RuntimeFnId::Ltrim | crate::ir::RuntimeFnId::Rtrim
+                                | crate::ir::RuntimeFnId::Chop,
                             ..
                         },
                 ),

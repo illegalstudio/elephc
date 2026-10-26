@@ -304,7 +304,7 @@ fn lower_array_access_from_values_with_receiver_pins(
         PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void | PhpType::Never | PhpType::TaggedScalar)
     {
         super::unpin_in_flight_owners(ctx, receiver_pins, expr.span);
-        release_coerced_source_if_owned(ctx, index_value, Some(index.span));
+        crate::ir_lower::ownership::release_if_owned(ctx, index_value, Some(index.span));
         return lower_null(ctx, expr);
     }
     let op = match array_value.ir_type {

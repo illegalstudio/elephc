@@ -518,7 +518,9 @@ function freshYieldValues(): Generator {
     yield str_repeat('s', 40);
     yield new FreshYieldValue();
 }
-foreach (freshYieldValues() as $value) { echo get_debug_type($value), '|'; }
+foreach (freshYieldValues() as $value) {
+    echo is_object($value) ? get_class($value) : gettype($value), '|';
+}
 unset($value);
 $abandoned = freshYieldValues();
 $abandoned->rewind();

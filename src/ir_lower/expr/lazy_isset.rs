@@ -470,6 +470,7 @@ fn lower_empty_through_exists_then_get(
 
     // `__isset(prop)` decides whether the property is considered set at all.
     let exists = lower_expr(ctx, exists_call);
+    let exists = ctx.truthy_consuming(exists, Some(expr.span));
     ctx.builder.terminate(Terminator::CondBr {
         cond: exists.value,
         then_target: present_block,
