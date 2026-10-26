@@ -17,6 +17,10 @@ fn test_compiled_method_string_return_owners_isolated_bundle() {
     let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(r#"<?php
 function isolatedReturnIdentity<T>(T $value): T { return $value; }
 function isolatedStringIdentity(string $value): string { return $value; }
+function isolatedStringChoice(string $value, bool $alias): string {
+    if ($alias) { return $value; }
+    return strtoupper($value);
+}
 class IsolatedGenericReturn<T> {
     public function __construct(private T $value) {}
     public function get(): T { return isolatedReturnIdentity($this->value); }
@@ -26,6 +30,8 @@ class IsolatedStringReturn {
     public function __construct(private string $value) {}
     public function get(): string { return isolatedStringIdentity($this->value); }
     public function direct(): string { return $this->value; }
+    public function nested(): string { return isolatedStringIdentity(isolatedStringIdentity($this->value)); }
+    public function conditional(bool $alias): string { return isolatedStringChoice($this->value, $alias); }
 }
 if ($argc === 1) { echo (new IsolatedGenericReturn('x'))->get(); }
 elseif ($argc === 2) { echo (new IsolatedStringReturn('x'))->get(); }
@@ -34,11 +40,16 @@ elseif ($argc === 4) { echo isolatedReturnIdentity('x'); }
 elseif ($argc === 5) { echo (new IsolatedStringReturn('x'))->direct(); }
 elseif ($argc === 6) {
     $value = new IsolatedGenericReturn('x'); echo $value->get(); unset($value);
-} else { $value = new IsolatedGenericReturn('x'); echo 'x'; unset($value); }
-"#, &[&[], &["x"], &["x", "x"], &["x", "x", "x"], &["x", "x", "x", "x"], &["x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x"]]);
+} elseif ($argc === 7) { $value = new IsolatedGenericReturn('x'); echo 'x'; unset($value); }
+elseif ($argc === 8) { echo (new IsolatedStringReturn('x'))->nested(); }
+elseif ($argc === 9) { echo (new IsolatedStringReturn('x'))->conditional(true); }
+else { echo (new IsolatedStringReturn('x'))->conditional(false); }
+"#, &[&[], &["x"], &["x", "x"], &["x", "x", "x"], &["x", "x", "x", "x"], &["x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x", "x", "x"]]);
+    assert_eq!(runs.len(), 10);
     let mut failures = Vec::new();
     for (mode, out) in runs.iter().enumerate() {
-        if !out.success || out.stdout != "x" || !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
+        let expected = if mode == 9 { "X" } else { "x" };
+        if !out.success || out.stdout != expected || !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
             failures.push(format!("mode={mode} success={} stdout={:?}\n{}", out.success, out.stdout, out.stderr));
         }
     }
