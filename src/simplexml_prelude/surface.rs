@@ -178,8 +178,8 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     final public function __elephc_int(): int { $handle = $this->__elephc_handle; return (int)elephc_xml_sx_string($handle, 0); }
     final public function __elephc_float(): float { $handle = $this->__elephc_handle; return (float)elephc_xml_sx_string($handle, 0); }
     final public function __elephc_number(): int|float {
-        $handle = $this->__elephc_handle;
-        return __elephc_simplexml_parse_number(elephc_xml_sx_string($handle, 0));
+        $handle = $this->__elephc_handle; $text = elephc_xml_sx_string($handle, 0);
+        return __elephc_simplexml_parse_number($text);
     }
     public static function __elephc_add(mixed $left, mixed $right): int|float { return __elephc_simplexml_numeric_value($left) + __elephc_simplexml_numeric_value($right); }
     public static function __elephc_sub(mixed $left, mixed $right): int|float { return __elephc_simplexml_numeric_value($left) - __elephc_simplexml_numeric_value($right); }

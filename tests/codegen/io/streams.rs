@@ -8284,6 +8284,17 @@ class FilterDiscovery extends php_user_filter {
     public function filter($in, $out, &$consumed, bool $closing): int { return PSFS_PASS_ON; }
 }
 
+stream_filter_register('discoveryfilter', 'FilterDiscovery');
+stream_filter_register('discoveryfilter.*', 'FilterDiscovery');
+$filters = stream_get_filters();
+var_dump(in_array('discoveryfilter', $filters, true), in_array('discoveryfilter.*', $filters, true));
+unset($filters);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "bool(true)\nbool(true)\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Runtime filter names use the same builtin transforms as literal append and prepend calls.
 #[test]
 fn test_stream_filter_dynamic_builtin_names() {
@@ -8301,14 +8312,4 @@ readDynamicBuiltinFilter('string.toupper', true);
 readDynamicBuiltinFilter('string.rot13', false);
 "#);
     assert_eq!(out, "abc|ABC|NoP|");
-}
-stream_filter_register('discoveryfilter', 'FilterDiscovery');
-stream_filter_register('discoveryfilter.*', 'FilterDiscovery');
-$filters = stream_get_filters();
-var_dump(in_array('discoveryfilter', $filters, true), in_array('discoveryfilter.*', $filters, true));
-unset($filters);
-"#);
-    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "bool(true)\nbool(true)\n");
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

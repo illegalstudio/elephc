@@ -16,6 +16,7 @@ use crate::support::*;
 mod buffers;
 mod json_enums;
 mod literal_catalog;
+mod native_false_returns;
 
 /// Asserts an eval failure stayed inside the C ABI/error-status contract.
 fn assert_no_rust_panic_leaked(stderr: &str) {
