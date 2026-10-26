@@ -322,13 +322,16 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
     roots: &[(usize, crate::ir::LocalSlotId)],
     span: Span,
 ) {
-    let owned_object_result = result.is_some_and(|result| {
-        matches!(ctx.builder.value_php_type(result).codegen_repr(), PhpType::Object(_))
+    let independently_owned_result = result.is_some_and(|result| {
+        let representation = ctx.builder.value_php_type(result).codegen_repr();
+        let operation = ctx.builder.value_defining_op(result);
+        (matches!(representation, PhpType::Object(_))
+            && matches!(operation, Some(Op::Call | Op::MethodCall | Op::NullsafeMethodCall | Op::StaticMethodCall))
+            || representation == PhpType::Callable
+                && matches!(operation, Some(Op::MethodCall | Op::NullsafeMethodCall | Op::StaticMethodCall)))
             && signature.is_some_and(|signature| !signature.by_ref_return)
-            && matches!(ctx.builder.value_defining_op(result),
-                Some(Op::Call | Op::MethodCall | Op::NullsafeMethodCall | Op::StaticMethodCall))
     });
-    let guarded_result = result.filter(|_| owned_object_result && args.iter().any(|value| {
+    let guarded_result = result.filter(|_| independently_owned_result && args.iter().any(|value| {
         ctx.value_is_owning_temporary(LoweredValue {
             value: *value,
             ir_type: ctx.builder.value_type(*value),
@@ -440,7 +443,7 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
                         && conditionally_releasable
                         && ctx.arg_and_result_types_can_alias(*value, result))
             });
-            if !owned_object_result && !callee_owns && !independently_boxed && result_reuses_arg {
+            if !independently_owned_result && !callee_owns && !independently_boxed && result_reuses_arg {
                 // Both suppression reasons above are MAY facts, so an unconditional skip is
                 // right only on the calls that actually hand the payload back. Emitting a
                 // conditional release instead lets each call decide at runtime: the codegen

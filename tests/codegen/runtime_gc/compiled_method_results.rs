@@ -10,6 +10,28 @@
 
 use crate::support::*;
 
+/// A method's independent callable result does not inherit and strand a fresh argument owner.
+#[test]
+fn test_compiled_method_callable_passthrough_releases_fresh_argument_owner() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ForwardedMethodCallable {
+    public function pass(callable $value): callable { return $value; }
+}
+function freshMethodCallable(): callable {
+    $value = str_repeat('f', 24); return static fn(): int => strlen($value);
+}
+$source = new ForwardedMethodCallable();
+for ($i = 0; $i < 4; $i++) {
+    $forwarded = $source->pass(freshMethodCallable()); echo $forwarded(), ':'; unset($forwarded);
+    $borrowed = freshMethodCallable(); $forwarded = $source->pass($borrowed);
+    unset($borrowed); echo $forwarded(), '|'; unset($forwarded);
+}
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "24:24|".repeat(4));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Concrete method returns detach borrowed strings and retain borrowed objects before later writes.
 #[test]
 fn test_concrete_compiled_method_borrowed_static_results_survive_replacement() {
