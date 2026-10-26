@@ -105,6 +105,9 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
         ctx.emit_void(op, vec![array.value, value.value], None, op.default_effects(), Some(span));
     }) {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+        // A concrete object read from final Mixed storage owns its unboxed lease.
+        // Finalization removes this release when the local still lends a concrete value.
+        crate::ir_lower::ownership::release_if_owned(ctx, array_value, Some(span));
         return;
     }
     ctx.emit_void(op, vec![array_value.value, value.value], None, op.default_effects(), Some(span));

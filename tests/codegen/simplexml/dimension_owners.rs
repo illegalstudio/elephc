@@ -9,6 +9,24 @@
 
 use crate::support::*;
 
+/// Final nullable storage releases the temporary object extracted for an ordinary append.
+#[test]
+fn test_simplexml_append_from_nullable_local_releases_unboxed_receiver() {
+    if skip_without_xml_native("test_simplexml_append_from_nullable_local_releases_unboxed_receiver") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function freshNullableAppendValue(): mixed { return str_repeat('added', 1); }
+$xml = new SimpleXMLElement('<r><item>first</item></r>');
+$view = $xml->item;
+$view[] = freshNullableAppendValue();
+$view = null;
+echo (string)$xml->item[1], ':', (int)($view === null);
+unset($xml, $view);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "added:1");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Separates throwing offsets, append receivers, fresh values and closure rebindings.
 #[test]
 fn test_simplexml_dimension_write_owners_isolated_bundle() {
