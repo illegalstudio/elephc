@@ -52,6 +52,8 @@ $peer = new XmlEmptyScalarPeer();
 var_dump(empty($peer?->text[0]));
 function xmlEmptyObjectParameter(object $node): bool { return empty($node->item); }
 var_dump(xmlEmptyObjectParameter($xml));
+function xmlErasedStringParameter(object $node): string { return (string)$node; }
+echo xmlErasedStringParameter($xml->item[0]);
 function xmlWriteOpaqueParameter(mixed $node): void { $node->other[0] = 'value'; }
 xmlWriteOpaqueParameter($xml);
 function xmlAppendOpaqueParameter(mixed $node): void { $node[] = 'appended'; }
@@ -84,6 +86,7 @@ echo $doc->saveXML();
     }
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     assert!(assembly.contains("__rt_gc_collect_cycles_explicit"), "{target}: shutdown retires native document cycles");
+    assert!(assembly.contains("__rt_sprintf_mixed_to_string"), "{target}: erased object string-context ABI");
     assert!(assembly.contains("elephc_xml_sx_load"), "{target}: document parsing boundary");
     assert!(assembly.contains("elephc_xml_sx_mutate"), "{target}: document mutation boundary");
     assert!(assembly.contains("elephc_xml_sx_diagnostics"), "{target}: native diagnostic transfer boundary");

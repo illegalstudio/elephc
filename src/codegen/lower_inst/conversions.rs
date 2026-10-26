@@ -342,8 +342,36 @@ pub(in crate::codegen) fn emit_mixed_string_dispatch_from_result(
     }
 
     ctx.emitter.label(&no_match_label);
-    emit_mixed_missing_tostring_error(ctx, receiver_reg);
+    if ctx.module.required_runtime_features.eval_bridge {
+        // Eval-declared classes have no static candidate arm. Reuse the existing
+        // bounded string-context bridge, which recovers an escaped object's context.
+        emit_erased_object_string(ctx, receiver_reg, &mode)?;
+    } else { emit_mixed_missing_tostring_error(ctx, receiver_reg); }
     ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Converts an erased object through the shared formatter's owned, exception-safe string ABI.
+fn emit_erased_object_string(
+    ctx: &mut FunctionContext<'_>, receiver: &str, mode: &MixedStringContextMode,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("mov x1, {receiver}"));            // pass the borrowed raw object payload
+            ctx.emitter.instruction("mov x0, #6");                              // select the formatter's raw object record
+            ctx.emitter.instruction("mov x2, #0");                              // recover an escaped eval object's owning context when necessary
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov rsi, {receiver}"));           // pass the borrowed raw object payload
+            ctx.emitter.instruction("mov edi, 6");                              // select the formatter's raw object record
+            ctx.emitter.instruction("xor edx, edx");                            // recover an escaped eval object's owning context when necessary
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_sprintf_mixed_to_string");
+    crate::codegen::return_ownership::emit_status(ctx.emitter, true);
+    if matches!(mode, MixedStringContextMode::Stdout) {
+        super::output_values::emit_owned_tostring_result_to_stdout(ctx, &PhpType::Str)?;
+    }
     Ok(())
 }
 
@@ -505,6 +533,12 @@ fn lower_object_to_string(
     class_name: &str,
 ) -> Result<()> {
     let normalized = class_name.trim_start_matches('\\');
+    if normalized.is_empty() {
+        ctx.load_value_to_result(expect_operand(inst, 0)?)?;
+        let receiver = abi::int_result_reg(ctx.emitter);
+        emit_erased_object_string(ctx, receiver, &MixedStringContextMode::Result)?;
+        return store_if_result(ctx, inst);
+    }
     if object_class_has_tostring(ctx, normalized) {
         return lower_runtime_object_method_call(ctx, inst, normalized, "__toString");
     }

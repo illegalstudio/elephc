@@ -395,3 +395,33 @@ eval($source);
     }
     assert_eq!(residual[0], residual[1], "eval output retained per-expression cells");
 }
+/// Native string casts dispatch eval-declared methods and preserve their throwing result owners.
+#[test]
+fn test_eval_declared_stringable_crosses_native_string_contexts() {
+    let out = compile_and_run_with_heap_debug(r###"<?php
+function nativeMixedEvalString(mixed $value): string { return (string)$value; }
+function nativeObjectEvalString(object $value): string { return (string)$value; }
+$source = $argc > 0 ? '
+class EvaluatedNativeString {
+    public bool $throws;
+    public function __construct(bool $throws) { $this->throws = $throws; }
+    public function __toString(): string {
+        if ($this->throws) { throw new RuntimeException("cast"); }
+        return str_repeat("s", 40);
+    }
+    public function __destruct() { echo "drop|"; }
+}
+$held = new EvaluatedNativeString(false);
+echo strlen(nativeMixedEvalString($held)), ":", strlen(nativeObjectEvalString($held)), "|";
+try { nativeMixedEvalString(new EvaluatedNativeString(true)); }
+catch (RuntimeException $error) { echo $error->getMessage(), "|"; unset($error); }
+try { nativeObjectEvalString(new EvaluatedNativeString(true)); }
+catch (RuntimeException $error) { echo $error->getMessage(), "|"; unset($error); }
+unset($held);
+' : '';
+eval($source);
+"###);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "40:40|cast|drop|cast|drop|drop|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
