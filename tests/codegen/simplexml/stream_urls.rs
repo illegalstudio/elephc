@@ -17,13 +17,15 @@ fn test_simplexml_stream_data_and_filters_bundle() {
     let out = compile_and_run_with_heap_debug(r###"<?php
 $uri = 'data://text/plain;base64,PHIvPg==';
 echo simplexml_load_file($uri)->getName(), ':', (new SimpleXMLElement($uri, 0, true))->getName(), '|';
+echo (new SimpleXMLElement($uri . "\0ignored", 0, true))->getName(), '|';
 echo simplexml_load_file('data://text/plain,%3Cr%3Eone+two%3C%2Fr%3E'), '|';
 echo simplexml_load_file('php://filter/read=string.tolower/resource=data://text/plain,%3CR%3EYES%3C%2FR%3E')->getName(), '|';
 $source = $argc > 0 ? 'echo simplexml_load_file($uri)->getName(), ":", (new SimpleXMLElement($uri, 0, true))->getName(), "|";' : '';
 eval($source);
+var_dump(simplexml_load_file('php://input', null, LIBXML_NOERROR | LIBXML_NOWARNING));
 "###);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "r:r|one two|r|r:r|");
+    assert_eq!(out.stdout, "r:r|r|one two|r|r:r|bool(false)\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
@@ -85,4 +87,23 @@ fn test_simplexml_http_document_factories() {
     let out = compile_and_run(&source);
     server.join().unwrap();
     assert_eq!(out, "r:r");
+}
+
+/// Encoded NUL rejection keeps stream warnings and constructor previous-exception chains.
+#[test]
+fn test_simplexml_stream_encoded_nul_rejection() {
+    if skip_without_xml_native("test_simplexml_stream_encoded_nul_rejection") { return; }
+    let out = compile_and_run(r#"<?php
+set_error_handler(function(int $level, string $message): bool {
+    echo str_contains($message, 'URI must not contain percent-encoded NUL bytes') ? 'nul|' : 'io|';
+    return true;
+});
+var_dump(simplexml_load_file('data://text/plain,%00'));
+restore_error_handler();
+set_error_handler(function(int $level, string $message): bool { throw new RuntimeException('stream-warning'); });
+try { new SimpleXMLElement('data://text/plain,%00', 0, true); }
+catch (Exception $error) { echo get_class($error), ':', $error->getMessage(), ':', get_class($error->getPrevious()); }
+restore_error_handler();
+"#);
+    assert_eq!(out, "nul|io|bool(false)\nException:String could not be parsed as XML:RuntimeException");
 }

@@ -10,6 +10,12 @@
 
 pub(super) const SOURCE: &str = r###"
 function __elephc_simplexml_file_handle(string $filename, int $options, string $ns, bool $prefix, string $caller): int {
+    $nul = strpos($filename, "\0");
+    if ($nul !== false) { $filename = substr($filename, 0, (int)$nul); }
+    if (str_contains($filename, '%00')) {
+        __elephc_simplexml_warning('Warning: ' . $caller . ': URI must not contain percent-encoded NUL bytes' . "\n");
+        return elephc_xml_sx_load_stream($filename, '', -1, $options, $ns, (int)$prefix);
+    }
     $separator = strpos($filename, '://');
     if ($separator === false || str_starts_with(strtolower($filename), 'file://')) {
         return elephc_xml_sx_load_file($filename, $options, $ns, (int)$prefix);
@@ -25,7 +31,10 @@ function __elephc_simplexml_stream_bytes(string $uri, string $caller): string|fa
     $scheme = strtolower(substr($uri, 0, (int)$separator));
     if ($scheme === 'data') { return __elephc_simplexml_data_bytes($uri, $caller); }
     if ($scheme === 'php') {
-        if ($uri === 'php://input') { return file_get_contents('php://input'); }
+        if ($uri === 'php://input') {
+            $input = file_get_contents('php://input');
+            return $input === false ? '' : $input;
+        }
         if ($uri === 'php://stdin') {
             $stream = fopen('php://stdin', 'rb');
             if ($stream === false) { return false; }
