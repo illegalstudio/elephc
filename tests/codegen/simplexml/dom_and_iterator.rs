@@ -132,6 +132,48 @@ eval($source);
     assert_eq!(out.stdout, "string(4) \"html\"\nbool(true)\nbool(false)\nold:before|bool(true)\nbool(false)\nstring(4) \"html\"\nbool(true)\nbool(false)\n");
 }
 
+/// Separates parser trees, DOM construction, retained imports and eval reload ownership.
+#[test]
+fn test_simplexml_dom_reload_owners_isolated_bundle() {
+    if skip_without_xml_native("test_simplexml_dom_reload_owners_isolated_bundle") { return; }
+    let runs = compile_and_run_with_heap_debug_per_argv(r###"<?php
+if ($argc === 1) {
+    $document = new DOMDocument(); echo $document->childNodes->length;
+} elseif ($argc === 2) {
+    for ($i = 0; $i < 3; $i++) {
+        $tree = __elephc_dom_parse_html('<html><body><p>x</p></body></html>', 0);
+        echo count($tree['children']); unset($tree);
+    }
+} elseif ($argc === 3) {
+    $document = new DOMDocument();
+    for ($i = 0; $i < 3; $i++) { $document->loadHTML('<html><body><p>x</p></body></html>'); }
+    echo $document->documentElement->nodeName;
+} elseif ($argc === 4) {
+    $document = new DOMDocument(); $document->loadXML('<old>before</old>');
+    $old = simplexml_import_dom($document);
+    $document->loadHTML('<html><body><p>after</p></body></html>');
+    echo $old->getName(), ':', (string)$old, '|', $document->documentElement->nodeName;
+} elseif ($argc === 5) {
+    $document = new DOMDocument();
+    $document->loadHTML('<html><body><p>first</p></body></html>');
+    $imported = simplexml_import_dom($document);
+    $document->loadHTML('<html><body><p>second</p></body></html>');
+    echo $imported->getName(), '|', $document->documentElement->nodeName;
+} else {
+    $source = $argc > 0 ? '$document = new DOMDocument(); $document->loadXML("<old/>"); $document->loadHTML("<html><body><p>new</p></body></html>"); echo $document->documentElement->nodeName;' : '';
+    eval($source);
+}
+"###, &[&[], &["x"], &["x", "x"], &["x", "x", "x"], &["x", "x", "x", "x"], &["x", "x", "x", "x", "x"]]);
+    let expected = ["0", "111", "html", "old:before|html", "html|html", "html"];
+    let mut failures = Vec::new();
+    for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {
+        if !out.success || out.stdout != expected || !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
+            failures.push(format!("mode={mode} success={} stdout={:?} expected={expected:?}\n{}", out.success, out.stdout, out.stderr));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 /// DOM failures warn before returning, imported wrappers isolate prefixes, and iterator errors match PHP.
 #[test]
 fn test_simplexml_dom_namespace_and_iterator_bundle() {
