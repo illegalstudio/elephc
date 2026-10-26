@@ -22,12 +22,14 @@ pub(super) struct Declarations {
     pub(super) returns: HashMap<String, Classes>,
     pub(super) functions: HashMap<String, FunctionSig>,
     pub(super) methods: HashMap<(String, String), FunctionSig>,
+    pub(super) globals: HashSet<String>,
 }
 
 /// Visits every declaration-bearing statement body, including alternatives and loops.
 pub(super) fn collect_declarations(program: &[Stmt], declarations: &mut Declarations) {
     for stmt in program {
         match &stmt.kind {
+            StmtKind::Global { vars } => declarations.globals.extend(vars.iter().cloned()),
             StmtKind::ClassDecl { name, extends, properties, methods, .. } => {
                 let class = php_symbol_key(name);
                 declarations.classes.insert(class.clone());

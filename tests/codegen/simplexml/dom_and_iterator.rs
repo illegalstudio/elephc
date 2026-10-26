@@ -36,8 +36,13 @@ $replace = function () use (&$document): void { $document = new DOMDocument(); }
 $replace();
 var_dump($document->loadXML('<r>captured</r>'));
 echo $document->documentElement->textContent;
+$alias =& $document;
+$document = initialDocumentConfig();
+$alias = new DOMDocument();
+var_dump($document->loadXML('<r>alias</r>'));
+echo $document->documentElement->textContent;
 "#);
-    assert_eq!(out, "bool(true)\ncaptured");
+    assert_eq!(out, "bool(true)\ncapturedbool(true)\nalias");
 }
 
 /// Loading HTML replaces a document's XML binding without invalidating retained old nodes.

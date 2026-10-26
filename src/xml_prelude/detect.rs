@@ -327,13 +327,7 @@ impl Detector {
                 subject,
                 arms,
                 default,
-            } => {
-                self.expr_refs_xml(subject)
-                    || arms.iter().any(|(conditions, body)| {
-                        conditions.iter().any(|value| self.expr_refs_xml(value)) || self.expr_refs_xml(body)
-                    })
-                    || default.as_deref().is_some_and(|value| self.expr_refs_xml(value))
-            }
+            } => self.match_refs_xml(subject, arms, default.as_deref()),
             ExprKind::ArrayAccess { array, index } => self.expr_refs_xml(array) || self.expr_refs_xml(index),
             ExprKind::Ternary {
                 condition,
@@ -468,9 +462,10 @@ impl Detector {
             StmtKind::IfDef { then_body, else_body, .. } => {
                 self.alternatives_refs_xml([then_body.as_slice(), else_body.as_deref().unwrap_or(&[])])
             }
-            StmtKind::While { condition, body } => self.loop_refs_xml(|path| {
-                path.expr_refs_xml(condition) || path.body_refs_xml(body)
-            }),
+            StmtKind::While { condition, body } => {
+                self.loop_refs_xml(|path| path.expr_refs_xml(condition) || path.body_refs_xml(body))
+                    || self.expr_refs_xml(condition)
+            },
             StmtKind::DoWhile { body, condition } => {
                 self.body_refs_xml(body) || self.expr_refs_xml(condition)
                     || self.loop_refs_xml(|path| path.body_refs_xml(body) || path.expr_refs_xml(condition))
@@ -482,6 +477,7 @@ impl Detector {
                             || path.body_refs_xml(body)
                             || update.as_deref().is_some_and(|stmt| path.stmt_refs_xml(stmt))
                     })
+                    || condition.as_ref().is_some_and(|expr| self.expr_refs_xml(expr))
             }
             StmtKind::ArrayAssign { index, value, .. } => {
                 self.expr_refs_xml(index) || self.expr_refs_xml(value)
@@ -505,12 +501,13 @@ impl Detector {
             | StmtKind::Synthetic(body)
             | StmtKind::NamespaceBlock { body, .. } => body.iter().any(|value| self.stmt_refs_xml(value)),
             StmtKind::Try { try_body, catches, finally_body } => {
-                let success = self.fork();
+                let exceptional = self.dom.exception_observer();
+                let mut success = self.fork();
+                success.dom.watch_exceptions(exceptional.clone());
                 if success.body_refs_xml(try_body) { return true; }
-                let exceptional = self.fork();
-                exceptional.dom.join(&success.dom);
                 for catch in catches {
-                    let branch = exceptional.fork();
+                    let branch = self.fork();
+                    branch.dom.replace(&exceptional);
                     if catch.exception_types.iter().any(name_is_xml_class) || branch.body_refs_xml(&catch.body) { return true; }
                     success.dom.join(&branch.dom);
                 }
@@ -826,6 +823,8 @@ mod tests {
             "class Config { function loadXML(): void {} } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); (new Config())->{'loadXML'}();",
             "class Config { function loadXML(): void {} } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); call_user_func([new Config(), 'loadXML']);",
             "class Config { function loadXML(): void {} } function readValue($value): void {} $doc = new DOMDocument(); $cfg = new Config(); readValue(value: $cfg); $cfg->loadXML();",
+            "class Config { function loadXML(): void {} } $doc = new DOMDocument(); while (($doc = new Config()) && $argc) {} $doc->loadXML();",
+            "class Config { function loadXML(): void {} } $doc = new DOMDocument(); $alias =& $doc; $alias = new Config(); $doc->loadXML();",
         ] {
             assert!(!program_uses_xml(&parse(&format!("<?php {source}"))), "{source}");
         }
@@ -858,6 +857,11 @@ mod tests {
             "class Config {} $doc = new Config(); $change = function () use (&$doc): void { $doc = new DOMDocument(); }; $doc = new Config(); $change(); $doc->loadXML('<r/>');",
             "class Config {} function change(&$value): void { $value = new DOMDocument(); } $doc = new Config(); change(value: $doc); $doc->loadXML('<r/>');",
             "class Config {} $doc = new DOMDocument(); $argc && ($doc = new Config()); $doc->loadXML('<r/>');",
+            "class Config {} $doc = new DOMDocument(); match ($argc) { 0 => ($doc = new Config()), default => 1 }; $doc->loadXML('<r/>');",
+            "class Config {} $doc = new Config(); $alias =& $doc; $doc = new Config(); $alias = new DOMDocument(); $doc->loadXML('<r/>');",
+            "class Config {} $doc = new DOMDocument(); $other = new Config(); if ($argc) { $alias =& $doc; } else { $alias =& $other; } $alias = new Config(); $doc->loadXML('<r/>');",
+            "class Config {} $doc = new Config(); try { $doc = new DOMDocument(); throw new Exception(); $doc = new Config(); } catch (Exception $error) { $doc->loadXML('<r/>'); }",
+            "class Config {} function changeGlobal(): void { global $doc; $doc = new DOMDocument(); } $doc = new Config(); changeGlobal(); $doc->loadXML('<r/>');",
         ] {
             assert!(program_uses_xml(&parse(&format!("<?php {source}"))), "{source}");
         }

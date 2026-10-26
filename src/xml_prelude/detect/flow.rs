@@ -108,6 +108,30 @@ impl Detector {
         false
     }
 
+    /// Keeps match-arm assignments on alternative paths rather than applying every arm in sequence.
+    pub(super) fn match_refs_xml(&self, subject: &Expr, arms: &[(Vec<Expr>, Expr)], default: Option<&Expr>) -> bool {
+        if self.expr_refs_xml(subject) { return true; }
+        let remaining = self.fork();
+        let mut merged: Option<Self> = None;
+        for (conditions, value) in arms {
+            let input = remaining.fork();
+            for condition in conditions {
+                if remaining.expr_refs_xml(condition) { return true; }
+                input.dom.join(&remaining.dom);
+            }
+            if input.expr_refs_xml(value) { return true; }
+            if let Some(merged) = &merged { merged.dom.join(&input.dom); }
+            else { merged = Some(input); }
+        }
+        if let Some(default) = default {
+            if remaining.expr_refs_xml(default) { return true; }
+            if let Some(merged) = &merged { merged.dom.join(&remaining.dom); }
+            else { merged = Some(remaining); }
+        }
+        if let Some(merged) = merged { self.dom.replace(&merged.dom); }
+        false
+    }
+
     /// Treats a runtime method name as possibly loadXML only for a DOM-connected receiver.
     pub(super) fn dynamic_method_refs_xml(&self, object: &Expr, method: &Expr) -> bool {
         let possible = match &method.kind {

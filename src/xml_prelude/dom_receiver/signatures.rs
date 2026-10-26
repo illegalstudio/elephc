@@ -49,6 +49,7 @@ impl DomReceiver {
         match &expr.kind {
             ExprKind::Closure { params, variadic, variadic_by_ref, .. } => Some(signature(params, variadic.as_deref(), *variadic_by_ref)),
             ExprKind::Variable(name) => self.callables.borrow().get(name).cloned(),
+            ExprKind::Assignment { value, .. } => self.callable_signature(value),
             ExprKind::FirstClassCallable(CallableTarget::Function(name)) => self.function_signature(name.as_str()),
             ExprKind::FirstClassCallable(CallableTarget::Method { object, method }) => {
                 let classes = self.classes(object)?;
@@ -67,6 +68,7 @@ impl DomReceiver {
 
     /// Computes possible argument mutations before their evaluation changes receiver provenance.
     pub(in crate::xml_prelude) fn call_mutations(&self, expr: &Expr) -> Vec<String> {
+        if !self.dom_available { return Vec::new(); }
         let (args, signatures) = match &expr.kind {
             ExprKind::FunctionCall { name, args } => (args, vec![self.function_signature(name.as_str())]),
             ExprKind::ClosureCall { var, args } => (args, vec![self.callables.borrow().get(var).cloned()]),
@@ -88,6 +90,7 @@ impl DomReceiver {
             _ => return Vec::new(),
         };
         let mut mutations = self.escaped_refs.borrow().clone();
+        if self.global_scope { mutations.extend(self.declarations.globals.iter().cloned()); }
         for sig in signatures {
             let planned = sig.as_ref().and_then(|sig| {
                 crate::types::call_args::plan_call_args(sig, args, expr.span, false, true).ok()

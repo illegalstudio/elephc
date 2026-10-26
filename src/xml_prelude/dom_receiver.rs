@@ -16,6 +16,7 @@ use std::rc::Rc;
 use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind, TypeExpr};
 
+mod aliases;
 mod declarations;
 mod signatures;
 use declarations::{collect_declarations, Declarations};
@@ -30,6 +31,10 @@ pub(super) struct DomReceiver {
     variables: RefCell<HashMap<String, Classes>>,
     callables: RefCell<HashMap<String, crate::types::FunctionSig>>,
     escaped_refs: RefCell<HashSet<String>>,
+    aliases: RefCell<HashMap<String, HashSet<String>>>,
+    uncertain_aliases: RefCell<HashSet<String>>,
+    global_scope: bool,
+    observers: Vec<Rc<Self>>,
     class: Option<String>,
     dom_available: bool,
 }
@@ -68,10 +73,12 @@ impl DomReceiver {
     /// Creates the top-level scope with all known declaration hints.
     pub(super) fn new(program: &[Stmt], dom_available: bool) -> Self {
         let mut declarations = Declarations::default();
-        collect_declarations(program, &mut declarations);
+        if dom_available { collect_declarations(program, &mut declarations); }
         Self {
             declarations: Rc::new(declarations), variables: RefCell::new(HashMap::new()),
             callables: RefCell::new(HashMap::new()), escaped_refs: RefCell::new(HashSet::new()),
+            aliases: RefCell::new(HashMap::new()), uncertain_aliases: RefCell::new(HashSet::new()),
+            global_scope: true, observers: Vec::new(),
             class: None, dom_available,
         }
     }
@@ -83,9 +90,12 @@ impl DomReceiver {
             variables: RefCell::new(if capture { self.variables.borrow().clone() } else { HashMap::new() }),
             callables: RefCell::new(if capture { self.callables.borrow().clone() } else { HashMap::new() }),
             escaped_refs: RefCell::new(if capture { self.escaped_refs.borrow().clone() } else { HashSet::new() }),
+            aliases: RefCell::new(if capture { self.aliases.borrow().clone() } else { HashMap::new() }),
+            uncertain_aliases: RefCell::new(if capture { self.uncertain_aliases.borrow().clone() } else { HashSet::new() }),
+            global_scope: false, observers: Vec::new(),
             class: self.class.clone(), dom_available: self.dom_available,
         };
-        for (name, ty, _, _) in params {
+        for (name, ty, _, _) in params.iter().filter(|_| self.dom_available) {
             result.variables.borrow_mut().insert(name.clone(), ty.as_ref().and_then(type_classes));
         }
         result
@@ -100,8 +110,24 @@ impl DomReceiver {
 
     /// Records an unconditional assignment; control-flow joins are handled separately.
     fn assign(&self, name: &str, classes: Classes) {
-        self.variables.borrow_mut().insert(name.to_string(), classes);
-        self.callables.borrow_mut().remove(name);
+        if !self.dom_available { return; }
+        self.write_reference_fact(name, classes);
+        self.notify_observers();
+    }
+
+    /// Collects every possible throw-prefix state independently of successful try completion.
+    pub(super) fn exception_observer(&self) -> Rc<Self> {
+        let mut result = self.clone();
+        result.observers.clear();
+        Rc::new(result)
+    }
+
+    /// Records mutations into a try region's exception-prefix accumulator.
+    pub(super) fn watch_exceptions(&mut self, observer: Rc<Self>) { self.observers.push(observer); }
+
+    /// Updates active exception accumulators after releasing all mutable fact borrows.
+    fn notify_observers(&self) {
+        for observer in &self.observers { observer.join(self); }
     }
 
     /// Replaces this path's facts after an unconditional control-flow region.
@@ -109,10 +135,14 @@ impl DomReceiver {
         *self.variables.borrow_mut() = other.variables.borrow().clone();
         *self.callables.borrow_mut() = other.callables.borrow().clone();
         *self.escaped_refs.borrow_mut() = other.escaped_refs.borrow().clone();
+        *self.aliases.borrow_mut() = other.aliases.borrow().clone();
+        *self.uncertain_aliases.borrow_mut() = other.uncertain_aliases.borrow().clone();
+        self.notify_observers();
     }
 
     /// Joins alternative paths and reports whether any receiver fact changed.
     pub(super) fn join(&self, other: &Self) -> bool {
+        let aliases_changed = self.join_references(other);
         let before = self.variables.borrow().clone();
         let right = other.variables.borrow();
         let mut joined = before.clone();
@@ -128,29 +158,30 @@ impl DomReceiver {
         callables.retain(|name, sig| other.callables.borrow().get(name) == Some(sig));
         let refs_before = self.escaped_refs.borrow().len();
         self.escaped_refs.borrow_mut().extend(other.escaped_refs.borrow().iter().cloned());
-        let changed = joined != before || *callables != callables_before || refs_before != self.escaped_refs.borrow().len();
+        let changed = aliases_changed || joined != before || *callables != callables_before || refs_before != self.escaped_refs.borrow().len();
         *self.variables.borrow_mut() = joined;
+        drop(callables);
+        self.notify_observers();
         changed
     }
 
     /// Records local assignments before later expressions inspect their receiver.
     pub(super) fn observe_statement(&self, stmt: &Stmt) {
+        if !self.dom_available { return; }
         match &stmt.kind {
-            StmtKind::Assign { name, value } => {
-                let sig = self.callable_signature(value);
-                self.assign(name, self.classes(value));
-                if let Some(sig) = sig { self.callables.borrow_mut().insert(name.clone(), sig); }
-                else { self.callables.borrow_mut().remove(name); }
-            },
-            StmtKind::TypedAssign { name, type_expr, .. } => self.assign(name, type_classes(type_expr)),
-            StmtKind::RefAssign { target, source } => {
-                self.assign(target, None);
-                self.escaped_refs.borrow_mut().insert(target.clone());
-                if let ExprKind::Variable(name) = &source.kind {
+            StmtKind::Global { vars } => {
+                for name in vars {
                     self.assign(name, None);
                     self.escaped_refs.borrow_mut().insert(name.clone());
                 }
             }
+            StmtKind::Assign { name, value } => {
+                let sig = self.callable_signature(value);
+                self.assign(name, self.classes(value));
+                self.set_callable(name, sig);
+            },
+            StmtKind::TypedAssign { name, type_expr, .. } => self.assign(name, type_classes(type_expr)),
+            StmtKind::RefAssign { target, source } => self.bind_reference(target, source),
             StmtKind::Foreach { key_var, value_var, .. } => {
                 self.assign(value_var, None);
                 if let Some(name) = key_var { self.assign(name, None); }
@@ -161,15 +192,19 @@ impl DomReceiver {
 
     /// Records assignment expressions, including ones nested in call arguments.
     pub(super) fn observe_expression(&self, expr: &Expr) {
+        if !self.dom_available { return; }
         if let ExprKind::Assignment { target, value, .. } = &expr.kind {
             if let ExprKind::Variable(name) = &target.kind {
+                let signature = self.callable_signature(value);
                 self.assign(name, self.classes(value));
+                self.set_callable(name, signature);
             }
         }
     }
 
     /// Marks captured aliases before analyzing a closure and remembers later indirect mutations.
     pub(super) fn observe_captures(&self, expr: &Expr) {
+        if !self.dom_available { return; }
         if let ExprKind::Closure { capture_refs, .. } = &expr.kind {
             for name in capture_refs {
                 self.assign(name, None);
@@ -219,6 +254,7 @@ impl DomReceiver {
 
     /// Recognizes DOMDocument and its subclasses, excluding known unrelated receivers.
     pub(super) fn may_load_xml(&self, object: &Expr) -> bool {
+        if !self.dom_available { return false; }
         let Some(classes) = self.classes(object) else { return self.dom_available; };
         classes.into_iter().any(|mut class| {
             let mut visited = HashSet::new();
