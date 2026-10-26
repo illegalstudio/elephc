@@ -11,10 +11,37 @@
 use crate::names::Name;
 use crate::parser::ast::{Expr, ExprKind, Stmt};
 use super::Detector;
+use std::cell::RefCell;
+use std::rc::Rc;
+use super::super::dom_receiver::DomReceiver;
+
+type ExitFacts = Rc<RefCell<Option<DomReceiver>>>;
+
+/// Destination states of one loop or switch, shared by its nested control-flow paths.
+#[derive(Clone)]
+pub(super) struct FlowFrame {
+    breaks: ExitFacts,
+    continues: Option<ExitFacts>,
+}
+
+/// Accumulates one possible exit without adding an artificial entry path.
+fn collect_exit(destination: &ExitFacts, receiver: &DomReceiver) {
+    let mut destination = destination.borrow_mut();
+    if let Some(previous) = destination.as_ref() { previous.join(receiver); }
+    else { *destination = Some(receiver.clone()); }
+}
 
 impl Detector {
     /// Creates an independent control-flow path in the same lexical scope.
-    pub(super) fn fork(&self) -> Self { Self { dom: self.dom.clone() } }
+    pub(super) fn fork(&self) -> Self { Self { dom: self.dom.clone(), frames: self.frames.clone() } }
+
+    /// Routes a numbered break/continue to its enclosing loop or switch.
+    pub(super) fn record_exit(&self, levels: usize, continuing: bool) {
+        let Some(index) = self.frames.len().checked_sub(levels.max(1)) else { return; };
+        let frame = &self.frames[index];
+        let destination = if continuing { frame.continues.as_ref().unwrap_or(&frame.breaks) } else { &frame.breaks };
+        collect_exit(destination, &self.dom);
+    }
 
     /// Visits one sequential body without adding an artificial lexical scope.
     pub(super) fn body_refs_xml(&self, body: &[Stmt]) -> bool {
@@ -55,9 +82,11 @@ impl Detector {
     /// Includes switch fallthrough while retaining direct entry to every case.
     pub(super) fn switch_refs_xml(&self, subject: &Expr, cases: &[(Vec<Expr>, Vec<Stmt>)], default: Option<&[Stmt]>) -> bool {
         if self.expr_refs_xml(subject) { return true; }
-        let entry = self.fork();
-        let merged = self.fork();
-        let fallthrough = self.fork();
+        let frame = FlowFrame { breaks: Rc::new(RefCell::new(None)), continues: None };
+        let mut entry = self.fork();
+        entry.frames.push(frame.clone());
+        let merged = entry.fork();
+        let fallthrough = entry.fork();
         for (conditions, body) in cases {
             let branch = entry.fork();
             branch.dom.join(&fallthrough.dom);
@@ -71,6 +100,7 @@ impl Detector {
             if branch.body_refs_xml(body) { return true; }
             merged.dom.join(&branch.dom);
         }
+        if let Some(exited) = frame.breaks.borrow().as_ref() { merged.dom.join(exited); }
         self.dom.replace(&merged.dom);
         false
     }
@@ -84,13 +114,29 @@ impl Detector {
     }
 
     /// Unions loop entry and back-edge states until another iteration adds no facts.
-    pub(super) fn loop_refs_xml(&self, visit: impl Fn(&Self) -> bool) -> bool {
-        let header = self.fork();
+    pub(super) fn loop_refs_xml(
+        &self, visit: impl Fn(&Self) -> bool, continuation: impl Fn(&Self) -> bool,
+        exit_condition: Option<&Expr>, at_least_once: bool,
+    ) -> bool {
+        let frame = FlowFrame { breaks: Rc::new(RefCell::new(None)), continues: Some(Rc::new(RefCell::new(None))) };
+        let mut header = self.fork();
+        header.frames.push(frame.clone());
+        if at_least_once && visit(&header) { return true; }
         loop {
             let iteration = header.fork();
             if visit(&iteration) { return true; }
-            if !header.dom.join(&iteration.dom) { break; }
+            let mut changed = header.dom.join(&iteration.dom);
+            let continued = frame.continues.as_ref().and_then(|facts| facts.borrow().clone());
+            if let Some(continued) = continued {
+                let path = header.fork();
+                path.dom.replace(&continued);
+                if continuation(&path) { return true; }
+                changed |= header.dom.join(&path.dom);
+            }
+            if !changed { break; }
         }
+        if exit_condition.is_some_and(|condition| header.expr_refs_xml(condition)) { return true; }
+        if let Some(exited) = frame.breaks.borrow().as_ref() { header.dom.join(exited); }
         self.dom.replace(&header.dom);
         false
     }
