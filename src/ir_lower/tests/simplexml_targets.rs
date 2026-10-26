@@ -60,8 +60,16 @@ echo $doc->saveXML();
         crate::codegen::platform::Target::parse(target).unwrap());
     let arithmetic = module.functions.iter().find(|function| function.name == "xmlMixedArithmetic")
         .expect("mixed arithmetic fixture must remain reachable");
-    assert_eq!(arithmetic.instructions.iter().filter(|inst| inst.op == crate::ir::Op::StaticMethodCall).count(), 2,
-        "{target}: both SimpleXML and BcMath arithmetic adapters must be reachable");
+    for class in ["SimpleXMLElement", "BcMath\\Number"] {
+        let method = elephc_builtin_contract::lookup_class(class).unwrap().operators.unwrap()
+            .arithmetic_method(elephc_builtin_contract::ObjectArithmetic::Add).unwrap();
+        let expected = format!("{class}::{method}");
+        assert!(arithmetic.instructions.iter().any(|inst| {
+            inst.op == crate::ir::Op::StaticMethodCall
+                && matches!(inst.immediate, Some(crate::ir::Immediate::Data(id))
+                    if module.data.strings.get(id.as_raw() as usize) == Some(&expected))
+        }), "{target}: missing arithmetic adapter {expected}");
+    }
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     assert!(assembly.contains("elephc_xml_sx_load"), "{target}: document parsing boundary");
     assert!(assembly.contains("elephc_xml_sx_mutate"), "{target}: document mutation boundary");
