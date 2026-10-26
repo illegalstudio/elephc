@@ -444,9 +444,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $result = ["__elephc_projection_seed" => null];
         unset($result["__elephc_projection_seed"]);
         if ($mode === 4) {
-            $values = ["__elephc_projection_seed" => ""];
-            unset($values["__elephc_projection_seed"]);
-            foreach ($this as $name => $attribute) { $values[$name] = (string)$attribute; }
+            $values = $this->__elephc_projection_text_values(true);
             if (count($values) > 0) { $result["@attributes"] = $values; }
             return $result;
         }
@@ -466,8 +464,8 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         }
         if ($mode === 3) { return $result; }
         if ($mode === 2 && elephc_xml_sx_int($handle, 6) !== 0) {
-            $i = 0;
-            foreach ($this as $element) { $result[(string)$i] = (string)$element; $i++; }
+            $values = $this->__elephc_projection_text_values(false);
+            foreach ($values as $index => $value) { $result[$index] = $value; }
             return $result;
         }
         $children = __elephc_simplexml_wrap(elephc_xml_sx_select($base_handle, 7, "", "", 0, 0), get_class($this));
@@ -489,6 +487,26 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $text = (string)$base;
         if ($text !== "") { $result["0"] = $text; }
         return $result;
+    }
+    private function __elephc_projection_text_values(bool $attributes): array<string, mixed> {
+        $handle = $this->__elephc_handle;
+        $selection = elephc_xml_sx_alias($handle);
+        $values = ["__elephc_projection_seed" => null];
+        unset($values["__elephc_projection_seed"]);
+        try {
+            elephc_xml_sx_iterator($selection, 0);
+            $index = 0;
+            while (elephc_xml_sx_iterator($selection, 2) !== 0) {
+                $node = elephc_xml_sx_iterator($selection, 3);
+                try {
+                    $key = $attributes ? elephc_xml_sx_string($node, 1) : (string)$index;
+                    $values[$key] = elephc_xml_sx_string($node, 0);
+                } finally { elephc_xml_sx_free($node); }
+                $index++;
+                elephc_xml_sx_iterator($selection, 1);
+            }
+        } finally { elephc_xml_sx_free($selection); }
+        return $values;
     }
     public function __elephc_json(): mixed { return (object)$this->__elephc_array(); }
     public function __debugInfo(): ?array { return $this->__elephc_array(); }
@@ -579,10 +597,10 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     }
     public function hasChildren(): bool {
         $handle = $this->__elephc_handle;
-        if (elephc_xml_sx_iterator($handle, 2) === 0) { return false; }
+        if (elephc_xml_sx_iterator($handle, 2) === 0 || elephc_xml_sx_int($handle, 5) >= 3) { return false; }
         $current = $this->__elephc_iterator_current();
         $child = $current->__elephc_handle;
-        return elephc_xml_sx_int($child, 0) > 0;
+        return elephc_xml_sx_int($child, 8) !== 0;
     }
     public function getChildren(): ?SimpleXMLElement {
         $handle = $this->__elephc_handle;
