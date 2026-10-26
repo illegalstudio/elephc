@@ -21,6 +21,8 @@ mod object_not_array;
 mod mixed_array_set;
 mod mixed_cell_autovivify;
 mod new_by_name;
+mod native_debug;
+pub(crate) use native_debug::emit_native_debug;
 mod object_vars;
 mod print_r_object;
 mod stdclass;

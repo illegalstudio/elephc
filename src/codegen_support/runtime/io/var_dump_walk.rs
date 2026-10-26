@@ -1170,6 +1170,11 @@ pub fn emit_var_dump_value(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_var_dump_emit_enum_line");                     // emit `<indent>enum(E::C)\n`
     emitter.instruction("b __rt_vd_val_done");                                  // value rendered
     emitter.label("__rt_vd_val_obj_plain");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // borrow the native object receiver
+    emitter.instruction("mov x1, #0");                                          // var_dump obtains its indentation from the shared walk state
+    emitter.instruction("mov x2, #0");                                          // select native var_dump formatting
+    emitter.instruction("bl __rt_try_native_debug_object");                     // render an owned native property snapshot
+    emitter.instruction("cbnz x0, __rt_vd_val_done");                           // a native object has already rendered its complete body
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
     emitter.instruction("bl __rt_vd_seen_find");                                // is this object already on the walk stack?
     emitter.instruction("cbnz x0, __rt_vd_val_recursion");                      // PHP renders a revisited object as *RECURSION*
@@ -1303,6 +1308,12 @@ fn emit_var_dump_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_var_dump_emit_enum_line");                   // emit `<indent>enum(E::C)\n`
     emitter.instruction("jmp __rt_vd_val_done_x86");                            // value rendered
     emitter.label("__rt_vd_val_obj_plain_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // borrow the native object receiver
+    emitter.instruction("xor rsi, rsi");                                        // var_dump obtains its indentation from the shared walk state
+    emitter.instruction("xor rdx, rdx");                                        // select native var_dump formatting
+    emitter.instruction("call __rt_try_native_debug_object");                   // render an owned native property snapshot
+    emitter.instruction("test rax, rax");                                       // inspect whether native rendering handled the object
+    emitter.instruction("jnz __rt_vd_val_done_x86");                            // a native object has already rendered its complete body
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
     emitter.instruction("call __rt_vd_seen_find");                              // is this object already on the walk stack?
     emitter.instruction("test rax, rax");                                       // did the guard report a revisit?

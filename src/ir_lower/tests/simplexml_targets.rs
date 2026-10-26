@@ -66,6 +66,7 @@ $xml->item[0] += 1;
 try { $xml->item[0][null] = 'invalid'; } catch (ValueError $error) { echo $error->getMessage(); }
 $xml->xpath('count(//item)');
 echo json_encode($xml), json_encode((array)$xml), $xml->asXML();
+var_dump($xml); print_r($xml); echo print_r($xml, true), var_export($xml, true);
 $doc = new DOMDocument(); $doc->loadXML('<r><v>shared</v></r>');
 $imported = simplexml_import_dom($doc);
 if ($imported instanceof SimpleXMLElement) { $imported->v = 'changed'; }
@@ -98,6 +99,9 @@ echo $doc->saveXML();
     assert!(assembly.contains("elephc_xml_sx_iterator"), "{target}: linear native iterator boundary");
     assert!(assembly.contains(&crate::names::method_symbol("SimpleXMLElement", "__elephc_array")),
         "{target}: native property projection body");
+    assert!(assembly.contains("_class_debug_projection_ptrs"), "{target}: native debug dispatch metadata");
+    assert!(assembly.contains(&crate::names::method_symbol("SimpleXMLElement", "__elephc_debug_projection")),
+        "{target}: zero-argument owned native debug projection");
     assert!(assembly.contains(&crate::names::method_symbol("SimpleXMLElement", "__elephc_clone_initialize")),
         "{target}: native clone handler body");
 }

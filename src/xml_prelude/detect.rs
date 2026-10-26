@@ -809,6 +809,12 @@ mod tests {
         assert!(!program_uses_xml(&parse("<?php echo XML_ERROR_SYNTAX;")));
     }
 
+    /// XML-aware var_export formatting does not require libxml2 in ordinary programs.
+    #[test]
+    fn var_export_prelude_does_not_force_xml_linkage() {
+        assert!(!program_uses_xml(&crate::var_export_prelude::var_export_declarations()));
+    }
+
     /// A user loadXML method stays independent of libxml2, including alongside HTML-only DOM use.
     #[test]
     fn ignores_unrelated_load_xml_receivers() {

@@ -516,6 +516,15 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     }
     public function __elephc_json(): mixed { return (object)$this->__elephc_array(); }
     public function __debugInfo(): ?array { return $this->__elephc_projection(true); }
+    public function __elephc_debug_projection(): array<string, mixed> {
+        $projection = $this->__debugInfo();
+        $result = ["__elephc_projection_seed" => null];
+        unset($result["__elephc_projection_seed"]);
+        if ($projection !== null) {
+            foreach ($projection as $key => $value) { $result[(string)$key] = $value; }
+        }
+        return $result;
+    }
     public function __elephc_dom_text(): string {
         $handle = $this->__elephc_handle;
         return elephc_xml_sx_string($handle, 3);
