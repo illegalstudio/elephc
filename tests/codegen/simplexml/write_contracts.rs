@@ -134,3 +134,36 @@ echo $xml->asXML();
         "<?xml version=\"1.0\"?>\n<r id=\"new\"/>\n",
     ));
 }
+
+/// Runtime-eval writes report the active PHP callable instead of a suspended native frame.
+#[test]
+fn test_simplexml_eval_assignment_warning_callers() {
+    if skip_without_xml_native("test_simplexml_eval_assignment_warning_callers") { return; }
+    let out = compile_and_run_with_heap_debug(r###"<?php
+set_error_handler(function(int $level, string $message): bool { echo $message, '|'; return true; });
+$source = $argc > 0 ? '
+function evaluatedXmlWarning(SimpleXMLElement $xml): void { $xml->item[4] = "f"; }
+class EvaluatedXmlWarning {
+    public function instanceWrite(SimpleXMLElement $xml): void { $xml->item[4] = "i"; }
+    public static function staticWrite(SimpleXMLElement $xml): void { $xml->item[4] = "s"; }
+}
+$xml = new SimpleXMLElement("<r><item>a</item><item>b</item></r>");
+$xml->item = "duplicate";
+$xml->item[4] = "top";
+evaluatedXmlWarning(new SimpleXMLElement("<r><item>a</item></r>"));
+(new EvaluatedXmlWarning())->instanceWrite(new SimpleXMLElement("<r><item>a</item></r>"));
+EvaluatedXmlWarning::staticWrite(new SimpleXMLElement("<r><item>a</item></r>"));
+' : '';
+eval($source);
+restore_error_handler();
+"###);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, concat!(
+        "Unknown: Cannot assign to an array of nodes (duplicate subnodes or attr detected)|",
+        "Unknown: Cannot add element item number 4 when only 2 such elements exist|",
+        "evaluatedXmlWarning(): Cannot add element item number 4 when only 1 such elements exist|",
+        "EvaluatedXmlWarning::instanceWrite(): Cannot add element item number 4 when only 1 such elements exist|",
+        "EvaluatedXmlWarning::staticWrite(): Cannot add element item number 4 when only 1 such elements exist|",
+    ));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
