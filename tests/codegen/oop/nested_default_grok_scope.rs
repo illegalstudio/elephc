@@ -8,7 +8,8 @@
 //! - Constructor names never replace the lexical scope of their arguments.
 //! - Free-function defaults cannot borrow the caller's class scope.
 
-use crate::support::{compile_and_run, compile_and_run_with_heap_debug, without_ir_opt};
+use crate::support::{compile_and_run, compile_and_run_with_heap_debug,
+    compile_and_run_capture_and_asm_per_argv, selected_function_assembly, without_ir_opt};
 
 /// Checks the observable value and retirement of every native owner.
 fn check(source: &str, expected: &str) {
@@ -21,6 +22,15 @@ fn check(source: &str, expected: &str) {
 /// Checks reflection semantics separately from its general metadata-graph ownership coverage.
 fn check_reflection(source: &str, expected: &str) {
     assert_eq!(compile_and_run(source), expected);
+}
+
+/// Preserves the ordinary runtime mode while exposing failed numeric metadata in its caller.
+fn check_reflection_with_assembly(source: &str, expected: &str) {
+    let (runs, assembly) = compile_and_run_capture_and_asm_per_argv(source, &[&[]]);
+    let out = &runs[0];
+    assert!(out.success && out.stdout == expected,
+        "stdout={:?} expected={expected:?}\nstderr={}\nReflection metadata assembly:\n{}",
+        out.stdout, out.stderr, selected_function_assembly(&assembly, &["main".into()]));
 }
 
 /// Nested self factories bind to the declaring class or trait consumer across caller scopes.
@@ -355,7 +365,7 @@ fn test_nested_default_greptile_remainder_overflow_no_ir_opt() {
 /// Property defaults apply int-to-float coercion without changing parameter or array value types.
 #[test]
 fn test_nested_default_grok_float_property_metadata() {
-    check_reflection(r#"<?php
+    check_reflection_with_assembly(r#"<?php
 class Numbers { const N = 6; }
 class Probe {
     public float $div = Numbers::N / 2;

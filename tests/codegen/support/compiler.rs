@@ -818,6 +818,14 @@ pub(crate) fn compile_and_run_capture_per_argv(
     compile_and_capture_per_argv(source, false, argvs).0
 }
 
+/// Captures ordinary executions and their exact assembly without enabling heap diagnostics.
+pub(crate) fn compile_and_run_capture_and_asm_per_argv(
+    source: &str,
+    argvs: &[&[&str]],
+) -> (Vec<ProgramOutput>, String) {
+    compile_and_capture_per_argv(source, false, argvs)
+}
+
 /// Heap-debug counterpart of [`compile_and_run_per_argv`]: compiles `source` once with heap
 /// debugging and returns every run's captured output, one per argument vector, without asserting
 /// success, so a fixture can check each arm's output and leak summary.
