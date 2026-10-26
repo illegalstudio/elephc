@@ -2,7 +2,7 @@
 title: "curl_multi_getcontent()"
 description: "Returns the content of a cURL handle if CURLOPT_RETURNTRANSFER is set."
 sidebar:
-  order: 714
+  order: 720
 ---
 
 ## curl_multi_getcontent()

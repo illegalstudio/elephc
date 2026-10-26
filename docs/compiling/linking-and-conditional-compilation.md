@@ -142,7 +142,7 @@ the lockfile, and Cargo configuration also participate in this freshness check.
 `--with-CRATE` force-enables a bridge regardless of that auto-detection. It
 force-links the staticlib (whole-archived, so it is retained even if no symbol
 references it) and, for crates whose PHP surface comes from an injected prelude
-(`pdo`, `mysqli`, `tz`, `image`, `xml`, `tokenizer`), force-injects that prelude so the classes/functions are
+(`pdo`, `mysqli`, `tz`, `image`, `xml`, `tokenizer`, `random`), force-injects that prelude so the classes/functions are
 available. This is useful when a program reaches a feature through indirection
 that detection cannot see. The flag is repeatable:
 
@@ -150,6 +150,7 @@ that detection cannot see. The flag is repeatable:
 elephc app.php --with-pdo
 elephc app.php --with-crypto --with-tls
 elephc app.php --with-bcmath
+elephc app.php --with-random
 elephc app.php --with-mbstring
 elephc app.php --with-iconv
 elephc app.php --with-pcntl

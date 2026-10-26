@@ -45,6 +45,7 @@ pub(crate) mod global_decls;
 mod progress;
 /// Immutable BCMath Number standard-library prelude injection.
 pub mod bcmath_prelude;
+pub mod random_prelude;
 /// Incremental hashing standard-library prelude injection.
 pub mod hash_prelude;
 /// Core attribute and sensitive-value class declarations.

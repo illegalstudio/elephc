@@ -2,7 +2,7 @@
 title: "memory_get_peak_usage()"
 description: "Returns peak live native heap bytes, including block headers and allocator rounding. With real_usage=true returns the fixed heap arena capacity, including unused space. Excludes concat scratch, libc, and Rust bridge allocations."
 sidebar:
-  order: 640
+  order: 646
 ---
 
 ## memory_get_peak_usage()

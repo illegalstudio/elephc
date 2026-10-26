@@ -60,6 +60,8 @@ pub(crate) struct Usage {
     pub(crate) classes: HashSet<String>,
     /// Method names seen on a receiver whose class this walk cannot know.
     pub(crate) methods: HashSet<String>,
+    /// Global constant names, case-sensitive, normalized without a leading separator.
+    pub(crate) constants: HashSet<String>,
     /// Every string literal in the subtree, normalized. The fallback root set.
     pub(crate) literals: HashSet<String>,
     /// PHP variable names written exactly as they appear (`$_SERVER` → `_SERVER`),
@@ -1046,6 +1048,13 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
                 record_class(usage, &name.as_canonical());
             }
         }
+        ExprKind::ConstRef(name) => {
+            usage.constants.insert(
+                name.as_canonical()
+                    .trim_start_matches('\\')
+                    .to_string(),
+            );
+        }
         ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)
         | ExprKind::BoolLiteral(_)
@@ -1054,7 +1063,6 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         | ExprKind::PostIncrement(_)
         | ExprKind::PreDecrement(_)
         | ExprKind::PostDecrement(_)
-        | ExprKind::ConstRef(_)
         | ExprKind::This
         | ExprKind::MagicConstant(_) => {}
         ExprKind::ObjectClassName { object } => scan_expr(object, usage),

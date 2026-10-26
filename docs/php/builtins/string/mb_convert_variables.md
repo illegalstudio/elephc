@@ -2,7 +2,7 @@
 title: "mb_convert_variables()"
 description: "Detects one source encoding and converts strings in variables, nested arrays, and object properties by reference."
 sidebar:
-  order: 844
+  order: 850
 ---
 
 ## mb_convert_variables()

@@ -2,7 +2,7 @@
 title: "simplexml_import_dom() - internals"
 description: "Compiler internals for simplexml_import_dom(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1018
+  order: 1024
 ---
 
 ## `simplexml_import_dom()` - internals

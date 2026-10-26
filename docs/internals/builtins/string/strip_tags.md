@@ -2,7 +2,7 @@
 title: "strip_tags() - internals"
 description: "Compiler internals for strip_tags(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 932
+  order: 938
 ---
 
 ## `strip_tags()` - internals

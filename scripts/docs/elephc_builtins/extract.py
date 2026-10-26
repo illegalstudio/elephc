@@ -587,6 +587,11 @@ PRELUDE_SOURCES: dict[str, tuple[str | tuple[str, ...], str, str]] = {
         "version",
         "crates/elephc-builtin-contract/src/catalog_data.rs",
     ),
+    "random": (
+        "random_prelude.rs",
+        "random",
+        "crates/elephc-builtin-contract/src/catalog_data.rs",
+    ),
     "opcache": (
         "opcache_prelude/build.rs",
         "OPcache",
@@ -744,7 +749,16 @@ def build_registry(repo: Path) -> list[Builtin]:
         in_catalog = not is_internal
 
         refine = PARAM_TYPES.get(canonical)
-        signature = aot_support if aot_support.get("supported") else entry
+        # A `runtime-arity-validation` shim accepts PHP's full call shape and reports the
+        # argument count itself, so the PHP-visible contract, not the shim, is the signature
+        # to document. Other divergences (a narrower prelude subset) do change the documented
+        # compiled surface and keep using the AOT profile.
+        documented_signature = (
+            entry
+            if aot_support.get("signature_override_reason") == "runtime-arity-validation"
+            else aot_support
+        )
+        signature = documented_signature if aot_support.get("supported") else entry
         params: list[Parameter] = []
         for i, p in enumerate(signature.get("params", [])):
             php_type = _normalize_type(p["type"])

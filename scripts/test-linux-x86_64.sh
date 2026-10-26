@@ -121,7 +121,7 @@ trap 'exit 143' TERM
 # (crates/elephc-xml/build.rs), and ELEPHC_TEST_REQUIRE_XML_NATIVE turns a
 # missing artifact into a loud failure in tests/codegen/xml instead of a skip.
 # shellcheck disable=SC2016 # Expanded by the container shell.
-DOCKER_TEST_COMMAND='cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-mbstring -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-tokenizer -p elephc-magician -p elephc-instr -p elephc-probe -p elephc-curl \
+DOCKER_TEST_COMMAND='cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-random -p elephc-mbstring -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-tokenizer -p elephc-magician -p elephc-instr -p elephc-probe -p elephc-curl \
     && cargo build --bin elephc \
     && "$CARGO_TARGET_DIR/debug/elephc" native install --locked --target linux-x86_64 --manifest-path examples/xml/elephc.toml \
     && ELEPHC_XML_LIBXML2_LIB_DIR="$(sh scripts/ci/libxml2_lib_dir.sh linux-x86_64)" \

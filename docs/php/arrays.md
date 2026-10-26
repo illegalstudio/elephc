@@ -444,7 +444,7 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `natcasesort()` | `natcasesort($arr): bool` | Case-insensitive natural sort |
 | `shuffle()` | `shuffle($arr): bool` | Randomly shuffle (in-place) |
 | `array_multisort()` | `array_multisort($arr1, $arr2): bool` | Sort equal-length indexed arrays in place by ascending row order: compare `$arr1`, then `$arr2` for ties. AOT accepts two concrete integer arrays or two boxed scalar arrays (for example through declared `array` parameters), not one of each. Concrete string/float arrays, associative arrays, sort flags, and more than two arrays are unsupported. |
-| `array_rand()` | `array_rand($arr): int` | Pick one random key |
+| `array_rand()` | `array_rand(array $array, int $num = 1): int\|string\|array` | Pick one random key, or an array of keys when `$num > 1`; consumes the seeded Mt19937 state |
 | `array_map()` | `array_map($callback, $arr): array` | Apply callback to each element |
 | `array_filter()` | `array_filter($arr, $callback = null, $mode = 0): array` | Preserve keys and values accepted by the callback; omitted/null callbacks remove empty values |
 | `array_reduce()` | `array_reduce($arr, $callback, $init): int` | Reduce to single value |

@@ -46,7 +46,11 @@ pub(super) fn prepare_call_site(
     // scalar Mixed rebinds whose fast path cannot invoke PHP code.
     let warns_at_call_site = inst.effects.contains(crate::ir::Effects::MAY_WARN)
         && !matches!(inst.op, Op::ReleaseLocalRefCell | Op::ReleaseLocalSlot);
-    if instruction_may_enter_php_frame(inst) || warns_at_call_site {
+    // Injected prelude code is an internal function's body: php-src reports its notices at
+    // the user's call site, so publishing the prelude's synthetic span here would overwrite
+    // the location the entering call just published.
+    let compiler_generated = inst.span.is_some_and(|span| !span.is_from_source());
+    if (instruction_may_enter_php_frame(inst) || warns_at_call_site) && !compiler_generated {
         let scratch = abi::int_result_reg(ctx.emitter);
         abi::emit_symbol_address(ctx.emitter, scratch, "_script_source_file");
         abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file", 0);

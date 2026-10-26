@@ -141,6 +141,7 @@ pub(super) fn check_assign(
             checker.warnings.push(CompileWarning {
                 span,
                 message: format!("Undefined variable: ${} (treated as null)", name),
+                kind: crate::errors::WarningKind::Warning,
             });
         }
     }

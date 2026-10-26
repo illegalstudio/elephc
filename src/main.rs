@@ -28,6 +28,7 @@ mod global_decls;
 mod hash_prelude;
 mod core_prelude;
 mod bcmath_prelude;
+mod random_prelude;
 mod image_prelude;
 mod intrinsics;
 #[allow(dead_code, unused_imports)]

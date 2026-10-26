@@ -9,14 +9,17 @@
 //! - Entries here are neutral contract data, not compiler lowering hooks.
 //! - Absence means AOT consumes the canonical signature exactly.
 
-use crate::{BuiltinContract, BuiltinId, BuiltinSignature, ParamSpec, TypeSpec};
+use crate::{BuiltinContract, BuiltinId, BuiltinSignature, DefaultSpec, ParamSpec, TypeSpec};
 
-/// Why the compiler intentionally exposes a signature narrower than the
-/// canonical shared contract.
+/// Why the compiler intentionally exposes a signature that differs from the canonical
+/// shared contract.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AotSignatureOverrideReason {
     /// An injected prelude currently implements only a strict signature subset.
     PreludeSignatureSubset,
+    /// The injected prelude accepts PHP's full call shape and reports the argument count
+    /// itself, because an internal function raises `ArgumentCountError` at call time.
+    RuntimeArityValidation,
 }
 
 /// Selected AOT signature plus an explicit compatibility reason.
@@ -43,17 +46,27 @@ pub fn aot_signature_profile(contract: &BuiltinContract) -> AotSignatureProfile 
 
 /// Finds a deliberate compiler compatibility signature by stable builtin ID.
 fn aot_signature_override(id: BuiltinId) -> Option<AotSignatureProfile> {
-    if id != BuiltinId::from_canonical_name("hash_init") {
-        return None;
+    if id == BuiltinId::from_canonical_name("hash_init") {
+        return Some(AotSignatureProfile {
+            signature: BuiltinSignature {
+                params: HASH_INIT_PARAMS,
+                variadic: None,
+                required_param_count: None,
+            },
+            override_reason: Some(AotSignatureOverrideReason::PreludeSignatureSubset),
+        });
     }
-    Some(AotSignatureProfile {
-        signature: BuiltinSignature {
-            params: HASH_INIT_PARAMS,
-            variadic: None,
-            required_param_count: None,
-        },
-        override_reason: Some(AotSignatureOverrideReason::PreludeSignatureSubset),
-    })
+    if id == BuiltinId::from_canonical_name("random_bytes") {
+        return Some(AotSignatureProfile {
+            signature: BuiltinSignature {
+                params: RANDOM_BYTES_PARAMS,
+                variadic: Some(RANDOM_BYTES_VARIADIC),
+                required_param_count: None,
+            },
+            override_reason: Some(AotSignatureOverrideReason::RuntimeArityValidation),
+        });
+    }
+    None
 }
 
 const HASH_INIT_PARAMS: &[ParamSpec] = &[ParamSpec {
@@ -62,6 +75,19 @@ const HASH_INIT_PARAMS: &[ParamSpec] = &[ParamSpec {
     default: None,
     by_ref: false,
 }];
+
+/// The random prelude's arity-tolerating shim: `$length` defaults so a zero-argument call
+/// reaches the body (which raises `ArgumentCountError`), and the tail carries PHP's surplus
+/// positional arguments and unknown named parameters.
+const RANDOM_BYTES_PARAMS: &[ParamSpec] = &[ParamSpec {
+    name: "length",
+    ty: TypeSpec::Int,
+    default: Some(DefaultSpec::Int(0)),
+    by_ref: false,
+}];
+
+/// Name of the random prelude shim's variadic tail.
+const RANDOM_BYTES_VARIADIC: &str = "extra";
 
 #[cfg(test)]
 mod tests {
@@ -101,7 +127,33 @@ mod tests {
                     .map(|reason| (contract.name, reason))
             })
             .collect::<Vec<_>>();
-        assert_eq!(overridden.len(), 1);
-        assert_eq!(overridden[0].0, "hash_init");
+        assert_eq!(overridden.len(), 2);
+        assert!(overridden.contains(&(
+            "hash_init",
+            AotSignatureOverrideReason::PreludeSignatureSubset
+        )));
+        assert!(overridden.contains(&(
+            "random_bytes",
+            AotSignatureOverrideReason::RuntimeArityValidation
+        )));
+    }
+
+    /// Verifies the random prelude shim accepts PHP's full call shape.
+    #[test]
+    fn random_bytes_accepts_every_call_shape_for_runtime_validation() {
+        let contract = lookup("random_bytes").expect("random_bytes contract must exist");
+        let profile = aot_signature_profile(contract);
+        assert_eq!(profile.signature.params.len(), 1);
+        assert_eq!(profile.signature.params[0].name, "length");
+        assert_eq!(
+            profile.signature.params[0].default,
+            Some(DefaultSpec::Int(0))
+        );
+        assert_eq!(profile.signature.variadic, Some("extra"));
+        assert_eq!(profile.signature.required_param_count(), 0);
+        assert_eq!(
+            profile.override_reason,
+            Some(AotSignatureOverrideReason::RuntimeArityValidation)
+        );
     }
 }

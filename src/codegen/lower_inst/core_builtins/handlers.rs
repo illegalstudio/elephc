@@ -193,6 +193,11 @@ pub(super) fn lower_trigger_error(
     let level = expect_operand(inst, 1)?;
     let file = expect_operand(inst, 2)?;
     let line = expect_operand(inst, 3)?;
+    // A call compiled from injected prelude code is an internal function's notice: php-src
+    // reports it at the user's call site, which `prepare_call_site` published for the
+    // entering call. The prelude's own synthetic span would otherwise name the injected
+    // source instead.
+    let caller_site = inst.span.is_some_and(|span| !span.is_from_source());
     let default_label = ctx.next_label("trigger_error_default");
     let done_label = ctx.next_label("trigger_error_done");
     let descriptor_reg = abi::nested_call_reg(ctx.emitter);
@@ -213,7 +218,9 @@ pub(super) fn lower_trigger_error(
         abi::int_result_reg(ctx.emitter),
         &default_label,
     );
-    super::super::callables::emit_invoker_arg_mixed(ctx, &[level, message, file, line])?;
+    super::super::callables::emit_trigger_error_handler_args(
+        ctx, level, message, file, line, caller_site,
+    )?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     let arg0 = abi::int_arg_reg_name(ctx.emitter.target, 0);
     let arg1 = abi::int_arg_reg_name(ctx.emitter.target, 1);
@@ -225,9 +232,29 @@ pub(super) fn lower_trigger_error(
     emit_bool_result(ctx, true);
     ctx.emitter.instruction(&branch_instruction(ctx, &done_label));             // skip PHP's default diagnostic after handler suppression
     ctx.emitter.label(&default_label);
-    emit_default_user_error(ctx, message, level, file, line)?;
+    emit_default_user_error(ctx, message, level, TriggerSite::for_call(file, line, caller_site))?;
     ctx.emitter.label(&done_label);
     Ok(())
+}
+
+/// Where one `trigger_error` diagnostic takes its file and line from.
+#[derive(Clone, Copy)]
+enum TriggerSite {
+    /// The operands baked from the call site, for source-written `trigger_error` calls.
+    Operands { file: ValueId, line: ValueId },
+    /// The caller location published by `prepare_call_site`, for injected prelude calls.
+    Caller,
+}
+
+impl TriggerSite {
+    /// Selects the caller location for compiler-generated calls, operands otherwise.
+    fn for_call(file: ValueId, line: ValueId, caller_site: bool) -> Self {
+        if caller_site {
+            Self::Caller
+        } else {
+            Self::Operands { file, line }
+        }
+    }
 }
 
 /// Rejects every error level outside PHP's four user-generated categories.
@@ -429,8 +456,7 @@ fn emit_default_user_error(
     ctx: &mut FunctionContext<'_>,
     message: ValueId,
     level: ValueId,
-    file: ValueId,
-    line: ValueId,
+    site: TriggerSite,
 ) -> Result<()> {
     let skip_output = ctx.next_label("trigger_error_skip_output");
     load_integer_operand(ctx, level)?;
@@ -446,13 +472,30 @@ fn emit_default_user_error(
     }
     abi::emit_call_label(ctx.emitter, "__rt_diag_write");
     emit_user_error_fragment(ctx, b" in ");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.load_string_value_to_regs(file, "x1", "x2")?,
-        Arch::X86_64 => ctx.load_string_value_to_regs(file, "rdi", "rsi")?,
+    match site {
+        TriggerSite::Operands { file, .. } => match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.load_string_value_to_regs(file, "x1", "x2")?,
+            Arch::X86_64 => ctx.load_string_value_to_regs(file, "rdi", "rsi")?,
+        },
+        TriggerSite::Caller => {
+            let (pointer_reg, length_reg) = abi::string_result_regs(ctx.emitter);
+            abi::emit_load_symbol_to_reg(ctx.emitter, pointer_reg, "_php_diagnostic_file", 0);
+            abi::emit_load_symbol_to_reg(ctx.emitter, length_reg, "_php_diagnostic_file_len", 0);
+        }
     }
     abi::emit_call_label(ctx.emitter, "__rt_diag_write");
     emit_user_error_fragment(ctx, b" on line ");
-    load_integer_operand(ctx, line)?;
+    match site {
+        TriggerSite::Operands { line, .. } => load_integer_operand(ctx, line)?,
+        TriggerSite::Caller => {
+            abi::emit_load_symbol_to_reg(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                "_php_diagnostic_line",
+                0,
+            );
+        }
+    }
     abi::emit_call_label(ctx.emitter, "__rt_itoa");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {}

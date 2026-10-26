@@ -358,6 +358,7 @@ pub(crate) const CORE_LOADED_EXTENSIONS: &[&str] = &[
     "date",
     "ctype",
     "mbstring",
+    "random",
     "Reflection",
     "Zend OPcache",
 ];

@@ -126,6 +126,19 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
+        lib_name: "elephc_random",
+        env_var: "ELEPHC_RANDOM_LIB_DIR",
+        crate_name: "elephc-random",
+        flag_name: "random",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        // The random bridge implements PHP's always-compiled `random` extension.
+        php_extensions: &["random"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
         lib_name: "elephc_mbstring",
         env_var: "ELEPHC_MBSTRING_LIB_DIR",
         crate_name: "elephc-mbstring",
@@ -1932,6 +1945,7 @@ mod tests {
         assert!(php_extensions_for_lib("elephc_pdo").is_empty());
         assert_eq!(php_extensions_for_lib("elephc_crypto"), ["hash"]);
         assert_eq!(php_extensions_for_lib("elephc_bcmath"), ["bcmath"]);
+        assert_eq!(php_extensions_for_lib("elephc_random"), ["random"]);
         assert_eq!(php_extensions_for_lib("elephc_phar"), ["Phar"]);
         assert_eq!(php_extensions_for_lib("elephc_image"), ["gd"]);
         assert_eq!(php_extensions_for_lib("elephc_web"), ["session"]);

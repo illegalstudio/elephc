@@ -2,7 +2,7 @@
 title: "__elephc_simplexml_warning() - internals"
 description: "Compiler internals for __elephc_simplexml_warning(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1195
+  order: 1202
 ---
 
 ## `__elephc_simplexml_warning()` - internals

@@ -2,7 +2,7 @@
 title: "opcache_reset()"
 description: "Clears the whole opcode cache."
 sidebar:
-  order: 650
+  order: 656
 ---
 
 ## opcache_reset()

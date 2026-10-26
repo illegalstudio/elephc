@@ -2,7 +2,7 @@
 title: "xmlwriter_end_comment()"
 description: "Ends the current comment."
 sidebar:
-  order: 1045
+  order: 1051
 ---
 
 ## xmlwriter_end_comment()

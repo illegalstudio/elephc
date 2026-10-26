@@ -55,6 +55,9 @@ pub enum Area {
     /// `ext/xml` and `ext/xmlwriter` surfaces declared by the xml prelude (plus the one
     /// registry builtin `xml_parse_into_struct`).
     Xml,
+    /// The `ext/random` surface declared by the random prelude: its procedural functions,
+    /// `Random\*` classes, `MT_RAND_*` constants, and internal helpers.
+    Random,
 }
 
 /// Describes how a PHP-visible catalog entry reaches executable behavior.

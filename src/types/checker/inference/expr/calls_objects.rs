@@ -134,6 +134,12 @@ impl Checker {
             }
             ExprKind::ConstRef(name) => {
                 let constant_name = name.as_str().trim_start_matches('\\');
+                if constant_name == "MT_RAND_PHP" {
+                    self.warnings.push(crate::errors::CompileWarning::deprecation(
+                        expr.span,
+                        "Constant MT_RAND_PHP is deprecated since 8.3, as it uses a biased non-standard variant of Mt19937",
+                    ));
+                }
                 if pcntl_int_constants(self.target)
                     .iter()
                     .any(|(constant, _)| *constant == constant_name)

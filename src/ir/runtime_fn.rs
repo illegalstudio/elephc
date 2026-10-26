@@ -1699,6 +1699,10 @@ impl RuntimeFnId {
             IoKind, MonitoringPolicy, TraceContextPolicy, WaitPolicy,
         };
         match self {
+            RuntimeFnId::MtRand
+            | RuntimeFnId::Rand
+            | RuntimeFnId::ArrayRand
+            | RuntimeFnId::Shuffle => MonitoringPolicy::GenericTiming,
             RuntimeFnId::MbSendMail => MonitoringPolicy::Io {
                 kind: IoKind::Network,
                 wait: WaitPolicy::Measured,
@@ -1906,6 +1910,12 @@ impl RuntimeFnId {
             | RuntimeFnId::BcScale
             | RuntimeFnId::BcSqrt | RuntimeFnId::BcNumberSqrt
             | RuntimeFnId::BcSub | RuntimeFnId::BcNumberSub => &[BuiltinRequirement::Bridge("elephc_bcmath")],
+            // `mt_rand`/`rand` now draw from the global Mt19937 state in the random bridge,
+            // and `array_rand`/`shuffle` reach the same state through a published slot.
+            RuntimeFnId::MtRand
+            | RuntimeFnId::Rand
+            | RuntimeFnId::ArrayRand
+            | RuntimeFnId::Shuffle => &[BuiltinRequirement::Bridge("elephc_random")],
             RuntimeFnId::ElephcPharBzip2Archive => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharDecompressArchive => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharGetFileMetadata => &[BuiltinRequirement::Bridge("elephc_phar")],

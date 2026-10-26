@@ -2,7 +2,7 @@
 title: "round() - internals"
 description: "Compiler internals for round(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 598
+  order: 603
 ---
 
 ## `round()` - internals

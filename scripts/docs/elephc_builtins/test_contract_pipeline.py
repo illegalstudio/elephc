@@ -52,10 +52,9 @@ class ContractPipelineTests(unittest.TestCase):
                     # Four hash_*, the thirty-four PHP-visible curl_* contracts the
                     # canonical `--features curl` docs configuration publishes (see
                     # extract.run_gen_builtins), the fifty-four xml_* / xmlwriter_*
-                    # functions of the xml prelude, three SimpleXML functions, two
-                    # tokenizer functions, and the 288 functions the other
-                    # injected preludes declare.
-                    "prelude": 385,
+                    # functions of the XML prelude, the SimpleXML, tokenizer and
+                    # random surfaces, and the remaining injected preludes.
+                    "prelude": 392,
                     # Calls rewritten from their enclosing lexical function frame.
                     "compiler-transform": 3,
                     # The date/calendar procedural families rewritten by the name resolver.
@@ -139,6 +138,19 @@ class ContractPipelineTests(unittest.TestCase):
         self.assertIn("compiler-injected hash prelude", rendered)
         self.assertIn('hash_init(string $algo, int $flags = 0, string $key = "")', rendered)
         self.assertNotIn("Compiled (AOT)**: not available", rendered)
+
+    def test_runtime_arity_validation_documents_the_php_signature(self) -> None:
+        """Document PHP's signature, not the prelude's arity-tolerating shim."""
+        random_bytes = self.render_by_name["random_bytes"]
+        self.assertEqual(
+            random_bytes["aot"]["signature_override_reason"], "runtime-arity-validation"
+        )
+        self.assertEqual([param["name"] for param in random_bytes["sig"]["params"]], ["length"])
+        self.assertIsNone(random_bytes["sig"]["variadic"])
+        rendered = render._availability_section(random_bytes)
+        self.assertIn("accepts any argument count", rendered)
+        self.assertIn("ArgumentCountError", rendered)
+        self.assertNotIn("broader canonical signature", rendered)
 
     def test_host_only_process_availability_keeps_eval_independent(self) -> None:
         """Label iOS AOT refusal without implying the Magician path is target-gated."""

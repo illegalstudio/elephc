@@ -2,7 +2,7 @@
 title: "is_scalar() - internals"
 description: "Compiler internals for is_scalar(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 984
+  order: 990
 ---
 
 ## `is_scalar()` - internals

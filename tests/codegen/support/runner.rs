@@ -104,6 +104,11 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         php_extensions: &["bcmath"],
     },
     TestBridgeStaticlib {
+        lib_name: "elephc_random",
+        package: "elephc-random",
+        php_extensions: &["random"],
+    },
+    TestBridgeStaticlib {
         lib_name: "elephc_mbstring",
         package: "elephc-mbstring",
         php_extensions: &["mbstring"],

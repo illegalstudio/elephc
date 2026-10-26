@@ -20,10 +20,10 @@ builtin! {
     ),
 }
 
-/// Validates that the argument is an array and returns `Int`.
+/// Validates the array argument and returns PHP's `int|string|array` result union.
 ///
-/// The registry's `check_arity` handles arity enforcement (exactly 1 argument).
-/// The runtime always returns a single random integer index from the array.
+/// Direct AOT calls are rewritten onto `__elephc_array_rand`, which implements the
+/// multi-key form; this builtin remains the first-class-callable/eval entry point.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
@@ -32,5 +32,12 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             "array_rand() argument must be array",
         ));
     }
-    Ok(PhpType::Int)
+    if let Some(num) = cx.args.get(1) {
+        cx.checker.infer_type(num, cx.env)?;
+    }
+    Ok(PhpType::Union(vec![
+        PhpType::Int,
+        PhpType::Str,
+        PhpType::Array(Box::new(PhpType::Mixed)),
+    ]))
 }

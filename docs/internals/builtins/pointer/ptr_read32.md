@@ -2,7 +2,7 @@
 title: "ptr_read32() - internals"
 description: "Compiler internals for ptr_read32(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 742
+  order: 748
 ---
 
 ## `ptr_read32()` - internals

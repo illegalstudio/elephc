@@ -38,7 +38,7 @@ pub fn emit_array_rand(emitter: &mut Emitter) {
 
     // -- get array length and generate random index --
     emitter.instruction("ldr x0, [x0]");                                        // x0 = array length
-    emitter.instruction("bl __rt_random_uniform");                              // x0 = random value in [0, length)
+    emitter.instruction("bl __rt_mt_uniform");                                  // x0 = random value in [0, length)
 
     // -- tear down stack frame and return --
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
@@ -55,6 +55,8 @@ fn emit_array_rand_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_array_rand");
 
     emitter.instruction("mov rdi, QWORD PTR [rdi]");                            // load the source indexed-array logical length into the x86_64 random-uniform bound register
-    emitter.instruction("call __rt_random_uniform");                            // sample a random scalar index in the half-open range [0, length)
+    emitter.instruction("sub rsp, 8");                                          // align the stack for the C-ABI bridge trampoline
+    emitter.instruction("call __rt_mt_uniform");                                // sample a random scalar index in the half-open range [0, length)
+    emitter.instruction("add rsp, 8");                                          // release the alignment slot
     emitter.instruction("ret");                                                 // return the sampled scalar index in rax
 }

@@ -2,7 +2,7 @@
 title: "pcntl_setcpuaffinity() - internals"
 description: "Compiler internals for pcntl_setcpuaffinity(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 662
+  order: 668
 ---
 
 ## `pcntl_setcpuaffinity()` - internals

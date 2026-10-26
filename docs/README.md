@@ -50,6 +50,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [Arrays](php/arrays.md) — indexed, associative, copy-on-write, 50+ built-in array functions
 - [Math](php/math.md) — abs, floor, ceil, round, trigonometry, logarithms, random, constants
 - [BCMath](php/bcmath.md) — exact arbitrary-precision decimal arithmetic, scale, rounding, and errors
+- [Random](php/random.md) — PHP's random engines, `Random\Randomizer`, interval boundaries, serialization, and procedural API
 - [iconv](php/iconv.md) — character-set conversion, `//TRANSLIT`/`//IGNORE`, character-oriented string functions, RFC 2047 MIME headers, and the encoding trio
 - [PCNTL](php/pcntl.md) — forking, child waits, signals, process replacement, process groups, sessions, daemonization, and target-specific controls
 - [Tokenizer](php/tokenizer.md): PHP source inspection, lossless tokens, `PhpToken` and `TOKEN_PARSE`.

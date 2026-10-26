@@ -2,7 +2,7 @@
 title: "memory_reset_peak_usage()"
 description: "Resets the live native heap peak to current usage. The reserved arena capacity and cumulative allocation/free counters are unchanged."
 sidebar:
-  order: 642
+  order: 648
 ---
 
 ## memory_reset_peak_usage()

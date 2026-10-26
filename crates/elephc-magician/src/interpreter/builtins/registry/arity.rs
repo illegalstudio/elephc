@@ -96,7 +96,6 @@ impl EvalBuiltinArity {
 pub(super) const PHP_ARITY_OVERRIDES: &[(&str, EvalBuiltinArity)] = &[
     ("array_column", EvalBuiltinArity::ranged(2, Some(3))),
     ("array_keys", EvalBuiltinArity::ranged(1, Some(3))),
-    ("array_rand", EvalBuiltinArity::ranged(1, Some(2))),
     ("array_unique", EvalBuiltinArity::ranged(1, Some(2))),
     ("array_walk", EvalBuiltinArity::ranged(2, Some(3))),
     ("arsort", EvalBuiltinArity::ranged(1, Some(2))),

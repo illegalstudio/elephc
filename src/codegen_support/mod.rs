@@ -27,6 +27,7 @@ pub(crate) mod iconv_bridge;
 pub(crate) mod interface_wrappers;
 pub(crate) mod mbstring_query;
 pub(crate) mod phar_stream;
+pub(crate) mod random;
 /// Platform module.
 pub mod platform;
 mod prescan;

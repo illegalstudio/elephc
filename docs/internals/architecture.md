@@ -561,6 +561,7 @@ crates/
 ├── elephc-pdo/                Multi-driver database bridge staticlib behind the PDO prelude
 ├── elephc-phar/               Pure-Rust PHAR/tar/zip archive bridge for `phar://` runtime paths
 ├── elephc-probe/              Sampled profiling and authenticated service endpoint
+├── elephc-random/             Pure-Rust `ext/random` engines, CSPRNG, and global Mt19937 state bridge
 ├── elephc-tls/                TLS bridge for the `https://` stream wrapper
 ├── elephc-tz/                 IANA timezone-introspection bridge staticlib with baked tz tables
 ├── elephc-web/                Prefork HTTP bridge with compile-time worker/pool/request isolation

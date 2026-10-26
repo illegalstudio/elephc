@@ -2,7 +2,7 @@
 title: "var_dump() - internals"
 description: "Compiler internals for var_dump(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 699
+  order: 705
 ---
 
 ## `var_dump()` - internals

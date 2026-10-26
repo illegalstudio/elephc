@@ -2,7 +2,7 @@
 title: "curl_multi_getcontent() - internals"
 description: "Compiler internals for curl_multi_getcontent(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 714
+  order: 720
 ---
 
 ## `curl_multi_getcontent()` - internals

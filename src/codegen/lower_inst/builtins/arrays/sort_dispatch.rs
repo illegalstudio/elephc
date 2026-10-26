@@ -281,6 +281,7 @@ pub(super) fn lower_indexed_array_shuffle(ctx: &mut FunctionContext<'_>, inst: &
             ctx.load_value_to_reg(array, "rdi")?;
         }
     }
+    crate::codegen::random::publish_elephc_random_function_pointers(ctx.emitter);
     abi::emit_call_label(ctx.emitter, "__rt_shuffle");
     abi::emit_load_int_immediate(
         ctx.emitter,

@@ -302,6 +302,7 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
         (with_crates.contains("curl"), "curl"),
         (with_crates.contains("xml"), "xml"),
         (with_crates.contains("bcmath"), "bcmath"),
+        (with_crates.contains("random"), "random"),
     ]
     .into_iter()
     .filter_map(|(forced, group)| forced.then_some(group.to_string()))
@@ -511,6 +512,7 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
     );
     let ast = crate::core_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::bcmath_prelude::inject_if_used(ast, with_crates.contains("bcmath"), &mut prelude_inventory);
+    let ast = crate::random_prelude::inject_if_used(ast, with_crates.contains("random"), &mut prelude_inventory);
     timings.record_since("hash-prelude", phase_started);
 
     // Inject the testing runtime (`Elephc\Testing\TestCase`, `Runner`, the PHPUnit alias)

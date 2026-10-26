@@ -2,7 +2,7 @@
 title: "token_get_all() - internals"
 description: "Compiler internals for token_get_all(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 949
+  order: 955
 ---
 
 ## `token_get_all()` - internals

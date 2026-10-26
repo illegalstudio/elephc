@@ -2,7 +2,7 @@
 title: "xml_set_notation_decl_handler()"
 description: "Sets the notation declaration handler."
 sidebar:
-  order: 1038
+  order: 1044
 ---
 
 ## xml_set_notation_decl_handler()

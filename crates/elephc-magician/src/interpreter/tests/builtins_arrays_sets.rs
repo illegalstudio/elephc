@@ -241,7 +241,9 @@ echo ":" . (($named >= 0 && $named < 2) ? "named" : "bad");
 $call = call_user_func("array_rand", [7, 8]);
 echo ":" . (($call >= 0 && $call < 2) ? "call" : "bad");
 $spread = call_user_func_array("array_rand", [["x" => 1, "y" => 2]]);
-echo ":" . (array_key_exists($spread, ["x" => 1, "y" => 2]) ? "spread" : "bad") . ":";
+echo ":" . (array_key_exists($spread, ["x" => 1, "y" => 2]) ? "spread" : "bad");
+$multi = array_rand($nums, 2);
+echo ":" . (is_array($multi) && count($multi) === 2 ? "multi" : "bad") . ":";
 return function_exists("array_rand");"#,
     )
     .expect("parse eval fragment");
@@ -250,7 +252,7 @@ return function_exists("array_rand");"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "idx:assoc:named:call:spread:");
+    assert_eq!(values.output, "idx:assoc:named:call:spread:multi:");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 /// Verifies eval random builtins return values inside PHP inclusive ranges.

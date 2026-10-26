@@ -50,8 +50,11 @@ pub(crate) fn lower_rand(
         InvertedRangePolicy::Swap
     };
     match inst.operands.len() {
-        0 => abi::emit_call_label(ctx.emitter, "__rt_random_u32"),
-        2 => lower_random_range(ctx, inst, name, policy)?,
+        0 => {
+            let symbol = ctx.emitter.target.extern_symbol("elephc_random_mt_rand31");
+            abi::emit_call_label(ctx.emitter, &symbol);
+        }
+        2 => lower_mt_rand_range(ctx, inst, name, policy)?,
         count => {
             return Err(CodegenIrError::invalid_module(format!(
                 "{} expected 0 or 2 args, got {}",
@@ -60,6 +63,43 @@ pub(crate) fn lower_rand(
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Lowers the two-argument `rand`/`mt_rand` form onto the bridge's global Mt19937 state.
+///
+/// The C entry takes `(min, max)` in the first two integer argument registers and applies
+/// php-src's mode-dependent range rules, so the inversion policy is resolved here before the
+/// call just as the old runtime path did.
+fn lower_mt_rand_range(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    policy: InvertedRangePolicy,
+) -> Result<()> {
+    let min = expect_operand(inst, 0)?;
+    let max = expect_operand(inst, 1)?;
+    load_numeric_as_int(ctx, min, name)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    load_numeric_as_int(ctx, max, name)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_pop_reg(ctx.emitter, "x9");
+            emit_inverted_range_policy(ctx, policy, "x9", "x0");
+            ctx.emitter.instruction("mov x1, x0");                              // pass the maximum in the second C argument
+            ctx.emitter.instruction("mov x0, x9");                              // pass the minimum in the first C argument
+            let symbol = ctx.emitter.target.extern_symbol("elephc_random_mt_rand_range");
+            abi::emit_call_label(ctx.emitter, &symbol);
+        }
+        Arch::X86_64 => {
+            abi::emit_pop_reg(ctx.emitter, "r9");
+            emit_inverted_range_policy(ctx, policy, "r9", "rax");
+            ctx.emitter.instruction("mov rsi, rax");                            // pass the maximum in the second C argument
+            ctx.emitter.instruction("mov rdi, r9");                             // pass the minimum in the first C argument
+            let symbol = ctx.emitter.target.extern_symbol("elephc_random_mt_rand_range");
+            abi::emit_call_label(ctx.emitter, &symbol);
+        }
+    }
+    Ok(())
 }
 
 /// Lowers `random_int()` over an inclusive integer range.
@@ -123,8 +163,12 @@ fn emit_x86_64_random_range(
     // See the AArch64 half: the width stays INCLUSIVE so it cannot wrap, and the 64-bit sampler
     // receives all of it rather than the low half.
     ctx.emitter.instruction("sub rax, r9");                                     // compute the inclusive range width as max - min
+    ctx.emitter.instruction("sub rsp, 16");                                     // reserve an aligned spill slot for the lower bound
+    ctx.emitter.instruction("mov QWORD PTR [rsp], r9");                         // preserve the lower bound across the runtime call
     ctx.emitter.instruction("mov rdi, rax");                                    // pass the inclusive upper bound to the random helper
     abi::emit_call_label(ctx.emitter, "__rt_random_uniform64");
+    ctx.emitter.instruction("mov r9, QWORD PTR [rsp]");                         // reload the lower bound after the runtime call
+    ctx.emitter.instruction("add rsp, 16");                                     // release the spill slot
     ctx.emitter.instruction("add rax, r9");                                     // shift the sampled offset back into the caller-visible range
     Ok(())
 }

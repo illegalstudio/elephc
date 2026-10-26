@@ -2,7 +2,7 @@
 title: "sinh() - internals"
 description: "Compiler internals for sinh(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 600
+  order: 605
 ---
 
 ## `sinh()` - internals

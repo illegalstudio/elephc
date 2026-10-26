@@ -354,7 +354,7 @@ elephc --no-ir-opt hot.php
 # Link extra native libraries or frameworks for FFI
 elephc app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
 
-# Force-enable an optional bridge (pdo, mysqli, tls, crypto, bcmath, iconv, mbstring, phar, tz, image, pcntl, xml, eval, regex, curl, web)
+# Force-enable an optional bridge (pdo, mysqli, tls, crypto, bcmath, random, mbstring, iconv, phar, tz, image, pcntl, xml, tokenizer, eval, regex, curl, web)
 elephc app.php --with-pdo --with-crypto
 # Force-inject the mysqli surface (links the shared elephc_pdo bridge, without the PDO classes)
 elephc app.php --with-mysqli
@@ -567,6 +567,7 @@ The full list of supported constructs, operators, and control structures is in t
 - **XML**: the complete function, class and constant inventory of `ext/xml` (the `XMLParser` SAX parser, every handler, incremental `xml_parse()`, `xml_parse_into_struct()`, libxml2's error codes) and `ext/xmlwriter` (`XMLWriter` with memory and URI output), plus SimpleXML (`SimpleXMLElement`, `SimpleXMLIterator`, parsing, mutation, namespaces and XPath), on a statically pinned libxml2 2.15.3 from the native catalog (`elephc native add libxml2`, auto-linked or `--with-xml`), natively and inside `eval()`; see the [XML guide](docs/php/xml.md) for documented behavioral differences and [runtime limits](docs/php/xml.md#runtime-limits)
 - **Date/time**: `DateTime`, `DateTimeImmutable`, `DateTimeInterface`, `DateTimeZone`, `DateInterval`, `DatePeriod`, the PHP 8.3 date exception hierarchy, DST-aware formatting via a bundled IANA timezone database, and `ext/calendar` Julian-Day functions
 - **Crypto**: `md5()`/`sha1()`/`hash()`/`hash_hmac()` hashing and OpenSSL-compatible symmetric ciphers (`openssl_encrypt()`/`openssl_decrypt()`, AES CBC/CTR/ECB/GCM) through a pure-Rust bridge with no system OpenSSL dependency
+- **Random**: PHP's `ext/random` — `mt_srand`/`srand`/`rand`/`mt_rand`/`mt_getrandmax`/`getrandmax`, `random_bytes`, `random_int`, `lcg_value`, `array_rand()`'s multi-key form, the `Random\Engine\Mt19937`, `PcgOneseq128XslRr64`, `Xoshiro256StarStar` and `Secure` engines, `Random\Randomizer` (`nextInt`, `nextFloat`, `getFloat`, `getInt`, `getBytes`, `getBytesFromString`, `shuffleArray`, `shuffleBytes`, `pickArrayKeys`), `Random\IntervalBoundary` and the `Random\*` exception hierarchy, matching php-src 8.5's streams, serialization and deprecations; see the [Random guide](docs/php/random.md)
 - **Native extensions**: complete PHP 8.5.10 `mbstring` function and constant inventory, complete `iconv` conversion and MIME helpers, plus the supported `curl` easy, multi, share, callback, stream, and multipart API through pay-for-use bridges
 - **OPcache**: the API reports the compiled script manifest and a live cache for dynamic `include`/`require` through `eval()`, with optional persistent file caching, revalidation, admission limits, blacklists, and preloading; see the [OPcache guide](docs/php/opcache.md)
 - **Environment**: `getenv()` answers a single variable or the whole environment, `putenv()` sets and removes, and `$_ENV` / `$_SERVER` carry the process environment plus `$_SERVER['argv']` in ordinary CLI programs
@@ -801,6 +802,7 @@ crates/
 ├── elephc-pdo/          # Multi-driver PDO bridge
 ├── elephc-phar/         # PHAR/tar/zip bridge
 ├── elephc-probe/        # Sampled profiling and authenticated service endpoint
+├── elephc-random/       # PHP ext/random engines, CSPRNG, and global Mt19937 state bridge
 ├── elephc-tls/          # TLS stream bridge
 ├── elephc-tz/           # IANA timezone bridge
 ├── elephc-xml/          # XML parser, writer, and SimpleXML bridge over static libxml2

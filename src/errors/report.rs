@@ -52,8 +52,12 @@ pub fn print_error(error: &CompileError) {
 /// - With line and column only: `warning[line:col]: message`
 /// - With no location metadata: `warning: message`
 pub fn print_warning(warning: &CompileWarning) {
+    let kind = match warning.kind {
+        crate::errors::WarningKind::Warning => "warning",
+        crate::errors::WarningKind::Deprecation => "deprecated",
+    };
     let file = diagnostic_file(&None, warning.span);
-    let plain = format_diagnostic("warning", &file, warning.span, &warning.message);
+    let plain = format_diagnostic(kind, &file, warning.span, &warning.message);
     if crate::progress::is_decorated() {
         eprintln!(
             "{} {}",

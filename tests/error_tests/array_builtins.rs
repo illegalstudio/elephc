@@ -568,9 +568,11 @@ fn test_error_array_intersect_key_wrong_args() {
 /// Verifies that error array rand wrong args.
 #[test]
 fn test_error_array_rand_wrong_args() {
+    // The multi-key form widened the registry signature to `array_rand($array, $num = 1)`,
+    // so the arity diagnostic names the range the builtin accepts.
     expect_error(
         "<?php array_rand();",
-        "array_rand() takes exactly 1 argument",
+        "array_rand() takes 1 or 2 arguments",
     );
 }
 

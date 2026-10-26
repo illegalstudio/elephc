@@ -63,7 +63,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ir::{
-    collect_dispatch_groups, BasicBlock, BlockId, DataId, DataPool, Effects, Function,
+    collect_dispatch_groups, BasicBlock, BlockId, CoreBuiltinOp, DataId, DataPool, Effects, Function,
     FunctionVariantLabel, Immediate, InstId, Instruction, IrType, LocalKind, LocalSlotId, Module,
     Op, Ownership, Terminator, Value, ValueDef, ValueId,
 };
@@ -197,6 +197,9 @@ fn callee_is_inline_safe(callee: &Function, receiver: bool) -> bool {
     if !is_destructor_free(&callee.return_php_type) {
         return false;
     }
+    if callee_reports_at_an_injected_span(callee) {
+        return false;
+    }
     for (index, param) in callee.params.iter().enumerate() {
         if param.by_ref || param.variadic {
             return false;
@@ -233,6 +236,24 @@ fn callee_is_inline_safe(callee: &Function, receiver: bool) -> bool {
         return false;
     }
     true
+}
+
+/// Returns whether `callee` raises a `trigger_error` from compiler-generated (prelude) code.
+///
+/// Such a notice is an internal function's diagnostic: codegen reports it at the caller's
+/// published location, and only a real `Call` publishes one. Splicing the body into a host
+/// frame would keep the synthetic span with no call site left to report, so the call has to
+/// stay a call.
+fn callee_reports_at_an_injected_span(callee: &Function) -> bool {
+    callee.instructions.iter().any(|inst| {
+        inst.op == Op::CoreBuiltin
+            && matches!(
+                inst.immediate,
+                Some(Immediate::I64(selector))
+                    if CoreBuiltinOp::from_i64(selector) == Some(CoreBuiltinOp::TriggerError)
+            )
+            && inst.span.is_some_and(|span| !span.is_from_source())
+    })
 }
 
 /// Returns `(saw_value, saw_void)` over the callee's `Return` terminators.

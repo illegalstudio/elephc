@@ -109,6 +109,7 @@ mod runtime_gc;
 mod runtime_reachability;
 mod runtime_introspection;
 mod math;
+mod random;
 mod misc;
 mod pointers;
 mod pointer_strings;

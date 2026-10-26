@@ -2,7 +2,7 @@
 title: "__elephc_curl_mime_abort() - internals"
 description: "Compiler internals for __elephc_curl_mime_abort(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1122
+  order: 1129
 ---
 
 ## `__elephc_curl_mime_abort()` - internals

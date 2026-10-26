@@ -31,6 +31,7 @@ pub(crate) fn lower_array_rand(ctx: &mut FunctionContext<'_>, inst: &Instruction
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the indexed-array pointer as the random-key helper argument
     }
+    crate::codegen::random::publish_elephc_random_function_pointers(ctx.emitter);
     abi::emit_call_label(ctx.emitter, "__rt_array_rand");
     store_if_result(ctx, inst)
 }

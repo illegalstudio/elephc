@@ -8,8 +8,11 @@
 //! Key details:
 //! - PHP builtin fallback applies to unqualified function calls without breaking explicit namespace references.
 
+use std::cell::Cell;
+
 use crate::names::php_symbol_key;
 use crate::parser::ast::{ArrayEntry, CallableTarget, Expr, ExprKind, InstanceOfTarget, StaticReceiver};
+use crate::span::Span;
 
 use super::names::{
     resolve_constant_name, resolve_function_name, resolve_function_reference, resolve_pointer_target,
@@ -19,6 +22,65 @@ use super::statements::{resolve_params, resolve_stmt_list};
 use super::{
     parse_callback_name, resolved_name, rewrite_callback_literal_args, Imports, Symbols,
 };
+
+thread_local! {
+    /// Whether the expression currently being resolved must stay a constant expression.
+    ///
+    /// `MT_RAND_PHP` is rewritten to an inline deprecation on an ordinary read, but a
+    /// constant initializer, default parameter, attribute argument, or switch label cannot
+    /// contain a function call. Those sites resolve under this flag.
+    static CONSTANT_EXPRESSION: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Resolves `f` while marking its expressions as constant-expression children.
+pub(super) fn with_constant_expression<T>(f: impl FnOnce() -> T) -> T {
+    struct Reset(bool);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            CONSTANT_EXPRESSION.with(|flag| flag.set(self.0));
+        }
+    }
+    let previous = CONSTANT_EXPRESSION.with(|flag| flag.replace(true));
+    let _reset = Reset(previous);
+    f()
+}
+
+/// Reports whether the current resolution must remain a constant expression.
+fn in_constant_expression() -> bool {
+    CONSTANT_EXPRESSION.with(|flag| flag.get())
+}
+
+/// Reports whether one resolved constant name is PHP's deprecated `MT_RAND_PHP`.
+fn is_mt_rand_php(name: &crate::names::Name) -> bool {
+    name.as_canonical().trim_start_matches('\\') == "MT_RAND_PHP"
+}
+
+/// Builds the expression PHP evaluates when the program reads `MT_RAND_PHP`.
+///
+/// php-src emits `E_DEPRECATED` from the constant fetch itself, so the diagnostic has to
+/// carry the read's own file and line. A prelude helper would report the helper's synthetic
+/// span instead, hence the inline `trigger_error(...) ? 1 : 1`: the call runs at this
+/// expression's span, and both branches keep the constant's value so the read still yields
+/// `1` whichever way a user error handler answers.
+fn mt_rand_php_read(span: Span) -> ExprKind {
+    let at = |kind| Expr { kind, span };
+    ExprKind::Ternary {
+        condition: Box::new(at(ExprKind::FunctionCall {
+            name: resolved_name("trigger_error".to_string()),
+            args: vec![
+                at(ExprKind::StringLiteral(
+                    "Constant MT_RAND_PHP is deprecated since 8.3, as it uses a biased non-standard variant of Mt19937"
+                        .to_string(),
+                )),
+                at(ExprKind::ConstRef(resolved_name(
+                    "E_USER_DEPRECATED".to_string(),
+                ))),
+            ],
+        })),
+        then_expr: Box::new(at(ExprKind::IntLiteral(1))),
+        else_expr: Box::new(at(ExprKind::IntLiteral(1))),
+    }
+}
 
 /// Recursively resolves names in an expression, returning a new expression with
 /// all name references rewritten according to namespace and import rules.
@@ -116,6 +178,10 @@ pub(super) fn resolve_expr(
                 }
             } else if let Some(rewritten) =
                 rewrite_date_procedural_alias(&function_name, &resolved_args)
+            {
+                rewritten
+            } else if let Some(rewritten) =
+                rewrite_random_procedural_alias(&function_name, &resolved_args)
             {
                 rewritten
             } else {
@@ -253,12 +319,19 @@ pub(super) fn resolve_expr(
                 .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))
                 .collect(),
         },
-        ExprKind::ConstRef(name) => ExprKind::ConstRef(resolved_name(resolve_constant_name(
-            name,
-            current_namespace,
-            imports,
-            symbols,
-        ))),
+        ExprKind::ConstRef(name) => {
+            let resolved = resolved_name(resolve_constant_name(
+                name,
+                current_namespace,
+                imports,
+                symbols,
+            ));
+            if !in_constant_expression() && is_mt_rand_php(&resolved) {
+                mt_rand_php_read(expr.span)
+            } else {
+                ExprKind::ConstRef(resolved)
+            }
+        }
         // `new Box<int>(...)`. Both halves need resolving and the CATCH-ALL below would resolve
         // neither: the class type has to canonicalize to the same name the declaration does or
         // no template matches it, and the constructor arguments are ordinary expressions that
@@ -465,9 +538,17 @@ pub(super) fn resolve_expr(
             }
         }
         ExprKind::FirstClassCallable(target) => ExprKind::FirstClassCallable(match target {
-            CallableTarget::Function(name) => CallableTarget::Function(
-                resolve_function_reference(name, current_namespace, imports, symbols),
-            ),
+            CallableTarget::Function(name) => {
+                let resolved =
+                    resolve_function_reference(name, current_namespace, imports, symbols);
+                if is_array_rand_function(&resolved) && !symbols.declares_function(&resolved) {
+                    CallableTarget::Function(resolved_name(
+                        "__elephc_array_rand".to_string(),
+                    ))
+                } else {
+                    CallableTarget::Function(resolved)
+                }
+            }
             CallableTarget::StaticMethod { receiver, method } => CallableTarget::StaticMethod {
                 receiver: match receiver {
                     StaticReceiver::Named(name) => StaticReceiver::Named(resolved_name(
@@ -635,6 +716,39 @@ fn rewrite_var_export_return_flag(
         }),
         Some(_) => None,
     }
+}
+
+
+/// Rewrites `array_rand()` onto the random prelude's multi-key implementation.
+///
+/// The builtin `array_rand` remains the eval/first-class-callable entry point and keeps its
+/// one-argument registry signature, but AOT direct calls need PHP's two-argument form and
+/// associative-key support. The prelude helper implements both on the same seeded global
+/// Mt19937 state, so `mt_srand()`/`array_rand()` stay stream-compatible with
+/// `Randomizer::pickArrayKeys()`.
+fn rewrite_random_procedural_alias(name: &str, args: &[Expr]) -> Option<ExprKind> {
+    if !is_array_rand_function(name) {
+        return None;
+    }
+    // Only PHP's 1-2 positional forms reach the helper. Any other statically known count
+    // keeps the registry builtin's own user-facing arity diagnostic (`array_rand() takes 1
+    // or 2 arguments`) instead of naming this internal shim. Spreads and named arguments
+    // have no static count, so they always take the helper.
+    let statically_counted = !args
+        .iter()
+        .any(|arg| matches!(arg.kind, ExprKind::Spread(_) | ExprKind::NamedArg { .. }));
+    if statically_counted && !(1..=2).contains(&args.len()) {
+        return None;
+    }
+    Some(ExprKind::FunctionCall {
+        name: resolved_name("__elephc_array_rand".to_string()),
+        args: args.to_vec(),
+    })
+}
+
+/// Returns whether a resolved function reference is PHP's global `array_rand`.
+fn is_array_rand_function(name: &str) -> bool {
+    name.trim_start_matches('\\').eq_ignore_ascii_case("array_rand")
 }
 
 /// Rewrites a procedural date/time alias call into the equivalent OOP expression, or returns `None`

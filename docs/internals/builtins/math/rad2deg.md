@@ -2,7 +2,7 @@
 title: "rad2deg() - internals"
 description: "Compiler internals for rad2deg(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 595
+  order: 599
 ---
 
 ## `rad2deg()` - internals

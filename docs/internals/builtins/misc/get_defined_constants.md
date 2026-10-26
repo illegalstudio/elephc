@@ -2,7 +2,7 @@
 title: "get_defined_constants() - internals"
 description: "Compiler internals for get_defined_constants(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 622
+  order: 628
 ---
 
 ## `get_defined_constants()` - internals

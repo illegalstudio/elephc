@@ -84,6 +84,8 @@ REGISTRY_AREA_DEFAULTS: Dict[str, Tuple[str, str]] = {
     # builtin `xml_parse_into_struct`; both PHP modules share one docs area and the
     # narrative page docs/php/xml.md.
     "xml": ("XML", "XML"),
+    # `ext/random` procedural functions declared by the random prelude.
+    "random": ("Math", "Random"),
 }
 
 

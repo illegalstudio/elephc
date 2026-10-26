@@ -2,7 +2,7 @@
 title: "mb_encode_numericentity() - internals"
 description: "Compiler internals for mb_encode_numericentity(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 850
+  order: 856
 ---
 
 ## `mb_encode_numericentity()` - internals

@@ -80,6 +80,7 @@ mod array_set_mixed_key;
 mod array_set_refcounted;
 mod array_set_str;
 mod array_rand;
+mod mt_uniform;
 mod random_u32;
 mod random_uniform;
 mod random_uniform64;
@@ -360,6 +361,7 @@ pub use array_rand::emit_array_rand;
 pub use random_u32::emit_random_u32;
 /// Emit 32-bit random unsigned integer helper.
 pub use random_uniform::emit_random_uniform;
+pub use mt_uniform::emit_mt_uniform;
 pub use random_uniform64::{emit_random_u64, emit_random_uniform64};
 /// Emit uniform random integer helper.
 pub use array_reduce::emit_array_reduce;

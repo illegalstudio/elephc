@@ -41,7 +41,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`array_pop()`](./builtins/array/array_pop.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
 | [`array_product()`](./builtins/array/array_product.md) | `(array $array): int|float` | `int|float` | ✓ | ✓ |
 | [`array_push()`](./builtins/array/array_push.md) | `(array $array, ...$values): int` | `int` | ✓ | ✓ |
-| [`array_rand()`](./builtins/array/array_rand.md) | `(array $array): int` | `int` | ✓ | ✓ |
+| [`array_rand()`](./builtins/array/array_rand.md) | `(array $array, int $num = 1): int|string|array` | `int|string|array` | ✓ | ✓ |
 | [`array_reduce()`](./builtins/array/array_reduce.md) | `(array $array, callable $callback, mixed $initial = null): mixed` | `mixed` | ✓ | ✓ |
 | [`array_replace()`](./builtins/array/array_replace.md) | `(array $array, array $replacements): mixed` | `mixed` | ✓ | - |
 | [`array_replace_recursive()`](./builtins/array/array_replace_recursive.md) | `(array $array, array $replacements): mixed` | `mixed` | ✓ | - |
@@ -590,28 +590,34 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`fdiv()`](./builtins/math/fdiv.md) | `(float $num1, float $num2): float` | `float` | ✓ | ✓ |
 | [`floor()`](./builtins/math/floor.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`fmod()`](./builtins/math/fmod.md) | `(float $num1, float $num2): float` | `float` | ✓ | ✓ |
+| [`getrandmax()`](./builtins/math/getrandmax.md) | `(): int` | `int` | ✓ | - |
 | [`hexdec()`](./builtins/math/hexdec.md) | `(string $hex_string): mixed` | `mixed` | ✓ | - |
 | [`hypot()`](./builtins/math/hypot.md) | `(float $x, float $y): float` | `float` | ✓ | ✓ |
 | [`intdiv()`](./builtins/math/intdiv.md) | `(int $num1, int $num2): int` | `int` | ✓ | ✓ |
 | [`is_finite()`](./builtins/math/is_finite.md) | `(float $num): bool` | `bool` | ✓ | ✓ |
 | [`is_infinite()`](./builtins/math/is_infinite.md) | `(float $num): bool` | `bool` | ✓ | ✓ |
 | [`is_nan()`](./builtins/math/is_nan.md) | `(float $num): bool` | `bool` | ✓ | ✓ |
+| [`lcg_value()`](./builtins/math/lcg_value.md) | `(): float` | `float` | ✓ | - |
 | [`log()`](./builtins/math/log.md) | `(float $num, float $base = 2.718281828459045): float` | `float` | ✓ | ✓ |
 | [`log10()`](./builtins/math/log10.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`log2()`](./builtins/math/log2.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`max()`](./builtins/math/max.md) | `(mixed $value, ...$values): mixed` | `mixed` | ✓ | ✓ |
 | [`min()`](./builtins/math/min.md) | `(mixed $value, ...$values): mixed` | `mixed` | ✓ | ✓ |
+| [`mt_getrandmax()`](./builtins/math/mt_getrandmax.md) | `(): int` | `int` | ✓ | - |
 | [`mt_rand()`](./builtins/math/mt_rand.md) | `(int $min, int $max): int` | `int` | ✓ | ✓ |
+| [`mt_srand()`](./builtins/math/mt_srand.md) | `(?int $seed = null, int $mode = 0): void` | `void` | ✓ | - |
 | [`octdec()`](./builtins/math/octdec.md) | `(string $octal_string): mixed` | `mixed` | ✓ | - |
 | [`pi()`](./builtins/math/pi.md) | `(): float` | `float` | ✓ | ✓ |
 | [`pow()`](./builtins/math/pow.md) | `(float $num, float $exponent): float` | `float` | ✓ | ✓ |
 | [`rad2deg()`](./builtins/math/rad2deg.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`rand()`](./builtins/math/rand.md) | `(int $min, int $max): int` | `int` | ✓ | ✓ |
+| [`random_bytes()`](./builtins/math/random_bytes.md) | `(int $length): string` | `string` | ✓ | - |
 | [`random_int()`](./builtins/math/random_int.md) | `(int $min, int $max): int` | `int` | ✓ | ✓ |
 | [`round()`](./builtins/math/round.md) | `(float $num, int $precision = 0, int $mode = 1): float` | `float` | ✓ | ✓ |
 | [`sin()`](./builtins/math/sin.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`sinh()`](./builtins/math/sinh.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`sqrt()`](./builtins/math/sqrt.md) | `(float $num): float` | `float` | ✓ | ✓ |
+| [`srand()`](./builtins/math/srand.md) | `(?int $seed = null, int $mode = 0): void` | `void` | ✓ | - |
 | [`tan()`](./builtins/math/tan.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`tanh()`](./builtins/math/tanh.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`clone()`](./builtins/misc/clone.md) | `(object $object, array $withProperties = []): object` | `object` | ✓ | ✓ |

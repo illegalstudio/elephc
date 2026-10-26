@@ -162,7 +162,7 @@ mod tests {
         // +1: `buffer_ptr`, the payload address of a buffer.
         // +5: SimpleXML loaders/import plus internal allocation and diagnostic helpers.
         // +5: native heap usage, peak reset, and allocation/free counters.
-        assert_eq!(contracts().len(), 1180 + curl_surface);
+        assert_eq!(contracts().len(), 1187 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

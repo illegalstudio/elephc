@@ -2,7 +2,7 @@
 title: "curl_share_setopt() - internals"
 description: "Compiler internals for curl_share_setopt(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 729
+  order: 735
 ---
 
 ## `curl_share_setopt()` - internals

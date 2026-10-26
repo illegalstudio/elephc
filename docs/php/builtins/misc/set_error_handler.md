@@ -2,7 +2,7 @@
 title: "set_error_handler()"
 description: "Installs a user error handler and returns the previous handler."
 sidebar:
-  order: 693
+  order: 699
 ---
 
 ## set_error_handler()

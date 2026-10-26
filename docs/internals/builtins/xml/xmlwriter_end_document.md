@@ -2,7 +2,7 @@
 title: "xmlwriter_end_document() - internals"
 description: "Compiler internals for xmlwriter_end_document(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1046
+  order: 1052
 ---
 
 ## `xmlwriter_end_document()` - internals

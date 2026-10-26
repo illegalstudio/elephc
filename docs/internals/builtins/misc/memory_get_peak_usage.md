@@ -2,7 +2,7 @@
 title: "memory_get_peak_usage() - internals"
 description: "Compiler internals for memory_get_peak_usage(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 640
+  order: 646
 ---
 
 ## `memory_get_peak_usage()` - internals

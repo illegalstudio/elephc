@@ -2,7 +2,7 @@
 title: "__elephc_curl_easy_upkeep() - internals"
 description: "Compiler internals for __elephc_curl_easy_upkeep(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1121
+  order: 1128
 ---
 
 ## `__elephc_curl_easy_upkeep()` - internals

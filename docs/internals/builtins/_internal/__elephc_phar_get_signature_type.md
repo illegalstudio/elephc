@@ -2,7 +2,7 @@
 title: "__elephc_phar_get_signature_type() - internals"
 description: "Compiler internals for __elephc_phar_get_signature_type(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1179
+  order: 1186
 ---
 
 ## `__elephc_phar_get_signature_type()` - internals

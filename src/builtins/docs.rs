@@ -67,6 +67,7 @@ fn area_str(area: Area) -> &'static str {
         Area::Image => "image",
         Area::Opcache => "opcache",
         Area::Xml => "xml",
+        Area::Random => "random",
     }
 }
 

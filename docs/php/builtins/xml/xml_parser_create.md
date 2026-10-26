@@ -2,7 +2,7 @@
 title: "xml_parser_create()"
 description: "Creates a new XML parser object."
 sidebar:
-  order: 1028
+  order: 1034
 ---
 
 ## xml_parser_create()

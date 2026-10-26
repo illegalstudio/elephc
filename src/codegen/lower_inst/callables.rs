@@ -3030,23 +3030,96 @@ pub(super) fn emit_invoker_arg_mixed(ctx: &mut FunctionContext<'_>, args: &[Valu
     Ok(())
 }
 
+/// Builds `trigger_error`'s handler arguments, replacing the baked file and line with the
+/// caller location when the call was compiled from injected prelude code.
+///
+/// php-src attributes an internal function's user-level notice to the user's call site, not to
+/// the internal implementation. Injected prelude functions are the compiler's internal
+/// functions, so their `trigger_error` must report the location `prepare_call_site` published
+/// for the entering call instead of the prelude's synthetic span.
+pub(super) fn emit_trigger_error_handler_args(
+    ctx: &mut FunctionContext<'_>,
+    level: ValueId,
+    message: ValueId,
+    file: ValueId,
+    line: ValueId,
+    caller_site: bool,
+) -> Result<()> {
+    if !caller_site {
+        return emit_invoker_arg_mixed(ctx, &[level, message, file, line]);
+    }
+    emit_invoker_arg_array_with(ctx, &[level, message], true)?;
+    emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)));
+    Ok(())
+}
+
 /// Creates the indexed array consumed by runtime callable descriptor invokers.
 fn emit_invoker_arg_array(ctx: &mut FunctionContext<'_>, args: &[ValueId]) -> Result<()> {
-    emit_new_invoker_arg_array(ctx, args.len());
-    if args.is_empty() {
+    emit_invoker_arg_array_with(ctx, args, false)
+}
+
+/// Builds the invoker argument array, optionally appending the published caller file and line.
+fn emit_invoker_arg_array_with(
+    ctx: &mut FunctionContext<'_>,
+    args: &[ValueId],
+    caller_site: bool,
+) -> Result<()> {
+    let extra = if caller_site { 2 } else { 0 };
+    emit_new_invoker_arg_array(ctx, args.len() + extra);
+    if args.is_empty() && !caller_site {
         return Ok(());
     }
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)); // preserve the in-progress invoker argument array across element boxing
     for arg in args {
         emit_box_invoker_arg(ctx, *arg)?;
-        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)); // preserve the boxed argument while loading the invoker array
-        emit_append_boxed_invoker_arg(ctx);
-        emit_release_pushed_refcounted_temp_after_array_push(ctx.emitter, &PhpType::Mixed);
-        emit_store_result_to_top_stack_slot(ctx);
+        emit_append_boxed_result_as_invoker_arg(ctx);
+    }
+    if caller_site {
+        emit_append_published_invoker_arg(ctx, PublishedInvokerArg::File);
+        emit_append_published_invoker_arg(ctx, PublishedInvokerArg::Line);
     }
     abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     Ok(())
+}
+
+/// One component of the caller location `prepare_call_site` published before the call.
+#[derive(Clone, Copy)]
+enum PublishedInvokerArg {
+    /// `_php_diagnostic_file` plus its length.
+    File,
+    /// `_php_diagnostic_line`.
+    Line,
+}
+
+/// Loads one published caller-location component, boxes it, and appends it to the argument array.
+fn emit_append_published_invoker_arg(ctx: &mut FunctionContext<'_>, component: PublishedInvokerArg) {
+    match component {
+        PublishedInvokerArg::File => {
+            let (pointer_reg, length_reg) = abi::string_result_regs(ctx.emitter);
+            abi::emit_load_symbol_to_reg(ctx.emitter, pointer_reg, "_php_diagnostic_file", 0);
+            abi::emit_load_symbol_to_reg(ctx.emitter, length_reg, "_php_diagnostic_file_len", 0);
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+        }
+        PublishedInvokerArg::Line => {
+            abi::emit_load_symbol_to_reg(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                "_php_diagnostic_line",
+                0,
+            );
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+        }
+    }
+    emit_append_boxed_result_as_invoker_arg(ctx);
+}
+
+/// Appends the boxed cell currently in the result register into the invoker argument array.
+fn emit_append_boxed_result_as_invoker_arg(ctx: &mut FunctionContext<'_>) {
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)); // preserve the boxed argument while loading the invoker array
+    emit_append_boxed_invoker_arg(ctx);
+    emit_release_pushed_refcounted_temp_after_array_push(ctx.emitter, &PhpType::Mixed);
+    emit_store_result_to_top_stack_slot(ctx);
 }
 
 /// Allocates the raw indexed array used to pass visible arguments to descriptor invokers.

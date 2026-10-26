@@ -2,7 +2,7 @@
 title: "memory_get_frees()"
 description: "Returns the cumulative number of native heap blocks released. Direct native reads do not allocate; eval boxes the sampled count."
 sidebar:
-  order: 639
+  order: 645
 ---
 
 ## memory_get_frees()
