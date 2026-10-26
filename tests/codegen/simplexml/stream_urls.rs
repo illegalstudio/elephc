@@ -43,6 +43,39 @@ var_dump(simplexml_load_file('php://input', null, LIBXML_NOERROR | LIBXML_NOWARN
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\nStream owner assembly:\n{}", out.stderr, stream_owner_assembly(&assembly));
 }
 
+/// Isolates stream factories in separate processes while compiling the shared eval catalog once.
+#[test]
+fn test_simplexml_stream_document_owners_isolated_bundle() {
+    if skip_without_xml_native("test_simplexml_stream_document_owners_isolated_bundle") { return; }
+    let runs = compile_and_run_with_heap_debug_per_argv(r###"<?php
+$seed = new SimpleXMLElement('<r/>');
+$uri = 'data://text/plain;base64,PHIvPg==';
+if ($argc === 1) { echo 'baseline'; }
+elseif ($argc === 2) { echo simplexml_load_file($uri)->getName(); }
+elseif ($argc === 3) { echo (new SimpleXMLElement($uri, 0, true))->getName(); }
+elseif ($argc === 4) { echo (new SimpleXMLElement($uri . "\0ignored", 0, true))->getName(); }
+elseif ($argc === 5) { echo simplexml_load_file('data://text/plain,%3Cr%3Eone+two%3C%2Fr%3E'); }
+elseif ($argc === 6) { echo simplexml_load_file('php://filter/read=string.tolower/resource=data://text/plain,%3CR%3EYES%3C%2FR%3E')->getName(); }
+elseif ($argc === 7) {
+    $source = $argc > 0 ? 'echo simplexml_load_file($uri)->getName(), ":", (new SimpleXMLElement($uri, 0, true))->getName();' : '';
+    eval($source);
+} else { var_dump(simplexml_load_file('php://input', null, LIBXML_NOERROR | LIBXML_NOWARNING)); }
+"###, &[
+        &[], &["x"], &["x", "x"], &["x", "x", "x"],
+        &["x", "x", "x", "x"], &["x", "x", "x", "x", "x"],
+        &["x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x"],
+    ]);
+    let expected = ["baseline", "r", "r", "r", "one two", "r", "r:r", "bool(false)\n"];
+    assert_eq!(runs.len(), expected.len());
+    let mut failures = Vec::new();
+    for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {
+        if !out.success || out.stdout != expected || !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
+            failures.push(format!("mode={mode} success={} stdout={:?} expected={expected:?}\n{}", out.success, out.stdout, out.stderr));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 /// Registered PHP wrappers supply document bytes without any libxml global callback.
 #[test]
 fn test_simplexml_registered_stream_document() {
