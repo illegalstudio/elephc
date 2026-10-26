@@ -96,7 +96,7 @@ pub(super) fn lower_mixed_property_array_runtime_set_aarch64(
     emit_property_array_target_get_aarch64(ctx, object, property, getter_label)?;
     abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
     abi::emit_pop_reg(ctx.emitter, "x3");
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_array_set");
+    emit_owned_property_cell_set(ctx);
     Ok(())
 }
 
@@ -122,8 +122,55 @@ pub(super) fn lower_mixed_property_array_runtime_set_x86_64(
     ctx.emitter.instruction("mov rdi, rax");                                    // pass the property Mixed cell as the array-write target
     abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
     abi::emit_pop_reg(ctx.emitter, "rcx");
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_array_set");
+    emit_owned_property_cell_set(ctx);
     Ok(())
+}
+
+/// Retires the getter's independent cell owner on successful and throwing dimension writes.
+fn emit_owned_property_cell_set(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sub sp, sp, #64");                         // reserve a cleanup record and the three write operands
+            ctx.emitter.instruction("str x0, [sp, #24]");                       // transfer the getter's owned Mixed cell to the unwind record
+            ctx.emitter.instruction("stp x1, x2, [sp, #32]");                   // preserve both normalized key words across guard publication
+            ctx.emitter.instruction("str x3, [sp, #48]");                       // preserve the value consumed by the runtime setter
+            abi::emit_symbol_address(ctx.emitter, "x9", "__rt_exception_release_owned");
+            ctx.emitter.instruction("str x9, [sp, #8]");                        // install the callback that releases an abandoned getter result
+            ctx.emitter.instruction("mov x0, sp");                              // pass the stack-local cleanup record
+            ctx.emitter.instruction("mov x1, #0");                              // prepend this independent owner to the unwind chain
+            abi::emit_call_label(ctx.emitter, "__rt_exception_guard_owned");
+            ctx.emitter.instruction("ldr x0, [sp, #24]");                       // borrow the guarded property cell for mutation
+            ctx.emitter.instruction("ldp x1, x2, [sp, #32]");                   // restore the normalized key
+            ctx.emitter.instruction("ldr x3, [sp, #48]");                       // restore the setter's consumed value
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_array_set");
+            ctx.emitter.instruction("mov x0, sp");                              // remove the exact guard before normal-path destruction
+            abi::emit_call_label(ctx.emitter, "__rt_exception_unguard_owned");
+            ctx.emitter.instruction("ldr x0, [sp, #24]");                       // recover the getter's independent owner
+            ctx.emitter.instruction("add sp, sp, #64");                         // retire the record before a destructor can throw
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 64");                             // reserve an aligned cleanup record and write operands
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 24], rdi");           // transfer the getter's owned Mixed cell to the unwind record
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 32], rsi");           // preserve the normalized key payload
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 40], rdx");           // preserve the normalized key tag or length
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 48], rcx");           // preserve the setter's consumed value
+            abi::emit_symbol_address(ctx.emitter, "r9", "__rt_exception_release_owned");
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], r9");             // install the abandoned-owner cleanup callback
+            ctx.emitter.instruction("mov rdi, rsp");                            // pass the stack-local cleanup record
+            ctx.emitter.instruction("xor esi, esi");                            // prepend this independent owner to the unwind chain
+            abi::emit_call_label(ctx.emitter, "__rt_exception_guard_owned");
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 24]");           // borrow the guarded property cell for mutation
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 32]");           // restore the key payload
+            ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 40]");           // restore the key tag or length
+            ctx.emitter.instruction("mov rcx, QWORD PTR [rsp + 48]");           // restore the setter's consumed value
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_array_set");
+            ctx.emitter.instruction("mov rdi, rsp");                            // remove the exact guard before normal-path destruction
+            abi::emit_call_label(ctx.emitter, "__rt_exception_unguard_owned");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 24]");           // recover the getter's independent owner
+            ctx.emitter.instruction("add rsp, 64");                             // retire the record before a destructor can throw
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
 }
 
 /// Calls the requested property getter and leaves the boxed Mixed property cell in `x0`.

@@ -121,3 +121,30 @@ echo (string)$xml['id'], ':', (string)$xml[' id '];
 "###);
     assert_eq!(out, "Cannot create attribute with an empty name|converted:literal");
 }
+/// Runtime property getters release their cell owner after successful and throwing offset stores.
+#[test]
+fn test_mixed_property_indexed_write_retires_getter_cell() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class RejectPropertyOffset implements ArrayAccess {
+    public function offsetExists(mixed $key): bool { return false; }
+    public function offsetGet(mixed $key): mixed { return null; }
+    public function offsetSet(mixed $key, mixed $value): void { throw new RuntimeException('rejected'); }
+    public function offsetUnset(mixed $key): void {}
+}
+function storePropertyOffset(mixed $holder, int $index): void {
+    $holder->item[$index] = str_repeat('v', 40);
+}
+$holder = new stdClass();
+$holder->item = [];
+for ($i = 0; $i < 4; $i++) { storePropertyOffset($holder, $i); }
+echo count($holder->item), '|';
+$holder->item = new RejectPropertyOffset();
+for ($i = 0; $i < 4; $i++) {
+    try { storePropertyOffset($holder, $i); }
+    catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
+}
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "4|rejected|rejected|rejected|rejected|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
