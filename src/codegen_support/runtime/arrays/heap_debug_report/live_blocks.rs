@@ -5,7 +5,8 @@
 //! - `super::emit_heap_debug_report()` on every supported target.
 //!
 //! Key details:
-//! - Walks validated physical headers without allocating or exposing payload contents.
+//! - Walks validated physical headers without allocating or exposing strings or payload pointers.
+//! - Object class ids and Mixed tags are range checked before reporting their type identity.
 //! - Reports at most 64 blocks, with offsets relative to the managed heap rather than addresses.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
@@ -95,6 +96,7 @@ pub(super) fn emit_live_blocks(emitter: &mut Emitter) {
         abi::load_at_offset(emitter, value, offset);
         write_integer(emitter);
     }
+    emit_type_identity(emitter);
     write_label(emitter, "_heap_dbg_newline", 1);
     abi::load_at_offset(emitter, value, 32);
     match emitter.target.arch {
@@ -117,6 +119,72 @@ pub(super) fn emit_live_blocks(emitter: &mut Emitter) {
     emitter.label("__rt_heap_debug_live_blocks_done");
     abi::emit_frame_restore(emitter, 80);
     abi::emit_return(emitter);
+}
+
+/// Reports only bounded object and Mixed discriminants after the complete block was validated.
+fn emit_type_identity(emitter: &mut Emitter) {
+    let value = abi::int_result_reg(emitter);
+    abi::load_at_offset(emitter, value, 48);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x0, #4");                                 // recognize native object allocations
+            emitter.instruction("b.eq __rt_heap_debug_live_class");            // only object payloads carry a class id
+            emitter.instruction("cmp x0, #5");                                 // recognize boxed Mixed allocations
+            emitter.instruction("b.eq __rt_heap_debug_live_tag");              // only Mixed payloads carry a value tag
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp rax, 4");                                 // recognize native object allocations
+            emitter.instruction("je __rt_heap_debug_live_class");              // only object payloads carry a class id
+            emitter.instruction("cmp rax, 5");                                 // recognize boxed Mixed allocations
+            emitter.instruction("je __rt_heap_debug_live_tag");                // only Mixed payloads carry a value tag
+        }
+    }
+    abi::emit_jump(emitter, "__rt_heap_debug_live_type_done");
+    emitter.label("__rt_heap_debug_live_class");
+    write_label(emitter, "_heap_dbg_block_class", 10);
+    emit_first_payload_word(emitter);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_symbol_to_reg(emitter, "x9", "_class_name_count", 0);
+            emitter.instruction("cmp x0, x9");                                  // accept only ids represented in this program's class table
+            emitter.instruction("b.lo __rt_heap_debug_live_class_valid");      // prevent malformed metadata from exposing a pointer
+        }
+        Arch::X86_64 => {
+            abi::emit_load_symbol_to_reg(emitter, "r10", "_class_name_count", 0);
+            emitter.instruction("cmp rax, r10");                                // accept only ids represented in this program's class table
+            emitter.instruction("jb __rt_heap_debug_live_class_valid");        // prevent malformed metadata from exposing a pointer
+        }
+    }
+    abi::emit_load_int_immediate(emitter, value, -1);
+    emitter.label("__rt_heap_debug_live_class_valid");
+    write_integer(emitter);
+    abi::emit_jump(emitter, "__rt_heap_debug_live_type_done");
+    emitter.label("__rt_heap_debug_live_tag");
+    write_label(emitter, "_heap_dbg_block_tag", 5);
+    emit_first_payload_word(emitter);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x0, #11");                                 // runtime tags run from int zero through invoker reference eleven
+            emitter.instruction("b.ls __rt_heap_debug_live_tag_valid");        // report a type discriminant rather than arbitrary payload contents
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp rax, 11");                                 // runtime tags run from int zero through invoker reference eleven
+            emitter.instruction("jbe __rt_heap_debug_live_tag_valid");          // report a type discriminant rather than arbitrary payload contents
+        }
+    }
+    abi::emit_load_int_immediate(emitter, value, -1);
+    emitter.label("__rt_heap_debug_live_tag_valid");
+    write_integer(emitter);
+    emitter.label("__rt_heap_debug_live_type_done");
+}
+
+/// Reads the first word of a block whose header, minimum payload and end were already checked.
+fn emit_first_payload_word(emitter: &mut Emitter) {
+    abi::load_at_offset(emitter, abi::int_result_reg(emitter), 8);
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction("ldr x0, [x0, #16]"),              // skip the validated sixteen-byte header
+        Arch::X86_64 => emitter.instruction("mov rax, QWORD PTR [rax + 16]"),    // skip the validated sixteen-byte header
+    }
 }
 
 /// Writes one fixed diagnostic label through the target's stderr syscall ABI.
@@ -163,7 +231,9 @@ mod tests {
             let asm = emitter.output();
             assert!(asm.contains("_heap_off") && asm.contains("__rt_heap_debug_live_blocks_next:"), "{target}");
             assert!(asm.contains("cmp x0, #64") || asm.contains("cmp rax, 64"), "{target}");
-            assert_eq!(asm.matches("__rt_itoa").count(), 4, "{target}");
+            assert_eq!(asm.matches("__rt_itoa").count(), 6, "{target}");
+            assert!(asm.contains("_heap_dbg_block_class") && asm.contains("_heap_dbg_block_tag"), "{target}");
+            assert!(asm.contains("_class_name_count"), "{target}");
             assert!(!asm.contains("__rt_heap_alloc") && !asm.contains("__rt_incref"), "{target}");
             assert_eq!("HEAP DEBUG: live offset=".len(), 24);
         }
