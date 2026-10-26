@@ -93,7 +93,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// contracts, generic declarations, and caller-scope access masks from both branches.
 /// BUMPED TO 22 because retained generic token streams now include ReservedNameHead.
 /// Older token variant indexes must not be decoded as this layout.
-pub(crate) const FORMAT_VERSION: u32 = 22;
+/// Format 23 adds array casts to EvalIR, shifting the stored cast discriminants.
+pub(crate) const FORMAT_VERSION: u32 = 23;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///
