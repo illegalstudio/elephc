@@ -88,7 +88,7 @@ pub extern "C" fn elephc_xml_sx_clone(handle: i64) -> i64 { guard(|| view(handle
 #[no_mangle]
 pub unsafe extern "C" fn elephc_xml_sx_select(handle: i64, kind: i64, name: *const c_char, ns: *const c_char, prefix: i64, index: i64) -> i64 {
     guard(|| view(handle).map(|v| {
-        if kind == 4 && index < 0 { return insert(v.with_scope(Scope::Nodes(vec![]))); }
+        if kind == 4 && index < 0 { return insert(v.with_scope(Scope::Nodes(Rc::new(vec![])))); }
         let mut selected = v.select(kind, &string(name), &string(ns), prefix != 0, index.max(0) as usize);
         if kind == 3 || (kind == 2 && matches!(v.scope, Scope::Attributes(..))) {
             if let Some(node) = selected.first() { selected.scope = Scope::Node(node); selected.identity = node; }
@@ -178,7 +178,7 @@ pub unsafe extern "C" fn elephc_xml_sx_xpath(handle: i64, expression: *const c_c
     guard(|| { diagnostics::reset(); view(handle).map(|v| {
         if v.first().is_none() || matches!(v.scope, Scope::Attributes(..)) { return 0; }
         match v.xpath(&string(expression)) {
-            Ok(nodes) => insert(v.with_scope(Scope::XPath(nodes))),
+            Ok(nodes) => insert(v.with_scope(Scope::XPath(Rc::new(nodes)))),
             Err(query::XPathError::Invalid) => -1,
             Err(query::XPathError::Scalar(kind)) => -i64::from(kind) - 1,
         }

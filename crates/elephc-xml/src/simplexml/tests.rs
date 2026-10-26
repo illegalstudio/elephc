@@ -83,7 +83,7 @@ fn simplexml_derived_xpath_registrations_are_isolated() {
     root.xpath_ns.borrow_mut().insert("q".into(), "urn:p".into());
     let alias = root.clone();
     let copied = root.deep_clone().unwrap();
-    let results = root.with_scope(Scope::XPath(root.xpath("//c").unwrap()));
+    let results = root.with_scope(Scope::XPath(Rc::new(root.xpath("//c").unwrap())));
     let xpath = results.item(0).unwrap();
     let iterated = root.item(0).unwrap();
     let added = root.with_scope(Scope::Node(root.add("d", None, None, false).unwrap()));
@@ -159,7 +159,7 @@ fn simplexml_comparison_identity_preserves_retained_base_nodes() {
 #[test]
 fn simplexml_xpath_attribute_wrappers_preserve_namespace_uri() {
     let root = parse(b"<r xmlns:p='urn:p' id='7' p:id='8'/>", 0, "", false).unwrap();
-    let results = root.with_scope(Scope::XPath(root.xpath("//@*").unwrap()));
+    let results = root.with_scope(Scope::XPath(Rc::new(root.xpath("//@*").unwrap())));
     for (index, expected) in ["7", "8"].into_iter().enumerate() {
         let attribute = results.item(index).unwrap();
         assert!(matches!(attribute.scope, Scope::Attributes(_, Some(_))));

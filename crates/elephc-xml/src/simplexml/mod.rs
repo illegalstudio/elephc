@@ -42,9 +42,9 @@ impl Namespace {
     fn matches(&self, node: Node) -> bool {
         unsafe {
             if self.value.is_empty() {
-                return string(ffi::ns(node, 1)).is_empty();
+                return borrowed_string_matches(ffi::ns(node, 1), "");
             }
-            string(ffi::ns(node, i32::from(self.prefix))) == self.value
+            borrowed_string_matches(ffi::ns(node, i32::from(self.prefix)), &self.value)
         }
     }
 }
@@ -56,8 +56,8 @@ enum Scope {
     Children(Rc<View>, Option<String>),
     Attributes(Rc<View>, Option<String>),
     Index(Rc<View>, usize),
-    Nodes(Vec<Node>),
-    XPath(Vec<Node>),
+    Nodes(Rc<Vec<Node>>),
+    XPath(Rc<Vec<Node>>),
 }
 
 /// PHP wrapper state; iterator position does not change through ordinary getters.
@@ -72,8 +72,8 @@ impl View {
     fn nodes(&self) -> Vec<Node> {
         match &self.scope {
             Scope::Node(node) => if node.is_null() { vec![] } else { vec![*node] },
-            Scope::Nodes(nodes) | Scope::XPath(nodes) => nodes.clone(),
-            Scope::Index(parent, index) => parent.nodes().get(*index).copied().into_iter().collect(),
+            Scope::Nodes(nodes) | Scope::XPath(nodes) => nodes.as_ref().clone(),
+            Scope::Index(parent, index) => parent.node_at(*index).into_iter().collect(),
             Scope::Children(parent, name) | Scope::Attributes(parent, name) => {
                 let Some(node) = parent.first() else { return vec![]; };
                 let attrs = matches!(self.scope, Scope::Attributes(..));
@@ -84,7 +84,7 @@ impl View {
                     let kind = unsafe { ffi::node_type(cursor) };
                     if kind == (if attrs { 2 } else { 1 })
                         && self.ns.matches(cursor)
-                        && name.as_ref().is_none_or(|name| *name == unsafe { string(ffi::name(cursor)) })
+                        && name.as_ref().is_none_or(|name| unsafe { borrowed_string_matches(ffi::name(cursor), name) })
                     { out.push(cursor); }
                     cursor = unsafe { ffi::next(cursor) };
                 }
@@ -93,7 +93,33 @@ impl View {
         }
     }
     /// Returns the first matched node, if any.
-    fn first(&self) -> Option<Node> { self.nodes().first().copied() }
+    fn first(&self) -> Option<Node> { self.node_at(0) }
+    /// Resolves one position without materializing the rest of a live selection.
+    fn node_at(&self, index: usize) -> Option<Node> {
+        match &self.scope {
+            Scope::Node(node) => (index == 0 && !node.is_null()).then_some(*node),
+            Scope::Nodes(nodes) | Scope::XPath(nodes) => nodes.get(index).copied(),
+            Scope::Index(parent, selected) => (index == 0).then(|| parent.node_at(*selected)).flatten(),
+            Scope::Children(parent, name) | Scope::Attributes(parent, name) => {
+                let parent = parent.first()?;
+                let attrs = matches!(self.scope, Scope::Attributes(..));
+                if attrs && unsafe { ffi::node_type(parent) } != 1 { return None; }
+                let mut node = unsafe { if attrs { ffi::attrs(parent) } else { ffi::child(parent) } };
+                let mut position = 0;
+                while !node.is_null() {
+                    if unsafe { ffi::node_type(node) } == (if attrs { 2 } else { 1 })
+                        && self.ns.matches(node)
+                        && name.as_ref().is_none_or(|name| unsafe { borrowed_string_matches(ffi::name(node), name) })
+                    {
+                        if position == index { return Some(node); }
+                        position += 1;
+                    }
+                    node = unsafe { ffi::next(node) };
+                }
+                None
+            }
+        }
+    }
     /// Returns nodes traversed by foreach and count for this wrapper kind.
     fn items(&self) -> Vec<Node> {
         if matches!(self.scope, Scope::Node(_) | Scope::Index(..)) {
@@ -103,7 +129,9 @@ impl View {
     }
     /// Materializes an XPath attribute as a filtered attribute list, preserving ordinary offsets.
     fn item(&self, index: usize) -> Option<Self> {
-        let node = *self.items().get(index)?;
+        let node = if matches!(self.scope, Scope::Node(_) | Scope::Index(..)) {
+            self.select(7, "", "", false, 0).node_at(index)?
+        } else { self.node_at(index)? };
         if matches!(self.scope, Scope::XPath(_)) && unsafe { ffi::node_type(node) } == 2 {
             let parent = self.with_scope(Scope::Node(unsafe { ffi::parent(node) }));
             let name = unsafe { string(ffi::name(node)) };
@@ -134,12 +162,12 @@ impl View {
                 let mut nodes = Vec::new();
                 let mut next = self.first().map(|n| unsafe { ffi::child(n) }).unwrap_or(std::ptr::null_mut());
                 while !next.is_null() { nodes.push(next); next = unsafe { ffi::next(next) }; }
-                Scope::Nodes(nodes)
+                Scope::Nodes(Rc::new(nodes))
             }
             3 => Scope::Attributes(if matches!(self.scope, Scope::Attributes(..)) {
                 parent_for_attributes(self)
             } else { parent }, Some(name.into())),
-            _ => self.nodes().get(index).copied().map(Scope::Node)
+            _ => self.node_at(index).map(Scope::Node)
                 .unwrap_or_else(|| Scope::Index(parent, index)),
         };
         let filter = if kind <= 1 { Namespace { value: ns.into(), prefix } } else { self.ns.clone() };
@@ -152,6 +180,12 @@ impl View {
         unsafe { ffi::unlink(node); }
         self.doc.detached.borrow_mut().push(node);
     }
+}
+
+/// Compares libxml's borrowed UTF-8 bytes without allocating per visited sibling.
+unsafe fn borrowed_string_matches(raw: *const c_char, value: &str) -> bool {
+    if raw.is_null() { value.is_empty() }
+    else { CStr::from_ptr(raw).to_bytes() == value.as_bytes() }
 }
 
 /// Captures the native base node retained by PHP wrappers, separate from their live selection.

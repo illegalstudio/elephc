@@ -29,8 +29,8 @@ impl View {
         let map = |node| self.map_node(&doc, node);
         let scope = match &self.scope {
             Scope::Node(node) => Scope::Node(map(*node)),
-            Scope::Nodes(nodes) => Scope::Nodes(nodes.iter().map(|node| map(*node)).filter(|node| !node.is_null()).collect()),
-            Scope::XPath(nodes) => Scope::XPath(nodes.iter().map(|node| map(*node)).filter(|node| !node.is_null()).collect()),
+            Scope::Nodes(nodes) => Scope::Nodes(Rc::new(nodes.iter().map(|node| map(*node)).filter(|node| !node.is_null()).collect())),
+            Scope::XPath(nodes) => Scope::XPath(Rc::new(nodes.iter().map(|node| map(*node)).filter(|node| !node.is_null()).collect())),
             Scope::Children(parent, name) => Scope::Children(Rc::new(parent.remap(doc.clone())), name.clone()),
             Scope::Attributes(parent, name) => Scope::Attributes(Rc::new(parent.remap(doc.clone())), name.clone()),
             Scope::Index(parent, index) => Scope::Index(Rc::new(parent.remap(doc.clone())), *index),
