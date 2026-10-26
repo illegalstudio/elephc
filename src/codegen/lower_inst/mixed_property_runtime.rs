@@ -132,6 +132,7 @@ fn emit_owned_property_cell_set(ctx: &mut FunctionContext<'_>) {
         Arch::AArch64 => {
             ctx.emitter.instruction("sub sp, sp, #64");                         // reserve a cleanup record and the three write operands
             ctx.emitter.instruction("str x0, [sp, #24]");                       // transfer the getter's owned Mixed cell to the unwind record
+            ctx.emitter.instruction("str x0, [sp, #56]");                       // preserve normal ownership after unguard clears its record slot
             ctx.emitter.instruction("stp x1, x2, [sp, #32]");                   // preserve both normalized key words across guard publication
             ctx.emitter.instruction("str x3, [sp, #48]");                       // preserve the value consumed by the runtime setter
             abi::emit_symbol_address(ctx.emitter, "x9", "__rt_exception_release_owned");
@@ -145,12 +146,13 @@ fn emit_owned_property_cell_set(ctx: &mut FunctionContext<'_>) {
             abi::emit_call_label(ctx.emitter, "__rt_mixed_array_set");
             ctx.emitter.instruction("mov x0, sp");                              // remove the exact guard before normal-path destruction
             abi::emit_call_label(ctx.emitter, "__rt_exception_unguard_owned");
-            ctx.emitter.instruction("ldr x0, [sp, #24]");                       // recover the getter's independent owner
+            ctx.emitter.instruction("ldr x0, [sp, #56]");                       // recover the independent owner outside the cleared guard record
             ctx.emitter.instruction("add sp, sp, #64");                         // retire the record before a destructor can throw
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("sub rsp, 64");                             // reserve an aligned cleanup record and write operands
             ctx.emitter.instruction("mov QWORD PTR [rsp + 24], rdi");           // transfer the getter's owned Mixed cell to the unwind record
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 56], rdi");           // preserve normal ownership after unguard clears its record slot
             ctx.emitter.instruction("mov QWORD PTR [rsp + 32], rsi");           // preserve the normalized key payload
             ctx.emitter.instruction("mov QWORD PTR [rsp + 40], rdx");           // preserve the normalized key tag or length
             ctx.emitter.instruction("mov QWORD PTR [rsp + 48], rcx");           // preserve the setter's consumed value
@@ -166,7 +168,7 @@ fn emit_owned_property_cell_set(ctx: &mut FunctionContext<'_>) {
             abi::emit_call_label(ctx.emitter, "__rt_mixed_array_set");
             ctx.emitter.instruction("mov rdi, rsp");                            // remove the exact guard before normal-path destruction
             abi::emit_call_label(ctx.emitter, "__rt_exception_unguard_owned");
-            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 24]");           // recover the getter's independent owner
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 56]");           // recover the independent owner outside the cleared guard record
             ctx.emitter.instruction("add rsp, 64");                             // retire the record before a destructor can throw
         }
     }
