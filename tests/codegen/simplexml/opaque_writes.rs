@@ -9,6 +9,26 @@
 
 use crate::support::*;
 
+/// Captures only the property writer and callback ownership paths for remote heap failures.
+fn property_writer_failure_assembly(assembly: &str) -> String {
+    let mut selected = String::new();
+    for symbol in [elephc::names::function_symbol("storePropertyOffset"),
+        elephc::names::method_symbol("RejectPropertyOffset", "offsetSet")]
+    {
+        for (label, limit) in [(symbol.clone(), 420),
+            (format!("{symbol}__cdylib_exception_cleanup"), 160)]
+        {
+            let start = format!("{label}:\n");
+            if let Some((_, body)) = assembly.split_once(&start) {
+                selected.push_str(&start);
+                selected.push_str(&body.lines().take(limit).collect::<Vec<_>>().join("\n"));
+                selected.push('\n');
+            }
+        }
+    }
+    selected
+}
+
 /// Enabling opaque writes preserves ordinary property append and COW without an XML capability.
 #[test]
 fn test_mixed_property_append_without_simplexml() {
@@ -124,7 +144,7 @@ echo (string)$xml['id'], ':', (string)$xml[' id '];
 /// Runtime property getters release their cell owner after successful and throwing offset stores.
 #[test]
 fn test_mixed_property_indexed_write_retires_getter_cell() {
-    let out = compile_and_run_with_heap_debug(r#"<?php
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(r#"<?php
 class RejectPropertyOffset implements ArrayAccess {
     public function offsetExists(mixed $key): bool { return false; }
     public function offsetGet(mixed $key): mixed { return null; }
@@ -146,5 +166,6 @@ for ($i = 0; $i < 4; $i++) {
 "#);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "4|rejected|rejected|rejected|rejected|");
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\nProperty writer assembly:\n{}",
+        out.stderr, property_writer_failure_assembly(&assembly));
 }
