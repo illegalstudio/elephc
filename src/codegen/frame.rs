@@ -701,6 +701,8 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     // Shutdown must retire unreachable cycles after every PHP root is gone,
     // while destructors can still use registered streams and instrumentation.
     abi::emit_call_label(ctx.emitter, "__rt_gc_collect_cycles_explicit");
+    // Dynamic eval destructors need their declaration context during the final collection.
+    emit_eval_context_epilogue_cleanup(ctx);
     if module_uses_resource_inventory_cleanup(ctx.module) {
         abi::emit_call_label(ctx.emitter, "__rt_resource_inventory_reset");
     }
@@ -1126,7 +1128,6 @@ fn emit_main_local_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
         emit_owned_local_cleanup(ctx, slot, offset, &ty);
     }
     emit_eval_scope_epilogue_cleanup(ctx);
-    emit_eval_context_epilogue_cleanup(ctx);
 }
 
 /// Returns main local slots that receive owned refcounted values through `StoreLocal`.

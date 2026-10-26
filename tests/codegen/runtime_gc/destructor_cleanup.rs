@@ -396,11 +396,22 @@ class ShutdownCycleOwner {
 gc_disable();
 function createShutdownCycle(): void { $cycle = new ShutdownCycleOwner('aot'); }
 createShutdownCycle();
-$source = $argc > 0 ? '$cycle = new ShutdownCycleOwner("eval");' : '';
+$source = $argc > 0 ? '
+class EvaluatedShutdownCycle {
+    public mixed $next = null;
+    public function __construct() { $this->next = $this; }
+    public function __destruct() { echo "dynamic|"; }
+}
+$cycle = new ShutdownCycleOwner("eval");
+$dynamic = new EvaluatedShutdownCycle();
+' : '';
 eval($source);
 echo 'end|';
 "###);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-    assert!(matches!(out.stdout.as_str(), "end|aot|eval|" | "end|eval|aot|"), "{}", out.stdout);
+    assert!(out.stdout.starts_with("end|"), "{}", out.stdout);
+    let mut destructors: Vec<_> = out.stdout[4..].split('|').filter(|name| !name.is_empty()).collect();
+    destructors.sort_unstable();
+    assert_eq!(destructors, ["aot", "dynamic", "eval"], "{}", out.stdout);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
