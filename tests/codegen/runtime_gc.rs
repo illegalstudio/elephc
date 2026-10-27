@@ -27,6 +27,7 @@ mod stream_filter_owners;
 mod leaf_array_cycles;
 mod eval_method_adapter_owners;
 mod eval_reflection_factory_owners;
+mod method_receiver_owners;
 #[path = "runtime_gc/json_decode_owners.rs"]
 mod json_decode_owners;
 #[path = "runtime_gc/string_append.rs"]

@@ -184,12 +184,8 @@ pub(super) fn lower_method_call(
     } else {
         (object, None)
     };
-    // Internal value-class methods can reject a scalar after their temporary receiver exists.
-    let receiver_pins = if crate::types::object_operators::operator_class(
-        &ctx.builder.value_php_type(object.value),
-    ).is_some() {
-        pin_in_flight_owners(ctx, &[object.value], object_expr.span)
-    } else { Vec::new() };
+    let receiver_guarded = default_receiver_owner.is_none()
+        && guard_method_receiver_on_throw(ctx, object, object_expr.span);
     let mut operands = vec![object.value];
     begin_call_argument_evaluation(ctx);
     let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
@@ -228,10 +224,10 @@ pub(super) fn lower_method_call(
         expr.span,
     );
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
-    unpin_in_flight_owners(ctx, receiver_pins, object_expr.span);
     if let Some(owner) = default_receiver_owner {
         retire_owned_call_operand(ctx, owner, expr.span);
     } else {
+        if receiver_guarded { ctx.unguard_call_argument(object.value, expr.span); }
         release_owning_receiver_temporary(ctx, object, expr.span);
     }
     let call = take_prepublished_call_result(ctx, result_staging, call, expr.span);

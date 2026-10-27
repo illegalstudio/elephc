@@ -178,6 +178,8 @@ fn lower_method_call_with_binding(
     } else {
         (object, None)
     };
+    let receiver_guarded = default_receiver_owner.is_none()
+        && guard_method_receiver_on_throw(ctx, object, expr.span);
     let mut operands = vec![object.value];
     begin_call_argument_evaluation(ctx);
     let enum_args = singular_object_class(&ctx.builder.value_php_type(object.value))
@@ -231,6 +233,7 @@ fn lower_method_call_with_binding(
     if let Some(owner) = default_receiver_owner {
         retire_owned_call_operand(ctx, owner, expr.span);
     } else {
+        if receiver_guarded { ctx.unguard_call_argument(object.value, expr.span); }
         release_owning_receiver_temporary(ctx, object, expr.span);
     }
     let call = take_prepublished_call_result(ctx, result_staging, call, expr.span);

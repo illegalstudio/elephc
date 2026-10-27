@@ -728,6 +728,31 @@ pub(super) fn take_published_container(
     owned
 }
 
+/// Guards a method receiver's independent lease without retaining a borrowed PHP local.
+pub(super) fn guard_method_receiver_on_throw(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+) -> bool {
+    let immutable_this = ctx.builder.function().flags.is_method
+        && ctx.builder.value_defining_instruction(value.value).is_some_and(|inst| {
+            inst.op == Op::LoadLocal
+                && matches!(inst.immediate, Some(Immediate::LocalSlot(slot))
+                    if ctx.local_slots.get("this") == Some(&slot))
+        });
+    if immutable_this || ctx.has_call_argument_guard(value.value)
+        || !ctx.value_needs_release_after_use(value)
+    {
+        return false;
+    }
+    // Finalization removes this guard when a provisional local unbox stays borrowed.
+    // A real owned receiver needs it through both argument evaluation and invocation.
+    ctx.begin_argument_guard_scope();
+    ctx.guard_call_argument(value, 0, span);
+    ctx.end_argument_guard_scope();
+    true
+}
+
 /// Publishes a temporary owner in a frame slot and returns its stable invocation operand.
 pub(crate) fn root_owned_call_operand(
     ctx: &mut LoweringContext<'_, '_>,
