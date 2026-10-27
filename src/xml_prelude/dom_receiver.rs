@@ -39,10 +39,12 @@ pub(super) struct DomReceiver {
     dom_available: bool,
 }
 
-/// Canonicalizes seeded DOMDocument separately from user-owned classes with that name.
+/// Separates seeded DOM ancestors from user-owned classes with the same names.
 fn class_key(name: &Name) -> String {
     if crate::name_resolver::is_additional_global_symbol(name, "DOMDocument") {
         "#domdocument".to_string()
+    } else if crate::name_resolver::is_additional_global_symbol(name, "DOMNode") {
+        "#domnode".to_string()
     } else {
         php_symbol_key(name.as_str())
     }
@@ -252,14 +254,15 @@ impl DomReceiver {
         }
     }
 
-    /// Recognizes DOMDocument and its subclasses, excluding known unrelated receivers.
+    /// Recognizes possible DOMDocument receivers, excluding only proven unrelated classes.
     pub(super) fn may_load_xml(&self, object: &Expr) -> bool {
         if !self.dom_available { return false; }
         let Some(classes) = self.classes(object) else { return self.dom_available; };
         classes.into_iter().any(|mut class| {
             let mut visited = HashSet::new();
             loop {
-                if class == "#domdocument" { return true; }
+                if matches!(class.as_str(), "#domdocument" | "#domnode")
+                    || self.declarations.open_receivers.contains(&class) { return true; }
                 if !visited.insert(class.clone()) { return false; }
                 let Some(parent) = self.declarations.parents.get(&class) else {
                     let builtin = crate::types::builtin_classes::builtin_class_like_names()

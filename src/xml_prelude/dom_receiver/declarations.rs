@@ -17,6 +17,7 @@ use super::{class_key, type_classes, Classes};
 #[derive(Default)]
 pub(super) struct Declarations {
     pub(super) classes: HashSet<String>,
+    pub(super) open_receivers: HashSet<String>,
     pub(super) parents: HashMap<String, String>,
     pub(super) properties: HashMap<(String, String), Classes>,
     pub(super) returns: HashMap<String, Classes>,
@@ -46,6 +47,10 @@ pub(super) fn collect_declarations(program: &[Stmt], declarations: &mut Declarat
             | StmtKind::InterfaceDecl { name, methods, .. } => {
                 let class = php_symbol_key(name);
                 declarations.classes.insert(class.clone());
+                if matches!(&stmt.kind, StmtKind::TraitDecl { .. } | StmtKind::InterfaceDecl { .. }) {
+                    // Traits can be used by DOMDocument subclasses, which may implement interfaces.
+                    declarations.open_receivers.insert(class.clone());
+                }
                 for method in methods {
                     declarations.methods.insert((class.clone(), php_symbol_key(&method.name)), super::signatures::signature(&method.params, method.variadic.as_deref(), method.variadic_by_ref));
                     collect_declarations(&method.body, declarations);

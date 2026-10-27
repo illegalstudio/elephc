@@ -102,6 +102,32 @@ echo $document->documentElement->textContent;
     assert_eq!(out, "bool(true)\nbool(true)\nbool(true)\ncallback");
 }
 
+/// DOM loaders retain native capability when reached through open receiver declarations.
+#[test]
+fn test_simplexml_dom_load_xml_trait_interface_and_node() {
+    if skip_without_xml_native("test_simplexml_dom_load_xml_trait_interface_and_node") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+trait LoadsXml {
+    public function loadFrom(string $xml): void { $this->loadXML($xml); }
+}
+class Feed extends DOMDocument { use LoadsXml; }
+$feed = new Feed();
+$feed->loadFrom('<rss><item>a</item></rss>');
+echo $feed->documentElement->nodeName, "\n";
+interface XmlLoader { public function loadXML(string $source, int $options = 0): bool; }
+class LoaderDocument extends DOMDocument implements XmlLoader {}
+function loadThroughInterface(XmlLoader $loader): void { var_dump($loader->loadXML('<r>interface</r>')); }
+loadThroughInterface(new LoaderDocument());
+function loadThroughNode(DOMNode $node): void {
+    if ($node instanceof DOMDocument) { var_dump($node->loadXML('<n/>')); }
+}
+loadThroughNode(new DOMDocument());
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "rss\nbool(true)\nbool(true)\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Callable arrays inject native XML support, and eval's callable factory shares the DOM receiver.
 #[test]
 fn test_simplexml_callable_array_dom_load_xml_detection_bundle() {
