@@ -116,14 +116,20 @@ pub(super) fn coerce_borrowed_ref_cell_local(
     coerce_loaded_local_to_result_type(ctx, source_ty, result_ty)
 }
 
-/// Loads the physical cell payload before exposing its borrowed, flow-sensitive view.
+/// Decodes boxed cell storage before exposing its borrowed, flow-sensitive view.
 pub(super) fn load_ref_cell_local_to_result_as(
     ctx: &mut FunctionContext<'_>,
     slot: LocalSlotId,
     ty: &PhpType,
 ) -> Result<PhpType> {
     let result_ty = ty.codegen_repr();
-    let ty = ctx.ref_cell_payload_type(slot)?.codegen_repr();
+    // Concrete reference aliases already carry their ABI view, including nominal object
+    // narrowing. Only a physically boxed payload needs decoding before applying that view.
+    let ty = if ctx.ref_cell_payload_type(slot)?.codegen_repr() == PhpType::Mixed {
+        PhpType::Mixed
+    } else {
+        result_ty.clone()
+    };
     reject_multiword_ref_param_local(&ty, "load")?;
     let offset = ctx.local_offset(slot)?;
     let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
