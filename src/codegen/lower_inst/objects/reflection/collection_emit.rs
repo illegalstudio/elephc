@@ -306,7 +306,13 @@ pub(super) fn emit_reflection_static_property_array(
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         let symbol = static_property_symbol(&member.declaring_class_name, &member.name);
         abi::emit_load_symbol_to_result(ctx.emitter, &symbol, &member.php_type);
-        emit_box_current_value_as_mixed(ctx.emitter, &crate::types::mixed_box_php_type(&member.php_type));
+        let storage_type = crate::types::mixed_box_php_type(&member.php_type);
+        if matches!(storage_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+            // Boxing an existing Mixed cell is a no-op. The metadata hash needs its own
+            // reference so destroying the reflector cannot retire the static slot's owner.
+            abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+        }
+        emit_box_current_value_as_mixed(ctx.emitter, &storage_type);
         emit_reflection_static_property_hash_insert(ctx, &member.name);
         if let Some(skip_label) = skip_label {
             ctx.emitter.label(&skip_label);
