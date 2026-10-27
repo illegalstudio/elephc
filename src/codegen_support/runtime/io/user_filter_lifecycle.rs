@@ -8,6 +8,7 @@
 //! Key details:
 //! - Both table roots detach before PHP callbacks can reenter or throw.
 //! - Each direction has an exception guard, including while another direction closes.
+//! - Shared instances receive one close callback while both direction owners retire.
 //! - A refused onCreate rolls back only the provisional object's roots, without onClose.
 //! - The descriptor is returned unchanged for the caller's remaining native teardown.
 //! - During fclose, a separate descriptor guard completes native close when PHP cleanup throws.
@@ -71,6 +72,11 @@ pub(crate) fn emit_user_filter_release_fd(emitter: &mut Emitter) {
         abi::emit_load_from_address(emitter, arg, frame, object);
         emitter.instruction(if arm { "cmp x0, #0" } else { "test rdi, rdi" });  // empty direction slots have no lifecycle callback
         emitter.instruction(&format!("{} {release}", if arm { "b.eq" } else { "jz" })); // retire even the empty guard in normal order
+        if direction == 1 {
+            abi::emit_load_from_address(emitter, if arm { "x9" } else { "r9" }, frame, 8);
+            emitter.instruction(if arm { "cmp x0, x9" } else { "cmp rdi, r9" }); // a shared instance already received its read-direction close hook
+            emitter.instruction(&format!("{} {release}", if arm { "b.eq" } else { "je" })); // retire the second owner without repeating the callback
+        }
         abi::emit_load_from_address(emitter, if arm { "x9" } else { "r9" }, frame, 24);
         emitter.instruction(if arm { "cmp x9, #0" } else { "test r9, r9" });    // rejected creation never invokes the close hook
         emitter.instruction(&format!("{} {release}", if arm { "b.ne" } else { "jnz" })); // roll back without observing onClose

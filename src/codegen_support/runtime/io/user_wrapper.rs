@@ -85,8 +85,8 @@ pub fn emit_user_wrapper_fclose(emitter: &mut Emitter) {
 
     // -- invoke an optional close method with exceptional object cleanup active --
     emitter.instruction("ldr x0, [sp, #0]");                                    // restore the wrapper receiver after publishing the guard
-    emitter.instruction("ldr x9, [sp, #8]");                                    // only the detached failing stream suppresses its callback
     abi::emit_load_symbol_to_reg(emitter, "x11", "_stream_close_silent", 0);
+    emitter.instruction("ldr x9, [sp, #8]");                                    // restore policy after the symbol helper borrows x9
     emitter.instruction("orr x9, x9, x11");                                     // combine XML resource suppression with native fileinfo cleanup mode
     emitter.instruction("cbnz x9, __rt_uwfclose_release");                      // skip PHP callbacks while unwinding a native-extension exception
     emit_aarch64_method_lookup(emitter, "__rt_uwfclose_release", VTABLE_SLOT_CLOSE);
@@ -1054,5 +1054,32 @@ fn simplexml_stream_cleanup_exports_on_all_targets() {
         assert!(assembly.contains("__rt_exception_guard_owned"), "{name}: exceptional wrapper owner");
         assert!(assembly.contains("__rt_exception_unguard_owned"), "{name}: normal owner transfer");
         assert!(assembly.contains("__rt_decref_object"), "{name}: wrapper storage release");
+    }
+}
+
+/// Symbol-address scratch registers must not replace the resource-specific close decision.
+#[cfg(test)]
+#[test]
+fn wrapper_close_restores_policy_after_symbol_loads_on_all_targets() {
+    use crate::codegen_support::platform::Target;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        for pic in [false, true] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = if pic { Emitter::new_pic(target) } else { Emitter::new(target) };
+            emit_user_wrapper_fclose(&mut emitter);
+            let assembly = emitter.output();
+            let arm = target.arch == Arch::AArch64;
+            let combine = if arm { "orr x9, x9, x11" } else { "or r9, r11" };
+            let combine = assembly.find(combine).expect("combined stream close policy");
+            let restore = if arm { "ldr x9, [sp, #8]" } else { "mov r9, QWORD PTR [rbp - 16]" };
+            let restore = assembly[..combine].rfind(restore).expect("saved resource policy");
+            if arm {
+                let symbol = assembly[..combine].rfind("_stream_close_silent").unwrap();
+                assert!(symbol < restore, "{name} pic={pic}: symbol addressing borrows x9");
+            }
+            let between = &assembly[restore..combine];
+            assert!(!between.contains("call ") && !between.contains("bl "),
+                "{name} pic={pic}: retain both policy inputs until the branch");
+        }
     }
 }

@@ -74,13 +74,18 @@ function scratch_call(string $base): string {
             crate::codegen::platform::Target::parse(target).unwrap(),
         );
         let function = module.functions.iter().find(|function| function.name == "scratch_call").unwrap();
-        let stores = function.instructions.iter().filter(|inst| inst.op == Op::StoreLocal).collect::<Vec<_>>();
+        // Internal return/cleanup stores can have no PHP source span. The backend
+        // deliberately emits @src markers only for real spans, so pair the same
+        // mapped stores before checking parking versus ordinary assignment.
+        let stores = function.instructions.iter().filter(|inst| {
+            inst.op == Op::StoreLocal && inst.span.is_some_and(|span| span.line > 0)
+        }).collect::<Vec<_>>();
         let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         let body = assembly.split_once("@fn name=scratch_call ").unwrap().1
             .split_once("@endfn name=scratch_call").unwrap().0;
         let sections = body.split("op=store_local").skip(1)
             .map(|part| part.split("@src ").next().unwrap()).collect::<Vec<_>>();
-        assert_eq!(sections.len(), stores.len(), "{target}: store annotations must match this straight-line function");
+        assert_eq!(sections.len(), stores.len(), "{target}: store annotations must match the mapped stores in this straight-line function");
         let mut parked = 0;
         let mut assigned = 0;
         for (store, section) in stores.iter().zip(sections) {

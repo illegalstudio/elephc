@@ -72,7 +72,8 @@ if ($argc === 1) {
 fwrite($stream, 'hello'); rewind($stream); echo fread($stream, 64);
 try { fclose($stream); } catch (RuntimeException $error) { echo 'caught|'; }
 "#, &[&[], &["x"], &["x", "x"], &["x", "x", "x"], &["x", "x", "x", "x"], &["x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x", "x"]]);
-    let expected = ["40|40|hello>close|drop|", "40|fresh|hello>close|drop|", "missing|hello", "40|all|hello>>close|drop|", "40|throw|hello>close|drop|caught|", "40|40|both|hello>>close|drop|close|drop|", "40|default|hello>close|drop|", "40|drop|created|hello", "40|drop|rejected|hello"];
+    // PHP keeps a filter whose onCreate throws attached until fclose; refusal retires it immediately.
+    let expected = ["40|40|hello>close|drop|", "40|fresh|hello>close|drop|", "missing|hello", "40|all|hello>>close|drop|", "40|throw|hello>close|drop|caught|", "40|40|both|hello>>close|drop|close|drop|", "40|default|hello>close|drop|", "40|created|hello>close|drop|", "40|drop|rejected|hello"];
     assert_eq!(runs.len(), expected.len());
     let mut failures = Vec::new();
     for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {
