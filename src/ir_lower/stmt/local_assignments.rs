@@ -112,8 +112,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
     // type with `global_alias_type` (already `Mixed`) and stores through the global symbol, so a
     // marked top-level local another body writes via `global $a` keeps exactly the representation
     // it has today.
-    let mixed_storage_site = ctx.is_recorded_mixed_storage_site(span, name)
-        || super::super::scoped_writes::boxed_capture(name, &ctx.builder.value_php_type(lowered.value));
+    let mixed_storage_site = ctx.is_recorded_mixed_storage_site(span, name);
     if mixed_storage_site && !ctx.has_local_slot(name) {
         ctx.declare_local(name, PhpType::Mixed);
     }

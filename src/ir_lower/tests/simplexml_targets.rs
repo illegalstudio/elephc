@@ -74,9 +74,11 @@ class TargetScopedWriteName {
     public function __destruct() {}
 }
 function xmlScopedWriteName(): TargetScopedWriteName { return new TargetScopedWriteName(); }
+function xmlScopedLogicFallback(): bool { return true; }
 function xmlScopedWriteCaptures(mixed $node): void {
     $node->{xmlScopedWriteName()}->leaf = 1;
     $node->{xmlScopedWriteName()}->leaf += 1;
+    $node->indexed[xmlComputedTargetIndex()]->compound += 1 or xmlScopedLogicFallback();
     for ($iteration = 0; $iteration < 2; $iteration++) { $node->{xmlScopedWriteName()}->leaf++; }
     try { $node->{xmlScopedWriteName()}->leaf += throw new RuntimeException('scope'); }
     catch (RuntimeException $error) { echo $error->getMessage(); }
@@ -166,7 +168,7 @@ echo $doc->saveXML();
     }).collect();
     assert!(!scoped_slots.is_empty(), "{target}: scoped captures need live unwind roots");
     for slot in scoped_slots {
-        assert_eq!(slot.php_type.codegen_repr(), crate::types::PhpType::Mixed, "{target}");
+        assert!(crate::ir::Ownership::php_type_needs_lifetime_tracking(&slot.php_type), "{target}");
         for op in [crate::ir::Op::PopCallOperandOwner, crate::ir::Op::ReleaseLocalSlot] {
             assert!(captures.instructions.iter().any(|inst| inst.op == op
                 && inst.immediate == Some(crate::ir::Immediate::LocalSlot(slot.id))), "{target}: missing {op:?} for scoped capture");

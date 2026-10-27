@@ -73,7 +73,15 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
         || (op != AssignmentOperator::Assign && computed_storage_property_target(&lhs_expr))) {
         let value = if matches!(lhs_expr.kind, ExprKind::DynamicPropertyAccess { .. }) {
             parse_expr(tokens, pos)?
-        } else { crate::parser::expr::parse_scoped_write_expr(tokens, pos)? };
+        } else {
+            let start = *pos;
+            let expression = crate::parser::expr::parse_scoped_write_expr(tokens, pos)?;
+            if matches!(expression.kind, ExprKind::Assignment { .. }) { expression } else {
+                // Low-precedence logic can wrap the assignment; retain its ordinary expression scope.
+                *pos = start;
+                parse_expr(tokens, pos)?
+            }
+        };
         expect_semicolon(tokens, pos)?;
         return Ok(Some(Stmt::new(StmtKind::ExprStmt(value), span)));
     }

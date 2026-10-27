@@ -1238,3 +1238,22 @@ scopedCaptureRun();
     assert_eq!(out.stdout, "name|~name|text|~text|after|");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Wrapping logic around a computed property assignment must not require a missing scope.
+#[test]
+fn test_computed_property_assignment_low_precedence_logic() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ComputedLogicNode { public int $count = 0; public ?int $maybe = null; }
+function computedLogicKey(): int { return 0; }
+function computedLogicFallback(string $name): bool { echo $name, '|'; return true; }
+$rows = [new ComputedLogicNode()];
+$rows[computedLogicKey()]->count += 1 or computedLogicFallback('or');
+$rows[computedLogicKey()]->count += 1 and computedLogicFallback('and');
+$rows[computedLogicKey()]->count += 1 xor computedLogicFallback('xor');
+$rows[computedLogicKey()]->maybe ??= 1 or computedLogicFallback('coalesce');
+var_dump($rows[0]->count, $rows[0]->maybe);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "and|xor|int(3)\nint(1)\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
