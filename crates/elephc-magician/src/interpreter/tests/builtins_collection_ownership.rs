@@ -12,6 +12,32 @@ use super::super::*;
 use super::support::*;
 use crate::interpreter::builtins::collection_builder::EvalArrayBuilder;
 
+/// String splitting retires segment keys and values and abandons partially populated arrays.
+#[test]
+fn explode_builder_releases_segment_operands_and_failed_results() {
+    for failed_insert in [None, Some(0), Some(1)] {
+        let mut values = FakeOps::default();
+        let separator = values.string("|").unwrap();
+        let string = values.string("|middle|").unwrap();
+        if let Some(index) = failed_insert { values.fail_array_set_call(index); }
+        let result = eval_explode_result(separator, string, None, &mut values);
+        let returned = if failed_insert.is_some() {
+            assert_eq!(result, Err(EvalStatus::UnsupportedConstruct));
+            None
+        } else {
+            let result = result.unwrap();
+            assert!(matches!(values.get(result), FakeValue::Array(entries) if entries.len() == 3));
+            Some(result)
+        };
+        for id in values.values.keys() {
+            let cell = RuntimeCellHandle::from_raw(*id as *mut crate::value::RuntimeCell);
+            let expected = usize::from(cell != separator && cell != string && Some(cell) != returned);
+            assert_eq!(values.releases.iter().filter(|released| **released == cell).count(), expected,
+                "failed insertion {failed_insert:?}, cell {id}");
+        }
+    }
+}
+
 /// Builtin exceptions own their object but release constructor arguments, including failed construction.
 #[test]
 fn builtin_throwable_construction_releases_argument_owners() {
