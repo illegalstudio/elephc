@@ -216,5 +216,6 @@ mod tests {
         assert_eq!(context.eval_reflection_class_name(identity), Some("NewClass"));
         context.register_dynamic_object(identity, "OrdinaryObject");
         assert_eq!(context.eval_reflection_class_name(identity), None);
+        context.forget_dynamic_object(identity);
     }
 }

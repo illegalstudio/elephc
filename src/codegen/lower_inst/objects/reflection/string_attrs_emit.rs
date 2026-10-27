@@ -235,7 +235,7 @@ pub(super) fn emit_reflection_constant_array_property_by_name(
     abi::emit_push_reg(ctx.emitter, result_reg);
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
-    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
     emit_reflection_constant_array(ctx, members)?;
     let assoc_type = PhpType::AssocArray {
         key: Box::new(PhpType::Str),
