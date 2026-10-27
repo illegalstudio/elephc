@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::names::{php_symbol_key, Name};
-use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind, TypeExpr};
+use crate::parser::ast::{Expr, ExprKind, StaticReceiver, Stmt, StmtKind, TypeExpr};
 
 mod aliases;
 mod declarations;
@@ -258,6 +258,30 @@ impl DomReceiver {
     pub(super) fn may_load_xml(&self, object: &Expr) -> bool {
         if !self.dom_available { return false; }
         let Some(classes) = self.classes(object) else { return self.dom_available; };
+        self.may_load_classes(classes)
+    }
+
+    /// Applies receiver provenance to scoped calls and their first-class callable forms.
+    pub(super) fn may_load_static(&self, receiver: &StaticReceiver) -> bool {
+        if !self.dom_available { return false; }
+        let classes = match receiver {
+            StaticReceiver::Named(name) => {
+                let key = if name.parts.len() == 1 && name.as_str().eq_ignore_ascii_case("DOMDocument") {
+                    "#domdocument".to_string()
+                } else if name.parts.len() == 1 && name.as_str().eq_ignore_ascii_case("DOMNode") {
+                    "#domnode".to_string()
+                } else { class_key(name) };
+                Some(HashSet::from([key]))
+            }
+            StaticReceiver::Generic(ty) => type_classes(ty),
+            StaticReceiver::Self_ | StaticReceiver::Static | StaticReceiver::Parent =>
+                self.class.clone().map(|class| HashSet::from([class])),
+        };
+        classes.is_none_or(|classes| self.may_load_classes(classes))
+    }
+
+    /// Shares DOM ancestry and open-interface reasoning across instance and scoped receivers.
+    fn may_load_classes(&self, classes: HashSet<String>) -> bool {
         classes.into_iter().any(|mut class| {
             let mut visited = HashSet::new();
             loop {

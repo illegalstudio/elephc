@@ -142,6 +142,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     private mixed $__elephc_current = null;
     private mixed $__elephc_owner = null;
     private mixed $__elephc_write_tmp = null;
+    private mixed $__elephc_projection_cache = null;
     public function __elephc_attach(int $handle): void {
         $this->__elephc_handle = $handle;
         $this->__elephc_owner = new __ElephcSimpleXMLLease($handle);
@@ -173,6 +174,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $this->__elephc_current = null;
         $this->__elephc_position = -1;
         $this->__elephc_write_tmp = null;
+        $this->__elephc_projection_cache = null;
     }
     public function __toString(): string {
         $handle = $this->__elephc_handle;
@@ -534,12 +536,15 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         return $namespaces;
     }
     public function __elephc_array(): array<string, mixed> {
-        return $this->__elephc_projection(false);
+        $this->__elephc_projection_cache = null;
+        $result = $this->__elephc_projection(false);
+        $this->__elephc_projection_cache = $result;
+        return $result;
     }
     private function __elephc_projection(bool $debug): array<string, mixed> {
         $handle = $this->__elephc_handle;
         $mode = elephc_xml_sx_int($handle, 5);
-        $base = __elephc_simplexml_wrap(elephc_xml_sx_projection_base($handle), get_class($this));
+        $base = __elephc_simplexml_wrap(elephc_xml_sx_projection_base($handle), 'SimpleXMLElement');
         $result = ["__elephc_projection_seed" => null];
         unset($result["__elephc_projection_seed"]);
         if ($mode === 4) {
@@ -552,7 +557,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
             return $result;
         }
         $base_handle = $base->__elephc_handle_value();
-        $attributes = __elephc_simplexml_wrap(elephc_xml_sx_select($base_handle, 8, "", "", 0, 0), get_class($this));
+        $attributes = __elephc_simplexml_wrap(elephc_xml_sx_select($base_handle, 8, "", "", 0, 0), 'SimpleXMLElement');
         if (($debug || $mode !== 1) && $attributes instanceof SimpleXMLElement) {
             if ($attributes->count() > 0) {
                 $values = ["__elephc_projection_seed" => ""];
@@ -571,12 +576,13 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         }
         $child_kind = $mode === 1 ? 10 : 9;
         $child_source = $mode === 1 ? $handle : $base_handle;
-        $children = __elephc_simplexml_wrap(elephc_xml_sx_select($child_source, $child_kind, "", "", 0, 0), get_class($this));
+        $children = __elephc_simplexml_wrap(elephc_xml_sx_select($child_source, $child_kind, "", "", 0, 0), 'SimpleXMLElement');
         if ($children instanceof SimpleXMLElement) {
             if ($children->count() > 0) {
                 foreach ($children as $name => $child) {
                     $raw = $child->__elephc_handle_value();
-                    $value = elephc_xml_sx_int($raw, 6) !== 0 ? elephc_xml_sx_string($raw, 0) : $child;
+                    $value = elephc_xml_sx_int($raw, 6) !== 0 ? elephc_xml_sx_string($raw, 0)
+                        : __elephc_simplexml_wrap(elephc_xml_sx_alias($raw), get_class($this));
                     if (array_key_exists($name, $result)) {
                         $old = $result[$name];
                         if (!is_array($old)) { $old = [$old]; }
@@ -663,7 +669,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $nodes = [];
         for ($i = 0; $i < $length; $i++) {
             $child = elephc_xml_sx_item($all, $i);
-            $nodes[] = __elephc_simplexml_wrap($child, get_class($this));
+            $nodes[] = __elephc_simplexml_wrap($child, 'SimpleXMLElement');
         }
         elephc_xml_sx_free($all);
         return $nodes;
@@ -837,7 +843,7 @@ function __elephc_simplexml_import_node(DOMNode $node, string $class): ?SimpleXM
         $handle = $bound->__elephc_handle_value();
         return __elephc_simplexml_wrap(elephc_xml_sx_alias($handle), $class);
     }
-    $result = __elephc_simplexml_import_document($document, $class);
+    $result = __elephc_simplexml_import_document($document, 'SimpleXMLElement');
     if (!($result instanceof SimpleXMLElement)) { return null; }
     __elephc_simplexml_bind_dom($document, $result);
     $bound = $node->__elephc_simplexml;

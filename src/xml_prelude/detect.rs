@@ -210,7 +210,8 @@ impl Detector {
     fn callable_target_refs_xml(&self, target: &CallableTarget) -> bool {
         match target {
             CallableTarget::Function(name) => name_is_xml_function(name),
-            CallableTarget::StaticMethod { receiver, .. } => receiver_refs_xml(receiver),
+            CallableTarget::StaticMethod { receiver, method } =>
+                (method.eq_ignore_ascii_case("loadXML") && self.dom.may_load_static(receiver)) || receiver_refs_xml(receiver),
             CallableTarget::Method { object, method } => {
                 (method.eq_ignore_ascii_case("loadXML") && self.dom.may_load_xml(object)) || self.expr_refs_xml(object)
             },
@@ -403,8 +404,9 @@ impl Detector {
                 self.dom.join(&called.dom);
                 result
             },
-            ExprKind::StaticMethodCall { receiver, args, .. } => {
-                receiver_refs_xml(receiver) || args.iter().any(|value| self.expr_refs_xml(value))
+            ExprKind::StaticMethodCall { receiver, method, args } => {
+                (method.eq_ignore_ascii_case("loadXML") && self.dom.may_load_static(receiver))
+                    || receiver_refs_xml(receiver) || args.iter().any(|value| self.expr_refs_xml(value))
             }
             ExprKind::FirstClassCallable(target) => self.callable_target_refs_xml(target),
             ExprKind::BufferNew { element_type, len } => {
@@ -827,6 +829,8 @@ mod tests {
             "namespace App; class DOMDocument { function loadXML(): void {} } (new DOMDocument())->loadXML();",
             "namespace App; class DOMNode { function loadXML(): void {} } (new DOMNode())->loadXML();",
             "namespace App; class Countable { function loadXML(): void {} } $doc = new \\DOMDocument(); (new Countable())->loadXML();",
+            "class Config { public static function loadXML(): void {} } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); Config::loadXML();",
+            "class Config { public static function loadXML(): void {} public function run(): void { self::loadXML(); } } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); (new Config())->run();",
             "class Config extends DOMElement { function loadXML(): void {} } $doc = new DOMDocument(); (new Config('r'))->loadXML();",
             "class Config extends stdClass { function loadXML(): void {} } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); (new Config())->loadXML();",
             "class Config { function loadXML(): void {} } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); $doc = new Config(); $doc->loadXML();",
@@ -857,6 +861,11 @@ mod tests {
             "(new DOMDocument())->loadXML('<r/>');",
             "$doc = new DOMDocument(); $alias = $doc; $alias->loadXML('<r/>');",
             "function run(DOMDocument $doc): void { $doc->loadXML('<r/>'); }",
+            "class Feed extends DOMDocument { public function run(): bool { return parent::loadXML('<r/>'); } } (new Feed())->run();",
+            "class Feed extends DOMDocument { public function run(): bool { return self::loadXML('<r/>'); } } (new Feed())->run();",
+            "class Feed extends DOMDocument { public function run(): bool { return static::loadXML('<r/>'); } } (new Feed())->run();",
+            "class Feed extends DOMDocument { public function run(): bool { return DOMDocument::loadXML('<r/>'); } } (new Feed())->run();",
+            "class Feed extends DOMDocument { public function loader(): Closure { return parent::loadXML(...); } } (new Feed())->loader();",
             "trait LoadsXml { public function loadFrom(string $xml): void { $this->loadXML($xml); } } class Feed extends DOMDocument { use LoadsXml; } $feed = new Feed(); $feed->loadFrom('<rss/>');",
             "interface XmlLoader { public function loadXML(string $source, int $options = 0): bool; } class Doc extends DOMDocument implements XmlLoader {} function load(XmlLoader $l): void { $l->loadXML('<r/>'); } load(new Doc());",
             "function viaNode(DOMNode $n): void { if ($n instanceof DOMDocument) { $n->loadXML('<n/>'); } } viaNode(new DOMDocument());",
