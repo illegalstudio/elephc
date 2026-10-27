@@ -157,3 +157,30 @@ stream_wrapper_unregister('ownerresult');
         assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "mode={index}: {}", out.stderr);
     }
 }
+
+/// Fresh count results never keep a narrowed union string argument alive after a write.
+#[test]
+fn test_fwrite_releases_owned_and_narrowed_string_arguments() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function preparedWriteInput(int $count): string|false {
+    return $count > 0 ? str_repeat('write', $count) : false;
+}
+function writeUnionInput(mixed $stream, int $count): void {
+    $data = preparedWriteInput($count);
+    if ($data === false) { return; }
+    echo fwrite($stream, $data), ':';
+}
+$stream = fopen('php://temp', 'w+');
+for ($index = 0; $index < 3; $index++) {
+    writeUnionInput($stream, $argc);
+    echo fwrite($stream, str_repeat('x', $argc)), '|';
+}
+rewind($stream);
+echo stream_get_contents($stream);
+fclose($stream);
+unset($stream);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "5:1|5:1|5:1|writexwritexwritex", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

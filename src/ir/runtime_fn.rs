@@ -2606,6 +2606,8 @@ impl RuntimeFnId {
                 // or input resource temporary through a returned argument alias.
                 | RuntimeFnId::Fopen
                 | RuntimeFnId::StreamGetContents
+                // Writes box a fresh count or false and only borrow the input bytes.
+                | RuntimeFnId::Fwrite
                 // Filter attachment boxes a fresh resource or false; names are only compared.
                 | RuntimeFnId::StreamFilterAppend
                 | RuntimeFnId::StreamFilterPrepend
@@ -3469,6 +3471,7 @@ mod tests {
             RuntimeFnId::Hrtime,
             RuntimeFnId::GraphemeStrrev,
             RuntimeFnId::StripTags,
+            RuntimeFnId::Fwrite,
             RuntimeFnId::StreamFilterAppend,
             RuntimeFnId::StreamFilterPrepend,
         ] {
