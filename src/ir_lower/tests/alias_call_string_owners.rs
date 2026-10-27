@@ -29,7 +29,7 @@ function callStringAlias(string $text, bool $fail): string {
         let function = module.functions.iter().find(|function| function.name == "callStringAlias").unwrap();
         let (call_index, call) = function.instructions.iter().enumerate().find(|(_, inst)| {
             inst.op == Op::Call && matches!(inst.immediate, Some(Immediate::Data(name))
-                if module.data.function_names[name.as_raw() as usize] == "aliasStringInput")
+                if module.data.function_names[name.as_raw() as usize].eq_ignore_ascii_case("aliasStringInput"))
         }).expect("alias-returning call");
         let operand = call.operands[0];
         assert!(function.instructions.iter().any(|inst| inst.result == Some(operand)
