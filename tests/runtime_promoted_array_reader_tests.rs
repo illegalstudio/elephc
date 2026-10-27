@@ -3,7 +3,7 @@
 //! while its static type stayed `Array(Mixed)`.
 //!
 //! Called from:
-//! - `cargo test --test runtime_promoted_array_reader_tests` through Rust's test harness.
+//! - `cargo test --test integration runtime_promoted_array_reader_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - `__rt_array_set_mixed_key` promotes the destination to hash storage when a key does not

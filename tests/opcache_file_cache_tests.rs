@@ -5,7 +5,7 @@
 //! on a bad setting rather than ignoring it.
 //!
 //! Called from:
-//! - `cargo test --test opcache_file_cache_tests` through Rust's test harness.
+//! - `cargo test --test integration opcache_file_cache_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Every expectation here was VERIFIED against reference PHP 8.5.10 before being

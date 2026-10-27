@@ -4,7 +4,7 @@
 //! compile-time manifest cannot contain.
 //!
 //! Called from:
-//! - `cargo test --test opcache_runtime_cache_tests` through Rust's test harness.
+//! - `cargo test --test integration opcache_runtime_cache_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - A runtime-dynamic include is a COMPILE ERROR at AOT top level, so every probe here

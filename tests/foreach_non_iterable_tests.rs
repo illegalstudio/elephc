@@ -4,7 +4,7 @@
 //! SKIPS the loop body, runs the statement after the loop, and exits 0.
 //!
 //! Called from:
-//! - `cargo test --test foreach_non_iterable_tests` through Rust's test harness.
+//! - `cargo test --test integration foreach_non_iterable_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Tests invoke the elephc CLI (CARGO_BIN_EXE_elephc) as a subprocess in an isolated temp dir,

@@ -3,7 +3,7 @@
 //! `php_profile::sensitivity`'s table that `php_profile_independence_tests` cannot reach.
 //!
 //! Called from:
-//! - `cargo test --test php_profile_session_independence_tests` through Rust's test harness.
+//! - `cargo test --test integration php_profile_session_independence_tests::` through Rust's test harness.
 //!
 //! Key details:
 //!

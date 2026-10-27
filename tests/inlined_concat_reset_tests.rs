@@ -30,7 +30,7 @@
 //! the comparison alone.
 //!
 //! Called from:
-//! - `cargo test --test inlined_concat_reset_tests` through Rust's test harness.
+//! - `cargo test --test integration inlined_concat_reset_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - The callee must be small enough to be selected for inlining; `plain()` returning a

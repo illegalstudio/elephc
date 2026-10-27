@@ -17,7 +17,7 @@
 //!   mismatched arms — the same answer the IR-level `wider_type_for_merge` already gave.
 //!
 //! Called from:
-//! - `cargo test --test null_coalesce_merge_tests` through Rust's test harness.
+//! - `cargo test --test integration null_coalesce_merge_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Harness style mirrors `tests/null_value_codegen_tests.rs`: the elephc CLI

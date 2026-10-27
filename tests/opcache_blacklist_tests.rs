@@ -3,7 +3,7 @@
 //! reference PHP RUNS but refuses to CACHE.
 //!
 //! Called from:
-//! - `cargo test --test opcache_blacklist_tests` through Rust's test harness.
+//! - `cargo test --test integration opcache_blacklist_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Every expectation here was VERIFIED against reference PHP 8.5.10 before being

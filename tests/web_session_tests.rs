@@ -2,7 +2,7 @@
 //! End-to-end web tests for PHP session support under `--web`.
 //!
 //! Called from:
-//! - `cargo test --test web_session_tests` through Rust's test harness.
+//! - `cargo test --test integration web_session_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Tests compile PHP with `--web`, spawn the server, drive HTTP requests,

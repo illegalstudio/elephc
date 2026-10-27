@@ -9,7 +9,7 @@
 //! profile.
 //!
 //! Called from:
-//! - `cargo test --test nan_bool_coercion_tests` through Rust's test harness.
+//! - `cargo test --test integration nan_bool_coercion_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Harness style mirrors `tests/null_coalesce_merge_tests.rs`: the elephc CLI

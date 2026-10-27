@@ -5,7 +5,7 @@
 //! guard.
 //!
 //! Called from:
-//! - `cargo test --test print_r_object_tests` through Rust's test harness.
+//! - `cargo test --test integration print_r_object_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - REGRESSION ANCHOR (issue C5): `print_r()` of an object was a HARD COMPILE

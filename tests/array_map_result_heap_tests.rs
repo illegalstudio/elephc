@@ -53,7 +53,7 @@
 //! shared by every callable call — so the cells below all use INT-valued sources.
 //!
 //! Called from:
-//! - `cargo test --test array_map_result_heap_tests` through Rust's test harness.
+//! - `cargo test --test integration array_map_result_heap_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - WHY EVERY TEST ASSERTS OUTPUT AS WELL AS `live_blocks=0`. The failure mode on the other side

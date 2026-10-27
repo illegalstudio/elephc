@@ -6,7 +6,7 @@
 //! prefix from a path-component match.
 //!
 //! Called from:
-//! - `cargo test --test opcache_restrict_api_tests` through Rust's test harness.
+//! - `cargo test --test integration opcache_restrict_api_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Every expectation here is PINNED FROM REFERENCE PHP 8.5.6 (Homebrew, `Zend OPcache`

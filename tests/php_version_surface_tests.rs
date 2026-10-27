@@ -4,7 +4,7 @@
 //! `ini_restore()` — across `--php-version` profiles and in both CLI and `--web` mode.
 //!
 //! Called from:
-//! - `cargo test --test php_version_surface_tests` through Rust's test harness.
+//! - `cargo test --test integration php_version_surface_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Tests invoke the elephc CLI (CARGO_BIN_EXE_elephc) as a subprocess in an isolated temp dir,

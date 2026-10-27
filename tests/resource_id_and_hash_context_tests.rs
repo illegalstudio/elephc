@@ -24,7 +24,7 @@
 //!   TypeError before touching the context.
 //!
 //! Called from:
-//! - `cargo test --test resource_id_and_hash_context_tests` through Rust's test harness.
+//! - `cargo test --test integration resource_id_and_hash_context_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Harness style mirrors `tests/array_flip_assoc_tests.rs`: the elephc CLI

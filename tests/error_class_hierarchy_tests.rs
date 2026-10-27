@@ -13,7 +13,7 @@
 //! `Exception`.
 //!
 //! Called from:
-//! - `cargo test --test error_class_hierarchy_tests` through Rust's test harness.
+//! - `cargo test --test integration error_class_hierarchy_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Tests invoke the elephc CLI (CARGO_BIN_EXE_elephc) as a subprocess in an isolated temp

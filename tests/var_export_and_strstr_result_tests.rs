@@ -14,7 +14,7 @@
 //!   capped away by `max_args: 2`.
 //!
 //! Called from:
-//! - `cargo test --test var_export_and_strstr_result_tests` through Rust's test harness.
+//! - `cargo test --test integration var_export_and_strstr_result_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Tests invoke the elephc CLI (CARGO_BIN_EXE_elephc) as a subprocess in an isolated temp dir,

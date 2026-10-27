@@ -32,7 +32,7 @@
 //! the ID space shared, which is what PHP does.
 //!
 //! Called from:
-//! - `cargo test --test eval_resource_id_tests` through Rust's test harness.
+//! - `cargo test --test integration eval_resource_id_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - EVERY expected string here was captured from reference PHP 8.5.6 with

@@ -4,7 +4,7 @@
 //! discarded by a jump — and never leaked, never skipped.
 //!
 //! Called from:
-//! - `cargo test --test finally_pending_exception_tests` through Rust's test harness.
+//! - `cargo test --test integration finally_pending_exception_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - The two places an exception is pending while `finally` code runs are the `finally` after no

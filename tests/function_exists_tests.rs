@@ -4,7 +4,7 @@
 //! prelude functions, and catalog builtins.
 //!
 //! Called from:
-//! - `cargo test --test function_exists_tests` through Rust's test harness.
+//! - `cargo test --test integration function_exists_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Tests invoke the elephc CLI (CARGO_BIN_EXE_elephc) as a subprocess in an isolated temp dir,

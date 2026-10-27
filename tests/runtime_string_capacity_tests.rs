@@ -3,7 +3,7 @@
 //! owned storage, and incremental encoders must fail closed instead of writing past the arena.
 //!
 //! Called from:
-//! - `cargo test --test runtime_string_capacity_tests` through Rust's test harness.
+//! - `cargo test --test integration runtime_string_capacity_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Every fixture runs in an isolated temporary directory and spawns the compiler binary.

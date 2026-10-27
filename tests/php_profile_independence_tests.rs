@@ -6,7 +6,7 @@
 //! differently under at least one.
 //!
 //! Called from:
-//! - `cargo test --test php_profile_independence_tests` through Rust's test harness.
+//! - `cargo test --test integration php_profile_independence_tests::` through Rust's test harness.
 //!
 //! Key details:
 //!

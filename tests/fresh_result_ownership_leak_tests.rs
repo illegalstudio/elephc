@@ -26,7 +26,7 @@
 //! in one place is what makes the fourth recurrence visible as a pattern.
 //!
 //! Called from:
-//! - `cargo test --test fresh_result_ownership_leak_tests` through Rust's test harness.
+//! - `cargo test --test integration fresh_result_ownership_leak_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - `--heap-debug` is the authoritative instrument for elephc's own arena; it reports on the

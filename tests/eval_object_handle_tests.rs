@@ -5,7 +5,7 @@
 //! allocator cleanliness for a loop that evals repeatedly.
 //!
 //! Called from:
-//! - `cargo test --test eval_object_handle_tests` through Rust's test harness.
+//! - `cargo test --test integration eval_object_handle_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - IDENTITY IS ASSERTED BEFORE HANDLES, DELIBERATELY. The question these tests

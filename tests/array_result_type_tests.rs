@@ -10,7 +10,7 @@
 //!   compile error, while `count()` and `foreach` over the very same expression compiled.
 //!
 //! Called from:
-//! - `cargo test --test array_result_type_tests` through Rust's test harness.
+//! - `cargo test --test integration array_result_type_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Tests invoke the elephc CLI (CARGO_BIN_EXE_elephc) as a subprocess in an isolated temp dir,

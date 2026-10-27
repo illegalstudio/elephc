@@ -4,7 +4,7 @@
 //! through autoload needs.
 //!
 //! Called from:
-//! - `cargo test --test autoload_diagnostics_tests` through Rust's test harness.
+//! - `cargo test --test integration autoload_diagnostics_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Autoloaded class files are loaded after name resolution, long after the entry file was

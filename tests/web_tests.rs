@@ -3,7 +3,7 @@
 //! launch it with `--listen`, drive it over raw TCP, and assert the response.
 //!
 //! Called from:
-//! - `cargo test --test web_tests` through Rust's test harness.
+//! - `cargo test --test integration web_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Tests invoke the elephc CLI (CARGO_BIN_EXE_elephc) as a subprocess in an

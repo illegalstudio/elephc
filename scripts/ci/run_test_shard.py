@@ -6,11 +6,16 @@ from pathlib import Path
 import shutil
 import subprocess
 
+INTEGRATION_SUITES = (r"(web_tests|web_session_tests|opcache_\w+|eval_\w+|php_profile_\w+"
+                      r"|extension_loaded_tests|php_version_surface_tests)")
+CLI_SUITES = (r"(opcache_\w+|eval_\w+|php_profile_\w+|extension_loaded_tests"
+              r"|php_version_surface_tests)")
+
 FILTERS = {
-    "non-codegen": "not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests) and not (binary(/^(opcache_|eval_|php_profile_)/) or binary(extension_loaded_tests) or binary(php_version_surface_tests))",
-    "cli": "binary(/^(opcache_|eval_|php_profile_)/) or binary(extension_loaded_tests) or binary(php_version_surface_tests)",
-    "web": "binary(web_tests) or binary(web_session_tests)",
-    "codegen": "binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo) and not test(~codegen::curl)",
+    "non-codegen": f"not binary(/^codegen_tests_/) and not (binary_id(elephc::integration) and test(/^{INTEGRATION_SUITES}::/))",
+    "cli": f"binary_id(elephc::integration) and test(/^{CLI_SUITES}::/)",
+    "web": "binary_id(elephc::integration) and test(/^(web_tests|web_session_tests)::/)",
+    "codegen": "binary(/^codegen_tests_/) and not test(~codegen::eval) and not test(~codegen::pdo) and not test(~codegen::curl)",
 }
 
 
@@ -37,7 +42,7 @@ def run(family, target, shard, count, root, env):
         execute(["tar", "-xzf", root / f"managed-native-curl-{target}.tar.gz",
                  "-C", cache, "--strip-components=1"], env)
     if family in {"codegen", "pdo", "curl", "eval"}:
-        execute(common + ["--no-run", "-E", "binary(codegen_tests)"], env)
+        execute(common + ["--no-run", "-E", "binary(/^codegen_tests_/)"], env)
     compiler = extracted / "target/debug/elephc"
     if family == "codegen":
         execute([compiler, "native", "install", "--locked", "--target", target,

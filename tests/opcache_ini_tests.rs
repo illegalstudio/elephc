@@ -6,7 +6,7 @@
 //! the unfiltered surface).
 //!
 //! Called from:
-//! - `cargo test --test opcache_ini_tests` through Rust's test harness.
+//! - `cargo test --test integration opcache_ini_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Tests invoke the elephc CLI (CARGO_BIN_EXE_elephc) as a subprocess in an isolated
@@ -71,7 +71,7 @@ fn compile(dir: &Path, source: &str, stem: &str) -> PathBuf {
 
 /// Compiles `source` with the supplied `--ini KEY=VALUE` overrides, returning the executable
 /// path together with the compiler's STDERR — which is where the OPcache quantity diagnostics
-/// land (`crate::main::emit_ini_override_warnings`).
+/// land (`elephc::entry::emit_ini_override_warnings`).
 fn compile_with_ini(
     dir: &Path,
     source: &str,

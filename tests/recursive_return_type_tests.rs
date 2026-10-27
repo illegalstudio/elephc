@@ -30,7 +30,7 @@
 //! here too, as no-regression coverage rather than as fixes.
 //!
 //! Called from:
-//! - `cargo test --test recursive_return_type_tests` through Rust's test harness.
+//! - `cargo test --test integration recursive_return_type_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Harness style mirrors `tests/null_coalesce_merge_tests.rs`: the elephc CLI

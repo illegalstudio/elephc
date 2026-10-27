@@ -7,7 +7,7 @@
 //! `opcache_prelude::bake_manifest`.
 //!
 //! Called from:
-//! - `cargo test --test opcache_manifest_tests` through Rust's test harness.
+//! - `cargo test --test integration opcache_manifest_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - The multi-file fixture is the point: the entry `require`s a sibling, pulls a PSR-4 class in

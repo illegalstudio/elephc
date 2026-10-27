@@ -4,7 +4,7 @@
 //! `--with-<flag>`, auto-detected from feature usage (e.g. `hash()` / `bcadd()`), or absent.
 //!
 //! Called from:
-//! - `cargo test --test extension_loaded_tests` through Rust's test harness.
+//! - `cargo test --test integration extension_loaded_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Tests invoke the elephc CLI (CARGO_BIN_EXE_elephc) as a subprocess in an isolated

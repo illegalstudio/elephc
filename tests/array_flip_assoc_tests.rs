@@ -3,7 +3,7 @@
 //! Pins key normalization, duplicate replacement, warnings and independent result ownership.
 //!
 //! Called from:
-//! - `cargo test --test array_flip_assoc_tests` through Rust's test harness.
+//! - `cargo test --test integration array_flip_assoc_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Fixtures compile and run in isolated directories on the host target.

@@ -36,7 +36,7 @@
 //!   empty. A program redirecting only stdout used to lose the diagnostic entirely.
 //!
 //! Called from:
-//! - `cargo test --test uncaught_exception_report_tests` through Rust's test harness.
+//! - `cargo test --test integration uncaught_exception_report_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - THE LOCATION IS THE CONSTRUCTION SITE, NOT THE THROW SITE, because that is what PHP reports:

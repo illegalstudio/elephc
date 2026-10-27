@@ -3,7 +3,7 @@
 //! may span the tags, and every shape prints what reference PHP 8.5.10 prints.
 //!
 //! Called from:
-//! - `cargo test --test eval_include_template_tests` through Rust's test harness.
+//! - `cargo test --test integration eval_include_template_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Each block of an included file used to be parsed on its own, so the most common template

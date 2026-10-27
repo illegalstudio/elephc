@@ -8,7 +8,7 @@
 //! property — that an EXCLUDED directive's environment variable is ignored on both surfaces.
 //!
 //! Called from:
-//! - `cargo test --test opcache_env_override_tests` through Rust's test harness.
+//! - `cargo test --test integration opcache_env_override_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - THIS IS AN ELEPHC EXTENSION, NOT PHP PARITY. Reference PHP has no per-directive environment

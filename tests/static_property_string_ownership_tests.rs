@@ -4,7 +4,7 @@
 //! storage, and the store used to move that pointer in instead of persisting it.
 //!
 //! Called from:
-//! - `cargo test --test static_property_string_ownership_tests` through Rust's test harness.
+//! - `cargo test --test integration static_property_string_ownership_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Every probe writes the property, then runs an UNRELATED `str_repeat()` whose only job

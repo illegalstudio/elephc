@@ -6,7 +6,7 @@
 //! invalid-spelling behavior, and the 8.2 per-version default.
 //!
 //! Called from:
-//! - `cargo test --test opcache_jit_status_tests` through Rust's test harness.
+//! - `cargo test --test integration opcache_jit_status_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Every expectation here is PINNED FROM REFERENCE PHP, reproduced on this host with

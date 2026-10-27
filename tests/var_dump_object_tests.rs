@@ -6,7 +6,7 @@
 //! half is covered by `var_dump_nested_tests`.
 //!
 //! Called from:
-//! - `cargo test --test var_dump_object_tests` through Rust's test harness.
+//! - `cargo test --test integration var_dump_object_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - REGRESSION ANCHOR: `var_dump()` of an object used to print the bare class

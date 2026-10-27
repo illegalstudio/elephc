@@ -3,7 +3,7 @@
 //! control flow — and never the caller, with the include's value and `finally` blocks intact.
 //!
 //! Called from:
-//! - `cargo test --test include_scoped_return_tests` through Rust's test harness.
+//! - `cargo test --test integration include_scoped_return_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - elephc inlines an include's body into the caller, so a `return` in it would return from the

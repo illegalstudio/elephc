@@ -21,7 +21,7 @@
 //!   box owns its copy.
 //!
 //! Called from:
-//! - `cargo test --test print_r_return_mode_heap_tests` through Rust's test harness.
+//! - `cargo test --test integration print_r_return_mode_heap_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Harness style mirrors `tests/null_coalesce_merge_tests.rs`: the elephc CLI

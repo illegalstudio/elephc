@@ -10,6 +10,10 @@ homepage = "https://github.com/illegalstudio/elephc"
 readme = "README.md"
 keywords = ["php", "compiler", "aot", "native", "codegen"]
 categories = ["compilers", "command-line-utilities"]
+# Integration tests are declared below instead of one binary per tests/*.rs: every
+# binary is rebuilt and relinked after each library edit, which cost ~340s of CPU per
+# `cargo test` with ~60 of them. tests/integration.rs gathers the small suites.
+autotests = false
 
 # The bridge staticlibs are default workspace members so plain `cargo build` /
 # `cargo test` materialize libelephc_tls.a (https:// wrapper),
@@ -36,9 +40,12 @@ default-members = [".", "crates/elephc-builtin-contract", "crates/elephc-monitor
 resolver = "2"
 exclude = ["third_party/mysql-28.0.4"]
 
+# The binary only calls the library's `entry::run` and declares no modules, so it has no
+# unit tests of its own: they run in the library's harness (`cargo test --lib`).
 [[bin]]
 name = "elephc"
 path = "src/main.rs"
+test = false
 
 # Documentation exporter: declared as an example so it can read the eval
 # interpreter's metadata (elephc-magician is a dev-dependency) without
@@ -46,6 +53,40 @@ path = "src/main.rs"
 [[example]]
 name = "gen_builtins"
 path = "tools/gen_builtins.rs"
+
+# The large suites (and one that can abort its process) keep a binary each, so `cargo test --test codegen_tests <filter>`
+# rebuilds only the suite being worked on. Every other tests/*.rs is a module of
+# `integration`; tests/integration.rs fails if a file is left out of both.
+[[test]]
+name = "codegen_tests"
+path = "tests/codegen_tests.rs"
+
+[[test]]
+name = "error_tests"
+path = "tests/error_tests.rs"
+
+[[test]]
+name = "lexer_tests"
+path = "tests/lexer_tests.rs"
+
+[[test]]
+name = "parser_tests"
+path = "tests/parser_tests.rs"
+
+# A regression here aborts the test PROCESS (a stack overflow on a small thread), so it
+# must not share a binary with other suites.
+[[test]]
+name = "embedder_stack_tests"
+path = "tests/embedder_stack_tests.rs"
+
+# Kept its own binary: it needs a real PHP 8.5 SDK and runs ignored by default.
+[[test]]
+name = "phpext_tests"
+path = "tests/phpext_tests.rs"
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
 
 [dependencies]
 elephc-generics = { path = "crates/elephc-generics" }

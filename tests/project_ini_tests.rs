@@ -3,7 +3,7 @@
 //! project sets once instead of passing `--ini` on every compile.
 //!
 //! Called from:
-//! - `cargo test --test project_ini_tests` through Rust's test harness.
+//! - `cargo test --test integration project_ini_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Tests invoke the elephc CLI (CARGO_BIN_EXE_elephc) as a subprocess in an isolated temp

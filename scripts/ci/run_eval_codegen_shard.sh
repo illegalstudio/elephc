@@ -245,7 +245,7 @@ fi
 echo "Rerunning ${#remaining[@]} test(s) under nextest after the single-process pass (status $pass1_status):"
 printf '  %s\n' "${remaining[@]}"
 
-filter="binary(codegen_tests) and ("
+filter="binary(/^codegen_tests_/) and ("
 separator=""
 for test_name in "${remaining[@]}"; do
     filter+="${separator}test(=${test_name})"

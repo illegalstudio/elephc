@@ -3,7 +3,7 @@
 //! measured on reference PHP 8.5.10.
 //!
 //! Called from:
-//! - `cargo test --test eval_inline_html_tests` through Rust's test harness.
+//! - `cargo test --test integration eval_inline_html_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - The eval lexer lexed `?>` as `?` then `>`, and `parse_fragment` refused any fragment

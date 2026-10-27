@@ -18,7 +18,7 @@
 //! silently removed interpolation from every transitively included file too.
 //!
 //! Called from:
-//! - `cargo test --test eval_string_interpolation_tests` through Rust's test harness.
+//! - `cargo test --test integration eval_string_interpolation_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - EVERY expected string here was captured from reference PHP 8.5.6 with

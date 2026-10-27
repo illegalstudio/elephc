@@ -8,7 +8,7 @@
 //! disabled (nothing happens — not even path validation).
 //!
 //! Called from:
-//! - `cargo test --test opcache_preload_tests` through Rust's test harness.
+//! - `cargo test --test integration opcache_preload_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Every expectation here is PINNED FROM REFERENCE PHP 8.5.6 (Homebrew, `Zend OPcache`

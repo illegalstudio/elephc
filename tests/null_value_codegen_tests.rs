@@ -16,7 +16,7 @@
 //!   caller saw `""` instead of `NULL`.
 //!
 //! Called from:
-//! - `cargo test --test null_value_codegen_tests` through Rust's test harness.
+//! - `cargo test --test integration null_value_codegen_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Tests invoke the elephc CLI (CARGO_BIN_EXE_elephc) as a subprocess in an isolated temp dir,

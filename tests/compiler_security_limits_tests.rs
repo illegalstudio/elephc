@@ -2,7 +2,7 @@
 //! Subprocess regressions for compiler and generated-program recursion limits.
 //!
 //! Called from:
-//! - `cargo test --test compiler_security_limits_tests` through Rust's test harness.
+//! - `cargo test --test integration compiler_security_limits_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Potential stack exhaustion always occurs in a child process, never in the test harness.

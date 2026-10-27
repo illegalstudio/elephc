@@ -23,7 +23,7 @@
 //! single un-honorable request is what keeps the flag from being a blunt "reject opcache" switch.
 //!
 //! Called from:
-//! - `cargo test --test opcache_strict_invalidate_tests` through Rust's test harness.
+//! - `cargo test --test integration opcache_strict_invalidate_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - THE DEFAULT MUST NOT MOVE. Every assertion here is paired: the same probe is compiled with
