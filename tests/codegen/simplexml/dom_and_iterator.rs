@@ -9,26 +9,6 @@
 
 use crate::support::*;
 
-/// Array/JSON projections preserve active cursors and recursive iteration sees prefixed children.
-#[test]
-fn test_simplexml_projection_preserves_cursor_and_has_children_ignores_namespace() {
-    if skip_without_xml_native("test_simplexml_projection_preserves_cursor_and_has_children_ignores_namespace") { return; }
-    let out = compile_and_run_with_heap_debug(r###"<?php
-$xml = new SimpleXMLElement('<r><i>1</i><i>2</i><i>3</i></r>');
-$items = $xml->i; $items->rewind(); $first = $items->current();
-echo json_encode((array)$items), '|', (string)$items->current(), ':', (int)($first === $items->current()), '|';
-foreach ($items as $item) { echo $item, json_encode($items), ';'; }
-echo '|';
-$xml = new SimpleXMLElement('<r xmlns:p="urn:p"><a><p:b/></a></r>');
-$xml->rewind(); var_dump($xml->hasChildren(), $xml->current()->count());
-$source = $argc > 0 ? '$xml = new SimpleXMLElement("<r><i>1</i><i>2</i></r>"); $items = $xml->i; foreach ($items as $item) { echo $item, json_encode($items), ";"; }' : '';
-eval($source);
-"###);
-    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "[\"1\",\"2\",\"3\"]|1:1|1{\"0\":\"1\",\"1\":\"2\",\"2\":\"3\"};2{\"0\":\"1\",\"1\":\"2\",\"2\":\"3\"};3{\"0\":\"1\",\"1\":\"2\",\"2\":\"3\"};|bool(true)\nint(0)\n1{\"0\":\"1\",\"1\":\"2\"};2{\"0\":\"1\",\"1\":\"2\"};");
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
-}
-
 /// Iterator steps create subclass wrappers eagerly and native methods bypass other public overrides.
 #[test]
 fn test_simplexml_iterator_eager_destruction_and_native_method_hooks() {

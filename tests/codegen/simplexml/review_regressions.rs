@@ -108,30 +108,6 @@ unset($selection, $xml);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// Upstream nullsafe exits skip terminal keys, while a real later null still evaluates them.
-#[test]
-fn test_simplexml_empty_long_nullsafe_chains() {
-    if skip_without_xml_native("test_simplexml_empty_long_nullsafe_chains") { return; }
-    let out = compile_and_run_with_heap_debug(r###"<?php
-$xml = new SimpleXMLElement('<r><child z="0"><item>0</item></child></r>');
-function emptyChainName(): string { echo 'name|'; return 'item'; }
-function emptyChainIndex(): string { echo 'index|'; return 'z'; }
-function emptyChains(mixed $node): void {
-    echo (int)empty($node?->child->{emptyChainName()}), '|';
-    echo (int)empty($node?->child[emptyChainIndex()]), '|';
-}
-emptyChains(null);
-emptyChains($xml);
-$ordinary = new stdClass(); $ordinary->child = null;
-emptyChains($ordinary);
-$code = $argc > 0 ? '$null = null; echo (int)empty($null?->child->{emptyChainName()}), "|", (int)empty($null?->child[emptyChainIndex()]), "|"; echo (int)empty($xml?->child->{emptyChainName()}), "|", (int)empty($xml?->child[emptyChainIndex()]), "|"; echo (int)empty($ordinary?->child->{emptyChainName()}), "|", (int)empty($ordinary?->child[emptyChainIndex()]), "|";' : '';
-eval($code);
-"###);
-    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "1|1|name|1|index|1|name|1|index|1|1|1|name|1|index|1|name|1|index|1|");
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
-}
-
 /// Attribute views add to their containing element and existing namespace URIs keep their prefix.
 #[test]
 fn test_simplexml_add_attribute_parent_and_namespace_reuse() {
@@ -214,45 +190,6 @@ restore_error_handler();
         "SimpleXMLElement::addChild(): Argument #1 ($qualifiedName) must not be empty|",
         "SimpleXMLElement::addAttribute(): Argument #1 ($qualifiedName) must not be empty|stopped:3",
     ));
-}
-
-/// Eval empty releases fresh dimension keys, retains borrowed keys, and cleans a throwing cast.
-#[test]
-fn test_simplexml_eval_empty_dimension_key_owners() {
-    if skip_without_xml_native("test_simplexml_eval_empty_dimension_key_owners") { return; }
-    let out = compile_and_run_with_heap_debug(r###"<?php
-$xml = new SimpleXMLElement('<r z="0"/>');
-$source = $argc > 0 ? '
-class ThrowingXmlEmptyKey {
-    public function __toString(): string { throw new RuntimeException("cast"); }
-    public function __destruct() { echo "drop|"; }
-}
-function freshXmlEmptyKey(): mixed { return new ThrowingXmlEmptyKey(); }
-$key = "z";
-echo "probes|";
-for ($i = 0; $i < 32; $i++) {
-    if ($i === 0) { echo "empty-loop|"; }
-    if (!empty($xml["missing" . str_repeat("x", 40)]) || !empty($xml[$key])) { echo "wrong|"; }
-    if ($i === 0) { echo "isset-loop|"; }
-    if (isset($xml["missing" . str_repeat("x", 40)]) || !isset($xml[$key])) { echo "wrong|"; }
-    if ($i === 0) { echo "fresh-loop|"; }
-    if (isset((new SimpleXMLElement("<r/>"))["missing"]) || !empty((new SimpleXMLElement("<r/>"))["missing"])) { echo "wrong|"; }
-    if ($i === 0) { echo "chain-loop|"; }
-    if (!empty($xml?->missing["key" . str_repeat("x", 40)])) { echo "wrong|"; }
-}
-echo "empty|";
-try { empty($xml[freshXmlEmptyKey()]); }
-catch (RuntimeException $error) { echo $error->getMessage(), "|"; }
-echo "isset|";
-try { isset($xml[freshXmlEmptyKey()]); }
-catch (RuntimeException $error) { echo $error->getMessage(), "|"; }
-echo $key;
-' : '';
-eval($source);
-"###);
-    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "probes|empty-loop|isset-loop|fresh-loop|chain-loop|empty|drop|cast|isset|drop|cast|z");
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
 /// Ordinary eval ArrayAccess empty keeps a fresh key through both offsetExists and offsetGet.

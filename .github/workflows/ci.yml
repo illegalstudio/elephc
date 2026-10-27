@@ -1204,18 +1204,14 @@ jobs:
         env:
           CARGO_NET_OFFLINE: "true"
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
-          # Keep phase records for the ten XML fixtures that reached the outer timeout.
+          # Keep phase records for the consolidated XML eval catalog fixtures.
           ELEPHC_FIXTURE_PHASE_TIMING: >-
-            test_simplexml_empty_long_nullsafe_chains,
-            test_xml_eval_declared_handlers_are_rejected_inside_eval,
-            dom_html_sixth_review_class_catalog_support,
-            test_xml_parser_inside_eval,
-            test_simplexml_eval_empty_dimension_key_owners,
-            test_simplexml_eval_assignment_warning_callers,
-            test_simplexml_projection_preserves_cursor_and_has_children_ignores_namespace,
-            test_simplexml_dynamic_property_names,
-            test_xml_parse_into_struct_dynamic_callable_shapes_inside_eval,
-            test_simplexml_missing_child_write_fetch
+            test_simplexml_eval_access_owners_bundle,
+            test_simplexml_eval_projection_and_nullsafe_bundle,
+            test_simplexml_dynamic_property_and_write_fetch_bundle,
+            test_xml_eval_parser_and_callable_shapes_bundle,
+            test_xml_eval_writer_and_handler_registration_bundle,
+            test_dom_html_eval_catalog_and_registered_surface_bundle
           # A missing libxml2 artifact must FAIL an xml fixture here, never skip it:
           # the package was materialized just above, so absence is a provisioning bug.
           ELEPHC_TEST_REQUIRE_XML_NATIVE: "1"

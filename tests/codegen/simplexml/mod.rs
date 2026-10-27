@@ -10,6 +10,7 @@
 use crate::support::*;
 
 mod review_regressions;
+mod eval_bundles;
 mod write_contracts;
 mod typed_empty;
 mod opaque_writes;
@@ -239,35 +240,6 @@ mutateNativePropertyMixed($xml);
 eval('$xml->a = "eval"; echo (string)$xml->a, "|"; var_dump(isset($xml->a)); unset($xml->a); var_dump(isset($xml->a));');
 "###);
     assert_eq!(out, "native|typed|bool(true)\nbool(false)\nfallback|mixed|bool(true)\nbool(false)\nboxed-fallback|bool(false)\neval|bool(true)\nbool(false)\n");
-}
-
-/// Runtime property names preserve native XML behavior and are evaluated once per operation.
-#[test]
-fn test_simplexml_dynamic_property_names() {
-    if skip_without_xml_native("test_simplexml_dynamic_property_names") { return; }
-    let out = compile_and_run(r###"<?php
-class DynamicNameXml extends SimpleXMLElement {
-    public string $a = 'slot';
-    public function __get(string $name): mixed { return 'get-hook'; }
-    public function __set(string $name, mixed $value): void { echo 'set-hook|'; }
-    public function __isset(string $name): bool { return false; }
-    public function __unset(string $name): void { echo 'unset-hook|'; }
-}
-function xmlPropertyName(string $name): string { echo $name, ':'; return $name; }
-function mutateDynamicXml(mixed $node): void {
-    echo (string)$node->{xmlPropertyName('a')}, '|';
-    $node->{xmlPropertyName('b')} = 'two';
-    var_dump(isset($node->{xmlPropertyName('b')}));
-    echo $node->{xmlPropertyName('missing')} ?? 'fallback', '|';
-    unset($node->{xmlPropertyName('a')});
-    var_dump(isset($node->a));
-}
-$xml = new DynamicNameXml('<r><a>native</a></r>');
-$key = $argc > 0 ? 'a' : 'missing'; echo (string)$xml->{$key}, '|';
-mutateDynamicXml($xml);
-eval('$key = "b"; echo (string)$xml->{$key}, "|"; unset($xml->{$key}); var_dump(isset($xml->{$key}));');
-"###);
-    assert_eq!(out, "native|a:native|b:b:bool(true)\nmissing:fallback|a:bool(false)\ntwo|bool(false)\n");
 }
 
 /// Verifies SimpleXML parse errors and options against PHP's observable output.

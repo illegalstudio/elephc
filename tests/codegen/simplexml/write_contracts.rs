@@ -51,39 +51,6 @@ echo (string)$xml->item;
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// Write-fetch creates missing nodes after keys and values run, while a saved empty read stays lazy.
-#[test]
-fn test_simplexml_missing_child_write_fetch() {
-    if skip_without_xml_native("test_simplexml_missing_child_write_fetch") { return; }
-    let out = compile_and_run(r###"<?php
-$xml = new SimpleXMLElement('<r/>');
-function missingXmlWriteIndex(): int { global $xml; echo (int)isset($xml->positive), '|'; return 1; }
-function missingXmlWriteValue(): string { global $xml; echo (int)isset($xml->positive), '|'; return 'ignored'; }
-function missingEvalXmlWriteIndex(): int { global $xml; echo (int)isset($xml->evaluated), '|'; return 1; }
-function missingEvalXmlWriteValue(): string { global $xml; echo (int)isset($xml->evaluated), '|'; return 'ignored'; }
-set_error_handler(function(int $level, string $message): bool { echo $level, ':', $message, '|'; return true; });
-$xml->positive[missingXmlWriteIndex()] = missingXmlWriteValue();
-$xml->negative[-1] = 'ignored';
-$xml->zero[0] = 'c';
-$xml->appended[] = 'd';
-$selection = $xml->absent;
-$selection[0] = 'ignored'; $selection[1] = 'ignored'; $selection[] = 'ignored';
-restore_error_handler();
-echo $xml->asXML();
-$code = $argc > 0 ? '$xml->evaluated[missingEvalXmlWriteIndex()] = missingEvalXmlWriteValue();' : '';
-set_error_handler(function(int $level, string $message): bool { echo $level, ':', $message, '|'; return true; });
-eval($code);
-restore_error_handler();
-echo count($xml->evaluated), ':', (string)$xml->evaluated;
-"###);
-    assert_eq!(out, concat!(
-        "0|0|2:main(): Cannot add element positive number 1 when only 0 such elements exist|",
-        "2:main(): Cannot add element negative number -1 when only 0 such elements exist|",
-        "<?xml version=\"1.0\"?>\n<r><positive/><negative/><zero>c</zero><appended>d</appended></r>\n",
-        "0|0|2:Unknown: Cannot add element evaluated number 1 when only 0 such elements exist|1:",
-    ));
-}
-
 /// Assignment diagnostics identify their PHP caller and release backtrace storage after callbacks.
 #[test]
 fn test_simplexml_assignment_warning_caller() {
@@ -133,37 +100,4 @@ echo $xml->asXML();
         "2:main(): Cannot change attribute number -1 when only 0 attributes exist|",
         "<?xml version=\"1.0\"?>\n<r id=\"new\"/>\n",
     ));
-}
-
-/// Runtime-eval writes report the active PHP callable instead of a suspended native frame.
-#[test]
-fn test_simplexml_eval_assignment_warning_callers() {
-    if skip_without_xml_native("test_simplexml_eval_assignment_warning_callers") { return; }
-    let out = compile_and_run_with_heap_debug(r###"<?php
-$xml = new SimpleXMLElement('<r><item>a</item><item>b</item></r>');
-set_error_handler(function(int $level, string $message): bool { echo $message, '|'; return true; });
-$source = $argc > 0 ? '
-function evaluatedXmlWarning(SimpleXMLElement $xml): void { $xml->item[4] = "f"; }
-class EvaluatedXmlWarning {
-    public function instanceWrite(SimpleXMLElement $xml): void { $xml->item[4] = "i"; }
-    public static function staticWrite(SimpleXMLElement $xml): void { $xml->item[4] = "s"; }
-}
-$xml->item = "duplicate";
-$xml->item[4] = "top";
-evaluatedXmlWarning(new SimpleXMLElement("<r><item>a</item></r>"));
-(new EvaluatedXmlWarning())->instanceWrite(new SimpleXMLElement("<r><item>a</item></r>"));
-EvaluatedXmlWarning::staticWrite(new SimpleXMLElement("<r><item>a</item></r>"));
-' : '';
-eval($source);
-restore_error_handler();
-"###);
-    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, concat!(
-        "Unknown: Cannot assign to an array of nodes (duplicate subnodes or attr detected)|",
-        "Unknown: Cannot add element item number 4 when only 2 such elements exist|",
-        "evaluatedXmlWarning(): Cannot add element item number 4 when only 1 such elements exist|",
-        "EvaluatedXmlWarning::instanceWrite(): Cannot add element item number 4 when only 1 such elements exist|",
-        "EvaluatedXmlWarning::staticWrite(): Cannot add element item number 4 when only 1 such elements exist|",
-    ));
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
