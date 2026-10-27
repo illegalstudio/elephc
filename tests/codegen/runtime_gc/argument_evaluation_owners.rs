@@ -205,3 +205,44 @@ for ($i = 0; $i < 3; $i++) {
         out.stderr,
     );
 }
+
+/// Alias-returning calls keep evaluated string snapshots reachable when the callee throws.
+#[test]
+fn test_alias_returning_calls_release_string_evaluation_pins_on_throw() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function maybeReturnString(string $value, bool $fail): string {
+    if ($fail) { throw new RuntimeException('caught'); }
+    return $value;
+}
+function maybeReturnBoxedString(string $value, bool $fail): string|false {
+    if ($fail) { throw new RuntimeException('boxed'); }
+    return $value;
+}
+function maybeReturnAny(mixed $value, bool $fail): mixed {
+    if ($fail) { throw new RuntimeException('mixed'); }
+    return $value;
+}
+for ($index = 0; $index < 3; $index++) {
+    $value = str_repeat('x', $argc + 8);
+    $items = [$value];
+    echo strlen(maybeReturnString($value, false)), ':';
+    echo strlen(maybeReturnBoxedString($value, false)), ':', count(maybeReturnAny($items, false)), '|';
+    try { maybeReturnString($value, true); }
+    catch (RuntimeException $error) { echo $error->getMessage(), ':'; }
+    try { maybeReturnBoxedString($value, true); }
+    catch (RuntimeException $error) { echo $error->getMessage(), ':'; }
+    try { maybeReturnAny($items, true); }
+    catch (RuntimeException $error) { echo $error->getMessage(), ':', strlen($items[0]), '|'; }
+}
+unset($value, $items, $error);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "9:9:1|caught:boxed:mixed:9|".repeat(3), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// The exceptional alias-call lease is independent of EIR optimization.
+#[test]
+fn test_alias_returning_calls_release_string_evaluation_pins_on_throw_no_ir_opt() {
+    without_ir_opt(test_alias_returning_calls_release_string_evaluation_pins_on_throw);
+}

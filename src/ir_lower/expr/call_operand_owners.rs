@@ -501,6 +501,17 @@ pub(super) fn root_user_call_operands(
                     roots.push((index, pin.slot));
                 }
             }
+            if !repeated && value_is_call_argument_evaluation_pin(ctx, *operand)
+                && !ctx.has_call_argument_guard(*operand)
+                && !roots.iter().any(|(root, _)| *root == index)
+            {
+                // Argument evaluation already acquired this independent snapshot.
+                // Keep it visible during a possible throw; normal cleanup still decides
+                // whether its owner transfers into the returned value.
+                for pin in pin_in_flight_owners(ctx, &[*operand], span) {
+                    roots.push((index, pin.slot));
+                }
+            }
             continue;
         }
         let value = LoweredValue { value: *operand, ir_type: ctx.builder.value_type(*operand) };
