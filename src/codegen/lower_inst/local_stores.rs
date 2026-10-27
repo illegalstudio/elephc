@@ -14,8 +14,11 @@ use crate::ir::RuntimeCallTarget;
 pub(super) fn lower_store_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
     let value = expect_operand(inst, 0)?;
-    let reset_concat_after_store =
-        inst.span.is_some_and(|span| span.line > 0) && value_is_acquire_of_str_concat(ctx, value)?;
+    // Parking a call operand can happen after a sibling scratch string was evaluated.
+    // Only an ordinary PHP assignment ends the concat lifetime, not a temporary owner store.
+    let reset_concat_after_store = ctx.local_kind(slot)? == LocalKind::PhpLocal
+        && inst.span.is_some_and(|span| span.line > 0)
+        && value_is_acquire_of_str_concat(ctx, value)?;
     ctx.store_value_to_local(slot, value)?;
     if reset_concat_after_store {
         reset_concat_to_frame_base(ctx);
