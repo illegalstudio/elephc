@@ -384,7 +384,8 @@ echo print_r([1, 2], $flag);
     assert_eq!(out, "Array\n(\n    [0] => 1\n    [1] => 2\n)\n");
 }
 
-/// A capture grows beyond 64 KiB and preserves both ends of the complete value.
+/// Verifies `print_r($value, true)` returns the whole text when it outgrows the 64 KiB static
+/// capture buffer: the capture moves to a growing heap block, so all 70000 bytes come back intact.
 #[test]
 fn test_print_r_return_grows_beyond_initial_buffer_capacity() {
     let out = compile_and_run(
@@ -395,10 +396,12 @@ echo strlen($r);
 echo "|";
 echo substr($r, 0, 3);
 echo "|";
-echo substr($r, 69997, 3);
+echo substr($r, 65533, 3);
+echo "|";
+echo substr($r, -3);
 "#,
     );
-    assert_eq!(out, "70000|xxx|xxx");
+    assert_eq!(out, "70000|xxx|xxx|xxx");
 }
 
 /// Verifies `var_dump` formats each argument independently with correct type tags and a trailing newline per call, in source order.

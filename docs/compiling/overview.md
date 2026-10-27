@@ -58,7 +58,7 @@ By default the compiler:
 - uses the **EIR backend** with the **linear-scan register allocator** and the
   **EIR optimization passes** enabled (see [Optimization and codegen controls](optimization.md)),
 - emits a native **executable** (see [Output formats and diagnostics](output-and-diagnostics.md)),
-- and uses an **8 MB** heap (see [Linking, heap, and conditional compilation](linking-and-conditional-compilation.md#heap-size)).
+- and uses a **128 MB** heap (see [Linking, heap, and conditional compilation](linking-and-conditional-compilation.md#heap-size)).
 
 Every one of these defaults can be changed with a command-line flag.
 

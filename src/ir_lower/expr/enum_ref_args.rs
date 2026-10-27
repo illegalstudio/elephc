@@ -55,7 +55,7 @@ pub(super) fn stage_argument(
         ctx.call_argument_evaluation_scopes.last_mut().expect("selected reference argument scope")
             .owners.push(crate::ir_lower::context::CallArgumentEvaluationOwner {
                 value: None, borrow: None, temp_name: alias.clone(), slot, span,
-                ref_cell_payload: Some(payload), scoped_receiver_alias: true,
+                ref_cell_payload: Some(payload), scoped_receiver_alias: true, pins_borrowed_source: false,
             });
     }
     let value = if variadic { lower_invoker_ref_arg_marker(ctx, &alias, span) }

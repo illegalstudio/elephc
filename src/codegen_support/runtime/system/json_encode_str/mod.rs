@@ -7,6 +7,11 @@
 //!
 //! Key details:
 //! - The exported helper name must stay stable for all JSON encoder call sites.
+//! - Both targets reserve the worst-case output (`6 × length + 2`: every byte may become a
+//!   `\u00XX` escape) through `__rt_strbuf_reserve_temp` before writing, so a long string gets a
+//!   transient heap block instead of running past the 64 KiB `_concat_buf` scratch. Container
+//!   encoders append the result and release that block; `__rt_concat_publish` advances
+//!   `_concat_off` only for a scratch-backed result.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;

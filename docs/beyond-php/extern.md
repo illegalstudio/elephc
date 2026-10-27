@@ -142,7 +142,10 @@ defaults, and by-reference callback parameters are rejected because ownership
 and temporary lifetime across a C callback boundary are not modeled safely yet.
 For C APIs without a userdata/context parameter, each generated trampoline owns
 one mutable descriptor slot for that callsite; registering a new descriptor at
-the same callsite replaces the previous slot owner.
+the same callsite replaces the previous slot owner. Two C registrations made
+through one callsite (a helper or a loop calling `signal()` for two signals)
+therefore share the function pointer and both run the last descriptor bound
+there; give each long-lived registration its own callsite.
 
 ## String conversion
 - **Calling C**: elephc creates temporary null-terminated copy, frees after call

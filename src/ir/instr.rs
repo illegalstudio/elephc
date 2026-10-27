@@ -473,6 +473,13 @@ pub enum PropertyFetchMode {
     Read,
     /// A silent existence probe: an inaccessible or undefined name answers `null`.
     Probe,
+    /// The probe `isset()` makes: silent like `Probe`, and only the answer's nullness is used,
+    /// so a class answering through magic is asked `__isset` alone, never `__get`, as php does.
+    Isset,
+    /// The probe `empty()` makes: like `Probe`, except that a class with `__get` but no
+    /// `__isset` reports the name absent without calling `__get`, as php does. (`??` does call
+    /// `__get` there.)
+    Empty,
 }
 
 impl PropertyFetchMode {
@@ -481,7 +488,15 @@ impl PropertyFetchMode {
         match self {
             Self::Read => "read",
             Self::Probe => "probe",
+            Self::Isset => "isset",
+            Self::Empty => "empty",
         }
+    }
+
+    /// Returns whether a class with `__get` but no `__isset` answers this probe as absent
+    /// without calling `__get`: php's `isset()` and `empty()`, not `??`.
+    pub const fn skips_get_without_isset(self) -> bool {
+        matches!(self, Self::Isset | Self::Empty)
     }
 
     /// Returns whether this mode may raise or warn about the name it fetches.

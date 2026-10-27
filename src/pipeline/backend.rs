@@ -25,6 +25,9 @@ pub(super) struct BackendInputs<'a> {
     /// `extension_loaded()` alongside archive-derived bridge extensions. Needed
     /// because the shared `elephc_pdo` archive cannot identify a surface by itself.
     pub(super) linked_php_surfaces: &'a [String],
+    /// Real PHP extensions the project hosts: their archives, the Zend engine
+    /// archive they resolve against, and the C++ runtime when one needs it.
+    pub(super) hosted_php_ext: Option<&'a crate::php_ext::install::HostedExtensions>,
     pub(super) ir_module: ir::Module,
     pub(super) web: bool,
     pub(super) web_isolation: codegen::WebIsolation,
@@ -72,6 +75,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         with_crates,
         ini_overrides,
         linked_php_surfaces,
+        hosted_php_ext,
         mut ir_module,
         web,
         web_isolation,
@@ -351,7 +355,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     if planned_link_libraries.iter().any(|lib| lib == "elephc_fileinfo") {
         native_requirements.push(NativeRequirement::package("libmagic"));
     }
-    let resolved_native = match crate::native_deps::resolve_for_compilation(
+    let mut resolved_native = match crate::native_deps::resolve_for_compilation(
         Path::new(filename),
         target,
         &native_requirements,
@@ -362,6 +366,12 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
             process::exit(1);
         }
     };
+    if let Some(hosted) = hosted_php_ext {
+        if let Err(error) = append_hosted_extensions(&mut resolved_native, hosted, target) {
+            eprintln!("{error}");
+            process::exit(1);
+        }
+    }
     let link_plan = crate::link_planning::build(crate::link_planning::LinkPlanningInputs {
         user_libraries: extra_link_libs,
         user_search_paths: extra_link_paths,
@@ -491,4 +501,51 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
             timings.elapsed(),
         );
     }
+}
+
+/// Appends each hosted PHP extension's archive to the link, then the engine
+/// they all resolve Zend symbols from (`libelephc_zend.a`, the elephc-zend
+/// bridge). Static archives resolve in command-line order on GNU ld, so the
+/// engine must come after every extension, and after the bridges a program
+/// links by name (which precede managed archives). A C++ extension also needs
+/// the platform's C++ runtime, which nothing else in a compiled program links.
+fn append_hosted_extensions(
+    resolved: &mut Vec<crate::native_deps::ResolvedNativePackage>,
+    hosted: &crate::php_ext::install::HostedExtensions,
+    target: Target,
+) -> Result<(), String> {
+    let engine = crate::linker::bridge_archive("elephc_zend").map_err(|error| error.to_string())?;
+    let cxx_runtime = match target.platform {
+        crate::codegen_support::platform::Platform::Linux => "stdc++",
+        _ => "c++",
+    };
+    let packages = hosted.extensions.iter().map(|extension| {
+        let mut system_libraries = extension.record.libraries.clone();
+        if extension.record.cxx {
+            system_libraries.push(cxx_runtime.to_string());
+        }
+        crate::native_deps::ResolvedNativePackage {
+            package: format!("extension:{}", extension.name),
+            artifact_root: extension.artifact_dir.clone(),
+            archives: vec![extension.archive()],
+            system_libraries,
+            library_paths: extension.record.library_dirs.iter().map(std::path::PathBuf::from).collect(),
+            frameworks: Vec::new(),
+        }
+    });
+    resolved.extend(packages);
+    resolved.push(crate::native_deps::ResolvedNativePackage {
+        package: crate::link_planning::HOSTED_ENGINE_PACKAGE.to_string(),
+        artifact_root: engine.parent().map(Path::to_path_buf).unwrap_or_default(),
+        archives: vec![engine],
+        library_paths: Vec::new(),
+        // The engine's `php_iconv_string` uses the system iconv, a separate
+        // library on Apple targets (part of the C library on Linux).
+        system_libraries: match target.platform {
+            crate::codegen_support::platform::Platform::Linux => vec!["dl".to_string(), "pthread".to_string(), "m".to_string()],
+            _ => vec!["iconv".to_string()],
+        },
+        frameworks: Vec::new(),
+    });
+    Ok(())
 }

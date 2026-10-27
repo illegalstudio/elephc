@@ -2,7 +2,7 @@
 title: "__elephc_simplexml_allocate() - internals"
 description: "Compiler internals for __elephc_simplexml_allocate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1209
+  order: 1210
 ---
 
 ## `__elephc_simplexml_allocate()` - internals

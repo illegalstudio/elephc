@@ -21,6 +21,23 @@ pub(super) fn is_sensitive(ctx: &FunctionContext<'_>, name: &str) -> bool {
         .any(|attribute| attribute.name.as_canonical().eq_ignore_ascii_case("SensitiveParameter")))
 }
 
+/// Whether the program carries `SensitiveParameterValue`, which `wrap` instantiates.
+pub(super) fn wrapper_class_is_emitted(ctx: &FunctionContext<'_>) -> bool {
+    ctx.module.class_infos.contains_key("SensitiveParameterValue")
+}
+
+/// Prints `Object(SensitiveParameterValue)`, PHP's rendering of a wrapped sensitive argument in a
+/// printed trace, without instantiating the class.
+pub(super) fn emit_printed_placeholder(ctx: &mut FunctionContext<'_>) {
+    let text = "Object(SensitiveParameterValue)";
+    let (label, len) = ctx.data.add_string(text.as_bytes());
+    let pointer = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let length = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_symbol_address(ctx.emitter, pointer, &label);
+    abi::emit_load_int_immediate(ctx.emitter, length, len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_stdout_write");
+}
+
 /// Wraps a borrowed boxed argument, returning an owned boxed SensitiveParameterValue.
 pub(super) fn wrap(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let class_id = ctx.module.class_infos.get("SensitiveParameterValue")

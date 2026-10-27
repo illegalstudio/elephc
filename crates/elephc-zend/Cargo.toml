@@ -1,0 +1,23 @@
+[package]
+name = "elephc-zend"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Elephc's own implementation of the PHP extension ABI, used to host PECL/PIE extensions"
+publish = false
+
+# Built as a C-callable staticlib (linked into compiled programs that host a
+# PHP extension) and an rlib (unit tests, and Elephc itself, which only reads
+# the generated C header through the `header` feature).
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[features]
+default = ["engine"]
+# The engine itself. Without it the crate only exposes the C header text the
+# extension build writes out, so Elephc can depend on it cheaply.
+engine = []
+
+[build-dependencies]
+cc = "1"
+syn = { version = "2", features = ["full", "parsing", "extra-traits"] }

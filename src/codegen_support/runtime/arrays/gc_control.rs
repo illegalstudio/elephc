@@ -194,84 +194,27 @@ fn emit_gc_control_x86_64(emitter: &mut Emitter) {
     emit_gc_timing_x86_64(emitter);
 }
 
-/// Emits the AArch64 allocator-cache drain into the ordered reusable free list.
+/// Emits the AArch64 `gc_mem_caches()` helper: every binned block is merged back into the
+/// ordered free list by `__rt_heap_consolidate`; `x0` = the bytes taken out of the bins.
 fn emit_gc_mem_caches_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_gc_mem_caches");
-    emitter.instruction("sub sp, sp, #48");                                     // reserve saved registers and the current bin offset
-    emitter.instruction("stp x19, x20, [sp, #0]");                              // preserve the cache base and reclaimed-byte accumulator
-    emitter.instruction("stp x29, x30, [sp, #16]");                             // preserve the caller frame and return address
-    emitter.instruction("add x29, sp, #16");                                    // establish the helper frame pointer
-    abi::emit_symbol_address(emitter, "x19", "_heap_small_bins");
-    emitter.instruction("mov x20, #0");                                         // initialize reclaimed cache bytes
-    emitter.instruction("str xzr, [sp, #32]");                                  // start at the first of four bin slots
-    emitter.label("__rt_gc_mem_caches_bin");
-    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the current bin byte offset
-    emitter.instruction("cmp x9, #32");                                         // have all four bins been drained?
-    emitter.instruction("b.eq __rt_gc_mem_caches_done");                        // yes, return the accumulated footprint
-    emitter.instruction("add x10, x19, x9");                                    // address the current bin head slot
-    emitter.instruction("ldr x9, [x10]");                                       // load the first cached block header
-    emitter.instruction("cbz x9, __rt_gc_mem_caches_next_bin");                 // an empty bin needs no work
-    emitter.instruction("ldr x12, [x9, #16]");                                  // preserve the cached successor
-    emitter.instruction("str x12, [x10]");                                      // unlink this header from the small-bin cache
-    emitter.instruction("ldr w11, [x9]");                                       // load its reusable payload capacity
-    emitter.instruction("add x20, x20, x11");                                   // include the payload in the released cache total
-    emitter.instruction("add x20, x20, #16");                                   // include the uniform allocator header
-    emitter.instruction("add x0, x9, #16");                                     // provide the user pointer expected by shared insertion cleanup
-    emitter.instruction("bl __rt_heap_free_insert_cached");                     // coalesce this cached block through the shared cache-drain trampoline
-    abi::emit_symbol_address(emitter, "x10", "_gc_frees");
-    emitter.instruction("ldr x11, [x10]");                                      // undo the shared insertion path's historical free count
-    emitter.instruction("sub x11, x11, #1");                                    // this block was counted when it first entered the cache
-    emitter.instruction("str x11, [x10]");                                      // preserve one free event per released allocation
-    emitter.instruction("b __rt_gc_mem_caches_bin");                            // continue draining the same bin
-    emitter.label("__rt_gc_mem_caches_next_bin");
-    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the completed bin offset
-    emitter.instruction("add x9, x9, #8");                                      // advance to the next pointer-sized bin slot
-    emitter.instruction("str x9, [sp, #32]");                                   // save the next bin offset
-    emitter.instruction("b __rt_gc_mem_caches_bin");                            // drain the next size class
-    emitter.label("__rt_gc_mem_caches_done");
-    emitter.instruction("mov x0, x20");                                         // return bytes removed from specialized caches
-    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore the caller frame and return address
-    emitter.instruction("ldp x19, x20, [sp, #0]");                              // restore callee-saved scratch registers
-    emitter.instruction("add sp, sp, #48");                                     // release the helper frame
-    emitter.instruction("ret");                                                 // return to the builtin wrapper
+    emitter.instruction("stp x29, x30, [sp, #-16]!");                           // preserve the caller frame and return address
+    emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
+    emitter.instruction(&format!("mov x0, #{}", super::heap_consolidate::HEAP_CONSOLIDATE_LIST_ALL)); // list every merged run so the bins end up empty
+    emitter.instruction("bl __rt_heap_consolidate");                            // merge every free block, x0 = bytes drained from the bins
+    emitter.instruction("ldp x29, x30, [sp], #16");                             // restore the caller frame and return address
+    emitter.instruction("ret");                                                 // return the drained byte count
 }
 
-/// Emits the x86_64 allocator-cache drain into the ordered reusable free list.
+/// Emits the x86_64 `gc_mem_caches()` helper (same contract as AArch64, result in `rax`).
 fn emit_gc_mem_caches_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_gc_mem_caches");
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
-    emitter.instruction("mov rbp, rsp");                                        // establish stable spill slots across insertion calls
-    emitter.instruction("sub rsp, 32");                                         // reserve cache base, total, and bin offset locals
-    abi::emit_symbol_address(emitter, "r8", "_heap_small_bins");
-    emitter.instruction("mov QWORD PTR [rbp - 8], r8");                         // preserve the small-bin table address
-    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // initialize reclaimed cache bytes
-    emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // start at the first bin slot
-    emitter.label("__rt_gc_mem_caches_bin");
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                       // reload the current bin byte offset
-    emitter.instruction("cmp rcx, 32");                                         // have all four bins been drained?
-    emitter.instruction("je __rt_gc_mem_caches_done");                          // yes, return the accumulated footprint
-    emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload the bin table base
-    emitter.instruction("lea rdx, [r8 + rcx]");                                 // address the current bin head slot
-    emitter.instruction("mov r9, QWORD PTR [rdx]");                             // load the first cached block header
-    emitter.instruction("test r9, r9");                                         // is this bin empty?
-    emitter.instruction("jz __rt_gc_mem_caches_next_bin");                      // yes, advance to the next size class
-    emitter.instruction("mov r10, QWORD PTR [r9 + 16]");                        // preserve the cached successor
-    emitter.instruction("mov QWORD PTR [rdx], r10");                            // unlink this header from the small-bin cache
-    emitter.instruction("mov r11d, DWORD PTR [r9]");                            // load its reusable payload capacity
-    emitter.instruction("add QWORD PTR [rbp - 16], r11");                       // include the payload in the released cache total
-    emitter.instruction("add QWORD PTR [rbp - 16], 16");                        // include the uniform allocator header
-    emitter.instruction("lea rax, [r9 + 16]");                                  // provide the user pointer expected by shared insertion cleanup
-    emitter.instruction("call __rt_heap_free_insert_cached");                   // coalesce this cached block through the shared cache-drain trampoline
-    abi::emit_symbol_address(emitter, "r8", "_gc_frees");
-    emitter.instruction("sub QWORD PTR [r8], 1");                               // avoid recounting a block already freed into the cache
-    emitter.instruction("jmp __rt_gc_mem_caches_bin");                          // continue draining the same bin
-    emitter.label("__rt_gc_mem_caches_next_bin");
-    emitter.instruction("add QWORD PTR [rbp - 24], 8");                         // advance to the next pointer-sized bin slot
-    emitter.instruction("jmp __rt_gc_mem_caches_bin");                          // drain the next size class
-    emitter.label("__rt_gc_mem_caches_done");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return bytes removed from specialized caches
-    emitter.instruction("leave");                                               // release locals and restore the caller frame pointer
-    emitter.instruction("ret");                                                 // return to the builtin wrapper
+    emitter.instruction("mov rbp, rsp");                                        // establish the helper frame
+    emitter.instruction(&format!("mov eax, {}", super::heap_consolidate::HEAP_CONSOLIDATE_LIST_ALL)); // list every merged run so the bins end up empty
+    emitter.instruction("call __rt_heap_consolidate");                          // merge every free block, rax = bytes drained from the bins
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the drained byte count
 }
 
 /// Emits the AArch64 scan that counts live cycle-collector candidate blocks.
@@ -679,11 +622,11 @@ mod tests {
             );
             match target.arch {
                 Arch::AArch64 => {
-                    assert!(asm.contains("bl __rt_heap_free_insert_cached"));
+                    assert!(asm.contains("bl __rt_heap_consolidate"));
                     assert!(asm.contains("fmov x0, d0"));
                 }
                 Arch::X86_64 => {
-                    assert!(asm.contains("call __rt_heap_free_insert_cached"));
+                    assert!(asm.contains("call __rt_heap_consolidate"));
                     assert!(asm.contains("movq rax, xmm0"));
                 }
             }

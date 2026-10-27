@@ -139,6 +139,9 @@ pub(crate) struct CallArgumentEvaluationOwner {
     pub ref_cell_payload: Option<PhpType>,
     /// Whether this is an intermediate receiver alias created for one nested ref argument.
     pub scoped_receiver_alias: bool,
+    /// Whether the pinned source was a borrow the expression did not own (a loaded parameter
+    /// or local): a user call then keeps borrowing it and the pin retires after the call.
+    pub pins_borrowed_source: bool,
 }
 
 /// Keeps one call's evaluation owners distinct from nested expression lowering.
@@ -497,6 +500,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// storage once the body is lowered (`refuse_pointer_reference_bindings`).
     pointer_reference_bindings: Vec<PointerReferenceBinding>,
     source_path: Option<String>,
+    /// PHP-visible labels of closures lowered from this body, keyed by their EIR symbol name.
+    closure_display_names: HashMap<String, String>,
 }
 
 impl<'m, 'f> LoweringContext<'m, 'f> {
@@ -666,6 +671,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             int_seed_bindings: HashMap::new(),
             pointer_reference_bindings: Vec::new(),
             source_path,
+            closure_display_names: HashMap::new(),
         }
     }
 
@@ -818,6 +824,35 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Returns the canonical PHP source path associated with this lowered body, if known.
     pub(crate) fn source_path(&self) -> Option<&str> {
         self.source_path.as_deref()
+    }
+
+    /// Records PHP's `{closure:<context>:<line>}` label for the closure about to be lowered.
+    ///
+    /// The context is the file for top-level code, `name()` inside a function, `Class::name()`
+    /// inside a method and the enclosing closure's own label inside a closure, the spelling PHP
+    /// 8.4+ prints in traces and `__FUNCTION__`.
+    pub(crate) fn register_closure_display_name(&mut self, closure_name: &str, line: u32) {
+        let enclosing_closure = self
+            .builder
+            .function()
+            .flags
+            .is_closure
+            .then(|| self.builder.function().display_name.clone())
+            .flatten();
+        let context = if let Some(enclosing) = enclosing_closure {
+            enclosing
+        } else if self.in_main {
+            self.source_path.clone().unwrap_or_else(|| "unknown".to_string())
+        } else {
+            format!("{}()", self.owner_name)
+        };
+        self.closure_display_names
+            .insert(closure_name.to_string(), format!("{{closure:{context}:{line}}}"));
+    }
+
+    /// Takes the label recorded by [`Self::register_closure_display_name`] for `closure_name`.
+    pub(crate) fn take_closure_display_name(&mut self, closure_name: &str) -> Option<String> {
+        self.closure_display_names.remove(closure_name)
     }
 
     /// Interns a string literal or metadata name in the module data pool.

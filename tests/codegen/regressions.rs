@@ -43,3 +43,5 @@ mod symbol_collisions;
 mod fixed_issue_behaviour;
 #[path = "regressions/fixed_issue_leaks.rs"]
 mod fixed_issue_leaks;
+#[path = "regressions/large_runtime_outputs.rs"]
+mod large_runtime_outputs;

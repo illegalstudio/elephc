@@ -479,12 +479,13 @@ fn test_array_slice_str_is_emitted_for_every_supported_target() {
     }
 }
 
-/// The incremental JSON and serialize encoders call the shared scratch-capacity guard and
-/// keep each target's instruction set out of the other target's output.
+/// The incremental JSON and serialize encoders write through the growable `__rt_strbuf_*`
+/// output buffer (which reserves room before every append and moves to the heap past the
+/// scratch arena) and keep each target's instruction set out of the other target's output.
 ///
-/// A misplaced guard is not cosmetic: an x86 `mov rdi, ...` line inside the AArch64 runtime
-/// makes every program that uses `serialize()` fail to assemble, so this pins both the guard
-/// symbol and the target split for the three encoders that write incrementally.
+/// A misplaced instruction is not cosmetic: an x86 `mov rdi, ...` line inside the AArch64
+/// runtime makes every program that uses `serialize()` fail to assemble, so this pins both the
+/// buffer protocol and the target split for the three encoders that write incrementally.
 #[test]
 fn serialize_and_json_encoders_emit_the_capacity_guard_for_their_own_architecture() {
     for name in ["macos-aarch64", "linux-x86_64"] {
@@ -501,8 +502,8 @@ fn serialize_and_json_encoders_emit_the_capacity_guard_for_their_own_architectur
         let serialize = serialize.output();
         for (what, asm) in [("json object", object), ("json array", array), ("serialize", serialize)] {
             assert!(
-                asm.contains("__rt_concat_headroom"),
-                "{name} {what}: encoder never calls the shared capacity guard"
+                asm.contains("__rt_strbuf_"),
+                "{name} {what}: encoder never goes through the growable output buffer"
             );
             if aarch64 {
                 assert!(

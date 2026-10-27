@@ -552,6 +552,57 @@ mod tests {
         assert!(args.iter().any(|argument| argument == "-Wl,--allow-multiple-definition"));
     }
 
+    /// Verifies the hosted-extension engine counts as a Rust bridge when the link plan is built
+    /// the way the compiler builds it: the engine archive enters as a managed package (so it can
+    /// follow the extension archives), and one more bridge such as `--with-crypto` then makes two
+    /// Rust staticlibs, whose duplicate runtime members GNU ld refuses without the flag.
+    #[test]
+    fn linux_hosted_engine_plus_one_bridge_allows_multiple_definition() {
+        use crate::link_planning::{build, LinkPlanningInputs, HOSTED_ENGINE_PACKAGE};
+        use crate::native_deps::ResolvedNativePackage;
+
+        let package = |name: &str, archive: &str| ResolvedNativePackage {
+            package: name.to_string(),
+            artifact_root: PathBuf::from("/cache"),
+            archives: vec![PathBuf::from(archive)],
+            system_libraries: Vec::new(),
+            library_paths: Vec::new(),
+            frameworks: Vec::new(),
+        };
+        let packages = [
+            package("extension:demo", "/cache/libdemo.a"),
+            package(HOSTED_ENGINE_PACKAGE, "/cache/libelephc_zend.a"),
+        ];
+        let forced = ["elephc_crypto".to_string()];
+        let planned = build(LinkPlanningInputs {
+            user_libraries: &[],
+            user_search_paths: &[],
+            user_frameworks: &[],
+            checker_libraries: &[],
+            runtime_requirements: &[],
+            managed_packages: &packages,
+            forced_bridges: &forced,
+            web: false,
+        });
+        // Bridge resolution turns each named bridge into its archive.
+        let resolved = LinkPlan::from_items(
+            planned
+                .items()
+                .iter()
+                .map(|item| match item {
+                    LinkItem::NamedLibrary { name, origin: LinkOrigin::Bridge { .. } } => {
+                        LinkItem::bridge_archive(format!("lib{name}.a"), name.clone(), false)
+                    }
+                    other => other.clone(),
+                })
+                .collect(),
+        );
+        let args = render_linux(&resolved);
+        assert!(args.iter().any(|argument| argument == "-Wl,--allow-multiple-definition"), "{args:?}");
+        let position = |needle: &str| args.iter().position(|argument| argument.ends_with(needle));
+        assert!(position("libdemo.a") < position("libelephc_zend.a"), "the engine follows the extension: {args:?}");
+    }
+
     /// Verifies a single bridge archive does not relax linker duplicate checks.
     #[test]
     fn linux_single_bridge_archive_keeps_strict_definitions() {

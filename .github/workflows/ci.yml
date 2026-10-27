@@ -52,6 +52,7 @@ env:
     -p elephc-instr
     -p elephc-probe
     -p elephc-curl
+    -p elephc-zend
 
 jobs:
   # Chooses the tiers this run executes (scripts/ci/plan_tiers.sh, CONTRIBUTING.md § "CI

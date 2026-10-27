@@ -44,6 +44,10 @@ pub struct Emitter {
     /// Only set for the macOS executable runtime object; Linux uses per-section
     /// `--gc-sections` and cdylibs never dead-strip.
     pub dead_strip: bool,
+    /// The platform-mangled symbol of the hosted-extension shutdown routine, when this module
+    /// hosts PHP extensions. Every process-exit sequence calls it after flushing output, which
+    /// is where php-src runs request shutdown (RSHUTDOWN) and then module shutdown (MSHUTDOWN).
+    pub exit_hook: Option<String>,
     /// Names of internal (`label()`) labels recorded while `dead_strip` is set,
     /// used by `localize_internal_labels` to rewrite them `L`-prefixed.
     internal_labels: HashSet<String>,
@@ -73,6 +77,7 @@ impl Emitter {
             concat_capacity: 65_536,
             cdylib_boundary: false,
             dead_strip: false,
+            exit_hook: None,
             internal_labels: HashSet::new(),
             out_of_line: String::new(),
         }

@@ -22,14 +22,13 @@
 //!   grew a real `HashContext` object (`elephc::hash_prelude`) and became
 //!   `hash_context_draws_an_object_handle_in_creation_order`, a parity assertion.
 //! - THE DIVERGENCE PINS IN THIS FILE are
-//!   `computed_debug_info_is_ignored_and_declared_properties_print_instead`,
-//!   and `reflection_subclass_debug_info_projection_drops_backing_slots`. elephc honours
-//!   `__debugInfo()` only when its body is a static property projection (folded into
-//!   `_class_vd_desc_*` at compile time); a body that computes values falls back to the
-//!   declared-property list. A `__debugInfo()` projection that reads a private Reflection
-//!   backing slot drops the pair instead of publishing compiler storage. Both tests assert
-//!   elephc's actual output with PHP's spelled out beside it, so they cannot be mistaken for
-//!   parity.
+//!   `reflection_subclass_debug_info_projection_drops_backing_slots`: a `__debugInfo()`
+//!   projection that reads a private Reflection backing slot drops the pair instead of
+//!   publishing compiler storage. The test asserts elephc's actual output with PHP's spelled
+//!   out beside it, so it cannot be mistaken for parity. Any other `__debugInfo()` is parity:
+//!   a static property projection is folded into `_class_vd_desc_*` at compile time, and a
+//!   body that computes values is called at run time (see
+//!   `computed_debug_info_prints_the_returned_array`).
 //! - ENUM CASES ARE LAZY NOW, AND THAT CELL IS PARITY. Cases used to be created in
 //!   bulk in `main`'s prologue, which burnt one handle per case of every referenced
 //!   enum before user code ran; `enum_cases_are_eager_so_handles_shift_divergence`
@@ -1534,24 +1533,17 @@ fn debug_info_projection_may_rename_reorder_and_be_empty() {
     );
 }
 
-/// KNOWN DIVERGENCE — a `__debugInfo()` body that is NOT a property projection is
-/// IGNORED, and the declared properties are printed instead.
+/// A `__debugInfo()` body that is NOT a property projection is CALLED at run time, and the
+/// array it returns replaces the declared properties (this used to be a divergence pin: the
+/// compiler could only fold projections, so a computing body fell back to the real properties).
 ///
-/// elephc folds `__debugInfo()` statically, so it can only honour bodies that reduce to
-/// "print these property slots under these names". A body that COMPUTES a value has no
-/// property slot to point at and falls back to the declared-property list — which is
-/// exactly what elephc did for every class before the projection support landed, so the
-/// fallback introduces no new failure and turns no compiling program into an error.
-///
-/// Reference PHP 8.5.6 prints `object(C)#1 (1) { ["n"]=> int(2) }` for this program.
-/// This assertion is elephc's ACTUAL output with PHP's spelled out beside it: it is a
-/// divergence pin, NOT parity, and it must never be read as one. Implementing it
-/// faithfully requires calling the method from `__rt_var_dump_object`, which is
-/// hand-written assembly on every target.
+/// Reference PHP 8.5.6 prints `object(C)#1 (1) { ["n"]=> int(2) }` for this program, and so
+/// does elephc now. The full run-time matrix (print_r, nesting, subclasses, recursion,
+/// non-array results) lives in `tests/codegen/objects/debug_info_dumps.rs`.
 #[test]
-fn computed_debug_info_is_ignored_and_declared_properties_print_instead() {
+fn computed_debug_info_prints_the_returned_array() {
     let out = run_php(
-        "debuginfo_computed_divergence",
+        "debuginfo_computed",
         concat!(
             "<?php\n",
             "class C {\n",
@@ -1561,18 +1553,12 @@ fn computed_debug_info_is_ignored_and_declared_properties_print_instead() {
             "var_dump(new C());\n",
         ),
     );
-    // Reference PHP 8.5.6 prints:  object(C)#1 (1) { ["n"]=> int(2) }
     assert_eq!(
         out,
         concat!(
             "object(C)#1 (1) {\n",
-            "  [\"items\"]=>\n",
-            "  array(2) {\n",
-            "    [0]=>\n",
-            "    int(1)\n",
-            "    [1]=>\n",
-            "    int(2)\n",
-            "  }\n",
+            "  [\"n\"]=>\n",
+            "  int(2)\n",
             "}\n",
         )
     );

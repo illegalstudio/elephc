@@ -110,6 +110,27 @@ struct ServerGuard {
     child: std::process::Child,
 }
 
+/// Spawns web-server children in their own process group, owned by a
+/// [`ServerGuard`] that tears the whole group down.
+trait SpawnGroup {
+    /// Spawns the command as the leader of a new process group with stdin and
+    /// stdout detached, so the server (and its forked workers) never hold the
+    /// test harness's captured pipes and can be killed together via `killpg`.
+    fn spawn_group(&mut self) -> std::io::Result<ServerGuard>;
+}
+
+impl SpawnGroup for Command {
+    /// See [`SpawnGroup::spawn_group`].
+    fn spawn_group(&mut self) -> std::io::Result<ServerGuard> {
+        use std::os::unix::process::CommandExt;
+        self.process_group(0)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .spawn()
+            .map(ServerGuard::new)
+    }
+}
+
 impl ServerGuard {
     /// Wraps an already-spawned server child so it is reaped on scope exit.
     fn new(child: std::process::Child) -> Self {
@@ -127,24 +148,64 @@ impl ServerGuard {
     /// covers a wedged master after a short grace period. This inherent method
     /// shadows `Child::kill` through the `Deref`, so every existing
     /// `child.kill()` call site becomes graceful with no change. Idempotent: an
-    /// already-exited child returns `Ok` immediately.
+    /// already-reaped child returns `Ok` immediately.
+    ///
+    /// The group signals are all sent BEFORE the leader is reaped: its zombie
+    /// keeps the pid, so the process group id cannot be handed to an unrelated
+    /// group while `killpg` still targets it. Reaping is left to `wait()`.
     fn kill(&mut self) -> std::io::Result<()> {
-        if matches!(self.child.try_wait(), Ok(Some(_))) {
-            return Ok(());
+        let pgid = self.child.id() as libc::pid_t;
+        match self.leader_state() {
+            LeaderState::Reaped => return Ok(()),
+            LeaderState::Exited => {
+                // Sweep any worker that outlived the master.
+                unsafe { libc::killpg(pgid, libc::SIGKILL) };
+                return Ok(());
+            }
+            LeaderState::Running => {}
         }
-        let pid = self.child.id().to_string();
-        let _ = Command::new("kill").arg("-TERM").arg(&pid).status();
+        unsafe { libc::killpg(pgid, libc::SIGTERM) };
         let deadline = Instant::now() + Duration::from_secs(3);
         while Instant::now() < deadline {
-            if matches!(self.child.try_wait(), Ok(Some(_))) {
-                return Ok(());
+            if self.leader_state() != LeaderState::Running {
+                break;
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        // Wedged master: force-kill. Its workers may briefly orphan, but this
-        // path is the rare exception, not the steady-state teardown.
-        self.child.kill()
+        // Sweep the workers, or force-kill a wedged master with them.
+        if self.leader_state() != LeaderState::Reaped {
+            unsafe { libc::killpg(pgid, libc::SIGKILL) };
+        }
+        Ok(())
     }
+
+    /// Reports whether the group leader still runs, has exited (a zombie not
+    /// reaped yet, so its pgid is still reserved) or was already reaped, without
+    /// reaping it (`WNOWAIT`).
+    fn leader_state(&self) -> LeaderState {
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let flags = libc::WEXITED | libc::WNOHANG | libc::WNOWAIT;
+        let status = unsafe { libc::waitid(libc::P_PID, self.child.id() as libc::id_t, &mut info, flags) };
+        if status != 0 {
+            // ECHILD: `wait()`/`try_wait()` already reaped it.
+            LeaderState::Reaped
+        } else if unsafe { info.si_pid() } == 0 {
+            LeaderState::Running
+        } else {
+            LeaderState::Exited
+        }
+    }
+}
+
+/// What `ServerGuard::leader_state` observed about the server process.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LeaderState {
+    /// The leader still runs.
+    Running,
+    /// The leader exited and is a zombie: its pid, and so the group id, stays reserved.
+    Exited,
+    /// The leader was reaped: the group id may already belong to someone else.
+    Reaped,
 }
 
 impl std::ops::Deref for ServerGuard {
@@ -165,7 +226,8 @@ impl std::ops::DerefMut for ServerGuard {
 impl Drop for ServerGuard {
     /// Gracefully terminates and reaps the server unconditionally, even during a
     /// panic unwind, so neither the master nor its workers leak. Best-effort: an
-    /// already-reaped child is a no-op.
+    /// already-reaped child is a no-op. `kill` signals the whole group before
+    /// `wait()` reaps the leader, never after (the group id could be reused).
     fn drop(&mut self) {
         let _ = self.kill();
         let _ = self.child.wait();
@@ -187,14 +249,12 @@ fn spawn_server_with_args(
     workers: &str,
     extra_args: &[&str],
 ) -> ServerGuard {
-    let child = ServerGuard::new(
-        Command::new(bin)
-            .arg("--listen").arg(addr)
-            .arg("--workers").arg(workers)
-            .args(extra_args)
-            .spawn()
-            .expect("failed to spawn web server"),
-    );
+    let child = Command::new(bin)
+        .arg("--listen").arg(addr)
+        .arg("--workers").arg(workers)
+        .args(extra_args)
+        .spawn_group()
+        .expect("failed to spawn web server");
     wait_until_ready(addr);
     child
 }
@@ -1384,7 +1444,7 @@ fn web_late_header_and_status_emit_headers_already_sent_warnings() {
     let mut child = Command::new(&bin)
         .args(["--listen", &addr, "--workers", "1"])
         .stderr(Stdio::from(stderr))
-        .spawn()
+        .spawn_group()
         .expect("spawn late-header warning server");
     wait_until_ready(&addr);
 
@@ -1503,7 +1563,7 @@ fn web_gc_stats_are_emitted_per_request() {
     let mut child = Command::new(&bin)
         .args(["--listen", &addr, "--workers", "1"])
         .stderr(Stdio::from(stderr_file))
-        .spawn()
+        .spawn_group()
         .expect("spawn web server with gc stats");
     wait_until_ready(&addr);
 
@@ -1565,10 +1625,11 @@ echo "cleared";
     let addr = format!("127.0.0.1:{}", free_port());
     let stderr_path = dir.join("server.stderr");
     let stderr_file = fs::File::create(&stderr_path).expect("create server stderr capture");
-    let mut child = ServerGuard::new(Command::new(&bin)
+    let mut child = Command::new(&bin)
         .args(["--listen", &addr, "--workers", "1"])
         .stderr(Stdio::from(stderr_file))
-        .spawn().expect("spawn eval superglobal server"));
+        .spawn_group()
+        .expect("spawn eval superglobal server");
     wait_until_ready(&addr);
     for rounds in [1, 2, 4, 8] {
         let request_started = Instant::now();
@@ -1694,12 +1755,10 @@ fn web_body_size_limit_returns_413() {
     let bin = compile_web(&dir, src, "app");
     let port = free_port();
     let addr = format!("127.0.0.1:{}", port);
-    let mut child = ServerGuard::new(
-        Command::new(&bin)
-            .args(["--listen", &addr, "--workers", "1", "--max-body-size", "64"])
-            .spawn()
-            .expect("spawn"),
-    );
+    let mut child = Command::new(&bin)
+        .args(["--listen", &addr, "--workers", "1", "--max-body-size", "64"])
+        .spawn_group()
+        .expect("spawn");
     wait_until_ready(&addr);
     let small = http_request(&addr, "POST", "/", &[("Content-Type", "text/plain")], &"x".repeat(10));
     let big = http_request(&addr, "POST", "/", &[("Content-Type", "text/plain")], &"x".repeat(1000));
@@ -1727,7 +1786,7 @@ fn web_body_read_timeout_returns_408_for_trickled_request() {
             "--body-read-timeout",
             "1",
         ])
-        .spawn()
+        .spawn_group()
         .expect("spawn body-timeout server");
     wait_until_ready(&addr);
 
@@ -2041,7 +2100,7 @@ echo "fast";
         ])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .spawn()
+        .spawn_group()
         .expect("spawn response-timeout server");
     wait_until_ready(&addr);
 
@@ -2216,13 +2275,11 @@ fn web_env_superglobal_populated() {
     let bin = compile_web(&dir, src, "app");
     let port = free_port();
     let addr = format!("127.0.0.1:{}", port);
-    let mut child = ServerGuard::new(
-        Command::new(&bin)
+    let mut child =         Command::new(&bin)
             .args(["--listen", &addr, "--workers", "1"])
             .env("ELEPHC_WEB_TEST_ENV", "present")
-            .spawn()
-            .expect("spawn"),
-    );
+            .spawn_group()
+            .expect("spawn");
     wait_until_ready(&addr);
     let resp = http_request(&addr, "GET", "/", &[], "");
     let _ = child.kill();
@@ -2279,12 +2336,10 @@ fn web_max_requests_recycles_and_keeps_serving() {
     let bin = compile_web(&dir, "<?php echo 'ok';", "app");
     let port = free_port();
     let addr = format!("127.0.0.1:{}", port);
-    let mut child = ServerGuard::new(
-        Command::new(&bin)
+    let mut child =         Command::new(&bin)
             .args(["--listen", &addr, "--workers", "1", "--max-requests", "2"])
-            .spawn()
-            .expect("spawn"),
-    );
+            .spawn_group()
+            .expect("spawn");
     wait_until_ready(&addr);
     // More requests than the cap: the server must keep serving across recycles.
     // A single-worker recycle has a brief no-listener window, so tolerate transient
@@ -2317,8 +2372,7 @@ fn web_max_requests_drains_keep_alive_before_recycle() {
         };
         let port = free_port();
         let addr = format!("127.0.0.1:{port}");
-        let mut child = ServerGuard::new(
-            Command::new(&bin)
+        let mut child =             Command::new(&bin)
                 .args([
                     "--listen",
                     &addr,
@@ -2327,9 +2381,8 @@ fn web_max_requests_drains_keep_alive_before_recycle() {
                     "--max-requests",
                     "1",
                 ])
-                .spawn()
-                .expect("spawn isolated web server"),
-        );
+                .spawn_group()
+                .expect("spawn isolated web server");
         wait_until_ready(&addr);
 
         let mut socket = TcpStream::connect(&addr).expect("connect keep-alive client");
@@ -2381,7 +2434,7 @@ fn web_max_requests_survives_sustained_recycle_churn() {
     let addr = format!("127.0.0.1:{}", port);
     let mut child = Command::new(&bin)
         .args(["--listen", &addr, "--workers", "1", "--max-requests", "2"])
-        .spawn()
+        .spawn_group()
         .expect("spawn");
     wait_until_ready(&addr);
     // 30 requests with a quota of 2 forces ~15 recycles (> MAX_FAST_DEATHS).
@@ -2442,12 +2495,10 @@ fn web_max_execution_time_kills_runaway_handler() {
     let bin = compile_web(&dir, src, "app");
     let port = free_port();
     let addr = format!("127.0.0.1:{}", port);
-    let mut child = ServerGuard::new(
-        Command::new(&bin)
+    let mut child =         Command::new(&bin)
             .args(["--listen", &addr, "--workers", "1", "--max-execution-time", "1"])
-            .spawn()
-            .expect("spawn"),
-    );
+            .spawn_group()
+            .expect("spawn");
     wait_until_ready(&addr);
     assert!(http_request(&addr, "GET", "/", &[], "").ends_with("fast"));
     // The runaway request is killed by the watchdog (dropped connection); tolerate it.
@@ -2527,12 +2578,10 @@ fn web_gzip_compresses_when_accepted() {
     );
     let port = free_port();
     let addr = format!("127.0.0.1:{}", port);
-    let mut child = ServerGuard::new(
-        Command::new(&bin)
+    let mut child =         Command::new(&bin)
             .args(["--listen", &addr, "--workers", "1", "--gzip"])
-            .spawn()
-            .expect("spawn"),
-    );
+            .spawn_group()
+            .expect("spawn");
     wait_until_ready(&addr);
     // The gzipped body is binary, so read raw bytes and inspect the (ASCII) header
     // block rather than http_request's read_to_string.

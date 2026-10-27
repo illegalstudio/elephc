@@ -94,7 +94,7 @@ pub(crate) fn emit_native_debug(emitter: &mut Emitter) {
     abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 1), result);
     load_argument(emitter, 0, RECEIVER);
     abi::emit_store_zero_to_symbol(emitter, "_vd_indent", 0);
-    abi::emit_call_label(emitter, "__rt_var_dump_open_object_with_count");
+    abi::emit_call_label(emitter, "__rt_var_dump_open_object_n");
     abi::load_at_offset(emitter, abi::secondary_scratch_reg(emitter), INDENT);
     abi::emit_store_reg_to_symbol(emitter, abi::secondary_scratch_reg(emitter), "_vd_indent", 0);
     abi::emit_call_label(emitter, "__rt_vd_indent_push");

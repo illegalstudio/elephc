@@ -274,6 +274,57 @@ fn test_heap_debug_double_free_reports_error() {
     assert!(err.contains("heap debug detected double free"), "{err}");
 }
 
+/// Verifies a double free is still caught once consolidation has merged binned blocks.
+/// Inline assembly harness: allocates A and B (16 bytes each) and C (24 bytes, keeping A and B
+/// off the bump tail), frees A and B into their bin, consolidates them into one run headed by A
+/// that goes back to a bin, then frees A again. The run's bin mark must route that free to the
+/// bin scan, which reports it. Target-specific ARM64/x86_64 assembly.
+#[test]
+fn test_heap_debug_double_free_of_consolidated_run_reports_error() {
+    let harness = match target().arch {
+        Arch::AArch64 => {
+            r#"    mov x0, #16
+    bl __rt_heap_alloc
+    str x0, [sp, #-16]!
+    mov x0, #16
+    bl __rt_heap_alloc
+    str x0, [sp, #-16]!
+    mov x0, #24
+    bl __rt_heap_alloc
+    str x0, [sp, #-16]!
+    ldr x0, [sp, #32]
+    bl __rt_heap_free
+    ldr x0, [sp, #16]
+    bl __rt_heap_free
+    mov x0, #0
+    bl __rt_heap_consolidate
+    ldr x0, [sp, #32]
+    bl __rt_heap_free"#
+        }
+        Arch::X86_64 => {
+            r#"    mov eax, 16
+    call __rt_heap_alloc
+    push rax
+    mov eax, 16
+    call __rt_heap_alloc
+    push rax
+    mov eax, 24
+    call __rt_heap_alloc
+    push rax
+    mov rax, QWORD PTR [rsp + 16]
+    call __rt_heap_free
+    mov rax, QWORD PTR [rsp + 8]
+    call __rt_heap_free
+    xor eax, eax
+    call __rt_heap_consolidate
+    mov rax, QWORD PTR [rsp + 16]
+    call __rt_heap_free"#
+        }
+    };
+    let err = compile_harness_expect_failure("<?php", 65_536, harness);
+    assert!(err.contains("heap debug detected double free"), "{err}");
+}
+
 /// Verifies heap debug mode detects a bad refcount by writing zero to the refcount field before calling incref.
 /// Inline assembly harness: allocates 16 bytes, sets refcount to zero at offset -12, calls __rt_incref —
 /// expecting "heap debug detected bad refcount" error. Target-specific ARM64/x86_64 assembly.

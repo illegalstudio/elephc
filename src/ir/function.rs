@@ -75,6 +75,11 @@ pub struct Function {
     /// Normalized expression evaluated by this native callable-default helper, if any.
     pub callable_default: Option<crate::parser::ast::Expr>,
     pub flags: FunctionFlags,
+    /// PHP-visible label of a closure (`{closure:<context>:<line>}`), when it differs from `name`.
+    ///
+    /// Backtraces and uncaught-exception traces print it in place of the compiler-internal
+    /// `__eir_closure_*` symbol name.
+    pub display_name: Option<String>,
     /// Slots the epilogue must never release: values this frame borrows or already moved.
     ///
     /// The inliner transplants a callee's parameter slots and directly-returned slots into
@@ -149,6 +154,7 @@ impl Function {
             callable_default: None,
             source_defaults: Vec::new(),
             flags: FunctionFlags::default(),
+            display_name: None,
             no_epilogue_cleanup_slots: std::collections::HashSet::new(),
             inlined_scopes: std::collections::HashMap::new(),
         }

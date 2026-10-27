@@ -19,6 +19,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::codegen::abi;
+use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::{Arch, Target};
 use crate::codegen::{
@@ -29,7 +30,7 @@ use crate::codegen_support::data_section::DataWord;
 use crate::codegen_support::try_handlers::{EXCEPTION_GUARD_SLOT_SIZE, TRY_HANDLER_SLOT_SIZE};
 use crate::ir::{
     Function, GcControlOp, Immediate, LocalKind, LocalSlotId, Module, Op, RuntimeCallTarget,
-    ValueDef, ValueId,
+    Terminator, ValueDef, ValueId,
 };
 use crate::ir_passes::{allocate_registers, Allocation};
 use crate::names::ir_global_symbol;
@@ -206,8 +207,38 @@ pub(super) fn layout_for_function(
 /// Returns whether any emitted EIR body can request a PHP Core backtrace.
 ///
 /// The predicate lives on `Module` beside `Module::calls_php_backtrace`, the narrower question
-/// the inliner asks before splicing a method frame away.
+/// the inliner asks before splicing a method frame away. A module that can `throw` also keeps the
+/// frame readers: the uncaught-exception report prints PHP's `Stack trace:` block by walking the
+/// activation chain with them.
 pub(super) fn module_uses_backtrace(module: &Module) -> bool {
+    module.uses_php_backtrace() || module_throws(module)
+}
+
+/// Returns whether the module can raise an exception itself through a `throw` statement.
+fn module_throws(module: &Module) -> bool {
+    module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .any(|function| {
+            function
+                .blocks
+                .iter()
+                .any(|block| matches!(block.terminator, Some(Terminator::Throw { .. })))
+                || function.instructions.iter().any(|inst| {
+                    matches!(
+                        inst.op,
+                        Op::ThrowException | Op::ThrowError | Op::ThrowErrorValue
+                    )
+                })
+        })
+}
+
+/// Returns whether any emitted EIR body can request a materialized `debug_backtrace()` array.
+///
+/// Only these modules need the heavy frame reader that builds a PHP frame hash.
+pub(super) fn module_materializes_backtrace(module: &Module) -> bool {
     module.uses_php_backtrace()
 }
 
@@ -393,6 +424,12 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     emit_callee_saved_saves(ctx);
     ctx.emitter.comment("save argc/argv to globals");
     abi::emit_store_process_args_to_globals(ctx.emitter);
+    if let Some(hook) = ctx.emitter.exit_hook.clone() {
+        ctx.emitter.comment("let the runtime's exit paths shut the hosted PHP extensions down");
+        let scratch = abi::int_result_reg(ctx.emitter);
+        abi::emit_symbol_address(ctx.emitter, scratch, &hook);
+        abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_exit_hook", 0);
+    }
     // Measure the stack only after argc/argv are safe in globals: the initializer is an
     // ordinary call and clobbers the C-ABI argument registers they arrive in. `main` itself
     // is never guarded — it is the root of every call chain and runs before the floor exists.
@@ -563,6 +600,11 @@ fn normalize_nullable_pointer_ref_param(ctx: &mut FunctionContext<'_>, offset: u
     }
 }
 
+/// Returns the label of the function-level frame reader published in the activation record.
+fn frame_reader_label(entry_label: &str) -> String {
+    format!("{entry_label}__bt_reader")
+}
+
 /// Publishes one cleanup and/or backtrace activation for a PHP frame.
 fn emit_exception_activation_push(ctx: &mut FunctionContext<'_>, entry_label: &str) {
     let Some(offset) = ctx.exception_activation_offset else {
@@ -587,7 +629,13 @@ fn emit_exception_activation_push(ctx: &mut FunctionContext<'_>, entry_label: &s
         Arch::X86_64 => "rbp",
     };
     abi::store_at_offset(ctx.emitter, frame_pointer, offset - 16);
-    abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
+    // Main carries source coordinates for generated diagnostics but is not a PHP-visible
+    // backtrace frame, so its reader stays null.
+    if ctx.backtrace_activation && !ctx.is_main {
+        abi::emit_symbol_address(ctx.emitter, scratch, &frame_reader_label(entry_label));
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
+    }
     abi::store_at_offset(ctx.emitter, scratch, offset - 24);
     // Synthetic cleanup frames still retain their incoming source coordinate. Their
     // reader stays absent, so PHP backtraces omit them while generated diagnostics can
@@ -618,6 +666,15 @@ pub(super) fn emit_exception_cleanup_callback(
     ctx: &mut FunctionContext<'_>,
     entry_label: &str,
 ) {
+    if ctx.backtrace_activation && !ctx.is_main && ctx.exception_activation_offset.is_some() {
+        let materialize = module_materializes_backtrace(ctx.module);
+        super::lower_inst::emit_function_frame_reader(
+            ctx,
+            &frame_reader_label(entry_label),
+            materialize,
+        )
+        .expect("frame reader emission");
+    }
     if !ctx.exception_cleanup_activation {
         return;
     }
@@ -702,12 +759,27 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     emit_main_local_epilogue_cleanup(ctx);
     emit_main_static_local_cleanup(ctx);
     emit_main_global_epilogue_cleanup(ctx);
-    emit_main_static_property_cleanup(ctx);
-    // Shutdown must retire unreachable cycles after every PHP root is gone,
-    // while destructors can still use registered streams and instrumentation.
+    let (static_properties, hosting_tables) =
+        super::runtime_metadata::static_properties_hosting_last(ctx.module);
+    emit_main_static_property_cleanup(ctx, static_properties);
+    // Collect PHP cycles while eval declarations and hosted extension state are alive.
     abi::emit_call_label(ctx.emitter, "__rt_gc_collect_cycles_explicit");
-    // Dynamic eval destructors need their declaration context during the final collection.
     emit_eval_context_epilogue_cleanup(ctx);
+    // Hosted extensions end the request (RSHUTDOWN) after the program's destructors, then their
+    // hosting tables release the engine objects (`free_obj` may still use module state), and the
+    // exit sequence's hook runs MSHUTDOWN last: php-src's `php_request_shutdown` frees the object
+    // store before `php_module_shutdown`. The hook's own RSHUTDOWN then finds no request left.
+    if !hosting_tables.is_empty() && super::block_emit::module_hosts_php_ext(ctx.module) {
+        let symbol = ctx.emitter.target.extern_symbol(super::block_emit::HOSTED_REQUEST_SHUTDOWN);
+        abi::emit_call_label(ctx.emitter, &symbol);
+    }
+    emit_main_static_property_cleanup(ctx, hosting_tables);
+    abi::emit_call_label(ctx.emitter, "__rt_gc_collect_cycles_explicit");
+    // Last owner teardown: a destructor above, or an engine object a hosting table released, may
+    // still reach C code that calls a callback.
+    if module_binds_extern_callbacks(ctx.module) {
+        abi::emit_call_label(ctx.emitter, EXTERN_CALLBACK_RELEASE_LABEL);
+    }
     if module_uses_resource_inventory_cleanup(ctx.module) {
         abi::emit_call_label(ctx.emitter, "__rt_resource_inventory_reset");
     }
@@ -745,9 +817,42 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     ctx.epilogue_emitted = true;
 }
 
+/// Routine that releases every callable descriptor an extern callback slot retains.
+pub(super) const EXTERN_CALLBACK_RELEASE_LABEL: &str = "__rt_release_extern_callbacks";
+
+/// Returns whether any extern takes a callable, so a callback slot may hold a descriptor.
+pub(super) fn module_binds_extern_callbacks(module: &Module) -> bool {
+    module
+        .extern_decls
+        .iter()
+        .any(|decl| decl.params.iter().any(|param| matches!(param.php_type, PhpType::Callable)))
+}
+
+/// Emits the routine releasing each extern callback slot's descriptor and clearing the slot.
+///
+/// A slot keeps the last callable handed to a C callback alive for the program's life, since C
+/// may call it at any time. Program exit releases them before the heap report, and the `--web`
+/// reset does too: the descriptor lives in the request arena, so a slot surviving the reset
+/// would hand the next binding a retired descriptor to release.
+pub(super) fn emit_extern_callback_release_routine(emitter: &mut Emitter, data: &DataSection) {
+    if emitter.target.arch == Arch::AArch64 {
+        emitter.raw(".align 2");
+    }
+    emitter.blank();
+    emitter.comment("--- extern callback descriptor slots release ---");
+    emitter.label_global(EXTERN_CALLBACK_RELEASE_LABEL);
+    abi::emit_frame_prologue(emitter, 16);
+    for slot in data.extern_callback_slots() {
+        abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), slot, 0);
+        abi::emit_store_zero_to_symbol(emitter, slot, 0);
+        crate::codegen::callable_descriptor::emit_release_current_descriptor(emitter);
+    }
+    abi::emit_frame_restore(emitter, 16);
+    abi::emit_return(emitter);
+}
+
 /// Retires class static owners once, finishing every property before propagating a destructor throw.
-fn emit_main_static_property_cleanup(ctx: &mut FunctionContext<'_>) {
-    let properties = super::runtime_metadata::refcounted_static_properties(ctx.module);
+fn emit_main_static_property_cleanup(ctx: &mut FunctionContext<'_>, properties: Vec<(String, PhpType)>) {
     if properties.is_empty() { return; }
     for (symbol, php_type) in properties {
         let ty = php_type.codegen_repr();
@@ -888,6 +993,13 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
     // every function is emitted; the call here forward-references its label.
     ctx.emitter.comment("reset per-request persistent state");
     abi::emit_call_label(ctx.emitter, "__rt_web_reset");
+    // A hosted PHP extension lives for the whole worker, but its request does not: the reset
+    // ended the previous request (RSHUTDOWN); start this one (RINIT).
+    if super::block_emit::module_hosts_php_ext(ctx.module) {
+        ctx.emitter.comment("hosted PHP extensions: request startup");
+        let symbol = ctx.emitter.target.extern_symbol(super::block_emit::HOSTED_REQUEST_STARTUP);
+        abi::emit_call_label(ctx.emitter, &symbol);
+    }
     emit_opcache_configuration(ctx);
     emit_opcache_restart_boundary(ctx);
     capture_concat_base(ctx);

@@ -12,9 +12,13 @@
 //!   which `TypeSpec` cannot express statically.
 //! - Add `pub mod <name>;` here for every new pointer builtin home.
 
+pub mod __elephc_ptr_get;
 pub mod __elephc_ptr_is_null;
 pub mod __elephc_ptr_read_string;
 pub mod __elephc_ptr_write_string;
+pub mod __elephc_zval_free;
+pub mod __elephc_zval_pack;
+pub mod __elephc_zval_unpack;
 pub mod buffer_free;
 pub mod buffer_len;
 pub mod buffer_ptr;

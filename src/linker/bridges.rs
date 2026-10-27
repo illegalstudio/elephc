@@ -339,7 +339,35 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
             trace_context: TraceContextPolicy::Automatic,
         },
     },
+    BridgeStaticlib {
+        lib_name: "elephc_zend",
+        env_var: "ELEPHC_ZEND_LIB_DIR",
+        crate_name: "elephc-zend",
+        flag_name: "zend",
+        whole_archive: false,
+        apple_frameworks: &[],
+        // `php_iconv_string` uses the system iconv, its own library on Apple targets.
+        apple_libraries: &["iconv"],
+        needs_libdl: true,
+        // The engine hosted PECL/PIE extensions run on; the extensions themselves
+        // report their own names.
+        php_extensions: &[],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
 ];
+
+/// Locates (auto-building in a source checkout) the archive of the bridge
+/// named `lib_name`, for links planned outside the named-library path.
+pub(super) fn locate_archive(lib_name: &str) -> Result<PathBuf, LinkError> {
+    let bridge = bridge_for_library(lib_name).ok_or_else(|| LinkError::MissingBridge {
+        name: lib_name.to_string(),
+        archive: None,
+        env_var: None,
+        searched: Vec::new(),
+        override_dir: None,
+    })?;
+    bridge.archive_path()
+}
 
 /// A typed plan after known bridge names have been resolved as far as possible.
 #[derive(Debug)]

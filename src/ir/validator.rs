@@ -733,9 +733,11 @@ fn validate_opcode_rules(
         | CatchCurrent | CatchBind | FinallyEnter | FinallyExit | IncludeOnceMark
         | IncludeOnceGuard | FunctionVariantMark | FunctionVariantDispatch | EvalFunctionExists
         | EvalClassExists | EvalConstantExists | EvalConstantFetch | ConcatReset | GcCollect
-        | GcControl | Nop => {
+        | Nop => {
             check_count(inst_id, inst, 0, "0")
         }
+        // Memory-usage selectors carry the optional `$real_usage` flag as their one operand.
+        GcControl => check_count_at_most(inst_id, inst, 1, "0 or 1"),
         CoreBuiltin => {
             let Some(Immediate::I64(selector)) = inst.immediate.as_ref() else {
                 return Ok(());

@@ -110,7 +110,9 @@ pub fn generate_runtime_with_features_mode(
     emitter.dead_strip = dead_strip;
     // The result arena shares the program's memory budget: a larger heap means a
     // larger scratch arena, so encoders are not capped at the historical 64 KiB.
-    emitter.concat_capacity = heap_size.max(65_536);
+    // Capped at 1 GiB so x86_64 can compare against it as a signed 32-bit immediate; a
+    // writer that outgrows the arena moves to the heap (or fails closed) either way.
+    emitter.concat_capacity = heap_size.clamp(65_536, 1 << 30);
     emitter.emit_text_prelude();
     runtime::emit_runtime(&mut emitter, features);
     // Rename internal labels to `L`-locals in the runtime text only; the `.data`

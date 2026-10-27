@@ -210,10 +210,22 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.comment("--- runtime: implode ---");
     emitter.label_global("__rt_implode");
 
+    // -- the generic entry reads the element layout from the array header --
+    emitter.instruction("ldr x4, [x3, #-8]");                                   // load packed indexed-array metadata for element layout dispatch
+    emitter.instruction("lsr x4, x4, #8");                                      // move the indexed-array value_type tag into the low bits
+    emitter.instruction("and x4, x4, #0x7f");                                   // isolate the indexed-array element value_type tag
+    // An explicit branch, not a fall-through: the typed entry is its own global symbol, so on
+    // Mach-O it is a separate atom that dead-stripping may move or drop.
+    emitter.instruction("b __rt_implode_typed");                                // continue in the shared join body
+
+    // -- typed entry: x4 = element value_type chosen by the caller --
+    emitter.label_global("__rt_implode_typed");
+
     // -- set up stack frame (128 bytes) --
     emitter.instruction("sub sp, sp, #128");                                    // allocate 128 bytes on the stack
     emitter.instruction("stp x29, x30, [sp, #112]");                            // save frame pointer and return address
     emitter.instruction("add x29, sp, #112");                                   // establish new frame pointer
+    emitter.instruction("str x4, [sp, #40]");                                   // preserve the value_type tag across mixed element casts
     emitter.instruction("stp x1, x2, [sp]");                                    // save glue string ptr and length
     emitter.instruction("str x3, [sp, #16]");                                   // save array pointer
 
@@ -235,10 +247,6 @@ pub fn emit_implode(emitter: &mut Emitter) {
     // -- load array length and initialize index --
     emitter.instruction("ldr x3, [sp, #16]");                                   // reload array pointer
     emitter.instruction("ldr x10, [x3]");                                       // load array element count
-    emitter.instruction("ldr x12, [x3, #-8]");                                  // load packed indexed-array metadata for element layout dispatch
-    emitter.instruction("lsr x12, x12, #8");                                    // move the indexed-array value_type tag into the low bits
-    emitter.instruction("and x12, x12, #0x7f");                                 // isolate the indexed-array element value_type tag
-    emitter.instruction("str x12, [sp, #40]");                                  // preserve the value_type tag across mixed element casts
     emitter.instruction("mov x11, #0");                                         // initialize element index = 0
 
     // -- main loop: join elements with glue --
@@ -428,6 +436,29 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits a typed `implode()` entry that forces the element layout and joins through
+/// `__rt_implode_typed`.
+///
+/// `__rt_implode_int`, `__rt_implode_float`, and `__rt_implode_bool` are these entries: the
+/// statically known element type picks the raw-scalar arm (`value_type` 0, 2, or 3) of the one
+/// bounded join, so every typed join formats into its own reserved destination and grows onto
+/// the heap instead of streaming into `_concat_buf` unchecked.
+pub(crate) fn emit_implode_typed_entry(emitter: &mut Emitter, label: &str, value_type: u8) {
+    emitter.blank();
+    emitter.comment(&format!("--- runtime: {} ---", label.trim_start_matches("__rt_")));
+    emitter.label_global(label);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("mov x4, #{}", value_type));           // force the statically known element layout
+            emitter.instruction("b __rt_implode_typed");                        // join through the bounded, growable implode body
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov ecx, {}", value_type));           // force the statically known element layout
+            emitter.instruction("jmp __rt_implode_typed");                      // join through the bounded, growable implode body
+        }
+    }
+}
+
 /// Addresses the current raw 8-byte element slot on x86_64, leaving it in `rcx`.
 fn emit_x86_64_scalar_slot_address(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, r11");                                        // copy the loop cursor before scaling it to a raw scalar slot offset
@@ -514,9 +545,19 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: implode ---");
     emitter.label_global("__rt_implode");
 
+    // -- the generic entry reads the element layout from the array header --
+    emitter.instruction("mov rcx, QWORD PTR [rdx - 8]");                        // load packed indexed-array metadata for element layout dispatch
+    emitter.instruction("shr rcx, 8");                                          // move the indexed-array value_type tag into the low bits
+    emitter.instruction("and rcx, 0x7f");                                       // isolate the indexed-array element value_type tag
+    emitter.instruction("jmp __rt_implode_typed");                              // continue in the shared join body (a separate symbol, never a fall-through)
+
+    // -- typed entry: rcx = element value_type chosen by the caller --
+    emitter.label_global("__rt_implode_typed");
+
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving implode spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for glue, array, and concat-buffer bookkeeping
     emitter.instruction("sub rsp, 112");                                        // reserve aligned spill slots for glue, array, concat destination, array length, loop index, the owned mixed-cast string, and the destination bound
+    emitter.instruction("mov QWORD PTR [rbp - 64], rcx");                       // preserve the value_type tag across mixed element casts
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the glue string pointer across the indexed-array copy loop and concat-buffer bookkeeping
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the glue string length across the indexed-array copy loop and concat-buffer bookkeeping
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // preserve the indexed-array pointer across the element copy loop and concat-buffer bookkeeping
@@ -538,10 +579,6 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rdx]");                            // load the indexed-array logical length once before entering the implode loop
     emitter.instruction("mov QWORD PTR [rbp - 48], r11");                       // preserve the indexed-array logical length for the loop termination check
     emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // initialize the indexed-array loop cursor to the first element
-    emitter.instruction("mov r11, QWORD PTR [rdx - 8]");                        // load packed indexed-array metadata for element layout dispatch
-    emitter.instruction("shr r11, 8");                                          // move the indexed-array value_type tag into the low bits
-    emitter.instruction("and r11, 0x7f");                                       // isolate the indexed-array element value_type tag
-    emitter.instruction("mov QWORD PTR [rbp - 64], r11");                       // preserve the value_type tag across mixed element casts
 
     emitter.label("__rt_implode_loop");
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the current indexed-array loop cursor before deciding whether implode is complete

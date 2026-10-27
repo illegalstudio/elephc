@@ -70,7 +70,7 @@ pub(super) fn lower_diagnostic_caller_line(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.label(&done);
 }
 
-/// Publishes the source line and a call-site-specific frame reader before a nested PHP call.
+/// Publishes the caller's source line before a nested PHP call so the callee's activation can record it.
 pub(super) fn prepare_call_site(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -101,30 +101,9 @@ pub(super) fn prepare_call_site(
     abi::emit_load_int_immediate(ctx.emitter, scratch, line);
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_backtrace_next_line", 0);
 
-    if !ctx.backtrace_activation {
-        return Ok(());
-    }
-    let activation_offset = ctx
-        .exception_activation_offset
-        .expect("backtrace activation requires an activation frame slot");
-    abi::store_at_offset(ctx.emitter, scratch, activation_offset - 32);
-    // Main carries source coordinates for generated diagnostics without contributing a
-    // PHP-visible backtrace frame. Its reader remains null throughout its lifetime.
-    if ctx.is_main {
-        return Ok(());
-    }
-    // Address-taken entries need real symbols: Mach-O folds temporary L labels into
-    // their enclosing symbol's signed 24-bit addend, which large PHP frames exceed.
-    // label() keeps this entry file-local; it is not exported with .globl.
-    let callback = ctx.next_global_label("backtrace_frame_reader");
-    abi::emit_symbol_address(ctx.emitter, scratch, &callback);
-    abi::store_at_offset(ctx.emitter, scratch, activation_offset - 24);
-
-    let resume = ctx.next_label("backtrace_call_site");
-    abi::emit_jump(ctx.emitter, &resume);
-    ctx.emitter.label(&callback);
-    emit_frame_reader_callback(ctx)?;
-    ctx.emitter.label(&resume);
+    // The callee's prologue copies this line into its own activation (`[32]`) and installs its
+    // function-level frame reader (`[24]`); a call site must never overwrite either word, or every
+    // frame would report the line of its own next call instead of the line it was called from.
     Ok(())
 }
 
@@ -356,20 +335,45 @@ fn advance_trace_cursor(ctx: &mut FunctionContext<'_>) {
     abi::emit_store_to_sp(ctx.emitter, cursor_reg, TRACE_CURSOR_OFFSET);
 }
 
-/// Emits one call-site-specific callback that reads the suspended PHP frame's live locals.
-fn emit_frame_reader_callback(ctx: &mut FunctionContext<'_>) -> Result<()> {
+/// Emits the function-level callback that reads the suspended PHP frame's live locals.
+///
+/// The prologue publishes `label` in the activation record (`[24]`), so every frame on the chain
+/// can be walked, including one that never calls anything before it throws. With `materialize`
+/// the callback can also build a `debug_backtrace()` frame hash; without it only the print mode
+/// used by the uncaught-exception report is emitted, which keeps the per-function size small for
+/// programs that never call `debug_backtrace()`.
+pub(in crate::codegen) fn emit_function_frame_reader(
+    ctx: &mut FunctionContext<'_>,
+    label: &str,
+    materialize: bool,
+) -> Result<()> {
+    ctx.emitter.blank();
+    ctx.emitter.comment("PHP frame reader for backtraces and uncaught-exception traces");
+    // A real symbol, so Mach-O never folds it into its function's addend, but file-local:
+    // only the prologue in this object takes its address.
+    ctx.emitter.label(label);
+    emit_frame_reader_callback(ctx, materialize)
+}
+
+/// Emits one callback body that reads the suspended PHP frame's live locals.
+fn emit_frame_reader_callback(ctx: &mut FunctionContext<'_>, materialize: bool) -> Result<()> {
     emit_frame_reader_prologue(ctx);
     capture_callback_argument_count(ctx)?;
-    let materialize = ctx.next_label("backtrace_frame_materialize");
+    if !materialize {
+        emit_printed_frame(ctx)?;
+        emit_frame_reader_epilogue(ctx);
+        return Ok(());
+    }
+    let materialize_label = ctx.next_label("backtrace_frame_materialize");
     abi::emit_load_temporary_stack_slot(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
         CALLBACK_PRINT_INDEX_OFFSET,
     );
-    emit_branch_if_negative(ctx, &materialize);
+    emit_branch_if_negative(ctx, &materialize_label);
     emit_printed_frame(ctx)?;
     emit_frame_reader_epilogue(ctx);
-    ctx.emitter.label(&materialize);
+    ctx.emitter.label(&materialize_label);
     allocate_mixed_hash(ctx, 8);
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     let file = ctx.module.source_path.clone().unwrap_or_else(|| "Unknown".to_string());
@@ -975,7 +979,14 @@ fn emit_printed_live_arguments(ctx: &mut FunctionContext<'_>) -> Result<()> {
         ctx.load_local_to_result(slot)?;
         // A `?ptr<T>` parameter keeps its union, so address 0 prints as PHP null.
         let ty = ctx.local_mixed_box_type(slot)?;
-        if super::backtrace_sensitive::is_sensitive(ctx, &name) {
+        if super::backtrace_sensitive::is_sensitive(ctx, &name)
+            && !super::backtrace_sensitive::wrapper_class_is_emitted(ctx)
+        {
+            // An uncaught-exception trace reaches every function's reader, including ones in
+            // programs that never build the wrapper class: print PHP's rendering of it, never
+            // the value itself.
+            super::backtrace_sensitive::emit_printed_placeholder(ctx);
+        } else if super::backtrace_sensitive::is_sensitive(ctx, &name) {
             super::backtrace_sensitive::wrap_value(ctx, &ty)?;
             abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
             abi::emit_call_label(ctx.emitter, "__rt_backtrace_print_arg");
@@ -985,6 +996,22 @@ fn emit_printed_live_arguments(ctx: &mut FunctionContext<'_>) -> Result<()> {
             print_current_argument_value(ctx, &ty);
         }
         increment_printed_argument_count(ctx, 0);
+    }
+    if ctx.local_slot_by_name(crate::func_args::HIDDEN_ARGS_PARAM).is_none() {
+        if let Some(variadic_slot) = source_variadic
+            .as_deref()
+            .and_then(|name| ctx.local_slot_by_name(name))
+        {
+            // Without a hidden collector the declared `...$rest` array still holds every surplus
+            // argument, and PHP lists them one by one after the fixed parameters.
+            if let PhpType::Array(element_ty) = ctx.local_php_type(variadic_slot)? {
+                let sensitive = source_variadic
+                    .as_ref()
+                    .is_some_and(|name| super::backtrace_sensitive::is_sensitive(ctx, name));
+                ctx.load_local_to_result(variadic_slot)?;
+                emit_printed_argument_array_range(ctx, 0, &element_ty, &done, sensitive)?;
+            }
+        }
     }
     if let Some(hidden_args) = ctx.local_slot_by_name(crate::func_args::HIDDEN_ARGS_PARAM) {
         let hidden_ty = ctx.local_php_type(hidden_args)?;
@@ -1133,7 +1160,10 @@ fn emit_printed_argument_array_range(
     emit_printed_actual_count_guard(ctx, 48, &range_done);
     emit_printed_argument_separator(ctx, 48);
     let repr = element_ty.codegen_repr();
-    if sensitive {
+    if sensitive && !super::backtrace_sensitive::wrapper_class_is_emitted(ctx) {
+        // See `emit_printed_live_arguments`: never the value, PHP's rendering of the wrapper.
+        super::backtrace_sensitive::emit_printed_placeholder(ctx);
+    } else if sensitive {
         emit_load_argument_tail_value(ctx, &repr);
         super::backtrace_sensitive::wrap_value(ctx, &repr)?;
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
@@ -1177,6 +1207,23 @@ fn load_borrowed_argument_tail_box(ctx: &mut FunctionContext<'_>) {
 
 /// Returns class, function, and call-type strings for the current frame.
 fn frame_function_parts(ctx: &FunctionContext<'_>) -> (Option<String>, String, &'static str) {
+    if let Some(label) = &ctx.function.display_name {
+        // A closure declared in a class keeps that class and the call type PHP prints for it:
+        // `Class->{closure:...}()` when `$this` is bound, `Class::{closure:...}()` otherwise.
+        let class = ctx
+            .function
+            .lexical_class
+            .as_ref()
+            .map(|class| class.trim_start_matches('\\').to_string());
+        let call_type = if class.is_none() {
+            ""
+        } else if ctx.local_slot_by_name("this").is_some() {
+            "->"
+        } else {
+            "::"
+        };
+        return (class, label.clone(), call_type);
+    }
     match ctx.function.display_name().rsplit_once("::") {
         Some((class, function)) => (
             Some(class.trim_start_matches('\\').to_string()),

@@ -978,3 +978,115 @@ echo "done";
         out.stderr
     );
 }
+
+/// Verifies memory usage grows with a large array, shrinks after it is released, and stays under the peak.
+#[test]
+fn test_core_memory_get_usage_tracks_allocation_and_release() {
+    let out = compile_and_run(
+        r#"<?php
+$n = 100000 + $argc - 1;
+$before = memory_get_usage();
+$big = range(1, $n);
+$during = memory_get_usage();
+$peak = memory_get_peak_usage();
+unset($big);
+$after = memory_get_usage();
+echo is_int($before) && $before > 0 ? "int" : "bad"; echo ":";
+echo $during - $before >= 400000 ? "grew" : "bad"; echo ":";
+echo $during - $after >= 400000 ? "shrank" : "bad"; echo ":";
+echo $peak >= $during ? "peak" : "bad"; echo ":";
+echo memory_get_peak_usage() >= $peak && memory_get_peak_usage() >= memory_get_usage() ? "kept" : "bad";
+"#,
+    );
+    assert_eq!(out, "int:grew:shrank:peak:kept");
+}
+
+/// Verifies the real-usage variants report arena bytes at or above the live bytes and honor every call form.
+#[test]
+fn test_core_memory_usage_real_variants() {
+    let out = compile_and_run(
+        r#"<?php
+$n = 100000 + $argc - 1;
+$big = range(1, $n);
+$live = memory_get_usage(false);
+$real = memory_get_usage(true);
+echo is_int($real) && $real > 0 ? "int" : "bad"; echo ":";
+echo $real >= $live ? "real" : "bad"; echo ":";
+echo memory_get_usage(real_usage: true) >= $live ? "named" : "bad"; echo ":";
+echo call_user_func("memory_get_usage", true) >= $live ? "callable" : "bad"; echo ":";
+echo memory_get_peak_usage(true) >= memory_get_usage(true) ? "peakreal" : "bad"; echo ":";
+echo memory_get_peak_usage(true) >= memory_get_peak_usage(false) ? "order" : "bad"; echo ":";
+$fn = memory_get_usage(...);
+echo $fn() > 0 && $fn(true) > 0 ? "fcc" : "bad"; echo count($big) === $n ? ":ok" : ":bad";
+"#,
+    );
+    assert_eq!(out, "int:real:named:callable:peakreal:order:fcc:ok");
+}
+
+/// Verifies the real peak follows an array that grows in place at the heap tail: the extension
+/// advances the arena offset, so the peak must never fall below `memory_get_usage(true)`.
+#[test]
+fn test_core_memory_real_peak_follows_in_place_array_growth() {
+    let out = compile_and_run(
+        r#"<?php
+function grow(int $n): int {
+    $a = [1];
+    $bad = 0;
+    for ($i = 0; $i < $n; $i++) {
+        memory_reset_peak_usage();
+        $a[] = $i;
+        if (memory_get_peak_usage(true) < memory_get_usage(true)) {
+            $bad++;
+        }
+    }
+    return $bad;
+}
+echo grow(5000 + $argc - 1);
+"#,
+    );
+    assert_eq!(out, "0");
+}
+
+/// Verifies a non-bool `$real_usage` flag is coerced like PHP's bool parameter: an int `2` and a
+/// `true` held in a bool|string local both select the real variant, a falsy `"0"` the live one.
+/// The Mixed local used to reach codegen as its box pointer and pick a variant from its low bit.
+#[test]
+fn test_core_memory_get_usage_coerces_a_mixed_real_usage_flag() {
+    let out = compile_and_run(
+        r#"<?php
+$m = $argc > 0 ? true : "x";
+$z = $argc > 0 ? "0" : 1;
+echo memory_get_usage(2) === memory_get_usage(true) ? "int" : "bad"; echo ":";
+echo memory_get_usage($m) === memory_get_usage(true) ? "mixed" : "bad"; echo ":";
+echo memory_get_peak_usage($m) === memory_get_peak_usage(true) ? "peak" : "bad"; echo ":";
+echo memory_get_usage($z) === memory_get_usage(false) ? "falsy" : "bad";
+"#,
+    );
+    assert_eq!(out, "int:mixed:peak:falsy");
+}
+
+/// Verifies resetting the peak lowers it to the current usage for both the live and real watermarks.
+#[test]
+fn test_core_memory_reset_peak_usage_matches_current_usage() {
+    let out = compile_and_run(
+        r#"<?php
+$n = 100000 + $argc - 1;
+$big = range(1, $n);
+unset($big);
+$high = memory_get_peak_usage();
+$highReal = memory_get_peak_usage(true);
+$ret = memory_reset_peak_usage();
+$peak = memory_get_peak_usage();
+$usage = memory_get_usage();
+$peakReal = memory_get_peak_usage(true);
+$usageReal = memory_get_usage(true);
+echo $ret === null ? "void" : "bad"; echo ":";
+echo $high - $usage >= 400000 ? "high" : "bad"; echo ":";
+echo $peak >= $usage && $peak - $usage < 4096 ? "reset" : "bad"; echo ":";
+echo $peakReal >= $usageReal && $peakReal <= $highReal ? "realreset" : "bad"; echo ":";
+$again = range(1, $n);
+echo memory_get_peak_usage() - $peak >= 400000 ? "regrow" : "bad";
+"#,
+    );
+    assert_eq!(out, "void:high:reset:realreset:regrow");
+}

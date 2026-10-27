@@ -394,9 +394,10 @@ mod tests {
         // the manifest. `opcache_invalidate` needs TWO of them because php-src's predicate
         // differs by `$force` and the non-forced arm reads the cache's recorded mtime.
         //
-        // None of the eleven is callable from eval'd code.
-        // Includes SimpleXML allocation/warnings, the abstract-class probe and the internal random helper.
-        assert_eq!(eval_internal, 131);
+        // None of the eleven is callable from eval'd code. Nor are the four internal aliases
+        // the extension-hosting prelude calls (`__elephc_ptr_get`, `__elephc_zval_*`).
+        // Also includes SimpleXML allocation/diagnostics and its abstract-class probe.
+        assert_eq!(eval_internal, 135);
         // 28 registry builtins awaiting eval homes, plus the 325 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
         assert_eq!(eval_pending, 359);
@@ -406,8 +407,9 @@ mod tests {
         // The four float pointer builtins (`ptr_read_f32`, `ptr_write_f32`, `ptr_read_f64`,
         // `ptr_write_f64`) and `buffer_ptr` are ordinary registry builtins on both backends.
         // The tokenizer location helper is a typed ordinary registry operation.
-        // Five native heap metric operations use the ordinary AOT registry.
-        assert_eq!(aot_registry, 768);
+        // Five native heap metric operations use the ordinary AOT registry, and so do the four
+        // internal aliases the extension-hosting prelude calls.
+        assert_eq!(aot_registry, 772);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
         assert_eq!(aot_external, 427 + curl_surface);
@@ -464,8 +466,9 @@ mod tests {
         // interpreter adapters.
         assert_eq!(interpreter_adapter, 612 + curl_surface);
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
-        // call from AOT code and have no eval execution route of their own.
-        assert_eq!(unsupported, 490);
+        // call from AOT code and have no eval execution route of their own. So do the four
+        // internal aliases the extension-hosting prelude calls.
+        assert_eq!(unsupported, 494);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

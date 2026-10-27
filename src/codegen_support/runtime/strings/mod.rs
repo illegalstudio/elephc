@@ -8,11 +8,12 @@
 //! Key details:
 //! - String helpers use PHP pointer/length pairs and target ABI return registers; heap-backed results must remain refcount-compatible.
 
-mod itoa;
+pub(crate) mod itoa;
 mod offset_warning;
 mod concat;
 mod str_append;
 pub(crate) mod concat_scratch;
+mod strbuf;
 mod ftoa;
 mod php_num_scan;
 mod str_eq;
@@ -145,6 +146,11 @@ pub use atoi::emit_atoi;
 pub use strcopy::emit_strcopy;
 /// Emit string copy helper.
 pub use concat_scratch::emit_concat_scratch;
+/// Fixed capacity shared by emitters that prove a result fits the concat scratch buffer.
+pub(crate) use concat_scratch::{FLOAT_SPILL_SLOTS, FLOAT_WINDOW_BYTES};
+pub use strbuf::emit_strbuf;
+/// Emit the growable output buffer used by `json_encode()` and `serialize()`.
+pub(crate) use strbuf::{STRBUF_SIZE, STRBUF_WRITE};
 pub use str_persist::emit_str_persist;
 /// Emit string persistence helper.
 pub use str_inc_dec::{emit_mixed_inc_dec, emit_str_inc_dec};

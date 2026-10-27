@@ -240,12 +240,18 @@ const UNCONTRACTED_PRELUDE_DECLARATIONS: &[(&str, &str)] = &[(
 /// `curl_prelude` is parsed rather than built (see `injected_prelude_programs`); it is audited
 /// through the same AST path, because the gate is about what a prelude CALLS, not about how
 /// its declarations were produced.
+///
+/// The extension-hosting prelude is audited too, on a sample hosted surface: it depends on the
+/// project's installed extensions, and its extern declarations have no PHP text, so it sits
+/// outside `injected_prelude_programs`.
 #[test]
 fn injected_preludes_never_call_php_visible_extension_builtins() {
     let extension_names = php_visible_extension_builtins();
 
+    let mut programs = injected_prelude_programs();
+    programs.push(("php_ext_prelude", crate::php_ext::prelude::sample_declarations()));
     let mut violations: Vec<String> = Vec::new();
-    for (prelude, program) in &injected_prelude_programs() {
+    for (prelude, program) in &programs {
         let called = crate::synthetic_class::called_function_names(program);
         for name in &extension_names {
             if called.iter().any(|call| call.eq_ignore_ascii_case(name)) {

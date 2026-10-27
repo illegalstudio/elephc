@@ -23,7 +23,6 @@ use crate::codegen_support::emit::Emitter;
 /// ABI: x0 = source ptr, x1 = source len, returns x1 = output ptr, x2 = output length.
 /// Caller: `crate::codegen_support::runtime::system`.
 pub(super) fn emit(emitter: &mut Emitter) {
-    let cap = emitter.concat_capacity;
     emitter.blank();
     emitter.comment("--- runtime: json_encode_str ---");
     emitter.label_global("__rt_json_encode_str");
@@ -42,11 +41,6 @@ pub(super) fn emit(emitter: &mut Emitter) {
     // -- save inputs --
     emitter.instruction("str x1, [sp, #0]");                                    // save source ptr
     emitter.instruction("str x2, [sp, #8]");                                    // save source len
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_buf");
-    let guard_limit = cap - 16;
-    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x10", guard_limit as i64); // leave room for one multibyte escape
-    emitter.instruction("add x9, x9, x10");                                     // compute the last write position that still leaves escape headroom
-    emitter.instruction("str x9, [sp, #48]");                                   // save the scratch guard limit for every write site
 
     // Cache _json_active_flags in x19 so the per-byte escape loop reads the
     // bitmask from a register instead of reloading from memory at every
@@ -63,15 +57,12 @@ pub(super) fn emit(emitter: &mut Emitter) {
     // -- numeric raw-copy path --
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload the source pointer
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload the source length
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // load the current concat-buffer offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_concat_buf");
-    emitter.instruction("add x11, x11, x10");                                   // compute the write pointer
+    emitter.instruction("mov x0, x2");                                          // the copy needs exactly the source length
+    emitter.instruction("bl __rt_strbuf_reserve_temp");                         // scratch when it fits, a transient heap block otherwise
+    emitter.instruction("mov x11, x0");                                         // write pointer = the reservation
     emitter.instruction("str x11, [sp, #16]");                                  // save the output start pointer for the return slice
-    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x12", cap as i64); // load the full scratch capacity
-    emitter.instruction("sub x12, x12, x10");                                   // remaining bytes before the arena end
-    emitter.instruction("cmp x2, x12");                                         // does the raw numeric copy still fit?
-    emitter.instruction("b.hi __rt_json_str_overflow");                         // fail closed instead of copying past the arena
+    emitter.instruction("ldr x1, [sp, #0]");                                    // reload the source pointer after the reservation
+    emitter.instruction("ldr x2, [sp, #8]");                                    // reload the source length after the reservation
     emitter.instruction("mov x12, #0");                                         // initialize the copy index
     emitter.label("__rt_json_str_numeric_copy");
     emitter.instruction("cmp x12, x2");                                         // have we copied every byte?
@@ -81,9 +72,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("add x12, x12, #1");                                    // advance the copy index
     emitter.instruction("b __rt_json_str_numeric_copy");                        // continue copying
     emitter.label("__rt_json_str_numeric_done");
-    emitter.instruction("add x10, x10, x2");                                    // advance the concat-buffer offset by the copied length
-    emitter.instruction("str x10, [x9]");                                       // republish the concat-buffer offset
     emitter.instruction("ldr x1, [sp, #16]");                                   // x1 = output start (the copied slice)
+    emitter.instruction("bl __rt_concat_publish");                              // advance _concat_off past a scratch-backed slice (x1/x2 preserved)
     // x2 already holds the source length; reuse it as the result length.
     emitter.instruction("ldr x19, [sp, #56]");                                  // restore the callee-saved register
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
@@ -92,15 +82,45 @@ pub(super) fn emit(emitter: &mut Emitter) {
 
     emitter.label("__rt_json_str_quoted");
 
-    // -- get output position in concat_buf --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // load current offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_concat_buf");
-    emitter.instruction("add x11, x11, x10");                                   // output position
+    // -- size the output in a first pass: plain printable ASCII copies as one byte --
+    // Every other byte (an escapable ASCII character, a control byte, DEL, or
+    // any UTF-8 byte) is budgeted at the 6-byte worst case of a \u00XX escape,
+    // so the reservation never overruns while a long plain string reserves
+    // its own length instead of six times it.
+    emitter.instruction("ldr x1, [sp, #0]");                                    // reload the source pointer for the sizing pass
+    emitter.instruction("ldr x2, [sp, #8]");                                    // reload the source length for the sizing pass
+    emitter.instruction("mov x0, #2");                                          // start the budget with the two quotes
+    emitter.instruction("mov x12, #0");                                         // initialize the sizing index
+    emitter.label("__rt_json_str_size_loop");
+    emitter.instruction("cmp x12, x2");                                         // has every source byte been sized?
+    emitter.instruction("b.ge __rt_json_str_size_done");                        // yes: reserve the computed budget
+    emitter.instruction("ldrb w13, [x1, x12]");                                 // load the next source byte
+    emitter.instruction("add x12, x12, #1");                                    // advance the sizing index
+    emitter.instruction("add x0, x0, #1");                                      // every byte costs at least one output byte
+    emitter.instruction("sub w14, w13, #32");                                   // rebase printable ASCII 0x20..0x7E onto 0..94
+    emitter.instruction("cmp w14, #95");                                        // control bytes wrap high, DEL and UTF-8 bytes land above 94
+    emitter.instruction("b.hs __rt_json_str_size_wide");                        // budget the worst-case escape for them
+    emitter.instruction("cmp w13, #34");                                        // double quote escapes
+    emitter.instruction("b.eq __rt_json_str_size_wide");                        // budget the worst-case escape
+    emitter.instruction("cmp w13, #92");                                        // backslash escapes
+    emitter.instruction("b.eq __rt_json_str_size_wide");                        // budget the worst-case escape
+    emitter.instruction("cmp w13, #47");                                        // slash may escape
+    emitter.instruction("b.eq __rt_json_str_size_wide");                        // budget the worst-case escape
+    emitter.instruction("cmp w13, #60");                                        // '<' may become a hex escape
+    emitter.instruction("b.eq __rt_json_str_size_wide");                        // budget the worst-case escape
+    emitter.instruction("cmp w13, #62");                                        // '>' may become a hex escape
+    emitter.instruction("b.eq __rt_json_str_size_wide");                        // budget the worst-case escape
+    emitter.instruction("cmp w13, #38");                                        // '&' may become a hex escape
+    emitter.instruction("b.eq __rt_json_str_size_wide");                        // budget the worst-case escape
+    emitter.instruction("cmp w13, #39");                                        // '\'' may become a hex escape
+    emitter.instruction("b.ne __rt_json_str_size_loop");                        // any other printable byte copies as one byte
+    emitter.label("__rt_json_str_size_wide");
+    emitter.instruction("add x0, x0, #5");                                      // raise this byte's budget to the 6-byte worst case
+    emitter.instruction("b __rt_json_str_size_loop");                           // size the next byte
+    emitter.label("__rt_json_str_size_done");
+    emitter.instruction("bl __rt_strbuf_reserve_temp");                         // scratch when it fits, a transient heap block otherwise
+    emitter.instruction("mov x11, x0");                                         // output position = the reservation
     emitter.instruction("str x11, [sp, #16]");                                  // save output start
-    emitter.instruction("ldr x12, [sp, #48]");                                  // reload the scratch guard limit
-    emitter.instruction("cmp x11, x12");                                        // does the opening quote leave escape headroom?
-    emitter.instruction("b.hs __rt_json_str_overflow");                         // fail closed when the arena is already nearly full
     emitter.instruction("str x11, [sp, #24]");                                  // save output write pos
 
     // -- write opening quote --
@@ -119,9 +139,6 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload source ptr
     emitter.instruction("ldrb w14, [x1, x13]");                                 // load source byte
     emitter.instruction("ldr x11, [sp, #24]");                                  // reload write pos
-    emitter.instruction("ldr x12, [sp, #48]");                                  // reload the scratch guard limit
-    emitter.instruction("cmp x11, x12");                                        // does one more input byte still leave escape headroom?
-    emitter.instruction("b.hs __rt_json_str_overflow");                         // fail closed instead of escaping past the arena
 
     // -- check for special characters that need escaping --
     emitter.instruction("cmp w14, #34");                                        // check for double quote
@@ -737,14 +754,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to the caller
 
     // -- write closing quote --
-    emitter.label("__rt_json_str_overflow");
-    emitter.instruction("b __rt_concat_overflow");                              // report the oversized result instead of overwriting adjacent BSS
-
     emitter.label("__rt_json_str_close");
     emitter.instruction("ldr x11, [sp, #24]");                                  // reload write pos
-    emitter.instruction("ldr x12, [sp, #48]");                                  // reload the scratch guard limit
-    emitter.instruction("cmp x11, x12");                                        // is there room for the closing quote?
-    emitter.instruction("b.hs __rt_json_str_overflow");                         // fail closed instead of writing the closing quote past the arena
     emitter.instruction("mov w12, #34");                                        // ASCII double quote
     emitter.instruction("strb w12, [x11]");                                     // write closing "
     emitter.instruction("add x11, x11, #1");                                    // advance past closing quote
@@ -754,10 +765,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("sub x2, x11, x1");                                     // x2 = total length
 
     // -- update concat_off --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // load current offset
-    emitter.instruction("add x10, x10, x2");                                    // add result length
-    emitter.instruction("str x10, [x9]");                                       // store updated offset
+    emitter.instruction("bl __rt_concat_publish");                              // advance _concat_off past a scratch-backed result (x1/x2 preserved)
 
     // -- tear down and return --
     emitter.instruction("ldr x19, [sp, #56]");                                  // restore the callee-saved register

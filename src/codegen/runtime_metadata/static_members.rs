@@ -10,12 +10,24 @@
 
 use super::*;
 
-/// Enumerates emitted owning static-property slots once per declaring class, in initializer order.
-pub(in crate::codegen) fn refcounted_static_properties(module: &Module) -> Vec<(String, PhpType)> {
+/// The owning static-property slots, once per declaring class in initializer order, split for shutdown: the program's own, then the hosted
+/// extension tables (`__ElephcPhpExtObjects`). An extension's request shutdown runs after the
+/// program's destructors but may still reach those tables (dropping a callable it kept calls back
+/// into them), so they are released after it, as php-src frees memory after RSHUTDOWN.
+pub(in crate::codegen) fn static_properties_hosting_last(
+    module: &Module,
+) -> (Vec<(String, PhpType)>, Vec<(String, PhpType)>) {
+    let hosting = |class_name: &str| class_name == crate::php_ext::prelude::OBJECT_TABLE;
+    (owning_static_properties(module, |class_name| !hosting(class_name)), owning_static_properties(module, hosting))
+}
+
+/// The owning static-property slots of the classes `keep` accepts.
+fn owning_static_properties(module: &Module, keep: impl Fn(&str) -> bool) -> Vec<(String, PhpType)> {
     let mut class_names = super::runtime_referenced_class_names(module).into_iter().collect::<Vec<_>>();
     class_names.sort();
     let mut props = Vec::new();
     for class_name in class_names {
+        if !keep(&class_name) { continue; }
         let Some(class_info) = module.class_infos.get(&class_name) else { continue; };
         for (property, php_type) in &class_info.static_properties {
             let declaring_class = class_info.static_property_declaring_classes.get(property)

@@ -11,7 +11,7 @@
 //!   xz is first inflated into a sibling temporary of the destination through a size-capped
 //!   writer, so an inflating stream stops at the bound instead of filling the disk.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fs::{self, FileTimes, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -64,6 +64,29 @@ const TAR_TRAILER: u64 = 1024;
 /// Extracts a verified compressed tar of the catalogued format to an empty destination and
 /// returns it.
 pub fn extract_archive(archive_path: &Path, format: ArchiveFormat, destination: &Path) -> Result<PathBuf, NativeError> {
+    extract_archive_tolerating(archive_path, format, destination, Tolerance::default())
+}
+
+/// Shapes a release archive may take beyond what catalog packages are allowed.
+#[derive(Clone, Copy, Default)]
+pub struct Tolerance<'a> {
+    /// Regular files beside the single top-level directory, dropped. A PECL
+    /// release is shaped that way: `package.xml` next to `<name>-<version>/`.
+    pub skip_top_level_files: &'a [&'a str],
+    /// A regular file listed twice, the later copy winning. PECL's packager
+    /// writes a file twice when `package.xml` names it twice, and PHP's own
+    /// installer extracts such releases the same way.
+    pub repeated_files: bool,
+}
+
+/// Like [`extract_archive`], with the given [`Tolerance`]. Links, special
+/// entries, traversal and the size bounds stay refused whatever it says.
+pub fn extract_archive_tolerating(
+    archive_path: &Path,
+    format: ArchiveFormat,
+    destination: &Path,
+    tolerance: Tolerance<'_>,
+) -> Result<PathBuf, NativeError> {
     if destination.exists() {
         return Err(NativeError::new(NativeErrorKind::Archive, "archive destination already exists").with_path(destination));
     }
@@ -74,12 +97,12 @@ pub fn extract_archive(archive_path: &Path, format: ArchiveFormat, destination: 
     }
     let file = fs::File::open(archive_path).map_err(|error| NativeError::io("open source archive", archive_path, error))?;
     match format {
-        ArchiveFormat::TarGz => extract_tar(GzDecoder::new(file), archive_path, compressed_size, destination)?,
+        ArchiveFormat::TarGz => extract_tar(GzDecoder::new(file), archive_path, compressed_size, destination, tolerance)?,
         ArchiveFormat::TarXz => {
             let inflated = inflate_xz(file, archive_path, compressed_size, destination)?;
             let result = fs::File::open(&inflated)
                 .map_err(|error| NativeError::io("open inflated xz source", &inflated, error))
-                .and_then(|tar| extract_tar(BufReader::new(tar), archive_path, compressed_size, destination));
+                .and_then(|tar| extract_tar(BufReader::new(tar), archive_path, compressed_size, destination, tolerance));
             let _ = fs::remove_file(&inflated);
             result?;
         }
@@ -163,10 +186,11 @@ impl<W: Write> Write for BoundedWriter<W> {
 ///
 /// `compressed_size` is the on-disk size of the ORIGINAL compressed archive, whatever the
 /// container, so the compression-ratio bound means the same thing for both formats.
-fn extract_tar<R: Read>(reader: R, archive_path: &Path, compressed_size: u64, destination: &Path) -> Result<(), NativeError> {
+fn extract_tar<R: Read>(reader: R, archive_path: &Path, compressed_size: u64, destination: &Path, tolerance: Tolerance<'_>) -> Result<(), NativeError> {
     let mut archive = tar::Archive::new(reader);
     let mut root: Option<std::ffi::OsString> = None;
-    let mut seen = HashSet::new();
+    // Every extracted path, and whether it is a regular file.
+    let mut seen = HashMap::new();
     let mut entry_count = 0_u64;
     let mut expanded = 0_u64;
 
@@ -185,6 +209,12 @@ fn extract_tar<R: Read>(reader: R, archive_path: &Path, compressed_size: u64, de
             continue;
         }
         let original = entry.path().map_err(|error| archive_error(archive_path, format!("invalid tar path: {error}")))?.into_owned();
+        if entry.header().entry_type().is_file()
+            && original.components().count() == 1
+            && original.to_str().is_some_and(|name| tolerance.skip_top_level_files.contains(&name))
+        {
+            continue;
+        }
         let relative = stripped_path(&original, &mut root)?;
         if relative.as_os_str().is_empty() {
             if !entry.header().entry_type().is_dir() {
@@ -192,10 +222,14 @@ fn extract_tar<R: Read>(reader: R, archive_path: &Path, compressed_size: u64, de
             }
             continue;
         }
-        if !seen.insert(relative.clone()) {
-            return Err(archive_error(&original, "duplicate archive path"));
-        }
         let entry_type = entry.header().entry_type();
+        let mut repeated = false;
+        if let Some(was_file) = seen.insert(relative.clone(), entry_type.is_file()) {
+            if !(tolerance.repeated_files && was_file && entry_type.is_file()) {
+                return Err(archive_error(&original, "duplicate archive path"));
+            }
+            repeated = true;
+        }
         let mode = entry.header().mode().map_err(|error| archive_error(&original, format!("invalid entry mode: {error}")))?;
         if mode & 0o6000 != 0 {
             return Err(archive_error(&original, "setuid and setgid archive modes are forbidden"));
@@ -219,6 +253,9 @@ fn extract_tar<R: Read>(reader: R, archive_path: &Path, compressed_size: u64, de
         }
         if let Some(parent) = output.parent() {
             fs::create_dir_all(parent).map_err(|error| NativeError::io("create extracted file parent", parent, error))?;
+        }
+        if repeated {
+            fs::remove_file(&output).map_err(|error| NativeError::io("replace repeated archive file", &output, error))?;
         }
         let mut file = OpenOptions::new().write(true).create_new(true).open(&output)
             .map_err(|error| NativeError::io("create extracted regular file", &output, error))?;
@@ -447,6 +484,61 @@ mod tests {
         let output = root.join("out");
         extract_archive(&archive, ArchiveFormat::TarGz, &output).unwrap();
         assert_eq!(fs::read(output.join("file.txt")).unwrap(), b"fixture");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A PECL release keeps `package.xml` beside `<name>-<version>/`. Skipping it
+    /// by name extracts the extension; without the skip the second top-level
+    /// entry is still refused, so the tolerance is opt-in and exact.
+    #[test]
+    fn skips_named_top_level_files_beside_the_root() {
+        let root = fixture("pecl");
+        fs::create_dir_all(&root).unwrap();
+        let archive = root.join("ext.tar.gz");
+        let entries = [
+            ("package.xml", tar::EntryType::Regular, 0o644),
+            ("ext-1.0.0/config.m4", tar::EntryType::Regular, 0o644),
+        ];
+        let file = fs::File::create(&archive).unwrap();
+        let mut encoder = GzEncoder::new(file, Compression::default());
+        encoder.write_all(&tar_bytes(&entries)).unwrap();
+        encoder.finish().unwrap();
+
+        let output = root.join("out");
+        let tolerance = Tolerance { skip_top_level_files: &["package.xml"], repeated_files: false };
+        extract_archive_tolerating(&archive, ArchiveFormat::TarGz, &output, tolerance).unwrap();
+        assert_eq!(fs::read(output.join("config.m4")).unwrap(), b"fixture");
+        assert!(!output.join("package.xml").exists());
+
+        let refused = root.join("refused");
+        assert!(extract_archive(&archive, ArchiveFormat::TarGz, &refused).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// PECL's packager writes a file twice when package.xml names it twice
+    /// (brotli 0.21.0, ast 1.1.3). Tolerated only when asked, and only for
+    /// regular files: the later copy wins.
+    #[test]
+    fn tolerates_a_repeated_regular_file_only_when_asked() {
+        let root = fixture("repeated");
+        fs::create_dir_all(&root).unwrap();
+        let archive = root.join("ext.tar.gz");
+        let entries = [
+            ("ext-1.0.0/a.h", tar::EntryType::Regular, 0o644),
+            ("ext-1.0.0/a.h", tar::EntryType::Regular, 0o644),
+        ];
+        let file = fs::File::create(&archive).unwrap();
+        let mut encoder = GzEncoder::new(file, Compression::default());
+        encoder.write_all(&tar_bytes(&entries)).unwrap();
+        encoder.finish().unwrap();
+
+        let output = root.join("out");
+        let tolerance = Tolerance { skip_top_level_files: &[], repeated_files: true };
+        extract_archive_tolerating(&archive, ArchiveFormat::TarGz, &output, tolerance).unwrap();
+        assert_eq!(fs::read(output.join("a.h")).unwrap(), b"fixture");
+
+        let refused = root.join("refused");
+        assert!(extract_archive(&archive, ArchiveFormat::TarGz, &refused).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 

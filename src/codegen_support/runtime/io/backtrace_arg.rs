@@ -69,7 +69,28 @@ fn emit_backtrace_print_arg_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_ftoa");                                        // x1/x2 = PHP-formatted float byte pair
     emitter.instruction("mov x0, x1");                                          // stdout pointer argument
     emitter.instruction("mov x1, x2");                                          // stdout length argument
-    emitter.instruction("b __rt_bt_arg_write_done");                            // write the converted float
+    emitter.instruction("stp x0, x1, [sp, #24]");                               // keep the digits to scan for a fraction after they are written
+    emitter.instruction("bl __rt_stdout_write");                                // write the converted float
+    emitter.label("__rt_bt_arg_float_scan");
+    emitter.instruction("ldp x9, x10, [sp, #24]");                              // reload the scan cursor and the remaining length
+    emitter.instruction("cbz x10, __rt_bt_arg_float_zero_frac");                // no '.', exponent or special spelling found: PHP prints a trailing .0
+    emitter.instruction("ldrb w11, [x9]");                                      // load one digit byte
+    emitter.instruction("cmp w11, #46");                                        // '.' already marks a fraction
+    emitter.instruction("b.eq __rt_bt_arg_done");                               // nothing to append
+    emitter.instruction("cmp w11, #69");                                        // 'E' marks an exponent form
+    emitter.instruction("b.eq __rt_bt_arg_done");                               // nothing to append
+    emitter.instruction("cmp w11, #78");                                        // 'N' marks NAN
+    emitter.instruction("b.eq __rt_bt_arg_done");                               // nothing to append
+    emitter.instruction("cmp w11, #73");                                        // 'I' marks INF
+    emitter.instruction("b.eq __rt_bt_arg_done");                               // nothing to append
+    emitter.instruction("add x9, x9, #1");                                      // advance the scan cursor
+    emitter.instruction("sub x10, x10, #1");                                    // one fewer byte to scan
+    emitter.instruction("stp x9, x10, [sp, #24]");                              // preserve the scan state
+    emitter.instruction("b __rt_bt_arg_float_scan");                            // examine the next byte
+    emitter.label("__rt_bt_arg_float_zero_frac");
+    abi::emit_symbol_address(emitter, "x0", "_bt_arg_zero_frac");
+    emitter.instruction("mov x1, #2");                                          // len(".0")
+    emitter.instruction("b __rt_bt_arg_write_done");                            // an integral float keeps its .0, as in php-src traces
 
     emitter.label("__rt_bt_arg_bool");
     emitter.instruction("ldr x9, [sp, #8]");                                    // inspect the boolean payload
@@ -129,6 +150,13 @@ fn emit_backtrace_print_arg_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_stdout_write");                                // write the opening single quote
     emitter.instruction("ldr x9, [sp, #8]");                                    // load the source string pointer
     emitter.instruction("ldr x10, [sp, #16]");                                  // load the source byte length
+    emitter.instruction("mov w12, #0");                                         // assume the string fits PHP's 15-byte argument budget
+    emitter.instruction("cmp x10, #15");                                        // is the string longer than the budget?
+    emitter.instruction("b.ls __rt_bt_arg_string_len_ready");                   // short strings print in full
+    emitter.instruction("mov x10, #15");                                        // php-src renders only the first 15 bytes of a long string
+    emitter.instruction("mov w12, #1");                                         // remember to append the ellipsis before the closing quote
+    emitter.label("__rt_bt_arg_string_len_ready");
+    emitter.instruction("str w12, [sp, #44]");                                  // keep the truncation flag clear of the four-byte escape buffer
     emitter.instruction("str x9, [sp, #24]");                                   // initialize the byte cursor
     emitter.instruction("str x10, [sp, #32]");                                  // initialize the remaining-byte count
     emitter.label("__rt_bt_arg_string_loop");
@@ -194,6 +222,12 @@ fn emit_backtrace_print_arg_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_bt_arg_string_loop");                           // render the next source byte
 
     emitter.label("__rt_bt_arg_string_close");
+    emitter.instruction("ldr w12, [sp, #44]");                                  // reload the truncation flag
+    emitter.instruction("cbz w12, __rt_bt_arg_string_closed");                  // an untruncated string needs no ellipsis
+    abi::emit_symbol_address(emitter, "x0", "_bt_arg_ellipsis");
+    emitter.instruction("mov x1, #3");                                          // len("...")
+    emitter.instruction("bl __rt_stdout_write");                                // php-src marks a truncated argument with three dots
+    emitter.label("__rt_bt_arg_string_closed");
     abi::emit_symbol_address(emitter, "x0", "_bt_arg_quote");
     emitter.instruction("mov x1, #1");                                          // closing quote length
 
@@ -254,7 +288,30 @@ fn emit_backtrace_print_arg_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_ftoa");                                      // rax/rdx = PHP-formatted float byte pair
     emitter.instruction("mov rdi, rax");                                        // stdout pointer argument
     emitter.instruction("mov rsi, rdx");                                        // stdout length argument
-    emitter.instruction("jmp __rt_bt_arg_write_done_x");                        // write the converted float
+    emitter.instruction("mov QWORD PTR [rbp - 32], rdi");                       // keep the digits to scan for a fraction after they are written
+    emitter.instruction("mov QWORD PTR [rbp - 40], rsi");                       // and their remaining length
+    emitter.instruction("call __rt_stdout_write");                              // write the converted float
+    emitter.label("__rt_bt_arg_float_scan_x");
+    emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // reload the scan cursor
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the remaining length
+    emitter.instruction("test r10, r10");                                       // any bytes left to scan?
+    emitter.instruction("jz __rt_bt_arg_float_zero_frac_x");                    // no '.', exponent or special spelling found: PHP prints a trailing .0
+    emitter.instruction("movzx r11d, BYTE PTR [r9]");                           // load one digit byte
+    emitter.instruction("cmp r11d, 46");                                        // '.' already marks a fraction
+    emitter.instruction("je __rt_bt_arg_done_x");                               // nothing to append
+    emitter.instruction("cmp r11d, 69");                                        // 'E' marks an exponent form
+    emitter.instruction("je __rt_bt_arg_done_x");                               // nothing to append
+    emitter.instruction("cmp r11d, 78");                                        // 'N' marks NAN
+    emitter.instruction("je __rt_bt_arg_done_x");                               // nothing to append
+    emitter.instruction("cmp r11d, 73");                                        // 'I' marks INF
+    emitter.instruction("je __rt_bt_arg_done_x");                               // nothing to append
+    emitter.instruction("add QWORD PTR [rbp - 32], 1");                         // advance the scan cursor
+    emitter.instruction("sub QWORD PTR [rbp - 40], 1");                         // one fewer byte to scan
+    emitter.instruction("jmp __rt_bt_arg_float_scan_x");                        // examine the next byte
+    emitter.label("__rt_bt_arg_float_zero_frac_x");
+    abi::emit_symbol_address(emitter, "rdi", "_bt_arg_zero_frac");
+    emitter.instruction("mov rsi, 2");                                          // len(".0")
+    emitter.instruction("jmp __rt_bt_arg_write_done_x");                        // an integral float keeps its .0, as in php-src traces
 
     emitter.label("__rt_bt_arg_bool_x");
     emitter.instruction("cmp QWORD PTR [rbp - 16], 0");                         // inspect the boolean payload
@@ -318,6 +375,12 @@ fn emit_backtrace_print_arg_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_stdout_write");                              // write the opening single quote
     emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // load the source string pointer
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // load the source byte length
+    emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // assume the string fits PHP's 15-byte argument budget
+    emitter.instruction("cmp r10, 15");                                         // is the string longer than the budget?
+    emitter.instruction("jbe __rt_bt_arg_string_len_ready_x");                  // short strings print in full
+    emitter.instruction("mov r10, 15");                                         // php-src renders only the first 15 bytes of a long string
+    emitter.instruction("mov QWORD PTR [rbp - 56], 1");                         // remember to append the ellipsis before the closing quote
+    emitter.label("__rt_bt_arg_string_len_ready_x");
     emitter.instruction("mov QWORD PTR [rbp - 32], r9");                        // initialize the byte cursor
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // initialize the remaining-byte count
     emitter.label("__rt_bt_arg_string_loop_x");
@@ -378,6 +441,12 @@ fn emit_backtrace_print_arg_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_bt_arg_string_loop_x");                       // render the next source byte
 
     emitter.label("__rt_bt_arg_string_close_x");
+    emitter.instruction("cmp QWORD PTR [rbp - 56], 0");                         // was the string truncated to the 15-byte budget?
+    emitter.instruction("je __rt_bt_arg_string_closed_x");                      // an untruncated string needs no ellipsis
+    abi::emit_symbol_address(emitter, "rdi", "_bt_arg_ellipsis");
+    emitter.instruction("mov rsi, 3");                                          // len("...")
+    emitter.instruction("call __rt_stdout_write");                              // php-src marks a truncated argument with three dots
+    emitter.label("__rt_bt_arg_string_closed_x");
     abi::emit_symbol_address(emitter, "rdi", "_bt_arg_quote");
     emitter.instruction("mov rsi, 1");                                          // closing quote length
 

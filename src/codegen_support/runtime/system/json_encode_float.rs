@@ -82,21 +82,15 @@ pub(crate) fn emit_json_encode_float(emitter: &mut Emitter) {
     emitter.instruction("b __rt_json_encode_float_scan");                       // continue scanning
 
     emitter.label("__rt_json_encode_float_append_dot_zero");
-    // Append `.0` at the tail of the formatted slice. The slice already
-    // lives in concat_buf at concat_off-len, so writing two bytes at the
-    // current concat_off and bumping concat_off + len keeps the slice
-    // contiguous.
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_concat_off");
-    emitter.instruction("ldr x11, [x10]");                                      // load the current concat-buffer offset (one past the formatted slice)
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_concat_buf");
-    emitter.instruction("add x12, x12, x11");                                   // compute the address of the next free byte
+    // Append `.0` right after the formatted slice. The formatter returns a 64-byte window (the
+    // scratch tail or a spill slot), so the two bytes always fit, and the slice stays contiguous.
+    emitter.instruction("add x12, x1, x2");                                     // address of the byte just past the formatted slice
     emitter.instruction("mov w13, #46");                                        // ASCII '.'
     emitter.instruction("strb w13, [x12]");                                     // emit the decimal point
     emitter.instruction("mov w13, #48");                                        // ASCII '0'
     emitter.instruction("strb w13, [x12, #1]");                                 // emit the trailing zero
-    emitter.instruction("add x11, x11, #2");                                    // advance the concat offset by the appended bytes
-    emitter.instruction("str x11, [x10]");                                      // republish the concat-buffer offset
     emitter.instruction("add x2, x2, #2");                                      // grow the result length to cover the appended `.0`
+    emitter.instruction("bl __rt_concat_publish");                              // advance the concat offset past the longer slice when it sits in the scratch
 
     emitter.label("__rt_json_encode_float_done");
     emitter.instruction("ldp x29, x30, [sp], #16");                             // restore frame pointer and link register
@@ -163,14 +157,11 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_json_encode_float_scan_x");                   // continue scanning
 
     emitter.label("__rt_json_encode_float_append_dot_zero_x");
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_concat_off", 0);              // load the current concat-buffer offset
-    abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // materialize the concat-buffer base
-    emitter.instruction("add r10, r9");                                         // compute the address of the next free byte
+    emitter.instruction("lea r10, [rax + rdx]");                                // address of the byte just past the formatted slice (the formatter returns a 64-byte window)
     emitter.instruction("mov BYTE PTR [r10], 46");                              // emit the decimal point
     emitter.instruction("mov BYTE PTR [r10 + 1], 48");                          // emit the trailing zero
-    emitter.instruction("add r9, 2");                                           // advance the concat offset by the appended bytes
-    abi::emit_store_reg_to_symbol(emitter, "r9", "_concat_off", 0);             // republish the concat-buffer offset
     emitter.instruction("add rdx, 2");                                          // grow the result length to cover the appended `.0`
+    emitter.instruction("call __rt_concat_publish");                            // advance the concat offset past the longer slice when it sits in the scratch
 
     emitter.label("__rt_json_encode_float_done_x");
     emitter.instruction("mov rsp, rbp");                                        // unwind the helper frame

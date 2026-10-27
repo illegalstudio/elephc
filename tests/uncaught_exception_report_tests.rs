@@ -22,8 +22,10 @@
 //! Fatal error: Uncaught Exception in /path/m1.php:2        <- EMPTY message: no colon
 //! ```
 //!
-//! elephc now emits the class, the message, the ` in <file>:<line>` suffix, and exits `255` like
-//! PHP.
+//! elephc now emits the full report PHP does: the class, the message, the ` in <file>:<line>`
+//! suffix, the `Stack trace:` block (one `#n file(line): call(args)` line per live frame and the
+//! closing `#n {main}`), the `Next ...` chain of previous exceptions, the closing
+//! `  thrown in <file> on line <n>` line, and exits `255` like PHP.
 //!
 //! Two framing details were measured later, from RAW BYTES rather than from the message text, and
 //! both had gone unnoticed because reading a merged `2>&1` hides them:
@@ -43,10 +45,12 @@
 //!   which is precisely the `new`; `separates_construction_from_throw_site` is the test that would
 //!   fail if the line were taken from the `throw` instead, and it is the only one of these tests
 //!   where the two differ.
-//! - THE STACK TRACE IS STILL ABSENT, so the tests assert a PREFIX up to the location rather than
-//!   full equality. `getTrace()`/`getTraceAsString()` remain synthetic in `lower_inst.rs` — an
-//!   empty array and an empty string — because elephc keeps no call stack. Asserting equality
-//!   would freeze that gap as intended behaviour.
+//! - THE STACK TRACE is rendered from the live activation chain at report time. The tests that
+//!   exercise it compare the WHOLE output against reference PHP 8.5 text and, when a `php` binary
+//!   is on the PATH, against what that binary prints for the very same script. The chain test
+//!   keeps both exceptions in one frame on purpose: PHP captures each trace at construction, elephc
+//!   walks the frames live at the uncaught throw, so a previous exception built in a callee that
+//!   has since returned prints a shorter trace (a documented divergence, not pinned here).
 //! - A Throwable with NO user `new` behind it — a `DivisionByZeroError` raised by `intdiv($n, 0)`
 //!   — carries line `0`, and the suffix is omitted entirely rather than printed as `:0`.
 //!   `synthesized_error_omits_the_location_and_still_exits_255` pins both halves of that: the
@@ -142,46 +146,59 @@ fn location_suffix(dir: &Path, script: &str, line: u32) -> String {
     format!(" in {}:{}", canonical.join(script).display(), line)
 }
 
+/// Returns the canonical absolute path reference PHP prints for `script` in `dir`.
+fn canonical_script(dir: &Path, script: &str) -> String {
+    dir.canonicalize()
+        .expect("failed to canonicalize the test directory")
+        .join(script)
+        .display()
+        .to_string()
+}
+
+/// Runs `php -n -d display_errors=1` on the script and returns its stdout, or `None` without PHP.
+fn php_reference(dir: &Path, stem: &str) -> Option<String> {
+    let output = Command::new("php")
+        .args(["-n", "-d", "display_errors=1"])
+        .arg(canonical_script(dir, &format!("{stem}.php")))
+        .output()
+        .ok()?;
+    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Compiles and runs `source`, then requires the report to equal `expected_template` exactly.
+///
+/// `<F>` in the template stands for the canonical script path. The same bytes must also match
+/// what a locally installed `php` prints for the identical script, when one is available.
+fn assert_report(prefix: &str, source: &str, expected_template: &str) {
+    let (reported, code, dir) = run_uncaught(prefix, source);
+    let expected = expected_template.replace("<F>", &canonical_script(&dir, &format!("{prefix}.php")));
+
+    assert_eq!(reported, expected, "report differs from reference PHP 8.5 text");
+    assert_eq!(code, Some(255), "PHP exits 255 for an uncaught exception");
+    if let Some(php) = php_reference(&dir, prefix) {
+        assert_eq!(reported, php, "report differs from the local php binary");
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// A built-in exception subclass reports its own class name, its message and its location.
 #[test]
 fn uncaught_builtin_subclass_reports_class_and_message() {
-    let prefix = "elephc_uncaught_builtin";
-    let (reported, code, dir) = run_uncaught(
-        prefix,
+    assert_report(
+        "elephc_uncaught_builtin",
         "<?php\nthrow new RuntimeException(\"boom detail\");\n",
+        "\nFatal error: Uncaught RuntimeException: boom detail in <F>:2\nStack trace:\n#0 {main}\n  thrown in <F> on line 2\n",
     );
-    let expected = format!(
-        "\nFatal error: Uncaught RuntimeException: boom detail{}",
-        location_suffix(&dir, &format!("{prefix}.php"), 2)
-    );
-
-    assert!(
-        reported.contains(&expected),
-        "the report must name the class, the message and the location;\n  attendu (fragment): {expected:?}\n  got:             {reported:?}"
-    );
-    assert_eq!(code, Some(255), "PHP exits 255 for an uncaught exception");
-    let _ = fs::remove_dir_all(&dir);
 }
 
 /// A USER-DECLARED subclass is named from the runtime class table, not a compile-time literal.
 #[test]
 fn uncaught_user_subclass_reports_its_own_name() {
-    let prefix = "elephc_uncaught_user";
-    let (reported, code, dir) = run_uncaught(
-        prefix,
+    assert_report(
+        "elephc_uncaught_user",
         "<?php\nclass MyErr extends Exception {}\nthrow new MyErr(\"custom text\");\n",
+        "\nFatal error: Uncaught MyErr: custom text in <F>:3\nStack trace:\n#0 {main}\n  thrown in <F> on line 3\n",
     );
-    let expected = format!(
-        "\nFatal error: Uncaught MyErr: custom text{}",
-        location_suffix(&dir, &format!("{prefix}.php"), 3)
-    );
-
-    assert!(
-        reported.contains(&expected),
-        "a user subclass must be named from the runtime class table;\n  attendu (fragment): {expected:?}\n  got:             {reported:?}"
-    );
-    assert_eq!(code, Some(255));
-    let _ = fs::remove_dir_all(&dir);
 }
 
 /// An EMPTY message drops the `": "` separator but KEEPS the location, exactly as PHP does.
@@ -192,19 +209,94 @@ fn uncaught_user_subclass_reports_its_own_name() {
 /// skipping one label too far would drop the suffix along with the separator.
 #[test]
 fn uncaught_empty_message_omits_the_separator() {
-    let prefix = "elephc_uncaught_empty";
-    let (reported, code, dir) = run_uncaught(prefix, "<?php\nthrow new Exception(\"\");\n");
-    let expected = format!(
-        "\nFatal error: Uncaught Exception{}\n",
-        location_suffix(&dir, &format!("{prefix}.php"), 2)
+    assert_report(
+        "elephc_uncaught_empty",
+        "<?php\nthrow new Exception(\"\");\n",
+        "\nFatal error: Uncaught Exception in <F>:2\nStack trace:\n#0 {main}\n  thrown in <F> on line 2\n",
     );
+}
 
-    assert_eq!(
-        reported, expected,
-        "an empty message must not be preceded by a colon, yet must still carry the location"
+/// An uncaught exception thrown inside a function called from the top level lists that call.
+#[test]
+fn uncaught_inside_a_function_called_from_top_level() {
+    assert_report(
+        "elephc_uncaught_toplevel_call",
+        "<?php\nfunction f() {\n    throw new DomainException(\"from f\");\n}\necho \"before\\n\";\nf();\n",
+        "before\n\nFatal error: Uncaught DomainException: from f in <F>:3\nStack trace:\n#0 <F>(6): f()\n#1 {main}\n  thrown in <F> on line 3\n",
     );
-    assert_eq!(code, Some(255));
-    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Nested calls print innermost first, with the call-site line and the formatted arguments.
+#[test]
+fn uncaught_nested_function_trace_formats_arguments() {
+    assert_report(
+        "elephc_uncaught_nested",
+        "<?php\nfunction inner($x) {\n    throw new RuntimeException(\"deep\");\n}\nfunction outer($a, $s) {\n    inner($a + 1);\n}\nouter(1, \"hi\");\n",
+        "\nFatal error: Uncaught RuntimeException: deep in <F>:3\nStack trace:\n#0 <F>(6): inner(2)\n#1 <F>(8): outer(1, 'hi')\n#2 {main}\n  thrown in <F> on line 3\n",
+    );
+}
+
+/// Instance methods print as `Class->method(...)` and static ones as `Class::method(...)`.
+#[test]
+fn uncaught_method_trace_uses_class_and_arrow() {
+    assert_report(
+        "elephc_uncaught_method",
+        "<?php\nclass K {\n    function m($v) {\n        throw new LogicException(\"in method\");\n    }\n    static function s() {\n        (new K)->m(null);\n    }\n}\nK::s();\n",
+        "\nFatal error: Uncaught LogicException: in method in <F>:4\nStack trace:\n#0 <F>(7): K->m(NULL)\n#1 <F>(10): K::s()\n#2 {main}\n  thrown in <F> on line 4\n",
+    );
+}
+
+/// A previous exception prints FIRST, the thrown one follows a `Next` separator, and a single
+/// `thrown in` line names the outermost exception.
+#[test]
+fn uncaught_chain_prints_previous_first_with_next_separator() {
+    assert_report(
+        "elephc_uncaught_chain",
+        "<?php\nfunction boom() {\n    try {\n        throw new LogicException(\"root\");\n    } catch (Exception $e) {\n        throw new RuntimeException(\"boom\", 3, $e);\n    }\n}\nboom();\n",
+        "\nFatal error: Uncaught LogicException: root in <F>:4\nStack trace:\n#0 <F>(9): boom()\n#1 {main}\n\nNext RuntimeException: boom in <F>:6\nStack trace:\n#0 <F>(9): boom()\n#1 {main}\n  thrown in <F> on line 6\n",
+    );
+}
+
+/// An exception thrown inside a closure names the closure with PHP's `{closure:file:line}` label.
+#[test]
+fn uncaught_inside_a_closure_names_the_closure() {
+    assert_report(
+        "elephc_uncaught_closure",
+        "<?php\n$f = function (int $n) {\n    throw new Exception(\"in closure\");\n};\n$f(5);\n",
+        "\nFatal error: Uncaught Exception: in closure in <F>:3\nStack trace:\n#0 <F>(5): {closure:<F>:2}(5)\n#1 {main}\n  thrown in <F> on line 3\n",
+    );
+}
+
+/// A closure declared inside a closure is labelled with its enclosing closure's label, as PHP 8.5
+/// prints it (`{closure:{closure:file:2}:3}`), never with the compiler's internal symbol.
+#[test]
+fn uncaught_inside_a_nested_closure_names_both_closures() {
+    assert_report(
+        "elephc_uncaught_nested_closure",
+        "<?php\n$outer = function () {\n    $inner = function () {\n        throw new Exception(\"nested\");\n    };\n    $inner();\n};\n$outer();\n",
+        "\nFatal error: Uncaught Exception: nested in <F>:4\nStack trace:\n#0 <F>(6): {closure:{closure:<F>:2}:3}()\n#1 <F>(8): {closure:<F>:2}()\n#2 {main}\n  thrown in <F> on line 4\n",
+    );
+}
+
+/// A `$previous` cycle closed by re-running the constructor prints each link once, oldest first,
+/// and stops at the first repeat as PHP 8.5 does; the renderer used to recurse without bound.
+#[test]
+fn uncaught_cyclic_previous_chain_prints_each_link_once() {
+    assert_report(
+        "elephc_uncaught_previous_cycle",
+        "<?php\nclass E extends Exception {\n    public function relink(?Throwable $p): void { parent::__construct(\"a\", 0, $p); }\n}\n$a = new E(\"a\");\n$b = new Exception(\"b\", 0, $a);\n$a->relink($b);\nthrow $b;\n",
+        "\nFatal error: Uncaught E: a in <F>:5\nStack trace:\n#0 {main}\n\nNext Exception: b in <F>:6\nStack trace:\n#0 {main}\n  thrown in <F> on line 6\n",
+    );
+}
+
+/// An exception whose previous link is itself prints once.
+#[test]
+fn uncaught_self_previous_link_prints_once() {
+    assert_report(
+        "elephc_uncaught_previous_self",
+        "<?php\nclass E extends Exception {\n    public function relink(?Throwable $p): void { parent::__construct(\"self\", 0, $p); }\n}\n$c = new E(\"self\");\n$c->relink($c);\nthrow $c;\n",
+        "\nFatal error: Uncaught E: self in <F>:5\nStack trace:\n#0 {main}\n  thrown in <F> on line 5\n",
+    );
 }
 
 /// The reported line is where the exception was CONSTRUCTED, not where it was thrown.
@@ -232,31 +324,52 @@ fn uncaught_reports_the_construction_site_not_the_throw_site() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// A Throwable with no user `new` behind it omits the location and STILL exits 255.
+/// A Throwable raised inside an internal call is located at that call, as PHP does, and STILL
+/// exits 255.
 ///
-/// `intdiv($n, 0)` raises a `DivisionByZeroError` synthesized by a codegen guard, which writes its
-/// own fatal diagnostic in `codegen::lower_inst::exceptions` and never reaches
-/// `__rt_report_uncaught_exception`. Two distinct regressions hide here: printing `:0` for a line
-/// the compiler does not know, and letting the two uncaught paths disagree on `$?` — that second
-/// path exited `1` while `throw new ...` exited `255`, so a script branching on the status saw a
-/// different answer depending on which kind of exception escaped.
+/// `intdiv($n, 0)` raises a `DivisionByZeroError` synthesized by a codegen guard, which stamps the
+/// line of the instruction it guards. A module with no `throw` keeps no frame readers (they would
+/// cost every program code size), so the guard writes its own short report without a
+/// `Stack trace:` block. The uncaught paths must also agree on `$?`: the short codegen path once
+/// exited `1` while `throw new ...` exited `255`.
 #[test]
-fn synthesized_error_omits_the_location_and_still_exits_255() {
+fn synthesized_error_is_located_at_the_call_and_still_exits_255() {
     let prefix = "elephc_uncaught_synthesized";
     let (reported, code, dir) = run_uncaught(
         prefix,
         "<?php\n$n = 1;\n$d = 0;\necho intdiv($n, $d);\n",
     );
 
+    let file = canonical_script(&dir, &format!("{prefix}.php"));
     assert_eq!(
-        reported, "\nFatal error: Uncaught DivisionByZeroError: Division by zero\n",
-        "an error with no construction site must omit the location, never print `:0`"
+        reported,
+        format!("\nFatal error: Uncaught DivisionByZeroError: Division by zero in {file}:4\n")
     );
     assert_eq!(
         code,
         Some(255),
         "both uncaught paths must leave the same exit status"
     );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A synthesized error escaping a user function of a module that throws reports that function's
+/// frame, as PHP does: the codegen guard goes through the full report instead of its short form.
+/// PHP also lists the internal `intdiv(1, 0)` frame as `#0`; internal calls have no activation
+/// here, so that line is missing.
+#[test]
+fn synthesized_error_reports_the_user_frames_it_escaped() {
+    let prefix = "elephc_uncaught_synthesized_frames";
+    let (reported, code, dir) = run_uncaught(
+        prefix,
+        "<?php\nfunction f($a) { return intdiv(1, $a); }\nif ($argc > 5) { throw new Exception(\"x\"); }\nf(0);\n",
+    );
+    let file = canonical_script(&dir, &format!("{prefix}.php"));
+    assert_eq!(
+        reported,
+        format!("\nFatal error: Uncaught DivisionByZeroError: Division by zero in {file}:2\nStack trace:\n#0 {file}(4): f(0)\n#1 {{main}}\n  thrown in {file} on line 2\n")
+    );
+    assert_eq!(code, Some(255));
     let _ = fs::remove_dir_all(&dir);
 }
 

@@ -215,7 +215,7 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     if is_user_function {
         let return_alias = user_return_alias
             .expect("a user function call resolved its return-alias summary before its arguments");
-        let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
+        let evaluation_intermediates = finish_user_call_argument_evaluation(ctx, &mut operands);
         let roots = root_user_call_operands(
             ctx, &mut operands, sig.as_ref(), &return_alias, &php_type, expr.span,
         );

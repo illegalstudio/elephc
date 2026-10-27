@@ -116,7 +116,7 @@ pub(super) fn lower(
         RuntimeFnId::Ptr => Some({
             crate::codegen::lower_inst::builtins::pointers::lower_ptr(ctx, inst)
         }),
-        RuntimeFnId::PtrGet => Some({
+        RuntimeFnId::PtrGet | RuntimeFnId::ElephcPtrGet => Some({
             crate::codegen::lower_inst::builtins::pointers::lower_ptr_get(ctx, inst)
         }),
         RuntimeFnId::PtrIsNull => Some({
@@ -170,16 +170,16 @@ pub(super) fn lower(
         RuntimeFnId::PtrWriteString => Some({
             crate::codegen::lower_inst::builtins::pointers::lower_ptr_write_string(ctx, inst)
         }),
-        RuntimeFnId::ZvalFree => Some({
+        RuntimeFnId::ZvalFree | RuntimeFnId::ElephcZvalFree => Some({
             crate::codegen::lower_inst::builtins::pointers::lower_zval_free(ctx, inst)
         }),
-        RuntimeFnId::ZvalPack => Some({
+        RuntimeFnId::ZvalPack | RuntimeFnId::ElephcZvalPack => Some({
             crate::codegen::lower_inst::builtins::pointers::lower_zval_pack(ctx, inst)
         }),
         RuntimeFnId::ZvalType => Some({
             crate::codegen::lower_inst::builtins::pointers::lower_zval_type(ctx, inst)
         }),
-        RuntimeFnId::ZvalUnpack => Some({
+        RuntimeFnId::ZvalUnpack | RuntimeFnId::ElephcZvalUnpack => Some({
             crate::codegen::lower_inst::builtins::pointers::lower_zval_unpack(ctx, inst)
         }),
         RuntimeFnId::IteratorApply => Some({

@@ -96,7 +96,10 @@ impl Checker {
                 None if *is_ref => (PhpType::Mixed, PhpType::Mixed),
                 None => match contextual_param_types.get(idx) {
                     Some(hint) => (hint.clone(), hint.clone()),
-                    None => (PhpType::Int, PhpType::Mixed),
+                    // No context types it: PHP semantics are `mixed`. The body must be
+                    // checked against the same Mixed the signature publishes, never an
+                    // `int` placeholder that makes valid string uses fail.
+                    None => (PhpType::Mixed, PhpType::Mixed),
                 },
             };
 

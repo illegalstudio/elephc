@@ -89,6 +89,7 @@ Compiler-specific extensions that go beyond standard PHP. These features have no
 - [Shared Libraries (cdylib)](beyond-php/cdylib.md) — --emit cdylib, #[Export] C-ABI functions, dlopen lifecycle
 - [Web Server (--web)](beyond-php/web.md) — compile a PHP file into a standalone HTTP server with worker, pool, or per-request process isolation
 - [Testing](beyond-php/testing.md) — the native test runtime: `Elephc\Testing\TestCase`, the PHPUnit-compatible assertion subset, the `Runner` report and exit code, and the `PHPUnit\Framework\TestCase` alias
+- [Hosting PHP Extensions](beyond-php/php-extensions.md) — `elephc extension add` builds a real PECL/PIE or in-house C extension from source and links it, functions and classes included, on Elephc's own Rust implementation of the extension API
 - [zval Bridge](beyond-php/zval-bridge.md) — zval_pack/unpack/type/free convert elephc values to/from PHP zval structs
 - [Profiling](beyond-php/profiling.md) - PHP-level profiling with one command in every environment: a launched program reports exact wall time, allocations, retained objects, database and outgoing-network wait, SQL queries, network operations and calls; a running service is sampled by default and exact only for a requested completed request. Includes per-`--web`-route tags, `.elephc` performance budgets, automatic curl trace propagation, W3C distributed traces, and a self-contained interactive call-graph page
 

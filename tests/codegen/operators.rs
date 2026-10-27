@@ -995,6 +995,28 @@ echo strlen($s), "|", $s[0], "|", $s[100001];
     assert_eq!(out, "100002|A|B");
 }
 
+/// Verifies an int converted while a scratch-backed string fills the 64 KiB concat scratch does
+/// not overwrite it. `__rt_itoa` used to wrap its 21-byte window to offset 0, writing the digits
+/// into bytes 18..20 of the live left operand (`zzz…123zzz…`); it now uses a spill slot. A digest
+/// formatted while the scratch is that full used to run past its end; it now reserves its bytes.
+#[test]
+fn test_large_scratch_operand_survives_int_conversion() {
+    let out = compile_and_run(
+        r#"<?php
+$n = $argc + 122;
+$a = str_repeat("z", 65520) . $n . $n;
+echo strlen($a), "|", substr_count($a, "z"), "|", substr($a, 0, 22), "|", substr($a, -8);
+$b = str_pad("", 65530, "x") . $n . strrev("yy") . $n;
+echo "|", substr_count($b, "x"), "|", substr($b, -10);
+echo "|", md5(strtoupper(str_repeat("b", 65530)) . "x");
+"#,
+    );
+    assert_eq!(
+        out,
+        "65526|65520|zzzzzzzzzzzzzzzzzzzzzz|zz123123|65530|xx123yy123|32dc44b1be62426973fc0eee6f69a692"
+    );
+}
+
 
 /// Verifies a `.=` accumulation loop that grows well past the 64 KiB concat scratch buffer stays
 /// byte-exact. Every append beyond the scratch capacity takes the heap fallback, and the appended

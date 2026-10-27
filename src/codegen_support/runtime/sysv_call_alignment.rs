@@ -54,6 +54,8 @@ const ALLOWED_MISALIGNED_CALLS: &[(&str, &str)] = &[
     ("__rt_hash_key_hash", "frameless: calls __rt_hash_fnv1a, integer-only assembly"),
     ("__rt_hash_key_eq", "frameless: calls __rt_str_eq, integer-only assembly"),
     ("__rt_mixed_is_empty", "frameless: calls __rt_mixed_unbox, integer-only assembly"),
+    ("__rt_ftoa_repr", "frameless: calls __rt_float_window, an integer-only leaf"),
+    ("__rt_strbuf_finish_owned", "frameless: calls __rt_strbuf_finish, an integer-only leaf"),
     // The two uncaught-exception helpers deliberately have NO entry here: they live in
     // NOT_STATICALLY_ANALYZABLE because their `and rsp, -16` instructions realign every
     // call and defeat the walker. A second entry in this list would silently absorb a real

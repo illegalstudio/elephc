@@ -283,8 +283,14 @@ $scan(null, $argc);
     for optimized in [false, true] {
         let output = run_property_loop(source, optimized);
         assert!(!output.status.success());
-        assert_eq!(String::from_utf8_lossy(&output.stdout),
-            "zero|\nFatal error: Uncaught Error: Call to a member function at() on null\n");
+        // PHP's uncaught report names the throw site and prints the stack trace; the file is the
+        // per-run temporary `main.php`, so only its fixed parts are compared.
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.starts_with("zero|\nFatal error: Uncaught Error: Call to a member function at() on null in "),
+            "{stdout}"
+        );
+        assert!(stdout.contains("\nStack trace:\n") && stdout.ends_with(" on line 9\n"), "{stdout}");
     }
 }
 

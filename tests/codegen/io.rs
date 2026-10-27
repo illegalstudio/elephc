@@ -11,6 +11,8 @@ use crate::support::*;
 
 #[path = "io/printing.rs"]
 mod printing;
+#[path = "io/large_dump_output.rs"]
+mod large_dump_output;
 #[path = "io/output_buffering.rs"]
 mod output_buffering;
 #[path = "io/output_handler_lifecycle.rs"]

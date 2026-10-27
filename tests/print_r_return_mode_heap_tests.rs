@@ -2,7 +2,7 @@
 //! End-to-end heap-ownership tests for `print_r`'s two capture-buffer modes, both of which
 //! leaked exactly one heap block per call.
 //!
-//! `print_r` renders into the static `_print_r_buf` capture buffer and `__rt_pr_finish` copies
+//! `print_r` renders into a growable raw capture buffer and `__rt_pr_finish` copies
 //! those bytes out through `__rt_str_persist`, so EVERY capture mode hands back a freshly
 //! allocated heap block. Two independent defects dropped that block on the floor:
 //!

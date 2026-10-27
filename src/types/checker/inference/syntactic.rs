@@ -359,10 +359,9 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                     PhpType::Pointer(None)
                 }
             }
-            "ptr_is_null" | "define" | "json_validate" | "flock" | "symlink" | "link" => {
-                PhpType::Bool
-            }
-            "ptr_sizeof" | "ptr_get" | "ptr_read8" | "ptr_read32" => PhpType::Int,
+            "ptr_is_null" | "__elephc_ptr_is_null" | "define" | "json_validate" | "flock" | "symlink"
+            | "link" => PhpType::Bool,
+            "ptr_sizeof" | "ptr_get" | "__elephc_ptr_get" | "ptr_read8" | "ptr_read32" => PhpType::Int,
             _ => PhpType::Int,
         },
         ExprKind::NullCoalesce { value, default } => {

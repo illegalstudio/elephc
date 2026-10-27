@@ -437,12 +437,14 @@ pub(super) fn lower_two_hash_arg_builtin(
             abi::emit_call_label(ctx.emitter, runtime_label);
             ctx.emitter.instruction("sub rsp, 16");                             // reserve a slot for the result
             ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // spill the result; stack holds [result, h2, h1]
+            // `__rt_decref_hash` takes its hash in `rax`, which still holds the result here: loading
+            // the temporary into `rdi` released the result instead, and the temporary leaked.
             if conv1 {
-                ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");       // reload the converted second hash temporary
+                ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");       // reload the converted second hash temporary
                 abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
             }
             if conv0 {
-                ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");       // reload the converted first hash temporary
+                ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 32]");       // reload the converted first hash temporary
                 abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
             }
             ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // restore the result hash pointer

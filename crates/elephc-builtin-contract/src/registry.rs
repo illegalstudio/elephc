@@ -163,7 +163,8 @@ mod tests {
         // +5: SimpleXML loaders/import plus internal allocation and diagnostic helpers.
         // +5: native heap usage, peak reset, and allocation/free counters.
         // +8: FileInfo procedures and shared warning/deprecation helpers.
-        assert_eq!(contracts().len(), 1195 + curl_surface);
+        // +4: internal pointer/zval aliases used by extension hosting.
+        assert_eq!(contracts().len(), 1199 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

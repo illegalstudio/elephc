@@ -91,10 +91,8 @@ pub fn emit_ftoa(emitter: &mut Emitter) {
     // -- destination: the caller window, or _concat_buf at the current _concat_off --
     emitter.instruction("ldr x13, [sp, #56]");                                  // caller destination, or 0
     emitter.instruction("cbnz x13, __rt_ftoa_dest_ready");                      // __rt_ftoa_into writes where the caller reserved room
-    abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // load the current concat write offset
-    abi::emit_symbol_address(emitter, "x11", "_concat_buf");
-    emitter.instruction("add x13, x11, x10");                                   // result start = concat_buf + offset
+    emitter.instruction("bl __rt_float_window");                                // bounded window: the scratch tail, or a spill slot when the scratch is nearly full
+    emitter.instruction("mov x13, x0");                                         // result start = the window
     emitter.label("__rt_ftoa_dest_ready");
     emitter.instruction("mov x12, x13");                                        // x12 = write cursor, x13 = result start
     emitter.instruction("add x14, sp, #8");                                     // x14 = read cursor into the snprintf scratch
@@ -167,10 +165,7 @@ pub fn emit_ftoa(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x13");                                         // result pointer = start of the emitted text
     emitter.instruction("ldr x9, [sp, #56]");                                   // caller destination, or 0
     emitter.instruction("cbnz x9, __rt_ftoa_published");                        // __rt_ftoa_into never touches _concat_off
-    abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // reload the original concat offset
-    emitter.instruction("add x10, x10, x2");                                    // advance it past the emitted bytes
-    emitter.instruction("str x10, [x9]");                                       // publish the updated concat offset
+    emitter.instruction("bl __rt_concat_publish");                              // advance _concat_off past the bytes when the result sits in the scratch (a spill slot leaves it alone)
     emitter.label("__rt_ftoa_published");
 
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
@@ -220,9 +215,7 @@ fn emit_ftoa_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 64]");                       // caller destination, or 0
     emitter.instruction("test r10, r10");                                       // did __rt_ftoa_into supply a window?
     emitter.instruction("jnz __rt_ftoa_dest_ready_x");                          // write where the caller reserved room
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_concat_off", 0);              // current concat write offset
-    abi::emit_symbol_address(emitter, "r8", "_concat_buf");
-    emitter.instruction("lea r10, [r8 + r9]");                                  // result start = concat_buf + offset
+    emitter.instruction("call __rt_float_window");                              // bounded window in r10: the scratch tail, or a spill slot when the scratch is nearly full
     emitter.label("__rt_ftoa_dest_ready_x");
     emitter.instruction("mov r11, r10");                                        // r11 = write cursor, r10 = result start
     emitter.instruction("lea rsi, [rbp - 56]");                                 // rsi = read cursor into the snprintf scratch
@@ -296,9 +289,7 @@ fn emit_ftoa_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rdx, rax");                                        // result length = cursor - start
     emitter.instruction("cmp QWORD PTR [rbp - 64], 0");                         // did the caller supply its own window?
     emitter.instruction("jne __rt_ftoa_published_x");                           // __rt_ftoa_into never touches _concat_off
-    abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // reload the original concat offset
-    emitter.instruction("add r8, rdx");                                         // advance it past the emitted bytes
-    abi::emit_store_reg_to_symbol(emitter, "r8", "_concat_off", 0);             // publish the updated concat offset
+    emitter.instruction("call __rt_concat_publish");                            // advance _concat_off past the bytes when the result sits in the scratch (a spill slot leaves it alone)
     emitter.label("__rt_ftoa_published_x");
 
     emitter.instruction("add rsp, 64");                                         // release the local scratch area before returning
@@ -357,12 +348,12 @@ pub fn emit_ftoa_repr(emitter: &mut Emitter) {
 
     // -- write "[-]XXX" straight into the concat buffer and publish the cursor --
     emitter.label("__rt_ftoa_repr_emit");
-    abi::emit_symbol_address(emitter, "x15", "_concat_off");
-    emitter.instruction("ldr x16, [x15]");                                      // current concat write offset
-    abi::emit_symbol_address(emitter, "x17", "_concat_buf");
-    emitter.instruction("add x1, x17, x16");                                    // result start = concat_buf + offset
+    emitter.instruction("mov x16, x9");                                         // keep the sign bit across the window call
+    emitter.instruction("mov x15, x30");                                        // keep the return address across the leaf helper calls
+    emitter.instruction("bl __rt_float_window");                                // bounded window: the scratch tail, or a spill slot when the scratch is nearly full
+    emitter.instruction("mov x1, x0");                                          // result start = the window
     emitter.instruction("mov x11, x1");                                         // x11 = write cursor, x1 = result start
-    emitter.instruction("tbz x9, #63, __rt_ftoa_repr_body");                    // skip the sign byte for non-negative values
+    emitter.instruction("tbz x16, #63, __rt_ftoa_repr_body");                   // skip the sign byte for non-negative values
     emitter.instruction("mov w10, #45");                                        // ASCII '-'
     emitter.instruction("strb w10, [x11], #1");                                 // emit the sign byte for -INF
     emitter.label("__rt_ftoa_repr_body");
@@ -370,8 +361,8 @@ pub fn emit_ftoa_repr(emitter: &mut Emitter) {
     emitter.instruction("strb w13, [x11], #1");                                 // emit the second literal byte
     emitter.instruction("strb w14, [x11], #1");                                 // emit the third literal byte
     emitter.instruction("sub x2, x11, x1");                                     // result length = cursor - start
-    emitter.instruction("add x16, x16, x2");                                    // advance the concat cursor past the literal
-    emitter.instruction("str x16, [x15]");                                      // publish the updated concat offset
+    emitter.instruction("bl __rt_concat_publish");                              // advance _concat_off past the literal when it sits in the scratch
+    emitter.instruction("mov x30, x15");                                        // restore the return address
     emitter.instruction("ret");                                                 // return pointer (x1) and length (x2)
 }
 
@@ -411,11 +402,11 @@ fn emit_ftoa_repr_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edi, 70");                                         // ASCII 'F' as the third literal byte
 
     emitter.label("__rt_ftoa_repr_emit_x");
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // current concat write offset
-    abi::emit_symbol_address(emitter, "r11", "_concat_buf");
-    emitter.instruction("lea rax, [r11 + r10]");                                // result start = concat_buf + offset
+    emitter.instruction("mov rdx, r9");                                         // keep the sign bits across the window call
+    emitter.instruction("call __rt_float_window");                              // bounded window in r10: the scratch tail, or a spill slot when the scratch is nearly full
+    emitter.instruction("mov rax, r10");                                        // result start = the window
     emitter.instruction("mov r8, rax");                                         // r8 = write cursor, rax = result start
-    emitter.instruction("test r9, r9");                                         // is the sign bit set?
+    emitter.instruction("test rdx, rdx");                                       // is the sign bit set?
     emitter.instruction("jns __rt_ftoa_repr_body_x");                           // skip the sign byte for non-negative values
     emitter.instruction("mov BYTE PTR [r8], 45");                               // emit the ASCII '-' for -INF
     emitter.instruction("inc r8");                                              // advance the write cursor
@@ -426,9 +417,7 @@ fn emit_ftoa_repr_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r8, 3");                                           // advance the write cursor past the literal
     emitter.instruction("mov rdx, r8");                                         // write cursor, one past the last byte
     emitter.instruction("sub rdx, rax");                                        // result length = cursor - start
-    emitter.instruction("add r10, rdx");                                        // advance the concat cursor past the literal
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_concat_off", 0);            // publish the updated concat offset
-    emitter.instruction("ret");                                                 // return pointer (rax) and length (rdx)
+    emitter.instruction("jmp __rt_concat_publish");                             // advance _concat_off past the literal when it sits in the scratch, then return pointer (rax) and length (rdx)
 }
 
 #[cfg(test)]

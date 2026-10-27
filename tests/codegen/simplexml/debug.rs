@@ -9,6 +9,42 @@
 
 use crate::support::*;
 
+/// Ordinary debug hooks preserve large outer captures while rendering native XML in nested calls.
+#[test]
+fn test_simplexml_debug_projection_inside_runtime_debug_info_capture() {
+    if skip_without_xml_native("test_simplexml_debug_projection_inside_runtime_debug_info_capture") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class CombinedXmlDebug {
+    public mixed $xml;
+    public function __construct(mixed $xml) { $this->xml = $xml; }
+    public function __debugInfo(): array {
+        echo 'hook|';
+        $nested = print_r($this->xml, true);
+        echo (int)str_contains($nested, '[v] => x'), '|';
+        return ['payload' => str_repeat('p', 70000), 'xml' => $this->xml];
+    }
+}
+$xml = new SimpleXMLElement('<r><v>x</v></r>');
+$values = ['before' => 'prefix', 'value' => new CombinedXmlDebug($xml), 'after' => 'suffix'];
+$captured = print_r($values, true);
+echo (int)str_contains($captured, '[before] => prefix'), ':',
+    substr_count($captured, str_repeat('p', 70000)), ':',
+    (int)str_contains($captured, '[v] => x'), ':',
+    (int)str_contains($captured, '[after] => suffix'), '|';
+$flag = $argc > 0;
+ob_start();
+$result = print_r($values, !$flag);
+$echoed = ob_get_clean();
+var_dump($result);
+echo (int)str_starts_with($echoed, 'hook|1|Array'), ':',
+    substr_count($echoed, str_repeat('p', 70000)), ':',
+    (int)str_contains($echoed, '[after] => suffix');
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "hook|1|1:1:1:1|bool(true)\n1:1:1");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Native debug snapshots hide implementation fields, preserve capture prefixes, and retire owners.
 #[test]
 fn test_simplexml_native_debug_projection_bundle() {

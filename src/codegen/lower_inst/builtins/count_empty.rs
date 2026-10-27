@@ -259,7 +259,7 @@ pub(in crate::codegen::lower_inst) fn lower_empty(ctx: &mut FunctionContext<'_>,
             ctx.load_value_to_result(value)?;
             emit_string_length_zero_bool(ctx);
         }
-        PhpType::TaggedScalar => {
+        ty if ty.codegen_repr() == PhpType::TaggedScalar => { // Includes nullable integer unions.
             emit_tagged_scalar_empty_bool(ctx, value)?;
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {

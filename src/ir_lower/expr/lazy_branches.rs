@@ -125,6 +125,42 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
     // fatal in PHP. `??` is precisely the construct that must not raise there, so a property
     // that can be in that state is read the way `isset()` reads it. Every other property keeps
     // the ordinary path and its exact slot type.
+    // An overloaded name on a class with `__isset`: php asks `__isset` first and reads through
+    // `__get` only when it says yes, so `??` sees null without ever calling `__get` otherwise.
+    // The receiver is evaluated once, before either call: `make()->name ?? $d` runs `make()` once.
+    if lazy_empty_magic_property_calls(ctx, value).is_some() {
+        let (object, property, nullsafe) = match &value.kind {
+            ExprKind::PropertyAccess { object, property } => (object, property, false),
+            ExprKind::NullsafePropertyAccess { object, property } => (object, property, true),
+            _ => unreachable!("only property accesses have magic existence calls"),
+        };
+        let (receiver, receiver_temp) = evaluate_once(ctx, object, value);
+        let rebuilt = Expr::new(
+            if nullsafe {
+                ExprKind::NullsafePropertyAccess { object: Box::new(receiver), property: property.clone() }
+            } else {
+                ExprKind::PropertyAccess { object: Box::new(receiver), property: property.clone() }
+            },
+            value.span,
+        );
+        let result = match lazy_empty_magic_property_calls(ctx, &rebuilt) {
+            Some((exists, get)) => {
+                let probe = Expr::new(
+                    ExprKind::Ternary {
+                        condition: Box::new(exists),
+                        then_expr: Box::new(get),
+                        else_expr: Box::new(Expr::new(ExprKind::Null, value.span)),
+                    },
+                    value.span,
+                );
+                lower_expr(ctx, &probe)
+            }
+            // The held receiver no longer types as the magic class: probe it the ordinary way.
+            None => lower_null_coalesce_value(ctx, &rebuilt),
+        };
+        release_evaluated_once(ctx, receiver_temp, value.span);
+        return result;
+    }
     if let ExprKind::PropertyAccess { object, property } = &value.kind {
         // The left operand of `??` is one of php's silent probes, exactly like `isset()`: a name
         // this scope may not reach answers the DEFAULT rather than raising, and a name that was

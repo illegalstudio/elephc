@@ -122,7 +122,7 @@ trap 'exit 143' TERM
 # missing artifact into a loud failure in tests/codegen/xml instead of a skip.
 # The corresponding FILEINFO variables enable native tests and forbid fileinfo skips.
 # shellcheck disable=SC2016 # Expanded by the container shell.
-DOCKER_TEST_COMMAND='cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-random -p elephc-mbstring -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-fileinfo -p elephc-tokenizer -p elephc-magician -p elephc-instr -p elephc-probe -p elephc-curl \
+DOCKER_TEST_COMMAND='cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-random -p elephc-mbstring -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-fileinfo -p elephc-tokenizer -p elephc-magician -p elephc-instr -p elephc-probe -p elephc-curl -p elephc-zend \
     && cargo build --bin elephc \
     && "$CARGO_TARGET_DIR/debug/elephc" native install --locked --target linux-aarch64 --manifest-path examples/xml/elephc.toml \
     && "$CARGO_TARGET_DIR/debug/elephc" native install --locked --target linux-aarch64 --manifest-path examples/fileinfo/elephc.toml \

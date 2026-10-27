@@ -429,9 +429,13 @@ pub enum RuntimeFnId {
     ElephcOpcacheRtInFileCache,
     ElephcOpcacheRtStat,
     ElephcOpcacheRtSwap,
+    ElephcPtrGet,
     ElephcPtrIsNull,
     ElephcPtrReadString,
     ElephcPtrWriteString,
+    ElephcZvalFree,
+    ElephcZvalPack,
+    ElephcZvalUnpack,
     BufferFree,
     BufferLen,
     BufferPtr,
@@ -1057,13 +1061,13 @@ impl RuntimeFnId {
                 // Do not let an FCC wrapper narrow that ABI to a packed Array<Mixed> pointer.
                 sig.return_type = PhpType::php_array();
             }
-            RuntimeFnId::ZvalPack => {
+            RuntimeFnId::ZvalPack | RuntimeFnId::ElephcZvalPack => {
                 if let Some((_, value_ty)) = sig.params.get_mut(0) {
                     *value_ty = PhpType::Mixed;
                 }
                 sig.return_type = PhpType::Pointer(None);
             }
-            RuntimeFnId::ZvalUnpack => {
+            RuntimeFnId::ZvalUnpack | RuntimeFnId::ElephcZvalUnpack => {
                 if let Some((_, zval_ty)) = sig.params.get_mut(0) {
                     *zval_ty = PhpType::Pointer(None);
                 }
@@ -1075,7 +1079,7 @@ impl RuntimeFnId {
                 }
                 sig.return_type = PhpType::Int;
             }
-            RuntimeFnId::ZvalFree => {
+            RuntimeFnId::ZvalFree | RuntimeFnId::ElephcZvalFree => {
                 if let Some((_, zval_ty)) = sig.params.get_mut(0) {
                     *zval_ty = PhpType::Pointer(None);
                 }
@@ -2391,10 +2395,13 @@ impl RuntimeFnId {
             return BuiltinResultOwnership::NonHeap;
         }
         // Every other iconv entry point boxes a freshly built string, integer, or array,
-        // so its result never aliases an argument.
+        // so its result never aliases an argument. `zval_unpack` builds a new Elephc value
+        // from a C zval its only argument points to, which is not refcounted storage.
         if matches!(
             self,
-            RuntimeFnId::Iconv
+            RuntimeFnId::ZvalUnpack
+                | RuntimeFnId::ElephcZvalUnpack
+                | RuntimeFnId::Iconv
                 | RuntimeFnId::IconvGetEncoding
                 | RuntimeFnId::IconvMimeDecode
                 | RuntimeFnId::IconvMimeDecodeHeaders
@@ -2737,6 +2744,7 @@ impl RuntimeFnId {
                 // leaked the literal replacement array on every call.
                 | RuntimeFnId::ArraySplice
                 | RuntimeFnId::ZvalUnpack
+                | RuntimeFnId::ElephcZvalUnpack
                 // Parsed values own their storage independently of the wire input and options.
                 | RuntimeFnId::Unserialize
                 // Both callback replacement and shell output reserve or persist their own
@@ -2788,6 +2796,12 @@ impl RuntimeFnId {
                 // Wire bytes occupy concat storage, never an operand's allocation. This also
                 // keeps temporary inputs pinned while serialization hooks can unwind.
                 | RuntimeFnId::Serialize
+                // A digest is formatted into its own concat reservation, never into or over
+                // the subject. The default `MayAliasArguments` bucket suppressed the release
+                // of an owned subject temporary, so `md5(str_repeat("x", 70000))` leaked the
+                // 70 KB subject on every call.
+                | RuntimeFnId::Md5
+                | RuntimeFnId::Sha1
         ) {
             BuiltinResultOwnership::Independent
         } else {
@@ -3142,9 +3156,13 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcOpcacheRtInFileCache => "__elephc_opcache_rt_in_file_cache",
             RuntimeFnId::ElephcOpcacheRtStat => "__elephc_opcache_rt_stat",
             RuntimeFnId::ElephcOpcacheRtSwap => "__elephc_opcache_rt_swap",
+            RuntimeFnId::ElephcPtrGet => "__elephc_ptr_get",
             RuntimeFnId::ElephcPtrIsNull => "__elephc_ptr_is_null",
             RuntimeFnId::ElephcPtrReadString => "__elephc_ptr_read_string",
             RuntimeFnId::ElephcPtrWriteString => "__elephc_ptr_write_string",
+            RuntimeFnId::ElephcZvalFree => "__elephc_zval_free",
+            RuntimeFnId::ElephcZvalPack => "__elephc_zval_pack",
+            RuntimeFnId::ElephcZvalUnpack => "__elephc_zval_unpack",
             RuntimeFnId::BufferFree => "buffer_free",
             RuntimeFnId::BufferLen => "buffer_len",
             RuntimeFnId::BufferPtr => "buffer_ptr",
