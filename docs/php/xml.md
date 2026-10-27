@@ -54,6 +54,8 @@ and the `RecursiveIterator` methods. Integer and float casts read the selected
 node text. Array casts, `get_object_vars()`, `__debugInfo()`, and JSON encoding expose XML
 properties, including `@attributes` and repeated children. DOM imports share
 their document, so edits through either API remain visible through the other.
+Importing a DOM node created by `ReflectionClass::newInstanceWithoutConstructor()`
+raises `TypeError`, matching PHP's rejection of uninitialized native nodes.
 
 `print_r()` and `var_dump()` render SimpleXML's native debug projection, including
 subclass `__debugInfo()` overrides, both in compiled code and opaque dynamic

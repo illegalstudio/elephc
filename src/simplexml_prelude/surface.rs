@@ -717,6 +717,10 @@ function simplexml_import_dom(object $node, ?string $class_name = "SimpleXMLElem
     throw new TypeError('simplexml_import_dom(): Argument #1 ($node) must be a valid XML node');
 }
 function __elephc_simplexml_import_node(DOMNode $node, string $class): ?SimpleXMLElement {
+    // Every materialized DOM node has a name; blank defaults identify uninitialized reflectors.
+    if ($node->nodeName === '') {
+        throw new TypeError('simplexml_import_dom(): Argument #1 ($node) must be a valid XML node');
+    }
     $bound = $node->__elephc_simplexml;
     if ($node instanceof DOMElement && $bound instanceof SimpleXMLElement) {
         $handle = $bound->__elephc_handle_value();

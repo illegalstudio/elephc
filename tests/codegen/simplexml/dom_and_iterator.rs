@@ -267,17 +267,21 @@ if ($argc === 1) {
 } elseif ($argc === 19) {
     set_error_handler(function(int $level, string $message): bool { return true; });
     echo (int)(simplexml_import_dom(new DOMDocument()) === null);
+    $uninitialized = (new ReflectionClass('DOMElement'))->newInstanceWithoutConstructor();
+    try { simplexml_import_dom($uninitialized); } catch (TypeError $error) { echo 'E:'; }
+    $uninitializedDocument = (new ReflectionClass('DOMDocument'))->newInstanceWithoutConstructor();
+    try { simplexml_import_dom($uninitializedDocument); } catch (TypeError $error) { echo 'D:'; }
     try { simplexml_import_dom(new stdClass()); } catch (TypeError $error) { echo get_class($error); }
     $iterator = new SimpleXMLElement('<r><a/></r>');
     try { $iterator->current(); } catch (Error $error) { echo 'E'; }
     try { $iterator->key(); } catch (Error $error) { echo 'E'; }
     restore_error_handler();
 } else {
-    $source = $argc > 0 ? 'set_error_handler(function(int $level, string $message): bool { return true; }); $document = new DOMDocument(); echo (int)(simplexml_import_dom($document) === null), (int)$document->loadXML("<r>"); $iterator = new SimpleXMLElement("<r/>"); try { $iterator->key(); } catch (Error $error) { echo "E"; } restore_error_handler();' : '';
+    $source = $argc > 0 ? 'set_error_handler(function(int $level, string $message): bool { return true; }); $document = new DOMDocument(); echo (int)(simplexml_import_dom($document) === null), (int)$document->loadXML("<r>"); $iterator = new SimpleXMLElement("<r/>"); try { $iterator->key(); } catch (Error $error) { echo "E"; } $uninitialized = (new ReflectionClass("DOMElement"))->newInstanceWithoutConstructor(); try { simplexml_import_dom($uninitialized); } catch (TypeError $error) { echo "T"; } restore_error_handler();' : '';
     eval($source);
 }
 "###, &argvs);
-    let expected = ["0", "111", "html", "old:before|html", "html|html", "html", "html", "0", "html", "1", "0", "0", "0", "#text", "1", "caught", "1:1:{\"p\":\"urn:p\"}", "01caught", "1TypeErrorEE", "10E"];
+    let expected = ["0", "111", "html", "old:before|html", "html|html", "html", "html", "0", "html", "1", "0", "0", "0", "#text", "1", "caught", "1:1:{\"p\":\"urn:p\"}", "01caught", "1E:D:TypeErrorEE", "10ET"];
     assert_eq!(runs.len(), expected.len());
     let mut failures = Vec::new();
     for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {
@@ -305,7 +309,7 @@ $doc = new DOMDocument(); $doc->loadXML('<r xmlns:p="urn:p" p:id="8">text<c/></r
 $text = $doc->documentElement->childNodes->item(0);
 if ($text instanceof DOMNode) { var_dump(simplexml_import_dom($text)); }
 $unattached = (new ReflectionClass('DOMElement'))->newInstanceWithoutConstructor();
-if ($unattached instanceof DOMNode) { var_dump(simplexml_import_dom($unattached)); }
+try { simplexml_import_dom($unattached); } catch (TypeError $error) { echo 'uninitialized:', $error->getMessage(), '|'; }
 var_dump(simplexml_import_dom(new DOMDocument()));
 try { simplexml_import_dom(new stdClass()); } catch (TypeError $error) { echo $error->getMessage(), '|'; }
 $first = simplexml_import_dom($doc);
@@ -338,12 +342,12 @@ eval($source);
 restore_error_handler();
 "###);
     let invalid = "2:simplexml_import_dom(): Invalid Nodetype to import|NULL\n";
-    let missing = "2:simplexml_import_dom(): Imported Node must have associated Document|NULL\n";
+    let uninitialized = "uninitialized:simplexml_import_dom(): Argument #1 ($node) must be a valid XML node|";
     let consumed = "Iterator not initialized or already consumed|";
     let parse = "2:DOMDocument::loadXML(): Premature end of data in tag r line 1 in Entity, line: 1|bool(false)\n";
     assert!(out.success, "stdout={} stderr={}\nDOM import assembly:\n{}", out.stdout, out.stderr, import_failure_assembly(&assembly));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
-    assert_eq!(out.stdout, format!("{invalid}{missing}{invalid}simplexml_import_dom(): Argument #1 ($node) must be a valid XML node|2:SimpleXMLElement::xpath(): Undefined namespace prefix: q|bool(false)\n1|{{\"p\":\"urn:p\"}}|{{\"p\":\"urn:p\"}}|[]|{}{parse}8:DOMDocument::loadXML(): Unsupported version '1.1' in Entity, line: 1|bool(true)\nDOMDocument::loadXML(): Argument #1 ($source) must not be empty|caught|caught|{invalid}{parse}{consumed}", consumed.repeat(4)));
+    assert_eq!(out.stdout, format!("{invalid}{uninitialized}{invalid}simplexml_import_dom(): Argument #1 ($node) must be a valid XML node|2:SimpleXMLElement::xpath(): Undefined namespace prefix: q|bool(false)\n1|{{\"p\":\"urn:p\"}}|{{\"p\":\"urn:p\"}}|[]|{}{parse}8:DOMDocument::loadXML(): Unsupported version '1.1' in Entity, line: 1|bool(true)\nDOMDocument::loadXML(): Argument #1 ($source) must not be empty|caught|caught|{invalid}{parse}{consumed}", consumed.repeat(4)));
 }
 
 /// Separates construction, selection, and foreach ownership in compiled and runtime-eval paths.
