@@ -47734,7 +47734,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "non_heap"
       },
       "requirements": {
         "kind": "shared"

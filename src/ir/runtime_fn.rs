@@ -2361,6 +2361,8 @@ impl RuntimeFnId {
                 | RuntimeFnId::MemoryGetUsage
                 | RuntimeFnId::MemoryResetPeakUsage
                 | RuntimeFnId::IntvalBase
+                // File writes return a bare byte count, never either input string.
+                | RuntimeFnId::FilePutContents
                 | RuntimeFnId::TokenizerErrorLocation
                 // Both array mutators answer the resulting element count. The returned
                 // machine integer cannot keep any variadic value operand alive.
@@ -3464,6 +3466,7 @@ mod tests {
     /// Pins the contracts used by argument cleanup and synthetic callable wrappers.
     #[test]
     fn runtime_result_ownership_distinguishes_fresh_boxes_from_concat_storage() {
+        assert_eq!(RuntimeFnId::FilePutContents.result_ownership(), BuiltinResultOwnership::NonHeap);
         for target in [
             RuntimeFnId::Getdate,
             RuntimeFnId::Localtime,
