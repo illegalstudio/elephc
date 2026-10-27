@@ -417,8 +417,8 @@ class ReferenceViewObject { public string $name = 'value'; }
 function replace_ref_object(&$value): void { $value = new ReferenceViewObject(); }
 function read_unpromoted_ref_object(int $flag): void {
     $value = new ReferenceViewObject();
-    if ($flag < 0) { replace_ref_object($value); }
-    if ($value instanceof ReferenceViewObject) { echo $value->name; }
+    if ($flag < 0) { replace_ref_object($value); return; }
+    echo $value->name;
 }
 "#;
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
