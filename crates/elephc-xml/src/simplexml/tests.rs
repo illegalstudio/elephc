@@ -282,6 +282,38 @@ fn simplexml_non_root_clone_is_detached_and_shares_only_document_ownership() {
     assert_eq!(unsafe { owned_string(ffi::text(copied.first().unwrap())) }, "copy");
 }
 
+/// Temporary clones and their derived views do not accumulate in the source document's list.
+#[test]
+fn simplexml_temporary_clone_subtrees_release_without_document_retention() {
+    let root = parse(b"<r><a><b>kept</b></a></r>", 0, "", false).unwrap();
+    let selected = root.select(2, "a", "", false, 0).select(4, "", "", false, 0);
+    let retained = root.doc.detached.borrow().len();
+    let references = Rc::strong_count(&root.doc);
+    for _ in 0..64 {
+        let copied = selected.deep_clone().unwrap();
+        let child = copied.select(2, "b", "", false, 0);
+        drop(copied);
+        assert_eq!(unsafe { owned_string(ffi::text(child.first().unwrap())) }, "kept");
+        drop(child);
+        assert_eq!(root.doc.detached.borrow().len(), retained);
+        assert_eq!(Rc::strong_count(&root.doc), references);
+    }
+}
+
+/// Removing a copied root transfers its storage to the document without a second free.
+#[test]
+fn simplexml_removed_clone_subtree_transfers_to_document_ownership() {
+    let root = parse(b"<r><a>kept</a></r>", 0, "", false).unwrap();
+    let selected = root.select(2, "a", "", false, 0).select(4, "", "", false, 0);
+    let copied = selected.deep_clone().unwrap();
+    let node = copied.first().unwrap();
+    copied.remove(4, "", 0);
+    assert!(root.doc.detached_set.borrow().contains(&node));
+    let document_alias = root.with_scope(Scope::Node(node));
+    drop(copied);
+    assert_eq!(unsafe { owned_string(ffi::text(document_alias.first().unwrap())) }, "kept");
+}
+
 /// Newly materialized wrappers own independent prefix maps while aliases and clones preserve theirs.
 #[test]
 fn simplexml_derived_xpath_registrations_are_isolated() {

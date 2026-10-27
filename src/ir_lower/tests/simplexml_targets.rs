@@ -69,6 +69,13 @@ function xmlUnionNegation(SimpleXMLElement|null $node): mixed { return -$node; }
 $zeroXml = new TargetZeroXml('<r>0.0</r>');
 echo xmlMixedNegation($zeroXml), xmlTypedNegation($zeroXml), xmlSubclassNegation($zeroXml), xmlUnionNegation($zeroXml);
 echo xmlMixedNegation($otherNumber);
+function xmlNullablePropertyReads(SimpleXMLElement $node): void {
+    var_dump($node->missing->child, $node->attributes()->missing);
+    $node->created->child = 'written';
+    $node->chain->middle->leaf = 'deep';
+    var_dump($node->created->child, $node->missing->child?->getName());
+}
+xmlNullablePropertyReads($xml);
 echo (int)($xml->item[0] > 1), (int)($xml->item[0] == '7'), $xml <=> $xml->item;
 $xml->item[0] += 1;
 try { $xml->item[0][null] = 'invalid'; } catch (ValueError $error) { echo $error->getMessage(); }

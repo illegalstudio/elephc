@@ -16,9 +16,8 @@ impl View {
         if !self.identity.is_null() && self.identity != unsafe { ffi::root(self.doc.raw) } {
             let copy = unsafe { ffi::copy_node(self.identity, self.doc.raw, 1) };
             if copy.is_null() { return None; }
-            self.doc.detached.borrow_mut().push(copy);
-            self.doc.detached_set.borrow_mut().insert(copy);
-            return Some(self.remap_with(self.doc.clone(), &|node| {
+            let owner = Rc::new(CloneOwner { node: copy, doc: self.doc.clone() });
+            return Some(self.remap_with(self.doc.clone(), Some(owner), &|node| {
                 corresponding_node(self.identity, copy, node)
             }));
         }
@@ -36,21 +35,21 @@ impl View {
 
     /// Preserves lazy selectors while binding concrete aliases to the copied tree or detached list.
     fn remap(&self, doc: Rc<Document>) -> Self {
-        self.remap_with(doc.clone(), &|node| self.map_node(&doc, node))
+        self.remap_with(doc.clone(), None, &|node| self.map_node(&doc, node))
     }
 
     /// Rebuilds selectors using the root-document or bounded-subtree correspondence map.
-    fn remap_with(&self, doc: Rc<Document>, map: &impl Fn(Node) -> Node) -> Self {
+    fn remap_with(&self, doc: Rc<Document>, clone_owner: Option<Rc<CloneOwner>>, map: &impl Fn(Node) -> Node) -> Self {
         let scope = match &self.scope {
             Scope::Node(node) => Scope::Node(map(*node)),
             Scope::Nodes(nodes) => Scope::Nodes(Rc::new(nodes.iter().map(|node| map(*node)).filter(|node| !node.is_null()).collect())),
             Scope::XPath(nodes) => Scope::XPath(Rc::new(nodes.iter().map(|node| map(*node)).filter(|node| !node.is_null()).collect())),
-            Scope::Children(parent, name) => Scope::Children(Rc::new(parent.remap_with(doc.clone(), map)), name.clone()),
-            Scope::Attributes(parent, name) => Scope::Attributes(Rc::new(parent.remap_with(doc.clone(), map)), name.clone()),
-            Scope::Index(parent, index) => Scope::Index(Rc::new(parent.remap_with(doc.clone(), map)), *index),
+            Scope::Children(parent, name) => Scope::Children(Rc::new(parent.remap_with(doc.clone(), clone_owner.clone(), map)), name.clone()),
+            Scope::Attributes(parent, name) => Scope::Attributes(Rc::new(parent.remap_with(doc.clone(), clone_owner.clone(), map)), name.clone()),
+            Scope::Index(parent, index) => Scope::Index(Rc::new(parent.remap_with(doc.clone(), clone_owner.clone(), map)), *index),
         };
         let identity = map(self.identity);
-        Self { doc, scope, identity, ns: self.ns.clone(), xpath_ns: Rc::new(RefCell::new(self.xpath_ns.borrow().clone())) }
+        Self { _clone_owner: clone_owner, doc, scope, identity, ns: self.ns.clone(), xpath_ns: Rc::new(RefCell::new(self.xpath_ns.borrow().clone())) }
     }
 
     /// Finds one node in the live copy before searching independently copied detached subtrees.

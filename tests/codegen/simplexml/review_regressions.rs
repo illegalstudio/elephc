@@ -286,6 +286,19 @@ $copied->b = 'copy'; echo (string)$document->a->b, ':', (string)$copied->b, '|';
 $group = clone $document->a; echo count($group->xpath('..')), '|';
 unset($node, $group, $document);
 echo $copied->asXML(), '|';
+$reads = new SimpleXMLElement('<r known="yes"><a/></r>');
+var_dump($reads->missing->child, $reads->a->c->d, $reads->attributes()->q);
+$dynamicName = 'child'; var_dump($reads->missing->{$dynamicName});
+echo (int)is_null($reads->missing->child), ':', (int)is_object($reads->a->children()->foo), '|';
+$reads->created->child = 'written'; echo (string)$reads->created->child, '|';
+$reads->chain->middle->leaf = 'deep'; echo (string)$reads->chain->middle->leaf, '|';
+$emptyAttributes = new SimpleXMLElement('<r/>');
+var_dump($emptyAttributes->attributes()->q, $reads->missing->child?->getName());
+for ($iteration = 0; $iteration < 32; $iteration++) {
+    $temporaryClone = clone $reads->a[0];
+    $temporaryClone->newChild = 'value';
+}
+unset($temporaryClone, $reads, $emptyAttributes, $dynamicName, $iteration);
 unset($prefixes, $declarationsXml, $className, $error, $zero, $negativeZero, $maybeZero, $copied);
 "####;
     let declarations = r####"<?php
@@ -330,7 +343,7 @@ stream_filter_register('xml.review.throw', 'XmlReviewThrowFilter');
     let names_expected = "<?xml version=\"1.0\"?>\n<r xmlns:p=\"urn:p\" at=\"base\" p:at=\"literal\"><p:q>value</p:q><a:b><c>nested</c></a:b><p:q>second</p:q></r>\n1:value:second:0|base:literal:a:b|method:qualified|:a|SimpleXMLElement::addAttribute(): Attribute requires prefix for namespace|SimpleXMLElement::addAttribute(): Attribute already exists|<?xml version=\"1.0\"?>\n<r xmlns:p=\"urn:p\" at=\"base\" p:at=\"literal\" :c=\"1\"><p:q>value</p:q><a:b><c>nested</c></a:b><p:q>second</p:q><p:method>qualified</p:method><:a>leading</:a></r>\n";
     let factory = "create|other-close|drop|RuntimeException:filter|";
     let constructor = "create|other-close|drop|Exception:String could not be parsed as XML|RuntimeException|";
-    let semantics_expected = "A:B|{\"a\":\"urn:a\",\"b\":\"urn:b\",\"\":\"\"}|{\"a\":\"urn:a\"}|{\"a\":\"urn:a\"}|{\"a\":\"urn:a\"}|{\"b\":\"urn:b\"}|[]|simplexml_load_string(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, MissingXmlReviewClass given|simplexml_load_file(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, MissingXmlReviewClass given|simplexml_import_dom(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, MissingXmlReviewClass given|simplexml_load_string(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, stdClass given|simplexml_load_file(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, stdClass given|simplexml_import_dom(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, stdClass given|float(-0)\nfloat(-0)\nfloat(0)\nfloat(0)\nfloat(-0)\n0|original:copy|1|<a><b>copy</b></a>|";
+    let semantics_expected = "A:B|{\"a\":\"urn:a\",\"b\":\"urn:b\",\"\":\"\"}|{\"a\":\"urn:a\"}|{\"a\":\"urn:a\"}|{\"a\":\"urn:a\"}|{\"b\":\"urn:b\"}|[]|simplexml_load_string(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, MissingXmlReviewClass given|simplexml_load_file(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, MissingXmlReviewClass given|simplexml_import_dom(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, MissingXmlReviewClass given|simplexml_load_string(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, stdClass given|simplexml_load_file(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, stdClass given|simplexml_import_dom(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, stdClass given|float(-0)\nfloat(-0)\nfloat(0)\nfloat(0)\nfloat(-0)\n0|original:copy|1|<a><b>copy</b></a>|NULL\nNULL\nNULL\nNULL\n1:1|written|deep|NULL\nNULL\n";
     let expected = [names_expected, names_expected, factory, constructor, factory, constructor, semantics_expected, semantics_expected];
     assert_eq!(runs.len(), expected.len());
     for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {

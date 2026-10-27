@@ -215,14 +215,22 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $handle = $this->__elephc_handle;
         return elephc_xml_sx_int($handle, 3) !== 0;
     }
-    final public function __elephc_property_get(string $name): static {
+    final public function __elephc_property_get(string $name): ?static {
+        $handle = $this->__elephc_handle;
+        $mode = elephc_xml_sx_int($handle, 5);
+        if ($mode !== 1 && elephc_xml_sx_int($handle, 1) === 0) { return null; }
+        $selected = $this->__elephc_property_select($name);
+        if ($mode === 3 && elephc_xml_sx_int($selected->__elephc_handle, 1) === 0) { return null; }
+        return $selected;
+    }
+    final public function __elephc_property_select(string $name): static {
         $handle = $this->__elephc_handle;
         $selected = elephc_xml_sx_select($handle, 2, $name, "", 0, 0);
         return __elephc_simplexml_wrap($selected, get_class($this));
     }
     final public function __elephc_property_write_fetch(string $name): static {
         if ($name === '') { throw new ValueError('Cannot create element with an empty name'); }
-        $selected = $this->__elephc_property_get($name);
+        $selected = $this->__elephc_property_select($name);
         $handle = $selected->__elephc_handle;
         if (elephc_xml_sx_int($handle, 1) === 0) {
             $created = elephc_xml_sx_mutate($handle, 23, '', '', '', 0, 0);
@@ -245,7 +253,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         if ($status === -2) { __elephc_simplexml_write_warning('Cannot assign to an array of nodes (duplicate subnodes or attr detected)', $caller); }
     }
     final public function __elephc_property_isset(string $name): bool {
-        $node = $this->__elephc_property_get($name);
+        $node = $this->__elephc_property_select($name);
         $handle = $node->__elephc_handle;
         return elephc_xml_sx_int($handle, 1) !== 0;
     }

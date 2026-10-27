@@ -7,6 +7,7 @@
 //! Key details:
 //! - Every view owns its document through Rc. Selectors are evaluated on access.
 //! - Unlinked nodes stay owned until all views die, preventing stale-view UAF.
+//! - Independent clone subtrees release with their views; explicit removal transfers to the document.
 //! - State stays on its originating thread; no native pointer crosses threads.
 
 mod abi;
@@ -31,6 +32,19 @@ impl Drop for Document {
         unsafe {
             for node in self.detached.get_mut().drain(..) { ffi::node_free(node); }
             ffi::doc_free(self.raw);
+        }
+    }
+}
+
+/// Owns one parentless clone until its last derived view dies or the document adopts it.
+struct CloneOwner { node: Node, doc: Rc<Document> }
+impl Drop for CloneOwner {
+    /// Frees an independent subtree while preserving nodes transferred to document ownership.
+    fn drop(&mut self) {
+        if unsafe { ffi::parent(self.node).is_null() }
+            && !self.doc.detached_set.borrow().contains(&self.node)
+        {
+            unsafe { ffi::node_free(self.node); }
         }
     }
 }
@@ -64,6 +78,7 @@ enum Scope {
 /// PHP wrapper state; iterator position does not change through ordinary getters.
 #[derive(Clone)]
 struct View {
+    _clone_owner: Option<Rc<CloneOwner>>,
     doc: Rc<Document>, scope: Scope, ns: Namespace,
     identity: Node,
     xpath_ns: Rc<RefCell<BTreeMap<String, String>>>,
@@ -277,7 +292,7 @@ fn from_document(raw: Node, namespace: &str, prefix: bool) -> Option<View> {
     let root = unsafe { ffi::root(raw) };
     let doc = Rc::new(Document { raw, detached: RefCell::new(vec![]), detached_set: RefCell::new(HashSet::new()) });
     if root.is_null() { return None; }
-    Some(View { doc, scope: Scope::Node(root), identity: root, ns: Namespace { value: namespace.into(), prefix },
+    Some(View { _clone_owner: None, doc, scope: Scope::Node(root), identity: root, ns: Namespace { value: namespace.into(), prefix },
         xpath_ns: Rc::new(RefCell::new(BTreeMap::new())) })
 }
 
