@@ -77,7 +77,8 @@ pub(super) fn guard_static_compound_property_read(
     let ExprKind::Variable(result) = &value.kind else { return None; };
     let StmtKind::Assign { name, value } = &stmt.kind else { return None; };
     let ExprKind::BinaryOp { left, op, right } = &value.kind else { return None; };
-    if name != result || left.as_ref() != target { return None; }
+    if name != result || left.as_ref() != target
+        || value.span.line != span.line || value.span.col != span.col { return None; }
     let rhs = ctx.with_borrowed_write_operand(|ctx| lower_expr(ctx, right));
     let mut receiver = lower_static_property_write_chain(ctx, object, rhs, span);
     let (cached_property, dynamic_name) = match property {
@@ -130,7 +131,7 @@ pub(super) fn guard_static_compound_property_read(
         left: Box::new(target.clone()), op: op.clone(), right: right.clone(),
     }, value.span);
     let read = Stmt::new(StmtKind::Assign { name: name.clone(), value }, stmt.span);
-    if !lower_property_write_prelude(ctx, &target, &read) {
+    if !lower_property_write_prelude(ctx, &target, &read, span) {
         crate::ir_lower::stmt::lower_stmt(ctx, &read);
     }
     Some(StaticCompoundReceiver { target, receiver, temp, dynamic_name })

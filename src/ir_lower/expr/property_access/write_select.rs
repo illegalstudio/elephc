@@ -94,15 +94,16 @@ pub(in crate::ir_lower::expr) fn select_named(
 
 /// Preserves write-context target reads in parser-generated compound and inc/dec preludes.
 pub(in crate::ir_lower::expr) fn lower_property_write_prelude(
-    ctx: &mut LoweringContext<'_, '_>, target: &Expr, stmt: &Stmt,
+    ctx: &mut LoweringContext<'_, '_>, target: &Expr, stmt: &Stmt, assignment_span: Span,
 ) -> bool {
     if !ctx.classes.contains_key("SimpleXMLElement") { return false; }
     if !matches!(target.kind, ExprKind::PropertyAccess { .. } | ExprKind::DynamicPropertyAccess { .. }) {
         return false;
     }
     let StmtKind::Assign { name, value } = &stmt.kind else { return false; };
-    let read = if value == target { true } else {
-        matches!(&value.kind, ExprKind::BinaryOp { left, .. } if left.as_ref() == target)
+    let read = if value == target { name.contains("__elephc_incdec_old_") } else {
+        matches!(&value.kind, ExprKind::BinaryOp { left, .. } if left.as_ref() == target
+            && value.span.line == assignment_span.line && value.span.col == assignment_span.col)
     };
     if !read { return false; }
     let selected = lower_property_write_receiver(ctx, target);

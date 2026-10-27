@@ -69,6 +69,8 @@ function xmlUnionNegation(SimpleXMLElement|null $node): mixed { return -$node; }
 $zeroXml = new TargetZeroXml('<r>0.0</r>');
 echo xmlMixedNegation($zeroXml), xmlTypedNegation($zeroXml), xmlSubclassNegation($zeroXml), xmlUnionNegation($zeroXml);
 echo xmlMixedNegation($otherNumber);
+function xmlComputedTargetName(): string { return 'a'; }
+function xmlComputedTargetIndex(): int { return 0; }
 function xmlNullablePropertyReads(SimpleXMLElement $node): void {
     var_dump($node->missing->child, $node->attributes()->missing);
     $node->created->child = 'written';
@@ -78,6 +80,9 @@ function xmlNullablePropertyReads(SimpleXMLElement $node): void {
     $name = 'middle'; $node->dynamic->{$name}->leaf = 'runtime';
     $node->sum->middle->leaf += 1;
     $node->increment->middle->leaf++;
+    $node->{xmlComputedTargetName()}->computed = 1;
+    $node->indexed[xmlComputedTargetIndex()]->compound += 1;
+    $node->indexed[xmlComputedTargetIndex()]->stepped++;
     $node->indexed[0]->leaf = 1;
     $node->indexed[1]->leaf = 2;
     var_dump(++$node->counter, $node->counter++);

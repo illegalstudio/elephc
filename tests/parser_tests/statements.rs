@@ -191,3 +191,35 @@ fn test_this_property_element_increment_retains_php_incdec() {
     assert!(matches!(&array.kind, ExprKind::PropertyAccess { object, property }
         if matches!(object.kind, ExprKind::This) && property == "arr"));
 }
+
+/// Computed write hops are captured independently instead of reading missing receiver storage.
+#[test]
+fn test_computed_property_write_statements_preserve_writable_traversal() {
+    for source in [
+        "<?php $x->{g()}->c = f();", "<?php $x->a[k()]->c = f();",
+        "<?php $x->a[k()]->c .= f();", "<?php $x->a[k()]->c++;",
+        "<?php $x->{g()}->b->c += 1;",
+    ] {
+        let statements = parse_source(source);
+        let StmtKind::ExprStmt(expression) = &statements[0].kind else {
+            panic!("computed property statement must retain expression write semantics: {source}");
+        };
+        let ExprKind::Assignment { target, prelude, .. } = &expression.kind else {
+            panic!("expected assignment: {source}");
+        };
+        assert!(matches!(target.kind, ExprKind::PropertyAccess { .. }), "{source}");
+        assert!(prelude.iter().any(|statement| matches!(&statement.kind,
+            StmtKind::Assign { value, .. } if matches!(value.kind, ExprKind::FunctionCall { .. }))), "{source}");
+    }
+}
+
+/// Append preparation evaluates only the computed name before selecting its property container.
+#[test]
+fn test_computed_property_append_keeps_receiver_chain() {
+    let statements = parse_source("<?php $x->{g()}->list[] = f();");
+    let StmtKind::Synthetic(prelude) = &statements[0].kind else { panic!("expected captured name"); };
+    assert!(matches!(&prelude[0].kind, StmtKind::Assign { value, .. }
+        if matches!(value.kind, ExprKind::FunctionCall { .. })));
+    assert!(matches!(&prelude.last().unwrap().kind, StmtKind::PropertyArrayPush { object, .. }
+        if matches!(object.kind, ExprKind::DynamicPropertyAccess { .. })));
+}

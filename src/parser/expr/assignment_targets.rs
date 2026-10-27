@@ -111,7 +111,7 @@ pub(crate) fn compound_assignment_expression(target: Expr, op: BinOp, rhs: Expr,
 ///
 /// A target that is still not replayable after stabilization is declined rather than guessed at,
 /// which leaves the caller's original error in place.
-pub(super) fn desugar_lvalue_incdec(
+pub(crate) fn desugar_lvalue_incdec(
     target: Expr,
     increment: bool,
     prefix: bool,

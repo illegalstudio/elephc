@@ -40,7 +40,7 @@ pub(super) fn lower_assignment_expr(
             compound_receiver = Some(receiver);
             continue;
         }
-        if conditional_value_temp.is_none() && lower_property_write_prelude(ctx, target, stmt) {
+        if conditional_value_temp.is_none() && lower_property_write_prelude(ctx, target, stmt, expr.span) {
             continue;
         }
         if let Some(update) = buffer_update.as_ref() {

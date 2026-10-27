@@ -342,7 +342,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $selected = $this->__elephc_dimension_get($offset);
         if ($selected !== null) { return $selected; }
         if (!is_int($offset)) {
-            __elephc_simplexml_warning("Notice: Indirect modification of overloaded element of SimpleXMLElement has no effect\n");
+            __elephc_simplexml_warning("Notice: Indirect modification of overloaded element of " . get_class($this) . " has no effect\n");
             return null;
         }
         $handle = $this->__elephc_handle;
@@ -365,7 +365,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
                 if ($added > 0) { return __elephc_simplexml_wrap($added, get_class($this)); }
             }
         }
-        __elephc_simplexml_warning("Notice: Indirect modification of overloaded element of SimpleXMLElement has no effect\n");
+        __elephc_simplexml_warning("Notice: Indirect modification of overloaded element of " . get_class($this) . " has no effect\n");
         return null;
     }
     final public function __elephc_dimension_set(mixed $offset, mixed $value): void {

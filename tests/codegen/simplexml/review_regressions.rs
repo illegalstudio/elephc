@@ -324,6 +324,20 @@ var_dump($counter->c += 2, --$counter->c);
 $missingCounter = new SimpleXMLElement('<r/>');
 var_dump($missingCounter->c += 1, ++$missingCounter->d);
 echo $missingCounter->asXML(), '|';
+$plainRead = new SimpleXMLElement('<r/>');
+echo ($plainRead->a = $plainRead->a . $plainRead->count()), '|', $plainRead->asXML(), '|';
+$plainThrow = new SimpleXMLElement('<r/>');
+try { $plainValue = ($plainThrow->a->b = $plainThrow->a->b . reviewThrowWriteName()); }
+catch (RuntimeException $plainError) { echo $plainError->getMessage(), '|'; }
+echo $plainThrow->asXML(), '|';
+ReviewPlainXmlHolder::$node = new SimpleXMLElement('<r/>');
+echo (ReviewPlainXmlHolder::$node->a = ReviewPlainXmlHolder::$node->a . ReviewPlainXmlHolder::$node->count()), '|', ReviewPlainXmlHolder::$node->asXML(), '|';
+ReviewPlainXmlHolder::$node = new SimpleXMLElement('<r/>');
+try { $staticPlainValue = (ReviewPlainXmlHolder::$node->a->b = ReviewPlainXmlHolder::$node->a->b . reviewThrowWriteName()); }
+catch (RuntimeException $staticPlainError) { echo $staticPlainError->getMessage(), '|'; }
+echo ReviewPlainXmlHolder::$node->asXML(), '|';
+ReviewPlainXmlHolder::$node = null;
+unset($plainRead, $plainThrow, $plainValue, $plainError, $staticPlainValue, $staticPlainError);
 $throwingUpdate = new SimpleXMLElement('<r/>');
 try { $throwingUpdate->absent->leaf += throw new RuntimeException('rhs-throw'); }
 catch (RuntimeException $updateError) { echo $updateError->getMessage(), ':', (int)isset($throwingUpdate->absent), '|'; }
@@ -354,6 +368,20 @@ reviewWriteHookLabel($hookUpdate); echo $hookUpdate->child->label, '|';
 var_dump(reviewBumpHookCount($hookUpdate));
 $hookUpdate->child->label = 'direct'; echo $hookUpdate->child->label, '|';
 $hookUpdate->count += 1; echo $hookUpdate->count, '|';
+$computedOrder = new SimpleXMLElement('<r/>');
+$computedOrder->{reviewOrderName()}->c = reviewOrderValue(); echo '|', $computedOrder->asXML();
+$computedOrder = new SimpleXMLElement('<r/>');
+$computedOrder->a[reviewOrderIndex()]->c = reviewOrderValue(); echo '|', $computedOrder->asXML();
+$computedOrder = new SimpleXMLElement('<r/>');
+$computedOrder->{reviewOrderName()}->list[] = reviewOrderValue(); echo '|', $computedOrder->asXML();
+$computedOrder = new SimpleXMLElement('<r/>');
+$computedOrder->a[reviewOrderIndex()]->c .= reviewOrderValue(); echo '|', $computedOrder->asXML();
+$computedOrder = new SimpleXMLElement('<r/>');
+$computedOrder->a[reviewOrderIndex()]->c++; echo '|', $computedOrder->asXML();
+$computedOrder = new SimpleXMLElement('<r/>');
+$computedOrder->{reviewOrderName()}->b->c += 1; echo '|', $computedOrder->asXML();
+reviewOrderOrdinary([new ReviewOrderObject()]);
+unset($computedOrder);
 $lateName = 'old'; $lateUpdate = new SimpleXMLElement('<r/>');
 $lateUpdate->{$lateName} += reviewChangeWriteName();
 echo $lateUpdate->asXML(), '|';
@@ -373,6 +401,10 @@ echo $badOffset->asXML(), '|';
 $appendedOffset = new SimpleXMLElement('<r><a/></r>');
 $appendedOffset->a[3]->b = 3;
 echo $appendedOffset->asXML(), '|';
+$subclassOffset = new ReviewNumericZeroXml('<r><a>1</a></r>');
+try { $subclassOffset['zz']->b = 1; } catch (Error $subclassOffsetError) { echo $subclassOffsetError->getMessage(), '|'; }
+echo $subclassOffset->asXML(), '|';
+unset($subclassOffset, $subclassOffsetError);
 restore_error_handler();
 unset($updates, $existingUpdate, $attributeUpdate, $liveUpdate, $offsetUpdate, $hookUpdate, $badOffset, $appendedOffset, $offsetError);
 "####;
@@ -387,6 +419,15 @@ function reviewCreateUpdateNode(): int {
     echo (int)isset($liveUpdate->a->b->c), '|';
     $liveUpdate->a->b->c = 7;
     return 1;
+}
+class ReviewPlainXmlHolder { public static ?SimpleXMLElement $node = null; }
+class ReviewOrderObject { public int $p = 0; }
+function reviewOrderName(): string { echo 'g'; return 'a'; }
+function reviewOrderIndex(): int { echo 'k'; return 0; }
+function reviewOrderValue(): int { echo 'f'; return 1; }
+function reviewOrderOrdinary(mixed $items): void {
+    $items[reviewOrderIndex()]->p = reviewOrderValue();
+    echo '|', $items[0]->p, '|';
 }
 class ReviewWriteName {
     public function __toString(): string { echo 'name|'; return 'converted'; }
@@ -448,8 +489,8 @@ stream_filter_register('xml.review.throw', 'XmlReviewThrowFilter');
     let factory = "create|other-close|drop|RuntimeException:filter|";
     let constructor = "create|other-close|drop|Exception:String could not be parsed as XML|RuntimeException|";
     let semantics_expected = "A:B|{\"a\":\"urn:a\",\"b\":\"urn:b\",\"\":\"\"}|{\"a\":\"urn:a\"}|{\"a\":\"urn:a\"}|{\"a\":\"urn:a\"}|{\"b\":\"urn:b\"}|[]|simplexml_load_string(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, MissingXmlReviewClass given|simplexml_load_file(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, MissingXmlReviewClass given|simplexml_import_dom(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, MissingXmlReviewClass given|simplexml_load_string(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, stdClass given|simplexml_load_file(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, stdClass given|simplexml_import_dom(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, stdClass given|float(-0)\nfloat(-0)\nfloat(0)\nfloat(0)\nfloat(-0)\n0|original:copy|1|<a><b>copy</b></a>|NULL\nNULL\nNULL\nNULL\n1:1|written|deep|four|attribute|tail|dynamic|boxed|<sum><deep><leaf/></deep></sum>|1|1|write-name:0|NULL\nNULL\n";
-    let updates_expected = "<?xml version=\"1.0\"?>\n<r><a><b><c/></b></a><d><e><f/></e></d><text/></r>\n|<?xml version=\"1.0\"?>\n<r><c>1</c></r>\n|<?xml version=\"1.0\"?>\n<r a=\"5\" b=\"\"/>\n|0|8|<?xml version=\"1.0\"?>\n<r><a><b>1</b></a><a><b>2</b></a></r>\n|get|get|set|count|int(11)\nget|get|direct|count|count|1110|rhs|<?xml version=\"1.0\"?>\n<r><new/></r>\n|rhs|<?xml version=\"1.0\"?>\n<r><new><leaf>1</leaf></new></r>\n|rhs|name|<?xml version=\"1.0\"?>\n<r><new><leaf>1</leaf></new><converted>1</converted></r>\n|int(6)\nbool(true)\nstring(16) \"SimpleXMLElement\"\nstring(1) \"8\"\nstring(1) \"8\"\nint(10)\nint(9)\nint(1)\nint(1)\n<?xml version=\"1.0\"?>\n<r><c/><d/></r>\n|rhs-throw:0|2:main(): Cannot add element a number 1 when only 0 such elements exist|8:Indirect modification of overloaded element of SimpleXMLElement has no effect|Attempt to assign property \"b\" on null|<?xml version=\"1.0\"?>\n<r><a/></r>\n|2:main(): Cannot add element a number 3 when only 1 such elements exist|<?xml version=\"1.0\"?>\n<r><a/><a><b>3</b></a></r>\n|";
-    let eval_updates_expected = "<?xml version=\"1.0\"?>\n<r><a><b><c/></b></a><d><e><f/></e></d><text/></r>\n|<?xml version=\"1.0\"?>\n<r><c>1</c></r>\n|<?xml version=\"1.0\"?>\n<r a=\"5\" b=\"\"/>\n|0|8|<?xml version=\"1.0\"?>\n<r><a><b>1</b></a><a><b>2</b></a></r>\n|get|get|set|count|int(11)\nget|get|direct|count|count|1110|rhs|<?xml version=\"1.0\"?>\n<r><new/></r>\n|rhs|<?xml version=\"1.0\"?>\n<r><new><leaf>1</leaf></new></r>\n|rhs|name|<?xml version=\"1.0\"?>\n<r><new><leaf>1</leaf></new><converted>1</converted></r>\n|2:Unknown: Cannot add element a number 1 when only 0 such elements exist|8:Indirect modification of overloaded element of SimpleXMLElement has no effect|Attempt to assign property \"b\" on null|<?xml version=\"1.0\"?>\n<r><a/></r>\n|2:Unknown: Cannot add element a number 3 when only 1 such elements exist|<?xml version=\"1.0\"?>\n<r><a/><a><b>3</b></a></r>\n|";
+    let updates_expected = "<?xml version=\"1.0\"?>\n<r><a><b><c/></b></a><d><e><f/></e></d><text/></r>\n|<?xml version=\"1.0\"?>\n<r><c>1</c></r>\n|<?xml version=\"1.0\"?>\n<r a=\"5\" b=\"\"/>\n|0|8|<?xml version=\"1.0\"?>\n<r><a><b>1</b></a><a><b>2</b></a></r>\n|get|get|set|count|int(11)\nget|get|direct|count|count|1110|gf|<?xml version=\"1.0\"?>\n<r><a><c>1</c></a></r>\nkf|<?xml version=\"1.0\"?>\n<r><a><c>1</c></a></r>\ngf|<?xml version=\"1.0\"?>\n<r><a><list>1</list></a></r>\nkf|<?xml version=\"1.0\"?>\n<r><a><c/></a></r>\nk|<?xml version=\"1.0\"?>\n<r><a><c/></a></r>\ng|<?xml version=\"1.0\"?>\n<r><a><b><c/></b></a></r>\nkf|1|rhs|<?xml version=\"1.0\"?>\n<r><new/></r>\n|rhs|<?xml version=\"1.0\"?>\n<r><new><leaf>1</leaf></new></r>\n|rhs|name|<?xml version=\"1.0\"?>\n<r><new><leaf>1</leaf></new><converted>1</converted></r>\n|int(6)\nbool(true)\nstring(16) \"SimpleXMLElement\"\nstring(1) \"8\"\nstring(1) \"8\"\nint(10)\nint(9)\nint(1)\nint(1)\n<?xml version=\"1.0\"?>\n<r><c/><d/></r>\n|0|<?xml version=\"1.0\"?>\n<r><a>0</a></r>\n|write-name|<?xml version=\"1.0\"?>\n<r/>\n|0|<?xml version=\"1.0\"?>\n<r><a>0</a></r>\n|write-name|<?xml version=\"1.0\"?>\n<r/>\n|rhs-throw:0|2:main(): Cannot add element a number 1 when only 0 such elements exist|8:Indirect modification of overloaded element of SimpleXMLElement has no effect|Attempt to assign property \"b\" on null|<?xml version=\"1.0\"?>\n<r><a/></r>\n|2:main(): Cannot add element a number 3 when only 1 such elements exist|<?xml version=\"1.0\"?>\n<r><a/><a><b>3</b></a></r>\n|8:Indirect modification of overloaded element of ReviewNumericZeroXml has no effect|Attempt to assign property \"b\" on null|<?xml version=\"1.0\"?>\n<r><a>1</a></r>\n|";
+    let eval_updates_expected = "<?xml version=\"1.0\"?>\n<r><a><b><c/></b></a><d><e><f/></e></d><text/></r>\n|<?xml version=\"1.0\"?>\n<r><c>1</c></r>\n|<?xml version=\"1.0\"?>\n<r a=\"5\" b=\"\"/>\n|0|8|<?xml version=\"1.0\"?>\n<r><a><b>1</b></a><a><b>2</b></a></r>\n|get|get|set|count|int(11)\nget|get|direct|count|count|1110|gf|<?xml version=\"1.0\"?>\n<r><a><c>1</c></a></r>\nkf|<?xml version=\"1.0\"?>\n<r><a><c>1</c></a></r>\ngf|<?xml version=\"1.0\"?>\n<r><a><list>1</list></a></r>\nkf|<?xml version=\"1.0\"?>\n<r><a><c/></a></r>\nk|<?xml version=\"1.0\"?>\n<r><a><c/></a></r>\ng|<?xml version=\"1.0\"?>\n<r><a><b><c/></b></a></r>\nkf|1|rhs|<?xml version=\"1.0\"?>\n<r><new/></r>\n|rhs|<?xml version=\"1.0\"?>\n<r><new><leaf>1</leaf></new></r>\n|rhs|name|<?xml version=\"1.0\"?>\n<r><new><leaf>1</leaf></new><converted>1</converted></r>\n|2:Unknown: Cannot add element a number 1 when only 0 such elements exist|8:Indirect modification of overloaded element of SimpleXMLElement has no effect|Attempt to assign property \"b\" on null|<?xml version=\"1.0\"?>\n<r><a/></r>\n|2:Unknown: Cannot add element a number 3 when only 1 such elements exist|<?xml version=\"1.0\"?>\n<r><a/><a><b>3</b></a></r>\n|8:Indirect modification of overloaded element of ReviewNumericZeroXml has no effect|Attempt to assign property \"b\" on null|<?xml version=\"1.0\"?>\n<r><a>1</a></r>\n|";
     let expected = [names_expected, names_expected, factory, constructor, factory, constructor, semantics_expected, semantics_expected, updates_expected, eval_updates_expected];
     assert_eq!(runs.len(), expected.len());
     for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {

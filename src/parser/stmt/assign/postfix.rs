@@ -69,7 +69,8 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
 
     // Runtime-name writes need the expression lowerer's captured RHS and lazy ??= plan.
     // A handcrafted assignment without its result target evaluated the value twice.
-    if !is_append && matches!(lhs_expr.kind, ExprKind::DynamicPropertyAccess { .. }) {
+    if !is_append && (matches!(lhs_expr.kind, ExprKind::DynamicPropertyAccess { .. })
+        || (!can_replay_assignment_target(&lhs_expr) && is_instance_property_assignment_target(&lhs_expr))) {
         let value = parse_expr(tokens, pos)?;
         expect_semicolon(tokens, pos)?;
         return Ok(Some(Stmt::new(StmtKind::ExprStmt(value), span)));
@@ -100,6 +101,10 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
         // afterwards. A child-property append must not retain the old static object chain.
         let target = hoisted.stabilize_array_base(lhs_expr);
         (target, hoisted.stabilize_unconditionally(rhs))
+    } else if is_append && is_instance_property_assignment_target(&lhs_expr)
+        && !can_replay_assignment_target(&lhs_expr) {
+        // Settle computed names and keys before the RHS, retaining writable traversal.
+        (hoisted.stabilize_array_base(lhs_expr), rhs)
     } else {
         let rhs = if matches!(op, AssignmentOperator::Compound(_))
             && compound_rhs_can_disturb_index(&lhs_expr, &rhs)
@@ -821,6 +826,14 @@ pub(crate) fn lower_postfix_incdec_assignment(
         AssignmentOperator::Compound(BinOp::Sub)
     };
     let one = Expr::new(ExprKind::IntLiteral(1), span);
+
+    if is_instance_property_assignment_target(&lhs_expr) && !can_replay_assignment_target(&lhs_expr) {
+        if let Some(expression) = crate::parser::expr::desugar_lvalue_incdec(
+            lhs_expr.clone(), is_increment, false, span,
+        ) {
+            return Ok(Stmt::new(StmtKind::ExprStmt(expression), span));
+        }
+    }
 
     if matches!(&lhs_expr.kind,
         ExprKind::PropertyAccess { object, .. } | ExprKind::DynamicPropertyAccess { object, .. }
