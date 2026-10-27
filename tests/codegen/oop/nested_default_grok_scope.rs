@@ -26,11 +26,11 @@ fn check_reflection(source: &str, expected: &str) {
 
 /// Preserves the ordinary runtime mode while exposing failed numeric metadata in its caller.
 fn check_reflection_with_assembly(source: &str, expected: &str) {
-    let (runs, assembly) = compile_and_run_capture_and_asm_per_argv(source, &[&[], &["metadata"]]);
+    let (runs, assembly) = compile_and_run_capture_and_asm_per_argv(source, &[&[]]);
     let out = &runs[0];
     assert!(out.success && out.stdout == expected,
-        "stdout={:?} expected={expected:?}\nstderr={}\nmetadata success={} stdout={:?} stderr={}\nReflection metadata assembly:\n{}",
-        out.stdout, out.stderr, runs[1].success, runs[1].stdout, runs[1].stderr,
+        "stdout={:?} expected={expected:?}\nstderr={}\nReflection metadata assembly:\n{}",
+        out.stdout, out.stderr,
         selected_function_assembly(&assembly, &["main".into(),
             elephc::names::method_symbol("ReflectionClass", "getDefaultProperties"),
             elephc::names::method_symbol("ReflectionProperty", "getDefaultValue")]));
