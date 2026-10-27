@@ -231,7 +231,6 @@ fn native_callable_type_variant(
     let variant = match lower.as_str() {
         "array" => EvalParameterTypeVariant::Array,
         "bool" => EvalParameterTypeVariant::Bool,
-        "false" => EvalParameterTypeVariant::Generic(elephc_generics::Type::atom("false")),
         "callable" => EvalParameterTypeVariant::Callable,
         "false" => EvalParameterTypeVariant::Generic(elephc_generics::Type::atom("false")),
         "float" => EvalParameterTypeVariant::Float,
