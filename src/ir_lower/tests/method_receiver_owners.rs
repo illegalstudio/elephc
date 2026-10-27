@@ -15,12 +15,18 @@ use crate::ir::{Immediate, Op, RuntimeCallTarget};
 fn method_receiver_guards_follow_final_storage_on_all_targets() {
     let source = r#"<?php
 class GuardedMethodReceiver {
-    public function fail(): void { throw new RuntimeException('caught'); }
+    public function fail(bool $throw = true): void {
+        if ($throw) { throw new RuntimeException('caught'); }
+    }
     public function borrowedThis(): void { $this->fail(); }
 }
 function temporaryReceiver(): void { (new GuardedMethodReceiver())->fail(); }
-function narrowedReceiver(mixed $receiver): void {
+function boxedReceiver(mixed $receiver): void {
     if ($receiver instanceof GuardedMethodReceiver) { $receiver->fail(); }
+}
+function projectedReceiver(mixed $receiver, bool $throw): void {
+    $receiver = new GuardedMethodReceiver();
+    $receiver->fail($throw);
 }
 function concreteReceiver(GuardedMethodReceiver $receiver): void { $receiver->fail(); }
 "#;
@@ -29,7 +35,7 @@ function concreteReceiver(GuardedMethodReceiver $receiver): void { $receiver->fa
             source, std::path::Path::new("main.php"), std::path::Path::new("."),
             crate::codegen::platform::Target::parse(target).unwrap(),
         );
-        for name in ["temporaryReceiver", "narrowedReceiver", "concreteReceiver"] {
+        for name in ["temporaryReceiver", "projectedReceiver", "boxedReceiver", "concreteReceiver"] {
             let function = module.functions.iter().find(|function| function.name == name).unwrap();
             let call = function.instructions.iter().find(|inst| inst.op == Op::MethodCall).unwrap();
             let receiver = call.operands[0];
@@ -37,7 +43,13 @@ function concreteReceiver(GuardedMethodReceiver $receiver): void { $receiver->fa
                 inst.immediate == Some(Immediate::RuntimeCall(RuntimeCallTarget::ExceptionGuardOwned))
                     && inst.operands.first() == Some(&receiver)
             });
-            assert_eq!(guarded, name != "concreteReceiver", "{target}: {name}");
+            assert_eq!(guarded, matches!(name, "temporaryReceiver" | "projectedReceiver"), "{target}: {name}");
+            if name == "projectedReceiver" {
+                let load = function.instructions.iter().find(|inst| inst.result == Some(receiver)).unwrap();
+                let Some(Immediate::LocalSlot(slot)) = load.immediate else { panic!("receiver local"); };
+                assert_eq!(function.locals[slot.as_raw() as usize].php_type.codegen_repr(), crate::types::PhpType::Mixed);
+                assert!(matches!(load.result_php_type, crate::types::PhpType::Object(_)));
+            }
         }
         let method = module.class_methods.iter()
             .find(|function| function.name == "GuardedMethodReceiver::borrowedThis").unwrap();
