@@ -281,6 +281,11 @@ fatals, thrown values, early fragment returns, and function cleanup must all
 balance those cells. Persistent declarations and metadata live in the eval
 context until its owning generated function or process scope is destroyed.
 
+Dynamic callable binders borrow the caller's evaluated arguments and own any
+materialized defaults, coercions or variadic collectors. They retire those
+internal owners after the activation scope has preserved its return value and
+completed reference writeback. A failed binding releases every prepared owner.
+
 The final ABI owner of an eval context also releases its stored static locals,
 static properties and materialized class constants. Generated
 `__elephc_eval_context_free` calls Rust's `__elephc_eval_context_free_v2`, which

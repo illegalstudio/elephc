@@ -152,6 +152,7 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     context.pop_called_class_scope();
     context.pop_class_scope();
     let return_result = finish_activation_scope(&mut function_scope, return_result, context, values);
+    let return_result = finish_native_bound_call(return_result, &evaluated_args, context, values);
     context.pop_function();
     return_result
 }
@@ -516,6 +517,7 @@ fn eval_closure_with_optional_binding(
     }
     let return_result = release_function_args(return_result, context, values);
     let return_result = finish_activation_scope(&mut function_scope, return_result, context, values);
+    let return_result = finish_native_bound_call(return_result, &evaluated_args, context, values);
     context.pop_function();
     return_result
 }

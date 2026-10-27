@@ -13,7 +13,7 @@ use crate::support::*;
 /// Persistent cells retire before context unregister, including when an eval destructor throws.
 #[test]
 fn test_eval_context_releases_persistent_cell_owners_bundle() {
-    let args: Vec<_> = (0..7).map(|count| vec!["x"; count]).collect();
+    let args: Vec<_> = (0..8).map(|count| vec!["x"; count]).collect();
     let argvs: Vec<_> = args.iter().map(Vec::as_slice).collect();
     let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(r#"<?php
 function runPersistentEvalOwners(bool $throwing, int $argumentCount): void {
@@ -46,6 +46,8 @@ echo strlen(PersistentOwnerHolder::TOKEN), "|";
         $source = str_replace('PersistentOwnerHolder::$value = new PersistentOwnerProbe("property", $throwing);', '', $source);
     } elseif ($argumentCount === 7) {
         $source = str_replace('echo strlen(PersistentOwnerHolder::TOKEN), "|";', 'echo "ready|";', $source);
+    } elseif ($argumentCount === 8) {
+        $source = str_replace('new PersistentOwnerProbe("local")', 'new PersistentOwnerProbe("local", false)', $source);
     }
     eval($source);
 }
@@ -63,7 +65,8 @@ try {
             3 => "constant|local|property|caught|",
             4 => "8|property|caught|",
             5 => "8|local|after|",
-            _ => "ready|local|property|caught|",
+            6 => "ready|local|property|caught|",
+            _ => "8|local|property|caught|",
         };
         if !out.success || out.stdout != expected || !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
             failures.push(format!("mode={mode} stdout={:?} expected={expected:?}\n{}", out.stdout, out.stderr));

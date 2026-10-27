@@ -132,8 +132,8 @@ pub(in crate::interpreter) fn release_native_bound_args(
     result
 }
 
-/// Preserves a native result while releasing the activation's internal argument owners.
-pub(super) fn finish_native_bound_call(
+/// Preserves a call result while releasing the activation's internal argument owners.
+pub(in crate::interpreter) fn finish_native_bound_call(
     result: Result<RuntimeCellHandle, EvalStatus>,
     args: &[BoundMethodArg],
     context: &mut ElephcEvalContext,

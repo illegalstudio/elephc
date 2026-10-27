@@ -160,6 +160,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     context.pop_called_class_scope();
     context.pop_class_scope();
     let return_result = finish_activation_scope(&mut method_scope, return_result, context, values);
+    let return_result = finish_native_bound_call(return_result, &evaluated_args, context, values);
     context.pop_function();
     return_result
 }
@@ -309,6 +310,7 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
     context.pop_called_class_scope();
     context.pop_class_scope();
     let return_result = finish_activation_scope(&mut method_scope, return_result, context, values);
+    let return_result = finish_native_bound_call(return_result, &evaluated_args, context, values);
     context.pop_function();
     return_result
 }

@@ -91,6 +91,7 @@ pub(in crate::interpreter) fn bind_evaluated_function_args_with_ref_mode(
         })();
         if let Err(status) = snapshot {
             for cell in surplus { let _ = eval_release_value(context, values, cell); }
+            let _ = release_native_bound_args(&args, context, values);
             return Err(status);
         }
     }
@@ -166,103 +167,114 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<BoundMethodArg>, EvalStatus> {
+    // Caller operands keep their evaluation leases. Only defaults, coercions and collectors
+    // created by this binder are released with the bound argument list.
+    let mut evaluated_args = evaluated_args;
+    for arg in &mut evaluated_args { arg.value = arg.value.borrowed(); }
     let mut bound_args = vec![None; params.len()];
-    let variadic_index = parameter_is_variadic
-        .iter()
-        .position(|is_variadic| *is_variadic);
-    let required_count =
-        method_required_param_count(params.len(), parameter_defaults, parameter_is_variadic);
-    let mut next_positional = 0;
-    let mut next_variadic_index = 0_i64;
-    let mut variadic_named_args = std::collections::HashSet::new();
-    let passed = evaluated_args.len();
-    let named_call = evaluated_args.iter().any(|arg| arg.name.is_some());
+    let binding_result = (|| {
+        let variadic_index = parameter_is_variadic
+            .iter()
+            .position(|is_variadic| *is_variadic);
+        let required_count =
+            method_required_param_count(params.len(), parameter_defaults, parameter_is_variadic);
+        let mut next_positional = 0;
+        let mut next_variadic_index = 0_i64;
+        let mut variadic_named_args = std::collections::HashSet::new();
+        let passed = evaluated_args.len();
+        let named_call = evaluated_args.iter().any(|arg| arg.name.is_some());
 
-    if let Some(index) = variadic_index {
-        let array = if evaluated_args_contain_named_variadic_values(
-            params,
-            variadic_index,
-            &evaluated_args,
-        ) {
-            values.assoc_new(evaluated_args.len())?
-        } else {
-            values.array_new(evaluated_args.len())?
-        };
-        bound_args[index] = Some(BoundMethodArg {
-            value: array,
-            ref_target: None,
-            variadic_ref_targets: Vec::new(),
-        });
-    }
-
-    for arg in evaluated_args {
-        if let Some(name) = arg.name {
-            bind_dynamic_named_method_arg(
+        if let Some(index) = variadic_index {
+            let array = if evaluated_args_contain_named_variadic_values(
                 params,
-                parameter_types,
-                parameter_is_by_ref,
                 variadic_index,
-                &mut bound_args,
-                &name,
-                arg.value,
-                arg.ref_target,
-                by_ref_mode,
-                &mut variadic_named_args,
-                context,
-                values,
-            )?;
-        } else {
-            bind_dynamic_positional_method_arg(
-                params,
-                &mut bound_args,
-                parameter_types,
-                parameter_is_by_ref,
-                variadic_index,
-                &mut next_positional,
-                &mut next_variadic_index,
-                arg.value,
-                arg.ref_target,
-                by_ref_mode,
-                context,
-                values,
-            )?;
-        }
-    }
-
-    for (position, value) in bound_args.iter_mut().enumerate() {
-        if Some(position) == variadic_index {
-            continue;
-        }
-        if value.is_none() {
-            if position < required_count {
-                let message = missing_argument_message(
-                    callee,
-                    named_call.then(|| (position, params[position].as_str())),
-                    passed,
-                    required_count,
-                    variadic_index.unwrap_or(params.len()),
-                );
-                return eval_throw_argument_count_error(&message, context, values);
-            }
-            let Some(Some(default)) = parameter_defaults.get(position) else {
-                return Err(EvalStatus::RuntimeFatal);
+                &evaluated_args,
+            ) {
+                values.assoc_new(evaluated_args.len())?
+            } else {
+                values.array_new(evaluated_args.len())?
             };
-            *value = Some(BoundMethodArg {
-                value: eval_method_parameter_default(default, context, values)?,
+            bound_args[index] = Some(BoundMethodArg {
+                value: array,
                 ref_target: None,
                 variadic_ref_targets: Vec::new(),
             });
         }
-        if let Some(param_type) = parameter_types.get(position).and_then(Option::as_ref) {
-            let bound = value.as_mut().ok_or(EvalStatus::RuntimeFatal)?;
-            bound.value = eval_method_parameter_value(param_type, bound.value, context, values)?;
-        }
-    }
 
-    bound_args
-        .into_iter()
-        .collect::<Option<Vec<_>>>()
-        .ok_or(EvalStatus::RuntimeFatal)
+        for arg in evaluated_args {
+            if let Some(name) = arg.name {
+                bind_dynamic_named_method_arg(
+                    params,
+                    parameter_types,
+                    parameter_is_by_ref,
+                    variadic_index,
+                    &mut bound_args,
+                    &name,
+                    arg.value,
+                    arg.ref_target,
+                    by_ref_mode,
+                    &mut variadic_named_args,
+                    context,
+                    values,
+                )?;
+            } else {
+                bind_dynamic_positional_method_arg(
+                    params,
+                    &mut bound_args,
+                    parameter_types,
+                    parameter_is_by_ref,
+                    variadic_index,
+                    &mut next_positional,
+                    &mut next_variadic_index,
+                    arg.value,
+                    arg.ref_target,
+                    by_ref_mode,
+                    context,
+                    values,
+                )?;
+            }
+        }
+
+        for (position, value) in bound_args.iter_mut().enumerate() {
+            if Some(position) == variadic_index {
+                continue;
+            }
+            if value.is_none() {
+                if position < required_count {
+                    let message = missing_argument_message(
+                        callee,
+                        named_call.then(|| (position, params[position].as_str())),
+                        passed,
+                        required_count,
+                        variadic_index.unwrap_or(params.len()),
+                    );
+                    return eval_throw_argument_count_error(&message, context, values);
+                }
+                let Some(Some(default)) = parameter_defaults.get(position) else {
+                    return Err(EvalStatus::RuntimeFatal);
+                };
+                *value = Some(BoundMethodArg {
+                    value: eval_method_parameter_default(default, context, values)?,
+                    ref_target: None,
+                    variadic_ref_targets: Vec::new(),
+                });
+            }
+            if let Some(param_type) = parameter_types.get(position).and_then(Option::as_ref) {
+                let bound = value.as_mut().ok_or(EvalStatus::RuntimeFatal)?;
+                let previous = bound.value;
+                bound.value = eval_method_parameter_value(param_type, previous, context, values)?;
+                if bound.value != previous { release_expr_result(previous, context, values)?; }
+            }
+        }
+
+        Ok(())
+    })();
+    if let Err(status) = binding_result {
+        let prepared = bound_args.into_iter().flatten().collect::<Vec<_>>();
+        let _ = release_native_bound_args(&prepared, context, values);
+        return Err(status);
+    }
+    bound_args.into_iter().collect::<Option<Vec<_>>>().ok_or(EvalStatus::RuntimeFatal)
 }
 
 /// Words PHP's `ArgumentCountError` for a user callable missing a required argument.

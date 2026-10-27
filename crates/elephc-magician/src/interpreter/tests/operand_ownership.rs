@@ -964,3 +964,51 @@ fn mixed_native_reference_slots_remain_pointer_sized() {
     assert_eq!(values.releases, vec![old]);
     assert_eq!(values.retains, vec![replacement, replacement]);
 }
+
+/// Eval functions, constructors and methods retire the default Boolean's construction lease.
+#[test]
+fn dynamic_callable_defaults_release_their_binding_owners() {
+    let program = parse_fragment(br#"
+function ownedDefaultFunction(bool $flag = false): bool { return $flag; }
+class OwnedDefaultMethod {
+    public function __construct(bool $flag = false) {}
+    public function value(bool $flag = false): bool { return $flag; }
+    public static function staticValue(bool $flag = false): bool { return $flag; }
+}
+echo (int)ownedDefaultFunction(), "|";
+$probe = new OwnedDefaultMethod();
+echo (int)$probe->value(), "|", (int)OwnedDefaultMethod::staticValue(), "|";
+"#).unwrap();
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+    values.release(result).unwrap();
+    assert_eq!(values.output, "0|0|0|");
+    let defaults = values.values.iter().filter(|(_, value)| **value == FakeValue::Bool(false))
+        .map(|(cell, _)| *cell).collect::<Vec<_>>();
+    assert_eq!(defaults.len(), 4);
+    for cell in defaults { assert_eq!(values.cell_owners.get(&cell), Some(&0)); }
+}
+
+/// Failure after an omitted default releases that default while preserving caller arguments.
+#[test]
+fn dynamic_callable_binding_failure_releases_prepared_defaults() {
+    let mut context = ElephcEvalContext::new();
+    let mut values = FakeOps::default();
+    let caller = values.int(7).unwrap();
+    let result = bind_evaluated_function_args_with_ref_mode(
+        "ownedDefaultFailure", &["flag".into(), "target".into()],
+        &[Some(EvalParameterType::new(vec![EvalParameterTypeVariant::Bool], false)),
+          Some(EvalParameterType::new(vec![EvalParameterTypeVariant::Class("MissingTarget".into())], true))],
+        &[Some(EvalExpr::Const(EvalConst::Bool(false))), Some(EvalExpr::Const(EvalConst::Null))], &[false, false], &[false, false],
+        vec![EvaluatedCallArg { name: Some("target".into()), value: caller.borrowed(), ref_target: None }],
+        EvalByRefBindingMode::RequireTarget, &mut context, &mut values,
+    );
+    assert!(matches!(result, Err(EvalStatus::RuntimeFatal)));
+    assert_eq!(values.cell_owners.get(&(caller.as_ptr() as usize)), Some(&1));
+    let defaults = values.values.iter().filter(|(_, value)| **value == FakeValue::Bool(false))
+        .map(|(cell, _)| *cell).collect::<Vec<_>>();
+    assert_eq!(defaults.len(), 1);
+    assert_eq!(values.cell_owners.get(&defaults[0]), Some(&0));
+}
