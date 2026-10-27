@@ -48,10 +48,14 @@ unset($xml, $view);
 #[test]
 fn test_simplexml_dimension_write_owners_isolated_bundle() {
     if skip_without_xml_native("test_simplexml_dimension_write_owners_isolated_bundle") { return; }
+    let args: Vec<_> = (0..22).map(|count| vec!["x"; count]).collect();
+    let argvs: Vec<_> = args.iter().map(Vec::as_slice).collect();
     let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(r#"<?php
 function appendIsolatedXmlMixed(mixed $view): void { $view[] = 'a'; }
 function freshIsolatedXmlString(): string { return str_repeat('x', 3); }
 function freshIsolatedXmlMixed(string $value): mixed { return str_repeat($value, 1); }
+function isolatedGlobalXmlKey(): int { global $isolatedGlobalXml; echo (int)isset($isolatedGlobalXml->item), '|'; return 1; }
+function isolatedGlobalXmlRhs(): int { global $isolatedGlobalXml; echo (int)isset($isolatedGlobalXml->item), '|'; return 1; }
 class IsolatedXmlAppendStatic { public static mixed $view; }
 class IsolatedXmlTimingStatic { public static SimpleXMLElement $xml; }
 $xml = new SimpleXMLElement('<r><item>keep</item></r>');
@@ -107,27 +111,20 @@ elseif ($argc === 2) {
     echo $old->getName(), ':', (int)isset($old->item), '|', IsolatedXmlTimingStatic::$xml->getName(), ':', (string)IsolatedXmlTimingStatic::$xml->item;
 } elseif ($argc === 19) {
     $number = 1; $change = function() use (&$number): void { $number = 2; }; $change(); echo $number;
-} else {
+} elseif ($argc === 20) {
     $source = $argc > 0 ? '$view = new SimpleXMLElement("<old/>"); $oldView = $view; $view->item[0] = (function() use (&$view): string { $view = new SimpleXMLElement("<new/>"); return "v"; })(); echo $oldView->getName(), ":", (int)isset($oldView->item), "|", $view->getName(), ":", (string)$view->item;' : '';
     eval($source);
+} elseif ($argc === 21) {
+    $isolatedGlobalXml = new SimpleXMLElement('<r/>');
+    set_error_handler(function(int $level, string $message): bool { return true; });
+    $isolatedGlobalXml->item[isolatedGlobalXmlKey()] += isolatedGlobalXmlRhs();
+    restore_error_handler(); echo count($isolatedGlobalXml->item), ':', (string)$isolatedGlobalXml->item;
+} else {
+    $source = $argc > 0 ? '$evalGlobalOwnerXml = new SimpleXMLElement("<r/>"); function evalGlobalOwnerKey(): int { global $evalGlobalOwnerXml; echo (int)isset($evalGlobalOwnerXml->item), "|"; return 1; } function evalGlobalOwnerRhs(): int { global $evalGlobalOwnerXml; echo (int)isset($evalGlobalOwnerXml->item), "|"; return 1; } set_error_handler(function(int $level, string $message): bool { return true; }); $evalGlobalOwnerXml->item[evalGlobalOwnerKey()] += evalGlobalOwnerRhs(); restore_error_handler(); echo count($evalGlobalOwnerXml->item), ":", (string)$evalGlobalOwnerXml->item;' : '';
+    eval($source);
 }
-"#, &[
-        &[], &["x"], &["x", "x"], &["x", "x", "x"], &["x", "x", "x", "x"],
-        &["x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x"],
-        &["x", "x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x", "x"],
-        &["x", "x", "x", "x", "x", "x", "x", "x", "x"],
-        &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x"],
-        &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x"],
-        &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x"],
-        &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x"],
-        &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x"],
-        &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x"],
-        &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x"],
-        &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x"],
-        &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x"],
-        &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x"],
-    ]);
-    let expected = ["r", "null", "null", "null", "a", "a", "a", "a", "a", "append", "append", "a", "g", "h", "1:", "old:0|new:v", "1:6", "sold:0|snew:s", "2", "old:0|new:v"];
+"#, &argvs);
+    let expected = ["r", "null", "null", "null", "a", "a", "a", "a", "a", "append", "append", "a", "g", "h", "1:", "old:0|new:v", "1:6", "sold:0|snew:s", "2", "old:0|new:v", "0|0|1:", "0|0|1:"];
     assert_eq!(runs.len(), expected.len());
     let mut failures = Vec::new();
     for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {
