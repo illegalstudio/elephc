@@ -30,6 +30,7 @@ mod eval_reflection_factory_owners;
 mod method_receiver_owners;
 mod file_write_owners;
 mod eval_string_split_owners;
+mod scalar_widening_owners;
 #[path = "runtime_gc/json_decode_owners.rs"]
 mod json_decode_owners;
 #[path = "runtime_gc/string_append.rs"]

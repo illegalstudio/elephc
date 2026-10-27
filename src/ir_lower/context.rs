@@ -2234,25 +2234,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         &mut self,
         name: &str,
         slot: LocalSlotId,
-        storage_type: &PhpType,
         span: Option<Span>,
     ) -> bool {
-        let storage_type = storage_type.clone();
         // A ref-bound slot stores an alias, not the payload owner being replaced.
         // StoreRefCell publishes the replacement through that alias before it retires
         // the previous payload, so generic slot cleanup must never release it first.
         if self.is_ref_bound_local(name) {
             return false;
         }
-        let tracked = Ownership::php_type_needs_lifetime_tracking(&storage_type);
-        let eval_may_have_reloaded_slot = self.eval_barrier_active
-            && self.builder.local_kind(slot) == LocalKind::PhpLocal;
-        if !tracked && self.loop_stack.is_empty() && !eval_may_have_reloaded_slot {
-            // Outside loops no back-edge can execute a later widening store before
-            // this one, and no eval reload can have populated it, so the untracked
-            // storage type is final for this path.
-            return false;
-        }
+        // A later store or eval synchronization fixes storage for the entire frame,
+        // including scalar values overwritten before that widening point. Defer the
+        // decision until finalization, which erases releases for slots that stay scalar.
         self.emit_void(
             Op::ReleaseLocalSlot,
             Vec::new(),
@@ -2352,9 +2344,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         } else {
             php_type.clone()
         };
-        // What the slot will be typed AFTER this store: the release decisions below follow it,
-        // because a slot becoming `Mixed` needs its cleanup even when this value is an int.
-        let widened_storage_type = self.builder.widened_local_php_type(slot, &widen_type);
         let source = value;
         let source_is_owning_temporary = self.value_is_owning_temporary(value);
         let transfer_catch_source_to_store = matches!(
@@ -2428,7 +2417,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     || (previous_kind == LocalKind::PhpLocal && self.eval_barrier_active)
             })
         {
-            self.release_stored_local_value_before_overwrite(name, slot, &widened_storage_type, span);
+            self.release_stored_local_value_before_overwrite(name, slot, span);
         }
         // A first syntactic store inside a loop body (main or function) can still
         // overwrite a prior runtime iteration's value. The same is true after eval, whose
@@ -2441,7 +2430,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             && (!self.loop_stack.is_empty()
                 || (previous_kind == LocalKind::PhpLocal && self.eval_barrier_active))
         {
-            self.release_stored_local_value_before_overwrite(name, slot, &widened_storage_type, span);
+            self.release_stored_local_value_before_overwrite(name, slot, span);
         }
         // NO release of the previous occupant is emitted here for the string case: the
         // BACKEND already does it. `lower_store_static_local` calls
@@ -2456,9 +2445,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // the RELEASE of what it overwrites.
         //
         // The slot widens only AFTER the releases above were emitted, and the two sides read
-        // different types on purpose. WHETHER a release is emitted follows the widened storage
-        // type (`widened_storage_type` above): a slot that becomes `Mixed` needs its cleanup
-        // even when this store's own value is an int. WHAT that release is analysed as follows
+        // different types on purpose. Every initialized slot gets deferred cleanup, which
+        // finalization erases if storage stays scalar. The release is analysed using
         // the slot's type at emission, which still describes what the slot HOLDS: a `string`
         // local being overwritten with `null` retires a string, not the `Mixed` the widened slot
         // will carry. Widening first made that release look like a possible destructor and
@@ -2598,14 +2586,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             && (!self.loop_stack.is_empty()
                 || (previous_kind == LocalKind::PhpLocal && self.eval_barrier_active))
         {
-            self.release_stored_local_value_before_overwrite(name, slot, &self.builder.local_php_type(slot), span);
+            self.release_stored_local_value_before_overwrite(name, slot, span);
         }
         if local_kind_uses_plain_store_cleanup(previous_kind)
             && previous_slot.is_none()
             && (!self.loop_stack.is_empty()
                 || (previous_kind == LocalKind::PhpLocal && self.eval_barrier_active))
         {
-            self.release_stored_local_value_before_overwrite(name, slot, &self.builder.local_php_type(slot), span);
+            self.release_stored_local_value_before_overwrite(name, slot, span);
         }
         self.store_slot_with_op(slot, stored, Op::StoreLocal, span);
         self.set_local_type(name, php_type);
@@ -3101,7 +3089,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // occupant when this path definitely wrote it, and also when a loop back-edge can carry a
         // previous iteration's value into a slot straight-line flow has not initialized yet.
         let released = (self.initialized_slots.contains(&slot) || !self.loop_stack.is_empty())
-            && self.release_stored_local_value_before_overwrite(name, slot, &storage, span);
+            && self.release_stored_local_value_before_overwrite(name, slot, span);
         // The zero also carries the frame's OWNERSHIP claim on a slot no `store_local` writes
         // (`codegen::local_analysis` counts it as a store, so an incoming parameter's prologue
         // retains what the release drops). Only a released slot an ordinary store already
@@ -3506,7 +3494,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
         // Retire the slot itself, avoiding a cleanup load whose representation may later widen.
         // The new cell has already been staged, so this may safely destroy the source object.
-        self.release_stored_local_value_before_overwrite(name, slot, &self.builder.local_php_type(slot), span);
+        self.release_stored_local_value_before_overwrite(name, slot, span);
     }
 
     /// Releases a promoted fallback ref-cell owner if the variable still owns one.

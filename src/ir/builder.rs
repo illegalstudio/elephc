@@ -204,11 +204,11 @@ impl<'f> Builder<'f> {
     /// Neutralizes deferred `release_local_slot` ops whose slot never widened to
     /// lifetime-tracked storage.
     ///
-    /// Lowering emits `release_local_slot` before a loop store when the slot's
-    /// storage type LOOKS untracked at that point but a later store on a
-    /// back-edge path may still widen it (e.g. a `for` counter widened
-    /// Int→Mixed by its checked-add update). Once the whole body is lowered the
-    /// final storage types are known, so ops guarding slots that stayed
+    /// Lowering emits `release_local_slot` before overwriting initialized storage,
+    /// even when it currently looks scalar. A later store or eval synchronization
+    /// can widen storage for the entire frame, including earlier assignments.
+    /// Once the whole body is lowered the final storage types are known, so ops
+    /// guarding slots that stayed
     /// untracked are rewritten to `nop`s. This keeps scalar slots eligible for
     /// dead-store elimination and load forwarding, which conservatively exclude
     /// any slot named by an unknown op.
