@@ -243,3 +243,18 @@ fn test_computed_property_element_increment_retains_php_incdec() {
     let ExprKind::Assignment { value, .. } = &value.kind else { panic!("expected captured increment"); };
     assert!(matches!(value.kind, ExprKind::PreIncrement(_)));
 }
+
+/// Statement write captures carry a dedicated scope tag while expression captures keep theirs.
+#[test]
+fn test_computed_statement_capture_scope_does_not_escape_to_expressions() {
+    let statements = parse_source("<?php $root->{g()}->value += f();");
+    let StmtKind::ExprStmt(expression) = &statements[0].kind else { panic!("expected update"); };
+    let ExprKind::Assignment { prelude, .. } = &expression.kind else { panic!("expected assignment"); };
+    assert!(prelude.iter().any(|stmt| matches!(&stmt.kind, StmtKind::Assign { name, .. }
+        if name.starts_with(elephc::parser::ast::SCOPED_WRITE_TEMP_PREFIX))));
+    let statements = parse_source("<?php echo ($root->{g()}->value += f());");
+    let StmtKind::Echo(expression) = &statements[0].kind else { panic!("expected expression context"); };
+    let ExprKind::Assignment { prelude, .. } = &expression.kind else { panic!("expected assignment"); };
+    assert!(!prelude.iter().any(|stmt| matches!(&stmt.kind, StmtKind::Assign { name, .. }
+        if name.starts_with(elephc::parser::ast::SCOPED_WRITE_TEMP_PREFIX))));
+}

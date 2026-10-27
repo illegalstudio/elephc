@@ -206,6 +206,7 @@ pub(crate) struct LoweringSnapshot {
     expression_depth: usize,
     reference_call_context: Option<ReferenceCallContext>,
     refusals: usize,
+    scoped_write_scopes: Vec<super::scoped_writes::ScopedWriteScope>,
     call_argument_evaluation_scopes: Vec<CallArgumentEvaluationScope>,
     borrowed_string_call_operands: HashSet<ValueId>,
     /// Provisional offset receiver reads belonging to this speculative function state.
@@ -296,6 +297,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// never adopted means no selected lowering produced a transferable cell, which is a refused
     /// reference assignment.
     pub(crate) reference_call_context: Option<ReferenceCallContext>,
+    /// Live owners for captures introduced by the scoped statement write planners.
+    pub(super) scoped_write_scopes: Vec<super::scoped_writes::ScopedWriteScope>,
     /// Nested owner ledgers for source-order call argument evaluation.
     pub(crate) call_argument_evaluation_scopes: Vec<CallArgumentEvaluationScope>,
     /// String subjects borrowed through read-only builtin calls whose result must be detached.
@@ -636,6 +639,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             hidden_temp_counter: 0,
             expression_depth: 0,
             reference_call_context: None,
+            scoped_write_scopes: Vec::new(),
             call_argument_evaluation_scopes: Vec::new(),
             borrowed_string_call_operands: HashSet::new(),
             string_offset_receivers: Vec::new(),
@@ -703,6 +707,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             // Refusals recorded by a speculative region must not outlive it: the region is
             // always lowered again for real, and that pass records its refusals again.
             refusals: crate::ir_lower::diagnostics::mark(),
+            scoped_write_scopes: self.scoped_write_scopes.clone(),
             call_argument_evaluation_scopes: self.call_argument_evaluation_scopes.clone(),
             borrowed_string_call_operands: self.borrowed_string_call_operands.clone(),
             string_offset_receivers: self.string_offset_receivers.clone(),
@@ -787,6 +792,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.reference_call_context = snapshot.reference_call_context;
         crate::ir_lower::diagnostics::rollback_to(snapshot.refusals);
         self.pointer_reference_bindings.truncate(snapshot.pointer_reference_bindings);
+        self.scoped_write_scopes = snapshot.scoped_write_scopes;
         self.call_argument_evaluation_scopes = snapshot.call_argument_evaluation_scopes;
         self.borrowed_string_call_operands = snapshot.borrowed_string_call_operands;
         self.string_offset_receivers = snapshot.string_offset_receivers;

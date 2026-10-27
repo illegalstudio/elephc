@@ -30,7 +30,7 @@ pub(super) fn lower_plain_dynamic(
     let expr = Expr::new(ExprKind::DynamicPropertyAccess {
         object: Box::new(object.clone()), property: Box::new(property.clone()),
     }, span);
-    let Ok(inputs) = prepare_inputs(ctx, object, Property::Dynamic(property), value, &expr) else { return true; };
+    let Ok(inputs) = prepare_inputs(ctx, object, Property::Dynamic(property), value, false, &expr) else { return true; };
     lower_dynamic_property_assign_prepared(ctx, &local_expr(&inputs.receiver, span),
         &local_expr(&inputs.name, span), &local_expr(&inputs.rhs, span), span);
     retire(ctx, inputs.owners, span);
@@ -46,7 +46,7 @@ pub(crate) fn lower_statement(
     }
     let ExprKind::BinaryOp { op, right, .. } = &value.kind else { return false; };
     if !possible(ctx, object, Property::Named(property)) || operation(op).is_none() { return false; }
-    let result = lower(ctx, object, Property::Named(property), op, right, false, value);
+    let result = lower(ctx, object, Property::Named(property), op, right, false, false, false, value);
     if !ctx.builder.insertion_block_is_terminated() {
         crate::ir_lower::ownership::release_if_owned(ctx, result, Some(span));
     }
@@ -64,12 +64,17 @@ pub(super) fn lower_assignment(
         ExprKind::DynamicPropertyAccess { object, property } => (object.as_ref(), Property::Dynamic(property)),
         _ => return None,
     };
-    if !possible(ctx, object, property) { return None; }
+    let scoped = prelude.iter().any(|stmt| matches!(&stmt.kind, StmtKind::Assign { name, .. }
+        if name.starts_with(crate::parser::ast::SCOPED_WRITE_TEMP_PREFIX)));
+    let ty = array_cast_source::array_cast_source_type_for_ir(ctx, object);
+    let snapshot = matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) || singular_object_class(&ty).is_some();
+    if !possible(ctx, object, property) && !(scoped && snapshot) { return None; }
     if let ExprKind::BinaryOp { left, op, right } = &value.kind {
         if left.as_ref() == target && value.span.line == expr.span.line
             && value.span.col == expr.span.col && operation(op).is_some() {
+            if scoped { super::super::scoped_writes::consume_update_operands(ctx); }
             for stmt in prelude { crate::ir_lower::stmt::lower_stmt(ctx, stmt); }
-            return Some(lower(ctx, object, property, op, right, false, expr));
+            return Some(lower(ctx, object, property, op, right, false, scoped, false, expr));
         }
     }
     let ExprKind::Variable(assigned) = &value.kind else { return None; };
@@ -87,8 +92,10 @@ pub(super) fn lower_assignment(
         if !old.contains("__elephc_incdec_old_") { return None; }
         (position, result.is_some_and(|value| matches!(&value.kind, ExprKind::Variable(name) if name == old)))
     };
+    if scoped { super::super::scoped_writes::consume_update_operands(ctx); }
     for stmt in &prelude[..prefix] { crate::ir_lower::stmt::lower_stmt(ctx, stmt); }
-    Some(lower(ctx, object, property, op, right, post, expr))
+    let reread = result.is_some_and(|result| result == target);
+    Some(lower(ctx, object, property, op, right, post, scoped, reread, expr))
 }
 
 /// Admits XML subclasses and erased receivers while leaving other typed objects unchanged.
@@ -105,24 +112,26 @@ fn possible(ctx: &LoweringContext<'_, '_>, object: &Expr, property: Property<'_>
 /// Captures operands once, then chooses the native update or the ordinary property operation.
 fn lower(
     ctx: &mut LoweringContext<'_, '_>, object: &Expr, property: Property<'_>, op: &BinOp,
-    right: &Expr, post: bool, expr: &Expr,
+    right: &Expr, post: bool, scoped: bool, reread: bool, expr: &Expr,
 ) -> LoweredValue {
     let staging = prepublish_call_result(ctx, &PhpType::Mixed, expr.span);
-    let inputs = match prepare_inputs(ctx, object, property, right, expr) {
+    let inputs = match prepare_inputs(ctx, object, property, right, scoped, expr) {
         Ok(inputs) => inputs, Err(value) => return value,
     };
     let name_expr = local_expr(&inputs.name, expr.span);
     let right_expr = local_expr(&inputs.rhs, expr.span);
     let parent = load(ctx, &inputs.receiver, expr.span);
     let code = operation(op).expect("validated update operation") as i64;
-    let result = property_access::native_xml_reads::dispatch(
+    let result = if !ctx.classes.contains_key("SimpleXMLElement") {
+        ordinary(ctx, parent, property, &name_expr, op, &right_expr, post, reread, expr)
+    } else { property_access::native_xml_reads::dispatch(
         ctx, parent, expr, PhpType::Mixed, false,
         |ctx, receiver| lower_method_call_with_receiver(ctx, receiver, "__elephc_property_update", &[
             name_expr.clone(), right_expr.clone(), Expr::new(ExprKind::IntLiteral(code), expr.span),
             Expr::new(ExprKind::BoolLiteral(post), expr.span),
         ], Op::MethodCall, expr),
-        |ctx, receiver| ordinary(ctx, receiver, property, &name_expr, op, &right_expr, post, expr),
-    );
+        |ctx, receiver| ordinary(ctx, receiver, property, &name_expr, op, &right_expr, post, reread, expr),
+    ) };
     stage_call_result(ctx, staging.as_ref(), result, expr.span);
     retire(ctx, inputs.owners, expr.span);
     take_prepublished_call_result(ctx, staging, result, expr.span)
@@ -130,10 +139,10 @@ fn lower(
 
 /// Evaluates computed operands early while loading variable names and coercing names after the RHS.
 fn prepare_inputs(
-    ctx: &mut LoweringContext<'_, '_>, object: &Expr, property: Property<'_>, right: &Expr, expr: &Expr,
+    ctx: &mut LoweringContext<'_, '_>, object: &Expr, property: Property<'_>, right: &Expr, scoped: bool, expr: &Expr,
 ) -> Result<Inputs, LoweredValue> {
     let mut owners = Vec::new();
-    let late = is_static_property_write_chain(object) || defer_native_property_write_receiver(ctx, object);
+    let late = scoped || is_static_property_write_chain(object) || defer_native_property_write_receiver(ctx, object);
     let early = if late { None } else { Some(capture_receiver(ctx, object, &[], &mut owners, expr.span)?) };
     let raw_name = match property {
         Property::Dynamic(name) if !matches!(name.kind, ExprKind::Variable(_)) => {
@@ -151,7 +160,11 @@ fn prepare_inputs(
         let right = load(ctx, &rhs, expr.span);
         receiver = Some(capture_receiver(ctx, object, &[right.value], &mut owners, expr.span)?);
     }
-    let name = match property {
+    let scoped_name = match property {
+        Property::Dynamic(name) => super::super::scoped_writes::property_name(ctx, name, expr.span),
+        Property::Named(_) => None,
+    };
+    let name = if let Some(name) = scoped_name { name } else { match property {
         Property::Named(name) => lower_expr(ctx, &Expr::new(ExprKind::StringLiteral(name.into()), expr.span)),
         Property::Dynamic(name) => {
             let raw = if let Some(raw) = raw_name { raw } else {
@@ -162,7 +175,7 @@ fn prepare_inputs(
             let value = load(ctx, &raw, expr.span);
             property_access::coerce_runtime_property_name(ctx, value, expr.span)
         }
-    };
+    } };
     let name = capture(ctx, name, &mut owners, expr.span);
     let receiver = if let Some(receiver) = receiver { receiver } else {
         let right = load(ctx, &rhs, expr.span);
@@ -171,10 +184,10 @@ fn prepare_inputs(
     Ok(Inputs { receiver, name, rhs, owners })
 }
 
-/// Uses the ordinary getter once, preserving the computed result instead of reading it again.
+/// Shares the ordinary receiver snapshot and preserves coerced prefix results.
 fn ordinary(
     ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, property: Property<'_>, name: &Expr,
-    op: &BinOp, right: &Expr, post: bool, expr: &Expr,
+    op: &BinOp, right: &Expr, post: bool, reread: bool, expr: &Expr,
 ) -> LoweredValue {
     let staging = prepublish_call_result(ctx, &PhpType::Mixed, expr.span);
     let mut owners = Vec::new();
@@ -197,7 +210,13 @@ fn ordinary(
             StmtKind::PropertyAssign { object: Box::new(receiver), property: property.into(), value: assigned }, expr.span)),
         Property::Dynamic(_) => lower_dynamic_property_assign(ctx, &receiver, name, &assigned, expr.span),
     }
-    let result = load(ctx, if post { &current } else { &next }, expr.span);
+    let result = if reread {
+        let receiver = load(ctx, &parent, expr.span);
+        match property {
+            Property::Named(property) => lower_property_get_from_value(ctx, receiver, property, Op::PropGet, expr),
+            Property::Dynamic(_) => lower_dynamic_property_fetch_from_value(ctx, receiver, name, PropertyFetchMode::Read, expr),
+        }
+    } else { load(ctx, if post { &current } else { &next }, expr.span) };
     stage_call_result(ctx, staging.as_ref(), result, expr.span);
     retire(ctx, owners, expr.span);
     take_prepublished_call_result(ctx, staging, result, expr.span)

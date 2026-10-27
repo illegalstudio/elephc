@@ -161,7 +161,10 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
     predeclare_loop_array_pointer_cursors(ctx, stmt);
     match &stmt.kind {
         StmtKind::Echo(expr) => lower_echo(ctx, expr, stmt.span),
-        StmtKind::Assign { name, value } => lower_assign(ctx, name, value, stmt.span),
+        StmtKind::Assign { name, value } => {
+            lower_assign(ctx, name, value, stmt.span);
+            super::scoped_writes::register_store(ctx, name, stmt.span);
+        }
         StmtKind::RefAssign { target, source } => lower_ref_assign(ctx, target, source, stmt.span),
         StmtKind::If {
             condition,
@@ -248,7 +251,10 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         // shape so a missing inner bucket is auto-vivified and a local bucket can be detached
         // before mutation; every other synthetic group keeps ordinary block lowering.
         StmtKind::Synthetic(body) => {
-            if !nested_append::try_lower_array_root(ctx, body, stmt.span) {
+            if let Some(boundary) = super::scoped_writes::begin_group(ctx, body) {
+                lower_block(ctx, body);
+                super::scoped_writes::finish(ctx, Some(boundary), stmt.span);
+            } else if !nested_append::try_lower_array_root(ctx, body, stmt.span) {
                 match nested_append::recognize(ctx, body) {
                     Some(group) => nested_append::lower(ctx, &group, stmt.span),
                     None => {
@@ -272,8 +278,12 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         StmtKind::Break(level) => lower_break(ctx, *level),
         StmtKind::Continue(level) => lower_continue(ctx, *level),
         StmtKind::ExprStmt(expr) => {
+            let boundary = super::scoped_writes::begin_expression(ctx, expr);
             let value = lower_expr(ctx, expr);
-            release_expr_statement_result(ctx, value, expr.span);
+            if !ctx.builder.insertion_block_is_terminated() {
+                release_expr_statement_result(ctx, value, expr.span);
+            }
+            super::scoped_writes::finish(ctx, boundary, expr.span);
         }
         StmtKind::NamespaceDecl { name: _ } => lower_noop(ctx, stmt.span),
         StmtKind::NamespaceBlock { name: _, body } => lower_block(ctx, body),

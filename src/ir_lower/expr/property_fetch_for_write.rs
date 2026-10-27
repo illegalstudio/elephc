@@ -56,9 +56,16 @@ pub(crate) fn lower_static_property_write_chain_with_operands(
         return capture_static_write_child(ctx, parent, child, span);
     }
     if let ExprKind::DynamicPropertyAccess { object, property } = &expr.kind {
+        let early_name = if matches!(object.kind, ExprKind::Variable(_)) {
+            super::super::scoped_writes::property_name(ctx, property, span)
+        } else { None };
         let mut parent = lower_static_property_write_chain_with_operands(ctx, object, operands, span);
-        let name = lower_expr(ctx, property);
-        let name = property_access::coerce_runtime_property_name(ctx, name, span);
+        let name = if let Some(name) = early_name { name } else {
+            super::super::scoped_writes::property_name(ctx, property, span).unwrap_or_else(|| {
+                let name = lower_expr(ctx, property);
+                property_access::coerce_runtime_property_name(ctx, name, span)
+            })
+        };
         parent.narrow_for_dynamic_array(ctx, name, operands, span);
         let result_type = property_access::dynamic_property_get_result_type(
             ctx, parent.value.value, property, expr,

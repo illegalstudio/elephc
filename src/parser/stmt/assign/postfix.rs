@@ -71,7 +71,9 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     // A handcrafted assignment without its result target evaluated the value twice.
     if !is_append && (matches!(lhs_expr.kind, ExprKind::DynamicPropertyAccess { .. })
         || (op != AssignmentOperator::Assign && computed_storage_property_target(&lhs_expr))) {
-        let value = parse_expr(tokens, pos)?;
+        let value = if matches!(lhs_expr.kind, ExprKind::DynamicPropertyAccess { .. }) {
+            parse_expr(tokens, pos)?
+        } else { crate::parser::expr::parse_scoped_write_expr(tokens, pos)? };
         expect_semicolon(tokens, pos)?;
         return Ok(Some(Stmt::new(StmtKind::ExprStmt(value), span)));
     }
@@ -103,6 +105,7 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
         (target, hoisted.stabilize_unconditionally(rhs))
     } else if op == AssignmentOperator::Assign && computed_storage_property_target(&lhs_expr) {
         // Settle computed names and keys before the RHS, retaining writable traversal.
+        hoisted.scoped = true;
         (hoisted.stabilize_array_base(lhs_expr), rhs)
     } else {
         let rhs = if matches!(op, AssignmentOperator::Compound(_))
@@ -843,7 +846,7 @@ pub(crate) fn lower_postfix_incdec_assignment(
     let one = Expr::new(ExprKind::IntLiteral(1), span);
 
     if computed_storage_property_target(&lhs_expr) {
-        if let Some(expression) = crate::parser::expr::desugar_lvalue_incdec(
+        if let Some(expression) = crate::parser::expr::desugar_scoped_lvalue_incdec(
             lhs_expr.clone(), is_increment, false, span,
         ) {
             return Ok(Stmt::new(StmtKind::ExprStmt(expression), span));
@@ -985,6 +988,7 @@ fn lower_effectful_static_assignment(
 /// assignments so that source evaluation order is preserved and side effects are not duplicated.
 struct EffectfulTargetLowerer {
     span: Span,
+    scoped: bool,
     next_temp: usize,
     stmts: Vec<Stmt>,
 }
@@ -995,6 +999,7 @@ impl EffectfulTargetLowerer {
     fn new(span: Span) -> Self {
         Self {
             span,
+            scoped: false,
             next_temp: 0,
             stmts: Vec::new(),
         }
@@ -1046,7 +1051,8 @@ impl EffectfulTargetLowerer {
     /// Returns a unique synthetic temporary name for this lowered statement.
     fn next_temp_name(&mut self) -> String {
         let name = crate::names::generated_local_name(&format!(
-            "__elephc_compound_{}_{}_{}",
+            "{}{}_{}_{}",
+            if self.scoped { crate::parser::ast::SCOPED_WRITE_TEMP_PREFIX } else { "__elephc_compound_" },
             self.span.line, self.span.col, self.next_temp
         ));
         self.next_temp += 1;

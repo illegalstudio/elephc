@@ -1199,3 +1199,42 @@ echo $c->readP() . ":" . $c->readC();
     );
     assert_eq!(out, "10:2;10:20");
 }
+
+/// Prefix increment returns the value after coercion to an ordinary declared property type.
+#[test]
+fn test_typed_string_property_prefix_increment_returns_stored_string() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class TypedPrefixResult { public string $value = '5'; }
+$object = new TypedPrefixResult();
+var_dump(++$object->value, $object->value);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "string(1) \"6\"\nstring(1) \"6\"\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Computed ordinary statement operands expire at their uses even without XML capability.
+#[test]
+fn test_computed_property_statement_capture_destructors() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ScopedNameResult {
+    public function __toString(): string { echo 'name|'; return 'child'; }
+    public function __destruct() { echo '~name|'; }
+}
+class ScopedTextResult {
+    public function __toString(): string { echo 'text|'; return 'x'; }
+    public function __destruct() { echo '~text|'; }
+}
+function scopedNameResult(): ScopedNameResult { return new ScopedNameResult(); }
+function scopedTextResult(): ScopedTextResult { return new ScopedTextResult(); }
+function scopedCaptureRun(): void {
+    $root = new stdClass(); $root->child = new stdClass(); $root->child->value = 'p';
+    $root->{scopedNameResult()}->value .= scopedTextResult();
+    echo 'after|';
+}
+scopedCaptureRun();
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "name|~name|text|~text|after|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

@@ -35,6 +35,7 @@ mod property_initializers;
 mod property_default_errors;
 mod reflection;
 mod stmt;
+mod scoped_writes;
 mod throwable_constructors;
 mod validation_context;
 mod core_methods;

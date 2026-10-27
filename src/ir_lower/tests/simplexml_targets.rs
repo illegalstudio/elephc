@@ -69,6 +69,19 @@ function xmlUnionNegation(SimpleXMLElement|null $node): mixed { return -$node; }
 $zeroXml = new TargetZeroXml('<r>0.0</r>');
 echo xmlMixedNegation($zeroXml), xmlTypedNegation($zeroXml), xmlSubclassNegation($zeroXml), xmlUnionNegation($zeroXml);
 echo xmlMixedNegation($otherNumber);
+class TargetScopedWriteName {
+    public function __toString(): string { return 'scoped'; }
+    public function __destruct() {}
+}
+function xmlScopedWriteName(): TargetScopedWriteName { return new TargetScopedWriteName(); }
+function xmlScopedWriteCaptures(mixed $node): void {
+    $node->{xmlScopedWriteName()}->leaf = 1;
+    $node->{xmlScopedWriteName()}->leaf += 1;
+    for ($iteration = 0; $iteration < 2; $iteration++) { $node->{xmlScopedWriteName()}->leaf++; }
+    try { $node->{xmlScopedWriteName()}->leaf += throw new RuntimeException('scope'); }
+    catch (RuntimeException $error) { echo $error->getMessage(); }
+}
+xmlScopedWriteCaptures($xml);
 function xmlComputedTargetName(): string { return 'a'; }
 function xmlComputedTargetIndex(): int { return 0; }
 function xmlNullablePropertyReads(SimpleXMLElement $node): void {
@@ -145,6 +158,20 @@ echo $doc->saveXML();
         inst.op == crate::ir::Op::StaticMethodCall && matches!(inst.immediate, Some(crate::ir::Immediate::Data(id))
             if module.data.strings.get(id.as_raw() as usize) == Some(&expected))
     }), "{target}: object-result classes retain their subtraction adapter");
+    let captures = module.functions.iter().find(|function| function.name == "xmlScopedWriteCaptures").unwrap();
+    let scoped_slots: Vec<_> = captures.locals.iter().filter(|slot| {
+        slot.name.as_deref().is_some_and(|name| name.starts_with(crate::parser::ast::SCOPED_WRITE_TEMP_PREFIX))
+            && captures.instructions.iter().any(|inst| inst.op == crate::ir::Op::PushCallOperandOwner
+                && inst.immediate == Some(crate::ir::Immediate::LocalSlot(slot.id)))
+    }).collect();
+    assert!(!scoped_slots.is_empty(), "{target}: scoped captures need live unwind roots");
+    for slot in scoped_slots {
+        assert_eq!(slot.php_type.codegen_repr(), crate::types::PhpType::Mixed, "{target}");
+        for op in [crate::ir::Op::PopCallOperandOwner, crate::ir::Op::ReleaseLocalSlot] {
+            assert!(captures.instructions.iter().any(|inst| inst.op == op
+                && inst.immediate == Some(crate::ir::Immediate::LocalSlot(slot.id))), "{target}: missing {op:?} for scoped capture");
+        }
+    }
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     assert!(assembly.contains("__rt_gc_collect_cycles_explicit"), "{target}: shutdown retires native document cycles");
     assert!(assembly.contains("__rt_sprintf_mixed_to_string"), "{target}: erased object string-context ABI");

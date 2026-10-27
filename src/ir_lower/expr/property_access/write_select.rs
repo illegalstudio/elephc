@@ -50,14 +50,14 @@ pub(crate) fn lower_property_write_receiver(
         }
         ExprKind::DynamicPropertyAccess { object, property } => {
             let (object, property) = if matches!(object.kind, ExprKind::Variable(_)) {
-                let name = lower_expr(ctx, property);
-                let name = coerce_runtime_property_name(ctx, name, expr.span);
+                let name = super::super::super::scoped_writes::property_name(ctx, property, expr.span)
+                    .unwrap_or_else(|| { let name = lower_expr(ctx, property); coerce_runtime_property_name(ctx, name, expr.span) });
                 (lower_property_write_receiver(ctx, object), name)
             } else {
                 let object = lower_property_write_receiver(ctx, object);
                 let pins = pin_in_flight_owners(ctx, &[object.value], expr.span);
-                let name = lower_expr(ctx, property);
-                let name = coerce_runtime_property_name(ctx, name, expr.span);
+                let name = super::super::super::scoped_writes::property_name(ctx, property, expr.span)
+                    .unwrap_or_else(|| { let name = lower_expr(ctx, property); coerce_runtime_property_name(ctx, name, expr.span) });
                 unpin_in_flight_owners(ctx, pins, expr.span);
                 (object, name)
             };
@@ -101,6 +101,8 @@ pub(in crate::ir_lower::expr) fn lower_property_write_prelude(
         return false;
     }
     let StmtKind::Assign { name, value } = &stmt.kind else { return false; };
+    // Scoped native updates own their receiver; ordinary fallback keeps an ordinary read.
+    if name.starts_with(crate::parser::ast::SCOPED_WRITE_TEMP_PREFIX) { return false; }
     let read = if value == target { name.contains("__elephc_incdec_old_") } else {
         matches!(&value.kind, ExprKind::BinaryOp { left, .. } if left.as_ref() == target
             && value.span.line == assignment_span.line && value.span.col == assignment_span.col)

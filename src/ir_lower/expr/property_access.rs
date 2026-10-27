@@ -1013,8 +1013,8 @@ pub(super) fn lower_dynamic_property_fetch(
             _ => false,
         };
         // PHP fetches a variable receiver after the property expression has evaluated.
-        let name = lower_expr(ctx, property);
-        let name = coerce_runtime_property_name(ctx, name, expr.span);
+        let name = super::super::scoped_writes::property_name(ctx, property, expr.span)
+            .unwrap_or_else(|| { let name = lower_expr(ctx, property); coerce_runtime_property_name(ctx, name, expr.span) });
         let object = lower_member_receiver(ctx, object, expr);
         let ty = ctx.builder.value_php_type(object.value);
         known_native |= singular_object_class(&ty).is_some_and(|(class, nullable)| !nullable
@@ -1057,8 +1057,8 @@ pub(super) fn lower_dynamic_property_fetch_from_value(
         }
     }
     let result_type = dynamic_property_fetch_result_type(ctx, object.value, property, mode, expr);
-    let property = lower_expr(ctx, property);
-    let property = coerce_runtime_property_name(ctx, property, expr.span);
+    let property = super::super::scoped_writes::property_name(ctx, property, expr.span)
+        .unwrap_or_else(|| { let property = lower_expr(ctx, property); coerce_runtime_property_name(ctx, property, expr.span) });
     lower_dynamic_property_fetch_from_operands(
         ctx, object, property, result_type, mode, false, expr,
     )
