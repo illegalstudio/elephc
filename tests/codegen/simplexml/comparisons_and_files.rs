@@ -68,7 +68,10 @@ eval($source);
 #[test]
 fn test_simplexml_file_loader_and_dom_throw_state_bundle() {
     if skip_without_xml_native("test_simplexml_file_loader_and_dom_throw_state_bundle") { return; }
-    let out = compile_and_run_with_heap_debug(r###"<?php
+    let args: Vec<_> = (0..11).map(|count| vec!["x"; count]).collect();
+    let argvs: Vec<_> = args.iter().map(Vec::as_slice).collect();
+    let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(r###"<?php
+$phase = $argc === 1 ? 99 : $argc - 2;
 set_error_handler(function(int $level, string $message): bool {
     if (str_starts_with($message, 'simplexml_load_file(): I/O warning : ')) { echo $level, ':file-io|'; }
     elseif (str_starts_with($message, 'SimpleXMLElement::__construct(): I/O warning : ')) { echo $level, ':ctor-io|'; }
@@ -76,33 +79,64 @@ set_error_handler(function(int $level, string $message): bool {
     return true;
 });
 $missing = __DIR__ . '/simplexml-missing-input.xml';
+if ($phase >= 1) {
 var_dump(simplexml_load_file($missing));
+}
+if ($phase >= 2) {
 try { new SimpleXMLElement($missing, 0, true); } catch (Exception $error) { echo $error->getMessage(), '|'; }
+}
+if ($phase >= 3) {
 var_dump(simplexml_load_file(''));
 var_dump(simplexml_load_file($missing, null, LIBXML_NOWARNING));
 try { simplexml_load_file("bad\0path"); } catch (ValueError $error) { echo $error->getMessage(), '|'; }
+}
+if ($phase >= 4) {
 $path = __DIR__ . '/simplexml-existing-input.xml'; file_put_contents($path, '<r><v>loaded</v></r>');
 $loaded = simplexml_load_file($path); $constructed = new SimpleXMLElement($path, 0, true);
 echo (string)$loaded->v, ':', (string)$constructed->v, '|'; unlink($path);
+}
+if ($phase >= 5) {
 $source = $argc > 0 ? 'var_dump(simplexml_load_file($missing)); try { new SimpleXMLElement($missing, 0, true); } catch (Exception $error) { echo $error->getMessage(), "|"; }' : '';
 eval($source);
+}
 restore_error_handler();
 set_error_handler(function(int $level, string $message): bool { throw new RuntimeException('caught'); });
+if ($phase >= 6) {
 try { simplexml_load_file($missing); } catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
+}
+if ($phase >= 7) {
 try { new SimpleXMLElement($missing, 0, true); } catch (Exception $error) { echo get_class($error), ':', $error->getMessage(), ':', get_class($error->getPrevious()), '|'; }
+}
+if ($phase >= 8) {
 try { new SimpleXMLElement('<broken>'); } catch (Exception $error) { echo get_class($error), ':', $error->getMessage(), ':', get_class($error->getPrevious()), '|'; }
+}
+if ($phase >= 9) {
 $doc = new DOMDocument(); $doc->loadXML('<old/>');
 try { $doc->loadXML('<?xml version="1.1"?><new/>'); } catch (RuntimeException $error) { echo $error->getMessage(), ':', $doc->documentElement->nodeName, '|'; }
 try { $doc->loadXML('<broken>'); } catch (RuntimeException $error) { echo $error->getMessage(), ':', $doc->documentElement->nodeName, '|'; }
+}
 restore_error_handler();
-"###);
-    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
-    assert_eq!(out.stdout, r###"2:file-io|bool(false)
+"###, &argvs);
+    let full = r###"2:file-io|bool(false)
 2:ctor-io|String could not be parsed as XML|2:file-io|bool(false)
 bool(false)
 simplexml_load_file(): Argument #1 ($filename) must not contain any null bytes|loaded:loaded|2:file-io|bool(false)
-2:ctor-io|String could not be parsed as XML|caught|Exception:String could not be parsed as XML:RuntimeException|Exception:String could not be parsed as XML:RuntimeException|caught:new|caught:new|"###);
+2:ctor-io|String could not be parsed as XML|caught|Exception:String could not be parsed as XML:RuntimeException|Exception:String could not be parsed as XML:RuntimeException|caught:new|caught:new|"###;
+    let phases = ["2:file-io|bool(false)\n", "2:ctor-io|String could not be parsed as XML|",
+        "2:file-io|bool(false)\nbool(false)\nsimplexml_load_file(): Argument #1 ($filename) must not contain any null bytes|",
+        "loaded:loaded|", "2:file-io|bool(false)\n2:ctor-io|String could not be parsed as XML|",
+        "caught|", "Exception:String could not be parsed as XML:RuntimeException|",
+        "Exception:String could not be parsed as XML:RuntimeException|", "caught:new|caught:new|"];
+    assert_eq!(phases.concat(), full);
+    let mut failures = Vec::new();
+    for (mode, out) in runs.iter().enumerate() {
+        let expected = phases[..if mode == 0 { phases.len() } else { mode - 1 }].concat();
+        if !out.success || out.stdout != expected || !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
+            failures.push(format!("mode={mode} stdout={:?} expected={expected:?}\n{}", out.stdout, out.stderr));
+        }
+    }
+    assert!(failures.is_empty(), "{}\nFile composite assembly:\n{}", failures.join("\n"),
+        selected_function_assembly(&assembly, &["_main".into()]));
 }
 
 
