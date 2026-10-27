@@ -187,7 +187,7 @@ eval($source);
 #[test]
 fn test_simplexml_dom_reload_owners_isolated_bundle() {
     if skip_without_xml_native("test_simplexml_dom_reload_owners_isolated_bundle") { return; }
-    let args: Vec<_> = (0..20).map(|count| vec!["x"; count]).collect();
+    let args: Vec<_> = (0..25).map(|count| vec!["x"; count]).collect();
     let argvs: Vec<_> = args.iter().map(Vec::as_slice).collect();
     let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(r###"<?php
 if ($argc === 1) {
@@ -286,12 +286,28 @@ if ($argc === 1) {
     try { $iterator->current(); } catch (Error $error) { echo 'E'; }
     try { $iterator->key(); } catch (Error $error) { echo 'E'; }
     restore_error_handler();
-} else {
+} elseif ($argc === 20) {
     $source = $argc > 0 ? 'set_error_handler(function(int $level, string $message): bool { return true; }); $document = new DOMDocument(); echo (int)(simplexml_import_dom($document) === null), (int)$document->loadXML("<r>"); $iterator = new SimpleXMLElement("<r/>"); try { $iterator->key(); } catch (Error $error) { echo "E"; } $uninitialized = (new ReflectionClass("DOMElement"))->newInstanceWithoutConstructor(); try { simplexml_import_dom($uninitialized); } catch (TypeError $error) { echo "T"; } restore_error_handler();' : '';
     eval($source);
+} elseif ($argc === 21 || $argc === 22) {
+    set_error_handler(function(int $level, string $message): bool { return true; });
+    $document = new DOMDocument();
+    echo (int)$document->loadXML($argc === 21 ? '<r>' : '<?xml version="1.1"?><r/>');
+    restore_error_handler();
+} elseif ($argc === 23) {
+    $document = new DOMDocument();
+    set_error_handler(function(int $level, string $message): bool { throw new RuntimeException('caught'); });
+    try { $document->loadXML('<?xml version="1.1"?><r/>'); }
+    catch (RuntimeException $error) { echo $error->getMessage(); }
+    restore_error_handler();
+} else {
+    $iterator = new SimpleXMLElement('<r><a/></r>');
+    try {
+        if ($argc === 24) { $iterator->current(); } else { $iterator->key(); }
+    } catch (Error $error) { echo 'E'; }
 }
 "###, &argvs);
-    let expected = ["0", "111", "html", "old:before|html", "html|html", "html", "html", "0", "html", "1", "0", "0", "0", "#text", "1", "caught", "1:1:{\"p\":\"urn:p\"}", "01caught", "1E:D:TypeErrorEE", "10ET"];
+    let expected = ["0", "111", "html", "old:before|html", "html|html", "html", "html", "0", "html", "1", "0", "0", "0", "#text", "1", "caught", "1:1:{\"p\":\"urn:p\"}", "01caught", "1E:D:TypeErrorEE", "10ET", "0", "1", "caught", "E", "E"];
     assert_eq!(runs.len(), expected.len());
     let mut failures = Vec::new();
     for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {
@@ -300,6 +316,12 @@ if ($argc === 1) {
         }
     }
     let symbols = [
+        "main".into(),
+        elephc::names::function_symbol("__elephc_simplexml_load_dom"),
+        elephc::names::method_symbol("DOMDocument", "loadXML"),
+        elephc::names::method_symbol("SimpleXMLElement", "current"),
+        elephc::names::method_symbol("SimpleXMLElement", "key"),
+        elephc::names::method_symbol("SimpleXMLElement", "__elephc_iterator_current"),
         elephc::names::method_symbol("DOMDocument", "loadHTML"),
         elephc::names::method_symbol("DOMNode", "__propset_childNodes"),
         elephc::names::join_php_symbol("_method_source_abi", &["DOMNode", "__propset_childNodes"]),
