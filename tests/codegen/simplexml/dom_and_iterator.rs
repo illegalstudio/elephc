@@ -252,10 +252,14 @@ if ($argc === 1) {
 } elseif ($argc === 17) {
     set_error_handler(function(int $level, string $message): bool { return true; });
     $document = new DOMDocument(); $document->loadXML('<r xmlns:p="urn:p" p:id="8">text<c/></r>');
-    $first = simplexml_import_dom($document); $first->registerXPathNamespace('q', 'urn:p');
-    $second = simplexml_import_dom($document);
-    echo (int)($second->xpath('//@q:id') === false), ':', count($first->xpath('//@q:id')), ':';
-    echo json_encode($first->attributes('p', true)->id->getNamespaces());
+    if ($document instanceof DOMNode) {
+        $first = simplexml_import_dom($document); $first->registerXPathNamespace('q', 'urn:p');
+        if ($document instanceof DOMNode) {
+            $second = simplexml_import_dom($document);
+            echo (int)($second->xpath('//@q:id') === false), ':', count($first->xpath('//@q:id')), ':';
+            echo json_encode($first->attributes('p', true)->id->getNamespaces());
+        } else { echo 'missing-node'; }
+    } else { echo 'missing-node'; }
     restore_error_handler();
 } elseif ($argc === 18) {
     $document = new DOMDocument();
