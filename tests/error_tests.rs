@@ -482,3 +482,6 @@ function gen() { yield from not_gen(); }
         "yield from expects an array literal or Generator, got int",
     );
 }
+
+#[path = "error_tests/enum_trait_constants.rs"]
+mod enum_trait_constants;

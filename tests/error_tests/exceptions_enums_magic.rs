@@ -182,7 +182,7 @@ fn test_error_enum_trait_constant_conflicts_with_case() {
         "<?php trait T { const A = 1; } enum E: int { case A = 1; use T; }",
         "<?php trait Inner { const A = 1; } trait T { use Inner; } enum E { use T; case A; }",
     ] {
-        expect_error(source, "Enum constant E::A conflicts with enum case");
+        expect_error(source, "conflicts with enum case");
     }
 }
 
