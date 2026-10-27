@@ -109,7 +109,7 @@ RUN (./target/debug/elephc examples/fizzbuzz/main.php && ./examples/fizzbuzz/mai
     || echo "WARNING: an example failed to compile or run"
 
 # The cheap tests: the lexer, parser and error-reporting suites and the bridge crates' unit tests. The compiler's
-# own unit tests (thousands, each lowering for every target) and the end-to-end codegen suites (codegen_tests and the
+# own unit tests (thousands, each lowering for every target) and the end-to-end codegen suites (the codegen_tests_* binaries and the
 # other compile-and-run binaries) take hours on one machine, so they are left to the agent.
 RUN timeout 1800 cargo nextest run --locked --workspace --no-fail-fast \
         -E '(kind(lib) & not package(elephc)) | (binary_id(elephc::integration) & test(/^(lexer_tests|parser_tests|error_tests)::/))' \

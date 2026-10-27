@@ -66,10 +66,13 @@ def run(family, target, shard, count, root, env):
     if family in {"codegen", "pdo", "curl", "eval"}:
         env.update(CARGO_NET_OFFLINE="true", ELEPHC_TEST_PREBUILT_BRIDGES="1")
     if family in {"pdo", "curl", "eval"}:
-        binaries = [path for path in (extracted / "target/debug/deps").glob("codegen_tests-*")
+        # The codegen suite is split by domain: eval owns its own binary, and every
+        # database/cURL bridge module lives in the extension binary.
+        owner = "codegen_tests_eval" if family == "eval" else "codegen_tests_ext"
+        binaries = [path for path in (extracted / "target/debug/deps").glob(f"{owner}-*")
                     if path.is_file() and os.access(path, os.X_OK)]
         if len(binaries) != 1:
-            raise ValueError("Expected one archived codegen test executable")
+            raise ValueError(f"Expected one archived {owner} executable, found {len(binaries)}")
         if family == "eval":
             env.update(EVAL_SHARD_NEXTEST_BIN=str(root / "cargo-nextest"),
                        EVAL_SHARD_NEXTEST_ARCHIVE=str(root / "nextest-archive.tar.zst"),

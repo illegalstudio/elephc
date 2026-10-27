@@ -3,7 +3,7 @@
 //! Checks concrete parameter and promoted property storage, bounds, and class template scope.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests generics_constructors`.
+//! - `cargo test --test codegen_tests_oop generics_constructors`.
 //!
 //! Key details:
 //! - PHPDoc constructor templates have the same effect in ordinary and strict PHP modes.

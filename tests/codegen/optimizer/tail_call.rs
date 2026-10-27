@@ -2,7 +2,7 @@
 //! End-to-end coverage of EIR tail self and mutual recursion and conservative fallbacks.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests optimizer::tail_call`.
+//! - `cargo test --test codegen_tests_core optimizer::tail_call`.
 //!
 //! Key details:
 //! - Deep calls exceed ordinary native stack limits; bounded fixtures compare both optimizer modes.

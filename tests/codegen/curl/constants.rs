@@ -2,7 +2,7 @@
 //! End-to-end proof that `ext/curl` integer constants are real, stable PHP values.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests curl` through Rust's test harness.
+//! - `cargo test --test codegen_tests_ext curl` through Rust's test harness.
 //!
 //! Key details:
 //! - `CURLOPT_URL` is one of the four frozen constant prefixes

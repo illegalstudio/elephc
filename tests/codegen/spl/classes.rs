@@ -3,7 +3,7 @@
 //! Verifies Phase 4 container metadata plus runtime-backed list behavior.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests` through the SPL test module.
+//! - `cargo test --test codegen_tests_oop` through the SPL test module.
 //!
 //! Key details:
 //! - Runtime tests cover Phase 4 containers; iterator decorators and heaps remain later roadmap phases.

@@ -832,7 +832,7 @@ temporary fails CI even when functional output stays correct.
 
 `tests/codegen/perf_regressions.rs` adds opt-in wall-clock ceilings for the same
 paths. It is ignored by default because runner speed varies; run it explicitly with
-`cargo test --test codegen_tests perf_regressions -- --ignored` (use a release
+`cargo test --test codegen_tests_core perf_regressions -- --ignored` (use a release
 build locally for the closest numbers). The ceilings are deliberately loose and
 catch order-of-magnitude regressions rather than small timing noise.
 

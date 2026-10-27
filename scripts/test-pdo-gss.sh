@@ -200,8 +200,8 @@ export ELEPHC_PG_GSS_DSN="pgsql:host=pgsql.elephc.test;hostaddr=127.0.0.1;port=$
 export ELEPHC_PG_GSS_EMPTY_CACHE="FILE:$FIXTURE_DIR/missing.ccache"
 
 if [[ -n ${ELEPHC_CI_TEST_ROOT:-} ]]; then
-    bash scripts/ci/run_prebuilt_tests.sh 'binary(=codegen_tests) and test(pgsql_gss)' --run-ignored only -j 1
+    bash scripts/ci/run_prebuilt_tests.sh 'binary(/^codegen_tests_/) and test(pgsql_gss)' --run-ignored only -j 1
 else
     cargo build -p elephc-pdo --features libpq-gss
-    cargo test --features pdo-libpq-gss --test codegen_tests pgsql_gss -- --ignored --test-threads=1
+    cargo test --features pdo-libpq-gss --test codegen_tests_ext pgsql_gss -- --ignored --test-threads=1
 fi

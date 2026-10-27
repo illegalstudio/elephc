@@ -20,10 +20,13 @@ class ShardExecution(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory(prefix=".shard-execution.", dir=ROOT)
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name)
-        binary = self.root / "nextest/target/debug/deps/codegen_tests-fixture"
-        binary.parent.mkdir(parents=True)
-        binary.write_text("#!/bin/sh\nexit 0\n")
-        binary.chmod(0o755)
+        deps = self.root / "nextest/target/debug/deps"
+        deps.mkdir(parents=True)
+        # The eval shard and the bridge shards each own one split codegen binary.
+        for name in ("codegen_tests_ext", "codegen_tests_eval"):
+            binary = deps / f"{name}-fixture"
+            binary.write_text("#!/bin/sh\nexit 0\n")
+            binary.chmod(0o755)
         self.calls = []
 
     def execute(self, family, target, shard="1", count="4"):

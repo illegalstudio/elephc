@@ -4,7 +4,7 @@
 //! and still keeps the whole surface when the source is known only at runtime.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests codegen::eval::literal_catalog` through Rust's test harness.
+//! - `cargo test --test codegen_tests_eval codegen::eval::literal_catalog` through Rust's test harness.
 //!
 //! Key details:
 //! - Every fixture needs the magician bridge (class declarations and `throw` inside the

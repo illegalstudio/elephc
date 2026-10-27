@@ -2,7 +2,7 @@
 //! End-to-end coverage for allocation-free checked numeric chain specialization.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests optimizer::checked_numeric_chain`.
+//! - `cargo test --test codegen_tests_core optimizer::checked_numeric_chain`.
 //!
 //! Key details:
 //! - Tests pin optimized EIR, both target architecture lowerings, overflow precision at the

@@ -54,12 +54,34 @@ test = false
 name = "gen_builtins"
 path = "tools/gen_builtins.rs"
 
-# The codegen suite (and one that can abort its process) keeps a binary each, so `cargo test --test codegen_tests <filter>`
-# rebuilds only the suite being worked on. Every other tests/*.rs is a module of
-# `integration`; tests/integration.rs fails if a file is left out of both.
+# The end-to-end codegen suite is split by domain into six `codegen_tests_*` binaries: rustc
+# re-expands every `#[test]` of a test crate after any library edit, so six smaller crates
+# rebuild in parallel, and `cargo test --test codegen_tests_<domain> <filter>` rebuilds only
+# one. The suite that can abort its process keeps a binary too. Every other tests/*.rs is a
+# module of `integration`; tests/integration.rs fails if a file is left out of all of them.
 [[test]]
-name = "codegen_tests"
-path = "tests/codegen_tests.rs"
+name = "codegen_tests_core"
+path = "tests/codegen_tests_core.rs"
+
+[[test]]
+name = "codegen_tests_data"
+path = "tests/codegen_tests_data.rs"
+
+[[test]]
+name = "codegen_tests_oop"
+path = "tests/codegen_tests_oop.rs"
+
+[[test]]
+name = "codegen_tests_runtime"
+path = "tests/codegen_tests_runtime.rs"
+
+[[test]]
+name = "codegen_tests_ext"
+path = "tests/codegen_tests_ext.rs"
+
+[[test]]
+name = "codegen_tests_eval"
+path = "tests/codegen_tests_eval.rs"
 
 # A regression here aborts the test PROCESS (a stack overflow on a small thread), so it
 # must not share a binary with other suites.

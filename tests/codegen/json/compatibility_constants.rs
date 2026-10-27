@@ -2,7 +2,7 @@
 //! Covers the remaining PHP JSON constants and their observable encoder behavior.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests json::compatibility_constants`.
+//! - `cargo test --test codegen_tests_ext json::compatibility_constants`.
 //!
 //! Key details:
 //! - Fixed PHP-compatible expectations cover native compilation; interpreter tests cover eval.

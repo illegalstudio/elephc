@@ -3,7 +3,7 @@
 //! Covers metadata arrays emitted for interfaces, parent classes, and direct trait uses.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests` through the SPL test module.
+//! - `cargo test --test codegen_tests_oop` through the SPL test module.
 //!
 //! Key details:
 //! - The helpers are AOT snapshots and return associative `name => name` arrays.

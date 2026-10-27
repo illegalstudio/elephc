@@ -3,7 +3,7 @@
 //! Wires the SPL test submodules into the codegen test harness.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests` through Rust's test harness.
+//! - `cargo test --test codegen_tests_oop` through Rust's test harness.
 //!
 //! Key details:
 //! - Submodules cover AOT autoloading, builtin interfaces, SPL redirects, and SPL exceptions.

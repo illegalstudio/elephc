@@ -14,7 +14,7 @@ class PrebuiltCodegenTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix="elephc-libtest-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name).resolve()
-        self.binary = self.root / "target/debug/deps/codegen_tests-fixture"
+        self.binary = self.root / "target/debug/deps/codegen_tests_ext-fixture"
         self.binary.parent.mkdir(parents=True)
         self.binary.write_text("#!/bin/sh\nexit 0\n")
         self.binary.chmod(0o755)
@@ -46,9 +46,11 @@ class PrebuiltCodegenTests(unittest.TestCase):
         self.binary.unlink()
         with self.assertRaises(ValueError):
             subject.run(["mysql"])
-        for name in ("codegen_tests-one", "codegen_tests-two"):
+        # Neither split binary lists a matching test, so the run must fail rather than
+        # pick one of them and report a green suite.
+        for name in ("codegen_tests_ext-one", "codegen_tests_ext-two"):
             path = self.binary.with_name(name)
-            path.write_text("fixture")
+            path.write_text("#!/bin/sh\nprintf '0 tests, 0 benchmarks\\n'\n")
             path.chmod(0o755)
         with self.assertRaises(ValueError):
             subject.run(["mysql"])

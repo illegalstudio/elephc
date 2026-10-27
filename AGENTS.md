@@ -36,7 +36,7 @@ Local agent runs should stay focused. By default, run only the build checks and 
 
 ```bash
 cargo test test_fizzbuzz                     # run a focused test by name
-cargo test --test codegen_tests test_name    # run a focused end-to-end codegen test
+cargo test --test codegen_tests_core test_name  # run a focused end-to-end codegen test (pick the codegen_tests_<domain> binary)
 cargo nextest run --profile ci test_name     # run a focused nextest test with per-test timeout
 cargo test                                  # full local suite; only when explicitly requested/necessary
 cargo test -- --include-ignored             # ignored tests; only when relevant or requested
@@ -63,7 +63,7 @@ Some tests are marked `#[ignore]` because they require external libraries (e.g.,
 The full test suite is slow because each codegen test spawns `as` + `ld` + runs the binary. CI runs sharded executable codegen tests on `macos-aarch64`, `linux-x86_64`, and `linux-aarch64`, and covers `ios-arm64` and `ios-sim-arm64` through target-specific compile and emitter tests. Pull Requests run the Linux matrix, the core live database suites and the macOS build; the macOS test matrix, the iOS links and the optional-driver live database suites run in the merge queue, or on the PR with the `ci:macos` / `ci:pdo-live` labels (CONTRIBUTING.md § "CI tiers and the merge queue"). Local implementation work should optimize for fast, relevant signal:
 
 1. **While developing a feature**: run only the tests for that feature or regression (`cargo test test_my_feature`).
-2. **Scope to a single test binary**: prefer `cargo test --test codegen_tests <filter>` over a bare `cargo test <filter>`. A bare filter rebuilds and links all three test binaries (plus the library's unit-test harness) every cycle; `--test <binary>` builds only the one you need. Most codegen work lives in `codegen_tests`.
+2. **Scope to a single test binary**: prefer `cargo test --test codegen_tests_<domain> <filter>` over a bare `cargo test <filter>`. A bare filter rebuilds and links all eight test binaries (plus the library's unit-test harness) every cycle; `--test <binary>` builds only the one you need. Codegen tests live in six `codegen_tests_*` binaries by domain (`core`, `data`, `oop`, `runtime`, `ext`, `eval`); the root file of each (`tests/codegen_tests_<domain>.rs`) lists the `tests/codegen/` modules it mounts.
 3. **For target-sensitive changes**: run the smallest relevant macOS/Linux focused tests locally when they materially reduce risk; otherwise let CI provide complete target coverage.
 4. **For broad infrastructure changes**: validate the edited workflow/config directly (YAML parse, `cargo metadata`, `nextest` config checks, etc.) instead of running unrelated Rust suites.
 5. **PHP cross-check**: opt in narrowly with `ELEPHC_PHP_CHECK=1 cargo test <filter>` when PHP equivalence is the question.
@@ -84,7 +84,7 @@ For docs-only, workflow-only, or configuration-only changes, replace Rust test r
 
 | File | What it tests | How |
 |---|---|---|
-| `tests/codegen_tests.rs`, `tests/codegen/` | Full pipeline (end-to-end) | Compiles PHP → binary, runs it, asserts stdout |
+| `tests/codegen_tests_*.rs`, `tests/codegen/` | Full pipeline (end-to-end), six binaries by domain | Compiles PHP → binary, runs it, asserts stdout |
 | `tests/lexer_tests.rs` (in `integration`) | Tokenization | Asserts token sequences from source strings |
 | `tests/parser_tests.rs` (in `integration`) | AST construction | Asserts AST node structure and operator precedence |
 | `tests/error_tests.rs`, `tests/error_tests/` (in `integration`) | Error reporting | Asserts that invalid programs produce the right error messages |

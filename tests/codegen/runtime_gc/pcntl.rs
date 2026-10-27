@@ -2,7 +2,7 @@
 //! Ownership regressions for PCNTL output arrays and registered callable descriptors.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests runtime_gc::pcntl` through Rust's test harness.
+//! - `cargo test --test codegen_tests_runtime runtime_gc::pcntl` through Rust's test harness.
 //!
 //! Key details:
 //! - Output rebinding, temporary signal normalization, and process-wide handler teardown

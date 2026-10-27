@@ -4,7 +4,7 @@
 //! deprecated runtime-named writes on plain classes (issue #708).
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests` through Rust's test harness.
+//! - `cargo test --test codegen_tests_oop` through Rust's test harness.
 //!
 //! Key details:
 //! - Every expectation is reference PHP 8.5 output, byte for byte (stdout only; the
