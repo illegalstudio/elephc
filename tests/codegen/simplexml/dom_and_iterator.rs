@@ -187,6 +187,8 @@ eval($source);
 #[test]
 fn test_simplexml_dom_reload_owners_isolated_bundle() {
     if skip_without_xml_native("test_simplexml_dom_reload_owners_isolated_bundle") { return; }
+    let args: Vec<_> = (0..20).map(|count| vec!["x"; count]).collect();
+    let argvs: Vec<_> = args.iter().map(Vec::as_slice).collect();
     let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(r###"<?php
 if ($argc === 1) {
     $document = new DOMDocument(); echo $document->childNodes->length;
@@ -228,12 +230,54 @@ if ($argc === 1) {
     $list = new DOMNodeList([]); $list->__construct([]); $list->__construct([]); echo $list->length;
 } elseif ($argc === 12) {
     $document = new DOMDocument(); $document->childNodes = new DOMNodeList([]); echo $document->childNodes->length;
-} else {
+} elseif ($argc === 13) {
     $document = new DOMDocument(); $document->childNodes = new DOMNodeList([$document]);
     $document->childNodes = new DOMNodeList([]); echo $document->childNodes->length;
+} elseif ($argc === 14) {
+    $document = new DOMDocument(); $document->loadXML('<r xmlns:p="urn:p" p:id="8">text<c/></r>');
+    $text = $document->documentElement->childNodes->item(0); echo $text->nodeName;
+} elseif ($argc === 15 || $argc === 16) {
+    $document = new DOMDocument(); $document->loadXML('<r>text<c/></r>');
+    $text = $document->documentElement->childNodes->item(0);
+    if ($argc === 15) {
+        set_error_handler(function(int $level, string $message): bool { return true; });
+        echo (int)(simplexml_import_dom($text) === null);
+    } else {
+        set_error_handler(function(int $level, string $message): bool { throw new RuntimeException('caught'); });
+        try { simplexml_import_dom($text); } catch (RuntimeException $error) { echo $error->getMessage(); }
+    }
+    restore_error_handler();
+} elseif ($argc === 17) {
+    set_error_handler(function(int $level, string $message): bool { return true; });
+    $document = new DOMDocument(); $document->loadXML('<r xmlns:p="urn:p" p:id="8">text<c/></r>');
+    $first = simplexml_import_dom($document); $first->registerXPathNamespace('q', 'urn:p');
+    $second = simplexml_import_dom($document);
+    echo (int)($second->xpath('//@q:id') === false), ':', count($first->xpath('//@q:id')), ':';
+    echo json_encode($first->attributes('p', true)->id->getNamespaces());
+    restore_error_handler();
+} elseif ($argc === 18) {
+    $document = new DOMDocument();
+    set_error_handler(function(int $level, string $message): bool { return true; });
+    echo (int)$document->loadXML('<r>'), (int)$document->loadXML('<?xml version="1.1"?><r/>');
+    restore_error_handler();
+    set_error_handler(function(int $level, string $message): bool { throw new RuntimeException('caught'); });
+    try { $document->loadXML('<?xml version="1.1"?><r/>'); }
+    catch (RuntimeException $error) { echo $error->getMessage(); }
+    restore_error_handler();
+} elseif ($argc === 19) {
+    set_error_handler(function(int $level, string $message): bool { return true; });
+    echo (int)(simplexml_import_dom(new DOMDocument()) === null);
+    try { simplexml_import_dom(new stdClass()); } catch (TypeError $error) { echo get_class($error); }
+    $iterator = new SimpleXMLElement('<r><a/></r>');
+    try { $iterator->current(); } catch (Error $error) { echo 'E'; }
+    try { $iterator->key(); } catch (Error $error) { echo 'E'; }
+    restore_error_handler();
+} else {
+    $source = $argc > 0 ? 'set_error_handler(function(int $level, string $message): bool { return true; }); $document = new DOMDocument(); echo (int)(simplexml_import_dom($document) === null), (int)$document->loadXML("<r>"); $iterator = new SimpleXMLElement("<r/>"); try { $iterator->key(); } catch (Error $error) { echo "E"; } restore_error_handler();' : '';
+    eval($source);
 }
-"###, &[&[], &["x"], &["x", "x"], &["x", "x", "x"], &["x", "x", "x", "x"], &["x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x"]]);
-    let expected = ["0", "111", "html", "old:before|html", "html|html", "html", "html", "0", "html", "1", "0", "0", "0"];
+"###, &argvs);
+    let expected = ["0", "111", "html", "old:before|html", "html|html", "html", "html", "0", "html", "1", "0", "0", "0", "#text", "1", "caught", "1:1:{\"p\":\"urn:p\"}", "01caught", "1TypeErrorEE", "10E"];
     assert_eq!(runs.len(), expected.len());
     let mut failures = Vec::new();
     for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {
