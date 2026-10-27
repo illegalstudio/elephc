@@ -51,6 +51,8 @@ var_dump(simplexml_load_file('php://input', null, LIBXML_NOERROR | LIBXML_NOWARN
 #[test]
 fn test_simplexml_stream_document_owners_isolated_bundle() {
     if skip_without_xml_native("test_simplexml_stream_document_owners_isolated_bundle") { return; }
+    let args: Vec<_> = (0..15).map(|count| vec!["x"; count]).collect();
+    let argvs: Vec<_> = args.iter().map(Vec::as_slice).collect();
     let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(r###"<?php
 $seed = new SimpleXMLElement('<r/>');
 $uri = 'data://text/plain;base64,PHIvPg==';
@@ -81,21 +83,16 @@ elseif ($argc === 10) {
         if (str_starts_with($filter_list, 'read=')) { $filter_list = substr($filter_list, 5); }
         foreach (explode('|', $filter_list) as $filter) { echo $filter; }
     }
-} else {
+} elseif ($argc === 14) {
     echo strlen(__elephc_simplexml_filter_bytes('php://filter/read=string.tolower/resource=data://text/plain,%3CR%3EYES%3C%2FR%3E   ', 'simplexml_load_file()'));
+} else {
+    $stream = fopen('php://temp', 'w+'); fwrite($stream, '<R>YES</R>'); rewind($stream);
+    $filter_name = strtolower('STRING.TOLOWER');
+    if (stream_filter_append($stream, $filter_name, STREAM_FILTER_READ) === false) { echo 'failed'; }
+    echo stream_get_contents($stream); fclose($stream);
 }
-"###, &[
-        &[], &["x"], &["x", "x"], &["x", "x", "x"],
-        &["x", "x", "x", "x"], &["x", "x", "x", "x", "x"],
-        &["x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x"],
-        &["x", "x", "x", "x", "x", "x", "x", "x"],
-        &["x", "x", "x", "x", "x", "x", "x", "x", "x"],
-        &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x"],
-        &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x"],
-        &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x"],
-        &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x"],
-    ]);
-    let expected = ["baseline", "r", "r", "r", "one two", "r", "r:r", "bool(false)\n", "10", "<R>YES</R>", "<r>yes</r>", "<r>yes</r>", "string.tolower", "13"];
+"###, &argvs);
+    let expected = ["baseline", "r", "r", "r", "one two", "r", "r:r", "bool(false)\n", "10", "<R>YES</R>", "<r>yes</r>", "<r>yes</r>", "string.tolower", "13", "<r>yes</r>"];
     assert_eq!(runs.len(), expected.len());
     let mut failures = Vec::new();
     for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {
