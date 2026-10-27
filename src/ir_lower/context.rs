@@ -3951,7 +3951,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 
     /// Returns whether a generic cast owns a detached Mixed string or an object method result.
-    fn value_is_owning_mixed_string_cast(&self, value: ValueId) -> bool {
+    pub(crate) fn value_is_owning_mixed_string_cast(&self, value: ValueId) -> bool {
         let Some(inst) = self.builder.value_defining_instruction(value) else {
             return false;
         };

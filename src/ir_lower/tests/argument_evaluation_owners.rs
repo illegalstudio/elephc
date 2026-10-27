@@ -8,6 +8,38 @@
 //! - By-value owners are visible to unwinding before later arguments execute.
 //! - By-reference places are never replaced by detached evaluation temporaries.
 
+/// An owned string cast gains a pin-only root even when the PHP callee may return its parameter.
+#[test]
+fn alias_returning_calls_root_owned_string_casts_on_all_targets() {
+    use crate::ir::{Immediate, Op};
+    let source = r#"<?php
+function returnOwnedStringCast(string $value): mixed {
+    if ($value === 'throw') { throw new RuntimeException('caught'); }
+    return $value;
+}
+function invokeOwnedStringCast(mixed $value): mixed { return returnOwnedStringCast((string)$value); }
+invokeOwnedStringCast('kept');
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = lower_for(source, target);
+        let function = module.functions.iter().find(|function| function.name == "invokeOwnedStringCast").unwrap();
+        let claim = function.instructions.iter().find(|inst| inst.op == Op::EnsureOwned)
+            .expect("the fresh string cast must gain a releasing owner shape");
+        let value = claim.result.unwrap();
+        let cast = function.instructions.iter().find(|inst| inst.result == Some(claim.operands[0])).unwrap();
+        assert_eq!(cast.op, Op::Cast, "{target}");
+        let slot = function.instructions.iter().find_map(|inst| {
+            if inst.op != Op::StoreLocal || inst.operands != [value] { return None; }
+            match inst.immediate { Some(Immediate::LocalSlot(slot)) => Some(slot), _ => None }
+        }).expect("the owned cast is parked for unwind");
+        assert!(function.instructions.iter().any(|inst| inst.op == Op::PushCallOperandOwner
+            && inst.immediate == Some(Immediate::LocalSlot(slot))), "{target}");
+        assert!(function.instructions.iter().any(|inst| inst.op == Op::PopCallOperandOwner
+            && inst.immediate == Some(Immediate::LocalSlot(slot))), "{target}");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Lowers the argument-owner regression program for one supported target.
 fn lower_for(source: &str, target: &str) -> crate::ir::Module {
     super::lower_source_at_for_target(

@@ -270,3 +270,33 @@ unset($value, $items, $error);
 fn test_alias_returning_calls_release_string_evaluation_pins_on_throw_no_ir_opt() {
     without_ir_opt(test_alias_returning_calls_release_string_evaluation_pins_on_throw);
 }
+
+/// A single owned string cast retires on both the normal alias-returning path and a caught throw.
+#[test]
+fn test_alias_returning_calls_release_owned_string_casts_on_throw() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function returnOrThrowOwnedString(string $text): mixed {
+    if (str_starts_with($text, 'x')) { throw new RuntimeException('caught'); }
+    return $text;
+}
+function invokeOwnedStringArgument(mixed $text): void {
+    try {
+        $result = returnOrThrowOwnedString((string)$text);
+        echo strlen((string)$result), '|';
+    } catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
+}
+for ($index = 0; $index < 3; $index++) {
+    invokeOwnedStringArgument(str_repeat('k', 17));
+    invokeOwnedStringArgument(str_repeat('x', 19));
+}
+"#);
+    assert!(out.success, "stdout={:?}\n{}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "17|caught|".repeat(3), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Owned string cast pins also survive exceptional calls without EIR optimization.
+#[test]
+fn test_alias_returning_calls_release_owned_string_casts_on_throw_no_ir_opt() {
+    without_ir_opt(test_alias_returning_calls_release_owned_string_casts_on_throw);
+}
