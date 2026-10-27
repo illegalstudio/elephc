@@ -8,7 +8,7 @@
 //! - Walks validated physical headers without allocating or exposing strings or payload pointers.
 //! - Object class ids and Mixed tags are range checked before reporting their type identity.
 //! - Reports at most 64 blocks, with offsets relative to the managed heap rather than addresses.
-//! - String fingerprints inspect at most 16 validated payload bytes without printing their content.
+//! - String fingerprints inspect at most 8 validated payload bytes without printing their content.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -202,7 +202,7 @@ fn emit_string_fingerprint(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("sub x10, x0, #16");                            // derive the validated physical payload size
-            emitter.instruction("mov x11, #16");                                // cap the inspected prefix independently of allocation size
+            emitter.instruction("mov x11, #8");                                 // cap the inspected prefix independently of allocation size
             emitter.instruction("cmp x10, x11");                                // choose the smaller safe byte count
             emitter.instruction("csel x10, x10, x11, lo");                      // never inspect padding outside this block
             abi::load_at_offset(emitter, "x9", 8);
@@ -221,7 +221,7 @@ fn emit_string_fingerprint(emitter: &mut Emitter) {
         }
         Arch::X86_64 => {
             emitter.instruction("sub rax, 16");                                 // derive the validated physical payload size
-            emitter.instruction("mov edx, 16");                                 // cap the inspected prefix independently of allocation size
+            emitter.instruction("mov edx, 8");                                  // cap the inspected prefix independently of allocation size
             emitter.instruction("cmp rax, rdx");                                // choose the smaller safe byte count
             emitter.instruction("cmovb rdx, rax");                              // never inspect padding outside this block
             abi::load_at_offset(emitter, "r10", 8);
@@ -375,7 +375,7 @@ mod tests {
             assert!(asm.contains("_heap_dbg_block_class") && asm.contains("_heap_dbg_block_tag"), "{target}");
             assert!(asm.contains("_heap_dbg_block_length"), "{target}");
             assert!(asm.contains("_heap_dbg_block_fingerprint"), "{target}");
-            assert!(asm.contains("mov x11, #16") || asm.contains("mov edx, 16"), "{target}");
+            assert!(asm.contains("mov x11, #8") || asm.contains("mov edx, 8"), "{target}");
             assert!(asm.contains("_class_name_count") && asm.contains("_class_name_entries"), "{target}");
             assert!(!asm.contains("__rt_heap_alloc") && !asm.contains("__rt_incref"), "{target}");
             assert_eq!("HEAP DEBUG: live offset=".len(), 24);
