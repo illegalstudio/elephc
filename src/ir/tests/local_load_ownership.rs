@@ -75,6 +75,19 @@ fn local_load_release_pruning_follows_the_storage_to_result_matrix() {
     }
 }
 
+/// Refining an interface object pointer borrows its slot while explicit owners keep cleanup.
+#[test]
+fn guarded_interface_receiver_load_views_preserve_release_ownership() {
+    for kind in [LocalKind::PhpLocal, LocalKind::StaticLocal] {
+        for (ownership, survives) in [(Ownership::MaybeOwned, false), (Ownership::Owned, true)] {
+            assert_release_survives(
+                PhpType::Object("Endpoint".into()), PhpType::Object("Reference".into()),
+                kind, ownership, survives,
+            );
+        }
+    }
+}
+
 /// An explicit owning value cannot be made borrowed merely from its storage shape.
 #[test]
 fn owned_local_load_releases_are_not_pruned() {

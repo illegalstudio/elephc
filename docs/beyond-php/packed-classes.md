@@ -184,7 +184,9 @@ $bodies[1]->pos = $bodies[0]->pos;   // copies 16 bytes
 $bodies[1]->pos = 5;                 // compile error: Body::pos takes a Vec2 record
 ```
 
-A whole buffer element is still assigned field by field (`$bodies[0] = ...` is rejected).
+A whole buffer element can be copied the same way: `$bodies[0] = $bodies[1]` copies the
+complete record, including nested fields and padding. The source must address the same packed
+class. See [Copying packed records](buffers.md#copying-packed-records).
 
 ## Typed pointers
 

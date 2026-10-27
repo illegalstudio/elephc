@@ -107,6 +107,7 @@ pub(crate) fn lower_main(
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
         &check_result.array_push_property_plans,
+        &check_result.member_receiver_types,
 
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
@@ -252,6 +253,7 @@ pub(crate) fn lower_user_function(
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
         &check_result.array_push_property_plans,
+        &check_result.member_receiver_types,
 
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
@@ -378,6 +380,7 @@ pub(crate) fn lower_class_method(
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
         &check_result.array_push_property_plans,
+        &check_result.member_receiver_types,
 
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
@@ -497,6 +500,7 @@ pub(crate) fn lower_eval_aot_function(
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
         &check_result.array_push_property_plans,
+        &check_result.member_receiver_types,
 
         &boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
@@ -627,6 +631,7 @@ pub(crate) fn lower_eval_aot_scope_function(
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
         &check_result.array_push_property_plans,
+        &check_result.member_receiver_types,
 
         &boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
@@ -747,6 +752,7 @@ pub(crate) fn lower_property_init_thunk(
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
         &check_result.array_push_property_plans,
+        &check_result.member_receiver_types,
 
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
@@ -1115,6 +1121,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
         &check_result.array_push_property_plans,
+        &check_result.member_receiver_types,
 
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
@@ -1239,6 +1246,7 @@ pub(crate) fn lower_clone_override_function(
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
         &check_result.array_push_property_plans,
+        &check_result.member_receiver_types,
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
         &check_result.generic_call_sites,
@@ -1407,6 +1415,7 @@ pub(crate) fn lower_eval_native_default_helpers(
             &check_result.throw_access_sites,
             &check_result.builtin_call_types,
             &check_result.array_push_property_plans,
+            &check_result.member_receiver_types,
             &check_result.boxed_reference_promotion_sites,
             &check_result.first_class_builtin_call_types,
             &check_result.generic_call_sites,
@@ -1641,6 +1650,7 @@ fn lower_closure_function_with_signature(
         parent.throw_access_sites,
         parent.builtin_call_types,
         parent.array_push_property_plans,
+        parent.member_receiver_types,
 
         parent.boxed_reference_promotion_sites,
         parent.first_class_builtin_call_types,
@@ -1697,6 +1707,7 @@ fn lower_body_into_function(
     throw_access_sites: &std::collections::HashMap<Span, crate::types::ThrowAccessInfo>,
     builtin_call_types: &std::collections::HashMap<Span, PhpType>,
     array_push_property_plans: &std::collections::HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
+    member_receiver_types: &std::collections::HashMap<(String, Span), Option<PhpType>>,
 
     boxed_reference_promotion_sites: &std::collections::HashMap<
         (String, Span),
@@ -1766,6 +1777,7 @@ fn lower_body_into_function(
         throw_access_sites,
         builtin_call_types,
         array_push_property_plans,
+        member_receiver_types,
 
         boxed_reference_promotion_sites,
         first_class_builtin_call_types,

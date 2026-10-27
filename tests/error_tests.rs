@@ -17,6 +17,9 @@ use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[path = "error_tests/buffer_record_copy.rs"]
+mod buffer_record_copy;
+
 static TEST_PROJECT_ID: AtomicUsize = AtomicUsize::new(0);
 
 /// Runs the full frontend pipeline (tokenize → parse → conditional → autoload → name-resolve → optimize → type-check)

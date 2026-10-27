@@ -148,9 +148,10 @@ pub(super) fn lower_builtin_callable_body(
         &module.declared_trait_properties,
         &module.packed_class_infos,
         &module.extern_class_infos,
-        &Default::default(),
-        &Default::default(),
+        &Default::default(), // throw access sites
+        &Default::default(), // builtin call types
         &Default::default(), // array_push property plans
+        &Default::default(), // checked member receiver types are absent in synthesized bodies
         &Default::default(),
         &Default::default(),
         &Default::default(),

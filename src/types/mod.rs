@@ -140,5 +140,14 @@ pub fn check_with_options(
 
 /// Returns the stable checker/EIR scope key for a closure nested at `span`.
 pub(crate) fn nested_loop_storage_scope(parent: &str, span: crate::span::Span) -> String {
-    format!("{}::closure@{}:{}", parent, span.line, span.col)
+    format!("{}{CLOSURE_SCOPE_SEPARATOR}{}:{}", parent, span.line, span.col)
+}
+
+/// Reserved boundary between a body scope and one of its lexical closure scopes.
+const CLOSURE_SCOPE_SEPARATOR: &str = "::closure@";
+
+/// Matches one body or its lexical closures without matching a similarly named body.
+pub(crate) fn loop_storage_scope_is_within(scope: &str, parent: &str) -> bool {
+    scope.strip_prefix(parent)
+        .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with(CLOSURE_SCOPE_SEPARATOR))
 }

@@ -27,7 +27,7 @@ use super::super::super::Checker;
 /// Errors:
 /// - Undefined variable
 /// - String offset assignment
-/// - Buffer element type mismatch or packed buffer assignment via index
+/// - Buffer element type mismatch
 /// - Object assignment without ArrayAccess
 pub(super) fn check_array_assign(
     checker: &mut Checker,
@@ -172,7 +172,8 @@ pub(super) fn check_array_assign(
 /// Validates the index and value types for a whole-element buffer write.
 ///
 /// A width-declared element (`buffer<u8>`, `buffer<f32>`) takes exactly what an `int` or
-/// `float` element takes; the store narrows the value to the element width.
+/// `float` element takes; the store narrows the value to the element width. A packed element
+/// copies a record of the same class from a packed address or typed pointer.
 pub(super) fn validate_buffer_element_write(
     elem_ty: &PhpType,
     idx_ty: &PhpType,
@@ -183,10 +184,21 @@ pub(super) fn validate_buffer_element_write(
         return Err(CompileError::new(span, "Buffer index must be integer"));
     }
     match &elem_ty.storage_value_type() {
-        PhpType::Packed(_) => Err(CompileError::new(
-            span,
-            "Assign packed buffer elements through field access like $buf[$i]->field",
-        )),
+        PhpType::Packed(record) => {
+            let same_record = matches!(val_ty,
+                PhpType::Packed(source) | PhpType::Pointer(Some(source))
+                    if source.trim_start_matches('\\')
+                        .eq_ignore_ascii_case(record.trim_start_matches('\\'))
+            );
+            if same_record {
+                Ok(())
+            } else {
+                Err(CompileError::new(span, &format!(
+                    "Buffer element type mismatch: expected {} record, got {}",
+                    record, val_ty,
+                )))
+            }
+        },
         inner if !buffer_element_accepts_assignment(inner, val_ty) => Err(CompileError::new(
             span,
             &format!(

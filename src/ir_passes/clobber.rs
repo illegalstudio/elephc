@@ -19,6 +19,8 @@
 //!   `r9`, `xmm2`–`xmm7`) are disjoint from every register the allowlisted
 //!   lowerings touch, a value that lives only across allowlisted ops keeps its
 //!   caller-saved register intact with no prologue save/restore.
+//! - Resolved buffer stores are classified by their buffer element type: scalar stores stay
+//!   inline, while whole packed-record copies may call the typed pointer null guard.
 //! - Branch edges with lifetime-tracked parameters are excluded because retaining
 //!   a borrowed argument can call the runtime after other parameters are stored.
 
@@ -59,10 +61,10 @@ pub(super) fn op_is_volatile_safe(op: Op) -> bool {
         // registers and stores its value to `_concat_off`. PIC x86_64 preserves
         // its additional r11 symbol-address scratch around the store.
         | ConcatReset | Nop
-        // Buffer element access through a hoisted descriptor: x9-x11 or r10/r11 plus the
+        // Buffer reads through a hoisted descriptor: x9-x11 or r10/r11 plus the
         // result register (`lower_inst::buffers`). Its stale-handle and bounds faults jump to
         // runtime fatals that never return, so no call can observe a caller-saved home.
-        | BufferGetResolved | BufferSetResolved
+        | BufferGetResolved
     )
 }
 
@@ -77,6 +79,23 @@ pub(super) fn instruction_is_volatile_safe(
     function: &Function,
     instruction: &Instruction,
 ) -> bool {
+    // Whole-record buffer stores use the shared copy loop and can call the pointer null guard.
+    // Inspect the descriptor's buffer type so scalar pointer-element stores remain inline-safe.
+    if instruction.op == Op::BufferSetResolved {
+        let handle_type = instruction.operands.first()
+            .and_then(|descriptor| function.value(*descriptor))
+            .and_then(|value| match value.def {
+                crate::ir::ValueDef::Instruction { inst, .. } => function.instruction(inst),
+                _ => None,
+            })
+            .filter(|producer| producer.op == Op::BufferResolve)
+            .and_then(|producer| producer.operands.first())
+            .and_then(|handle| function.value(*handle));
+        return handle_type.is_some_and(|value| matches!(
+            value.php_type.codegen_repr(),
+            PhpType::Buffer(elem) if !matches!(elem.as_ref(), PhpType::Packed(_))
+        ));
+    }
     if op_is_volatile_safe(instruction.op) {
         return true;
     }

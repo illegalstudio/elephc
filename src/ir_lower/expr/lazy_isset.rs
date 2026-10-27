@@ -250,10 +250,10 @@ pub(super) fn lower_lazy_empty_without_native(
     // re-derived so the two constructs cannot drift on which properties they consider declared.
     if let ExprKind::PropertyAccess { object, property } = &args[0].kind {
         if matches!(
-            property_isset_action(ctx, object, property),
+            property_isset_action(ctx, object, property, &args[0]),
             Some(IssetPropertyAction::Initialized)
         ) {
-            let object = lower_expr(ctx, object);
+            let object = lower_member_receiver(ctx, object, &args[0]);
             return Some(lower_initialized_property_empty(
                 ctx, object, property, name, &args[0],
             ));

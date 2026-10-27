@@ -17,6 +17,35 @@ use crate::ir::{
 use crate::ir_passes::clobber::instruction_is_volatile_safe;
 use crate::types::PhpType;
 
+/// Keeps packed resolved buffer stores call-clobbering while scalar pointer stores stay safe.
+#[test]
+fn buffer_record_copy_resolved_stores_are_not_volatile_safe() {
+    for element in [PhpType::Packed("Record".into()), PhpType::Pointer(Some("Record".into()))] {
+        let mut function = Function::new("copy".into(), IrType::Void, PhpType::Void);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", vec![
+                (IrType::Heap(IrHeapKind::Buffer), PhpType::Buffer(Box::new(element.clone()))),
+                (IrType::I64, PhpType::Pointer(Some("Record".into()))),
+            ]);
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let handle = builder.block_param(entry, 0);
+            let source = builder.block_param(entry, 1);
+            let descriptor = builder.emit(Op::BufferResolve, vec![handle], None,
+                IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+            let index = builder.emit_const_i64(0);
+            builder.emit(Op::BufferSetResolved, vec![descriptor, index, source], None,
+                IrType::Void, PhpType::Void, Ownership::NonHeap);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        let expected_safe = matches!(element, PhpType::Pointer(_));
+        let store = function.instructions.iter()
+            .find(|inst| inst.op == Op::BufferSetResolved).unwrap();
+        assert_eq!(instruction_is_volatile_safe(&function, store), expected_safe, "{element:?}");
+    }
+}
+
 /// Builds one named packed-field read whose receiver is a checked packed record address.
 fn packed_read() -> Function {
     let mut function = Function::new("packed_read".to_string(), IrType::Void, PhpType::Void);

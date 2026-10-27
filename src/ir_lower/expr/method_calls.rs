@@ -41,7 +41,7 @@ pub(super) fn lower_method_call(
         None
     };
     let object_expr = object;
-    let object = lower_expr(ctx, object_expr);
+    let object = lower_member_receiver(ctx, object_expr, expr);
     if op == Op::MethodCall && args.is_empty()
         && ctx.classes.values().any(|class| class.deferred_property_default_error.is_some())
         && matches!(php_symbol_key(method).as_str(),

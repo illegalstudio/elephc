@@ -432,6 +432,17 @@ impl<'f> Builder<'f> {
         }
     }
 
+    /// Refines a fresh object receiver's class metadata without altering storage or ownership.
+    pub(crate) fn set_object_value_class(&mut self, value: ValueId, class: String) {
+        let entry = &mut self.func.values[value.as_raw() as usize];
+        assert!(matches!(entry.php_type, PhpType::Object(_)));
+        let php_type = PhpType::Object(class);
+        entry.php_type = php_type.clone();
+        if let ValueDef::Instruction { inst, .. } = entry.def {
+            self.func.instructions[inst.as_raw() as usize].result_php_type = php_type;
+        }
+    }
+
     /// Returns the opcode that produced an instruction-defined value, if available.
     pub fn value_defining_op(&self, value: ValueId) -> Option<Op> {
         self.value_defining_instruction(value).map(|inst| inst.op)
@@ -788,6 +799,7 @@ fn widened_local_storage_type(current: &PhpType, incoming: &PhpType) -> PhpType 
 /// the associative logical type; cleanup remains safe because array decref dispatches by heap kind.
 /// Pointers and packed record addresses are one raw address word too, so a pointer-word slot
 /// (see `pointer_word_storage`) reads as a record address or as another pointer type as is.
+/// Object class/interface names likewise refine the checked view of the same object pointer.
 ///
 /// Codegen consumes this predicate too, so its no-coercion path and EIR release
 /// pruning cannot classify an ordinary borrowed local view differently.
@@ -804,6 +816,7 @@ pub(crate) fn local_load_types_share_storage(source_ty: &PhpType, result_ty: &Ph
             | (PhpType::AssocArray { .. }, PhpType::AssocArray { .. })
             | (PhpType::Array(_), PhpType::AssocArray { .. })
             | (PhpType::AssocArray { .. }, PhpType::Array(_))
+            | (PhpType::Object(_), PhpType::Object(_))
             | (PhpType::Pointer(_), PhpType::Pointer(_) | PhpType::Packed(_))
             | (PhpType::Packed(_), PhpType::Pointer(_))
     )

@@ -134,18 +134,18 @@ fn test_error_buffer_write_rejects_static_string_index() {
     );
 }
 
-/// Verifies that packed buffer elements cannot be assigned directly; must use field access.
+/// Verifies that a packed buffer element rejects an integer source.
 #[test]
-fn test_error_buffer_packed_element_requires_field_assignment() {
+fn test_error_buffer_record_copy_local_requires_record() {
     expect_error(
         "<?php packed class Vec2 { public float $x; public float $y; } buffer<Vec2> $points = buffer_new<Vec2>(1); $points[0] = 1;",
-        "Assign packed buffer elements through field access like $buf[$i]->field",
+        "Buffer element type mismatch: expected Vec2 record, got int",
     );
 }
 
-/// Verifies packed buffer elements cannot be assigned whole through an object property.
+/// Verifies a packed buffer element through an object property rejects an integer source.
 #[test]
-fn test_error_buffer_property_packed_element_requires_field_assignment() {
+fn test_error_buffer_record_copy_property_requires_record() {
     expect_error(
         r#"<?php
 packed class Vec2 { public float $x; public float $y; }
@@ -154,7 +154,7 @@ $points = new Points();
 $points->values = buffer_new<Vec2>(1);
 $points->values[0] = 1;
 "#,
-        "Assign packed buffer elements through field access like $buf[$i]->field",
+        "Buffer element type mismatch: expected Vec2 record, got int",
     );
 }
 
@@ -214,9 +214,9 @@ StaticIndexedBuffer::$values[$index] = 1;
     );
 }
 
-/// Verifies packed buffer elements cannot be assigned whole through a static property.
+/// Verifies a packed buffer element through a static property rejects an integer source.
 #[test]
-fn test_error_static_buffer_property_packed_element_requires_field_assignment() {
+fn test_error_buffer_record_copy_static_requires_record() {
     expect_error(
         r#"<?php
 packed class Vec2 { public float $x; public float $y; }
@@ -224,7 +224,7 @@ final class StaticPoints { public static buffer<Vec2> $values; }
 StaticPoints::$values = buffer_new<Vec2>(1);
 StaticPoints::$values[0] = 1;
 "#,
-        "Assign packed buffer elements through field access like $buf[$i]->field",
+        "Buffer element type mismatch: expected Vec2 record, got int",
     );
 }
 

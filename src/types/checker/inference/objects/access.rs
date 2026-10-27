@@ -32,10 +32,14 @@ impl Checker {
         // `branch_guard_narrowing`). Consult it first so a guarded branch sees the narrowed type.
         if let Some(key) = Self::narrowed_property_env_key(object, property) {
             if let Some(narrowed) = env.get(&key) {
+                if let Ok(obj_ty) = self.infer_type(object, env) {
+                    self.record_member_receiver_type(expr.span, &obj_ty);
+                }
                 return Ok(narrowed.clone());
             }
         }
         let obj_ty = self.infer_type(object, env)?;
+        self.record_member_receiver_type(expr.span, &obj_ty);
         // A `?ptr<T>` reaches its fields like `ptr<T>`: the value is the bare address, and a
         // null one faults with the null-pointer dereference fatal a null `ptr<T>` raises.
         let nullable_pointer = match &obj_ty {
@@ -159,6 +163,7 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
+        self.record_member_receiver_type(expr.span, &obj_ty);
         if matches!(obj_ty, PhpType::Mixed) {
             return Ok(PhpType::Mixed);
         }
@@ -190,6 +195,7 @@ impl Checker {
         nullsafe: bool,
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
+        self.record_member_receiver_type(expr.span, &obj_ty);
         if nullsafe && matches!(obj_ty, PhpType::Void) {
             return Ok(PhpType::Void);
         }

@@ -311,6 +311,15 @@ Offset  Size  Field
 
 `__rt_buffer_resolve` validates the handle index, non-zero generation, active marker, and exact generation match before length, read, write, or free paths use descriptor metadata. `buffer_new<T>()` allocates exactly `length * stride` payload bytes from the compiler-managed heap and zeroes only that payload. `buffer_free()` marks the descriptor inactive before releasing the detached payload. Reusable descriptors enter the `_buffer_registry_free` list and receive a new generation for their next lifetime, which keeps stale aliases invalid after slot or heap reuse. A descriptor whose u32 generation reaches its maximum is retired instead of wrapping to zero.
 
+Whole packed-element assignment lowers to `BufferSet` (or `BufferSetResolved` after
+optimization) and copies the packed class's complete stride through
+`src/codegen/lower_inst/packed_record_copy.rs`, shared with nested packed-field stores.
+The assignment checks the destination handle and index; a source element read checks its
+own handle and index before supplying its address. The copy allocates nothing and does no
+reference counting: nested records and padding are bytes, while pointer fields retain their
+addresses. Typed pointer sources use the null guard and require caller-managed liveness.
+Resolved packed stores remain call-clobbering for register allocation, unlike scalar stores.
+
 Buffers created inside `eval()` do not use `_buffer_registry`. Magician keeps its own thread-local registry (`crates/elephc-magician/src/interpreter/builtins/raw_memory/buffer_registry.rs`) with the same lifecycle: `buffer_new()` publishes a zeroed `calloc` payload of `length * 8` bytes in a slot and answers the handle `(generation << 32) | (1 << 31) | slot`, `buffer_len()` and `buffer_ptr()` resolve the handle before reading the slot, and `buffer_free()` unpublishes the slot before freeing the payload, so a stale alias dies with the same `use of buffer after buffer_free()` fatal. Bit 31 keeps eval handles disjoint from compiled descriptor indices, generations stop at `2^31 - 1` so every handle is a positive PHP integer, and a slot that reaches that generation is retired.
 
 ### Fiber stacks and scheduler state

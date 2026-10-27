@@ -76,6 +76,16 @@ function xmlNullablePropertyReads(SimpleXMLElement $node): void {
     var_dump($node->created->child, $node->missing->child?->getName());
 }
 xmlNullablePropertyReads($xml);
+interface TargetXmlReceiver {}
+class TargetGuardedXml extends SimpleXMLElement implements TargetXmlReceiver {}
+function xmlGuardedInterfaceReads(TargetXmlReceiver $node): void {
+    if ($node instanceof TargetGuardedXml) {
+        echo $node->item, $node?->item;
+        var_dump(isset($node->item), empty($node->missing));
+        echo $node->missing ?? 'fallback', $node?->missing ?? 'safe';
+    }
+}
+xmlGuardedInterfaceReads(new TargetGuardedXml('<r><item>guarded</item></r>'));
 echo (int)($xml->item[0] > 1), (int)($xml->item[0] == '7'), $xml <=> $xml->item;
 $xml->item[0] += 1;
 try { $xml->item[0][null] = 'invalid'; } catch (ValueError $error) { echo $error->getMessage(); }

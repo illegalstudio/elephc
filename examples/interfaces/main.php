@@ -39,6 +39,19 @@ $printer = new ProductPrinter();
 $printer->printLine();
 echo ProductPrinter::kind() . "\n";
 
+// A base interface can expose an optional capability through an instanceof guard.
+function printLabel(Named $item): void {
+    if ($item instanceof Labeled) {
+        echo $item->label() . "\n";
+    }
+    if (!($item instanceof ProductPrinter)) {
+        return;
+    }
+    echo $item->name . "\n";
+}
+
+printLabel($printer);
+
 class OneSlotMap implements ArrayAccess {
     private string $value = "";
 

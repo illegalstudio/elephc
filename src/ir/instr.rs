@@ -1209,6 +1209,7 @@ pub enum Op {
     BufferNew,
     BufferLen,
     BufferGet,
+    /// Stores a scalar or copies a whole same-class packed record from its source address.
     BufferSet,
     /// Speculatively resolves a buffer handle to its static descriptor address, or 0 for an
     /// invalid, freed, or stale handle. Never faults: the access that consumes the descriptor
@@ -1217,7 +1218,7 @@ pub enum Op {
     /// `buffer_get` through a descriptor from `BufferResolve`: `[descriptor, index]`. Faults
     /// on a zero descriptor; a true immediate records a same-buffer proof that omits bounds.
     BufferGetResolved,
-    /// `buffer_set` through a descriptor from `BufferResolve`: `[descriptor, index, value]`.
+    /// Scalar store or packed record copy through `BufferResolve`: `[descriptor, index, value]`.
     /// A true immediate has the same proven-in-range meaning as `BufferGetResolved`.
     BufferSetResolved,
     BufferFree,
@@ -1400,8 +1401,9 @@ impl Op {
             }
             // Reads the static descriptor registry and never faults.
             BufferResolve => E::READS_HEAP,
-            // One scalar store into the validated payload: no refcounted element is replaced.
-            BufferSetResolved => E::WRITES_HEAP | E::MAY_FATAL,
+            // Scalar stores and whole POD record copies never replace refcounted elements.
+            BufferSetResolved => E::READS_HEAP | E::WRITES_HEAP | E::MAY_FATAL,
+            BufferSet => E::READS_HEAP | E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             ArrayGetSilent | HashGetSilent | ArrayIsset | HashIsset | DescriptorArgKeyExists => {
                 E::READS_HEAP
             }
@@ -1480,7 +1482,7 @@ impl Op {
             HashUnset | PropUnset | DynamicPropUnset | OffsetUnset => E::READS_HEAP
                 | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_THROW | E::MAY_FATAL | E::REFCOUNT_OP,
             ArraySet | HashSet | DescriptorArgSet | ArrayPush | HashAppend
-            | BufferSet | BufferFree | PackedFieldSet | PtrWrite
+            | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             // `PropSet` and `DynamicPropSet` now carry the SAME conservative contract, because
             // phase B2 gave them the same set of observable consequences. Either can create a

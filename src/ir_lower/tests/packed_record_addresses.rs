@@ -14,6 +14,56 @@ use crate::codegen::platform::Target;
 use crate::ir::{IrHeapKind, IrType, Op};
 use crate::types::PhpType;
 
+/// Emits record-copy loops and typed-pointer guards on every supported target in both modes.
+#[test]
+fn buffer_record_copy_emits_for_every_target() {
+    let source = r#"<?php
+packed class Pixel { public u8 $r; public u8 $g; public u8 $b; }
+packed class Words { public int $a; public int $b; }
+function copyWords(buffer<Words> $dst, buffer<Words> $src, int $n): void {
+    for ($i = 0; $i < $n; $i++) { $dst[$i] = $src[$i]; }
+}
+function copyRecords(buffer<Pixel> $dst, buffer<Pixel> $src, ptr<Pixel> $p, int $n): void {
+    for ($i = 0; $i < $n; $i++) {
+        $dst[$i] = $src[$i];
+        $dst[$i] = $p;
+    }
+}
+"#;
+    for target in ["linux-x86_64", "linux-aarch64", "macos-aarch64", "ios-arm64", "ios-sim-arm64"] {
+        for optimize in [false, true] {
+            let mut module = super::lower_source_at_for_target(
+                source, Path::new("main.php"), Path::new("."), Target::parse(target).unwrap(),
+            );
+            if optimize {
+                crate::ir_passes::optimize_module(&mut module);
+            }
+            let copy = module.functions.iter().find(|function| function.name == "copyRecords").unwrap();
+            assert!(copy.instructions.iter().any(|inst| {
+                inst.op == if optimize { Op::BufferSetResolved } else { Op::BufferSet }
+            }), "{target}, optimize={optimize}: record store should reach the expected path");
+            let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+                .unwrap_or_else(|error| panic!("{target}, optimize={optimize}: {error:?}"));
+            assert!(asm.contains("__rt_ptr_check_nonnull"), "{target}: typed sources need a guard");
+            if target != "linux-x86_64" {
+                assert!(asm.contains("mov x9, #2"), "{target}: word count must not overwrite destination x11");
+            }
+            assert!(asm.contains("buffer_bounds_fail"), "{target}: indices need bounds checks");
+            let complete_tail = if target == "linux-x86_64" {
+                let data_reg = if optimize { "r11" } else { "r10" };
+                let dest_reg = if optimize { "r10" } else { "r11" };
+                assert!(asm.contains(&format!("mov QWORD PTR [{dest_reg}], {data_reg}")),
+                    "resolved word copies must preserve the destination address");
+                asm.contains(&format!("mov {data_reg}w, WORD PTR [rax]"))
+                    && asm.contains(&format!("mov {data_reg}b, BYTE PTR [rax]"))
+            } else {
+                asm.contains("ldrh w10, [x0], #2") && asm.contains("ldrb w10, [x0], #1")
+            };
+            assert!(complete_tail, "{target}: a three-byte record needs both tail pieces");
+        }
+    }
+}
+
 /// Verifies packed producers remain record-shaped while all four pointer sinks receive pointers.
 #[test]
 fn packed_record_addresses_retype_only_at_pointer_sinks() {

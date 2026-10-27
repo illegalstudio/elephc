@@ -13,6 +13,7 @@ mod buffers;
 mod buffer_ptr;
 mod buffer_arrays;
 mod buffer_merges;
+mod buffer_record_copy;
 mod static_buffer_properties;
 mod packed_nested_fields;
 mod packed_field_narrowing;

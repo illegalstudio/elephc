@@ -37,6 +37,7 @@ mod generic_variance;
 mod inference;
 mod loop_storage;
 mod method_pass;
+mod member_receivers;
 mod mixed_storage_scan;
 mod packed_counter;
 pub(crate) mod null_probe;
@@ -447,6 +448,10 @@ pub(crate) struct Checker {
     pub builtin_call_types: HashMap<Span, PhpType>,
     /// Native property reference plans retain checker facts across opaque argument effects.
     pub array_push_property_plans: HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
+    /// Receiver types observed at member uses, with conflicting checker visits disabled.
+    pub member_receiver_types: HashMap<(String, Span), Option<PhpType>>,
+    /// Named-function contexts and body scopes queried without their local branch guards.
+    pub member_receiver_analysis_scopes: Vec<(Option<String>, String)>,
     /// Caller locals converted to canonical boxed storage by a validated by-reference call.
     /// Scoped call sites keep recursive signature checking from changing another body's env.
     pub boxed_reference_outputs: HashMap<(String, Span), HashMap<String, PhpType>>,
@@ -1439,6 +1444,7 @@ fn check_types_on_compiler_stack(
         throw_access_sites: checker.throw_access_sites,
         builtin_call_types: checker.builtin_call_types,
         array_push_property_plans: checker.array_push_property_plans,
+        member_receiver_types: checker.member_receiver_types,
         boxed_reference_promotion_sites: checker.boxed_reference_promotion_sites,
         buffer_read_sites: checker.buffer_read_observations.into_iter()
             .filter_map(|(span, buffer)| buffer.then_some(span)).collect(),

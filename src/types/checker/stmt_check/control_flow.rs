@@ -90,7 +90,14 @@ fn stabilize_loop_storage(
                     return Some(cached.clone());
                 }
             }
-            let inferred = checker.infer_type(expr, analysis_env).ok()?;
+            // This body and its lexical closures see an unguarded environment. Independently
+            // checked callees still need their facts, including a user function named `main`.
+            checker.member_receiver_analysis_scopes.push((
+                checker.current_function.clone(), checker.current_loop_storage_scope.clone(),
+            ));
+            let inferred = checker.infer_type(expr, analysis_env);
+            let _ = checker.member_receiver_analysis_scopes.pop();
+            let inferred = inferred.ok()?;
             if memoizable {
                 call_types.insert(expr.span, inferred.clone());
             }

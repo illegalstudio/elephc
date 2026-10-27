@@ -205,21 +205,21 @@ pub(super) fn lower_lazy_property_isset_operand(
     arg: &Expr,
 ) -> Option<LoweredValue> {
     if needs_native_xml_property_dispatch(ctx, object, property) {
-        let object = lower_expr(ctx, object);
+        let object = lower_member_receiver(ctx, object, arg);
         return Some(lower_boxed_xml_property_isset(ctx, object, property, arg));
     }
-    match property_isset_action(ctx, object, property)? {
+    match property_isset_action(ctx, object, property, arg)? {
         IssetPropertyAction::Fallback => None,
         IssetPropertyAction::Magic => {
-            let object = lower_expr(ctx, object);
+            let object = lower_member_receiver(ctx, object, arg);
             Some(lower_magic_property_isset(ctx, object, property, arg))
         }
         IssetPropertyAction::AlwaysFalse => {
-            lower_expr(ctx, object);
+            lower_member_receiver(ctx, object, arg);
             Some(emit_bool_literal(ctx, false, Some(arg.span)))
         }
         IssetPropertyAction::Initialized => {
-            let object = lower_expr(ctx, object);
+            let object = lower_member_receiver(ctx, object, arg);
             Some(lower_initialized_property_isset(ctx, object, property, arg))
         }
     }
@@ -240,8 +240,12 @@ pub(super) fn property_isset_action(
     ctx: &LoweringContext<'_, '_>,
     object: &Expr,
     property: &str,
+    member: &Expr,
 ) -> Option<IssetPropertyAction> {
-    let (class_name, _) = isset_object_expr_class(ctx, object)?;
+    let object_ty = isset_object_expr_type(ctx, object)?;
+    let object_ty = checked_member_receiver_type(ctx, &object_ty, member).unwrap_or(object_ty);
+    let (class_name, _) = singular_object_class(&object_ty)?;
+    let class_name = normalized_class_name(class_name)?;
     if is_builtin_stdclass_name(&class_name) {
         return Some(IssetPropertyAction::Fallback);
     }
@@ -272,7 +276,14 @@ pub(super) fn property_isset_action(
 
 /// Returns the single receiver class and whether that receiver may be null.
 pub(super) fn isset_object_expr_class(ctx: &LoweringContext<'_, '_>, object: &Expr) -> Option<(String, bool)> {
-    let ty = match &object.kind {
+    let ty = isset_object_expr_type(ctx, object)?;
+    let (class_name, nullable) = singular_object_class(&ty)?;
+    normalized_class_name(class_name).map(|name| (name, nullable))
+}
+
+/// Resolves the receiver type without evaluating a property probe's source expression.
+fn isset_object_expr_type(ctx: &LoweringContext<'_, '_>, object: &Expr) -> Option<PhpType> {
+    Some(match &object.kind {
         ExprKind::Variable(name) => ctx.local_type(name),
         ExprKind::This => PhpType::Object(ctx.current_class.clone()?),
         ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.to_string()),
@@ -285,9 +296,7 @@ pub(super) fn isset_object_expr_class(ctx: &LoweringContext<'_, '_>, object: &Ex
             .map(|sig| sig.return_type.clone())
             .unwrap_or_else(|| infer_expr_type_syntactic(object)),
         _ => infer_expr_type_syntactic(object),
-    };
-    let (class_name, nullable) = singular_object_class(&ty)?;
-    normalized_class_name(class_name).map(|name| (name, nullable))
+    })
 }
 
 /// Returns whether a named property can use normal `isset()` value probing.

@@ -131,7 +131,7 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
         // never created answers it without an `Undefined property` warning. A receiver whose
         // class is only known at run time needs the runtime-name form to carry that mode.
         let needs_probe = property_probe_needs_runtime_name_form(ctx, object);
-        let object = lower_expr(ctx, object);
+        let object = lower_member_receiver(ctx, object, value);
         if native_property_method_for_value(ctx, object.value, property,
             elephc_builtin_contract::ObjectProperty::Probe).is_some()
         {

@@ -34,6 +34,7 @@ mod arithmetic;
 mod immediate_operands;
 mod arrays;
 mod buffers;
+mod packed_record_copy;
 mod call_argument_unpack;
 mod checked_int_to_int;
 mod checked_numeric_chain;

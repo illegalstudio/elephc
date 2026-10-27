@@ -436,6 +436,7 @@ pub(crate) fn lower_property_get_from_value(
     op: Op,
     expr: &Expr,
 ) -> LoweredValue {
+    let object = refine_member_receiver(ctx, object, expr);
     let object = box_opaque_property_receiver(ctx, object, expr.span);
     let ty = ctx.builder.value_php_type(object.value);
     if matches!(op, Op::PropGet | Op::NullsafePropGet)
@@ -1036,6 +1037,7 @@ pub(super) fn lower_dynamic_property_fetch_from_value(
     mode: PropertyFetchMode,
     expr: &Expr,
 ) -> LoweredValue {
+    let object = refine_member_receiver(ctx, object, expr);
     // A literal name on a C struct receiver is the named field read (`$r->{'y'}` is `$r->y`): it
     // keeps the width-aware load and the owned copy of a `char*` field the named read takes. That
     // holds in probe mode too: the checker only admits declared fields, which always exist, so
@@ -1046,6 +1048,14 @@ pub(super) fn lower_dynamic_property_fetch_from_value(
         }
     }
     let result_type = dynamic_property_get_result_type(ctx, object.value, property, expr);
+    // A silent fetch can answer null for a typed slot that has not been initialized. Buffer
+    // handles keep their element type and use the raw missing-value sentinel, like buffer
+    // element probes: boxing a buffer loses the descriptor's element layout at a later merge.
+    let result_type = if mode.is_read() || matches!(result_type, PhpType::Buffer(_)) {
+        result_type
+    } else {
+        nullable_result_type(result_type)
+    };
     let property = lower_expr(ctx, property);
     let property = coerce_runtime_property_name(ctx, property, expr.span);
     lower_dynamic_property_fetch_from_operands(
@@ -1111,6 +1121,7 @@ pub(super) fn lower_property_probe_from_value(
     property: &str,
     expr: &Expr,
 ) -> LoweredValue {
+    let object = refine_member_receiver(ctx, object, expr);
     let object = box_opaque_property_receiver(ctx, object, expr.span);
     if let Some(method) = native_property_method_for_value(ctx, object.value, property,
         elephc_builtin_contract::ObjectProperty::Probe)

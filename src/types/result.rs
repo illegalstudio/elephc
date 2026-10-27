@@ -127,6 +127,8 @@ pub struct CheckResult {
     pub builtin_call_types: HashMap<Span, PhpType>,
     /// Native array_push property decisions, scoped to the body and original place span.
     pub array_push_property_plans: HashMap<(String, Span), ArrayPushPropertyPlan>,
+    /// Checked member receiver types by body scope and source node; conflicting visits are None.
+    pub member_receiver_types: HashMap<(String, Span), Option<PhpType>>,
     /// Checker-authorized call-argument sites that may widen one local to a boxed Mixed cell.
     pub boxed_reference_promotion_sites: HashMap<(String, Span), HashSet<String>>,
     /// Reads proven to use native buffers on every checker visit to the source span.

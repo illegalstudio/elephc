@@ -37,6 +37,7 @@ mod nullable_array_merge;
 mod narrowing;
 #[path = "types/narrowed_object_arguments.rs"]
 mod narrowed_object_arguments;
+mod guarded_interface_receivers;
 #[path = "types/param_coercion.rs"]
 mod param_coercion;
 #[path = "types/declare_groups.rs"]

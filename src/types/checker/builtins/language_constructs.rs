@@ -98,6 +98,7 @@ fn check_isset_arg(checker: &mut Checker, arg: &Expr, env: &TypeEnv) -> Result<(
     | ExprKind::NullsafePropertyAccess { object, .. } = &arg.kind
     {
         let object_ty = checker.infer_null_probe_operand(object, env)?;
+        checker.record_member_receiver_type(arg.span, &object_ty);
         if isset_object_receiver_type(checker, &object_ty) {
             return Ok(());
         }

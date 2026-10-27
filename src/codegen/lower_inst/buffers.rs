@@ -10,14 +10,16 @@
 //! - Buffer get/set preserve PHP source evaluation order while spilling call-clobbered values.
 //! - The resolved get/set forms take a descriptor from a hoisted `buffer_resolve`. They test it
 //!   for zero at the access, so a stale handle still reports the use-after-free there, and they
-//!   touch only the result register plus x9-x11 (AArch64) or r10/r11 (x86_64), which keeps them
-//!   volatile-safe for the register allocator.
+//!   scalar forms touch only the result register plus x9-x11 (AArch64) or r10/r11 (x86_64),
+//!   which keeps scalar accesses volatile-safe for the register allocator.
 //! - A true immediate on a resolved access proves its exact loop index is in range. Codegen still
 //!   tests the descriptor for zero but omits the descriptor-length load and comparison.
 //! - A width-declared element type (`buffer<i32>`, `buffer<u8>`, `buffer<f32>`) sets the stride
 //!   to the width and loads and stores through the shared `scalar_widths` emitter; the resolved
 //!   forms recover that element type from the `buffer_resolve` their descriptor came from, since
 //!   their own result type is the element's value type.
+//! - Packed writes copy the complete record through `packed_record_copy`; resolved packed
+//!   writes are call-clobbering because a typed source pointer may need a null guard.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -128,6 +130,12 @@ pub(super) fn lower_buffer_set(ctx: &mut FunctionContext<'_>, inst: &Instruction
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     require_int(ctx.load_value_to_result(index)?, "buffer_set index")?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    if let PhpType::Packed(record) = &elem_ty {
+        ensure_set_value_matches(&elem_ty, &ctx.value_php_type(value)?)?;
+        let address_reg = materialize_resolved_element_address_for_get(ctx);
+        super::packed_record_copy::emit_packed_record_copy(ctx, value, record, 0, address_reg)?;
+        return store_if_result(ctx, inst);
+    }
     materialize_set_value(ctx, value, &elem_ty)?;
     push_buffer_set_value(ctx, &elem_ty)?;
     let address_reg = materialize_resolved_element_address_for_set(ctx);
@@ -175,6 +183,11 @@ pub(super) fn lower_buffer_set_resolved(
     let index_in_bounds = matches!(inst.immediate, Some(Immediate::Bool(true)));
     let elem_ty = resolved_buffer_element_type(ctx, descriptor)?;
     let address_reg = emit_resolved_element_address(ctx, descriptor, index, index_in_bounds)?;
+    if let PhpType::Packed(record) = &elem_ty {
+        ensure_set_value_matches(&elem_ty, &ctx.value_php_type(value)?)?;
+        super::packed_record_copy::emit_packed_record_copy(ctx, value, record, 0, address_reg)?;
+        return store_if_result(ctx, inst);
+    }
     let value_ty = ctx.load_value_to_result(value)?;
     ensure_set_value_matches(&elem_ty, &value_ty)?;
     store_element_value(ctx, &elem_ty, address_reg)?;
@@ -342,7 +355,7 @@ fn source_load_local_slot(ctx: &FunctionContext<'_>, value: ValueId) -> Result<O
     Ok(None)
 }
 
-/// Resolves the stacked Buffer handle and returns a bounds-checked payload address for a read.
+/// Resolves the stacked handle and returns a checked address for a read or whole-record write.
 fn materialize_resolved_element_address_for_get(ctx: &mut FunctionContext<'_>) -> &'static str {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -512,6 +525,8 @@ fn materialize_set_value(
 /// integer widths, a `float` for `f32`; the store then narrows it to the element width.
 fn ensure_set_value_matches(elem_ty: &PhpType, value_ty: &PhpType) -> Result<()> {
     match (elem_ty.storage_value_type().codegen_repr(), value_ty.codegen_repr()) {
+        (PhpType::Packed(record), PhpType::Packed(source) | PhpType::Pointer(Some(source)))
+            if source.trim_start_matches('\\').eq_ignore_ascii_case(record.trim_start_matches('\\')) => Ok(()),
         (PhpType::Float, PhpType::Float) => Ok(()),
         (PhpType::Int, PhpType::Int | PhpType::Bool)
         | (PhpType::Bool, PhpType::Int | PhpType::Bool)

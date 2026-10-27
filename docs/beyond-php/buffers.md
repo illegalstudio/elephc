@@ -109,6 +109,36 @@ echo $counts[$cell]--; // the old value, then the element is one lower
 
 Buffer indices may be statically typed as `int` or `mixed`. A `mixed` index is converted to `int` at runtime before bounds checking; a statically known non-integer index is rejected at compile time.
 
+### Copying packed records
+
+A whole-element assignment copies the complete record, including nested records and padding:
+
+```php
+<?php
+packed class Vec2 { public float $x; public float $y; }
+$old = buffer_new<Vec2>(2);
+$old[1]->x = 2.5;
+$next = buffer_new<Vec2>(4);
+$next[0] = $old[1];
+buffer_free($old);
+echo $next[0]->x;       // 2.5: the destination owns independent record bytes
+```
+
+Both records must have the same packed class. The source can be a buffer element, an
+embedded packed field or a `ptr<T>` of that class. A typed pointer is null-checked; its
+lifetime remains the caller's responsibility. Copies between buffer elements check both
+indices and both buffer handles. Copying an element to itself is valid. As with nested
+record assignment, source and destination must be identical or disjoint.
+
+This is a shallow byte copy: pointer fields keep their addresses and do not copy the
+pointed-to data. Ordinary `$alias = $buf[$i]` still takes the record's address.
+Whole records can also be copied through instance or static buffer properties.
+
+Generic code can use `$next[$i] = $old[$i]` for both packed and scalar `T`, without
+listing any fields. [The buffer list example](https://github.com/illegalstudio/elephc/tree/main/examples/buffer-list)
+uses this to grow a `BufferList<T>`, remove elements by swapping in the last record,
+and clear its logical length. Each buffer itself stays fixed-size.
+
 `++` and `--` on an element of a scalar buffer (any integer or float width) read the element
 once, step it by one and write it back, with the same bounds and freed-buffer checks as any
 access. The update itself allocates nothing, so it suits counting and histogram loops; only the
