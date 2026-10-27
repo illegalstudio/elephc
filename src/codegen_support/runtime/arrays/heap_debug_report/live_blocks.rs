@@ -8,6 +8,7 @@
 //! - Walks validated physical headers without allocating or exposing strings or payload pointers.
 //! - Object class ids and Mixed tags are range checked before reporting their type identity.
 //! - Reports at most 64 blocks, with offsets relative to the managed heap rather than addresses.
+//! - String fingerprints inspect at most 32 validated payload bytes without printing their content.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -127,6 +128,8 @@ fn emit_type_identity(emitter: &mut Emitter) {
     abi::load_at_offset(emitter, value, 48);
     match emitter.target.arch {
         Arch::AArch64 => {
+            emitter.instruction("cmp x0, #1");                                  // recognize strings without exposing their bytes
+            emitter.instruction("b.eq __rt_heap_debug_live_string");            // fingerprint only a bounded prefix of validated storage
             emitter.instruction("cmp x0, #2");                                  // recognize indexed arrays with bounded scalar metadata
             emitter.instruction("b.eq __rt_heap_debug_live_array");             // array lengths distinguish collectors from stored child lists
             emitter.instruction("cmp x0, #4");                                  // recognize native object allocations
@@ -135,6 +138,8 @@ fn emit_type_identity(emitter: &mut Emitter) {
             emitter.instruction("b.eq __rt_heap_debug_live_tag");               // only Mixed payloads carry a value tag
         }
         Arch::X86_64 => {
+            emitter.instruction("cmp rax, 1");                                  // recognize strings without exposing their bytes
+            emitter.instruction("je __rt_heap_debug_live_string");              // fingerprint only a bounded prefix of validated storage
             emitter.instruction("cmp rax, 2");                                  // recognize indexed arrays with bounded scalar metadata
             emitter.instruction("je __rt_heap_debug_live_array");               // array lengths distinguish collectors from stored child lists
             emitter.instruction("cmp rax, 4");                                  // recognize native object allocations
@@ -143,6 +148,9 @@ fn emit_type_identity(emitter: &mut Emitter) {
             emitter.instruction("je __rt_heap_debug_live_tag");                 // only Mixed payloads carry a value tag
         }
     }
+    abi::emit_jump(emitter, "__rt_heap_debug_live_type_done");
+    emitter.label("__rt_heap_debug_live_string");
+    emit_string_fingerprint(emitter);
     abi::emit_jump(emitter, "__rt_heap_debug_live_type_done");
     emitter.label("__rt_heap_debug_live_array");
     emit_array_identity(emitter);
@@ -184,6 +192,56 @@ fn emit_type_identity(emitter: &mut Emitter) {
     emitter.label("__rt_heap_debug_live_tag_valid");
     write_integer(emitter);
     emitter.label("__rt_heap_debug_live_type_done");
+}
+
+/// Prints a 32-bit FNV-1a prefix fingerprint, stopping at NUL or the validated payload boundary.
+fn emit_string_fingerprint(emitter: &mut Emitter) {
+    write_label(emitter, "_heap_dbg_block_fingerprint", 13);
+    let value = abi::int_result_reg(emitter);
+    abi::load_at_offset(emitter, value, 40);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("sub x10, x0, #16");                            // derive the validated physical payload size
+            emitter.instruction("mov x11, #32");                                // cap the inspected prefix independently of allocation size
+            emitter.instruction("cmp x10, x11");                                // choose the smaller safe byte count
+            emitter.instruction("csel x10, x10, x11, lo");                      // never inspect padding outside this block
+            abi::load_at_offset(emitter, "x9", 8);
+            emitter.instruction("add x9, x9, #16");                             // address this string's own payload without following pointers
+            emitter.instruction("movz w0, #0x9dc5");                            // materialize the low half of the FNV-1a basis
+            emitter.instruction("movk w0, #0x811c, lsl #16");                   // complete the unsigned 32-bit FNV-1a basis
+            emitter.instruction("movz w12, #0x0193");                           // materialize the low half of the FNV-1a multiplier
+            emitter.instruction("movk w12, #0x0100, lsl #16");                  // complete the unsigned 32-bit multiplier
+            emitter.label("__rt_heap_debug_live_string_loop");
+            emitter.instruction("cbz x10, __rt_heap_debug_live_string_done");   // stop at the bounded physical prefix length
+            emitter.instruction("ldrb w11, [x9], #1");                          // inspect only one byte within the validated allocation
+            emitter.instruction("cbz w11, __rt_heap_debug_live_string_done");   // avoid reading unused storage after a terminating NUL
+            emitter.instruction("eor w0, w0, w11");                             // mix the next byte without retaining or displaying it
+            emitter.instruction("mul w0, w0, w12");                             // apply wrapping 32-bit FNV-1a multiplication
+            emitter.instruction("sub x10, x10, #1");                            // consume one validated prefix byte
+        }
+        Arch::X86_64 => {
+            emitter.instruction("sub rax, 16");                                 // derive the validated physical payload size
+            emitter.instruction("mov edx, 32");                                 // cap the inspected prefix independently of allocation size
+            emitter.instruction("cmp rax, rdx");                                // choose the smaller safe byte count
+            emitter.instruction("cmovb rdx, rax");                              // never inspect padding outside this block
+            abi::load_at_offset(emitter, "r10", 8);
+            emitter.instruction("add r10, 16");                                 // address this string's own payload without following pointers
+            emitter.instruction("mov eax, 2166136261");                         // initialize the unsigned 32-bit FNV-1a basis
+            emitter.label("__rt_heap_debug_live_string_loop");
+            emitter.instruction("test rdx, rdx");                               // stop at the bounded physical prefix length
+            emitter.instruction("jz __rt_heap_debug_live_string_done");         // no further byte belongs to the inspected prefix
+            emitter.instruction("movzx ecx, BYTE PTR [r10]");                   // inspect only one byte within the validated allocation
+            emitter.instruction("test ecx, ecx");                               // a terminating NUL ends the useful string prefix
+            emitter.instruction("jz __rt_heap_debug_live_string_done");         // avoid reading unused storage after the terminator
+            emitter.instruction("xor eax, ecx");                                // mix the next byte without retaining or displaying it
+            emitter.instruction("imul eax, eax, 16777619");                     // apply wrapping 32-bit FNV-1a multiplication
+            emitter.instruction("inc r10");                                     // advance within the validated payload
+            emitter.instruction("dec rdx");                                     // consume one validated prefix byte
+        }
+    }
+    abi::emit_jump(emitter, "__rt_heap_debug_live_string_loop");
+    emitter.label("__rt_heap_debug_live_string_done");
+    write_integer(emitter);
 }
 
 /// Reports array metadata only when the complete header and element capacity fit its block.
@@ -313,9 +371,11 @@ mod tests {
             let asm = emitter.output();
             assert!(asm.contains("_heap_off") && asm.contains("__rt_heap_debug_live_blocks_next:"), "{target}");
             assert!(asm.contains("cmp x0, #64") || asm.contains("cmp rax, 64"), "{target}");
-            assert_eq!(asm.matches("__rt_itoa").count(), 7, "{target}");
+            assert_eq!(asm.matches("__rt_itoa").count(), 8, "{target}");
             assert!(asm.contains("_heap_dbg_block_class") && asm.contains("_heap_dbg_block_tag"), "{target}");
             assert!(asm.contains("_heap_dbg_block_length"), "{target}");
+            assert!(asm.contains("_heap_dbg_block_fingerprint"), "{target}");
+            assert!(asm.contains("mov x11, #32") || asm.contains("mov edx, 32"), "{target}");
             assert!(asm.contains("_class_name_count") && asm.contains("_class_name_entries"), "{target}");
             assert!(!asm.contains("__rt_heap_alloc") && !asm.contains("__rt_incref"), "{target}");
             assert_eq!("HEAP DEBUG: live offset=".len(), 24);

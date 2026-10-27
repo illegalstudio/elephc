@@ -26,11 +26,12 @@ fn check_reflection(source: &str, expected: &str) {
 
 /// Preserves the ordinary runtime mode while exposing failed numeric metadata in its caller.
 fn check_reflection_with_assembly(source: &str, expected: &str) {
-    let (runs, assembly) = compile_and_run_capture_and_asm_per_argv(source, &[&[]]);
+    let (runs, assembly) = compile_and_run_capture_and_asm_per_argv(source, &[&[], &["metadata"]]);
     let out = &runs[0];
     assert!(out.success && out.stdout == expected,
-        "stdout={:?} expected={expected:?}\nstderr={}\nReflection metadata assembly:\n{}",
-        out.stdout, out.stderr, selected_function_assembly(&assembly, &["main".into()]));
+        "stdout={:?} expected={expected:?}\nstderr={}\nmetadata success={} stdout={:?} stderr={}\nReflection metadata assembly:\n{}",
+        out.stdout, out.stderr, runs[1].success, runs[1].stdout, runs[1].stderr,
+        selected_function_assembly(&assembly, &["main".into()]));
 }
 
 /// Nested self factories bind to the declaring class or trait consumer across caller scopes.
@@ -392,6 +393,9 @@ function value(float $number = Numbers::N): float { return $number; }
 function expression(float $number = Numbers::N / 2): float { return $number; }
 echo (int)((new ReflectionParameter('value', 0))->getDefaultValue() === 6),
     (int)((new ReflectionParameter('expression', 0))->getDefaultValue() === 3);
+if ($argc > 1) {
+    foreach ($defaults as $name => $default) { echo '|', $name, ':', gettype($default), ':', $default; }
+}
 "#, "1111111|1111111|11");
 }
 

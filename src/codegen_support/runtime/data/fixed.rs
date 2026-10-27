@@ -1581,6 +1581,7 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _heap_dbg_block_class_name\n_heap_dbg_block_class_name:\n    .ascii \" class=\"\n");
     out.push_str(".globl _heap_dbg_block_tag\n_heap_dbg_block_tag:\n    .ascii \" tag=\"\n");
     out.push_str(".globl _heap_dbg_block_length\n_heap_dbg_block_length:\n    .ascii \" length=\"\n");
+    out.push_str(".globl _heap_dbg_block_fingerprint\n_heap_dbg_block_fingerprint:\n    .ascii \" fingerprint=\"\n");
     out.push_str(".globl _resource_id_prefix\n_resource_id_prefix:\n    .ascii \"Resource id #\"\n");
     for (label, value) in [
         ("_bt_arg_unknown", "Unknown"),
