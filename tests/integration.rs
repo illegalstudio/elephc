@@ -30,6 +30,8 @@ mod compiler_determinism_tests;
 mod compiler_security_limits_tests;
 #[path = "error_class_hierarchy_tests.rs"]
 mod error_class_hierarchy_tests;
+#[path = "error_tests.rs"]
+mod error_tests;
 #[path = "eval_argument_count_tests.rs"]
 mod eval_argument_count_tests;
 #[path = "eval_include_template_tests.rs"]
@@ -60,6 +62,8 @@ mod include_scoped_return_tests;
 mod inlined_concat_reset_tests;
 #[path = "ir_backend_smoke_test.rs"]
 mod ir_backend_smoke_test;
+#[path = "lexer_tests.rs"]
+mod lexer_tests;
 #[path = "nan_bool_coercion_tests.rs"]
 mod nan_bool_coercion_tests;
 #[path = "native_pcre2_shim_tests.rs"]
@@ -88,6 +92,8 @@ mod opcache_restrict_api_tests;
 mod opcache_runtime_cache_tests;
 #[path = "opcache_strict_invalidate_tests.rs"]
 mod opcache_strict_invalidate_tests;
+#[path = "parser_tests.rs"]
+mod parser_tests;
 #[path = "php_ext_tests.rs"]
 mod php_ext_tests;
 #[path = "php_profile_floor_tests.rs"]

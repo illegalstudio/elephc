@@ -13,7 +13,7 @@ mod managed_pcre2_support;
 #[path = "codegen/support/mod.rs"]
 mod support;
 
-// Shared with `error_tests`, whose marking meta-test iterates the list this binary never reads.
+// Shared with `integration`'s `error_tests` suite, whose marking meta-test iterates the list this binary never reads.
 #[allow(dead_code)]
 #[path = "support/locals_retype_fixtures.rs"]
 mod locals_retype_fixtures;

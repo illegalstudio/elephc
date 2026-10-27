@@ -112,7 +112,7 @@ RUN (./target/debug/elephc examples/fizzbuzz/main.php && ./examples/fizzbuzz/mai
 # own unit tests (thousands, each lowering for every target) and the end-to-end codegen suites (codegen_tests and the
 # other compile-and-run binaries) take hours on one machine, so they are left to the agent.
 RUN timeout 1800 cargo nextest run --locked --workspace --no-fail-fast \
-        -E '(kind(lib) & not package(elephc)) | binary(lexer_tests) | binary(parser_tests) | binary(error_tests)' \
+        -E '(kind(lib) & not package(elephc)) | (binary_id(elephc::integration) & test(/^(lexer_tests|parser_tests|error_tests)::/))' \
     || echo "WARNING: cargo nextest reported failures"
 
 # Everything is fetched. From here on cargo must not try to reach a registry.

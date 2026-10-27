@@ -54,24 +54,12 @@ test = false
 name = "gen_builtins"
 path = "tools/gen_builtins.rs"
 
-# The large suites (and one that can abort its process) keep a binary each, so `cargo test --test codegen_tests <filter>`
+# The codegen suite (and one that can abort its process) keeps a binary each, so `cargo test --test codegen_tests <filter>`
 # rebuilds only the suite being worked on. Every other tests/*.rs is a module of
 # `integration`; tests/integration.rs fails if a file is left out of both.
 [[test]]
 name = "codegen_tests"
 path = "tests/codegen_tests.rs"
-
-[[test]]
-name = "error_tests"
-path = "tests/error_tests.rs"
-
-[[test]]
-name = "lexer_tests"
-path = "tests/lexer_tests.rs"
-
-[[test]]
-name = "parser_tests"
-path = "tests/parser_tests.rs"
 
 # A regression here aborts the test PROCESS (a stack overflow on a small thread), so it
 # must not share a binary with other suites.
@@ -227,7 +215,7 @@ curl = ["elephc-magician/curl", "elephc-builtin-contract/curl"]
 
 # Local test-speed tuning. The dev profile (which `test` inherits) keeps full
 # `debug = 2` info by default, which inflates both rustc codegen and the link of
-# the six test binaries. `line-tables-only` keeps file:line in panic backtraces
+# the three test binaries. `line-tables-only` keeps file:line in panic backtraces
 # (so test failures stay legible) while cutting the debug info the assembler and
 # linker chew through on every edit -> `cargo test` cycle.
 [profile.dev]
