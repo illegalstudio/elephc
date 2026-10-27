@@ -26,12 +26,15 @@ if ($argc === 1) {
 if ($value instanceof NarrowedCaptureObject) { echo $value->name; }
 unset($value);
 "#;
-    let runs = compile_and_run_with_heap_debug_per_argv(source, &[&[], &["raw"]]);
-    for (out, expected) in runs.iter().zip(["new", "old"]) {
-        assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
-        assert_eq!(out.stdout, expected, "{}", out.stderr);
-        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(source, &[&[], &["raw"]]);
+    let mut failures = Vec::new();
+    for (mode, (out, expected)) in runs.iter().zip(["new", "old"]).enumerate() {
+        if !out.success || out.stdout != expected || !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
+            failures.push(format!("mode={mode} success={} stdout={:?} expected={expected:?}\n{}", out.success, out.stdout, out.stderr));
+        }
     }
+    let symbols = ["_main".into(), elephc::names::function_symbol("__eir_closure_main_0")];
+    assert!(failures.is_empty(), "{}\n{}", failures.join("\n"), selected_function_assembly(&assembly, &symbols));
 }
 
 /// Cell payload extraction stays correct without EIR optimization.
