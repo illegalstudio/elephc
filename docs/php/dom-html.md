@@ -118,13 +118,12 @@ Processing instructions follow that same legacy HTML tokenizer. For example,
 unterminated target such as `<?foo` becomes text, while an incomplete instruction
 with data is discarded.
 
-- No libxml2 or Lexbor engine, no `elephc-dom` crate, no XML `load()` / `loadXML()`.
+- HTML loading uses the built-in parser without libxml2 or Lexbor. `DOMDocument::loadXML()` and `simplexml_import_dom()` use the [SimpleXML/libxml2 bridge](xml.md), which requires the managed `libxml2` package. XML `load()` remains unimplemented.
 - No modern `Dom\` HTML API (`Dom\HTMLDocument`, `Dom\Element`, …).
 - No XPath, CSS selectors, DTD/schema validation, XInclude, C14N, or token lists.
 - No tree mutation (`appendChild`, `removeChild`, `setAttribute`, `createElement`, …).
 - No `DOMAttr` / `DOMNamedNodeMap`, `DOMCdataSection` / entity-node APIs, or notations. HTML entity decoding and script/style CDATA serialization are supported internally.
-- No `LIBXML_*` constants beyond the five Termwind flags.
-- No SimpleXML and no DOM ↔ SimpleXML import.
+- The HTML subset exposes the five Termwind `LIBXML_*` flags; the XML bridge also provides its XML parsing flags.
 - `loadHTMLFile()`, encoding detection, error collection (`libxml_use_internal_errors`), and default `<head>` insertion are unimplemented.
 - Specialized Termwind renderers that need richer markup (`<table>`, `<code>`, `<pre>` via `getHtml()` / `saveXML` of mixed subtrees) are not the goal of this subset; `saveXML` covers a simple element so those paths can be added later.
 - Opaque `eval()` source alone does not trigger DOM injection. Once static program references load the prelude, `eval()` can discover, construct, and query the registered DOM classes through native dispatch. This remains a limited HTML subset, not full PHP DOM.

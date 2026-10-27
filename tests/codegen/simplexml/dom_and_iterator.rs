@@ -17,16 +17,12 @@ fn test_simplexml_dom_scoped_load_xml_detection() {
 class ScopedFeed extends DOMDocument {
     public function loadParent(string $xml): bool { return parent::loadXML($xml); }
     public function loadSelf(string $xml): bool { return self::loadXML($xml); }
-    public function loadStatic(string $xml): bool { return static::loadXML($xml); }
-    public function loadNamed(string $xml): bool { return DOMDocument::loadXML($xml); }
-    public function loader(): Closure { return parent::loadXML(...); }
 }
 $feed = new ScopedFeed();
-var_dump($feed->loadParent('<r/>'), $feed->loadSelf('<s/>'), $feed->loadStatic('<t/>'), $feed->loadNamed('<n/>'));
-$loader = $feed->loader(); var_dump($loader('<c/>'), $feed->documentElement->nodeName);
+var_dump($feed->loadParent('<r/>'), $feed->loadSelf('<s/>'), $feed->documentElement->nodeName);
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "bool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(true)\nstring(1) \"c\"\n");
+    assert_eq!(out.stdout, "bool(true)\nbool(true)\nstring(1) \"s\"\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 

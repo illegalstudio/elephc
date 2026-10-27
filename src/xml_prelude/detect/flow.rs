@@ -211,11 +211,23 @@ impl Detector {
 
     /// Treats a runtime method name as possibly loadXML only for a DOM-connected receiver.
     pub(super) fn dynamic_method_refs_xml(&self, object: &Expr, method: &Expr) -> bool {
-        let possible = match &method.kind {
+        Self::method_may_load_xml(method) && self.dom.may_load_xml(object)
+    }
+
+    /// Rules out literal data pairs while retaining unknown runtime method names.
+    fn method_may_load_xml(method: &Expr) -> bool {
+        match &method.kind {
             ExprKind::StringLiteral(name) => name.eq_ignore_ascii_case("loadXML"),
+            ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) | ExprKind::BoolLiteral(_)
+            | ExprKind::Null | ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)
+            | ExprKind::ArrayLiteralMixed(_) => false,
             _ => true,
-        };
-        possible && self.dom.may_load_xml(object)
+        }
+    }
+
+    /// Uses class-string provenance only for callback arrays, preserving instance semantics.
+    pub(super) fn callback_method_refs_xml(&self, object: &Expr, method: &Expr) -> bool {
+        Self::method_may_load_xml(method) && self.dom.may_load_callback(object)
     }
 
     /// Detects parser-desugared and explicit callback-array calls using the shared argument planner.
@@ -227,6 +239,6 @@ impl Detector {
         let args = plan.normalized_args();
         let Some(callback) = args.first() else { return false; };
         let ExprKind::ArrayLiteral(items) = &callback.kind else { return false; };
-        items.len() == 2 && self.dynamic_method_refs_xml(&items[0], &items[1])
+        items.len() == 2 && self.callback_method_refs_xml(&items[0], &items[1])
     }
 }

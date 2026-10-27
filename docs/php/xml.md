@@ -102,7 +102,7 @@ elephc feed.php
 
 Use `--with-xml` when the surface is only reached at runtime, for example
 through opaque dynamic `eval()`; it force-links the whole `elephc_xml` archive
-and force-injects the `XMLParser` / `XMLWriter` prelude even when the compiler
+and force-injects the `XMLParser`, `XMLWriter`, `SimpleXMLElement`, and `SimpleXMLIterator` prelude even when the compiler
 sees no xml usage:
 
 ```bash
@@ -116,6 +116,15 @@ SDK's `libiconv` for libxml2's encoding handlers; on Linux, glibc provides
 iconv from libc. On Linux a program that links the bridge also needs the zlib
 and bzip2 development libraries at link time (`-lz -lbz2`, the runtime's
 stream layer), exactly like any program that uses `fopen()`.
+
+`DOMDocument::loadXML()` also activates this bridge, including supported
+`parent::loadXML()` / `self::loadXML()` forwarding and dynamic callable forms
+in DOM programs. These programs must declare `libxml2` with
+`elephc native add libxml2`. HTML-only DOM loading remains independent of XML
+when receivers and callable names are known to be unrelated. Unknown callback
+receivers or method names remain conservative: a two-element array that could
+represent a DOM XML loader can activate the bridge even when its values are
+determined only at runtime. Use a declared `libxml2` package for those programs.
 
 `extension_loaded('xml')` and `extension_loaded('xmlwriter')` report `true`
 whenever the bridge is linked, natively and inside `eval()`. `function_exists()`

@@ -280,6 +280,27 @@ impl DomReceiver {
         classes.is_none_or(|classes| self.may_load_classes(classes))
     }
 
+    /// Distinguishes callback class strings and known data literals from object receivers.
+    pub(super) fn may_load_callback(&self, receiver: &Expr) -> bool {
+        if !self.dom_available { return false; }
+        match &receiver.kind {
+            ExprKind::ClassConstant { receiver } => self.may_load_static(receiver),
+            ExprKind::StringLiteral(name) => {
+                let name = name.trim_start_matches('\\');
+                let class = if name.eq_ignore_ascii_case("DOMDocument") {
+                    "#domdocument".to_string()
+                } else if name.eq_ignore_ascii_case("DOMNode") {
+                    "#domnode".to_string()
+                } else { php_symbol_key(name) };
+                self.may_load_classes(HashSet::from([class]))
+            }
+            ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) | ExprKind::BoolLiteral(_)
+            | ExprKind::Null | ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)
+            | ExprKind::ArrayLiteralMixed(_) => false,
+            _ => self.may_load_xml(receiver),
+        }
+    }
+
     /// Shares DOM ancestry and open-interface reasoning across instance and scoped receivers.
     fn may_load_classes(&self, classes: HashSet<String>) -> bool {
         classes.into_iter().any(|mut class| {

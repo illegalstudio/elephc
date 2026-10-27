@@ -320,7 +320,7 @@ impl Detector {
             }
             ExprKind::ClosureCall { args, .. } => args.iter().any(|value| self.expr_refs_xml(value)),
             ExprKind::ArrayLiteral(items) => {
-                (items.len() == 2 && self.dynamic_method_refs_xml(&items[0], &items[1]))
+                (items.len() == 2 && self.callback_method_refs_xml(&items[0], &items[1]))
                     || items.iter().any(|value| self.expr_refs_xml(value))
             }
             ExprKind::ArrayLiteralAssoc(pairs) => pairs
@@ -831,6 +831,12 @@ mod tests {
             "namespace App; class Countable { function loadXML(): void {} } $doc = new \\DOMDocument(); (new Countable())->loadXML();",
             "class Config { public static function loadXML(): void {} } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); Config::loadXML();",
             "class Config { public static function loadXML(): void {} public function run(): void { self::loadXML(); } } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); (new Config())->run();",
+            "$doc = new DOMDocument(); $doc->loadHTML('<p/>'); $size = [80, 24]; echo count($size);",
+            "$doc = new DOMDocument(); $doc->loadHTML('<p/>'); $size = [$argc, 24]; $pairs = ['loadXML', false];",
+            "class Config { public static function loadXML(): void {} } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); $load = [Config::class, 'loadXML']; call_user_func($load);",
+            "class Config { public static function loadXML(): void {} } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); call_user_func(['Config', 'loadXML']);",
+            "class Config { public static function loadXML(): void {} public function run(): void { call_user_func([self::class, 'loadXML']); } } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); (new Config())->run();",
+            "class Config { public static function loadXML(): void {} } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); $method = 'loadXML'; Config::$method();",
             "class Config extends DOMElement { function loadXML(): void {} } $doc = new DOMDocument(); (new Config('r'))->loadXML();",
             "class Config extends stdClass { function loadXML(): void {} } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); (new Config())->loadXML();",
             "class Config { function loadXML(): void {} } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); $doc = new Config(); $doc->loadXML();",
@@ -866,6 +872,9 @@ mod tests {
             "class Feed extends DOMDocument { public function run(): bool { return static::loadXML('<r/>'); } } (new Feed())->run();",
             "class Feed extends DOMDocument { public function run(): bool { return DOMDocument::loadXML('<r/>'); } } (new Feed())->run();",
             "class Feed extends DOMDocument { public function loader(): Closure { return parent::loadXML(...); } } (new Feed())->loader();",
+            "class Feed extends DOMDocument { public function run(): void { $load = [parent::class, 'loadXML']; call_user_func($load, '<r/>'); } } (new Feed())->run();",
+            "class Feed extends DOMDocument { public function run(string $method): void { $load = [static::class, $method]; } } (new Feed())->run('loadXML');",
+            "$doc = new DOMDocument(); $load = ['Unknown', 'loadXML'];",
             "trait LoadsXml { public function loadFrom(string $xml): void { $this->loadXML($xml); } } class Feed extends DOMDocument { use LoadsXml; } $feed = new Feed(); $feed->loadFrom('<rss/>');",
             "interface XmlLoader { public function loadXML(string $source, int $options = 0): bool; } class Doc extends DOMDocument implements XmlLoader {} function load(XmlLoader $l): void { $l->loadXML('<r/>'); } load(new Doc());",
             "function viaNode(DOMNode $n): void { if ($n instanceof DOMDocument) { $n->loadXML('<n/>'); } } viaNode(new DOMDocument());",
