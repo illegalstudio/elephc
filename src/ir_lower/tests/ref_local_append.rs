@@ -442,3 +442,32 @@ function read_unpromoted_ref_object(int $flag): void {
             "{name}: raw and promoted storage must both expose the object payload: {read}");
     }
 }
+
+/// Unsetting a conditionally captured local retires the raw owner without consuming a live cell.
+#[test]
+fn ref_local_conditional_unset_keeps_representation_guard_on_all_targets() {
+    let source = r#"<?php
+class ConditionalUnsetObject { public string $name = 'kept'; }
+function conditionalUnsetOwner(int $flag): void {
+    $value = new ConditionalUnsetObject();
+    if ($flag > 0) {
+        $read = function() use (&$value): string { return $value->name; };
+    }
+    unset($value);
+    if ($flag > 0) { echo $read(); }
+}
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let body = assembly.split_once("@fn name=conditionalUnsetOwner ").unwrap().1
+            .split_once("@endfn name=conditionalUnsetOwner").unwrap().0;
+        let unset = body.split_once("op=unset_local").unwrap().1
+            .lines().take_while(|line| !line.contains("@src ")).collect::<Vec<_>>().join("\n");
+        let guard = unset.find("raw_local_cleanup_done").expect("raw cleanup must test cell state");
+        let release = unset.find("__rt_decref_").expect("raw object or boxed owner must retire");
+        assert!(guard < release, "{name}: live cells must bypass raw retirement: {unset}");
+    }
+}

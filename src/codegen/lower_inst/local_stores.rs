@@ -654,6 +654,12 @@ fn emit_mixed_local_slot_retirement(ctx: &mut FunctionContext<'_>, done: &str) {
 pub(super) fn lower_unset_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
     let offset = ctx.local_offset(slot)?;
+    if ctx.local_kind(slot)? == LocalKind::PhpLocal && ctx.has_dynamic_ref_cell_state(slot) {
+        // A conditional capture can leave this path owning the raw value instead of a cell.
+        // Retire only that raw owner before clearing the flag that distinguishes the two.
+        let ty = ctx.local_php_type(slot)?;
+        crate::codegen::frame::emit_owned_local_cleanup(ctx, slot, offset, &ty);
+    }
     ctx.unmark_promoted_ref_cell(slot);
     if ctx.local_kind(slot)? == LocalKind::OwnedTemp {
         clear_local_slot_storage(ctx, slot, offset)?;
