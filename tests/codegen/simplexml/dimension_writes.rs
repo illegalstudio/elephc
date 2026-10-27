@@ -54,7 +54,7 @@ foreach ($xml->item as $item) { echo (string)$item, ','; }
 #[test]
 fn test_simplexml_dimension_write_timing_bundle() {
     if skip_without_xml_native("test_simplexml_dimension_write_timing_bundle") { return; }
-    let out = compile_and_run_with_heap_debug(r###"<?php
+    let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(r###"<?php
 $timingXml = new SimpleXMLElement('<r/>');
 function nativeXmlCompoundKey(): int { global $timingXml; echo (int)isset($timingXml->item), '|'; return 1; }
 function nativeXmlCompoundRhs(): int { global $timingXml; echo (int)isset($timingXml->item), '|'; return 1; }
@@ -72,7 +72,7 @@ class NativeXmlTimingStatic { public static SimpleXMLElement $xml; }
 NativeXmlTimingStatic::$xml = new SimpleXMLElement('<sold/>'); $old = NativeXmlTimingStatic::$xml;
 NativeXmlTimingStatic::$xml->item[0] = (function(): string { NativeXmlTimingStatic::$xml = new SimpleXMLElement('<snew/>'); return 's'; })();
 echo $old->getName(), ':', (int)isset($old->item), '|', NativeXmlTimingStatic::$xml->getName(), ':', (string)NativeXmlTimingStatic::$xml->item, '|';
-$source = $argc > 0 ? '
+$source = $argc === 1 ? '
 $evalTimingXml = new SimpleXMLElement("<r/>");
 function evalNativeXmlCompoundKey(): int { global $evalTimingXml; echo (int)isset($evalTimingXml->item), "|"; return 1; }
 function evalNativeXmlCompoundRhs(): int { global $evalTimingXml; echo (int)isset($evalTimingXml->item), "|"; return 1; }
@@ -92,13 +92,20 @@ EvalNativeXmlTimingStatic::$xml->item[0] = (function(): string { EvalNativeXmlTi
 echo $evalOld->getName(), ":", (int)isset($evalOld->item), "|", EvalNativeXmlTimingStatic::$xml->getName(), ":", (string)EvalNativeXmlTimingStatic::$xml->item, "|";
 ' : '';
 eval($source);
-"###);
-    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, concat!(
-        "0|0|2:main(): Cannot add element item number 1 when only 0 such elements exist|1:|old:0|new:v|1:6|sold:0|snew:s|",
-        "0|0|2:Unknown: Cannot add element item number 1 when only 0 such elements exist|1:|old:0|new:v|1:6|sold:0|snew:s|",
-    ));
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+"###, &[&[], &["native-only"]]);
+    let native = "0|0|2:main(): Cannot add element item number 1 when only 0 such elements exist|1:|old:0|new:v|1:6|sold:0|snew:s|";
+    let evaluated = "0|0|2:Unknown: Cannot add element item number 1 when only 0 such elements exist|1:|old:0|new:v|1:6|sold:0|snew:s|";
+    let mut failures = Vec::new();
+    for (mode, out) in runs.iter().enumerate() {
+        let expected = if mode == 0 { native.to_string() + evaluated } else { native.to_string() };
+        if !out.success || out.stdout != expected || !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
+            failures.push(format!("mode={mode} stdout={:?} expected={expected:?}\n{}", out.stdout, out.stderr));
+        }
+    }
+    assert!(failures.is_empty(), "{}\nTiming composite assembly:\n{}", failures.join("\n"),
+        selected_function_assembly(&assembly, &["_main".into(),
+            elephc::names::function_symbol("__elephc_simplexml_numeric_value"),
+            elephc::names::function_symbol("__elephc_simplexml_write_warning")]));
 }
 
 /// Native dimensions bypass same-named user methods, while explicit method calls remain ordinary.
