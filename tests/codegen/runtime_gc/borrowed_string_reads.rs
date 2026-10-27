@@ -356,3 +356,31 @@ echo $reflector->getName();
     assert_eq!(out.stdout, "7:9:11|ctor|arg|".repeat(4) + "ReflectedConstructedNameOwner");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+
+/// String reads from narrowed Mixed parameters retire detached copies after container insertion.
+#[test]
+fn test_borrowed_string_reads_narrowed_parameter_array_insertions() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function insertNarrowedString(mixed $text): void {
+    if (!is_string($text)) { return; }
+    $indexed = [$text];
+    $indexed[] = $text;
+    $hash = ['first' => $text];
+    $hash['second'] = $text;
+    $spread = [...$indexed, $text];
+    $text = null;
+    echo strlen($indexed[0]), ':', count($indexed), ':', strlen($hash['second']), ':', count($spread), ':', gettype($text), '|';
+}
+for ($index = 0; $index < 3; $index++) { insertNarrowedString(str_repeat('ab', $argc + 4)); }
+"#);
+    assert!(out.success, "stdout={:?}\n{}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "10:2:10:3:NULL|".repeat(3), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Array insertion cleanup keeps the same ownership contract without EIR optimization.
+#[test]
+fn test_borrowed_string_reads_narrowed_parameter_array_insertions_no_ir_opt() {
+    crate::support::without_ir_opt(test_borrowed_string_reads_narrowed_parameter_array_insertions);
+}

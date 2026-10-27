@@ -22,11 +22,9 @@ pub(super) fn release_persisted_string_operand(
     span: Span,
 ) {
     let ty = ctx.builder.value_php_type(value.value);
-    // Only release a FRESH owning string temporary (a call/concat result, etc.).
-    // A borrowed load of a variable that still owns the string (e.g. the prelude's
-    // `$_GET[$k] = $v`) must NOT be released here, or the container's stored copy
-    // would be freed out from under it.
-    if matches!(ty.codegen_repr(), PhpType::Str) && ctx.value_is_owning_temporary(value) {
+    // A later widening can make a local read allocate a detached string. Emit its
+    // provisional retirement too; ownership finalization removes borrowed concrete reads.
+    if matches!(ty.codegen_repr(), PhpType::Str) && ctx.value_needs_release_after_use(value) {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     }
 }
@@ -38,10 +36,11 @@ pub(in crate::ir_lower) fn release_indexed_array_write_operand(
     value: LoweredValue,
     span: Span,
 ) {
-    if !ctx.value_is_owning_temporary(value) {
+    let value_ty = ctx.builder.value_php_type(value.value).codegen_repr();
+    let detached_string = value_ty == PhpType::Str && ctx.value_needs_release_after_use(value);
+    if !ctx.value_is_owning_temporary(value) && !detached_string {
         return;
     }
-    let value_ty = ctx.builder.value_php_type(value.value).codegen_repr();
     if matches!(
         container_elem_ty.map(PhpType::codegen_repr),
         Some(PhpType::Mixed)
