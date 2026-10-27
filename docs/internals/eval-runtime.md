@@ -281,6 +281,15 @@ fatals, thrown values, early fragment returns, and function cleanup must all
 balance those cells. Persistent declarations and metadata live in the eval
 context until its owning generated function or process scope is destroyed.
 
+The final ABI owner of an eval context also releases its stored static locals,
+static properties and materialized class constants. Generated
+`__elephc_eval_context_free` calls Rust's `__elephc_eval_context_free_v2`, which
+returns an owned destructor exception after retiring every detached batch. The
+native adapter propagates that exception after Rust returns. Destructor dispatch
+stays registered during these releases, and nested ABI owner releases cannot
+free the context while the batch is running. Retained callback owners and PCNTL
+registrations continue to defer final reclamation.
+
 Cycle collection uses `__elephc_eval_gc_collect_cycles_v2(Throwable **out)`:
 native exceptions are caught below the Rust activation and returned as an owned
 boxed Throwable. The destructor callback installed through
