@@ -32,7 +32,7 @@ unset($source);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// Eval Reflection metadata retains exactly one owned public name per reflected owner.
+/// Eval Reflection public names retire with their metadata owners, including explicit removal.
 #[test]
 fn test_eval_reflection_parameter_public_name_releases_string_owner() {
     let runs = compile_and_run_with_heap_debug_per_argv(r#"<?php
@@ -50,18 +50,8 @@ echo 'done';
     for out in &runs {
         assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
         assert_eq!(out.stdout, "done");
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
     }
-    // The pre-existing metadata retention (#1352) includes the parameter and its declaring
-    // function. Their independently owned public names add two legitimate payloads to the
-    // legacy 23-block graph. Removing both names isolates those additions from orphaned
-    // temporaries without treating the whole retained graph as a new public-name leak.
-    assert_eq!(eval_operand_owner_live_blocks(&runs[1].stderr), 23, "{}", runs[1].stderr);
-    assert_eq!(
-        eval_operand_owner_live_blocks(&runs[0].stderr),
-        eval_operand_owner_live_blocks(&runs[1].stderr) + 2,
-        "only the two public metadata names may add retained owners: normal={}\ncontrol={}",
-        runs[0].stderr, runs[1].stderr,
-    );
 }
 
 /// Extracts the runtime heap's retained allocation count, accepting eval-registered class and reflection metadata in the baseline.
