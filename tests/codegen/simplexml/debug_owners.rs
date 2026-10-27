@@ -13,6 +13,8 @@ use crate::support::*;
 #[test]
 fn test_simplexml_debug_projection_owners_isolated_bundle() {
     if skip_without_xml_native("test_simplexml_debug_projection_owners_isolated_bundle") { return; }
+    let args: Vec<_> = (0..19).map(|count| vec!["x"; count]).collect();
+    let argvs: Vec<_> = args.iter().map(Vec::as_slice).collect();
     let runs = compile_and_run_with_heap_debug_per_argv(r###"<?php
 class OwnerCallbackXmlDebug extends SimpleXMLElement {
     public function __debugInfo(): ?array { var_dump('inner'); return ['visible' => print_r(['inside' => 7], true), 'zero' => 0]; }
@@ -52,26 +54,24 @@ elseif ($argc === 13) {
     $source = $argc > 0 ? 'class EvalOwnerNullXmlDebug extends SimpleXMLElement { public function __debugInfo(): ?array { return null; } } set_error_handler(function(int $level, string $message): bool { throw new RuntimeException("eval-null"); }); try { print_r(new EvalOwnerNullXmlDebug("<r/>"), true); } catch (RuntimeException $error) { echo $error->getMessage(); } restore_error_handler();' : '';
     eval($source);
 } elseif ($argc === 15) { echo json_encode(print_r($xml, true)); }
-else { echo strlen(print_r(new OwnerPlainDebug(), true)); }
-"###, &[
-        &[],
-        &["x"],
-        &["x", "x"],
-        &["x", "x", "x"],
-        &["x", "x", "x", "x"],
-        &["x", "x", "x", "x", "x"],
-        &["x", "x", "x", "x", "x", "x"],
-        &["x", "x", "x", "x", "x", "x", "x"],
-        &["x", "x", "x", "x", "x", "x", "x", "x"],
-        &["x", "x", "x", "x", "x", "x", "x", "x", "x"],
-        &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x"],
-        &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x"],
-        &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x"],
-        &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x"],
-        &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x"],
-        &["x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x"],
-    ]);
-    let expected = ["178", "1", "147", "{\"@attributes\":{\"id\":\"1\"},\"b\":[\"2\",\"3\"]}", "string(5) \"inner\"\n95", "91", "111", "8192|29", "null-handler", "11", "1|167", "28", "58", "eval-null", "\"SimpleXMLElement Object\\n(\\n    [@attributes] => Array\\n        (\\n            [id] => 1\\n        )\\n\\n    [b] => Array\\n        (\\n            [0] => 2\\n            [1] => 3\\n        )\\n\\n)\\n\"", "46"];
+elseif ($argc === 16) { echo strlen(print_r(new OwnerPlainDebug(), true)); }
+elseif ($argc === 17 || $argc === 18) {
+    $node = new OwnerNullXmlDebug('<r/>');
+    set_error_handler(function(int $level, string $message): bool {
+        echo $level, ':', (int)str_starts_with($message, 'Returning null from OwnerNullXmlDebug::__debugInfo()'), '|'; return true;
+    });
+    echo strlen(print_r($node, true)); restore_error_handler();
+    if ($argc === 18) {
+        set_error_handler(function(int $level, string $message): bool { throw new RuntimeException('null-handler'); });
+        try { print_r($node, true); } catch (RuntimeException $error) { echo '|', $error->getMessage(); }
+        restore_error_handler();
+    }
+} else {
+    $source = $argc > 0 ? 'class EvalOwnerComboNullXmlDebug extends SimpleXMLElement { public function __debugInfo(): ?array { return null; } } $node = new EvalOwnerComboNullXmlDebug("<r/>"); set_error_handler(function(int $level, string $message): bool { echo $level, ":", (int)str_starts_with($message, "Returning null from EvalOwnerComboNullXmlDebug::__debugInfo()"), "|"; return true; }); echo strlen(print_r($node, true)); restore_error_handler(); set_error_handler(function(int $level, string $message): bool { throw new RuntimeException("eval-null"); }); try { print_r($node, true); } catch (RuntimeException $error) { echo "|", $error->getMessage(); } restore_error_handler();' : '';
+    eval($source);
+}
+"###, &argvs);
+    let expected = ["178", "1", "147", "{\"@attributes\":{\"id\":\"1\"},\"b\":[\"2\",\"3\"]}", "string(5) \"inner\"\n95", "91", "111", "8192|29", "null-handler", "11", "1|167", "28", "58", "eval-null", "\"SimpleXMLElement Object\\n(\\n    [@attributes] => Array\\n        (\\n            [id] => 1\\n        )\\n\\n    [b] => Array\\n        (\\n            [0] => 2\\n            [1] => 3\\n        )\\n\\n)\\n\"", "46", "8192:1|29", "8192:1|29|null-handler", "8192:1|38|eval-null"];
     assert_eq!(runs.len(), expected.len());
     let mut failures = Vec::new();
     for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {
