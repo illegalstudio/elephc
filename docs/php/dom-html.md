@@ -47,7 +47,7 @@ foreach ($body->childNodes as $node) {
 | `DOMElement::getAttribute(string $name): string` | Attribute names are lowercased on parse; duplicate names keep their first value. Queries are compared literally, so `class` matches parsed `CLASS`, but a query for `CLASS` does not. Missing attributes return `""`. |
 | `instanceof DOMElement` / `DOMText` / `DOMComment` / `DOMDocument` | Class hierarchy matches PHP (`DOMText`/`DOMComment` extend `DOMCharacterData` extend `DOMNode`). |
 | `DOMProcessingInstruction` | Extends `DOMNode`; parsed instructions preserve target case, `target`, `data`, `nodeName`, `nodeValue`, and ordinary node links. Serialization emits `<?target data?>`. Legacy HTML consumes through `>`, retaining a preceding `?` in the data. |
-| `saveXML(?DOMNode $node = null): string` | Serializes a node or the whole document. Text escapes `&`, `<`, `>`, and CR; double-quoted attributes also escape `"`, LF, and TAB, but not `'`. Non-ASCII attribute code points use uppercase hexadecimal references, while text stays UTF-8. Script/style raw text serializes as safely split CDATA. No XML declaration (Termwind passes `LIBXML_NOXMLDECL`). |
+| `saveXML(?DOMNode $node = null, int $options = 0): string` | Serializes a node or the whole document. Text escapes `&`, `<`, `>`, and CR; double-quoted attributes also escape `"`, LF, and TAB, but not `'`. Non-ASCII attribute code points use uppercase hexadecimal references, while text stays UTF-8. Script/style raw text serializes as safely split CDATA. Options are accepted for PHP signature compatibility and ignored: `LIBXML_NOEMPTYTAG` formatting is unavailable. HTML-backed documents have no XML declaration; XML-backed documents use SimpleXML serialization. |
 
 Leading comments and processing instructions remain document-level siblings before
 `html`. After an explicit `</html>`, trailing comments and instructions remain
@@ -98,7 +98,7 @@ These constants are always available (including inside a namespace, and in
 
 | Constant | Value | Effect here |
 |---|---|---|
-| `LIBXML_NOXMLDECL` | 2 | Save flag; parse ignores it. `saveXML()` never emits `<?xml …?>`. |
+| `LIBXML_NOXMLDECL` | 2 | Accepted save flag; save options are ignored. HTML-backed `saveXML()` output omits an XML declaration. |
 | `LIBXML_HTML_NODEFDTD` | 4 | No default doctype is added (none is added anyway). |
 | `LIBXML_NOERROR` | 32 | Parse is silent and forgiving. |
 | `LIBXML_NOBLANKS` | 256 | Drops trailing document-level whitespace padding and whitespace-only text that remains directly under `html` or `head` after body insertion. Whitespace moved into an implied body is retained, including between body siblings and after the last child. Whitespace inside `body`, `title`, and other elements remains. Without this flag, wrapper whitespace and trailing fragment padding are preserved; padding after an explicit `</html>` is always ignored. XML blank-node filtering is outside this HTML-only subset. |

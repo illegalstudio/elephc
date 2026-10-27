@@ -1172,7 +1172,8 @@ class DOMDocument extends DOMNode {
         return $load($this, $source, $options);
     }
 
-    public function saveXML(mixed $node = null): string {
+    public function saveXML(mixed $node = null, int $options = 0): string {
+        $_unused_options = $options;
         $_unused_flags = $this->__elephc_flags;
         if ($node === null) {
             $bound = $this->__elephc_simplexml;

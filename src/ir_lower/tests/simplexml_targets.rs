@@ -12,6 +12,12 @@ fn verify_simplexml_target(target: &str) {
     let module = super::lower_source_at_for_target(r###"<?php
 debug_backtrace();
 $counterXml = new SimpleXMLElement('<r>2</r>');
+class TargetXmlSaveDocument extends DOMDocument {
+    public function saveXML(mixed $node = null, int $options = 0): string { return parent::saveXML($node, $options); }
+}
+$saveDocument = new TargetXmlSaveDocument();
+$saveDocument->loadHTML('<html><body>target</body></html>');
+echo $saveDocument->saveXML();
 class TargetHookedCoalesceXml extends SimpleXMLElement {
     public function __isset(string $name): bool { return true; }
     public function __get(string $name): mixed { return 'wrong'; }
