@@ -9,6 +9,37 @@
 
 use crate::support::*;
 
+/// A flow-proven object remains usable through raw and promoted Mixed reference storage.
+#[test]
+fn test_core_reference_capture_narrowed_object_reads_preserve_payload() {
+    let source = r#"<?php
+class NarrowedCaptureObject {
+    public string $name;
+    public function __construct(string $name) { $this->name = $name; }
+}
+$value = new NarrowedCaptureObject('old');
+if ($argc === 1) {
+    $replace = function() use (&$value): void { $value = new NarrowedCaptureObject('new'); };
+    $replace();
+    unset($replace);
+}
+if ($value instanceof NarrowedCaptureObject) { echo $value->name; }
+unset($value);
+"#;
+    let runs = compile_and_run_with_heap_debug_per_argv(source, &[&[], &["raw"]]);
+    for (out, expected) in runs.iter().zip(["new", "old"]) {
+        assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+        assert_eq!(out.stdout, expected, "{}", out.stderr);
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    }
+}
+
+/// Cell payload extraction stays correct without EIR optimization.
+#[test]
+fn test_core_reference_capture_narrowed_object_reads_preserve_payload_no_ir_opt() {
+    without_ir_opt(test_core_reference_capture_narrowed_object_reads_preserve_payload);
+}
+
 /// Escaping closures preserve shared writable state and release it after the final descriptor.
 #[test]
 fn test_core_closure_reference_cells_survive_creator_and_shared_descriptors() {

@@ -1480,7 +1480,7 @@ impl<'a> FunctionContext<'a> {
     /// conditional `unset()`, while the caller's still-attached cell keeps the ABI shape from
     /// the function signature. Other promoted locals use their final frame storage shape for
     /// both representations.
-    fn ref_cell_payload_type(&self, slot: LocalSlotId) -> Result<PhpType> {
+    pub(super) fn ref_cell_payload_type(&self, slot: LocalSlotId) -> Result<PhpType> {
         if let Some(param) = self
             .function
             .params

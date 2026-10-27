@@ -401,7 +401,45 @@ function read_unpromoted_ref_string(int $flag): void {
             .split_once("@endfn name=read_unpromoted_ref_string").unwrap().0;
         let read = body.split_once("op=load_ref_cell").unwrap().1
             .split_once("op=echo_value").unwrap().0;
-        assert!(read.contains("__rt_mixed_unbox"), "{name}: {read}");
+        assert_eq!(read.matches("__rt_mixed_unbox").count(), 2,
+            "{name}: raw and promoted storage must both expose borrowed string bytes: {read}");
         assert!(!read.contains("__rt_mixed_cast_string"), "{name}: {read}");
+    }
+}
+
+/// A narrowed object view unboxes both representations of a conditionally promoted Mixed local.
+#[test]
+fn ref_local_mixed_object_reads_unbox_on_all_targets() {
+    use crate::ir::{Immediate, Op, Ownership};
+    use crate::types::PhpType;
+
+    let source = r#"<?php
+class ReferenceViewObject { public string $name = 'value'; }
+function replace_ref_object(&$value): void { $value = 123; }
+function read_unpromoted_ref_object(int $flag): void {
+    $value = new ReferenceViewObject();
+    if ($flag < 0) { replace_ref_object($value); return; }
+    echo $value->name;
+}
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let function = module.functions.iter()
+            .find(|function| function.name == "read_unpromoted_ref_object").unwrap();
+        let load = function.instructions.iter().find(|inst| inst.op == Op::LoadRefCell
+            && inst.result_php_type == PhpType::Object("ReferenceViewObject".into()))
+            .expect("flow-proven object read from conditionally promoted storage");
+        let Some(Immediate::LocalSlot(slot)) = load.immediate else { panic!("local cell read"); };
+        assert_eq!(function.locals[slot.as_raw() as usize].php_type.codegen_repr(), PhpType::Mixed);
+        assert_eq!(function.value(load.result.unwrap()).unwrap().ownership, Ownership::Borrowed);
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let body = assembly.split_once("@fn name=read_unpromoted_ref_object ").unwrap().1
+            .split_once("@endfn name=read_unpromoted_ref_object").unwrap().0;
+        let read = body.split_once("op=load_ref_cell").unwrap().1
+            .split_once("// @src ").unwrap().0;
+        assert_eq!(read.matches("__rt_mixed_unbox").count(), 2,
+            "{name}: raw and promoted storage must both expose the object payload: {read}");
     }
 }
