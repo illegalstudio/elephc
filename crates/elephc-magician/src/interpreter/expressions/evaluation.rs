@@ -296,32 +296,31 @@ pub(super) fn eval_instanceof_expr(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let value = eval_expr(value, context, scope, values)?;
-    let result = match target {
+    with_eval_operands(&[value], context, scope, values, |operands, context, scope, values| match target {
         EvalInstanceOfTarget::ClassName(class_name) => {
             let target_class = eval_instanceof_static_target_name(class_name, context)?;
-            let tag = values.type_tag(value)?;
-            if tag == EVAL_TAG_CALLABLE && target_class.eq_ignore_ascii_case("Closure") {
-                true
-            } else if tag == EVAL_TAG_OBJECT {
-                eval_instanceof_object_result(value, &target_class, context, values)?
-            } else {
-                false
-            }
+            eval_instanceof_value_result(operands[0], &target_class, context, values)
         }
         EvalInstanceOfTarget::Expr(target) => {
-            let target = eval_expr(target, context, scope, values)?;
-            let target_class = eval_instanceof_dynamic_target_name(target, context, values)?;
-            let tag = values.type_tag(value)?;
-            if tag == EVAL_TAG_CALLABLE && target_class.eq_ignore_ascii_case("Closure") {
-                true
-            } else if tag == EVAL_TAG_OBJECT {
-                eval_instanceof_object_result(value, &target_class, context, values)?
-            } else {
-                false
-            }
+            with_eval_operands(&[target], context, scope, values, |targets, context, _, values| {
+                let target_class = eval_instanceof_dynamic_target_name(targets[0], context, values)?;
+                eval_instanceof_value_result(operands[0], &target_class, context, values)
+            })
         }
-    };
+    })
+}
+
+/// Tests borrowed operands after evaluation has acquired their normal and exceptional leases.
+fn eval_instanceof_value_result(
+    value: RuntimeCellHandle, target_class: &str,
+    context: &ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let tag = values.type_tag(value)?;
+    let result = if tag == EVAL_TAG_CALLABLE && target_class.eq_ignore_ascii_case("Closure") {
+        true
+    } else if tag == EVAL_TAG_OBJECT {
+        eval_instanceof_object_result(value, target_class, context, values)?
+    } else { false };
     values.bool_value(result)
 }
 
