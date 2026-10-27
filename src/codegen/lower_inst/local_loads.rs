@@ -213,17 +213,11 @@ pub(in crate::codegen) fn coerce_loaded_local_to_result_type(
             emit_unbox_mixed_to_owned_refcounted_result(ctx, &result_ty);
             Ok(())
         }
-        (PhpType::Mixed, PhpType::Void) => {
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_result_reg(ctx.emitter),
-                0x7fff_ffff_ffff_fffe,
-            );
-            Ok(())
-        }
-        // A pointer-word local that lowering knows holds `null` here (address 0 in the slot)
-        // reads as the ordinary null value every `null` consumer expects.
-        (PhpType::Pointer(_), PhpType::Void) => {
+        // Flow typing can prove null while the frame retains its earlier container or
+        // pointer representation. Materialize PHP null instead of exposing its zero word.
+        (PhpType::Mixed | PhpType::Pointer(_) | PhpType::Packed(_)
+            | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)
+            | PhpType::Iterable | PhpType::Buffer(_) | PhpType::Callable, PhpType::Void) => {
             abi::emit_load_int_immediate(
                 ctx.emitter,
                 abi::int_result_reg(ctx.emitter),
