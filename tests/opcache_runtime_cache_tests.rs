@@ -110,6 +110,7 @@ fn compile(dir: &Path, ini: &[&str]) -> PathBuf {
 fn compile_with_flags(dir: &Path, ini: &[&str], flags: &[&str]) -> PathBuf {
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(dir);
     cmd.arg(dir.join("main.php"));
     for flag in flags {
@@ -216,6 +217,7 @@ fn the_regex_note_is_only_for_programs_that_evaluate_code() {
         fs::write(dir.join("main.php"), source).unwrap();
         let output = Command::new(elephc_bin())
             .env("XDG_CACHE_HOME", dir.join("cache-root"))
+            .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
             .current_dir(&dir)
             .arg(dir.join("main.php"))
             .arg("--ini")

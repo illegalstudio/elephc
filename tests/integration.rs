@@ -137,13 +137,57 @@ mod web_session_tests;
 #[path = "web_tests.rs"]
 mod web_tests;
 
+/// Returns the runtime-cache directory every test process on this machine shares.
+///
+/// The sharing is the point: a prepared runtime object is keyed by everything that shapes it,
+/// so one per shape replaces one per compile. `CARGO_TARGET_TMPDIR` is baked in at build time,
+/// which names the builder's target tree, not the runner's: a CI archive built in a job
+/// container points at a path the runner user cannot create, and the runtime preparation then
+/// had to fall back for every compile. Resolve a writable candidate at run time instead.
+pub(crate) fn shared_runtime_cache_dir() -> std::path::PathBuf {
+    // Same per-user name as the compiler's fallback in `src/runtime_cache.rs`.
+    let name = temporary_runtime_cache_dir_name();
+    let candidates = [
+        std::env::var_os("CARGO_TARGET_TMPDIR").map(std::path::PathBuf::from),
+        Some(std::env::temp_dir()),
+    ];
+    for base in candidates.into_iter().flatten() {
+        let candidate = base.join(&name);
+        if std::fs::create_dir_all(&candidate).is_ok() {
+            return candidate;
+        }
+    }
+    std::env::temp_dir().join(name)
+}
+
+/// Returns the per-user name of the shared temporary runtime cache.
+///
+/// `/tmp` is shared and the cache is hardened to owner-only, so the effective user id keeps one
+/// user's directory from rejecting another's compiles.
+#[cfg(unix)]
+fn temporary_runtime_cache_dir_name() -> String {
+    format!("elephc-runtime-cache-{}", unsafe { libc::geteuid() })
+}
+
+/// Returns the shared temporary runtime cache name on platforms without user ids.
+///
+/// The OS temporary directory is already per user there, so one fixed name cannot collide.
+#[cfg(not(unix))]
+fn temporary_runtime_cache_dir_name() -> String {
+    "elephc-runtime-cache".to_string()
+}
+
 /// Fails when a `tests/*.rs` suite is neither a module of this binary nor its own
 /// `[[test]]` target in `Cargo.toml`: with `autotests = false` such a file would
 /// silently never be built or run. A module must be named after its file, because
 /// the nextest and CI filters select a suite by that `<stem>::` test-name prefix.
 #[test]
 fn every_suite_file_is_registered() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    // Read the checkout Cargo actually ran from: `env!` would bake the builder's path, which a
+    // nextest archive run from another checkout cannot reach even with `--workspace-remap`.
+    let manifest_dir = std::env::var_os("CARGO_MANIFEST_DIR")
+        .unwrap_or_else(|| env!("CARGO_MANIFEST_DIR").into());
+    let root = std::path::Path::new(&manifest_dir);
     let manifest = std::fs::read_to_string(root.join("Cargo.toml")).expect("read Cargo.toml");
     let this = std::fs::read_to_string(root.join("tests/integration.rs")).expect("read tests/integration.rs");
     let mut missing = Vec::new();

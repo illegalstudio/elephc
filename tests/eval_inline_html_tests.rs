@@ -110,6 +110,7 @@ fn a_close_tag_in_eval_switches_to_inline_html_as_php_does() {
     eprintln!("inline HTML fixture: compiling");
     let output = Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .current_dir(&dir)
         .arg(dir.join("main.php"))
         .output()

@@ -90,6 +90,7 @@ fn run_php(stem: &str, source: &str) -> String {
 
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(&dir);
     cmd.arg(&php);
     let compile = cmd.output().expect("failed to spawn elephc");

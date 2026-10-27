@@ -101,6 +101,7 @@ fn try_compile(dir: &Path, stem: &str, ini: &[String]) -> (bool, String, String,
     fs::write(&php, PROBE).unwrap();
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(dir);
     cmd.arg(&php);
     for assignment in ini {
@@ -182,6 +183,7 @@ fn compile_source(dir: &Path, stem: &str, source: &str, ini: &[String]) -> PathB
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(dir);
     cmd.arg(&php);
     for assignment in ini {

@@ -59,6 +59,7 @@ fn elephc_bin() -> String {
 fn check(dir: &Path) -> Output {
     Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .current_dir(dir)
         .arg("--check")
         .arg(dir.join("main.php"))

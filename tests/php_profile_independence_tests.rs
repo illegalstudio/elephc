@@ -210,6 +210,7 @@ fn compile_and_run(dir: &Path, source: &str, profile: &str, case: &str) -> Strin
 
     let mut command = Command::new(elephc_bin());
     command.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    command.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     managed_pcre2_support::configure_host_managed_pcre2(&mut command, dir);
     let compile = command
         .args(["--php-version", profile, "prog.php"])

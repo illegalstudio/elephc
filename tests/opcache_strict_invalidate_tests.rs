@@ -91,6 +91,7 @@ fn compile(dir: &Path, stem: &str, source: &str, extra: &[&str]) -> PathBuf {
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(dir);
     cmd.args(extra);
     for assignment in ENABLED_INI {
@@ -203,6 +204,7 @@ echo var_export(opcache_invalidate(__FILE__, true), true), "\n";
     fs::write(&php, source).unwrap();
     let output = Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .current_dir(&dir)
         .arg("--strict-opcache")
         .arg("--ini")

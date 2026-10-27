@@ -78,6 +78,7 @@ fn assert_program(label: &str, body: &str, expected: &str) {
     fs::write(dir.join("main.php"), format!("<?php\n{PRELUDE}{body}")).unwrap();
     let output = Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .current_dir(&dir)
         .arg("--heap-debug")
         .arg(dir.join("main.php"))

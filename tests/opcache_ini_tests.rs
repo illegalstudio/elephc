@@ -83,6 +83,7 @@ fn compile_with_ini(
     let mut cmd = Command::new(elephc_bin());
     managed_pcre2::configure_host_managed_pcre2(&mut cmd, dir);
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(dir);
     for (key, value) in ini {
         cmd.arg("--ini").arg(format!("{key}={value}"));
@@ -964,6 +965,7 @@ fn jit_prof_threshold_is_an_int_in_the_82_profile() {
         fs::write(&php, &probe).unwrap();
         let output = Command::new(elephc_bin())
             .env("XDG_CACHE_HOME", dir.join("cache-root"))
+            .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
             .current_dir(&dir)
             .arg("--php-version")
             .arg(version)
@@ -989,6 +991,7 @@ fn jit_prof_threshold_is_an_int_in_the_82_profile() {
         fs::write(&php, &probe).unwrap();
         let output = Command::new(elephc_bin())
             .env("XDG_CACHE_HOME", dir.join("cache-root"))
+            .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
             .current_dir(&dir)
             .arg("--php-version")
             .arg("8.2")

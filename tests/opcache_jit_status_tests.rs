@@ -93,6 +93,7 @@ fn compile(dir: &Path, stem: &str, args: &[&str]) -> PathBuf {
     fs::write(&php, PROBE).unwrap();
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(dir);
     cmd.arg(&php);
     cmd.args(args);
@@ -253,6 +254,7 @@ if (is_array($c)) {
         fs::write(&php, INI_PROBE).unwrap();
         let mut cmd = Command::new(elephc_bin());
         cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+        cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
         cmd.current_dir(&dir);
         cmd.arg(&php);
         cmd.arg("--ini").arg("opcache.enable_cli=1");

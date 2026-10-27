@@ -64,6 +64,7 @@ fn deeply_nested_source_reports_compiler_depth_limit() {
 
     let output = Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .arg(&php)
         .output()
         .expect("spawn compiler depth probe");
@@ -101,6 +102,7 @@ echo descend(0);
 
     let compile = Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .arg(&php)
         .output()
         .expect("compile recursion fixture");
@@ -151,6 +153,7 @@ fn large_frames_report_runtime_recursion_limit_before_stack_overflow() {
 
     let compile = Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .arg(format!("--heap-size={LARGE_FRAME_TEST_HEAP_BYTES}"))
         .arg(&php)
         .output()
@@ -197,6 +200,7 @@ fn distinct_include_chain_reports_depth_limit() {
 
     let output = Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .arg(dir.join("f0.php"))
         .output()
         .expect("spawn include-depth probe");
@@ -220,6 +224,7 @@ fn deeply_nested_unserialize_is_rejected_before_runtime_recursion() {
 
     let compile = Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .arg(&php)
         .output()
         .expect("compile nested unserialize fixture");
@@ -268,6 +273,7 @@ fn nesting_below_the_limit_compiles_and_runs() {
 
     let compile = Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .arg("-q")
         .arg(&php)
         .output()

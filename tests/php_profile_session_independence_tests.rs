@@ -162,6 +162,7 @@ fn serve_once(dir: &Path, source: &str, profile: &str, case: &str) -> String {
 
     let output = Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .current_dir(dir)
         .args(["--web", "--php-version", profile])
         .arg(&php)

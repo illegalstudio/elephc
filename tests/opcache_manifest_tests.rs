@@ -65,6 +65,7 @@ fn elephc_bin() -> String {
 fn compile(dir: &Path, stem: &str, ini: &[&str]) -> PathBuf {
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(dir);
     cmd.arg(dir.join(format!("{}.php", stem)));
     for assignment in ini {
@@ -985,6 +986,7 @@ if (is_array($s)) {
 
         let output = Command::new(elephc_bin())
             .env("XDG_CACHE_HOME", dir.join("cache-root"))
+            .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
             .current_dir(&dir)
             .arg("--php-version")
             .arg(version)

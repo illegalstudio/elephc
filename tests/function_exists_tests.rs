@@ -59,6 +59,7 @@ fn compile_raw(dir: &Path, source: &str, stem: &str, flags: &[&str]) -> std::pro
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(dir);
     cmd.args(flags).arg(&php);
     cmd.output().expect("failed to spawn elephc")

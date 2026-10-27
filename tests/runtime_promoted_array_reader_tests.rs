@@ -64,6 +64,7 @@ fn compile_and_run(dir: &Path, source: &str) -> String {
     fs::write(&probe, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(dir);
     cmd.arg(&probe);
     let output = cmd.output().expect("failed to spawn elephc");
