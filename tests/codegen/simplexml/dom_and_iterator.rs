@@ -239,14 +239,16 @@ if ($argc === 1) {
 } elseif ($argc === 15 || $argc === 16) {
     $document = new DOMDocument(); $document->loadXML('<r>text<c/></r>');
     $text = $document->documentElement->childNodes->item(0);
-    if ($argc === 15) {
-        set_error_handler(function(int $level, string $message): bool { return true; });
-        echo (int)(simplexml_import_dom($text) === null);
-    } else {
-        set_error_handler(function(int $level, string $message): bool { throw new RuntimeException('caught'); });
-        try { simplexml_import_dom($text); } catch (RuntimeException $error) { echo $error->getMessage(); }
-    }
-    restore_error_handler();
+    if ($text instanceof DOMNode) {
+        if ($argc === 15) {
+            set_error_handler(function(int $level, string $message): bool { return true; });
+            echo (int)(simplexml_import_dom($text) === null);
+        } else {
+            set_error_handler(function(int $level, string $message): bool { throw new RuntimeException('caught'); });
+            try { simplexml_import_dom($text); } catch (RuntimeException $error) { echo $error->getMessage(); }
+        }
+        restore_error_handler();
+    } else { echo 'missing-node'; }
 } elseif ($argc === 17) {
     set_error_handler(function(int $level, string $message): bool { return true; });
     $document = new DOMDocument(); $document->loadXML('<r xmlns:p="urn:p" p:id="8">text<c/></r>');
@@ -268,9 +270,13 @@ if ($argc === 1) {
     set_error_handler(function(int $level, string $message): bool { return true; });
     echo (int)(simplexml_import_dom(new DOMDocument()) === null);
     $uninitialized = (new ReflectionClass('DOMElement'))->newInstanceWithoutConstructor();
-    try { simplexml_import_dom($uninitialized); } catch (TypeError $error) { echo 'E:'; }
+    if ($uninitialized instanceof DOMNode) {
+        try { simplexml_import_dom($uninitialized); } catch (TypeError $error) { echo 'E:'; }
+    } else { echo 'wrong-node'; }
     $uninitializedDocument = (new ReflectionClass('DOMDocument'))->newInstanceWithoutConstructor();
-    try { simplexml_import_dom($uninitializedDocument); } catch (TypeError $error) { echo 'D:'; }
+    if ($uninitializedDocument instanceof DOMNode) {
+        try { simplexml_import_dom($uninitializedDocument); } catch (TypeError $error) { echo 'D:'; }
+    } else { echo 'wrong-node'; }
     try { simplexml_import_dom(new stdClass()); } catch (TypeError $error) { echo get_class($error); }
     $iterator = new SimpleXMLElement('<r><a/></r>');
     try { $iterator->current(); } catch (Error $error) { echo 'E'; }
@@ -309,7 +315,9 @@ $doc = new DOMDocument(); $doc->loadXML('<r xmlns:p="urn:p" p:id="8">text<c/></r
 $text = $doc->documentElement->childNodes->item(0);
 if ($text instanceof DOMNode) { var_dump(simplexml_import_dom($text)); }
 $unattached = (new ReflectionClass('DOMElement'))->newInstanceWithoutConstructor();
-try { simplexml_import_dom($unattached); } catch (TypeError $error) { echo 'uninitialized:', $error->getMessage(), '|'; }
+if ($unattached instanceof DOMNode) {
+    try { simplexml_import_dom($unattached); } catch (TypeError $error) { echo 'uninitialized:', $error->getMessage(), '|'; }
+} else { echo 'wrong-node'; }
 var_dump(simplexml_import_dom(new DOMDocument()));
 try { simplexml_import_dom(new stdClass()); } catch (TypeError $error) { echo $error->getMessage(), '|'; }
 $first = simplexml_import_dom($doc);
