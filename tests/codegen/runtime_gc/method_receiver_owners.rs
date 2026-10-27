@@ -28,6 +28,10 @@ function invokeBoxedReceiver(mixed $receiver): void {
 function invokeNullableReceiver(?MethodReceiverOwner $receiver): void {
     try { $receiver?->fail(); } catch (RuntimeException $error) { echo 'N'; }
 }
+function invokeProjectedReceiver(mixed $receiver): void {
+    $receiver = new MethodReceiverOwner();
+    try { $receiver->fail(); } catch (RuntimeException $error) { echo 'P'; }
+}
 for ($index = 0; $index < 3; $index++) {
     try { (new MethodReceiverOwner())->fail(); }
     catch (RuntimeException $error) { echo 'T'; }
@@ -40,10 +44,12 @@ for ($index = 0; $index < 3; $index++) {
     unset($kept);
     echo MethodReceiverOwner::$destroyed, '|';
 }
+invokeProjectedReceiver(null);
+echo ':', MethodReceiverOwner::$destroyed;
 unset($error);
 "#);
     assert!(out.success, "stdout={:?}\n{}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "TABN:2:3|TABN:5:6|TABN:8:9|", "{}", out.stderr);
+    assert_eq!(out.stdout, "TABN:2:3|TABN:5:6|TABN:8:9|P:10", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
