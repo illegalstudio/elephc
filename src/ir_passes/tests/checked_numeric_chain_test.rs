@@ -146,6 +146,41 @@ fn fuses_multiply_add_chain_at_integer_cast() {
     assert!(!fuse(&mut function), "fusion must be idempotent");
 }
 
+/// Commutative scalar parents fuse around a right-hand chain without commuting subtraction.
+#[test]
+fn integer_destinations_right_hand_chain_keeps_operation_semantics() {
+    for operation in [MixedNumericOp::Add, MixedNumericOp::Sub, MixedNumericOp::Mul] {
+        let mut function = Function::new("right_chain".to_string(), IrType::I64, PhpType::Int);
+        let expected;
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", vec![]);
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let first = builder.emit_const_i64(7);
+            let second = builder.emit_const_i64(31);
+            let third = builder.emit_const_i64(3);
+            let product = emit_checked(&mut builder, Op::ICheckedMul, second, third);
+            let root = emit_mixed(&mut builder, operation, first, product);
+            let cast = emit_int_cast(&mut builder, root);
+            emit_release(&mut builder, product);
+            emit_release(&mut builder, root);
+            builder.terminate(Terminator::Return { value: Some(cast) });
+            expected = vec![second, third, first];
+        }
+        let commutative = operation != MixedNumericOp::Sub;
+        assert_eq!(fuse(&mut function), commutative);
+        if commutative {
+            assert_eq!(function.instructions[5].operands, expected);
+            assert_eq!(function.instructions[5].immediate,
+                Some(Immediate::CheckedNumericChain(Box::new(CheckedNumericChainImmediate::new(
+                    vec![MixedNumericOp::Mul, operation],
+                )))));
+        }
+        assert!(validate_function(&function).is_ok());
+    }
+}
+
 /// Retains the complete left-associated operation order in a longer chain.
 #[test]
 fn retains_add_sub_mul_operation_order() {

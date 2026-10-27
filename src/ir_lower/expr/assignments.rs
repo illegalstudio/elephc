@@ -112,6 +112,11 @@ pub(super) fn lower_assignment_expr(
         .unwrap_or_else(|| lower_expr(ctx, value));
     let mut result = lowered;
     if let ExprKind::Variable(name) = &target.kind {
+        let lowered = if ctx.integer_local_declarations.contains(name) {
+            coerce_integer_arithmetic(ctx, lowered, &PhpType::Int, expr.span)
+        } else {
+            lowered
+        };
         let lowered = crate::ir_lower::ownership::copy_assignment_value(ctx, lowered, Some(expr.span));
         // For static locals and ref-bound locals, keep the declared type to
         // avoid widening Int→Mixed. The codegen narrows Mixed→Int when the slot

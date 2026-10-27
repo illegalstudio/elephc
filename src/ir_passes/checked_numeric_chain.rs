@@ -1,5 +1,5 @@
 //! Purpose:
-//! Fuses boxed left-associated checked integer arithmetic chains at an integer cast sink.
+//! Fuses boxed checked integer arithmetic chains at an integer cast sink.
 //! Keeps every in-range intermediate in scalar registers instead of allocating Mixed cells.
 //!
 //! Called from:
@@ -8,6 +8,7 @@
 //! Key details:
 //! - Only add/sub/mul chains in one basic block are accepted, and every boxed intermediate
 //!   may be used only by the next chain operation plus removable release bookkeeping.
+//! - A scalar left operand may join a right-hand chain for commutative add/mul only.
 //! - The fused opcode retains the ordered operation list so codegen can switch to PHP float
 //!   semantics at the first overflowing operation and evaluate the remaining suffix exactly.
 
@@ -100,7 +101,7 @@ fn analyze_candidate(
     (rewrite.operations.len() >= 2).then_some(rewrite)
 }
 
-/// Recursively collects a left-associated chain ending at `expected_user`.
+/// Collects one-sided chains, commuting a scalar across add/mul when the chain is on the right.
 fn collect_chain(
     function: &Function,
     value: ValueId,
@@ -135,18 +136,27 @@ fn collect_chain(
             let Some(Immediate::MixedNumericOp(operation)) = definition.immediate else {
                 return None;
             };
-            if matches!(operation, MixedNumericOp::Pow) || !value_is_i64(function, rhs) {
+            if matches!(operation, MixedNumericOp::Pow) {
                 return None;
             }
+            let (chain, scalar) = if value_is_i64(function, rhs) {
+                (lhs, rhs)
+            } else if value_is_i64(function, lhs)
+                && matches!(operation, MixedNumericOp::Add | MixedNumericOp::Mul)
+            {
+                (rhs, lhs)
+            } else {
+                return None;
+            };
             let mut inner = collect_chain(
                 function,
-                lhs,
+                chain,
                 definition_id,
                 sink_block,
                 uses,
                 terminator_uses,
             )?;
-            inner.operands.push(rhs);
+            inner.operands.push(scalar);
             inner.operations.push(operation);
             inner
         }

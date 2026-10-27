@@ -191,6 +191,16 @@ pub(super) fn contextualize_local_assignment(
     lowered: LoweredValue,
     span: Span,
 ) -> (LoweredValue, PhpType) {
+    // A declaration constrains later writes as well as its initializer. Convert before
+    // assignment copying, so a fresh numeric result never needs a cloned Mixed owner.
+    if ctx.integer_local_declarations.contains(name) {
+        let converted = crate::ir_lower::expr::coerce_integer_arithmetic(
+            ctx, lowered, &PhpType::Int, span,
+        );
+        if converted.value != lowered.value {
+            return (converted, PhpType::Int);
+        }
+    }
     let source_ty = ctx.builder.value_php_type(lowered.value);
     let source_repr = source_ty.codegen_repr();
     let lowered = crate::ir_lower::ownership::copy_assignment_value(ctx, lowered, Some(span));

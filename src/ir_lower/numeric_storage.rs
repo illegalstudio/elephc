@@ -133,6 +133,8 @@ pub(crate) fn lower_body(
     ctx: &mut LoweringContext<'_, '_>,
     body: &[Stmt],
 ) {
+    ctx.conditional_local_declarations =
+        super::integer_local_contracts::conditional_declarations(body);
     let checkpoint = ctx.snapshot();
     lower_stmts(ctx, body);
     let scalar_force = loop_carried(ctx);

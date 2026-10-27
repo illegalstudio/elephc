@@ -145,6 +145,24 @@ accumulation with immediate masks, scaling, increments, and a fixed loop bound.
 
 ## Frame-local checked numeric cells
 
+Integer destinations expose checked arithmetic conversion in EIR before assigning
+call-operand owners. Direct, method, static and statically known callable arguments,
+including named and static spread arguments, can therefore use the existing checked
+integer sinks. Explicit `int` local declarations apply the same conversion to their
+initializer and later arithmetic assignments. Inferred locals retain PHP's dynamic
+integer or float result. Only add/subtract/multiply trees with concrete integer
+leaves take this path; unknown Mixed sources keep the ordinary boundary conversion.
+Names declared inside a branch, loop, exception region or include-once guard keep
+their existing dynamic reassignment handling throughout the body. This conservative
+boundary prevents a skipped declaration from narrowing a sibling arm or a later
+write. Explicit declaration initializers still use their own integer destination.
+
+The conversion consumes the final result of the entire tree. Intermediate overflow
+still promotes at the original operation, and later operations use its float value.
+Compatible left-associated trees and scalar add/multiply operands around right-hand
+chains fuse into scalar checked chains. Other closed numeric trees use the frame
+cells described below, without allocating heap cells.
+
 `src/codegen/stack_numeric.rs::plan()` runs before frame sizing and selects owned
 add/subtract/multiply results from checked integer or proven numeric Mixed
 operations, plus numeric increments or decrements, whose complete pointer lifetime

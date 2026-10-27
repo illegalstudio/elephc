@@ -31,6 +31,7 @@ mod array_reference_outputs;
 mod array_implode;
 mod array_membership;
 mod call_coercion_owners;
+mod integer_destinations;
 mod callable_flow_safety;
 mod loop_closures;
 mod method_loop_counters;

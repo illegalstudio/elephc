@@ -68,7 +68,7 @@ pub(super) fn lower_arg_with_signature(
         return lowered.value;
     }
     let lowered = match sig.params.get(index) {
-        Some((_, param_ty)) => lower_expr_for_destination(ctx, arg, param_ty),
+        Some((_, param_ty)) => lower_expr_for_parameter(ctx, arg, param_ty),
         None => lower_expr(ctx, arg),
     };
     record_pointer_reference_argument(ctx, sig, index, arg);

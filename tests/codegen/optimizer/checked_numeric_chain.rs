@@ -11,7 +11,7 @@
 use super::*;
 
 /// Emits the main function's EIR with explicit optimizer arguments.
-fn emit_main_ir(source: &str, extra_args: &[&str]) -> String {
+pub(super) fn emit_main_ir(source: &str, extra_args: &[&str]) -> String {
     let dir = make_cli_test_dir("elephc_checked_numeric_chain_ir");
     let php_path = dir.join("main.php");
     fs::write(&php_path, source).expect("write checked numeric chain EIR fixture");
@@ -37,11 +37,14 @@ fn emit_main_ir(source: &str, extra_args: &[&str]) -> String {
 }
 
 /// Emits target-specific user assembly for one optimized source fixture.
-fn emit_target_assembly(source: &str, target: &str) -> String {
+pub(super) fn emit_target_assembly(source: &str, target: &str) -> String {
     let dir = make_cli_test_dir("elephc_checked_numeric_chain_asm");
     let php_path = dir.join("main.php");
     fs::write(&php_path, source).expect("write checked numeric chain assembly fixture");
     let mut command = elephc_cli_command(&dir);
+    if target.starts_with("ios-") {
+        command.args(["--emit", "staticlib"]);
+    }
     command
         .arg("--emit-asm")
         .arg("--target")

@@ -29,10 +29,16 @@ pub(super) fn lower_typed_assign(
         .as_ref()
         .map(|assignment| assignment.value)
         .unwrap_or_else(|| lower_expr(ctx, value));
+    let lowered = crate::ir_lower::expr::coerce_integer_arithmetic(ctx, lowered, &php_type, span);
     // `?ptr<T> $x = null` (or a packed record address) stores the pointer word.
     let lowered = ctx.retype_packed_address_for_pointer_sink(lowered, &php_type, Some(span));
     let lowered = coerce_typed_assign_value(ctx, lowered, &php_type, span);
     let lowered = coerce_declared_array_storage(ctx, lowered, &php_type, span);
+    if php_type == PhpType::Int && !ctx.conditional_local_declarations.contains(name) {
+        ctx.integer_local_declarations.insert(name.to_owned());
+    } else {
+        ctx.integer_local_declarations.remove(name);
+    }
     ctx.declare_local(name, php_type.clone());
     ctx.store_local(name, lowered, php_type, Some(span));
     let callable_result = if direct_closure {

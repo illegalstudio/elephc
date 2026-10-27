@@ -117,9 +117,9 @@ pub(super) fn lower_named_args_with_signature_options(
 /// Lowers a plan's normalized arguments, giving each regular parameter's literal its declared type.
 ///
 /// Like `lower_args`, every argument but the last is rooted across the later evaluation; the
-/// regular entries additionally go through `lower_expr_for_destination`, so a null-only literal
-/// bound to `array<ptr<T>|null>` keeps pointer storage as a positional argument does. Variadic tail
-/// entries lower as plain values.
+/// regular entries additionally use their parameter destination for pointer literals and
+/// checked integer arithmetic, as positional arguments do. Variadic tail entries lower as
+/// plain values.
 fn lower_normalized_args(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
@@ -132,7 +132,7 @@ fn lower_normalized_args(
         .enumerate()
         .map(|(index, arg)| {
             let value = match sig.params.get(index).filter(|_| index < regular_count) {
-                Some((_, param_ty)) => lower_expr_for_destination(ctx, arg, param_ty),
+                Some((_, param_ty)) => lower_expr_for_parameter(ctx, arg, param_ty),
                 None => lower_expr(ctx, arg),
             };
             if index + 1 < normalized.len() {
@@ -204,7 +204,7 @@ fn lower_planned_source_arg(
             .map(|(_, param_ty)| param_ty.clone());
         match param_ty {
             Some(param_ty) => {
-                lower_expr_for_destination(ctx, &plan.source_args[source_index], &param_ty).value
+                lower_expr_for_parameter(ctx, &plan.source_args[source_index], &param_ty).value
             }
             None => lower_call_source_arg(ctx, &plan.source_args[source_index]),
         }

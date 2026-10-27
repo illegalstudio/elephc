@@ -229,6 +229,8 @@ pub(crate) struct LoweringSnapshot {
     numeric_closure_sites: std::collections::HashSet<Span>,
     numeric_tracked_locals: std::collections::HashSet<String>,
     final_mixed_locals: std::collections::HashMap<String, std::collections::HashSet<usize>>,
+    integer_local_declarations: HashSet<String>,
+    conditional_local_declarations: HashSet<String>,
     numeric_proof_sealed: bool,
     pointer_reference_bindings: usize,
 }
@@ -473,6 +475,10 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// Ordinals keep an unset/rebound variable independent from its old storage.
     /// This map fixes storage only; fast arithmetic needs its own numeric-domain proof.
     pub(crate) final_mixed_locals: HashMap<String, HashSet<usize>>,
+    /// Explicit integer local declarations whose arithmetic writes are integer sinks.
+    pub(crate) integer_local_declarations: HashSet<String>,
+    /// Names whose conditional declarations prevent a path-independent integer write contract.
+    pub(crate) conditional_local_declarations: HashSet<String>,
     /// When set, loop facts reuse `numeric_closure_sites` instead of seeding
     /// another proof from the now-Mixed slots.
     pub(crate) numeric_proof_sealed: bool,
@@ -646,6 +652,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             numeric_closure_sites: HashSet::new(),
             numeric_tracked_locals: HashSet::new(),
             final_mixed_locals: HashMap::new(),
+            integer_local_declarations: HashSet::new(),
+            conditional_local_declarations: HashSet::new(),
             numeric_proof_sealed: false,
             int_seed_bindings: HashMap::new(),
             pointer_reference_bindings: Vec::new(),
@@ -708,6 +716,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             numeric_closure_sites: self.numeric_closure_sites.clone(),
             numeric_tracked_locals: self.numeric_tracked_locals.clone(),
             final_mixed_locals: self.final_mixed_locals.clone(),
+            integer_local_declarations: self.integer_local_declarations.clone(),
+            conditional_local_declarations: self.conditional_local_declarations.clone(),
             numeric_proof_sealed: self.numeric_proof_sealed,
             pointer_reference_bindings: self.pointer_reference_bindings.len(),
         }
@@ -790,6 +800,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.numeric_closure_sites = snapshot.numeric_closure_sites;
         self.numeric_tracked_locals = snapshot.numeric_tracked_locals;
         self.final_mixed_locals = snapshot.final_mixed_locals;
+        self.integer_local_declarations = snapshot.integer_local_declarations;
+        self.conditional_local_declarations = snapshot.conditional_local_declarations;
         self.numeric_proof_sealed = snapshot.numeric_proof_sealed;
     }
 
