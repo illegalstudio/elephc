@@ -406,7 +406,7 @@ function read_unpromoted_ref_string(int $flag): void {
     }
 }
 
-/// A narrowed object view unboxes both representations of a conditionally promoted Mixed local.
+/// A narrowed object view unboxes the raw storage after the promoted branch has returned.
 #[test]
 fn ref_local_mixed_object_reads_unbox_on_all_targets() {
     use crate::ir::{Immediate, Op, Ownership};
@@ -438,8 +438,8 @@ function read_unpromoted_ref_object(int $flag): void {
             .split_once("@endfn name=read_unpromoted_ref_object").unwrap().0;
         let read = body.rsplit_once("op=load_ref_cell").unwrap().1
             .lines().take_while(|line| !line.contains("@src ")).collect::<Vec<_>>().join("\n");
-        assert_eq!(read.matches("__rt_mixed_unbox").count(), 2,
-            "{name}: raw and promoted storage must both expose the object payload: {read}");
+        assert_eq!(read.matches("__rt_mixed_unbox").count(), 1,
+            "{name}: the surviving raw branch must expose the object payload: {read}");
     }
 }
 
