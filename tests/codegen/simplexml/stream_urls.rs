@@ -213,7 +213,7 @@ restore_error_handler();
 #[test]
 fn test_simplexml_throwing_stream_uri_owners_isolated_bundle() {
     if skip_without_xml_native("test_simplexml_throwing_stream_uri_owners_isolated_bundle") { return; }
-    let args: Vec<_> = (0..17).map(|count| vec!["x"; count]).collect();
+    let args: Vec<_> = (0..19).map(|count| vec!["x"; count]).collect();
     let argvs: Vec<_> = args.iter().map(Vec::as_slice).collect();
     let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(r#"<?php
 class IsolatedThrowingXmlInput {
@@ -239,6 +239,19 @@ function forwardMutableXmlUri(string $uri, bool $change): void {
 function forwardOwnedLocalXmlUri(string $uri): void {
     $local = str_repeat($uri, 1);
     $stream = fopen($local, 'rb'); __elephc_simplexml_read_stream($stream);
+}
+function returnForwardedXmlUri(string $uri): string|false {
+    $stream = fopen($uri, 'rb'); return __elephc_simplexml_read_stream($stream);
+}
+function returnCheckedXmlUri(string $uri, bool $change): string|false {
+    if ($change) { $uri = 'changed'; }
+    $separator = strpos($uri, '://');
+    if ($separator === false) { return false; }
+    $scheme = strtolower(substr($uri, 0, intval($separator)));
+    if (!in_array($scheme, stream_get_wrappers(), true) || !file_exists($uri)) { return false; }
+    $stream = fopen($uri, 'rb');
+    if ($stream === false) { return false; }
+    return __elephc_simplexml_read_stream($stream);
 }
 stream_wrapper_register('isolatedxml', 'IsolatedThrowingXmlInput');
 $uri = 'isolatedxml://document';
@@ -288,13 +301,19 @@ elseif ($argc === 10) {
 } elseif ($argc === 16) {
     try { forwardMutableXmlUri($uri, $argc < 0); }
     catch (RuntimeException $error) { echo $error->getMessage(); }
-} else {
+} elseif ($argc === 17) {
     try { forwardOwnedLocalXmlUri($uri); }
+    catch (RuntimeException $error) { echo $error->getMessage(); }
+} elseif ($argc === 18) {
+    try { returnForwardedXmlUri($uri); }
+    catch (RuntimeException $error) { echo $error->getMessage(); }
+} else {
+    try { returnCheckedXmlUri($uri, $argc < 0); }
     catch (RuntimeException $error) { echo $error->getMessage(); }
 }
 stream_wrapper_unregister('isolatedxml');
 "#, &argvs);
-    let expected = ["registered", "close|", "read|close|", "read", "read", "read", "read", "read", "1", "1", "read", "1", "read", "isolatedxml", "read", "read", "read"];
+    let expected = ["registered", "close|", "read|close|", "read", "read", "read", "read", "read", "1", "1", "read", "1", "read", "isolatedxml", "read", "read", "read", "read", "read"];
     assert_eq!(runs.len(), expected.len());
     let mut failures = Vec::new();
     for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {
