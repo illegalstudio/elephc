@@ -9,6 +9,22 @@
 
 use crate::support::*;
 
+/// Statically reflected DOM loaders inject XML without another native XML trigger.
+#[test]
+fn test_simplexml_dom_reflected_load_xml_detection() {
+    if skip_without_xml_native("test_simplexml_dom_reflected_load_xml_detection") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$document = new DOMDocument();
+$method = new ReflectionMethod('DOMDocument', 'loadXML');
+var_dump($method->invoke($document, '<r><c/></r>'), $document->documentElement->nodeName);
+$fromClass = (new ReflectionClass(DOMDocument::class))->getMethod('loadXML');
+var_dump($fromClass->invokeArgs($document, ['<s/>']), $document->documentElement->nodeName);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "bool(true)\nstring(1) \"r\"\nbool(true)\nstring(1) \"s\"\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Scoped loader calls retain the XML bridge without any ordinary instance loadXML trigger.
 #[test]
 fn test_simplexml_dom_scoped_load_xml_detection() {

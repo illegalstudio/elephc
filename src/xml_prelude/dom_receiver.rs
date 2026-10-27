@@ -72,6 +72,9 @@ fn type_classes(ty: &TypeExpr) -> Classes {
 }
 
 impl DomReceiver {
+    /// Reports whether conservative reflection discovery can target a DOM loader in this program.
+    pub(super) fn dom_available(&self) -> bool { self.dom_available }
+
     /// Creates the top-level scope with all known declaration hints.
     pub(super) fn new(program: &[Stmt], dom_available: bool) -> Self {
         let mut declarations = Declarations::default();
@@ -299,6 +302,32 @@ impl DomReceiver {
             | ExprKind::ArrayLiteralMixed(_) => false,
             _ => self.may_load_xml(receiver),
         }
+    }
+
+    /// Keeps reflected method discovery conservative when its DOM target is not statically known.
+    pub(super) fn may_reflect_dom(&self, object: &Expr) -> bool {
+        if !self.dom_available { return false; }
+        if let ExprKind::NewObject { class_name, args } = &object.kind {
+            if matches!(php_symbol_key(class_name.as_str()).as_str(), "reflectionclass" | "reflectionobject") {
+                return args.first().is_none_or(|arg| self.may_load_callback(arg));
+            }
+        }
+        let Some(classes) = self.classes(object) else { return true; };
+        classes.into_iter().any(|mut class| {
+            let mut visited = HashSet::new();
+            loop {
+                if matches!(class.as_str(), "reflectionclass" | "reflectionobject")
+                    || self.declarations.open_receivers.contains(&class) { return true; }
+                if !visited.insert(class.clone()) { return false; }
+                let Some(parent) = self.declarations.parents.get(&class) else {
+                    if let Some(builtin) = elephc_builtin_contract::lookup_class(&class) {
+                        return builtin.kind == elephc_builtin_contract::ClassKind::Interface;
+                    }
+                    return !self.declarations.classes.contains(&class);
+                };
+                class = parent.clone();
+            }
+        })
     }
 
     /// Shares DOM ancestry and open-interface reasoning across instance and scoped receivers.

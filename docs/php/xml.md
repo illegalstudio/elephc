@@ -125,6 +125,9 @@ when receivers and callable names are known to be unrelated. Unknown callback
 receivers or method names remain conservative: a two-element array that could
 represent a DOM XML loader can activate the bridge even when its values are
 determined only at runtime. Use a declared `libxml2` package for those programs.
+Reflective discovery of `loadXML` through `ReflectionMethod` or
+`ReflectionClass::getMethod()` / `getMethods()` also plans the bridge when its
+target might be a DOM document. Opaque reflected targets remain conservative.
 
 `extension_loaded('xml')` and `extension_loaded('xmlwriter')` report `true`
 whenever the bridge is linked, natively and inside `eval()`. `function_exists()`

@@ -33,6 +33,7 @@
 //!   the other bridge-backed preludes.
 
 mod flow;
+mod reflection;
 
 use crate::names::Name;
 use crate::parser::ast::{
@@ -359,7 +360,8 @@ impl Detector {
                 self.expr_refs_xml(callee) || args.iter().any(|value| self.expr_refs_xml(value))
             }
             ExprKind::NewObject { class_name, args } => {
-                name_is_xml_class(class_name) || args.iter().any(|value| self.expr_refs_xml(value))
+                name_is_xml_class(class_name) || self.reflection_constructor_refs_xml(class_name, args)
+                    || args.iter().any(|value| self.expr_refs_xml(value))
             }
             ExprKind::NewGeneric { class_type, args } => {
                 type_refs_xml(class_type) || args.iter().any(|value| self.expr_refs_xml(value))
@@ -388,10 +390,14 @@ impl Detector {
             }
             ExprKind::StaticPropertyAccess { receiver, .. } => receiver_refs_xml(receiver),
             ExprKind::MethodCall { object, method, args, .. } => {
-                (method.eq_ignore_ascii_case("loadXML") && self.dom.may_load_xml(object)) || self.expr_refs_xml(object) || args.iter().any(|value| self.expr_refs_xml(value))
+                (method.eq_ignore_ascii_case("loadXML") && self.dom.may_load_xml(object))
+                    || self.reflection_lookup_refs_xml(object, method, args)
+                    || self.expr_refs_xml(object) || args.iter().any(|value| self.expr_refs_xml(value))
             }
             ExprKind::NullsafeMethodCall { object, method, args, .. } => {
-                (method.eq_ignore_ascii_case("loadXML") && self.dom.may_load_xml(object)) || self.expr_refs_xml(object) || self.optional_args_refs_xml(args)
+                (method.eq_ignore_ascii_case("loadXML") && self.dom.may_load_xml(object))
+                    || self.reflection_lookup_refs_xml(object, method, args)
+                    || self.expr_refs_xml(object) || self.optional_args_refs_xml(args)
             }
             ExprKind::NullsafeDynamicMethodCall {
                 object,
@@ -837,6 +843,9 @@ mod tests {
             "class Config { public static function loadXML(): void {} } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); call_user_func(['Config', 'loadXML']);",
             "class Config { public static function loadXML(): void {} public function run(): void { call_user_func([self::class, 'loadXML']); } } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); (new Config())->run();",
             "class Config { public static function loadXML(): void {} } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); $method = 'loadXML'; Config::$method();",
+            "class Config { public function loadXML(): void {} } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); $method = new ReflectionMethod('Config', 'loadXML');",
+            "class Config { public function loadXML(): void {} } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); (new ReflectionClass('Config'))->getMethod('loadXML');",
+            "class Config { public function loadXML(): void {} } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); (new ReflectionClass('Config'))->getMethods();",
             "class Config extends DOMElement { function loadXML(): void {} } $doc = new DOMDocument(); (new Config('r'))->loadXML();",
             "class Config extends stdClass { function loadXML(): void {} } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); (new Config())->loadXML();",
             "class Config { function loadXML(): void {} } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); $doc = new Config(); $doc->loadXML();",
@@ -875,6 +884,12 @@ mod tests {
             "class Feed extends DOMDocument { public function run(): void { $load = [parent::class, 'loadXML']; call_user_func($load, '<r/>'); } } (new Feed())->run();",
             "class Feed extends DOMDocument { public function run(string $method): void { $load = [static::class, $method]; } } (new Feed())->run('loadXML');",
             "$doc = new DOMDocument(); $load = ['Unknown', 'loadXML'];",
+            "$doc = new DOMDocument(); $method = new ReflectionMethod('DOMDocument', 'loadXML'); $method->invoke($doc, '<r/>');",
+            "$doc = new DOMDocument(); $method = new ReflectionMethod(DOMDocument::class, 'loadXML'); $method->invoke($doc, '<r/>');",
+            "$doc = new DOMDocument(); $method = new ReflectionMethod('DOMDocument::loadXML'); $method->invoke($doc, '<r/>');",
+            "$doc = new DOMDocument(); (new ReflectionClass('DOMDocument'))->getMethod('loadXML')->invoke($doc, '<r/>');",
+            "$doc = new DOMDocument(); $reflection = new ReflectionClass('DOMDocument'); $reflection->getMethods();",
+            "$doc = new DOMDocument(); new ReflectionMethod(method: 'loadXML', objectOrMethod: 'DOMDocument');",
             "trait LoadsXml { public function loadFrom(string $xml): void { $this->loadXML($xml); } } class Feed extends DOMDocument { use LoadsXml; } $feed = new Feed(); $feed->loadFrom('<rss/>');",
             "interface XmlLoader { public function loadXML(string $source, int $options = 0): bool; } class Doc extends DOMDocument implements XmlLoader {} function load(XmlLoader $l): void { $l->loadXML('<r/>'); } load(new Doc());",
             "function viaNode(DOMNode $n): void { if ($n instanceof DOMDocument) { $n->loadXML('<n/>'); } } viaNode(new DOMDocument());",

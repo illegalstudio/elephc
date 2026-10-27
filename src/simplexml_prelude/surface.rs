@@ -854,6 +854,6 @@ function __elephc_simplexml_import_node(DOMNode $node, string $class): ?SimpleXM
     return null;
 }
 function __elephc_simplexml_import_document(DOMDocument $document, string $class): SimpleXMLElement|false {
-    return simplexml_load_string($document->saveXML(), $class);
+    return simplexml_load_string(__elephc_dom_serialize_node($document), $class);
 }
 "###;

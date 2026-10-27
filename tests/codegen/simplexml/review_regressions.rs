@@ -494,13 +494,16 @@ echo get_class($projectedVars['b']), '|'; unset($projectedVars);
 echo 'B|'; $projectedInfo = $projectedXml->__debugInfo();
 echo get_class($projectedInfo['b']), '|'; unset($projectedInfo);
 echo 'R|'; unset($projectedXml); echo 'end|';
-$projectionDocument = new DOMDocument();
+$projectionDocument = new ReviewProjectionDocument();
 $projectionDocument->loadHTML('<html><body><a>value</a></body></html>');
 $projectionImported = simplexml_import_dom($projectionDocument, 'ReviewProjectionXml');
 echo get_class($projectionImported), '|'; unset($projectionImported);
 echo 'nodes|'; unset($projectionDocument); echo 'done|';
 "####;
     let declarations = r####"<?php
+class ReviewProjectionDocument extends DOMDocument {
+    public function saveXML(mixed $node = null, int $options = 0): string { echo 'wrong-save|'; return '<wrong/>'; }
+}
 class ReviewProjectionXml extends SimpleXMLElement {
     public function __destruct() { echo 'D:', parent::getName(), '|'; }
     public function count(): int { echo 'wrong-count|'; return parent::count(); }
