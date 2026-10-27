@@ -5418,6 +5418,7 @@ pub(super) fn instruction_has_opaque_user_code_boundary(
         Op::Release
             | Op::ReleaseUnlessAliases
             | Op::ReleaseLocalSlot
+            | Op::ReleaseRawLocalSlot
             | Op::ReleaseLocalRefCell
             | Op::StoreStaticLocal
             | Op::StoreRefCell
@@ -5432,6 +5433,7 @@ pub(super) fn instruction_has_opaque_user_code_boundary(
     let released_type = match op {
         Op::Release | Op::ReleaseUnlessAliases => operand_types.first().cloned(),
         Op::ReleaseLocalSlot
+        | Op::ReleaseRawLocalSlot
         | Op::ReleaseLocalRefCell
         | Op::StoreStaticLocal
         | Op::StoreRefCell => local_type.cloned(),

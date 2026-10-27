@@ -45,7 +45,7 @@ pub(super) fn prepare_call_site(
     // source location from its own frame, so eagerly updating diagnostics here only burdens
     // scalar Mixed rebinds whose fast path cannot invoke PHP code.
     let warns_at_call_site = inst.effects.contains(crate::ir::Effects::MAY_WARN)
-        && !matches!(inst.op, Op::ReleaseLocalRefCell | Op::ReleaseLocalSlot);
+        && !matches!(inst.op, Op::ReleaseLocalRefCell | Op::ReleaseLocalSlot | Op::ReleaseRawLocalSlot);
     // Injected prelude code is an internal function's body: php-src reports its notices at
     // the user's call site, so publishing the prelude's synthetic span here would overwrite
     // the location the entering call just published.
