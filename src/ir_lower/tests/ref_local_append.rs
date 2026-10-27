@@ -461,10 +461,16 @@ function conditionalUnsetOwner(int $flag): void {
         let module = super::lower_source_at_for_target(
             source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
         );
+        let function = module.functions.iter().find(|function| function.name == "conditionalUnsetOwner").unwrap();
+        let retirement = function.instructions.iter().find(|inst| {
+            inst.op == crate::ir::Op::ReleaseRawLocalSlot
+        }).expect("conditional raw retirement must be explicit EIR");
+        assert_eq!(retirement.effects, crate::ir::Effects::all(),
+            "{name}: retiring the raw object may execute an arbitrary PHP destructor");
         let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         let body = assembly.split_once("@fn name=conditionalUnsetOwner ").unwrap().1
             .split_once("@endfn name=conditionalUnsetOwner").unwrap().0;
-        let unset = body.split_once("op=unset_local").unwrap().1
+        let unset = body.split_once("op=release_raw_local_slot").unwrap().1
             .lines().take_while(|line| !line.contains("@src ")).collect::<Vec<_>>().join("\n");
         let guard = unset.find("raw_local_cleanup_done").expect("raw cleanup must test cell state");
         let release = unset.find("__rt_decref_").expect("raw object or boxed owner must retire");

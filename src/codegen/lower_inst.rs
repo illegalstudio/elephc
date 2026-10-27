@@ -224,6 +224,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::RetainLocalRefCell => lower_retain_local_ref_cell(ctx, &inst),
         Op::ReleaseLocalRefCell => lower_release_local_ref_cell(ctx, &inst),
         Op::ReleaseLocalSlot => lower_release_local_slot(ctx, inst_id, &inst),
+        Op::ReleaseRawLocalSlot => local_stores::lower_release_raw_local_slot(ctx, &inst),
         Op::PushCallOperandOwner => ownership::lower_push_call_operand_owner(ctx, &inst),
         Op::PopCallOperandOwner => ownership::lower_pop_call_operand_owner(ctx, &inst),
         Op::LoadGlobal => lower_load_global(ctx, &inst),

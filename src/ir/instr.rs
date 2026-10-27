@@ -820,6 +820,8 @@ pub enum Op {
     RetainLocalRefCell,
     ReleaseLocalRefCell,
     ReleaseLocalSlot,
+    /// Retires a raw local owner only when its runtime storage is not a reference-cell pointer.
+    ReleaseRawLocalSlot,
     PushCallOperandOwner,
     PopCallOperandOwner,
     LoadGlobal,
@@ -1326,7 +1328,7 @@ impl Op {
             // The last cell owner can run an arbitrary payload destructor.
             ReleaseLocalRefCell => E::all(),
             // Retiring the slot can invoke an arbitrary PHP destructor after clearing its owner.
-            ReleaseLocalSlot => E::all(),
+            ReleaseLocalSlot | ReleaseRawLocalSlot => E::all(),
             PushCallOperandOwner | PopCallOperandOwner => {
                 E::READS_LOCAL | E::READS_GLOBAL | E::WRITES_GLOBAL
             }
@@ -1677,6 +1679,7 @@ impl Op {
             RetainLocalRefCell => "retain_local_ref_cell",
             ReleaseLocalRefCell => "release_local_ref_cell",
             ReleaseLocalSlot => "release_local_slot",
+            ReleaseRawLocalSlot => "release_raw_local_slot",
             PushCallOperandOwner => "push_call_operand_owner",
             PopCallOperandOwner => "pop_call_operand_owner",
             LoadGlobal => "load_global",

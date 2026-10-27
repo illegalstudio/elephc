@@ -586,7 +586,7 @@ fn validate_instruction_immediate(
         }),
         StrAppend | LoadLocal | StoreLocal | UnsetLocal | ZeroLocalSlot | LoadRefCell | StoreRefCell
         | ReleaseLocalRefCell | AcquireRefCell
-        | ReleaseLocalSlot | PushCallOperandOwner | PopCallOperandOwner
+        | ReleaseLocalSlot | ReleaseRawLocalSlot | PushCallOperandOwner | PopCallOperandOwner
         | LoadStaticLocal | StoreStaticLocal | InitStaticLocal | StaticLocalUninitialized
         | InvokerRefArg => require_immediate(inst_id, inst, "local slot", |imm| {
             matches!(imm, Imm::LocalSlot(_))
@@ -821,7 +821,7 @@ fn validate_opcode_rules(
         ThrowErrorValue => check_unary(function, inst_id, inst, IrType::Str, "Str"),
         UnsetLocal | ZeroLocalSlot | PromoteLocalRefCell | AliasLocalRefCell | RetainLocalRefCell
         | ReleaseLocalRefCell
-        | ReleaseLocalSlot | PushCallOperandOwner | PopCallOperandOwner => {
+        | ReleaseLocalSlot | ReleaseRawLocalSlot | PushCallOperandOwner | PopCallOperandOwner => {
             check_count(inst_id, inst, 0, "0")
         }
         AcquireRefCell => {

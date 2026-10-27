@@ -2935,6 +2935,15 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.clear_reflection_arg_array_local(name);
         self.clear_fiber_start_sig(name);
         let slot = self.declare_local(name, PhpType::Void);
+        // A conditional capture may leave the current path owning the unpromoted raw value.
+        // Keep that destructor boundary explicit before either reference ownership or state ends.
+        self.emit_void(
+            Op::ReleaseRawLocalSlot,
+            Vec::new(),
+            Some(Immediate::LocalSlot(slot)),
+            Op::ReleaseRawLocalSlot.default_effects(),
+            span,
+        );
         self.release_ref_cell_owner(name, span);
         self.emit_void(
             Op::UnsetLocal,
