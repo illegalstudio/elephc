@@ -443,7 +443,11 @@ unsafe fn borrow_path(ptr: *const u8, len: u64) -> std::path::PathBuf {
     }
 }
 
-/// Frees a process-level eval context handle allocated by the eval bridge.
+/// Consumes a context owner and returns any owned persistent-value destructor exception.
+///
+/// Generated code raises the returned Throwable after this Rust call returns. The final ABI
+/// owner drains static locals, static properties and materialized class constants while the
+/// dynamic destructor registry is still live. PCNTL registrations defer final reclamation.
 ///
 /// Releases every retained `CURLOPT_PRIVATE` value in `context.stream_resources` ONE STEP
 /// before the context (and, transitively, its `EvalStreamResources`) actually drops — see
@@ -468,15 +472,52 @@ unsafe fn borrow_path(ptr: *const u8, len: u64) -> std::path::PathBuf {
 /// # Safety
 /// `ctx` must be null or a pointer returned by `__elephc_eval_context_new`
 /// that has not already been freed.
-#[no_mangle]
-pub unsafe extern "C" fn __elephc_eval_context_free(ctx: *mut ElephcEvalContext) {
+#[export_name = "__elephc_eval_context_free_v2"]
+pub unsafe extern "C" fn __elephc_eval_context_free(ctx: *mut ElephcEvalContext) -> *mut crate::value::RuntimeCell {
     let Some(context) = (unsafe { ctx.as_mut() }) else {
-        return;
+        return ptr::null_mut();
     };
-    if !context.release_abi_owner() || crate::context::pcntl_runtime::defer_context_free(ctx) {
-        return;
+    if !context.release_abi_owner() || context.teardown_active()
+        || crate::context::pcntl_runtime::defer_context_free(ctx)
+        || !context.begin_teardown()
+    {
+        return ptr::null_mut();
     }
-    unsafe { drop_eval_context_now(ctx) };
+    let thrown = unsafe { release_persistent_context_cells(ctx) };
+    unsafe { &mut *ctx }.end_teardown();
+    if !unsafe { &*ctx }.has_abi_owners()
+        && !crate::context::pcntl_runtime::defer_context_free(ctx)
+    {
+        unsafe { drop_eval_context_now(ctx) };
+    }
+    thrown.map_or(ptr::null_mut(), crate::value::RuntimeCellHandle::as_ptr)
+}
+
+/// Releases detached persistent owners while eval destructor dispatch can still find the context.
+///
+/// Each batch is removed before callbacks run. Destructors may create another batch or retain
+/// the context, so no Rust reference into its maps survives a generated-runtime call.
+///
+/// # Safety
+/// The context must be live and protected against recursive teardown for this entire pass.
+unsafe fn release_persistent_context_cells(ctx: *mut ElephcEvalContext) -> Option<crate::value::RuntimeCellHandle> {
+    let mut thrown = unsafe { &mut *ctx }.take_pending_throw();
+    loop {
+        let cells = unsafe { &mut *ctx }.take_persistent_cell_owners();
+        if cells.is_empty() { break; }
+        #[cfg(not(test))]
+        { thrown = crate::runtime_hooks::release::release_native_cells(cells, thrown); }
+        #[cfg(test)]
+        { let _ = cells; }
+    }
+    // Teardown callbacks can also schedule a context-local exception.
+    if let Some(pending) = unsafe { &mut *ctx }.take_pending_throw() {
+        #[cfg(not(test))]
+        { thrown = crate::runtime_hooks::release::release_native_cells(thrown, Some(pending)); }
+        #[cfg(test)]
+        { thrown = Some(pending); }
+    }
+    thrown
 }
 
 /// Unregisters every process-global callback into one context, then drops it immediately.
@@ -491,7 +532,7 @@ pub(crate) unsafe fn drop_eval_context_now(ctx: *mut ElephcEvalContext) {
     let Some(context) = (unsafe { ctx.as_mut() }) else {
         return;
     };
-    if context.has_abi_owners() {
+    if context.has_abi_owners() || context.teardown_active() {
         return;
     }
     #[cfg(not(test))]

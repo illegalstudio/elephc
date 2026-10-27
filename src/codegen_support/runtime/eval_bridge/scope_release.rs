@@ -14,11 +14,12 @@ const FRAME: usize = 80;
 const THROWN: usize = 48;
 const STATUS: usize = 56;
 
-/// Emits native adapters for the three scope operations that can invoke PHP destructors.
+/// Emits native adapters for scope and context operations that can invoke PHP destructors.
 pub(super) fn emit(emitter: &mut Emitter) {
     emit_operation(emitter, "__elephc_eval_scope_set", Some(5));
     emit_operation(emitter, "__elephc_eval_scope_unset", Some(3));
     emit_operation(emitter, "__elephc_eval_scope_free", None);
+    emit_operation(emitter, "__elephc_eval_context_free", None);
 }
 
 /// Preserves ordinary statuses and consumes an escaping boxed Throwable after a versioned Rust call.
@@ -59,7 +60,7 @@ mod tests {
     fn scope_release_adapters_propagate_only_after_the_rust_call_returns() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let target = Target::parse(name).unwrap();
-            for (entry, output) in [("__elephc_eval_scope_set", Some(5)), ("__elephc_eval_scope_unset", Some(3)), ("__elephc_eval_scope_free", None)] {
+            for (entry, output) in [("__elephc_eval_scope_set", Some(5)), ("__elephc_eval_scope_unset", Some(3)), ("__elephc_eval_scope_free", None), ("__elephc_eval_context_free", None)] {
                 let mut emitter = Emitter::new(target);
                 emit_operation(&mut emitter, entry, output);
                 let asm = emitter.output();
