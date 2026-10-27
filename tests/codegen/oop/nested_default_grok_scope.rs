@@ -385,6 +385,12 @@ echo (int)((new ReflectionProperty('Probe', 'div'))->getDefaultValue() === 3.0),
     (int)((new ReflectionProperty('Probe', 'coerced'))->getDefaultValue() === 6.0),
     (int)((new ReflectionProperty('Probe', 'nullable'))->getDefaultValue() === 6.0), '|';
 $defaults = (new ReflectionClass('Probe'))->getDefaultProperties();
+if ($argc > 1) {
+    echo '|before:', gettype($defaults['literal']), ':', $defaults['literal'], '|';
+    $plain = ['div' => 3.0, 'pow' => 36.0, 'bare' => 6.0, 'literal' => 3.0,
+        'exact' => 6, 'coerced' => 6.0, 'nullable' => 6.0];
+    echo 'plain:', gettype($plain['literal']), ':', $plain['literal'], '|';
+}
 echo (int)($defaults['div'] === 3.0), (int)($defaults['pow'] === 36.0),
     (int)($defaults['bare'] === 6.0), (int)($defaults['literal'] === 3.0),
     (int)($defaults['exact'] === 6), (int)($defaults['coerced'] === 6.0),
