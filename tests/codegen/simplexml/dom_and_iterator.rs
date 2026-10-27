@@ -128,6 +128,39 @@ loadThroughNode(new DOMDocument());
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// A DOMNode annotation alone must inject the loader before guarded method calls are lowered.
+#[test]
+fn test_simplexml_dom_load_xml_through_dom_node_only() {
+    if skip_without_xml_native("test_simplexml_dom_load_xml_through_dom_node_only") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function loadOnlyThroughNode(DOMNode $node): void {
+    if ($node instanceof DOMDocument) { var_dump($node->loadXML('<n/>')); }
+}
+loadOnlyThroughNode(new DOMDocument());
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "bool(true)\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Builtin interface hints remain open to DOMDocument subclasses without another XML trigger.
+#[test]
+fn test_simplexml_dom_load_xml_through_builtin_interface_only() {
+    if skip_without_xml_native("test_simplexml_dom_load_xml_through_builtin_interface_only") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class CountedDocument extends DOMDocument implements Countable {
+    public function count(): int { return 0; }
+}
+function loadOnlyThroughCountable(Countable $document): void {
+    if ($document instanceof DOMDocument) { var_dump($document->loadXML('<r/>')); }
+}
+loadOnlyThroughCountable(new CountedDocument());
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "bool(true)\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Callable arrays inject native XML support, and eval's callable factory shares the DOM receiver.
 #[test]
 fn test_simplexml_callable_array_dom_load_xml_detection_bundle() {

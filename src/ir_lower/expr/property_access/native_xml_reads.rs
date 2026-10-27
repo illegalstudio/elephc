@@ -49,7 +49,7 @@ pub(super) fn isset(
             ctx, receiver, "__elephc_property_isset", &[name.clone()], Op::MethodCall, expr,
         ),
         |ctx, receiver| {
-            let value = lower_property_probe_without_native(ctx, receiver, property, expr);
+            let value = lower_property_probe_without_native(ctx, receiver, property, PropertyFetchMode::Isset, expr);
             probe_value_is_set(ctx, value, expr)
         },
     )
@@ -65,7 +65,7 @@ pub(super) fn probe(
         |ctx, receiver| lower_method_call_with_receiver(
             ctx, receiver, "__elephc_property_probe", &[name.clone()], Op::MethodCall, expr,
         ),
-        |ctx, receiver| lower_property_probe_without_native(ctx, receiver, property, expr),
+        |ctx, receiver| lower_property_probe_without_native(ctx, receiver, property, PropertyFetchMode::Probe, expr),
     )
 }
 

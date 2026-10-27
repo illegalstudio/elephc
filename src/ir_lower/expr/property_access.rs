@@ -1117,7 +1117,7 @@ fn lower_dynamic_property_fetch_without_native(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: LoweredValue,
     result_type: PhpType, mode: PropertyFetchMode, expr: &Expr,
 ) -> LoweredValue {
-    if mode == PropertyFetchMode::Probe && scalar_property_probe_receiver(ctx, object.value) {
+    if !mode.is_read() && scalar_property_probe_receiver(ctx, object.value) {
         crate::ir_lower::ownership::release_if_owned(ctx, property, Some(expr.span));
         release_owning_receiver_temporary(ctx, object, expr.span);
         return lower_null(ctx, expr);
@@ -1162,12 +1162,13 @@ pub(super) fn lower_property_probe_from_value(
     if !property.starts_with("__elephc_") && ctx.classes.contains_key("SimpleXMLElement")
         && matches!(ctx.builder.value_php_type(object.value).codegen_repr(), PhpType::Mixed | PhpType::Union(_))
     { return native_xml_reads::probe(ctx, object, property, expr); }
-    lower_property_probe_without_native(ctx, object, property, expr)
+    lower_property_probe_without_native(ctx, object, property, PropertyFetchMode::Probe, expr)
 }
 
 /// Probes ordinary property storage without re-entering a native XML presence branch.
 fn lower_property_probe_without_native(
-    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, expr: &Expr,
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str,
+    mode: PropertyFetchMode, expr: &Expr,
 ) -> LoweredValue {
     // Runtime-name probes must suppress typed uninitialized reads just like coalesce.
     // In particular, isset() on the C|false receiver after a rejected readonly fallback
@@ -1179,7 +1180,7 @@ fn lower_property_probe_without_native(
     let name = Expr::new(ExprKind::StringLiteral(property.to_string()), expr.span);
     let result_type = dynamic_property_get_result_type(ctx, object.value, &name, expr);
     let name = lower_expr(ctx, &name);
-    lower_dynamic_property_fetch_without_native(ctx, object, name, result_type, PropertyFetchMode::Probe, expr)
+    lower_dynamic_property_fetch_without_native(ctx, object, name, result_type, mode, expr)
 }
 
 /// Like `lower_property_probe_from_value`, for `empty()`: a receiver with `__get` but no

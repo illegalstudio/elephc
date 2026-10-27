@@ -265,9 +265,10 @@ impl DomReceiver {
                     || self.declarations.open_receivers.contains(&class) { return true; }
                 if !visited.insert(class.clone()) { return false; }
                 let Some(parent) = self.declarations.parents.get(&class) else {
-                    let builtin = crate::types::builtin_classes::builtin_class_like_names()
-                        .any(|name| php_symbol_key(name) == class);
-                    return !builtin && !self.declarations.classes.contains(&class) && self.dom_available;
+                    if let Some(builtin) = elephc_builtin_contract::lookup_class(&class) {
+                        return builtin.kind == elephc_builtin_contract::ClassKind::Interface;
+                    }
+                    return !self.declarations.classes.contains(&class) && self.dom_available;
                 };
                 class = parent.clone();
             }

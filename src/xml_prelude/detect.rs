@@ -82,6 +82,7 @@ pub(super) fn program_uses_xml(program: &[Stmt]) -> bool {
     let dom_available = crate::dom_html_prelude::program_uses_dom_html(program);
     let mut classes = xml_classes().to_vec();
     classes.push("DOMDocument");
+    classes.push("DOMNode");
     crate::name_resolver::resolve_with_additional_global_symbols(
         program.to_vec(), xml_functions(), &classes,
     )
@@ -825,6 +826,7 @@ mod tests {
             "class Config { function loadXML(): void {} } function run(Config $cfg): void { $cfg->loadXML(); } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); run(new Config());",
             "namespace App; class DOMDocument { function loadXML(): void {} } (new DOMDocument())->loadXML();",
             "namespace App; class DOMNode { function loadXML(): void {} } (new DOMNode())->loadXML();",
+            "namespace App; class Countable { function loadXML(): void {} } $doc = new \\DOMDocument(); (new Countable())->loadXML();",
             "class Config extends DOMElement { function loadXML(): void {} } $doc = new DOMDocument(); (new Config('r'))->loadXML();",
             "class Config extends stdClass { function loadXML(): void {} } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); (new Config())->loadXML();",
             "class Config { function loadXML(): void {} } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); $doc = new Config(); $doc->loadXML();",
@@ -858,6 +860,8 @@ mod tests {
             "trait LoadsXml { public function loadFrom(string $xml): void { $this->loadXML($xml); } } class Feed extends DOMDocument { use LoadsXml; } $feed = new Feed(); $feed->loadFrom('<rss/>');",
             "interface XmlLoader { public function loadXML(string $source, int $options = 0): bool; } class Doc extends DOMDocument implements XmlLoader {} function load(XmlLoader $l): void { $l->loadXML('<r/>'); } load(new Doc());",
             "function viaNode(DOMNode $n): void { if ($n instanceof DOMDocument) { $n->loadXML('<n/>'); } } viaNode(new DOMDocument());",
+            "class CountedDoc extends DOMDocument implements Countable { public function count(): int { return 0; } } function loadCounted(Countable $doc): void { if ($doc instanceof DOMDocument) { $doc->loadXML('<r/>'); } } loadCounted(new CountedDoc());",
+            "class TextDoc extends DOMDocument { public function __toString(): string { return ''; } } function loadText(Stringable $doc): void { if ($doc instanceof DOMDocument) { $doc->loadXML('<r/>'); } } loadText(new TextDoc());",
             "class Document extends DOMDocument { function parse(): void { $this->loadXML('<r/>'); } }",
             "class Holder { public DOMDocument $doc; function parse(): void { $this->doc->loadXML('<r/>'); } }",
             "$doc = new DOMDocument(); $parse = $doc->loadXML(...); $parse('<r/>');",

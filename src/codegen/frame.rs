@@ -774,7 +774,6 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
         abi::emit_call_label(ctx.emitter, &symbol);
     }
     emit_main_static_property_cleanup(ctx, hosting_tables);
-    abi::emit_call_label(ctx.emitter, "__rt_gc_collect_cycles_explicit");
     // Last owner teardown: a destructor above, or an engine object a hosting table released, may
     // still reach C code that calls a callback.
     if module_binds_extern_callbacks(ctx.module) {

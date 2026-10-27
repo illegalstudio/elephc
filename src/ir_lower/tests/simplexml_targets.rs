@@ -12,6 +12,16 @@ fn verify_simplexml_target(target: &str) {
     let module = super::lower_source_at_for_target(r###"<?php
 debug_backtrace();
 $counterXml = new SimpleXMLElement('<r>2</r>');
+function xmlQuietScalarProbes(int $number): void {
+    var_dump(isset($number->a), empty($number->{xmlComputedTargetName()}));
+}
+xmlQuietScalarProbes($argc);
+class TargetXmlPresencePeer {
+    public function __isset(string $name): bool { return true; }
+    public function __get(string $name): mixed { return null; }
+}
+function xmlQuietUnionProbe(SimpleXMLElement|TargetXmlPresencePeer $node): bool { return isset($node->a); }
+var_dump(xmlQuietUnionProbe($counterXml), xmlQuietUnionProbe(new TargetXmlPresencePeer()));
 echo -$counterXml; $previousXml = $counterXml++; echo $counterXml, (string)$previousXml;
 $uriRoot = simplexml_load_file('data://text/plain;base64,PHIvPg==');
 class MixedXmlChildHolder { public mixed $child = null; }

@@ -77,8 +77,9 @@ const PREV_LINE: usize = 96;
 /// Fetch-helper slot that keeps the capacity of the parked raw print_r capture.
 const SAVE_CAP: usize = 104;
 /// Frame size of the fetch helper: the shared slots, `ENTRY`, `PREV_GUARD`, `PREV_PAD`,
-/// `PREV_LINE` and the capture save slots.
-const FETCH_FRAME: usize = 112;
+/// `PREV_LINE` and the capture save slots, plus the 16-byte ABI footer.
+const FETCH_FRAME: usize = 128;
+const _: () = assert!(SAVE_CAP <= FETCH_FRAME - 16);
 
 /// Tag reported when the class has no run-time `__debugInfo()`.
 const TAG_NONE: usize = 0;

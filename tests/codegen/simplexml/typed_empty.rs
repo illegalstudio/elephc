@@ -9,6 +9,52 @@
 
 use crate::support::*;
 
+/// Linking SimpleXML preserves the ordinary magic presence protocol for opaque receivers.
+#[test]
+fn test_simplexml_named_isset_preserves_ordinary_magic_hooks() {
+    if skip_without_xml_native("test_simplexml_named_isset_preserves_ordinary_magic_hooks") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+interface XmlPresencePeer {}
+class XmlPresenceGetOnly implements XmlPresencePeer {
+    public function __get(string $name): mixed { echo 'get|'; return 'present'; }
+}
+class XmlPresenceBoth implements XmlPresencePeer {
+    public function __isset(string $name): bool { echo 'isset|'; return true; }
+    public function __get(string $name): mixed { echo 'get|'; return null; }
+}
+class XmlPresenceElement extends SimpleXMLElement implements XmlPresencePeer {}
+function xmlPresenceMixed(mixed $node): void {
+    $name = 'a';
+    echo (int)isset($node->a), ':', (int)isset($node->{$name}), ':';
+    echo $node->a ?? 'fallback', ':', (int)empty($node->a), '|';
+}
+function xmlPresenceUnion(XmlPresenceGetOnly|XmlPresenceBoth|SimpleXMLElement $node): void {
+    $name = 'a';
+    echo (int)isset($node->a), ':', (int)isset($node->{$name}), ':';
+    echo $node->a ?? 'fallback', ':', (int)empty($node->a), '|';
+}
+function xmlPresenceObject(object $node): void {
+    $name = 'a';
+    echo (int)isset($node->a), ':', (int)isset($node->{$name}), ':';
+    echo $node->a ?? 'fallback', ':', (int)empty($node->a), '|';
+}
+function xmlPresenceInterface(XmlPresencePeer $node): void {
+    $name = 'a';
+    echo (int)isset($node->a), ':', (int)isset($node->{$name}), ':';
+    echo $node->a ?? 'fallback', ':', (int)empty($node->a), '|';
+}
+$nodes = [new XmlPresenceGetOnly(), new XmlPresenceBoth(), new XmlPresenceElement('<r><a>1</a></r>')];
+foreach ($nodes as $node) { xmlPresenceMixed($node); }
+foreach ($nodes as $node) { xmlPresenceUnion($node); }
+foreach ($nodes as $node) { xmlPresenceObject($node); }
+foreach ($nodes as $node) { xmlPresenceInterface($node); }
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    let expected = "0:0:get|present:1|isset|1:isset|1:isset|get|fallback:isset|get|1|1:1:1:0|";
+    assert_eq!(out.stdout, expected.repeat(4));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Scalar continuations preserve ordinary empty semantics and evaluate the final key.
 #[test]
 fn test_simplexml_empty_typed_scalar_continuations() {
