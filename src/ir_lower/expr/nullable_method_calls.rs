@@ -564,7 +564,9 @@ pub(super) fn stabilize_borrowed_result_and_release_receiver(
     result: LoweredValue,
     span: Span,
 ) -> LoweredValue {
-    if !ctx.value_is_owning_temporary(receiver) {
+    let boxed_local_read = ctx.builder.value_php_type(receiver.value).codegen_repr() == PhpType::Mixed
+        && ctx.value_needs_release_after_use(receiver);
+    if !ctx.value_is_owning_temporary(receiver) && !boxed_local_read {
         return result;
     }
     let result = if ctx.value_is_owning_temporary(result) {

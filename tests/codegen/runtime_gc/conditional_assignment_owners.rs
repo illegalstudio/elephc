@@ -33,7 +33,7 @@ function conditionalAssignmentOwners(int $flags, mixed $boxed = null): void {
         $boxed = str_repeat('n', 90);
     }
     if ($flags !== 0) {
-        echo $text[0], ':', $object->name, ':', count($items), ':', is_array($boxed) ? 'array' : 'string', '|';
+        echo ((string)$text)[0], ':', $object->name, ':', count($items), ':', is_array($boxed) ? 'array' : 'string', '|';
     } else { echo 'none|'; }
 }
 conditionalAssignmentOwners($argc - 1);
