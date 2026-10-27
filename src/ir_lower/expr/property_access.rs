@@ -11,6 +11,9 @@ use super::*;
 
 mod native_xml_reads;
 mod runtime_hooks;
+pub(super) mod write_select;
+pub(crate) use write_select::lower_property_write_receiver;
+pub(super) use write_select::lower_property_write_prelude;
 
 /// Borrows guarded XML storage, narrowing opaque object metadata while preserving boxed unions.
 pub(crate) fn borrow_native_xml_property_receiver(
@@ -998,7 +1001,7 @@ pub(super) fn lower_dynamic_property_fetch(
     if matches!(object.kind, ExprKind::Variable(_))
         && !matches!(property.kind, ExprKind::StringLiteral(_))
     {
-        let known_native = match &object.kind {
+        let mut known_native = match &object.kind {
             ExprKind::Variable(name) => {
                 let ty = ctx.local_type(name);
                 singular_object_class(&ty).is_some_and(|(class, nullable)| !nullable
@@ -1009,8 +1012,11 @@ pub(super) fn lower_dynamic_property_fetch(
         // PHP fetches a variable receiver after the property expression has evaluated.
         let name = lower_expr(ctx, property);
         let name = coerce_runtime_property_name(ctx, name, expr.span);
-        let object = lower_expr(ctx, object);
-        let result_type = dynamic_property_get_result_type(ctx, object.value, property, expr);
+        let object = lower_member_receiver(ctx, object, expr);
+        let ty = ctx.builder.value_php_type(object.value);
+        known_native |= singular_object_class(&ty).is_some_and(|(class, nullable)| !nullable
+            && crate::types::builtin_classes::has_native_dimensions(class, ctx.classes));
+        let result_type = dynamic_property_fetch_result_type(ctx, object.value, property, mode, expr);
         return lower_dynamic_property_fetch_from_operands(
             ctx, object, name, result_type, mode, known_native, expr,
         );
@@ -1047,20 +1053,28 @@ pub(super) fn lower_dynamic_property_fetch_from_value(
             return lower_property_get_from_value(ctx, object, name, Op::PropGet, expr);
         }
     }
-    let result_type = dynamic_property_get_result_type(ctx, object.value, property, expr);
-    // A silent fetch can answer null for a typed slot that has not been initialized. Buffer
-    // handles keep their element type and use the raw missing-value sentinel, like buffer
-    // element probes: boxing a buffer loses the descriptor's element layout at a later merge.
-    let result_type = if mode.is_read() || matches!(result_type, PhpType::Buffer(_)) {
-        result_type
-    } else {
-        nullable_result_type(result_type)
-    };
+    let result_type = dynamic_property_fetch_result_type(ctx, object.value, property, mode, expr);
     let property = lower_expr(ctx, property);
     let property = coerce_runtime_property_name(ctx, property, expr.span);
     lower_dynamic_property_fetch_from_operands(
         ctx, object, property, result_type, mode, false, expr,
     )
+}
+
+/// Preserves typed buffer handles while allowing silent property probes to return null.
+fn dynamic_property_fetch_result_type(
+    ctx: &LoweringContext<'_, '_>, object: ValueId, property: &Expr,
+    mode: PropertyFetchMode, expr: &Expr,
+) -> PhpType {
+    let result_type = dynamic_property_get_result_type(ctx, object, property, expr);
+    // A silent fetch can answer null for a typed slot that has not been initialized. Buffer
+    // handles keep their element type and use the raw missing-value sentinel, like buffer
+    // element probes: boxing a buffer loses the descriptor's element layout at a later merge.
+    if mode.is_read() || matches!(result_type, PhpType::Buffer(_)) {
+        result_type
+    } else {
+        nullable_result_type(result_type)
+    }
 }
 
 /// Fetches a property with an already evaluated name, sharing ordinary getter and ownership rules.
@@ -1076,13 +1090,21 @@ pub(super) fn lower_dynamic_property_fetch_from_operands(
     known_native: bool,
     expr: &Expr,
 ) -> LoweredValue {
+    lower_dynamic_property_fetch_or_select(ctx, object, property, result_type, mode, known_native, false, expr)
+}
+
+/// Shares dynamic receiver dispatch while distinguishing non-materializing write selections.
+pub(super) fn lower_dynamic_property_fetch_or_select(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: LoweredValue,
+    result_type: PhpType, mode: PropertyFetchMode, known_native: bool, write_select: bool, expr: &Expr,
+) -> LoweredValue {
     let object = box_opaque_property_receiver(ctx, object, expr.span);
     let ty = ctx.builder.value_php_type(object.value);
     let may_be_native = matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
         || singular_object_class(&ty).is_some_and(|(class, _)|
             crate::types::builtin_classes::has_native_dimensions(class, ctx.classes));
     if ctx.classes.contains_key("SimpleXMLElement") && may_be_native {
-        return native_xml_reads::dynamic(ctx, object, property, mode, known_native, expr);
+        return native_xml_reads::dynamic(ctx, object, property, mode, known_native, write_select, expr);
     }
     lower_dynamic_property_fetch_without_native(ctx, object, property, result_type, mode, expr)
 }

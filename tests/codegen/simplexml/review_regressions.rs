@@ -292,6 +292,20 @@ $dynamicName = 'child'; var_dump($reads->missing->{$dynamicName});
 echo (int)is_null($reads->missing->child), ':', (int)is_object($reads->a->children()->foo), '|';
 $reads->created->child = 'written'; echo (string)$reads->created->child, '|';
 $reads->chain->middle->leaf = 'deep'; echo (string)$reads->chain->middle->leaf, '|';
+$writes = new SimpleXMLElement('<r/>');
+$writes->one->two->three->leaf = 'four'; echo (string)$writes->one->two->three->leaf, '|';
+$writes->dimension->child['at'] = 'attribute'; echo (string)$writes->dimension->child['at'], '|';
+$writes->appended->child[] = 'tail'; echo (string)$writes->appended->child, '|';
+$writeName = 'middle'; $writes->runtime->{$writeName}->leaf = 'dynamic';
+echo (string)$writes->runtime->middle->leaf, '|';
+reviewWriteNestedXml($writes, $writeName);
+echo (string)$writes->opaque->middle->leaf, '|';
+var_dump($writes->sum->deep->leaf += 1);
+echo (int)isset($writes->sum->deep->leaf), '|';
+$writes->increment->deep->leaf++; echo (int)isset($writes->increment->deep->leaf), '|';
+try { $writes->throwing->{reviewThrowWriteName()}->leaf = 'unused'; }
+catch (RuntimeException $writeError) { echo $writeError->getMessage(), ':', (int)isset($writes->throwing), '|'; }
+unset($writes, $writeName, $writeError);
 $emptyAttributes = new SimpleXMLElement('<r/>');
 var_dump($emptyAttributes->attributes()->q, $reads->missing->child?->getName());
 for ($iteration = 0; $iteration < 32; $iteration++) {
@@ -303,6 +317,8 @@ unset($prefixes, $declarationsXml, $className, $error, $zero, $negativeZero, $ma
 "####;
     let declarations = r####"<?php
 class ReviewNumericZeroXml extends SimpleXMLElement {}
+function reviewWriteNestedXml(mixed $node, string $name): void { $node->opaque->{$name}->leaf = 'boxed'; }
+function reviewThrowWriteName(): string { throw new RuntimeException('write-name'); }
 function reviewNegateXmlMixed(mixed $value): mixed { return -$value; }
 function reviewNegateXmlSubclass(ReviewNumericZeroXml $value): mixed { return -$value; }
 class XmlReviewOtherFilter extends php_user_filter {
@@ -343,7 +359,7 @@ stream_filter_register('xml.review.throw', 'XmlReviewThrowFilter');
     let names_expected = "<?xml version=\"1.0\"?>\n<r xmlns:p=\"urn:p\" at=\"base\" p:at=\"literal\"><p:q>value</p:q><a:b><c>nested</c></a:b><p:q>second</p:q></r>\n1:value:second:0|base:literal:a:b|method:qualified|:a|SimpleXMLElement::addAttribute(): Attribute requires prefix for namespace|SimpleXMLElement::addAttribute(): Attribute already exists|<?xml version=\"1.0\"?>\n<r xmlns:p=\"urn:p\" at=\"base\" p:at=\"literal\" :c=\"1\"><p:q>value</p:q><a:b><c>nested</c></a:b><p:q>second</p:q><p:method>qualified</p:method><:a>leading</:a></r>\n";
     let factory = "create|other-close|drop|RuntimeException:filter|";
     let constructor = "create|other-close|drop|Exception:String could not be parsed as XML|RuntimeException|";
-    let semantics_expected = "A:B|{\"a\":\"urn:a\",\"b\":\"urn:b\",\"\":\"\"}|{\"a\":\"urn:a\"}|{\"a\":\"urn:a\"}|{\"a\":\"urn:a\"}|{\"b\":\"urn:b\"}|[]|simplexml_load_string(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, MissingXmlReviewClass given|simplexml_load_file(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, MissingXmlReviewClass given|simplexml_import_dom(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, MissingXmlReviewClass given|simplexml_load_string(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, stdClass given|simplexml_load_file(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, stdClass given|simplexml_import_dom(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, stdClass given|float(-0)\nfloat(-0)\nfloat(0)\nfloat(0)\nfloat(-0)\n0|original:copy|1|<a><b>copy</b></a>|NULL\nNULL\nNULL\nNULL\n1:1|written|deep|NULL\nNULL\n";
+    let semantics_expected = "A:B|{\"a\":\"urn:a\",\"b\":\"urn:b\",\"\":\"\"}|{\"a\":\"urn:a\"}|{\"a\":\"urn:a\"}|{\"a\":\"urn:a\"}|{\"b\":\"urn:b\"}|[]|simplexml_load_string(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, MissingXmlReviewClass given|simplexml_load_file(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, MissingXmlReviewClass given|simplexml_import_dom(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, MissingXmlReviewClass given|simplexml_load_string(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, stdClass given|simplexml_load_file(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, stdClass given|simplexml_import_dom(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, stdClass given|float(-0)\nfloat(-0)\nfloat(0)\nfloat(0)\nfloat(-0)\n0|original:copy|1|<a><b>copy</b></a>|NULL\nNULL\nNULL\nNULL\n1:1|written|deep|four|attribute|tail|dynamic|boxed|int(1)\n1|1|write-name:0|NULL\nNULL\n";
     let expected = [names_expected, names_expected, factory, constructor, factory, constructor, semantics_expected, semantics_expected];
     assert_eq!(runs.len(), expected.len());
     for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {

@@ -42,7 +42,7 @@ pub(super) fn eval_property_compound_assign_result(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let current = eval_property_get_result(object, property, context, values)?;
+    let current = eval_write_property_get_result(object, property, context, values)?;
     with_eval_value_lease(current, context, values, |current, context, values| {
         with_eval_void_operands(&[right], context, scope, values, |args, context, _, values| {
             let value = eval_binary_result(op, current, args[0], context, values)?;
@@ -61,7 +61,7 @@ pub(super) fn eval_property_inc_dec_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let current = eval_property_get_result(object, property, context, values)?;
+    let current = eval_write_property_get_result(object, property, context, values)?;
     with_eval_value_lease(current, context, values, |current, context, values| {
         let value = eval_inc_dec_value(current, increment, values)?;
         with_eval_value_lease(value, context, values, |value, context, values| {

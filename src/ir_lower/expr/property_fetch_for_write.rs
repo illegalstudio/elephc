@@ -73,8 +73,11 @@ pub(crate) fn lower_static_property_write_chain_with_operands(
             Op::Borrow.default_effects(), Some(span));
         ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
         let pins = pin_in_flight_owners(ctx, &[name.value], span);
-        let child = property_access::lower_dynamic_property_fetch_from_operands(
-            ctx, borrowed, name, result_type, PropertyFetchMode::Read, false, expr,
+        let argument = ctx.emit_value(Op::Borrow, vec![name.value], None, PhpType::Str,
+            Op::Borrow.default_effects(), Some(span));
+        ctx.builder.set_value_ownership(argument.value, Ownership::Borrowed);
+        let child = property_access::lower_dynamic_property_fetch_or_select(
+            ctx, borrowed, argument, result_type, PropertyFetchMode::Read, false, true, expr,
         );
         unpin_in_flight_owners(ctx, pins, span);
         crate::ir_lower::ownership::release_if_owned(ctx, name, Some(span));
@@ -92,7 +95,7 @@ pub(crate) fn lower_static_property_write_chain_with_operands(
     let borrowed = ctx.emit_value(Op::Borrow, vec![parent.value.value], None, ty,
         Op::Borrow.default_effects(), Some(span));
     ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
-    let child = lower_property_get_from_value(ctx, borrowed, property, Op::PropGet, expr);
+    let child = property_access::write_select::select_named(ctx, borrowed, property, expr);
     capture_static_write_child(ctx, parent, child, span)
 }
 

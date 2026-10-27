@@ -37,6 +37,9 @@ pub(super) fn lower_assignment_expr(
             compound_receiver = Some(receiver);
             continue;
         }
+        if conditional_value_temp.is_none() && lower_property_write_prelude(ctx, target, stmt) {
+            continue;
+        }
         if let Some(update) = buffer_update.as_ref() {
             if compound_receiver.is_none() && update.read_position() == position {
                 if let Some(result) = crate::ir_lower::stmt::lower_buffer_expression_update(
@@ -516,7 +519,7 @@ pub(super) fn lower_dynamic_property_assign(
         receiver.finish_operand_window(ctx, property_pins, span);
         (receiver, property, value)
     } else {
-        let object = lower_expr(ctx, object);
+        let object = crate::ir_lower::expr::lower_property_write_receiver(ctx, object);
         let receiver = crate::ir_lower::stmt::property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
         let property = lower_expr(ctx, property);
         let property = property_access::coerce_runtime_property_name(ctx, property, span);

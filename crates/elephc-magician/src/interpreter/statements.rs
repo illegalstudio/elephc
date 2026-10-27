@@ -37,6 +37,7 @@ mod native_static_dispatch;
 mod property_constant_validation;
 mod property_dispatch;
 mod property_dimension_writes;
+mod property_write_receivers;
 mod property_validation;
 mod abstract_setter;
 mod readonly_property_writes;
@@ -48,6 +49,7 @@ mod static_property_access;
 mod trait_declarations;
 
 use super::*;
+use property_write_receivers::{eval_property_write_receiver, eval_write_property_get_result, with_eval_property_write_operands};
 use crate::context::{
     NativeCallableArrayDefaultElement, NativeCallableArrayDefaultKey,
     NativeCallableObjectDefaultArg, NativeCallableSignature,

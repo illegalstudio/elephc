@@ -58,13 +58,14 @@ pub(super) fn probe(
 /// Retains an evaluated dynamic name and preserves any non-null native source-type hint.
 pub(super) fn dynamic(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: LoweredValue,
-    mode: PropertyFetchMode, known_native: bool, expr: &Expr,
+    mode: PropertyFetchMode, known_native: bool, write_select: bool, expr: &Expr,
 ) -> LoweredValue {
     let temp = ctx.declare_owned_hidden_temp(PhpType::Str);
     store_value_into_temp(ctx, &temp, PhpType::Str, property, expr.span);
     let slot = ctx.local_slots[&temp];
     register_owned_call_operand(ctx, slot, expr.span);
-    let method = if mode == PropertyFetchMode::Read { "__elephc_property_get" }
+    let method = if write_select { "__elephc_property_select" }
+        else if mode == PropertyFetchMode::Read { "__elephc_property_get" }
         else { "__elephc_property_probe" };
     let result = dispatch(
         ctx, object, expr, PhpType::Mixed, known_native,

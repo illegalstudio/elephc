@@ -41,7 +41,7 @@ pub(super) fn lower_property_array_push(
         let receiver = crate::ir_lower::expr::lower_static_property_write_chain(ctx, object, value, span);
         (receiver, value)
     } else {
-        let object = lower_expr(ctx, object);
+        let object = crate::ir_lower::expr::lower_property_write_receiver(ctx, object);
         let mut receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
         let value = lower_rooted_property_write_operand(ctx, value, &mut roots);
         receiver.place_above_operand_roots(ctx, &roots, span);
@@ -244,7 +244,7 @@ pub(super) fn lower_property_array_assign_with_update(
             ctx, object, &[index.value, value.value], span);
         (receiver, index, value)
     } else {
-        let object = lower_expr(ctx, object);
+        let object = crate::ir_lower::expr::lower_property_write_receiver(ctx, object);
         let mut receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
         let source = match update {
             PropertyElementUpdate::Written => PropertyWriteValue::Expr(source_value),

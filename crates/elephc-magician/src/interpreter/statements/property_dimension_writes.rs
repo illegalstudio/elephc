@@ -26,7 +26,7 @@ pub(super) fn eval_property_dimension_write(
     let mut operands = Vec::new();
     let mut result = (|| {
         let early_object = if deferred_receiver(object) { None } else {
-            let object = eval_owned_expr(object, context, scope, values)?;
+            let object = eval_property_write_receiver(object, context, scope, values)?;
             operands.push(object);
             Some(object)
         };
@@ -36,7 +36,7 @@ pub(super) fn eval_property_dimension_write(
         };
         let (key, assigned) = stage_operands(index, value, &mut operands, context, scope, values)?;
         let object = if let Some(object) = early_object { object } else {
-            let object = eval_owned_expr(object, context, scope, values)?;
+            let object = eval_property_write_receiver(object, context, scope, values)?;
             operands.push(object);
             object
         };

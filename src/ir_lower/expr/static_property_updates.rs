@@ -129,7 +129,10 @@ pub(super) fn guard_static_compound_property_read(
     let value = Expr::new(ExprKind::BinaryOp {
         left: Box::new(target.clone()), op: op.clone(), right: right.clone(),
     }, value.span);
-    crate::ir_lower::stmt::lower_stmt(ctx, &Stmt::new(StmtKind::Assign { name: name.clone(), value }, stmt.span));
+    let read = Stmt::new(StmtKind::Assign { name: name.clone(), value }, stmt.span);
+    if !lower_property_write_prelude(ctx, &target, &read) {
+        crate::ir_lower::stmt::lower_stmt(ctx, &read);
+    }
     Some(StaticCompoundReceiver { target, receiver, temp, dynamic_name })
 }
 

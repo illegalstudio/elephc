@@ -73,19 +73,24 @@ function xmlNullablePropertyReads(SimpleXMLElement $node): void {
     var_dump($node->missing->child, $node->attributes()->missing);
     $node->created->child = 'written';
     $node->chain->middle->leaf = 'deep';
+    $node->dimension->middle['at'] = 'attribute';
+    $node->appended->middle[] = 'tail';
+    $name = 'middle'; $node->dynamic->{$name}->leaf = 'runtime';
+    $node->sum->middle->leaf += 1;
+    $node->increment->middle->leaf++;
     var_dump($node->created->child, $node->missing->child?->getName());
 }
 xmlNullablePropertyReads($xml);
 interface TargetXmlReceiver {}
 class TargetGuardedXml extends SimpleXMLElement implements TargetXmlReceiver {}
-function xmlGuardedInterfaceReads(TargetXmlReceiver $node): void {
+function xmlGuardedInterfaceReads(TargetXmlReceiver $node, string $name): void {
     if ($node instanceof TargetGuardedXml) {
-        echo $node->item, $node?->item;
+        echo $node->item, $node?->item, $node->$name ?? 'dynamic';
         var_dump(isset($node->item), empty($node->missing));
         echo $node->missing ?? 'fallback', $node?->missing ?? 'safe';
     }
 }
-xmlGuardedInterfaceReads(new TargetGuardedXml('<r><item>guarded</item></r>'));
+xmlGuardedInterfaceReads(new TargetGuardedXml('<r><item>guarded</item></r>'), 'item');
 echo (int)($xml->item[0] > 1), (int)($xml->item[0] == '7'), $xml <=> $xml->item;
 $xml->item[0] += 1;
 try { $xml->item[0][null] = 'invalid'; } catch (ValueError $error) { echo $error->getMessage(); }

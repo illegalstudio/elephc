@@ -1,0 +1,109 @@
+//! Purpose:
+//! Preserve lazy native XML selections along property write receiver chains.
+//!
+//! Called from:
+//! - Instance property assignment and property dimension write lowering.
+//!
+//! Key details:
+//! - Selection does not create nodes before assignment operands have run.
+//! - Ordinary object reads retain their existing dispatch and ownership rules.
+
+use super::*;
+
+/// Evaluates intermediate write receivers without converting missing XML selections to null.
+pub(crate) fn lower_property_write_receiver(
+    ctx: &mut LoweringContext<'_, '_>, expr: &Expr,
+) -> LoweredValue {
+    match &expr.kind {
+        ExprKind::PropertyAccess { object, property } => {
+            let object = lower_property_write_receiver(ctx, object);
+            select_named(ctx, object, property, expr)
+        }
+        ExprKind::DynamicPropertyAccess { object, property } => {
+            let (object, property) = if matches!(object.kind, ExprKind::Variable(_)) {
+                let name = lower_expr(ctx, property);
+                let name = coerce_runtime_property_name(ctx, name, expr.span);
+                (lower_property_write_receiver(ctx, object), name)
+            } else {
+                let object = lower_property_write_receiver(ctx, object);
+                let pins = pin_in_flight_owners(ctx, &[object.value], expr.span);
+                let name = lower_expr(ctx, property);
+                let name = coerce_runtime_property_name(ctx, name, expr.span);
+                unpin_in_flight_owners(ctx, pins, expr.span);
+                (object, name)
+            };
+            select_dynamic(ctx, object, property, expr)
+        }
+        ExprKind::ArrayAccess { array, index } => {
+            let array = lower_property_write_receiver(ctx, array);
+            lower_array_access_from_lowered_receiver(ctx, array, index, expr)
+        }
+        _ => lower_expr(ctx, expr),
+    }
+}
+
+/// Selects a named XML child while retaining the ordinary getter for other receiver classes.
+pub(in crate::ir_lower::expr) fn select_named(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, expr: &Expr,
+) -> LoweredValue {
+    let object = refine_member_receiver(ctx, object, expr);
+    let object = box_opaque_property_receiver(ctx, object, expr.span);
+    if let Some(method) = native_property_method_for_value(ctx, object.value, property,
+        elephc_builtin_contract::ObjectProperty::WriteSelect)
+    {
+        let name = Expr::new(ExprKind::StringLiteral(property.into()), expr.span);
+        return lower_method_call_with_receiver(ctx, object, method, &[name], Op::MethodCall, expr);
+    }
+    let ty = ctx.builder.value_php_type(object.value);
+    if !property.starts_with("__elephc_") && ctx.classes.contains_key("SimpleXMLElement")
+        && matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+    {
+        let name = lower_expr(ctx, &Expr::new(ExprKind::StringLiteral(property.into()), expr.span));
+        return select_dynamic(ctx, object, name, expr);
+    }
+    lower_property_get_from_value(ctx, object, property, Op::PropGet, expr)
+}
+
+/// Preserves write-context target reads in parser-generated compound and inc/dec preludes.
+pub(in crate::ir_lower::expr) fn lower_property_write_prelude(
+    ctx: &mut LoweringContext<'_, '_>, target: &Expr, stmt: &Stmt,
+) -> bool {
+    if !ctx.classes.contains_key("SimpleXMLElement") { return false; }
+    if !matches!(target.kind, ExprKind::PropertyAccess { .. } | ExprKind::DynamicPropertyAccess { .. }) {
+        return false;
+    }
+    let StmtKind::Assign { name, value } = &stmt.kind else { return false; };
+    let read = if value == target { true } else {
+        matches!(&value.kind, ExprKind::BinaryOp { left, .. } if left.as_ref() == target)
+    };
+    if !read { return false; }
+    let selected = lower_property_write_receiver(ctx, target);
+    let ty = ctx.builder.value_php_type(selected.value);
+    let temp = ctx.declare_owned_hidden_temp(ty.clone());
+    store_value_into_temp(ctx, &temp, ty, selected, stmt.span);
+    let slot = ctx.local_slots[&temp];
+    register_owned_call_operand(ctx, slot, stmt.span);
+    let read = Expr::new(ExprKind::Variable(temp), target.span);
+    let value = if value == target { read } else {
+        let ExprKind::BinaryOp { op, right, .. } = &value.kind else { unreachable!(); };
+        Expr::new(ExprKind::BinaryOp { left: Box::new(read), op: op.clone(), right: right.clone() }, value.span)
+    };
+    crate::ir_lower::stmt::lower_stmt(ctx, &Stmt::new(StmtKind::Assign { name: name.clone(), value }, stmt.span));
+    retire_owned_call_operand(ctx, slot, stmt.span);
+    true
+}
+
+/// Selects with an evaluated name through the same native/ordinary ownership boundary.
+pub(super) fn select_dynamic(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, name: LoweredValue, expr: &Expr,
+) -> LoweredValue {
+    let object = refine_member_receiver(ctx, object, expr);
+    let property = match &expr.kind {
+        ExprKind::DynamicPropertyAccess { property, .. } => property.as_ref().clone(),
+        ExprKind::PropertyAccess { property, .. } => Expr::new(ExprKind::StringLiteral(property.clone()), expr.span),
+        _ => Expr::new(ExprKind::StringLiteral(String::new()), expr.span),
+    };
+    let result_type = dynamic_property_get_result_type(ctx, object.value, &property, expr);
+    lower_dynamic_property_fetch_or_select(ctx, object, name, result_type,
+        PropertyFetchMode::Read, false, true, expr)
+}

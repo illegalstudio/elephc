@@ -61,7 +61,7 @@ pub(super) fn lower_property_assign(
         let receiver = crate::ir_lower::expr::lower_static_property_write_chain(ctx, object, rhs, span);
         (receiver, rhs)
     } else {
-        let object = lower_expr(ctx, object);
+        let object = crate::ir_lower::expr::lower_property_write_receiver(ctx, object);
         let receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
         let rhs = match object_property_type(ctx, object.value, property) {
             Some(property_ty) => {

@@ -187,6 +187,7 @@ use closure_calls::*;
 use descriptor_calls::*;
 use object_construction::*;
 use property_access::*;
+pub(crate) use property_access::lower_property_write_receiver;
 use property_probes::*;
 use method_calls::*;
 use member_receivers::{checked_member_receiver_type, lower_member_receiver, refine_member_receiver};
