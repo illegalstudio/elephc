@@ -1177,7 +1177,7 @@ class DOMDocument extends DOMNode {
         $_unused_flags = $this->__elephc_flags;
         if ($node === null) {
             $bound = $this->__elephc_simplexml;
-            if (is_object($bound)) { return (string)$bound->asXML(); }
+            if (is_object($bound)) { return $bound->__elephc_dom_document_xml(); }
             return __elephc_dom_serialize_node($this);
         }
         return __elephc_dom_serialize_node($node);
@@ -1199,7 +1199,10 @@ class DOMComment extends DOMCharacterData {
 
 class DOMProcessingInstruction extends DOMNode {
     public string $target = "";
-    public string $data = "";
+    public string $data {
+        get { return (string)$this->nodeValue; }
+        set { $this->nodeValue = $value; }
+    }
 
     public function __construct(string $target, string $data = "") {
         $this->target = $target;

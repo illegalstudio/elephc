@@ -343,12 +343,13 @@ pub extern "C" fn elephc_xml_sx_compare(left: i64, right: i64) -> i64 {
     })
 }
 
-/// Encodes serialized bytes as ASCII hex so the extern C-string ABI preserves all encodings.
+/// Encodes bytes as hex: node (0), SimpleXML root (1), or complete DOM document (2).
 #[no_mangle]
 pub extern "C" fn elephc_xml_sx_xml_hex(handle: i64, whole: i64) -> *const c_char {
     guard(|| output(view(handle).and_then(|v| v.first().map(|node| unsafe {
         let mut length = 0;
-        let raw = ffi::dump_bytes(v.doc.raw, node, i32::from(whole != 0), &mut length);
+        let mode = match whole { 0 => 0, 2 => 2, _ => 1 };
+        let raw = ffi::dump_bytes(v.doc.raw, node, mode, &mut length);
         if raw.is_null() { return String::new(); }
         let bytes = std::slice::from_raw_parts(raw.cast::<u8>(), length.max(0) as usize);
         let mut hex = String::with_capacity(bytes.len().saturating_mul(2));

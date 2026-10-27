@@ -22,6 +22,14 @@ $targetHtmlXml = simplexml_import_dom($saveDocument);
 echo count($targetHtmlXml->xpath('//body'));
 $targetXmlChildren = $saveDocument->documentElement->childNodes;
 echo $targetXmlChildren->item(0)->nodeName;
+echo $saveDocument->saveXML();
+$targetMetadataDocument = new DOMDocument();
+$targetMetadataDocument->loadXML('<r><![CDATA[q]]><?work data?></r>');
+$targetMetadataChildren = $targetMetadataDocument->documentElement->childNodes;
+echo $targetMetadataChildren->item(0)->nodeName;
+$targetMetadataPi = $targetMetadataChildren->item(1);
+$targetMetadataPi->data = 'changed';
+echo $targetMetadataPi->data;
 class TargetHookedCoalesceXml extends SimpleXMLElement {
     public function __isset(string $name): bool { return true; }
     public function __get(string $name): mixed { return 'wrong'; }

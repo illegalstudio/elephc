@@ -308,14 +308,20 @@ char *elephc_libxml2_v1_sx_dump_bytes(void *rawdoc, void *rawnode, int whole, in
     xmlDocPtr doc = rawdoc;
     xmlNodePtr node = rawnode;
     *length = 0;
-    if (whole && doc->type == XML_DOCUMENT_NODE && node == xmlDocGetRootElement(doc)) {
+    if (doc->type == XML_DOCUMENT_NODE && (whole == 2 || (whole && node == xmlDocGetRootElement(doc)))) {
         xmlChar *out = NULL;
         xmlDocDumpMemory(doc, &out, length);
         return (char *)out;
     }
     xmlBufferPtr out = xmlBufferCreate();
     if (!out) return NULL;
-    if (xmlNodeDump(out, doc, node, 0, 0) < 0) { xmlBufferFree(out); return NULL; }
+    /* DOM documents include every sibling; SimpleXML's HTML root remains node-only.
+     * Keep the built-in HTML DOM's declaration-free serialization contract. */
+    if (whole == 2) {
+        for (xmlNodePtr child = doc->children; child; child = child->next) {
+            if (xmlNodeDump(out, doc, child, 0, 0) < 0) { xmlBufferFree(out); return NULL; }
+        }
+    } else if (xmlNodeDump(out, doc, node, 0, 0) < 0) { xmlBufferFree(out); return NULL; }
     *length = xmlBufferLength(out);
     xmlChar *result = xmlStrndup(xmlBufferContent(out), *length);
     xmlBufferFree(out);

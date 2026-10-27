@@ -24,6 +24,7 @@ fn simplexml_html_import_keeps_literal_attributes_comments_and_independent_lease
     let builder = abi::elephc_xml_sx_html_document();
     assert_ne!(builder, 0);
     assert_eq!(abi::elephc_xml_sx_html_root(builder), 0);
+    let before = append(builder, 5, "#comment", "before");
     let html = append(builder, 1, "html", "");
     let xmlns = append(html, 2, "xmlns", "http://www.w3.org/1999/xhtml");
     let p = append(html, 1, "p", "");
@@ -34,12 +35,16 @@ fn simplexml_html_import_keeps_literal_attributes_comments_and_independent_lease
     let second_text = append(p, 3, "#text", "B");
     let cdata = append(p, 4, "#cdata-section", "<raw>");
     let pi = append(p, 6, "work", "data");
+    let after = append(builder, 6, "after", "tail");
     let root = abi::elephc_xml_sx_html_root(builder);
-    for handle in [builder, html, xmlns, attribute, colon, comment, text, second_text, cdata, pi] {
+    for handle in [builder, before, html, xmlns, attribute, colon, comment, text, second_text, cdata, pi, after] {
         abi::elephc_xml_sx_free(handle);
     }
     let dumped = unsafe { string(abi::elephc_xml_sx_string(root, 2)) };
     assert_eq!(dumped, "<html xmlns=\"http://www.w3.org/1999/xhtml\"><p xlink:href=\"&amp;literal;\" :class=\"value\"><!-- ---- -->A&amp;B<![CDATA[<raw>]]><?work data?></p></html>");
+    let document = format!("<!--before-->{dumped}<?after tail?>");
+    let expected_hex: String = document.as_bytes().iter().map(|byte| format!("{byte:02x}")).collect();
+    assert_eq!(unsafe { string(abi::elephc_xml_sx_xml_hex(root, 2)) }, expected_hex);
     // The child remains valid after the final root lease disappears.
     abi::elephc_xml_sx_free(root);
     assert_eq!(unsafe { string(abi::elephc_xml_sx_string(p, 0)) }, "A&B<raw>");
@@ -62,7 +67,7 @@ fn simplexml_html_import_preserves_namespace_and_node_correspondence() {
     assert!(root.namespaces(true, true, true).is_empty());
     assert_eq!(root.xpath("//html").unwrap().len(), 1);
     assert_eq!(unsafe { ffi::next(a) }, b);
-    assert_eq!(unsafe { owned_string(ffi::text(a)) }, "a");
+    assert_eq!(unsafe { owned_string(ffi::full_text(a)) }, "a");
 }
 
 /// A failed or abandoned import releases a rootless document through its internal lease.

@@ -661,6 +661,10 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $handle = $this->__elephc_handle;
         return (string)hex2bin(elephc_xml_sx_xml_hex($handle, 0));
     }
+    public function __elephc_dom_document_xml(): string {
+        $handle = $this->__elephc_handle;
+        return (string)hex2bin(elephc_xml_sx_xml_hex($handle, 2));
+    }
     public function __elephc_dom_set_text(string $text): void {
         $handle = $this->__elephc_handle;
         elephc_xml_sx_mutate($handle, 22, "", $text, "", 0, 0);
@@ -689,14 +693,19 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     public function __elephc_dom_node(mixed $document, mixed $parent): DOMNode {
         $handle = $this->__elephc_handle;
         $kind = elephc_xml_sx_int($handle, 4);
-        if ($kind === 3 || $kind === 4) {
+        if ($kind === 4) {
+            $node = new DOMText();
+            $node->__elephc_raw_text = true;
+            return $this->__elephc_dom_bind_node($node, $document, $parent, "#cdata-section");
+        }
+        if ($kind === 3) {
             return $this->__elephc_dom_bind_node(new DOMText(), $document, $parent, "#text");
         }
         if ($kind === 8) {
             return $this->__elephc_dom_bind_node(new DOMComment(), $document, $parent, "#comment");
         }
         if ($kind === 7) {
-            return $this->__elephc_dom_bind_node(new DOMProcessingInstruction($this->getName(), ""), $document, $parent, $this->getName());
+            return $this->__elephc_dom_bind_node(new DOMProcessingInstruction($this->getName(), $this->__elephc_dom_text()), $document, $parent, $this->getName());
         }
         return $this->__elephc_dom_bind_node(new DOMElement(), $document, $parent, $this->getName());
     }
