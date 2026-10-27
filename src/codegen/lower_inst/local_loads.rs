@@ -123,9 +123,9 @@ pub(super) fn load_ref_cell_local_to_result_as(
     ty: &PhpType,
 ) -> Result<PhpType> {
     let result_ty = ty.codegen_repr();
-    // Concrete reference aliases already carry their ABI view, including nominal object
-    // narrowing. Only a physically boxed payload needs decoding before applying that view.
-    let ty = if ctx.ref_cell_payload_type(slot)?.codegen_repr() == PhpType::Mixed {
+    // Incoming references and externally rebound aliases already carry their ABI view.
+    // A frame-owned Mixed promotion needs decoding before applying a narrower logical view.
+    let ty = if ctx.owns_mixed_ref_cell_payload(slot) {
         PhpType::Mixed
     } else {
         result_ty.clone()

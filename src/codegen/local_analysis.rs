@@ -21,6 +21,8 @@ use crate::ir::{
 };
 use crate::types::PhpType;
 
+mod ref_cell_payloads;
+
 /// Cached local-slot facts for one EIR function.
 pub(super) struct LocalSlotAnalysis {
     stored_slots: HashSet<LocalSlotId>,
@@ -29,6 +31,7 @@ pub(super) struct LocalSlotAnalysis {
     ref_cell_slots_before_inst: HashSet<(InstId, LocalSlotId)>,
     release_ops_with_possible_ref_cell: HashSet<InstId>,
     owned_parameter_slots: HashSet<LocalSlotId>,
+    owned_mixed_ref_cell_slots: HashSet<LocalSlotId>,
 }
 
 impl LocalSlotAnalysis {
@@ -81,6 +84,7 @@ impl LocalSlotAnalysis {
             &ever_ref_cell_slots,
         );
         let dynamic_ref_cell_slots = dynamic_ref_cell_slots(function, &ever_ref_cell_slots);
+        let owned_mixed_ref_cell_slots = ref_cell_payloads::owned_mixed_slots(function);
         Self {
             stored_slots,
             ever_ref_cell_slots,
@@ -88,6 +92,7 @@ impl LocalSlotAnalysis {
             ref_cell_slots_before_inst,
             release_ops_with_possible_ref_cell,
             owned_parameter_slots,
+            owned_mixed_ref_cell_slots,
         }
     }
 
@@ -124,6 +129,11 @@ impl LocalSlotAnalysis {
     /// Returns whether the frame owns this by-value parameter for its whole lifetime.
     pub(super) fn owns_parameter_slot(&self, slot: LocalSlotId) -> bool {
         self.owned_parameter_slots.contains(&slot)
+    }
+
+    /// Identifies cells allocated by this frame with a boxed payload and no external rebinding.
+    pub(super) fn owns_mixed_ref_cell_payload(&self, slot: LocalSlotId) -> bool {
+        self.owned_mixed_ref_cell_slots.contains(&slot)
     }
 }
 
