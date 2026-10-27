@@ -182,6 +182,8 @@ pub(crate) struct LoweringSnapshot {
     local_kinds: HashMap<String, LocalKind>,
     local_types: TypeEnv,
     initialized_slots: HashSet<LocalSlotId>,
+    /// PHP slots assigned by an already lowered store, including conditional stores.
+    assigned_php_local_slots: HashSet<LocalSlotId>,
     constants: HashMap<String, (ExprKind, PhpType)>,
     loop_stack: Vec<LoopFrame>,
     finally_stack: Vec<FinallyFrame>,
@@ -297,6 +299,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub(crate) borrowed_string_calls_enabled: bool,
     pub(crate) append_update_cell_aliases: HashSet<String>,
     initialized_slots: HashSet<LocalSlotId>,
+    /// PHP slots assigned by an already lowered store, including conditional stores.
+    assigned_php_local_slots: HashSet<LocalSlotId>,
     pub functions: &'m HashMap<String, FunctionSig>,
     pub extern_functions: &'m HashMap<String, ExternFunctionSig>,
     pub extern_globals: &'m HashMap<String, PhpType>,
@@ -544,6 +548,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             local_kinds: HashMap::new(),
             local_types: env,
             initialized_slots: HashSet::new(),
+            assigned_php_local_slots: HashSet::new(),
             functions,
             extern_functions,
             extern_globals,
@@ -641,6 +646,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             local_kinds: self.local_kinds.clone(),
             local_types: self.local_types.clone(),
             initialized_slots: self.initialized_slots.clone(),
+            assigned_php_local_slots: self.assigned_php_local_slots.clone(),
             constants: self.constants.clone(),
             loop_stack: self.loop_stack.clone(),
             finally_stack: self.finally_stack.clone(),
@@ -722,6 +728,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.local_kinds = snapshot.local_kinds;
         self.local_types = snapshot.local_types;
         self.initialized_slots = snapshot.initialized_slots;
+        self.assigned_php_local_slots = snapshot.assigned_php_local_slots;
         self.constants = snapshot.constants;
         self.loop_stack = snapshot.loop_stack;
         self.finally_stack = snapshot.finally_stack;
@@ -2408,12 +2415,18 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         } else {
             value
         };
-        // An earlier conditional store may have populated this slot even when the merge
-        // cannot prove definite initialization. Frame cleanup slots start at zero, so retiring
-        // an existing slot is safe on both the populated and the never-assigned paths.
+        // An earlier conditional PHP assignment may have populated this slot even when
+        // the merge cannot prove definite initialization. A merely declared one-shot temporary
+        // has no previous owner; keep its first store free of artificial destructor effects.
         if !uses_global
             && local_kind_uses_plain_store_cleanup(previous_kind)
-            && previous_slot.is_some()
+            && previous_slot.is_some_and(|slot| {
+                self.initialized_slots.contains(&slot)
+                    || (previous_kind == LocalKind::PhpLocal
+                        && self.assigned_php_local_slots.contains(&slot))
+                    || !self.loop_stack.is_empty()
+                    || (previous_kind == LocalKind::PhpLocal && self.eval_barrier_active)
+            })
         {
             self.release_stored_local_value_before_overwrite(name, slot, &widened_storage_type, span);
         }
@@ -4652,6 +4665,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             op.default_effects(),
             span,
         );
+        if op == Op::StoreLocal && self.builder.local_kind(slot) == LocalKind::PhpLocal {
+            self.assigned_php_local_slots.insert(slot);
+        }
         self.initialized_slots.insert(slot);
     }
 
