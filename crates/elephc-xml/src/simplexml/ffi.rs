@@ -10,6 +10,12 @@
 use std::ffi::{c_char, c_int, c_void};
 pub(super) type Node = *mut c_void;
 extern "C" {
+    /// Creates the document owner for a literal HTML tree import.
+    #[link_name = "elephc_libxml2_v1_sx_html_document"]
+    pub(super) fn html_document() -> Node;
+    /// Appends a literal DOM node, with no XML parser or namespace interpretation.
+    #[link_name = "elephc_libxml2_v1_sx_html_append"]
+    pub(super) fn html_append(doc: Node, parent: Node, kind: c_int, name: *const c_char, value: *const c_char) -> Node;
     /// Appends a sibling with the source node's exact name and namespace.
     #[link_name = "elephc_libxml2_v1_sx_append_sibling"]
     pub(super) fn append_sibling(node: Node) -> Node;

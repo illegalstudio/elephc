@@ -500,6 +500,25 @@ $projectionImported = simplexml_import_dom($projectionDocument, 'ReviewProjectio
 echo get_class($projectionImported), '|'; unset($projectionImported);
 echo 'nodes|'; unset($projectionDocument); echo 'done|';
 "####;
+    let dom_probes = r####"
+$literalDocument = new DOMDocument();
+$literalDocument->loadHTML('<html xmlns="http://www.w3.org/1999/xhtml"><body><!-- ---- --><p xlink:href="#a" x-on:click="go" :class="active">A &amp; B</p><i>I</i></body></html>', LIBXML_NOERROR | LIBXML_NOWARNING);
+$literalBody = $literalDocument->getElementsByTagName('body')->item(0);
+$beforeChildren = $literalBody->childNodes;
+echo $beforeChildren->item(1)->nextSibling->nodeName, ':', $beforeChildren->item(2)->previousSibling->nodeName, '|';
+$literalXml = simplexml_import_dom($literalDocument);
+echo count($literalXml->xpath('//p')), ':', count($literalXml->getDocNamespaces()), ':', (string)$literalXml['xmlns'], '|';
+echo (string)$literalXml->body->p['xlink:href'], ':', (string)$literalXml->body->p['x-on:click'], ':', (string)$literalXml->body->p[':class'], '|';
+echo (string)$literalXml->body->p, '|', $literalXml->asXML(), '|';
+$afterChildren = $literalBody->childNodes;
+echo $afterChildren->item(0)->nextSibling->nodeName, ':', $afterChildren->item(1)->previousSibling->nodeName, ':', $afterChildren->item(1)->nextSibling->nodeName, ':', $afterChildren->item(2)->previousSibling->nodeName, '|';
+$literalXml->body->p['xlink:href'] = '#changed';
+echo $literalDocument->getElementsByTagName('p')->item(0)->getAttribute('xlink:href'), '|';
+$xmlSiblingDocument = new DOMDocument();
+$xmlSiblingDocument->loadXML('<r><a/><b/></r>');
+$xmlSiblingChildren = $xmlSiblingDocument->documentElement->childNodes;
+echo $xmlSiblingChildren->item(0)->nextSibling->nodeName, ':', $xmlSiblingChildren->item(1)->previousSibling->nodeName, '|';
+"####;
     let declarations = r####"<?php
 class ReviewProjectionDocument extends DOMDocument {
     public function saveXML(mixed $node = null, int $options = 0): string { echo 'wrong-save|'; return '<wrong/>'; }
@@ -621,6 +640,7 @@ stream_filter_register('xml.review.throw', 'XmlReviewThrowFilter');
     let eval_updates = runtime_updates.replace('\\', "\\\\").replace('\'', "\\'");
     let eval_quiet_probes = quiet_probes.replace('\\', "\\\\").replace('\'', "\\'");
     let eval_projection_probes = projection_probes.replace('\\', "\\\\").replace('\'', "\\'");
+    let eval_dom_probes = dom_probes.replace('\\', "\\\\").replace('\'', "\\'");
     let source = format!("{declarations}
         if ($argc === 1) {{ {names} }}
         elseif ($argc === 2) {{ $source = $argc > 0 ? '{eval_names}' : ''; eval($source); }}
@@ -632,6 +652,8 @@ stream_filter_register('xml.review.throw', 'XmlReviewThrowFilter');
         elseif ($argc === 12) {{ $source = $argc > 0 ? '{eval_quiet_probes}' : ''; eval($source); }}
         elseif ($argc === 13) {{ {projection_probes} }}
         elseif ($argc === 14) {{ $source = $argc > 0 ? '{eval_projection_probes}' : ''; eval($source); }}
+        elseif ($argc === 15) {{ {dom_probes} }}
+        elseif ($argc === 16) {{ $source = $argc > 0 ? '{eval_dom_probes}' : ''; eval($source); }}
         else {{
             set_error_handler(function(int $level, string $message): bool {{ return true; }});
             $constructor = $argc === 4 || $argc === 6;
@@ -639,7 +661,7 @@ stream_filter_register('xml.review.throw', 'XmlReviewThrowFilter');
             else {{ $source = $argc > 0 ? '{eval_filters}' : ''; eval($source); }}
             restore_error_handler();
         }}");
-    let args: Vec<_> = (0..14).map(|count| vec!["x"; count]).collect();
+    let args: Vec<_> = (0..16).map(|count| vec!["x"; count]).collect();
     let argvs: Vec<_> = args.iter().map(Vec::as_slice).collect();
     let runs = compile_and_run_with_heap_debug_per_argv(&source, &argvs);
     let names_expected = "<?xml version=\"1.0\"?>\n<r xmlns:p=\"urn:p\" at=\"base\" p:at=\"literal\"><p:q>value</p:q><a:b><c>nested</c></a:b><p:q>second</p:q></r>\n1:value:second:0|base:literal:a:b|method:qualified|:a|SimpleXMLElement::addAttribute(): Attribute requires prefix for namespace|SimpleXMLElement::addAttribute(): Attribute already exists|<?xml version=\"1.0\"?>\n<r xmlns:p=\"urn:p\" at=\"base\" p:at=\"literal\" :c=\"1\"><p:q>value</p:q><a:b><c>nested</c></a:b><p:q>second</p:q><p:method>qualified</p:method><:a>leading</:a></r>\n";
@@ -650,7 +672,8 @@ stream_filter_register('xml.review.throw', 'XmlReviewThrowFilter');
     let eval_updates_expected = "<?xml version=\"1.0\"?>\n<r><a><b><c/></b></a><d><e><f/></e></d><text/></r>\n|<?xml version=\"1.0\"?>\n<r><c>1</c></r>\n|<?xml version=\"1.0\"?>\n<r a=\"5\" b=\"\"/>\n|0|8|<?xml version=\"1.0\"?>\n<r><a><b>1</b></a><a><b>2</b></a></r>\n|get|get|set|count|int(11)\nget|get|direct|count|count|1110|gf|<?xml version=\"1.0\"?>\n<r><a><c>1</c></a></r>\nkf|<?xml version=\"1.0\"?>\n<r><a><c>1</c></a></r>\ngf|<?xml version=\"1.0\"?>\n<r><a><list>1</list></a></r>\nkf|<?xml version=\"1.0\"?>\n<r><a><c/></a></r>\nk|<?xml version=\"1.0\"?>\n<r><a><c/></a></r>\ng|<?xml version=\"1.0\"?>\n<r><a><b><c/></b></a></r>\nkf|1|kDreleased|kDreleased|kkNULL\nstring(2) \"aa\"\nIt's not possible to assign a complex type to properties, resource given|It's not possible to assign a complex type to attributes, resource given|It's not possible to assign a complex type to properties, resource given|It's not possible to assign a complex type to attributes, resource given|<?xml version=\"1.0\"?>\n<r id=\"old\"><a>old</a></r>\n|rhs|<?xml version=\"1.0\"?>\n<r><new/></r>\n|rhs|<?xml version=\"1.0\"?>\n<r><new><leaf>1</leaf></new></r>\n|rhs|name|<?xml version=\"1.0\"?>\n<r><new><leaf>1</leaf></new><converted>1</converted></r>\n|g|f|str|~name|after-plain|g|str|~name|after-compound|g|str|~name|after-incdec|g|f|str|~name|~text|after-name-text|kkf|~text|after-text|g|~name|capture-rhs|g|f|str|~name|capture-name|g|str|~name|after-keep|g|str|f|str|~name|after-fallback|g|str|~name|after-loop|g|str|~name|after-loop|~key|after-key|end-captures|string(1) \"6\"\nstring(1) \"6\"\n2:Unknown: Cannot add element a number 1 when only 0 such elements exist|8:Indirect modification of overloaded element of SimpleXMLElement has no effect|Attempt to assign property \"b\" on null|<?xml version=\"1.0\"?>\n<r><a/></r>\n|2:Unknown: Cannot add element a number 3 when only 1 such elements exist|<?xml version=\"1.0\"?>\n<r><a/><a><b>3</b></a></r>\n|8:Indirect modification of overloaded element of ReviewNumericZeroXml has no effect|Attempt to assign property \"b\" on null|<?xml version=\"1.0\"?>\n<r><a>1</a></r>\n|";
     let quiet_expected = "s|bool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(false)\nbool(false)\nNULL\nm|bool(true)\nbool(true)\nbool(true)\nbool(true)\nfb|c|xD||e|bool(false)\nbool(false)\nbool(false)\nu|D|D|end|fallback|v|self-fb|nullable-fb|nullable-fb|";
     let projection_expected = "J|{\"@attributes\":{\"id\":\"1\"},\"a\":\"x\",\"b\":{\"c\":{}}}|P|D:c|D:b|1:0|V|1:1|A|D:b|D:c|ReviewProjectionXml|O|D:b|ReviewProjectionXml|B|ReviewProjectionXml|D:b|R|D:r|D:b|end|ReviewProjectionXml|D:html|nodes|done|";
-    let expected = [names_expected, names_expected, factory, constructor, factory, constructor, semantics_expected, semantics_expected, updates_expected, eval_updates_expected, quiet_expected, quiet_expected, projection_expected, projection_expected];
+    let dom_expected = "i:p|1:0:http://www.w3.org/1999/xhtml|#a:go:active|A & B|<html xmlns=\"http://www.w3.org/1999/xhtml\"><body><!-- ---- --><p xlink:href=\"#a\" x-on:click=\"go\" :class=\"active\">A &amp; B</p><i>I</i></body></html>|p:#comment:i:p|#changed|b:a|";
+    let expected = [names_expected, names_expected, factory, constructor, factory, constructor, semantics_expected, semantics_expected, updates_expected, eval_updates_expected, quiet_expected, quiet_expected, projection_expected, projection_expected, dom_expected, dom_expected];
     assert_eq!(runs.len(), expected.len());
     for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {
         assert!(out.success, "mode={mode} stdout={:?} stderr={}", out.stdout, out.stderr);

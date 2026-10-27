@@ -9,6 +9,20 @@
 
 use crate::support::*;
 
+/// HTML-only attribute writes replace existing values and append new literal names.
+#[test]
+fn dom_html_set_attribute_updates_unbound_tree() {
+    let out = compile_and_run(r#"<?php
+$document = new DOMDocument();
+$document->loadHTML('<html><body><p id="old">value</p></body></html>');
+$element = $document->getElementsByTagName('p')->item(0);
+$element->setAttribute('id', 'new & value');
+$element->setAttribute('data-name', 'added');
+echo $element->getAttribute('id'), '|', $element->getAttribute('data-name'), '|', $document->saveXML($element);
+"#);
+    assert_eq!(out, "new & value|added|<p id=\"new &amp; value\" data-name=\"added\">value</p>");
+}
+
 /// An old implied-root flag must not trim whitespace inside a later unclosed element.
 #[test]
 fn dom_html_body_boundary_review_later_element_blanks() {

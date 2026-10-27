@@ -54,6 +54,40 @@ pub unsafe extern "C" fn elephc_xml_sx_load_dom(data: *const c_char, length: i64
             "", false, "", 2).map(insert).unwrap_or(0)
     })
 }
+/// Creates an internal document lease before any HTML element has been appended.
+#[no_mangle]
+pub extern "C" fn elephc_xml_sx_html_document() -> i64 {
+    guard(|| {
+        crate::ffi::init_library();
+        let raw = unsafe { ffi::html_document() };
+        if raw.is_null() { return 0; }
+        let doc = Rc::new(Document { raw, detached: RefCell::new(vec![]), detached_set: RefCell::new(HashSet::new()) });
+        insert(View { _clone_owner: None, doc, scope: Scope::Node(std::ptr::null_mut()),
+            identity: std::ptr::null_mut(), ns: Namespace::default(),
+            xpath_ns: Rc::new(RefCell::new(BTreeMap::new())) })
+    })
+}
+/// Retains each appended literal HTML node independently of its temporary parent handle.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_xml_sx_html_append(handle: i64, kind: i64, name: *const c_char, value: *const c_char) -> i64 {
+    guard(|| {
+        let Some(parent) = view(handle) else { return 0; };
+        let Ok(kind) = i32::try_from(kind) else { return 0; };
+        let node = ffi::html_append(parent.doc.raw, parent.first().unwrap_or(std::ptr::null_mut()), kind, name, value);
+        if node.is_null() { return 0; }
+        insert(parent.with_scope(Scope::Node(node)))
+    })
+}
+/// Publishes an imported root while keeping rootless builder leases internal.
+#[no_mangle]
+pub extern "C" fn elephc_xml_sx_html_root(handle: i64) -> i64 {
+    guard(|| {
+        let Some(document) = view(handle) else { return 0; };
+        let root = unsafe { ffi::root(document.doc.raw) };
+        if root.is_null() { return 0; }
+        insert(document.with_scope(Scope::Node(root)))
+    })
+}
 /// Opens a file or URL through libxml so read failures retain the SimpleXML caller's warnings.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_xml_sx_load_file(filename: *const c_char, options: i64, ns: *const c_char, prefix: i64) -> i64 {

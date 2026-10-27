@@ -3,7 +3,7 @@
 //! `elephc-xml` bridge links, and retains libxml2's complete public header set.
 //!
 //! Called from:
-//! - `crate::native_deps::recipe::CuratedRecipes` for libxml2 recipe revision 8.
+//! - `crate::native_deps::recipe::CuratedRecipes` for libxml2 recipe revision 9.
 //!
 //! Key details:
 //! - Out-of-tree autoconf build, static/PIC only. Python bindings, zlib, ICU, readline/history
@@ -49,7 +49,8 @@ use super::super::toolchain::run_checked;
 use super::util::{copy_regular, require_regular};
 
 /// Embedded shim source used by installed Elephc binaries without repository access.
-pub const SHIM_SOURCE: &str = concat!(include_str!("libxml2_shim.c"), "\n", include_str!("libxml2_simplexml.c"));
+pub const SHIM_SOURCE: &str = concat!(include_str!("libxml2_shim.c"), "\n", include_str!("libxml2_simplexml.c"),
+    "\n", include_str!("libxml2_simplexml_tree.c"));
 
 /// The exact configure switches revision 1 passes, in order, before the `CFLAGS=` operand and
 /// any cross `--host=`.

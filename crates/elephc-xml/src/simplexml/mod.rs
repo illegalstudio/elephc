@@ -298,3 +298,6 @@ fn from_document(raw: Node, namespace: &str, prefix: bool) -> Option<View> {
 
 #[cfg(all(test, elephc_xml_native))]
 mod tests;
+
+#[cfg(all(test, elephc_xml_native))]
+mod tests_html_import;

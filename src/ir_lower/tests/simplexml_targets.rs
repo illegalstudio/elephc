@@ -18,6 +18,10 @@ class TargetXmlSaveDocument extends DOMDocument {
 $saveDocument = new TargetXmlSaveDocument();
 $saveDocument->loadHTML('<html><body>target</body></html>');
 echo $saveDocument->saveXML();
+$targetHtmlXml = simplexml_import_dom($saveDocument);
+echo count($targetHtmlXml->xpath('//body'));
+$targetXmlChildren = $saveDocument->documentElement->childNodes;
+echo $targetXmlChildren->item(0)->nodeName;
 class TargetHookedCoalesceXml extends SimpleXMLElement {
     public function __isset(string $name): bool { return true; }
     public function __get(string $name): mixed { return 'wrong'; }

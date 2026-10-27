@@ -12,6 +12,9 @@ pub(super) const SOURCE: &str = r###"<?php
 extern "elephc_xml" {
     function elephc_xml_sx_load(string $data, int $length, int $options, string $ns, int $prefix, string $url): int;
     function elephc_xml_sx_load_dom(string $data, int $length, int $options): int;
+    function elephc_xml_sx_html_document(): int;
+    function elephc_xml_sx_html_append(int $handle, int $kind, string $name, string $value): int;
+    function elephc_xml_sx_html_root(int $handle): int;
     function elephc_xml_sx_load_file(string $filename, int $options, string $ns, int $prefix): int;
     function elephc_xml_sx_load_stream(string $filename, string $data, int $length, int $options, string $ns, int $prefix): int;
     function elephc_xml_sx_diagnostics(): string;
@@ -679,6 +682,8 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         foreach ($this->__elephc_dom_selections() as $view) {
             if ($view instanceof SimpleXMLElement) { $children[] = $view->__elephc_dom_node($document, $parent); }
         }
+        $length = count($children);
+        for ($i = 1; $i < $length; $i++) { __elephc_dom_link_siblings($children[$i - 1], $children[$i]); }
         return new DOMNodeList($children);
     }
     public function __elephc_dom_node(mixed $document, mixed $parent): DOMNode {
@@ -854,6 +859,38 @@ function __elephc_simplexml_import_node(DOMNode $node, string $class): ?SimpleXM
     return null;
 }
 function __elephc_simplexml_import_document(DOMDocument $document, string $class): SimpleXMLElement|false {
-    return simplexml_load_string(__elephc_dom_serialize_node($document), $class);
+    $builder = elephc_xml_sx_html_document();
+    if ($builder === 0) { return false; }
+    try {
+        foreach ($document->childNodes as $child) {
+            if ($child instanceof DOMNode) { __elephc_simplexml_import_child($builder, $child); }
+        }
+        $root = elephc_xml_sx_html_root($builder);
+        if ($root === 0) { return false; }
+        return __elephc_simplexml_wrap($root, $class);
+    } finally { elephc_xml_sx_free($builder); }
+}
+function __elephc_simplexml_import_child(int $parent, DOMNode $node): void {
+    $kind = 0;
+    if ($node instanceof DOMElement) { $kind = 1; }
+    elseif ($node instanceof DOMText) { $kind = $node->__elephc_raw_text ? 4 : 3; }
+    elseif ($node instanceof DOMComment) { $kind = 5; }
+    elseif ($node instanceof DOMProcessingInstruction) { $kind = 6; }
+    if ($kind === 0) { return; }
+    $value = $kind === 1 ? '' : (string)$node->nodeValue;
+    $handle = elephc_xml_sx_html_append($parent, $kind, $node->nodeName, $value);
+    if ($handle === 0) { throw new Error('Could not import DOM node'); }
+    try {
+        if ($kind === 1) {
+            foreach ($node->__attrs as $pair) {
+                $attribute = elephc_xml_sx_html_append($handle, 2, (string)$pair[0], (string)$pair[1]);
+                if ($attribute === 0) { throw new Error('Could not import DOM attribute'); }
+                elephc_xml_sx_free($attribute);
+            }
+            foreach ($node->childNodes as $child) {
+                if ($child instanceof DOMNode) { __elephc_simplexml_import_child($handle, $child); }
+            }
+        }
+    } finally { elephc_xml_sx_free($handle); }
 }
 "###;

@@ -160,7 +160,7 @@ void elephc_libxml2_v1_sx_string_free(void *value) { xmlFree(value); }
 char *elephc_libxml2_v1_sx_dump(void *rawdoc, void *rawnode) {
     xmlDocPtr doc = rawdoc;
     xmlNodePtr node = rawnode;
-    if (node == xmlDocGetRootElement(doc)) {
+    if (doc->type == XML_DOCUMENT_NODE && node == xmlDocGetRootElement(doc)) {
         xmlChar *out = NULL; int size = 0;
         xmlDocDumpMemory(doc, &out, &size);
         return (char *)out;
@@ -308,7 +308,7 @@ char *elephc_libxml2_v1_sx_dump_bytes(void *rawdoc, void *rawnode, int whole, in
     xmlDocPtr doc = rawdoc;
     xmlNodePtr node = rawnode;
     *length = 0;
-    if (whole && node == xmlDocGetRootElement(doc)) {
+    if (whole && doc->type == XML_DOCUMENT_NODE && node == xmlDocGetRootElement(doc)) {
         xmlChar *out = NULL;
         xmlDocDumpMemory(doc, &out, length);
         return (char *)out;
