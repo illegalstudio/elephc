@@ -2408,21 +2408,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         } else {
             value
         };
+        // An earlier conditional store may have populated this slot even when the merge
+        // cannot prove definite initialization. Frame cleanup slots start at zero, so retiring
+        // an existing slot is safe on both the populated and the never-assigned paths.
         if !uses_global
             && local_kind_uses_plain_store_cleanup(previous_kind)
-            && previous_slot.is_some_and(|slot| self.initialized_slots.contains(&slot))
-        {
-            self.release_stored_local_value_before_overwrite(name, slot, &widened_storage_type, span);
-        }
-        // A loop-carried slot can exist globally without being definitely initialized
-        // on this CFG path. An earlier eval barrier can likewise reload a future PHP local
-        // before lowering reaches its first syntactic store. Release either runtime occupant
-        // before overwriting it.
-        if !uses_global
-            && local_kind_uses_plain_store_cleanup(previous_kind)
-            && previous_slot.is_some_and(|slot| !self.initialized_slots.contains(&slot))
-            && (!self.loop_stack.is_empty()
-                || (previous_kind == LocalKind::PhpLocal && self.eval_barrier_active))
+            && previous_slot.is_some()
         {
             self.release_stored_local_value_before_overwrite(name, slot, &widened_storage_type, span);
         }
