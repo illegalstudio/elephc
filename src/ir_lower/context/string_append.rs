@@ -1,5 +1,5 @@
 //! Purpose:
-//! Proves and publishes string storage contracts for consuming appends and borrowed builtin reads.
+//! Proves final string storage for consuming appends, borrowed builtin reads and offset receivers.
 //!
 //! Called from:
 //! - Function-body lowering to check provisional string storage after the complete body.
@@ -31,10 +31,18 @@ impl LoweringContext<'_, '_> {
             let Some(Immediate::LocalSlot(slot)) = inst.immediate else { return true; };
             self.builder.local_php_type(slot).codegen_repr() != self.builder.value_php_type(*value).codegen_repr()
         });
-        if invalidated_append || invalidated_read {
+        let owned_offsets: HashSet<_> = self.string_offset_receivers.iter().filter_map(|(span, value)| {
+            let inst = self.builder.value_defining_instruction(*value)?;
+            let Some(Immediate::LocalSlot(slot)) = inst.immediate else { return None; };
+            crate::ir::local_load_coercion_owns_result(
+                &self.builder.local_php_type(slot), &self.builder.value_php_type(*value),
+            ).then_some(*span)
+        }).collect();
+        if invalidated_append || invalidated_read || !owned_offsets.is_empty() {
             // Replay the existing ownership path instead of repairing a consuming
             // store piecemeal: widened loads, acquires and old-owner releases must agree.
             self.restore(checkpoint);
+            self.owned_string_offset_sites.extend(owned_offsets);
             if invalidated_append { self.consuming_string_append_enabled = false; }
             if invalidated_read { self.borrowed_string_calls_enabled = false; }
             lower(self);

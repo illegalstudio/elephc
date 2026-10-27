@@ -28,6 +28,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_cstr(emitter);
     io::emit_disk_space(emitter);
     io::emit_fopen(emitter);
+    io::emit_fileinfo_streams(emitter);
     io::emit_fgets(emitter);
     io::emit_feof(emitter);
     io::emit_stream_isatty(emitter);
@@ -56,6 +57,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_fsockopen(emitter);
     io::emit_stream_wrapper_register(emitter);
     io::emit_stream_wrapper_unregister(emitter);
+    io::emit_stream_registry(emitter);
     io::emit_stream_socket_server(emitter);
     io::emit_stream_socket_client(emitter);
     io::emit_unix_socket_server(emitter);
@@ -124,7 +126,6 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_fire_notification(emitter);
     io::emit_user_wrapper_stream_cast(emitter);
     io::emit_stream_filter_register(emitter);
-    io::emit_stream_registry_cleanup(emitter);
     io::emit_resolve_user_filter_id(emitter);
     io::emit_stream_filter_attach_user(emitter);
     io::emit_apply_user_stream_filter(emitter);

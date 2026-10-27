@@ -2,7 +2,7 @@
 title: "chr() - internals"
 description: "Compiler internals for chr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 805
+  order: 811
 ---
 
 ## `chr()` - internals

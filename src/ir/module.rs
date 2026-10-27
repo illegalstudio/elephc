@@ -267,7 +267,7 @@ impl Module {
                 .any(Function::keeps_backtrace_argument_snapshot)
     }
 
-    /// Returns whether a backtrace can be requested by a direct call or through the eval bridge.
+    /// Returns whether a backtrace or generated diagnostic observes the physical PHP call chain.
     ///
     /// A backtrace requested any other way (a `debug_backtrace` callable string, a descriptor)
     /// makes the argument-introspection pass give EVERY PHP frame an argument snapshot, which
@@ -290,6 +290,7 @@ impl Module {
                                 Some(
                                     crate::ir::CoreBuiltinOp::DebugBacktrace
                                         | crate::ir::CoreBuiltinOp::DebugPrintBacktrace
+                                        | crate::ir::CoreBuiltinOp::DiagnosticCallerLine
                                 )
                             )
                     )

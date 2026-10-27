@@ -2,7 +2,7 @@
 title: "session_set_save_handler()"
 description: "Installs a custom session storage handler."
 sidebar:
-  order: 1017
+  order: 1023
 ---
 
 ## session_set_save_handler()

@@ -11,7 +11,6 @@
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::runtime::strings::CONCAT_BUF_CAPACITY;
 use crate::codegen_support::sentinels::{
     emit_branch_if_null_container, CONCAT_TEMP_HEAP_KIND,
 };
@@ -19,7 +18,6 @@ use crate::codegen_support::sentinels::{
 const PROBE_FRAME: usize = 64;
 const WRITE_FRAME: usize = 96;
 const TRY_FRAME: usize = 48;
-const MAX_SCRATCH_INTEGER_SLOTS: usize = (CONCAT_BUF_CAPACITY - 1) / 21;
 
 /// Emits all AArch64 helper bodies used by the integer-tree fast path.
 pub(super) fn emit_helpers(emitter: &mut Emitter) {
@@ -34,6 +32,7 @@ pub(super) fn emit_entry(emitter: &mut Emitter, prefix: &str) {
     let fallback = format!("{prefix}_fallback");
     let unsupported = format!("{prefix}_unsupported");
     let attempt = format!("{prefix}_attempt");
+    let max_scratch_integer_slots = (emitter.concat_capacity - 1) / 21;
 
     // -- keep flags, recursive encodes, and unsupported trees on the general encoder --
     abi::emit_symbol_address(emitter, "x9", "_json_active_flags");
@@ -49,7 +48,8 @@ pub(super) fn emit_entry(emitter: &mut Emitter, prefix: &str) {
     emitter.instruction("and x9, x9, #0x7f");                                   // discard copy-on-write and other header flags
     emitter.instruction(&format!("cbnz x9, {attempt}"));                        // nested and boxed layouts still need the complete proof
     emitter.instruction("ldr x9, [x0]");                                        // load the direct integer array length
-    emitter.instruction(&format!("cmp x9, #{MAX_SCRATCH_INTEGER_SLOTS}"));      // test the twenty-byte-per-value upper bound against scratch capacity
+    abi::emit_load_int_immediate(emitter, "x10", max_scratch_integer_slots as i64);
+    emitter.instruction("cmp x9, x10");                                         // test the twenty-byte-per-value upper bound against scratch capacity
     emitter.instruction(&format!("b.ls {fallback}"));                           // bounded direct arrays retain the faster single-pass encoder
     emitter.label(&attempt);
 

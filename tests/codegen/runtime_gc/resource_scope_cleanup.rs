@@ -12,6 +12,23 @@
 
 use crate::support::*;
 
+/// A fresh stream result retires its filename argument independently of its resource box.
+#[test]
+fn test_fopen_filename_heap_ownership() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$path = tempnam(sys_get_temp_dir(), "finfo");
+file_put_contents($path, "hello");
+$stream = fopen($path, "rb");
+$value = stream_get_contents($stream, 7340032);
+echo $value, "\n";
+fclose($stream);
+unlink($path);
+unset($value, $stream, $path);
+"#);
+    assert_eq!(out.stdout, "hello\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Verifies that a HashContext never finalized is auto-freed at scope exit
 /// through `__rt_mixed_free_deep` tag-9 kind-2 → `__rt_hash_ctx_free`.
 #[test]

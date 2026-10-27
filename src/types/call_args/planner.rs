@@ -81,6 +81,7 @@ pub(crate) fn plan_call_args_with_regular_param_count(
         return Ok(CallArgPlan {
             passthrough_args: Some(source_args.clone()),
             source_args,
+            source_origins,
             regular_args: Vec::new(),
             variadic_args: Vec::new(),
             source_values: Vec::new(),
@@ -139,6 +140,7 @@ pub(crate) fn plan_call_args_with_regular_param_count_and_assoc_spreads(
         return Ok(CallArgPlan {
             passthrough_args: Some(source_args.clone()),
             source_args,
+            source_origins,
             regular_args: Vec::new(),
             variadic_args: Vec::new(),
             source_values: Vec::new(),
@@ -507,6 +509,7 @@ fn plan_named_call_args(
 
     Ok(CallArgPlan {
         source_args,
+        source_origins: source_origins.to_vec(),
         regular_args,
         variadic_args,
         source_values: source_values.into_iter().flatten().collect(),

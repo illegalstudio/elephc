@@ -2,7 +2,7 @@
 title: "imagepng()"
 description: "Writes an image as PNG, to a file or to the output buffer."
 sidebar:
-  order: 522
+  order: 528
 ---
 
 ## imagepng()

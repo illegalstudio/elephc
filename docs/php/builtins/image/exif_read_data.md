@@ -2,7 +2,7 @@
 title: "exif_read_data()"
 description: "Reads the EXIF headers of a JPEG or TIFF image."
 sidebar:
-  order: 449
+  order: 455
 ---
 
 ## exif_read_data()

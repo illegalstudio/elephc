@@ -151,7 +151,8 @@ pub(super) fn eval_native_member_attribute_record(
 ) -> Vec<u8> {
     let mut record = Vec::new();
     record.push(registration.owner_kind);
-    let member_key = if registration.owner_kind == NATIVE_MEMBER_ATTRIBUTE_CLASS {
+    let member_key = if matches!(registration.owner_kind,
+        NATIVE_MEMBER_ATTRIBUTE_CLASS | NATIVE_MEMBER_ATTRIBUTE_FUNCTION) {
         registration.class_name.clone()
     } else {
         format!("{}::{}", registration.class_name, registration.member_name)

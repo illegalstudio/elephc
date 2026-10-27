@@ -2,7 +2,7 @@
 title: "getimagesize() - internals"
 description: "Compiler internals for getimagesize(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 453
+  order: 459
 ---
 
 ## `getimagesize()` - internals

@@ -172,7 +172,7 @@ pub fn eval_support(contract: &BuiltinContract) -> BackendSupport {
 
 /// Prelude-provided surfaces outside `ext/curl` that Magician binds with its own eval homes.
 const EVAL_IMPLEMENTED_PRELUDE_SURFACES: &[&str] =
-    &["hash_copy", "hash_final", "hash_init", "hash_update", "token_get_all", "token_name", "zend_version"];
+    &["hash_copy", "hash_final", "hash_init", "hash_update", "token_get_all", "token_name", "zend_version", "finfo_open", "finfo_close", "finfo_set_flags", "finfo_file", "finfo_buffer", "mime_content_type"];
 
 /// Returns the documented execution route for an eval-supported contract.
 pub fn eval_execution(contract: &BuiltinContract) -> Option<EvalExecution> {
@@ -377,7 +377,7 @@ mod tests {
         // raw-memory builtins and `buffer_ptr`, bound in eval through their own registry homes.
         // The tokenizer location helper also uses the shared runtime registry.
         // Five native heap metric bindings share the boxed runtime dispatcher.
-        assert_eq!(eval_registry, 699 + curl_surface);
+        assert_eq!(eval_registry, 705 + curl_surface);
         // Compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use, plus the ELEVEN
         // `__elephc_opcache_rt_*` runtime script-cache helpers this branch adds.
@@ -396,7 +396,7 @@ mod tests {
         //
         // None of the eleven is callable from eval'd code.
         // Includes SimpleXML allocation/warnings, the abstract-class probe and the internal random helper.
-        assert_eq!(eval_internal, 129);
+        assert_eq!(eval_internal, 131);
         // 28 registry builtins awaiting eval homes, plus the 325 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
         assert_eq!(eval_pending, 359);
@@ -407,10 +407,10 @@ mod tests {
         // `ptr_write_f64`) and `buffer_ptr` are ordinary registry builtins on both backends.
         // The tokenizer location helper is a typed ordinary registry operation.
         // Five native heap metric operations use the ordinary AOT registry.
-        assert_eq!(aot_registry, 766);
+        assert_eq!(aot_registry, 768);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
-        assert_eq!(aot_external, 421 + curl_surface);
+        assert_eq!(aot_external, 427 + curl_surface);
     }
 
     /// Verifies representative exceptional routes are attached to their contracts.
@@ -462,10 +462,10 @@ mod tests {
         assert_eq!(hybrid_adapter, 4);
         // Includes the four float pointer builtins and `buffer_ptr`, which eval runs through
         // interpreter adapters.
-        assert_eq!(interpreter_adapter, 606 + curl_surface);
+        assert_eq!(interpreter_adapter, 612 + curl_surface);
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own.
-        assert_eq!(unsupported, 488);
+        assert_eq!(unsupported, 490);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

@@ -135,3 +135,18 @@ echo strlen($home) > 0 ? "ok" : "empty";
     );
     assert_eq!(out, "ok");
 }
+
+/// C-string returns are copied before argument cleanup, including pointers into an argument.
+#[test]
+fn test_ffi_extern_copied_string_return_releases_arguments() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+extern function strchr(string $value, i32 $byte): string;
+function directSearch(string $value): string { return strchr($value, 97); }
+function callableSearch(string $value): string { return call_user_func('strchr', $value, 97); }
+$value = str_repeat('a', $argc + 3);
+echo strlen(directSearch($value)), strlen(callableSearch($value));
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "44", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

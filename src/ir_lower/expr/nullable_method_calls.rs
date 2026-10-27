@@ -169,17 +169,9 @@ fn lower_method_call_with_binding(
     let result_staging = prepublish_user_call_result(
         ctx, sig.as_ref(), &return_alias, &result_type, expr.span,
     );
-    // Nullable and nullsafe dispatch need the same pre-default receiver root as direct calls.
-    let (object, default_receiver_owner) = if sig.as_ref().is_some_and(|signature| {
-        signature.defaults.iter().flatten()
-            .any(crate::types::deferred_defaults::contains_deferred_error)
-    }) {
-        root_owned_call_operand(ctx, object, expr.span)
-    } else {
-        (object, None)
-    };
-    let receiver_guarded = default_receiver_owner.is_none()
-        && guard_method_receiver_on_throw(ctx, object, expr.span);
+    // A concrete local load may later unbox physical Mixed storage after eval widens
+    // its slot. Acquiring a root is safe for both borrowed and independently owned loads.
+    let (object, receiver_owner) = root_method_receiver(ctx, object, expr.span);
     let mut operands = vec![object.value];
     begin_call_argument_evaluation(ctx);
     let enum_args = singular_object_class(&ctx.builder.value_php_type(object.value))
@@ -230,10 +222,9 @@ fn lower_method_call_with_binding(
         expr.span,
     );
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
-    if let Some(owner) = default_receiver_owner {
+    if let Some(owner) = receiver_owner {
         retire_owned_call_operand(ctx, owner, expr.span);
     } else {
-        if receiver_guarded { ctx.unguard_call_argument(object.value, expr.span); }
         release_owning_receiver_temporary(ctx, object, expr.span);
     }
     let call = take_prepublished_call_result(ctx, result_staging, call, expr.span);
@@ -489,6 +480,13 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
                                 | Op::CallableDescriptorInvoke
                         )
                     );
+                    // A boxed user return owns its persisted string independently of the raw
+                    // argument, including temporary calls and string casts from Mixed storage.
+                    // Provisional local releases remain subject to backend ownership filtering.
+                    if arg_repr == PhpType::Str && result_repr == PhpType::Mixed && user_call_result {
+                        crate::ir_lower::ownership::release_if_owned(ctx, lowered, Some(span));
+                        continue;
+                    }
                     if owned_string_arg && user_call_result {
                         if result_repr == PhpType::Str {
                             ctx.emit_void(

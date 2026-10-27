@@ -2,7 +2,7 @@
 title: "xml_parse()"
 description: "Parses a chunk of XML data, dispatching the registered handlers."
 sidebar:
-  order: 1032
+  order: 1038
 ---
 
 ## xml_parse()

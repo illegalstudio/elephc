@@ -2,7 +2,7 @@
 title: "buffer_new()"
 description: "Allocates a raw byte buffer."
 sidebar:
-  order: 741
+  order: 747
 ---
 
 ## buffer_new()

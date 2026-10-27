@@ -2,7 +2,7 @@
 title: "pcntl_unshare() - internals"
 description: "Compiler internals for pcntl_unshare(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 679
+  order: 685
 ---
 
 ## `pcntl_unshare()` - internals

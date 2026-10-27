@@ -2,7 +2,7 @@
 title: "imagedashedline()"
 description: "Draws a dashed line. Superseded by imagesetstyle() with imageline()."
 sidebar:
-  order: 498
+  order: 504
 ---
 
 ## imagedashedline()

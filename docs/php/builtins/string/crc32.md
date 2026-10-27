@@ -2,7 +2,7 @@
 title: "crc32()"
 description: "Calculates the CRC32 polynomial of a string."
 sidebar:
-  order: 808
+  order: 814
 ---
 
 ## crc32()

@@ -2,7 +2,7 @@
 title: "fsockopen()"
 description: "Open Internet or Unix domain socket connection."
 sidebar:
-  order: 794
+  order: 800
 ---
 
 ## fsockopen()

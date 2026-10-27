@@ -70,6 +70,12 @@ pub(super) fn reflection_builtin_function_metadata(
     function_name: &str,
     signature: &FunctionSig,
 ) -> Result<ReflectionOwnerMetadata> {
+    let is_deprecated = elephc_builtin_contract::lookup(function_name)
+        .map_or(signature.deprecation.is_some(), |contract| {
+            contract.deprecation.is_some_and(|deprecation| {
+                deprecation.is_active_for(crate::codegen::compile_php_version())
+            })
+        });
     let required_parameter_count = reflection_required_parameter_count(signature);
     let type_metadata = reflection_return_type_metadata(signature);
     let declaring_function = ReflectionDeclaringFunctionMember::Function {
@@ -78,7 +84,7 @@ pub(super) fn reflection_builtin_function_metadata(
         attr_args: Vec::new(),
         required_parameter_count,
         type_metadata: type_metadata.clone(),
-        is_deprecated: signature.deprecation.is_some(),
+        is_deprecated,
         is_generator: false,
         returns_reference: false,
     };
@@ -96,7 +102,7 @@ pub(super) fn reflection_builtin_function_metadata(
     )?;
     metadata.required_parameter_count = required_parameter_count;
     metadata.type_metadata = type_metadata;
-    metadata.is_deprecated = signature.deprecation.is_some();
+    metadata.is_deprecated = is_deprecated;
     Ok(metadata)
 }
 

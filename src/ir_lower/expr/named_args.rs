@@ -9,6 +9,31 @@
 
 use super::*;
 
+/// Lowers named builtin arguments without inventing a user-function variadic collector.
+///
+/// Without spreads, valid named builtin calls have no variadic entries: positional values precede
+/// named regular parameters, and the checker rejects unknown names. The shared planner still owns
+/// source evaluation and parameter ordering, using a storage signature with no empty collector.
+pub(super) fn lower_named_builtin_args_with_signature(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    let Some(sig) = sig else { return lower_args(ctx, args); };
+    let mut storage = sig.clone();
+    if storage.variadic.is_some() {
+        let regular = crate::types::call_args::regular_param_count(sig);
+        storage.params.truncate(regular);
+        storage.param_type_exprs.truncate(regular);
+        storage.param_attributes.truncate(regular);
+        storage.ref_params.truncate(regular);
+        storage.declared_params.truncate(regular);
+        storage.defaults.truncate(regular);
+        storage.variadic = None;
+    }
+    lower_args_with_signature(ctx, Some(&storage), args)
+}
+
 /// Lowers named arguments with caller-selected trailing-default preservation.
 pub(super) fn lower_named_args_with_signature_options(
     ctx: &mut LoweringContext<'_, '_>,

@@ -2,7 +2,7 @@
 title: "srand() - internals"
 description: "Compiler internals for srand(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 607
+  order: 613
 ---
 
 ## `srand()` - internals

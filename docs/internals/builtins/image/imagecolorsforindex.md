@@ -2,7 +2,7 @@
 title: "imagecolorsforindex() - internals"
 description: "Compiler internals for imagecolorsforindex(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 478
+  order: 484
 ---
 
 ## `imagecolorsforindex()` - internals

@@ -2,7 +2,7 @@
 title: "cairo_get_current_point()"
 description: "Returns the current point of the path as an [x, y] pair."
 sidebar:
-  order: 407
+  order: 413
 ---
 
 ## cairo_get_current_point()

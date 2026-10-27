@@ -96,7 +96,7 @@ pub(super) fn reflection_class_metadata_for_name(
         };
         let is_instantiable =
             reflection_class_is_instantiable(info, is_enum, constructor_member.as_ref());
-        let is_cloneable = reflection_class_is_cloneable(class_name, info, is_enum);
+        let is_cloneable = reflection_class_is_cloneable(class_name, info, is_enum, &ctx.module.class_infos);
         let is_iterable = reflection_class_is_iterable(info, is_enum);
         return Ok(ReflectionOwnerMetadata {
             rendered_to_string: None,

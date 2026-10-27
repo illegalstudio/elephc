@@ -45,6 +45,7 @@ env:
     -p elephc-image
     -p elephc-pcntl
     -p elephc-xml
+    -p elephc-fileinfo
     -p elephc-tokenizer
     -p elephc-magician
     -p elephc-web
@@ -225,7 +226,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
-          key: libxml2-native-macos-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
+          key: libxml2-native-macos-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             libxml2-native-macos-aarch64-
 
@@ -237,6 +238,17 @@ jobs:
           ./target/debug/elephc native install --locked \
             --target macos-aarch64 \
             --manifest-path examples/xml/elephc.toml
+
+      - name: Materialize managed native libmagic
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target macos-aarch64 \
+            --manifest-path examples/fileinfo/elephc.toml
+
+      - name: Test the fileinfo bridge against managed libmagic
+        run: |
+          ELEPHC_FILEINFO_LIBMAGIC_LIB_DIR="$(sh scripts/ci/libmagic_lib_dir.sh macos-aarch64)" \
+            cargo test -p elephc-fileinfo
 
       - name: Test the xml bridge against managed libxml2
         # crates/elephc-xml/build.rs reads ELEPHC_XML_LIBXML2_LIB_DIR (the artifact's
@@ -392,7 +404,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
-          key: libxml2-native-linux-x86_64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
+          key: libxml2-native-linux-x86_64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             libxml2-native-linux-x86_64-
 
@@ -404,6 +416,17 @@ jobs:
           ./target/debug/elephc native install --locked \
             --target linux-x86_64 \
             --manifest-path examples/xml/elephc.toml
+
+      - name: Materialize managed native libmagic
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-x86_64 \
+            --manifest-path examples/fileinfo/elephc.toml
+
+      - name: Test the fileinfo bridge against managed libmagic
+        run: |
+          ELEPHC_FILEINFO_LIBMAGIC_LIB_DIR="$(sh scripts/ci/libmagic_lib_dir.sh linux-x86_64)" \
+            cargo test -p elephc-fileinfo
 
       - name: Test the xml bridge against managed libxml2
         # crates/elephc-xml/build.rs reads ELEPHC_XML_LIBXML2_LIB_DIR (the artifact's
@@ -551,7 +574,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
-          key: libxml2-native-linux-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
+          key: libxml2-native-linux-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             libxml2-native-linux-aarch64-
 
@@ -563,6 +586,17 @@ jobs:
           ./target/debug/elephc native install --locked \
             --target linux-aarch64 \
             --manifest-path examples/xml/elephc.toml
+
+      - name: Materialize managed native libmagic
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-aarch64 \
+            --manifest-path examples/fileinfo/elephc.toml
+
+      - name: Test the fileinfo bridge against managed libmagic
+        run: |
+          ELEPHC_FILEINFO_LIBMAGIC_LIB_DIR="$(sh scripts/ci/libmagic_lib_dir.sh linux-aarch64)" \
+            cargo test -p elephc-fileinfo
 
       - name: Test the xml bridge against managed libxml2
         # crates/elephc-xml/build.rs reads ELEPHC_XML_LIBXML2_LIB_DIR (the artifact's
@@ -1175,7 +1209,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
-          key: libxml2-native-macos-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
+          key: libxml2-native-macos-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             libxml2-native-macos-aarch64-
 
@@ -1200,6 +1234,12 @@ jobs:
             --target macos-aarch64 \
             --manifest-path examples/xml/elephc.toml
 
+      - name: Materialize managed native libmagic
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target macos-aarch64 \
+            --manifest-path examples/fileinfo/elephc.toml
+
       - name: Run codegen test shard
         env:
           CARGO_NET_OFFLINE: "true"
@@ -1215,6 +1255,7 @@ jobs:
           # A missing libxml2 artifact must FAIL an xml fixture here, never skip it:
           # the package was materialized just above, so absence is a provisioning bug.
           ELEPHC_TEST_REQUIRE_XML_NATIVE: "1"
+          ELEPHC_TEST_REQUIRE_FILEINFO_NATIVE: "1"
         run: |
           "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
@@ -1269,7 +1310,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
-          key: libxml2-native-linux-x86_64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
+          key: libxml2-native-linux-x86_64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             libxml2-native-linux-x86_64-
 
@@ -1294,6 +1335,12 @@ jobs:
             --target linux-x86_64 \
             --manifest-path examples/xml/elephc.toml
 
+      - name: Materialize managed native libmagic
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target linux-x86_64 \
+            --manifest-path examples/fileinfo/elephc.toml
+
       - name: Run codegen test shard
         env:
           CARGO_NET_OFFLINE: "true"
@@ -1301,6 +1348,7 @@ jobs:
           # A missing libxml2 artifact must FAIL an xml fixture here, never skip it:
           # the package was materialized just above, so absence is a provisioning bug.
           ELEPHC_TEST_REQUIRE_XML_NATIVE: "1"
+          ELEPHC_TEST_REQUIRE_FILEINFO_NATIVE: "1"
         run: |
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
@@ -1355,7 +1403,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
-          key: libxml2-native-linux-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
+          key: libxml2-native-linux-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             libxml2-native-linux-aarch64-
 
@@ -1380,6 +1428,12 @@ jobs:
             --target linux-aarch64 \
             --manifest-path examples/xml/elephc.toml
 
+      - name: Materialize managed native libmagic
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target linux-aarch64 \
+            --manifest-path examples/fileinfo/elephc.toml
+
       - name: Run codegen test shard
         env:
           CARGO_NET_OFFLINE: "true"
@@ -1387,6 +1441,7 @@ jobs:
           # A missing libxml2 artifact must FAIL an xml fixture here, never skip it:
           # the package was materialized just above, so absence is a provisioning bug.
           ELEPHC_TEST_REQUIRE_XML_NATIVE: "1"
+          ELEPHC_TEST_REQUIRE_FILEINFO_NATIVE: "1"
         run: |
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
@@ -2153,7 +2208,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/elephc-native
-          key: xml-native-${{ matrix.elephc_target }}-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
+          key: xml-native-${{ matrix.elephc_target }}-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             xml-native-${{ matrix.elephc_target }}-
 
@@ -2162,6 +2217,65 @@ jobs:
           ELEPHC_NATIVE_CACHE: ${{ runner.temp }}/elephc-native
         run: |
           bash scripts/ci/test_ios_xml_link.sh \
+            "${{ matrix.elephc_target }}" \
+            "${{ matrix.rust_target }}" \
+            "${{ matrix.sdk }}" \
+            "${{ matrix.clang_target }}"
+
+  fileinfo-ios-compile-link:
+    name: Fileinfo iOS Compile & Link (${{ matrix.elephc_target }})
+    needs: plan
+    if: needs.plan.outputs.extended == 'true'
+    runs-on: macos-15
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - elephc_target: ios-arm64
+            rust_target: aarch64-apple-ios
+            sdk: iphoneos
+            clang_target: arm64-apple-ios13.0
+          - elephc_target: ios-sim-arm64
+            rust_target: aarch64-apple-ios-sim
+            sdk: iphonesimulator
+            clang_target: arm64-apple-ios13.0-simulator
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust with the iOS standard library
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ matrix.rust_target }}
+
+      - name: Cache Rust build state
+        # Dependencies only (registry, git checkouts, and the dependency
+        # artifacts under target/); the action prunes the workspace crates'
+        # own artifacts before saving. Caching the whole target/ dir put three
+        # 4 GB entries per platform plus every other job's into the repository's
+        # 10 GB allowance, so main's entries were evicted before the next run
+        # and every archive job compiled from scratch.
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
+        with:
+          prefix-key: rust-deps-xml-${{ matrix.elephc_target }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-bin: false
+          cache-on-failure: true
+
+      - name: Cache managed native libmagic for iOS
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/elephc-native
+          key: fileinfo-native-${{ matrix.elephc_target }}-${{ hashFiles('examples/fileinfo/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            fileinfo-native-${{ matrix.elephc_target }}-
+
+      - name: Build and link fileinfo with managed libmagic
+        env:
+          ELEPHC_NATIVE_CACHE: ${{ runner.temp }}/elephc-native
+        run: |
+          bash scripts/ci/test_ios_fileinfo_link.sh \
             "${{ matrix.elephc_target }}" \
             "${{ matrix.rust_target }}" \
             "${{ matrix.sdk }}" \
@@ -2521,18 +2635,6 @@ jobs:
         # signature, lowering, or area assignment without regenerating docs.
         run: python3 scripts/docs/extract_builtins.py --render --force
 
-      - name: Test builtin contract documentation pipeline
-        run: python3 -m unittest discover -s scripts/docs/elephc_builtins -p 'test_*.py'
-
-      - name: Audit generated builtins docs
-        run: python3 scripts/docs/audit_builtins.py
-
-      - name: Validate generated docs for site compatibility
-        run: python3 scripts/docs/elephc_builtins/validate_site_compat.py
-
-      - name: Run PHP comparison generator tests
-        run: python3 -m unittest discover -s scripts/docs -p "test_*.py" -v
-
       - name: Regenerate the module symbol sections
         # Writes the generated "Functions" block (functions, classes, constants per
         # PHP module from the shared catalogs) into each hand-written module page.
@@ -2545,17 +2647,17 @@ jobs:
         # consistency; the committed page must come back byte-identical.
         run: python3 scripts/docs/gen_php_comparison.py
 
-      - name: Upload regenerated builtin documentation
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: regenerated-builtin-docs
-          retention-days: 3
-          path: |
-            docs/php/
-            docs/internals/builtins/
-            scripts/docs/builtin_registry.json
-            scripts/docs/symbol_registry.json
+      - name: Test builtin contract documentation pipeline
+        run: python3 -m unittest discover -s scripts/docs/elephc_builtins -p 'test_*.py'
+
+      - name: Audit generated builtins docs
+        run: python3 scripts/docs/audit_builtins.py
+
+      - name: Validate generated docs for site compatibility
+        run: python3 scripts/docs/elephc_builtins/validate_site_compat.py
+
+      - name: Run PHP comparison generator tests
+        run: python3 -m unittest discover -s scripts/docs -p "test_*.py" -v
 
       - name: Fail if generated docs are out of sync
         run: |
@@ -2943,6 +3045,13 @@ jobs:
           grep -F "handle still usable after curl_close()" "$RUNNER_TEMP/curl-get.out"
           grep -F "connection refused, as expected" "$RUNNER_TEMP/curl-get.out"
 
+      - name: Compile and run fileinfo through the production resolver
+        run: |
+          ./target/debug/elephc native install --locked --target "${{ matrix.target }}" --manifest-path examples/fileinfo/elephc.toml
+          ./target/debug/elephc --target "${{ matrix.target }}" examples/fileinfo/main.php
+          ./examples/fileinfo/main > "$RUNNER_TEMP/fileinfo.out"
+          grep -Fx "text/plain; charset=us-ascii" "$RUNNER_TEMP/fileinfo.out"
+
       - name: Compile and run xml through the production resolver
         # Exercises the chain every tests/codegen/xml fixture also needs (see
         # tests/codegen/support/xml_native.rs) end to end through the real
@@ -3059,6 +3168,7 @@ jobs:
       - curl-native-linux-aarch64
       - curl-ios-compile-link
       - xml-ios-compile-link
+      - fileinfo-ios-compile-link
       - tokenizer-ios-compile-link
       - eval-codegen-tests-macos-aarch64
       - eval-codegen-tests-linux-x86_64
@@ -3111,7 +3221,7 @@ jobs:
           extended_tier="non-codegen-tests-macos-aarch64 cli-tests-macos-aarch64
             web-tests-macos-aarch64 codegen-tests-macos-aarch64 pdo-codegen-tests-macos-aarch64
             curl-native-macos-aarch64 curl-codegen-tests-macos-aarch64
-            eval-codegen-tests-macos-aarch64 curl-ios-compile-link xml-ios-compile-link tokenizer-ios-compile-link"
+            eval-codegen-tests-macos-aarch64 curl-ios-compile-link xml-ios-compile-link fileinfo-ios-compile-link tokenizer-ios-compile-link"
           in_list() { case " $(echo $2) " in *" $1 "*) return 0 ;; esac; return 1; }
           echo "tiers: run=$RUN_TIER extended=$EXTENDED_TIER"
           status=0

@@ -2,7 +2,7 @@
 title: "mb_substr()"
 description: "Selects a substring using character offsets and an optional character length."
 sidebar:
-  order: 905
+  order: 911
 ---
 
 ## mb_substr()

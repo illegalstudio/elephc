@@ -2,7 +2,7 @@
 title: "iconv()"
 description: "Converts a string from one character encoding to another."
 sidebar:
-  order: 827
+  order: 833
 ---
 
 ## iconv()

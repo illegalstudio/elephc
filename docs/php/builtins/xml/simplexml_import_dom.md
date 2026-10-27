@@ -2,7 +2,7 @@
 title: "simplexml_import_dom()"
 description: "Imports a DOM node as a SimpleXML element."
 sidebar:
-  order: 1024
+  order: 1030
 ---
 
 ## simplexml_import_dom()

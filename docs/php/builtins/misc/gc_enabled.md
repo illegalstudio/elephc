@@ -2,7 +2,7 @@
 title: "gc_enabled()"
 description: "Reports whether automatic cycle collection is enabled."
 sidebar:
-  order: 625
+  order: 631
 ---
 
 ## gc_enabled()

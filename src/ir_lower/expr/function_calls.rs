@@ -88,6 +88,9 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     if let Some(value) = lower_static_settype(ctx, canonical, args, expr) {
         return value;
     }
+    if let Some(value) = array_push_spread::lower_array_push_spread(ctx, name, args, expr) {
+        return value;
+    }
     if let Some(value) = lower_static_array_push(ctx, canonical, args, expr) {
         return value;
     }
@@ -378,6 +381,7 @@ pub(super) fn emit_builtin_call_value(
     if eval_literal.is_none() {
         if let Some(def) = crate::builtins::registry::lookup(name) {
             let mut operands = operands;
+            super::array_builtin_args::validate_typed_array_push_operands(ctx, def, &operands, span);
             let roots = root_non_aliasing_callback_operands(ctx, def, &mut operands, &php_type, span);
             // A builtin whose effects carry MAY_THROW can reach a codegen guard that jumps
             // straight to __rt_throw_current while these operands are still pure SSA. Pin them

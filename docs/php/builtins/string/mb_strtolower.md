@@ -2,7 +2,7 @@
 title: "mb_strtolower()"
 description: "Converts every character to its Unicode lowercase mapping."
 sidebar:
-  order: 901
+  order: 907
 ---
 
 ## mb_strtolower()

@@ -2,7 +2,7 @@
 title: "mb_split()"
 description: "Splits a string using a multibyte regex and an optional maximum number of fields."
 sidebar:
-  order: 887
+  order: 893
 ---
 
 ## mb_split()

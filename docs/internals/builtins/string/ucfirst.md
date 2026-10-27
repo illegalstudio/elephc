@@ -2,7 +2,7 @@
 title: "ucfirst() - internals"
 description: "Compiler internals for ucfirst(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 958
+  order: 964
 ---
 
 ## `ucfirst()` - internals
@@ -25,7 +25,7 @@ sidebar:
 - **Target strategy**: `runtime_call`
 - **Validation**: `signature`
 - **Result type source**: `declared`
-- **Result ownership**: `may_alias_arguments`
+- **Result ownership**: `fresh`
 - **Effects**: `static (0 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`

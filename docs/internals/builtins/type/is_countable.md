@@ -2,7 +2,7 @@
 title: "is_countable() - internals"
 description: "Compiler internals for is_countable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 978
+  order: 984
 ---
 
 ## `is_countable()` - internals

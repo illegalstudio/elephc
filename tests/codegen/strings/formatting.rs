@@ -528,13 +528,13 @@ fn test_sprintf_overlong_width_reports_runtime_error() {
     );
 }
 
-/// A width that fits in `INT_MAX` but not in the 64 KiB result arena must be a controlled
+/// A width that fits in `INT_MAX` but not in the configured result arena must be a controlled
 /// error too; `sprintf("%2000000000s", "x")` used to segfault.
 #[test]
 fn test_sprintf_result_larger_than_buffer_reports_runtime_error() {
     let err = compile_and_run_expect_failure(r#"<?php echo sprintf("%2000000000s", "x");"#);
     assert!(
-        err.contains("formatted result exceeds the 65536-byte string buffer"),
+        err.contains("formatted result exceeds the configured string buffer"),
         "{err}"
     );
 }

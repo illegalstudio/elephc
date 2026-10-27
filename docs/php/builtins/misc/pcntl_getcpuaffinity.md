@@ -2,7 +2,7 @@
 title: "pcntl_getcpuaffinity()"
 description: "Returns the CPU affinity mask for a Linux process, or false on failure."
 sidebar:
-  order: 665
+  order: 671
 ---
 
 ## pcntl_getcpuaffinity()

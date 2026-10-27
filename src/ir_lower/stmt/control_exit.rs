@@ -512,6 +512,7 @@ pub(super) fn acquire_borrowed_return_value(
                 | Op::DynamicPropGet
                 | Op::NullsafePropGet
                 | Op::LoadStaticLocal
+                | Op::LoadStaticProperty
         )
     ) {
         return value;
@@ -519,8 +520,61 @@ pub(super) fn acquire_borrowed_return_value(
     crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
 }
 
+/// Identifies local-backed values whose return transfers the frame's existing reference.
+fn pending_return_uses_local_owner(ctx: &LoweringContext<'_, '_>, mut value: crate::ir::ValueId) -> bool {
+    while let Some(inst) = ctx.builder.value_defining_instruction(value) {
+        match inst.op {
+            Op::Move | Op::Borrow | Op::ArrayToMixed | Op::HashToMixed => {
+                let Some(source) = inst.operands.first() else { return false; };
+                value = *source;
+            }
+            Op::LoadLocal | Op::LoadStaticLocal => {
+                let Some(Immediate::LocalSlot(slot)) = inst.immediate else { return false; };
+                return matches!(ctx.builder.local_kind(slot), LocalKind::PhpLocal | LocalKind::StaticLocal);
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
 /// Terminates with a return after running active finally bodies from inner to outer.
 pub(crate) fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<crate::ir::ValueId>) {
+    let pending = value.filter(|value| {
+        !ctx.finally_stack.is_empty()
+            && Ownership::php_type_needs_lifetime_tracking(&ctx.builder.value_php_type(*value))
+            && ctx.value_is_owning_temporary(LoweredValue {
+                value: *value,
+                ir_type: ctx.builder.value_type(*value),
+            })
+            // Concrete local container reads are only provisional owners. Their
+            // final return transfers the local reference; parking it a second
+            // time would let unwind cleanup release that reference twice.
+            && !pending_return_uses_local_owner(ctx, *value)
+    }).map(|value| {
+        let ty = ctx.builder.value_php_type(value);
+        let name = ctx.declare_owned_hidden_temp(ty.clone());
+        let slot = ctx.local_slots[&name];
+        // A caught throw can revisit this return site in the same activation.
+        // Retire that abandoned return before publishing its replacement.
+        ctx.emit_void(
+            Op::ReleaseLocalSlot, Vec::new(), Some(Immediate::LocalSlot(slot)),
+            Op::ReleaseLocalSlot.default_effects(), None,
+        );
+        ctx.store_local(&name, LoweredValue {
+            value, ir_type: ctx.builder.value_type(value),
+        }, ty, None);
+        name
+    });
+    terminate_return_with_owner(ctx, value, pending.as_deref());
+}
+
+/// Keeps a pending return frame-owned across every copied finalizer until its final transfer.
+fn terminate_return_with_owner(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: Option<crate::ir::ValueId>,
+    pending: Option<&str>,
+) {
     let saved_finally_stack = ctx.finally_stack.clone();
     let saved_try_loop_depths = ctx.try_loop_depths.clone();
     let saved_taken = ctx.taken_finally_exceptions.clone();
@@ -528,7 +582,7 @@ pub(crate) fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<
     release_taken_exceptions(ctx, None);
     if run_innermost_finally(ctx, false, None) {
         if !ctx.builder.insertion_block_is_terminated() {
-            terminate_return(ctx, value);
+            terminate_return_with_owner(ctx, value, pending);
         }
         // Finalizer frames are consumed only on the emitted control-flow path.
         // Restore the lexical lowering state for sibling and fallthrough blocks.
@@ -542,6 +596,11 @@ pub(crate) fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<
     ctx.taken_finally_exceptions = saved_taken;
     ctx.exit_cleaned_loops = saved_cleaned;
     ctx.emit_eval_scope_finalizer(None);
+    if let Some(pending) = pending {
+        // A normal return transfers this exact SSA owner to the caller. Throws
+        // and superseding returns instead leave it to activation cleanup.
+        ctx.clear_owned_hidden_temp(pending, None);
+    }
     ctx.builder.terminate(Terminator::Return { value });
 }
 

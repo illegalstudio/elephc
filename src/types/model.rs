@@ -71,6 +71,11 @@ impl PhpType {
                 if **key == Self::Mixed && **value == Self::Mixed)))
     }
 
+    /// Returns whether an array slot can safely hold a managed live reference for `array_push`.
+    pub(crate) fn supports_live_array_push_place(&self) -> bool {
+        self.is_php_array() || self.codegen_repr() == Self::Mixed
+    }
+
     /// Returns the type a packed field or buffer element of this storage type reads as.
     ///
     /// A width (`PhpType::Narrow`) reads as its value type, `int` or `float`; every other

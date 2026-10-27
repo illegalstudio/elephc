@@ -57,6 +57,8 @@ pub enum ClassRoute {
 /// Canonical backend-neutral contract for one PHP builtin class-like.
 #[derive(Clone, Copy, Debug)]
 pub struct ClassContract {
+    /// Whether the PHP internal object handler permits cloning, including subclasses.
+    pub cloneable: bool,
     /// Reviewed internal object handlers; absent for ordinary PHP/userland classes.
     pub operators: Option<&'static crate::ClassOperators>,
     /// Stable identity derived from the canonical lowercase name (namespace included).

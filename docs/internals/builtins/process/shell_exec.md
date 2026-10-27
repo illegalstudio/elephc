@@ -2,7 +2,7 @@
 title: "shell_exec() - internals"
 description: "Compiler internals for shell_exec(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 772
+  order: 778
 ---
 
 ## `shell_exec()` - internals
@@ -25,7 +25,7 @@ sidebar:
 - **Target strategy**: `runtime_call`
 - **Validation**: `checker_hook`
 - **Result type source**: `checked`
-- **Result ownership**: `may_alias_arguments`
+- **Result ownership**: `fresh`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`

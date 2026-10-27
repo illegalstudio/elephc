@@ -2,7 +2,7 @@
 title: "error_reporting()"
 description: "Gets or sets the active error reporting mask."
 sidebar:
-  order: 617
+  order: 623
 ---
 
 ## error_reporting()

@@ -2,7 +2,7 @@
 title: "stream_bucket_make_writeable() - internals"
 description: "Compiler internals for stream_bucket_make_writeable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 359
+  order: 365
 ---
 
 ## `stream_bucket_make_writeable()` - internals
@@ -25,7 +25,7 @@ sidebar:
 - **Target strategy**: `runtime_call`
 - **Validation**: `signature`
 - **Result type source**: `declared`
-- **Result ownership**: `may_alias_arguments`
+- **Result ownership**: `fresh`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`

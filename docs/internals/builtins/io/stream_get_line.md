@@ -2,7 +2,7 @@
 title: "stream_get_line() - internals"
 description: "Compiler internals for stream_get_line(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 373
+  order: 379
 ---
 
 ## `stream_get_line()` - internals

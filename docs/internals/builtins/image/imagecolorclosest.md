@@ -2,7 +2,7 @@
 title: "imagecolorclosest() - internals"
 description: "Compiler internals for imagecolorclosest(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 468
+  order: 474
 ---
 
 ## `imagecolorclosest()` - internals

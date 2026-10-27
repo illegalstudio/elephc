@@ -122,6 +122,7 @@ pub mod types;
 pub mod tz_prelude;
 pub mod xml_prelude;
 mod simplexml_prelude;
+pub mod fileinfo_prelude;
 pub mod tokenizer_prelude;
 /// Conditionally-injected `var_export` prelude (elephc-PHP rendering function).
 pub mod var_export_prelude;

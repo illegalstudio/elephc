@@ -418,6 +418,8 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     store_argc_local_if_present(ctx);
     store_argv_local_if_present(ctx);
     emit_registered_instr_enter(ctx);
+    let entry_label = ctx.emitter.entry_symbol();
+    emit_exception_activation_push(ctx, entry_label);
 }
 
 /// Emits a callable function prologue using an already-resolved entry label.
@@ -587,7 +589,10 @@ fn emit_exception_activation_push(ctx: &mut FunctionContext<'_>, entry_label: &s
     abi::store_at_offset(ctx.emitter, frame_pointer, offset - 16);
     abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
     abi::store_at_offset(ctx.emitter, scratch, offset - 24);
-    if ctx.backtrace_activation {
+    // Synthetic cleanup frames still retain their incoming source coordinate. Their
+    // reader stays absent, so PHP backtraces omit them while generated diagnostics can
+    // recover source coordinates through helpers that do not appear in PHP backtraces.
+    if ctx.backtrace_enabled {
         abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_php_backtrace_next_line", 0);
     }
     abi::store_at_offset(ctx.emitter, scratch, offset - 32);
@@ -709,11 +714,13 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     if ctx.module.required_runtime_features.mbstring || ctx.module.required_runtime_features.eval_bridge {
         abi::emit_call_label(ctx.emitter, "__rt_mbstring_release_catalog");
     }
+    abi::emit_call_label(ctx.emitter, "__rt_stream_registry_cleanup");
     // The exact root brackets every PHP callback that shutdown can invoke:
     // output handlers above and object destructors from the cleanup paths. If
     // it exits earlier, those functions become disconnected graph roots and
     // their work no longer partitions `{main}`.
     emit_instr_exit(ctx);
+    emit_exception_activation_pop(ctx);
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     // Everything below is a call on a torn-down frame, and on x86_64 that frame
@@ -895,6 +902,7 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
     // profiler before the bridge invokes this handler.
     register_main_instr(ctx);
     emit_registered_instr_enter(ctx);
+    emit_exception_activation_push(ctx, WEB_HANDLER_SYMBOL);
 }
 
 /// Installs the compiled OPcache configuration before any of the program's code runs.
@@ -1027,6 +1035,7 @@ pub(super) fn emit_web_handler_epilogue(ctx: &mut FunctionContext<'_>) {
     // opened. Dumping from the epilogue as well wrote a profile for every request
     // including the ones that never started a slice, which is how an unprofiled
     // service filled its log.
+    emit_exception_activation_pop(ctx);
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     abi::emit_return(ctx.emitter);

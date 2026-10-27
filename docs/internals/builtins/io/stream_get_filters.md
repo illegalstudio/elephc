@@ -2,7 +2,7 @@
 title: "stream_get_filters() - internals"
 description: "Compiler internals for stream_get_filters(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 372
+  order: 378
 ---
 
 ## `stream_get_filters()` - internals

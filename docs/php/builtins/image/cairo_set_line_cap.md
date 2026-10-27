@@ -2,7 +2,7 @@
 title: "cairo_set_line_cap()"
 description: "Selects how the ends of a stroked line are drawn."
 sidebar:
-  order: 436
+  order: 442
 ---
 
 ## cairo_set_line_cap()

@@ -1,6 +1,6 @@
 //! Purpose:
 //! Emits the shared `__rt_concat_reserve`, `__rt_concat_publish`, and `__rt_alloc_overflow`
-//! runtime helpers that bound every append into the fixed 64 KiB `_concat_buf` scratch buffer.
+//! runtime helpers that bound every append into the heap-sized `_concat_buf` result arena.
 //! Runtime string/IO producers reserve their exact result size here instead of writing past
 //! the scratch end into the adjacent BSS globals.
 //!
@@ -14,7 +14,7 @@
 //! - `__rt_concat_grow` marks its in-progress result with `CONCAT_TEMP_HEAP_KIND`, allowing
 //!   `__rt_str_persist` to take over the buffer without allocating a leaking duplicate.
 //! - `__rt_concat_publish` derives the storage class from the pointer itself: only pointers
-//!   inside `[_concat_buf, _concat_buf + 65536)` move `_concat_off`, so heap-backed results
+//!   inside `[_concat_buf, _concat_buf + capacity)` move `_concat_off`, so heap-backed results
 //!   leave the shared scratch offset untouched with no extra flag register.
 //! - Requests larger than the configured heap capacity (`_heap_max`), including the wrapped
 //!   or negative sizes produced by an overflowing size computation, reach
@@ -28,10 +28,7 @@ use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::sentinels::CONCAT_TEMP_HEAP_KIND;
-use crate::codegen_support::runtime::data::ALLOC_OVERFLOW_MSG;
-
-/// Byte capacity of the shared `_concat_buf` scratch buffer declared in `runtime::data::fixed`.
-pub(crate) const CONCAT_BUF_CAPACITY: usize = 65536;
+use crate::codegen_support::runtime::data::{ALLOC_OVERFLOW_MSG, CONCAT_OVERFLOW_MSG};
 
 /// Emits `__rt_concat_reserve`, `__rt_concat_publish`, `__rt_concat_grow`, and
 /// `__rt_alloc_overflow`.
@@ -62,6 +59,8 @@ pub(crate) const CONCAT_BUF_CAPACITY: usize = 65536;
 pub fn emit_concat_scratch(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_concat_scratch_linux_x86_64(emitter);
+        emit_concat_headroom_linux_x86_64(emitter);
+        emit_preg_cb_ensure_x86_64(emitter);
         return;
     }
 
@@ -69,6 +68,8 @@ pub fn emit_concat_scratch(emitter: &mut Emitter) {
     emit_concat_publish_aarch64(emitter);
     emit_concat_grow_aarch64(emitter);
     emit_alloc_overflow_aarch64(emitter);
+    emit_concat_headroom_aarch64(emitter);
+    emit_preg_cb_ensure_aarch64(emitter);
 }
 
 /// Emits the AArch64 `__rt_concat_reserve` helper.
@@ -91,7 +92,7 @@ fn emit_concat_reserve_aarch64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x10", "_concat_off");
     emitter.instruction("ldr x11, [x10]");                                      // load the current concat scratch write offset
     emitter.instruction("add x12, x11, x0");                                    // compute the scratch tail this request would reach
-    emitter.instruction(&format!("mov x13, #{}", CONCAT_BUF_CAPACITY));         // load the concat scratch capacity in bytes
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x13", emitter.concat_capacity as i64); // load the concat scratch capacity in bytes
     emitter.instruction("cmp x12, x13");                                        // does the reservation still fit inside the shared scratch buffer?
     emitter.instruction("b.hi __rt_concat_reserve_heap");                       // use the owned heap fallback when the scratch buffer would overflow
     abi::emit_symbol_address(emitter, "x14", "_concat_buf");
@@ -116,7 +117,7 @@ fn emit_concat_reserve_aarch64(emitter: &mut Emitter) {
 /// Emits the AArch64 `__rt_concat_publish` helper.
 ///
 /// Classifies the result by address instead of by a caller-supplied flag: only a pointer
-/// inside `[_concat_buf, _concat_buf + 65536)` advances `_concat_off`. Heap-backed results
+/// inside `[_concat_buf, _concat_buf + capacity)` advances `_concat_off`. Heap-backed results
 /// own their own storage and must not move the shared scratch cursor.
 fn emit_concat_publish_aarch64(emitter: &mut Emitter) {
     emitter.blank();
@@ -125,7 +126,7 @@ fn emit_concat_publish_aarch64(emitter: &mut Emitter) {
 
     abi::emit_symbol_address(emitter, "x9", "_concat_buf");
     emitter.instruction("sub x10, x1, x9");                                     // compute the candidate scratch offset of the finished result
-    emitter.instruction(&format!("mov x11, #{}", CONCAT_BUF_CAPACITY));         // load the concat scratch capacity in bytes
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x11", emitter.concat_capacity as i64); // load the concat scratch capacity in bytes
     emitter.instruction("cmp x10, x11");                                        // is the result outside the shared scratch window (unsigned, so heap pointers wrap high)?
     emitter.instruction("b.hs __rt_concat_publish_done");                       // heap-backed results leave the shared scratch offset untouched
     emitter.instruction("add x10, x10, x2");                                    // advance the scratch offset past the bytes this result actually wrote
@@ -201,7 +202,7 @@ fn emit_alloc_overflow_aarch64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: alloc_overflow (fatal) ---");
     emitter.label_global("__rt_alloc_overflow");
 
-    emit_cdylib_allocation_escape(emitter);
+    emit_cdylib_allocation_escape(emitter, "__rt_alloc_overflow_fatal");
 
     emitter.instruction("mov x0, #2");                                          // fd = stderr for the allocation-overflow diagnostic
     abi::emit_symbol_address(emitter, "x1", "_alloc_overflow_msg");
@@ -232,7 +233,8 @@ fn emit_concat_scratch_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [r9]");                              // load the current concat scratch write offset
     emitter.instruction("mov r10, r9");                                         // copy the write offset before deriving the tail this request would reach
     emitter.instruction("add r10, rax");                                        // compute the scratch tail this request would reach
-    emitter.instruction(&format!("cmp r10, {}", CONCAT_BUF_CAPACITY));          // does the reservation still fit inside the shared scratch buffer?
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "r8", emitter.concat_capacity as i64); // load the shared scratch capacity
+    emitter.instruction("cmp r10, r8");                                         // does the reservation still fit inside the shared scratch buffer?
     emitter.instruction("ja __rt_concat_reserve_heap_x86");                     // use the owned heap fallback when the scratch buffer would overflow
     abi::emit_symbol_address(emitter, "r11", "_concat_buf");
     emitter.instruction("lea rax, [r11 + r9]");                                 // return the scratch destination pointer at the current write offset
@@ -259,7 +261,8 @@ fn emit_concat_scratch_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "r8", "_concat_buf");
     emitter.instruction("mov r9, rax");                                         // copy the result pointer before deriving its candidate scratch offset
     emitter.instruction("sub r9, r8");                                          // compute the candidate scratch offset of the finished result
-    emitter.instruction(&format!("cmp r9, {}", CONCAT_BUF_CAPACITY));           // is the result outside the shared scratch window (unsigned, so heap pointers wrap high)?
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "r8", emitter.concat_capacity as i64); // load the shared scratch capacity
+    emitter.instruction("cmp r9, r8");                                          // is the result outside the shared scratch window (unsigned, so heap pointers wrap high)?
     emitter.instruction("jae __rt_concat_publish_done_x86");                    // heap-backed results leave the shared scratch offset untouched
     emitter.instruction("add r9, rdx");                                         // advance the scratch offset past the bytes this result actually wrote
     abi::emit_symbol_address(emitter, "r8", "_concat_off");
@@ -318,7 +321,7 @@ fn emit_concat_scratch_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: alloc_overflow (fatal) ---");
     emitter.label_global("__rt_alloc_overflow");
 
-    emit_cdylib_allocation_escape(emitter);
+    emit_cdylib_allocation_escape(emitter, "__rt_alloc_overflow_fatal");
 
     emitter.instruction("mov edi, 2");                                          // fd = stderr for the allocation-overflow diagnostic
     abi::emit_symbol_address(emitter, "rsi", "_alloc_overflow_msg");
@@ -330,8 +333,81 @@ fn emit_concat_scratch_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("syscall");                                             // terminate the process after reporting the impossible allocation
 }
 
+/// Emits the AArch64 `__rt_concat_headroom` guard and its fatal overflow exit.
+///
+/// `__rt_concat_headroom` takes the absolute write pointer in `x0` and the number of bytes
+/// the caller is about to write in `x1`. It returns silently while the write stays inside
+/// `[_concat_buf, _concat_buf + capacity)` and reaches `__rt_concat_overflow` otherwise. Incremental
+/// encoders whose result size is not known up front (`json_encode()`, `serialize()`) call it
+/// before every append so an oversized result fails closed instead of overwriting `_concat_off`
+/// and the adjacent heap.
+fn emit_concat_headroom_aarch64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: concat_headroom (guard) ---");
+    emitter.label_global("__rt_concat_headroom");
+    abi::emit_symbol_address(emitter, "x9", "_concat_buf");
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x10", emitter.concat_capacity as i64); // load the scratch capacity
+    emitter.instruction("add x9, x9, x10");                                     // compute the one-past-end scratch address
+    emitter.instruction("cmp x0, x9");                                          // is the write pointer already outside the arena?
+    emitter.instruction("b.hs __rt_concat_headroom_full");                      // fail closed before any byte leaves the buffer
+    emitter.instruction("sub x11, x9, x0");                                     // remaining bytes between the cursor and the arena end
+    emitter.instruction("cmp x1, x11");                                         // does the pending write still fit?
+    emitter.instruction("b.hi __rt_concat_headroom_full");                      // fail closed when the append would cross the end
+    emitter.instruction("ret");                                                 // the pending write fits inside the shared scratch arena
+
+    emitter.label("__rt_concat_headroom_full");
+    emitter.instruction("b __rt_concat_overflow");                              // unconditional branch keeps the fatal trampoline cross-atom safe
+
+    emitter.blank();
+    emitter.comment("--- runtime: concat_overflow (fatal) ---");
+    emitter.label_global("__rt_concat_overflow");
+    emit_cdylib_allocation_escape(emitter, "__rt_concat_overflow_fatal");
+    emitter.instruction("mov x0, #2");                                          // write the capacity diagnostic to stderr
+    abi::emit_symbol_address(emitter, "x1", "_concat_overflow_msg");
+    emitter.instruction(&format!("mov x2, #{}", CONCAT_OVERFLOW_MSG.len()));    // exact diagnostic byte length
+    emitter.syscall(4);
+    emitter.instruction("mov x0, #255");                                        // PHP exits with 255 on an uncaught fatal error
+    emitter.syscall(1);
+}
+
+/// Emits the x86_64 Linux `__rt_concat_headroom` guard and its fatal overflow exit.
+///
+/// Inputs use the System V registers: `rdi` = absolute write pointer, `rsi` = pending byte
+/// count. The contract matches the AArch64 helper.
+fn emit_concat_headroom_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: concat_headroom (guard) ---");
+    emitter.label_global("__rt_concat_headroom");
+    abi::emit_symbol_address(emitter, "r8", "_concat_buf");
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "r9", emitter.concat_capacity as i64); // load the scratch capacity
+    emitter.instruction("add r9, r8");                                          // compute the one-past-end scratch address
+    emitter.instruction("cmp rdi, r9");                                         // is the write pointer already outside the arena?
+    emitter.instruction("jae __rt_concat_headroom_full_x86");                   // fail closed before any byte leaves the buffer
+    emitter.instruction("mov r10, r9");                                         // seed the remaining-capacity computation
+    emitter.instruction("sub r10, rdi");                                        // remaining bytes between the cursor and the arena end
+    emitter.instruction("cmp rsi, r10");                                        // does the pending write still fit?
+    emitter.instruction("ja __rt_concat_headroom_full_x86");                    // fail closed when the append would cross the end
+    emitter.instruction("ret");                                                 // the pending write fits inside the shared scratch arena
+
+    emitter.label("__rt_concat_headroom_full_x86");
+    emitter.instruction("jmp __rt_concat_overflow");                            // unconditional branch keeps the fatal trampoline reachable
+
+    emitter.blank();
+    emitter.comment("--- runtime: concat_overflow (fatal) ---");
+    emitter.label_global("__rt_concat_overflow");
+    emit_cdylib_allocation_escape(emitter, "__rt_concat_overflow_fatal");
+    emitter.instruction("mov edi, 2");                                          // write the capacity diagnostic to stderr
+    abi::emit_symbol_address(emitter, "rsi", "_concat_overflow_msg");
+    emitter.instruction(&format!("mov edx, {}", CONCAT_OVERFLOW_MSG.len()));    // exact diagnostic byte length
+    emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
+    emitter.instruction("syscall");                                             // emit the fatal capacity diagnostic
+    emitter.instruction("mov edi, 255");                                        // PHP exits with 255 on an uncaught fatal error
+    emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit
+    emitter.instruction("syscall");                                             // terminate after reporting the oversized result
+}
+
 /// Converts an impossible allocation into a recoverable cdylib boundary escape.
-fn emit_cdylib_allocation_escape(emitter: &mut Emitter) {
+fn emit_cdylib_allocation_escape(emitter: &mut Emitter, fatal_label: &str) {
     if !emitter.cdylib_boundary {
         return;
     }
@@ -343,7 +419,7 @@ fn emit_cdylib_allocation_escape(emitter: &mut Emitter) {
                 crate::codegen_support::cdylib::BOUNDARY_ACTIVE,
             );
             emitter.instruction("ldr x9, [x9]");                                // read whether a native recovery boundary is active
-            emitter.instruction("cbz x9, __rt_alloc_overflow_fatal");           // retain executable fatal behavior without a boundary
+            emitter.instruction(&format!("cbz x9, {}", fatal_label));           // retain executable fatal behavior without a boundary
             abi::emit_store_imm_to_symbol(
                 emitter,
                 crate::codegen_support::cdylib::BOUNDARY_STATUS,
@@ -352,7 +428,7 @@ fn emit_cdylib_allocation_escape(emitter: &mut Emitter) {
             );
             abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
             emitter.instruction("b __rt_throw_current");                        // unwind to the cdylib handler with allocation status recorded
-            emitter.label("__rt_alloc_overflow_fatal");
+            emitter.label(fatal_label);
         }
         Arch::X86_64 => {
             abi::emit_symbol_address(
@@ -362,7 +438,7 @@ fn emit_cdylib_allocation_escape(emitter: &mut Emitter) {
             );
             emitter.instruction("mov r8, QWORD PTR [r8]");                      // read whether a native recovery boundary is active
             emitter.instruction("test r8, r8");                                 // distinguish cdylib recovery from executable fatal handling
-            emitter.instruction("jz __rt_alloc_overflow_fatal");                // retain executable fatal behavior without a boundary
+            emitter.instruction(&format!("jz {}", fatal_label));                // retain executable fatal behavior without a boundary
             abi::emit_store_imm_to_symbol(
                 emitter,
                 crate::codegen_support::cdylib::BOUNDARY_STATUS,
@@ -371,9 +447,117 @@ fn emit_cdylib_allocation_escape(emitter: &mut Emitter) {
             );
             abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
             emitter.instruction("jmp __rt_throw_current");                      // unwind to the cdylib handler with allocation status recorded
-            emitter.label("__rt_alloc_overflow_fatal");
+            emitter.label(fatal_label);
         }
     }
+}
+
+
+/// Emits the AArch64 `__rt_preg_cb_ensure` guard for the callback replacement buffer.
+///
+/// Inputs: `x0` = address of the base slot, `x1` = address of the write slot,
+/// `x2` = address of the capacity slot, `x3` = bytes about to be appended.
+/// The helper grows the owned output block through `__rt_concat_grow` when
+/// `write - base + needed` exceeds the capacity, then updates the three slots.
+/// It preserves every callee-saved register and clobbers only `x0`-`x13`.
+fn emit_preg_cb_ensure_aarch64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: preg_cb_ensure (grow callback output) ---");
+    emitter.label_global("__rt_preg_cb_ensure");
+    emitter.instruction("ldr x9, [x0]");                                        // output base
+    emitter.instruction("ldr x10, [x1]");                                       // output write cursor
+    emitter.instruction("ldr x11, [x2]");                                       // output capacity
+    emitter.instruction("sub x12, x10, x9");                                    // bytes already written
+    emitter.instruction("add x13, x12, x3");                                    // bytes needed after this append
+    emitter.instruction("cmp x13, x11");                                        // does the append still fit?
+    emitter.instruction("b.hi __rt_preg_cb_ensure_grow");                       // grow the owned block when it does not
+    emitter.instruction("ret");                                                 // the pending append fits the current block
+
+    emitter.label("__rt_preg_cb_ensure_grow");
+    emitter.instruction("sub sp, sp, #96");                                     // reserve the grow frame
+    emitter.instruction("stp x29, x30, [sp, #80]");                             // preserve the frame pointer and return address
+    emitter.instruction("add x29, sp, #80");                                    // establish the ensure frame pointer
+    emitter.instruction("stp x0, x1, [sp]");                                    // save the base and write slot addresses
+    emitter.instruction("str x2, [sp, #16]");                                   // save the capacity slot address
+    emitter.instruction("stp x12, x13, [sp, #24]");                             // save the used and total byte counts
+    emitter.instruction("mov x0, x9");                                          // pass the current base
+    emitter.instruction("mov x1, x12");                                         // pass the bytes to preserve
+    emitter.instruction("lsl x2, x11, #1");                                     // start with double the current capacity
+    emitter.instruction("cmp x2, x13");                                         // is the doubled capacity enough for this append?
+    emitter.instruction("csel x2, x13, x2, lo");                                // otherwise grow straight to the required total
+    emitter.instruction("str x2, [sp, #40]");                                   // save the new capacity across the grow call
+    emitter.instruction("bl __rt_concat_grow");                                 // allocate, copy, and release the old block
+    emitter.instruction("mov x9, #1");                                          // callback output is an owned call result, not a concat operand
+    emitter.instruction("str x9, [x0, #-8]");                                   // retag the grown block so persistence copies instead of adopting it
+    emitter.instruction("mov x9, x0");                                          // new base
+    emitter.instruction("ldr x10, [sp, #0]");                                   // reload the base slot address
+    emitter.instruction("str x9, [x10]");                                       // publish the new base
+    emitter.instruction("ldr x11, [sp, #24]");                                  // reload the bytes already written
+    emitter.instruction("add x11, x9, x11");                                    // write cursor = new base + used
+    emitter.instruction("ldr x12, [sp, #8]");                                   // reload the write slot address
+    emitter.instruction("str x11, [x12]");                                      // publish the new write cursor
+    emitter.instruction("ldr x13, [sp, #16]");                                  // reload the capacity slot address
+    emitter.instruction("ldr x14, [sp, #40]");                                  // reload the new capacity
+    emitter.instruction("str x14, [x13]");                                      // publish the new capacity
+    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore the frame pointer and return address
+    emitter.instruction("add sp, sp, #96");                                     // release the ensure frame
+    emitter.instruction("ret");                                                 // return to the append site
+}
+
+/// Emits the x86_64 `__rt_preg_cb_ensure` guard for the callback replacement buffer.
+///
+/// Inputs: `rdi` = address of the base slot, `rsi` = address of the write slot,
+/// `rdx` = address of the capacity slot, `rcx` = bytes about to be appended.
+fn emit_preg_cb_ensure_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: preg_cb_ensure (grow callback output) ---");
+    emitter.label_global("__rt_preg_cb_ensure");
+    emitter.instruction("mov r8, QWORD PTR [rdi]");                             // output base
+    emitter.instruction("mov r9, QWORD PTR [rsi]");                             // output write cursor
+    emitter.instruction("mov r10, QWORD PTR [rdx]");                            // output capacity
+    emitter.instruction("mov r11, r9");                                         // bytes already written
+    emitter.instruction("sub r11, r8");                                         // used = write - base
+    emitter.instruction("mov rax, r11");                                        // seed the required total
+    emitter.instruction("add rax, rcx");                                        // total = used + needed
+    emitter.instruction("cmp rax, r10");                                        // does the append still fit?
+    emitter.instruction("ja __rt_preg_cb_ensure_grow_x86");                     // grow the owned block when it does not
+    emitter.instruction("ret");                                                 // the pending append fits the current block
+
+    emitter.label("__rt_preg_cb_ensure_grow_x86");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the ensure frame base
+    emitter.instruction("sub rsp, 64");                                         // reserve the grow frame
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the base slot address
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the write slot address
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the capacity slot address
+    emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // save the bytes already written
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the required total
+    emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // save the current capacity
+    emitter.instruction("mov rax, r8");                                         // pass the current base
+    emitter.instruction("mov rdi, r11");                                        // pass the bytes to preserve
+    emitter.instruction("mov rsi, r10");                                        // start with double the current capacity
+    emitter.instruction("shl rsi, 1");                                          // double it
+    emitter.instruction("cmp rsi, QWORD PTR [rbp - 40]");                       // is the doubled capacity enough?
+    emitter.instruction("jae __rt_preg_cb_ensure_cap_ready_x86");               // keep the doubled capacity when it is
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // otherwise grow straight to the required total
+    emitter.label("__rt_preg_cb_ensure_cap_ready_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 56], rsi");                       // save the new capacity across the grow call
+    emitter.instruction("call __rt_concat_grow");                               // allocate, copy, and release the old block
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the owned-string kind word
+    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // retag the grown block so persistence copies instead of adopting it
+    emitter.instruction("mov r8, rax");                                         // new base
+    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the base slot address
+    emitter.instruction("mov QWORD PTR [r9], r8");                              // publish the new base
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the bytes already written
+    emitter.instruction("add r10, r8");                                         // write cursor = new base + used
+    emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // reload the write slot address
+    emitter.instruction("mov QWORD PTR [r9], r10");                             // publish the new write cursor
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the capacity slot address
+    emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the new capacity
+    emitter.instruction("mov QWORD PTR [r10], r11");                            // publish the new capacity
+    emitter.instruction("add rsp, 64");                                         // release the ensure frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return to the append site
 }
 
 #[cfg(test)]

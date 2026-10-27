@@ -2,7 +2,7 @@
 title: "trigger_error() - internals"
 description: "Compiler internals for trigger_error(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 701
+  order: 707
 ---
 
 ## `trigger_error()` - internals

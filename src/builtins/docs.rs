@@ -307,7 +307,7 @@ fn build_json(include_internal: bool) -> Value {
             "summary": spec.summary,
             "examples": spec.examples,
             "php_manual": spec.php_manual,
-            "deprecated": spec.deprecation,
+            "deprecated": spec.deprecation.map(|deprecation| deprecation.message),
         }));
     }
     Value::Array(out)

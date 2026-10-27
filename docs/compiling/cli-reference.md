@@ -511,7 +511,7 @@ See [Optimization and codegen controls](optimization.md).
 | `--link LIB` / `-l LIB` / `-lLIB` | library name | — | Link an extra native library (repeatable). |
 | `--link-path DIR` / `-L DIR` / `-LDIR` | directory | — | Add a library search path (repeatable). |
 | `--framework NAME` | framework name | — | Link a macOS framework (repeatable). |
-| `--with-NAME` | `pdo`, `tls`, `crypto`, `bcmath`, `random`, `mbstring`, `iconv`, `phar`, `tz`, `image`, `pcntl`, `xml`, `tokenizer`, `eval`, `regex`, `curl`, `mysqli`, `web` | - | Force-enable an optional bridge or runtime capability (repeatable). Bridge names force-link their staticlib and inject any PHP-surface prelude. `--with-bcmath` force-links exact decimal arithmetic and retains the `BcMath\Number` class for indirect calls and opaque eval source. `--with-random` force-links the random bridge and injects the `Random\*` surface and the procedural `mt_*`/`lcg_value`/`random_bytes` functions; static detection already links it when a program names that surface, `array_rand()`, or `shuffle()`. `--with-mbstring`, `--with-iconv`, and `--with-pcntl` force-link their native support when static detection cannot see a call. `--with-tokenizer` retains PHP source tokenization and `PhpToken` for indirect use. `--with-xml` force-links the XML bridge and injects the `XMLParser`, `XMLWriter`, `SimpleXMLElement`, and `SimpleXMLIterator` prelude; the parser uses the managed `libxml2` package, so the project must declare it (`elephc native add libxml2`), exactly as auto-detected XML use does. `--with-regex` enables managed PCRE2 for opaque dynamic eval; the project must declare `pcre2`. `--with-eval` force-links Magician but is not required for normal `eval()` use. `--with-mysqli` force-injects the mysqli prelude (which links the shared `elephc_pdo` bridge); it does not inject the PDO classes. `--with-web` is an alias for `--web`. An unknown name is an error. Run `elephc --print-capabilities` for the list a given binary actually accepts. |
+| `--with-NAME` | `pdo`, `tls`, `crypto`, `bcmath`, `random`, `mbstring`, `iconv`, `phar`, `tz`, `image`, `pcntl`, `xml`, `fileinfo`, `tokenizer`, `eval`, `regex`, `curl`, `mysqli`, `web` | - | Force-enable an optional bridge or runtime capability (repeatable). Bridge names force-link their staticlib and inject any PHP-surface prelude. `--with-bcmath` force-links exact decimal arithmetic and retains the `BcMath\Number` class for indirect calls and opaque eval source. `--with-random` force-links the random bridge and injects the `Random\*` surface and the procedural `mt_*`/`lcg_value`/`random_bytes` functions; static detection already links it when a program names that surface, `array_rand()`, or `shuffle()`. `--with-mbstring`, `--with-iconv`, and `--with-pcntl` force-link their native support when static detection cannot see a call. `--with-tokenizer` retains PHP source tokenization and `PhpToken` for indirect use. `--with-xml` force-links the XML bridge and injects the `XMLParser`, `XMLWriter`, `SimpleXMLElement`, and `SimpleXMLIterator` prelude; the parser uses the managed `libxml2` package, so the project must declare it (`elephc native add libxml2`), exactly as auto-detected XML use does. `--with-regex` enables managed PCRE2 for opaque dynamic eval; the project must declare `pcre2`. `--with-eval` force-links Magician but is not required for normal `eval()` use. `--with-mysqli` force-injects the mysqli prelude (which links the shared `elephc_pdo` bridge); it does not inject the PDO classes. `--with-web` is an alias for `--web`. An unknown name is an error. Run `elephc --print-capabilities` for the list a given binary actually accepts. |
 
 See [Linking, heap, and conditional compilation](linking-and-conditional-compilation.md).
 
@@ -519,7 +519,7 @@ See [Linking, heap, and conditional compilation](linking-and-conditional-compila
 
 | Flag | Values | Default | Description |
 |---|---|---|---|
-| `--heap-size=BYTES` | integer ≥ 65536 | `8388608` (8 MB) | Size of the program's runtime heap. |
+| `--heap-size=BYTES` | integer ≥ 65536 | `8388608` (8 MB) | Size of the program's runtime heap. Also sizes the shared string-result arena, so string-producing builtins are bounded by this budget rather than a fixed 64 KiB cap. |
 | `--define SYMBOL` / `--define=SYMBOL` | symbol name | — | Define a compile-time symbol for `ifdef` (repeatable). |
 
 ## Strict PHP mode
@@ -1003,3 +1003,8 @@ as `LINUX_AARCH64`. All three tool overrides are required for a non-host target.
 The variables in this table are read by the **compiler**. A separate family,
 `ELEPHC_INI_<directive>`, is read by the **compiled binary** at run time — see
 [Runtime overrides](#runtime-overrides-elephc_ini_).
+
+`--with-fileinfo` force-links the optional fileinfo bridge and retains its PHP
+functions and `finfo` class for dynamic eval. Declare the managed `libmagic`
+package first with `elephc native add libmagic`. Its compiled database is embedded
+in the resulting program.

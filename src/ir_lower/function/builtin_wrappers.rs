@@ -150,6 +150,7 @@ pub(super) fn lower_builtin_callable_body(
         &module.extern_class_infos,
         &Default::default(),
         &Default::default(),
+        &Default::default(), // array_push property plans
         &Default::default(),
         &Default::default(),
         &Default::default(),

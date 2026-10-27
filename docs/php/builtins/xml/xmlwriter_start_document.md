@@ -2,7 +2,7 @@
 title: "xmlwriter_start_document()"
 description: "Writes the XML declaration."
 sidebar:
-  order: 1070
+  order: 1076
 ---
 
 ## xmlwriter_start_document()

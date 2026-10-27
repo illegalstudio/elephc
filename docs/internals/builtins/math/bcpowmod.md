@@ -2,7 +2,7 @@
 title: "bcpowmod() - internals"
 description: "Compiler internals for bcpowmod(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 562
+  order: 568
 ---
 
 ## `bcpowmod()` - internals

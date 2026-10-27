@@ -2,7 +2,7 @@
 title: "token_name() - internals"
 description: "Compiler internals for token_name(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 956
+  order: 962
 ---
 
 ## `token_name()` - internals

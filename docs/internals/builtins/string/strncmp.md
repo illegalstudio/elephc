@@ -2,7 +2,7 @@
 title: "strncmp() - internals"
 description: "Compiler internals for strncmp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 943
+  order: 949
 ---
 
 ## `strncmp()` - internals

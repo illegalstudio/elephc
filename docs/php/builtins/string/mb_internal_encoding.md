@@ -2,7 +2,7 @@
 title: "mb_internal_encoding()"
 description: "Reads or changes the default encoding used by mbstring text operations."
 sidebar:
-  order: 873
+  order: 879
 ---
 
 ## mb_internal_encoding()

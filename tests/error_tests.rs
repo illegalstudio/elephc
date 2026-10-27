@@ -72,6 +72,7 @@ fn check_source_with_defines_and_options(
     let ast = elephc::testing_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::fileinfo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::tokenizer_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::name_resolver::resolve(ast).map_err(|e| e.message.clone())?;
@@ -109,6 +110,7 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     let ast = elephc::testing_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::fileinfo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::tokenizer_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::name_resolver::resolve(ast)?;
@@ -482,3 +484,6 @@ function gen() { yield from not_gen(); }
         "yield from expects an array literal or Generator, got int",
     );
 }
+
+#[path = "error_tests/fileinfo.rs"]
+mod fileinfo;

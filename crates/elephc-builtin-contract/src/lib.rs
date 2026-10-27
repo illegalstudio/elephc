@@ -68,7 +68,7 @@ pub use registry::{contracts, lookup, lookup_id};
 pub use symbol_registry::{canonical_constant_name, classes, constants, lookup_class, lookup_constant};
 pub use runtime_id::{runtime_builtin_id, RuntimeBuiltinId, RuntimeBuiltinStatus};
 pub use spec::{
-    Area, BuiltinContract, BuiltinKind, BuiltinRequirement, BuiltinSignature, DefaultSpec,
+    Area, BuiltinContract, BuiltinDeprecation, BuiltinKind, BuiltinRequirement, BuiltinSignature, DefaultSpec,
     ParamSpec, PassingMode, TypeSpec,
 };
 pub use support::{

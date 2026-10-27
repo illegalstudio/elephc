@@ -60,7 +60,9 @@ pub(super) fn reflection_class_is_cloneable(
     class_name: &str,
     info: &crate::types::ClassInfo,
     is_enum: bool,
+    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
 ) -> bool {
+    if !crate::types::builtin_classes::class_allows_clone(class_name, classes) { return false; }
     if info.is_abstract || is_enum || reflection_class_has_runtime_managed_storage(class_name) {
         return false;
     }

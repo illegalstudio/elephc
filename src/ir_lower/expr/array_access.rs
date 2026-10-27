@@ -238,6 +238,9 @@ pub(super) fn lower_array_access_from_value_with_null_preservation(
         array_value,
         Some(expr.span),
     );
+    let (array_value, receiver_owner) = super::string_offset_owners::prepare_receiver(
+        ctx, array_value, expr.span,
+    );
     let mut pending_receiver = [array_value];
     let (index_value, receiver_pins) = super::lower_with_pending_owners(
         ctx,
@@ -260,6 +263,7 @@ pub(super) fn lower_array_access_from_value_with_null_preservation(
         warn_on_missing,
         preserve_null,
         receiver_pins,
+        receiver_owner,
     )
 }
 
@@ -276,6 +280,9 @@ pub(crate) fn lower_array_access_from_values(
     // Key coercion and missing-key warnings can invoke a throwing user handler. Keep an
     // owning intermediate receiver reachable until the read finishes; the normal release
     // below still retires it after the independent result has been stabilized.
+    let (array_value, receiver_owner) = super::string_offset_owners::prepare_receiver(
+        ctx, array_value, expr.span,
+    );
     let receiver_pins = super::pin_in_flight_owners(ctx, &[array_value.value], expr.span);
     lower_array_access_from_values_with_receiver_pins(
         ctx,
@@ -286,6 +293,7 @@ pub(crate) fn lower_array_access_from_values(
         warn_on_missing,
         preserve_null,
         receiver_pins,
+        receiver_owner,
     )
 }
 
@@ -299,6 +307,7 @@ fn lower_array_access_from_values_with_receiver_pins(
     warn_on_missing: bool,
     preserve_null: bool,
     receiver_pins: Vec<super::PinnedInFlightOwner>,
+    receiver_owner: Option<crate::ir::LocalSlotId>,
 ) -> LoweredValue {
     if !warn_on_missing && matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(),
         PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void | PhpType::Never | PhpType::TaggedScalar)
@@ -430,6 +439,9 @@ fn lower_array_access_from_values_with_receiver_pins(
     // call, or one-shot temp. Preserve borrowed string/callable payloads before
     // dropping that receiver; boxed and retained container reads are already
     // independent and must not be acquired twice.
+    if let Some(owner) = receiver_owner {
+        return super::string_offset_owners::finish_read(ctx, result, owner, expr.span);
+    }
     stabilize_borrowed_result_and_release_receiver(ctx, array_value, result, expr.span)
 }
 

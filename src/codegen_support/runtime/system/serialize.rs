@@ -38,6 +38,23 @@ mod custom;
 mod context;
 mod sleep_result;
 
+/// Branches to the shared serialize overflow helper through an assembler-local
+/// trampoline: conditional branches cannot target an external symbol, and the
+/// shared helper must stay global so macOS `-dead_strip` keeps it.
+fn emit_serialize_overflow_branch(emitter: &mut Emitter, condition: &str) {
+    emitter.instruction(&format!("{} 1f", condition));                          // take the local trampoline when the guard fails
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction("b 2f"),                           // skip the trampoline when the guard passes
+        Arch::X86_64 => emitter.instruction("jmp 2f"),                          // skip the trampoline when the guard passes
+    }
+    emitter.label("1");
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction("b __rt_serialize_overflow"),      // enter the shared fail-closed helper
+        Arch::X86_64 => emitter.instruction("jmp __rt_serialize_overflow"),     // enter the shared fail-closed helper
+    }
+    emitter.label("2");
+}
+
 /// Emits `__rt_serialize_value`, the tag-dispatching serializer, and the
 /// `__rt_serialize_mixed` wrapper that unpacks a boxed Mixed cell first.
 ///
@@ -60,6 +77,7 @@ pub(crate) fn emit_serialize(emitter: &mut Emitter) {
 
 /// AArch64 implementation of `__rt_serialize_mixed` and `__rt_serialize_value`.
 fn emit_serialize_aarch64(emitter: &mut Emitter) {
+    let cap = emitter.concat_capacity;
     use crate::codegen_support::abi::emit_symbol_address;
 
     emitter.blank();
@@ -168,14 +186,29 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
 
     // -- indexed array / hash / nested mixed: delegate, then resume finalize --
     emitter.label("__rt_serialize_arr_indexed");
+    emitter.instruction("ldr x11, [sp, #8]");                                   // reload the running write pointer for the capacity guard
+    emitter.instruction("mov x0, x11");                                         // guard the indexed-array header
+    emitter.instruction("mov x1, #64");                                         // reserve the largest container header this encoder writes
+    emitter.instruction("bl __rt_concat_headroom");                             // fail closed instead of writing past the shared arena
+    emitter.instruction("ldr x11, [sp, #8]");                                   // reload the write pointer after the guard clobbers x11
     emitter.instruction("ldr x0, [sp, #24]");                                   // array pointer = saved low payload word
     emitter.instruction("bl __rt_serialize_indexed_array");                     // append a:n:{...} for the indexed array
     emitter.instruction("b __rt_serialize_after_container");                    // recompute the write pointer and finish
     emitter.label("__rt_serialize_arr_hash");
+    emitter.instruction("ldr x11, [sp, #8]");                                   // reload the running write pointer for the capacity guard
+    emitter.instruction("mov x0, x11");                                         // guard the hash header
+    emitter.instruction("mov x1, #64");                                         // reserve the largest container header this encoder writes
+    emitter.instruction("bl __rt_concat_headroom");                             // fail closed instead of writing past the shared arena
+    emitter.instruction("ldr x11, [sp, #8]");                                   // reload the write pointer after the guard clobbers x11
     emitter.instruction("ldr x0, [sp, #24]");                                   // hash pointer = saved low payload word
     emitter.instruction("bl __rt_serialize_hash");                              // append a:n:{...} for the associative array
     emitter.instruction("b __rt_serialize_after_container");                    // recompute the write pointer and finish
     emitter.label("__rt_serialize_arr_object");
+    emitter.instruction("ldr x11, [sp, #8]");                                   // reload the running write pointer for the capacity guard
+    emitter.instruction("mov x0, x11");                                         // guard the object header
+    emitter.instruction("mov x1, #64");                                         // reserve the longest class-name header this encoder writes
+    emitter.instruction("bl __rt_concat_headroom");                             // fail closed instead of writing past the shared arena
+    emitter.instruction("ldr x11, [sp, #8]");                                   // reload the write pointer after the guard clobbers x11
     emitter.instruction("ldr x0, [sp, #24]");                                   // object pointer = saved low payload word
     emitter.instruction("bl __rt_serialize_obj_ref");                           // dedup: emit r:<idx>; if seen, else register -> x0=1 if emitted
     emitter.instruction("cbnz x0, __rt_serialize_after_container");             // back-reference emitted → finalize
@@ -195,6 +228,11 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
 
     // -- null: "N;" --
     emitter.label("__rt_serialize_null");
+    emitter.instruction("ldr x11, [sp, #8]");                                   // reload the running write pointer for the capacity guard
+    emitter.instruction("mov x0, x11");                                         // guard the null marker
+    emitter.instruction("mov x1, #2");                                          // reserve exactly the bytes this value writes
+    emitter.instruction("bl __rt_concat_headroom");                             // fail closed instead of writing past the shared arena
+    emitter.instruction("ldr x11, [sp, #8]");                                   // reload the write pointer after the guard clobbers x11
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload the running write pointer
     emitter.instruction("mov w12, #78");                                        // ASCII 'N'
     emitter.instruction("strb w12, [x11]");                                     // write the null type marker
@@ -206,6 +244,11 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
 
     // -- bool: "b:0;" / "b:1;" --
     emitter.label("__rt_serialize_bool");
+    emitter.instruction("ldr x11, [sp, #8]");                                   // reload the running write pointer for the capacity guard
+    emitter.instruction("mov x0, x11");                                         // guard the bool marker
+    emitter.instruction("mov x1, #4");                                          // reserve exactly the bytes this value writes
+    emitter.instruction("bl __rt_concat_headroom");                             // fail closed instead of writing past the shared arena
+    emitter.instruction("ldr x11, [sp, #8]");                                   // reload the write pointer after the guard clobbers x11
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload the running write pointer
     emitter.instruction("mov w12, #98");                                        // ASCII 'b'
     emitter.instruction("strb w12, [x11]");                                     // write the bool type marker
@@ -225,6 +268,11 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
 
     // -- int: "i:" + digits + ";" --
     emitter.label("__rt_serialize_int");
+    emitter.instruction("ldr x11, [sp, #8]");                                   // reload the running write pointer for the capacity guard
+    emitter.instruction("mov x0, x11");                                         // guard the integer markers, digits, and itoa scratch
+    emitter.instruction("mov x1, #24");                                         // reserve exactly the bytes this value writes
+    emitter.instruction("bl __rt_concat_headroom");                             // fail closed instead of writing past the shared arena
+    emitter.instruction("ldr x11, [sp, #8]");                                   // reload the write pointer after the guard clobbers x11
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload the running write pointer
     emitter.instruction("mov w12, #105");                                       // ASCII 'i'
     emitter.instruction("strb w12, [x11]");                                     // write the integer type marker
@@ -238,7 +286,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x12, [x9]");                                       // point itoa scratch at the current write position
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the integer payload
     emitter.instruction("bl __rt_itoa");                                        // format the integer -> x1=digit ptr, x2=digit len
-    emit_serialize_copy_run_aarch64(emitter, "__rt_serialize_int"); // copy the digits to the write pos
+    emit_serialize_copy_run_aarch64(emitter, "__rt_serialize_int");             // copy the digits to the write pos
     emitter.instruction("mov w12, #59");                                        // ASCII ';'
     emitter.instruction("strb w12, [x11]");                                     // write the terminating semicolon
     emitter.instruction("add x11, x11, #1");                                    // advance past the semicolon
@@ -248,6 +296,12 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     // -- string: "s:" + bytelen + ":\"" + raw bytes + "\";" --
     emitter.label("__rt_serialize_str");
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload the running write pointer
+    emitter.instruction("ldr x1, [sp, #32]");                                   // reload the byte length from the high payload word
+    emitter.instruction("adds x1, x1, #32");                                    // reserve room for s:<digits>:"..."; around the payload
+    emit_serialize_overflow_branch(emitter, "b.cs");
+    emitter.instruction("mov x0, x11");                                         // guard the whole serialized string slice
+    emitter.instruction("bl __rt_concat_headroom");                             // fail closed instead of copying past the arena
+    emitter.instruction("ldr x11, [sp, #8]");                                   // reload the running write pointer after the guard
     emitter.instruction("mov w12, #115");                                       // ASCII 's'
     emitter.instruction("strb w12, [x11]");                                     // write the string type marker
     emitter.instruction("mov w12, #58");                                        // ASCII ':'
@@ -260,7 +314,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x12, [x9]");                                       // point itoa scratch at the current write position
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the byte length from the high payload word
     emitter.instruction("bl __rt_itoa");                                        // format the byte length -> x1=digit ptr, x2=digit len
-    emit_serialize_copy_run_aarch64(emitter, "__rt_serialize_strlen"); // copy the length digits
+    emit_serialize_copy_run_aarch64(emitter, "__rt_serialize_strlen");          // copy the length digits
     emitter.instruction("mov w12, #58");                                        // ASCII ':'
     emitter.instruction("strb w12, [x11]");                                     // write the length/value separator
     emitter.instruction("mov w12, #34");                                        // ASCII '"'
@@ -289,6 +343,11 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
 
     // -- float: "d:" + (INF/-INF/NAN | shortest round-trip) + ";" --
     emitter.label("__rt_serialize_float");
+    emitter.instruction("ldr x11, [sp, #8]");                                   // reload the running write pointer for the capacity guard
+    emitter.instruction("mov x0, x11");                                         // guard the float representation
+    emitter.instruction("mov x1, #32");                                         // reserve exactly the bytes this value writes
+    emitter.instruction("bl __rt_concat_headroom");                             // fail closed instead of writing past the shared arena
+    emitter.instruction("ldr x11, [sp, #8]");                                   // reload the write pointer after the guard clobbers x11
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload the running write pointer
     emitter.instruction("mov w12, #100");                                       // ASCII 'd'
     emitter.instruction("strb w12, [x11]");                                     // write the float type marker
@@ -561,6 +620,10 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x9]");                                       // current write offset
     emit_symbol_address(emitter, "x11", "_concat_buf");
     emitter.instruction("add x11, x11, x10");                                   // write target pointer
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x12", cap as i64); // load the shared scratch capacity
+    emitter.instruction("sub x12, x12, x10");                                   // remaining bytes before the arena end
+    emitter.instruction("cmp x1, x12");                                         // does the raw run still fit?
+    emit_serialize_overflow_branch(emitter, "b.hi");
     emitter.instruction("mov x12, #0");                                         // byte cursor = 0
     emitter.label("__rt_concat_append_loop");
     emitter.instruction("cmp x12, x1");                                         // copied the whole run?
@@ -978,6 +1041,9 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // deallocate the dedup frame
     emitter.instruction("ret");                                                 // return the back-reference flag in x0
+
+    emitter.label_global("__rt_serialize_overflow");
+    emitter.instruction("b __rt_concat_overflow");                              // report the oversized result instead of corrupting adjacent BSS
 }
 
 /// Emits the AArch64 sequence that decrements `_ser_value_counter` by one,
@@ -995,10 +1061,14 @@ fn emit_uncount_key_aarch64(emitter: &mut Emitter) {
 /// `_concat_off`, advancing the offset (clobbers x9-x12).
 fn emit_append_literal_aarch64(emitter: &mut Emitter, bytes: &[u8], what: &str) {
     use crate::codegen_support::abi::emit_symbol_address;
+    let ceiling = emitter.concat_capacity.saturating_sub(bytes.len());
     emit_symbol_address(emitter, "x9", "_concat_off");
     emitter.instruction("ldr x10, [x9]");                                       // load the current write offset
     emit_symbol_address(emitter, "x11", "_concat_buf");
     emitter.instruction("add x11, x11, x10");                                   // compute the write target pointer
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x12", ceiling as i64); // last offset where this literal still fits
+    emitter.instruction("cmp x10, x12");                                        // does this literal still fit the arena?
+    emit_serialize_overflow_branch(emitter, "b.hi");
     for (i, b) in bytes.iter().enumerate() {
         emitter.instruction(&format!("mov w12, #{}", b));                       // literal byte for {what}
         emitter.instruction(&format!("strb w12, [x11, #{}]", i));               // write the literal byte
@@ -1031,6 +1101,7 @@ fn emit_serialize_copy_run_aarch64(emitter: &mut Emitter, prefix: &str) {
 
 /// x86_64 implementation of `__rt_serialize_mixed` and `__rt_serialize_value`.
 fn emit_serialize_x86_64(emitter: &mut Emitter) {
+    let cap = emitter.concat_capacity;
     use crate::codegen_support::abi::emit_symbol_address;
 
     emitter.blank();
@@ -1136,14 +1207,29 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
 
     // -- indexed array / hash / nested mixed: delegate, then resume finalize --
     emitter.label("__rt_serialize_arr_indexed");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the running write pointer for the capacity guard
+    emitter.instruction("mov rdi, r11");                                        // guard the indexed-array header
+    emitter.instruction("mov rsi, 64");                                         // reserve the largest container header this encoder writes
+    emitter.instruction("call __rt_concat_headroom");                           // fail closed instead of writing past the shared arena
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the write pointer after the guard clobbers r10
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // array pointer = saved low payload word
     emitter.instruction("call __rt_serialize_indexed_array");                   // append a:n:{...} for the indexed array
     emitter.instruction("jmp __rt_serialize_after_container");                  // recompute the write pointer and finish
     emitter.label("__rt_serialize_arr_hash");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the running write pointer for the capacity guard
+    emitter.instruction("mov rdi, r11");                                        // guard the hash header
+    emitter.instruction("mov rsi, 64");                                         // reserve the largest container header this encoder writes
+    emitter.instruction("call __rt_concat_headroom");                           // fail closed instead of writing past the shared arena
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the write pointer after the guard clobbers r10
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // hash pointer = saved low payload word
     emitter.instruction("call __rt_serialize_hash");                            // append a:n:{...} for the associative array
     emitter.instruction("jmp __rt_serialize_after_container");                  // recompute the write pointer and finish
     emitter.label("__rt_serialize_arr_object");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the running write pointer for the capacity guard
+    emitter.instruction("mov rdi, r11");                                        // guard the object header
+    emitter.instruction("mov rsi, 64");                                         // reserve the longest class-name header this encoder writes
+    emitter.instruction("call __rt_concat_headroom");                           // fail closed instead of writing past the shared arena
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the write pointer after the guard clobbers r10
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // object pointer = saved low payload word
     emitter.instruction("call __rt_serialize_obj_ref");                         // dedup: emit r:<idx>; if seen, else register -> rax=1 if emitted
     emitter.instruction("test rax, rax");                                       // was a back-reference emitted?
@@ -1164,6 +1250,11 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
 
     // -- null: "N;" --
     emitter.label("__rt_serialize_null");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the running write pointer for the capacity guard
+    emitter.instruction("mov rdi, r11");                                        // guard the null marker
+    emitter.instruction("mov rsi, 2");                                          // reserve exactly the bytes this value writes
+    emitter.instruction("call __rt_concat_headroom");                           // fail closed instead of writing past the shared arena
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the write pointer after the guard clobbers r10
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the running write pointer
     emitter.instruction("mov BYTE PTR [r11], 78");                              // ASCII 'N'
     emitter.instruction("mov BYTE PTR [r11 + 1], 59");                          // ASCII ';'
@@ -1173,6 +1264,11 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
 
     // -- bool: "b:0;" / "b:1;" --
     emitter.label("__rt_serialize_bool");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the running write pointer for the capacity guard
+    emitter.instruction("mov rdi, r11");                                        // guard the bool marker
+    emitter.instruction("mov rsi, 4");                                          // reserve exactly the bytes this value writes
+    emitter.instruction("call __rt_concat_headroom");                           // fail closed instead of writing past the shared arena
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the write pointer after the guard clobbers r10
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the running write pointer
     emitter.instruction("mov BYTE PTR [r11], 98");                              // ASCII 'b'
     emitter.instruction("mov BYTE PTR [r11 + 1], 58");                          // ASCII ':'
@@ -1189,6 +1285,11 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
 
     // -- int: "i:" + digits + ";" --
     emitter.label("__rt_serialize_int");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the running write pointer for the capacity guard
+    emitter.instruction("mov rdi, r11");                                        // guard the integer markers, digits, and itoa scratch
+    emitter.instruction("mov rsi, 24");                                         // reserve exactly the bytes this value writes
+    emitter.instruction("call __rt_concat_headroom");                           // fail closed instead of writing past the shared arena
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the write pointer after the guard clobbers r10
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the running write pointer
     emitter.instruction("mov BYTE PTR [r11], 105");                             // ASCII 'i'
     emitter.instruction("mov BYTE PTR [r11 + 1], 58");                          // ASCII ':'
@@ -1201,7 +1302,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r10], rcx");                            // point itoa scratch at the current write position
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the integer payload
     emitter.instruction("call __rt_itoa");                                      // format the integer -> rax=digit ptr, rdx=digit len
-    emit_serialize_copy_run_x86_64(emitter, "__rt_serialize_int"); // copy the digits to the write pos
+    emit_serialize_copy_run_x86_64(emitter, "__rt_serialize_int");              // copy the digits to the write pos
     emitter.instruction("mov BYTE PTR [r11], 59");                              // ASCII ';'
     emitter.instruction("add r11, 1");                                          // advance past the semicolon
     emitter.instruction("mov QWORD PTR [rbp - 16], r11");                       // save the updated write pointer
@@ -1210,6 +1311,12 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     // -- string: "s:" + bytelen + ":\"" + raw bytes + "\";" --
     emitter.label("__rt_serialize_str");
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the running write pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // reload the byte length from the high payload word
+    emitter.instruction("add rsi, 32");                                         // reserve room for s:<digits>:"..."; around the payload
+    emit_serialize_overflow_branch(emitter, "jc");
+    emitter.instruction("mov rdi, r11");                                        // guard the whole serialized string slice
+    emitter.instruction("call __rt_concat_headroom");                           // fail closed instead of copying past the arena
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the running write pointer after the guard
     emitter.instruction("mov BYTE PTR [r11], 115");                             // ASCII 's'
     emitter.instruction("mov BYTE PTR [r11 + 1], 58");                          // ASCII ':'
     emitter.instruction("add r11, 2");                                          // advance past "s:"
@@ -1221,7 +1328,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r10], rcx");                            // point itoa scratch at the current write position
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the byte length from the high payload word
     emitter.instruction("call __rt_itoa");                                      // format the byte length -> rax=digit ptr, rdx=digit len
-    emit_serialize_copy_run_x86_64(emitter, "__rt_serialize_strlen"); // copy the length digits
+    emit_serialize_copy_run_x86_64(emitter, "__rt_serialize_strlen");           // copy the length digits
     emitter.instruction("mov BYTE PTR [r11], 58");                              // ASCII ':'
     emitter.instruction("mov BYTE PTR [r11 + 1], 34");                          // ASCII '"'
     emitter.instruction("add r11, 2");                                          // advance past the ":\"" separator
@@ -1246,6 +1353,11 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
 
     // -- float: "d:" + (INF/-INF/NAN | shortest round-trip) + ";" --
     emitter.label("__rt_serialize_float");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the running write pointer for the capacity guard
+    emitter.instruction("mov rdi, r11");                                        // guard the float representation
+    emitter.instruction("mov rsi, 32");                                         // reserve exactly the bytes this value writes
+    emitter.instruction("call __rt_concat_headroom");                           // fail closed instead of writing past the shared arena
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the write pointer after the guard clobbers r10
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the running write pointer
     emitter.instruction("mov BYTE PTR [r11], 100");                             // ASCII 'd'
     emitter.instruction("mov BYTE PTR [r11 + 1], 58");                          // ASCII ':'
@@ -1510,6 +1622,10 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // current write offset
     emit_symbol_address(emitter, "r11", "_concat_buf");
     emitter.instruction("add r11, r10");                                        // write target pointer
+    emitter.instruction(&format!("mov r9, {}", cap));                           // load the shared scratch capacity
+    emitter.instruction("sub r9, r10");                                         // remaining bytes before the arena end
+    emitter.instruction("cmp rsi, r9");                                         // does the raw run still fit?
+    emit_serialize_overflow_branch(emitter, "ja");
     emitter.instruction("xor rcx, rcx");                                        // byte cursor = 0
     emitter.label("__rt_concat_append_loop");
     emitter.instruction("cmp rcx, rsi");                                        // copied the whole run?
@@ -1934,6 +2050,9 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 32");                                         // deallocate the dedup frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the back-reference flag in rax
+
+    emitter.label_global("__rt_serialize_overflow");
+    emitter.instruction("jmp __rt_concat_overflow");                            // report the oversized result instead of corrupting adjacent BSS
 }
 
 /// Emits the x86_64 sequence that decrements `_ser_value_counter` by one, undoing
@@ -1951,10 +2070,14 @@ fn emit_uncount_key_x86_64(emitter: &mut Emitter) {
 /// `_concat_off`, advancing the offset (clobbers r9-r11).
 fn emit_append_literal_x86_64(emitter: &mut Emitter, bytes: &[u8], what: &str) {
     use crate::codegen_support::abi::emit_symbol_address;
+    let ceiling = emitter.concat_capacity.saturating_sub(bytes.len());
     emit_symbol_address(emitter, "r10", "_concat_off");
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the current write offset
     emit_symbol_address(emitter, "r11", "_concat_buf");
     emitter.instruction("add r11, r10");                                        // compute the write target pointer
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "r9", ceiling as i64); // last offset where this literal still fits
+    emitter.instruction("cmp r10, r9");                                         // does this literal still fit the arena?
+    emit_serialize_overflow_branch(emitter, "ja");
     for (i, b) in bytes.iter().enumerate() {
         emitter.instruction(&format!("mov BYTE PTR [r11 + {}], {}", i, b));     // literal byte for {what}
     }

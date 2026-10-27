@@ -2,7 +2,7 @@
 title: "imagepng() - internals"
 description: "Compiler internals for imagepng(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 522
+  order: 528
 ---
 
 ## `imagepng()` - internals

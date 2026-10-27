@@ -188,6 +188,7 @@ pub(super) fn lower_restore_exception_handler(ctx: &mut FunctionContext<'_>) -> 
 pub(super) fn lower_trigger_error(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
+    internal_category: Option<&[u8]>,
 ) -> Result<()> {
     let message = expect_operand(inst, 0)?;
     let level = expect_operand(inst, 1)?;
@@ -197,11 +198,14 @@ pub(super) fn lower_trigger_error(
     // reports it at the user's call site, which `prepare_call_site` published for the
     // entering call. The prelude's own synthetic span would otherwise name the injected
     // source instead.
-    let caller_site = inst.span.is_some_and(|span| !span.is_from_source());
+    // Internal warning operands already carry the live caller-frame line. A callback
+    // can change the published globals before that diagnostic is emitted.
+    let caller_site = internal_category.is_none()
+        && inst.span.is_some_and(|span| !span.is_from_source());
     let default_label = ctx.next_label("trigger_error_default");
     let done_label = ctx.next_label("trigger_error_done");
     let descriptor_reg = abi::nested_call_reg(ctx.emitter);
-    emit_validate_trigger_error_level(ctx, level)?;
+    if internal_category.is_none() { emit_validate_trigger_error_level(ctx, level)?; }
     abi::emit_load_symbol_to_reg(
         ctx.emitter,
         descriptor_reg,
@@ -221,18 +225,28 @@ pub(super) fn lower_trigger_error(
     super::super::callables::emit_trigger_error_handler_args(
         ctx, level, message, file, line, caller_site,
     )?;
-    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    // The handler can throw into this frame's catch, bypassing ordinary argument cleanup.
+    // Publish the boxed argument array as an unwind owner before entering user code.
+    abi::emit_reserve_temporary_stack(ctx.emitter, 64);
+    abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    let owner_address = abi::tertiary_scratch_reg(ctx.emitter);
+    abi::emit_temporary_stack_address(ctx.emitter, owner_address, 0);
+    abi::emit_link_call_operand_owner_at_stack(ctx.emitter, owner_address, false, 16);
     let arg0 = abi::int_arg_reg_name(ctx.emitter.target, 0);
     let arg1 = abi::int_arg_reg_name(ctx.emitter.target, 1);
     abi::emit_load_symbol_to_reg(ctx.emitter, arg0, "_php_error_handler_callable", 0);
     abi::emit_load_temporary_stack_slot(ctx.emitter, arg1, 0);
     abi::emit_call_label(ctx.emitter, "__rt_error_handler_invoke");
+    abi::emit_unlink_call_operand_owner_at_stack(ctx.emitter, 16);
     super::super::callables::release_invoker_arg_preserving_result(ctx);
+    abi::emit_release_temporary_stack(ctx.emitter, 48);
     emit_release_handler_result_and_branch_on_false(ctx, &default_label);
     emit_bool_result(ctx, true);
     ctx.emitter.instruction(&branch_instruction(ctx, &done_label));             // skip PHP's default diagnostic after handler suppression
     ctx.emitter.label(&default_label);
-    emit_default_user_error(ctx, message, level, TriggerSite::for_call(file, line, caller_site))?;
+    emit_default_user_error(
+        ctx, message, level, TriggerSite::for_call(file, line, caller_site), internal_category,
+    )?;
     ctx.emitter.label(&done_label);
     Ok(())
 }
@@ -457,6 +471,7 @@ fn emit_default_user_error(
     message: ValueId,
     level: ValueId,
     site: TriggerSite,
+    internal_category: Option<&[u8]>,
 ) -> Result<()> {
     let skip_output = ctx.next_label("trigger_error_skip_output");
     load_integer_operand(ctx, level)?;
@@ -465,7 +480,8 @@ fn emit_default_user_error(
     let mask_reg = abi::secondary_scratch_reg(ctx.emitter);
     abi::emit_load_symbol_to_reg(ctx.emitter, mask_reg, "_php_error_reporting", 0);
     emit_branch_if_no_mask_overlap(ctx, mask_reg, level_reg, &skip_output);
-    emit_user_error_category(ctx, level_reg);
+    if let Some(category) = internal_category { emit_user_error_fragment(ctx, category); }
+    else { emit_user_error_category(ctx, level_reg); }
     match ctx.emitter.target.arch {
         Arch::AArch64 => ctx.load_string_value_to_regs(message, "x1", "x2")?,
         Arch::X86_64 => ctx.load_string_value_to_regs(message, "rdi", "rsi")?,

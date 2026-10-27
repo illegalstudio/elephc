@@ -188,6 +188,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Pcntl,
     /// Dispatches the `xml_*` / `xmlwriter_*` family by forwarding to the compiled xml prelude.
     Xml,
+    /// Forwards fileinfo to the compiled host prelude.
+    Fileinfo,
     /// Dispatches `number_format(...)`.
     NumberFormat,
     /// Dispatches the bridge-backed OpenSSL cipher builtins.
@@ -541,6 +543,7 @@ impl EvalValuesHook {
                 eval_network_env_values_result(name, evaluated_args, context, values)
             }
             Self::Pcntl => eval_pcntl_values_result(name, evaluated_args, context, values),
+            Self::Fileinfo => eval_fileinfo_values_result(name, evaluated_args, context, values),
             Self::Xml => eval_xml_values_result(name, evaluated_args, context, values),
             Self::NumberFormat => {
                 eval_number_format_declared_values_result(evaluated_args, values)
@@ -575,7 +578,7 @@ impl EvalValuesHook {
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::PregMatch => eval_preg_match_values_result(evaluated_args, values),
-            Self::PregMatchAll => eval_preg_match_all_values_result(evaluated_args, values),
+            Self::PregMatchAll => eval_preg_match_all_values_result(evaluated_args, context, values),
             Self::PregReplace => eval_preg_replace_values_result(evaluated_args, values),
             Self::PregReplaceCallback => {
                 eval_preg_replace_callback_values_result(

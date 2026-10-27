@@ -14,7 +14,7 @@ use crate::codegen_support::platform::Target;
 
 use super::catalog::PackageVersion;
 use super::error::{NativeError, NativeErrorKind};
-use super::recipes::{curl, libssh2, libxml2, nghttp2, oniguruma, openssl, pcre2, zlib};
+use super::recipes::{curl, libmagic, libssh2, libxml2, nghttp2, oniguruma, openssl, pcre2, zlib};
 use super::toolchain::NativeToolchain;
 
 /// Immutable inputs to one trusted package recipe invocation.
@@ -50,6 +50,7 @@ enum BuiltInRecipe {
     Libssh2,
     Curl,
     Libxml2,
+    Libmagic,
 }
 
 /// Resolves a package and immutable recipe revision to its built-in executor.
@@ -62,6 +63,7 @@ fn built_in_recipe(package: &str, revision: u32) -> Option<BuiltInRecipe> {
         ("nghttp2", 2) => Some(BuiltInRecipe::Nghttp2),
         ("libssh2", 2) => Some(BuiltInRecipe::Libssh2),
         ("curl", 4) => Some(BuiltInRecipe::Curl),
+        ("libmagic", 1) => Some(BuiltInRecipe::Libmagic),
         ("libxml2", 6) => Some(BuiltInRecipe::Libxml2),
         _ => None,
     }
@@ -78,6 +80,7 @@ impl RecipeRunner for CuratedRecipes {
             Some(BuiltInRecipe::Nghttp2) => nghttp2::build(request),
             Some(BuiltInRecipe::Libssh2) => libssh2::build(request),
             Some(BuiltInRecipe::Curl) => curl::build(request),
+            Some(BuiltInRecipe::Libmagic) => libmagic::build(request),
             Some(BuiltInRecipe::Libxml2) => libxml2::build(request),
             None => Err(NativeError::new(
                 NativeErrorKind::Build,

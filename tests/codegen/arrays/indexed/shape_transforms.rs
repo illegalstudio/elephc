@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Inline PHP fixtures are compiled to native binaries and assertions compare stdout or expected failures.
+//! - Runtime array_push spreads cover indexed receiver staging, iteration and heap ownership.
 
 use super::*;
 use crate::support::compile_and_run_with_heap_debug;
@@ -348,6 +349,206 @@ $r = [1]; array_push($r, 2, 3, 4); echo $r[0], $r[1], $r[2], $r[3], "\n";
             "1234\n",
         )
     );
+}
+
+/// A Generator spread into an indexed local appends each yielded value and releases every owner.
+#[test]
+fn test_array_push_indexed_generator_spread_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function indexedPushGenerator(): Generator { yield 3; yield 4; }
+for ($i = 0; $i < 32; $i++) {
+    $values = [1, 2];
+    $count = array_push($values, ...indexedPushGenerator());
+}
+echo $count, "|", json_encode($values), "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "4|[1,2,3,4]\n", "stderr: {}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A runtime indexed-list spread appends its elements separately and leaves the heap balanced.
+#[test]
+fn test_array_push_indexed_runtime_list_spread_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+for ($i = 0; $i < 32; $i++) {
+    $values = [1, 2];
+    $tail = [$argc > 0 ? 3 : 30, 4];
+    $count = array_push($values, ...$tail);
+}
+echo $count, "|", json_encode($values), "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "4|[1,2,3,4]\n", "stderr: {}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Reference aliases accept compatible plain values, while prior builtins do not create aliases.
+#[test]
+fn test_array_push_indexed_reference_alias_compatible_plain_values_are_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$values = [1];
+$alias =& $values;
+$count = array_push($alias, 2, 3);
+echo $count, "|", json_encode($values), "|", json_encode($alias), "\n";
+$sequential = [1];
+array_push($sequential, 2);
+echo array_push($sequential, "x"), "|", json_encode($sequential), "\n";
+$sorted = [2, 1];
+sort($sorted);
+echo array_push($sorted, "x"), "|", json_encode($sorted), "\n";
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        "3|[1,2,3]|[1,2,3]\n3|[1,2,\"x\"]\n3|[1,2,\"x\"]\n",
+        "stderr: {}",
+        out.stderr
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Nested indexed receivers under a reference-bound root use copy/write-back without crashing.
+#[test]
+fn test_array_push_nested_indexed_reference_root_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$rows = [[1], [2]];
+$alias =& $rows;
+$first = array_push($rows[0], 2);
+$second = array_push($rows[1]);
+$loopRows = [[1], [2]];
+$loopAlias =& $loopRows;
+for ($i = 0; $i < 2; $i++) {
+    array_push($loopRows[$i], (int) ($i + 10));
+}
+$hashRows = [["a" => 1]];
+$hashAlias =& $hashRows;
+$hashCount = array_push($hashRows[0], 2);
+echo $first, "|", $second, "|", json_encode($rows), "|", json_encode($alias), "\n";
+echo json_encode($loopRows), "|", json_encode($loopAlias), "\n";
+echo $hashCount, "|", json_encode($hashRows), "|", json_encode($hashAlias), "\n";
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        "2|1|[[1,2],[2]]|[[1,2],[2]]\n[[1,10],[2,11]]|[[1,10],[2,11]]\n2|[{\"a\":1,\"0\":2}]|[{\"a\":1,\"0\":2}]\n",
+        "stderr: {}",
+        out.stderr
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Closure-body mutations keep their boxed capture path while native alias readers stay typed.
+#[test]
+fn test_array_push_reference_captures_allow_plain_value_widening() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$captured = [1];
+$add = function () use (&$captured) { return array_push($captured, "y"); };
+echo $add(), "|", json_encode($captured), "\n";
+$shared = [1];
+$alias =& $shared;
+$readShared = function () use (&$shared) { return json_encode($shared); };
+array_push($alias, 2);
+echo json_encode($alias), "|", $readShared(), "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "2|[1,\"y\"]\n[1,2]|[1,2]\n", "stderr: {}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Unrelated read-only array captures retain native storage for typed consumers in both frames.
+/// The pre-bound native reference control has the same retained graph, so require no added owner.
+#[test]
+fn test_array_push_capture_plans_preserve_read_only_array_builtins() {
+    let source = r#"<?php
+$values = [3, 1, 2];
+$read = function () use (&$values) {
+    echo min($values), "/", max($values), "|", array_search(1, $values, true), "\n";
+    echo implode(",", array_merge($values, [4])), "|";
+    echo implode(",", array_diff($values, [1])), "|";
+    echo implode(",", $values + [5 => 5]), "\n";
+};
+$read();
+echo min($values), "/", max($values), "|", array_search(1, $values, true), "\n";
+echo implode(",", array_merge($values, [4])), "|", implode(",", array_diff($values, [1])), "\n";
+$floats = [2.5, 1.5];
+$floatRead = function () use (&$floats) { return min($floats) + max($floats) + array_sum($floats); };
+echo $floatRead(), "\n";
+array_push($values, 10);
+echo min($values), "/", max($values), "\n";
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    let control = compile_and_run_with_heap_debug(&source
+        .replacen("$read =", "$controlAlias =& $values;\n$read =", 1)
+        .replacen("$floatRead =", "$floatAlias =& $floats;\n$floatRead =", 1));
+    assert_eq!(out.stdout,
+        "1/3|1\n3,1,2,4|3,2|3,1,2,5\n1/3|1\n3,1,2,4|3,2\n8\n1/10\n",
+        "stderr: {}", out.stderr);
+    assert_eq!(control.stdout, out.stdout, "native control: {}", control.stderr);
+    let summary = |stderr: &str| stderr.lines()
+        .find(|line| line.starts_with("HEAP DEBUG: leak summary:"))
+        .expect("heap debug must report final ownership").to_owned();
+    assert_eq!(summary(&out.stderr), summary(&control.stderr),
+        "candidate: {}\npre-bound native control: {}", out.stderr, control.stderr);
+}
+
+/// Nested capture mutations preserve compatible native layouts and outer indexed reads.
+#[test]
+fn test_array_push_nested_captures_preserve_compatible_storage() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$rows = [[1]];
+$push = function () use (&$rows) { array_push($rows[0], 2); };
+$push();
+echo $rows[0][0], "|", $rows[0][1], "|", json_encode($rows), "\n";
+$named = [[[2, 3]]];
+$popNamed = function () use (&$named) { return array_pop(array: $named[0][0]); };
+echo $popNamed(), "|", $named[0][0][0], "|", json_encode($named), "\n";
+"#);
+    assert_eq!(out.stdout, "1|2|[[1,2]]\n3|2|[[[2]]]\n", "stderr: {}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Indexed spread appends share the ordinary widening path for every source and value shape.
+#[test]
+fn test_array_push_indexed_heterogeneous_spreads_are_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function heterogeneousPushGenerator(): Generator { yield "x"; yield 1.5; }
+function emptyPushGenerator(): Generator { yield "g"; yield 2.5; }
+$dynamic = [1, 2];
+$tail = [$argc > 0 ? "x" : "y", "z"];
+echo array_push($dynamic, ...$tail), "|", json_encode($dynamic), "\n";
+$literal = [$argc];
+echo array_push($literal, ...["a", "b"]), "|", json_encode($literal), "\n";
+$generated = [1, 2];
+echo array_push($generated, ...heterogeneousPushGenerator()), "|", json_encode($generated), "\n";
+$plain = [1];
+$more = [$argc + 1];
+echo array_push($plain, "s", ...$more), "|", json_encode($plain), "\n";
+$empty = [];
+$items = [$argc + 1, 2, $argc + 3];
+echo array_push($empty, ...$items), "|", $empty[0] + $empty[2], "|", json_encode($empty), "\n";
+$emptyGenerated = [];
+echo array_push($emptyGenerated, ...emptyPushGenerator()), "|", json_encode($emptyGenerated), "\n";
+$strings = ["a"];
+echo array_push($strings, ...[$argc + 1, 5]), "|", json_encode($strings), "\n";
+"#,
+    );
+    assert_eq!(out.stdout, concat!(
+        "4|[1,2,\"x\",\"z\"]\n",
+        "3|[1,\"a\",\"b\"]\n",
+        "4|[1,2,\"x\",1.5]\n",
+        "3|[1,\"s\",2]\n",
+        "3|6|[2,2,4]\n",
+        "2|[\"g\",2.5]\n",
+        "3|[\"a\",2,5]\n",
+    ), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
 /// Verifies a multi-value `array_push()` neither leaks the appended values nor double releases

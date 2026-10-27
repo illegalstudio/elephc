@@ -1555,7 +1555,10 @@ greet();
     )
     .unwrap();
 
+    // This probes a standalone subprogram anchor, so retain greet's call boundary even
+    // when the optimizer can inline a discarded void call and the linker can remove it.
     let output = elephc_cli_command(&dir)
+        .arg("--no-ir-opt")
         .arg("--debug-info")
         .arg(&php_path)
         .output()

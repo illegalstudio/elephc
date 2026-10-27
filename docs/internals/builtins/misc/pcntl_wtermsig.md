@@ -2,7 +2,7 @@
 title: "pcntl_wtermsig() - internals"
 description: "Compiler internals for pcntl_wtermsig(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 689
+  order: 695
 ---
 
 ## `pcntl_wtermsig()` - internals

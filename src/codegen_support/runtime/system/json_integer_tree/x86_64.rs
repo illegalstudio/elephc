@@ -11,7 +11,6 @@
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::runtime::strings::CONCAT_BUF_CAPACITY;
 use crate::codegen_support::sentinels::{
     emit_branch_if_null_container, x86_64_heap_kind_word, CONCAT_TEMP_HEAP_KIND,
 };
@@ -19,7 +18,6 @@ use crate::codegen_support::sentinels::{
 const PROBE_FRAME: usize = 64;
 const WRITE_FRAME: usize = 96;
 const TRY_FRAME: usize = 48;
-const MAX_SCRATCH_INTEGER_SLOTS: usize = (CONCAT_BUF_CAPACITY - 1) / 21;
 
 /// Emits all x86_64 helper bodies used by the integer-tree fast path.
 pub(super) fn emit_helpers(emitter: &mut Emitter) {
@@ -34,6 +32,7 @@ pub(super) fn emit_entry(emitter: &mut Emitter, prefix: &str) {
     let fallback = format!("{prefix}_fallback");
     let unsupported = format!("{prefix}_unsupported");
     let attempt = format!("{prefix}_attempt");
+    let max_scratch_integer_slots = (emitter.concat_capacity - 1) / 21;
 
     // -- keep flags, recursive encodes, and unsupported trees on the general encoder --
     abi::emit_load_symbol_to_reg(emitter, "r10", "_json_active_flags", 0);
@@ -49,7 +48,8 @@ pub(super) fn emit_entry(emitter: &mut Emitter, prefix: &str) {
     emitter.instruction("and r10, 0x7f");                                       // discard copy-on-write and other header flags
     emitter.instruction("test r10, r10");                                       // direct integer slots use value type zero
     emitter.instruction(&format!("jnz {attempt}"));                             // nested and boxed layouts still need the complete proof
-    emitter.instruction(&format!("cmp QWORD PTR [rax], {MAX_SCRATCH_INTEGER_SLOTS}")); // test the twenty-byte-per-value upper bound against scratch capacity
+    abi::emit_load_int_immediate(emitter, "r11", max_scratch_integer_slots as i64);
+    emitter.instruction("cmp QWORD PTR [rax], r11");                            // test the twenty-byte-per-value upper bound against scratch capacity
     emitter.instruction(&format!("jbe {fallback}"));                            // bounded direct arrays retain the faster single-pass encoder
     emitter.label(&attempt);
 

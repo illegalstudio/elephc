@@ -116,7 +116,7 @@ pub(crate) fn lower_clone_with(ctx: &mut FunctionContext<'_>, inst: &Instruction
     abi::emit_temporary_stack_address(ctx.emitter, &owner_addr, 0);
     abi::emit_link_call_operand_owner_at_stack(ctx.emitter, &owner_addr, false, 16);
 
-    emit_enum_uncloneable_guard(ctx);
+    emit_declared_uncloneable_guard(ctx);
     emit_clone_hook(ctx, object, inst.operands.get(2).copied())?;
     // An omitted second argument IS the empty override array, so there is nothing to apply.
     if let Some(properties) = inst.operands.get(1).copied() {
@@ -575,12 +575,12 @@ fn emit_uncloneable_guard(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.label(&cloned_label);
 }
 
-/// Refuses an enum case, which php forbids cloning, naming the enum the way php-src does.
+/// Refuses enum cases and catalogued opaque objects using their runtime class names.
 ///
-/// The shared shallow-copy adapter happily copies an enum case, so the refusal is decided here
+/// The shared shallow-copy adapter copies enum cases and opaque internal classes, so the refusal is decided here
 /// from the clone's own runtime class id. It runs INSIDE the owner window, so the copy the
 /// adapter already made is released by the unwinder instead of leaking.
-fn emit_enum_uncloneable_guard(ctx: &mut FunctionContext<'_>) {
+fn emit_declared_uncloneable_guard(ctx: &mut FunctionContext<'_>) {
     let mut enums = ctx
         .module
         .enum_infos
@@ -592,6 +592,11 @@ fn emit_enum_uncloneable_guard(ctx: &mut FunctionContext<'_>) {
                 .map(|info| (info.class_id as i64, name.clone()))
         })
         .collect::<Vec<_>>();
+    for (name, info) in &ctx.module.class_infos {
+        if !crate::types::builtin_classes::class_allows_clone(name, &ctx.module.class_infos) {
+            enums.push((info.class_id as i64, name.clone()));
+        }
+    }
     if enums.is_empty() {
         return;
     }

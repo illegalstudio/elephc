@@ -255,6 +255,9 @@ impl Checker {
                         pre_bound_own_storage,
                         &method.body,
                         |checker| {
+                            checker.boxed_parameter_locals.extend(method.params.iter()
+                                .filter(|(_, annotation, _, _)| annotation.is_none())
+                                .map(|(name, _, _, _)| name.clone()));
                             for s in &method.body {
                                 if let Err(error) = checker.check_stmt(s, &mut method_env) {
                                     method_errors.extend(error.flatten());

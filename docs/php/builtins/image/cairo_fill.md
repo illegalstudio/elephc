@@ -2,7 +2,7 @@
 title: "cairo_fill()"
 description: "Fills the current path with the current source and clears the path."
 sidebar:
-  order: 405
+  order: 411
 ---
 
 ## cairo_fill()

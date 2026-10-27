@@ -39,7 +39,6 @@ use super::sprintf_x86_64::emit_sprintf_linux_x86_64;
 /// Byte capacity of the shared `_concat_buf` result arena declared in
 /// `crate::codegen_support::runtime::data::emit_runtime_data_fixed`. Both `__rt_sprintf`
 /// lowerings derive their write limit from this constant, so the two stay in step.
-pub(super) const CONCAT_BUF_CAP: u32 = 65536;
 
 /// Byte capacity of the per-conversion `snprintf` scratch buffer. PHP clamps float
 /// precision to 53 digits, so the widest libc body is `%.53f` of `DBL_MAX`
@@ -72,6 +71,7 @@ pub(super) const CONV_SCRATCH_CAP: u32 = 512;
 /// cursor in `_concat_buf`, `x24` = result start, `x25` = `_concat_off` address,
 /// `x26` = argument count, `x27` = optional eval context.
 pub fn emit_sprintf(emitter: &mut Emitter) {
+    let cap = emitter.concat_capacity;
     if emitter.target.arch == Arch::X86_64 {
         emit_sprintf_linux_x86_64(emitter);
         return;
@@ -123,7 +123,7 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x7", "_concat_buf");
     emitter.instruction("add x23, x7, x8");                                     // write cursor = buffer base + offset
     emitter.instruction("mov x24, x23");                                        // remember where this result starts
-    emitter.instruction(&format!("mov x9, #{}", CONCAT_BUF_CAP));               // total concat-buffer capacity in bytes
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x9", cap as i64); // total concat-buffer capacity in bytes
     emitter.instruction("add x9, x7, x9");                                      // one-past-the-end address of the concat buffer
     emitter.instruction("str x9, [sp, #144]");                                  // publish the hard write limit for every copy below
     emitter.instruction("str xzr, [sp, #152]");                                 // no formatter-owned temporary string is live

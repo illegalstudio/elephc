@@ -149,6 +149,11 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         php_extensions: &["curl"],
     },
     TestBridgeStaticlib {
+        lib_name: "elephc_fileinfo",
+        package: "elephc-fileinfo",
+        php_extensions: &["fileinfo"],
+    },
+    TestBridgeStaticlib {
         lib_name: "elephc_xml",
         package: "elephc-xml",
         php_extensions: &["xml", "xmlwriter", "SimpleXML"],
@@ -1324,6 +1329,11 @@ fn test_link_plan(
     // reads the same durable cache structurally (see `super::xml_native`). A fixture
     // whose artifact is missing skips (or, under `ELEPHC_TEST_REQUIRE_XML_NATIVE`,
     // panics) before it ever reaches this point.
+    if named.contains("elephc_fileinfo") {
+        if let Some(archives) = super::fileinfo_native::archives() {
+            for archive in archives { plan.push(LinkItem::managed_archive(archive, "libmagic")); }
+        }
+    }
     if named.contains("elephc_xml") && !xml_pushed {
         push_xml_native_if_available(&mut plan);
     }

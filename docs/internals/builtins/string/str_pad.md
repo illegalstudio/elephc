@@ -2,7 +2,7 @@
 title: "str_pad() - internals"
 description: "Compiler internals for str_pad(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 930
+  order: 936
 ---
 
 ## `str_pad()` - internals
@@ -25,7 +25,7 @@ sidebar:
 - **Target strategy**: `runtime_call`
 - **Validation**: `signature`
 - **Result type source**: `declared`
-- **Result ownership**: `may_alias_arguments`
+- **Result ownership**: `fresh`
 - **Effects**: `static (1 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`

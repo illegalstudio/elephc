@@ -2,7 +2,7 @@
 title: "iptcparse()"
 description: "Parses an IPTC block into its tag arrays."
 sidebar:
-  order: 540
+  order: 546
 ---
 
 ## iptcparse()

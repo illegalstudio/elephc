@@ -226,6 +226,32 @@ pub enum BuiltinRequirement {
     MacOsLibrary(&'static str),
 }
 
+/// Deprecation message and the first affected compatibility profile, when versioned.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct BuiltinDeprecation {
+    /// Human-readable reason retained by signatures and documentation exporters.
+    pub message: &'static str,
+    /// First deprecated profile; `None` preserves an unversioned legacy declaration.
+    pub since: Option<PhpVersion>,
+}
+
+impl BuiltinDeprecation {
+    /// Describes an existing deprecation without a profile boundary.
+    pub const fn always(message: &'static str) -> Self {
+        Self { message, since: None }
+    }
+
+    /// Describes a deprecation beginning with the selected PHP release.
+    pub const fn since(since: PhpVersion, message: &'static str) -> Self {
+        Self { message, since: Some(since) }
+    }
+
+    /// Reports whether this deprecation applies to the selected compatibility profile.
+    pub fn is_active_for(self, version: PhpVersion) -> bool {
+        self.since.is_none_or(|since| version >= since)
+    }
+}
+
 /// Canonical backend-neutral contract for one PHP builtin catalog entry.
 #[derive(Clone, Copy, Debug)]
 pub struct BuiltinContract {
@@ -264,8 +290,8 @@ pub struct BuiltinContract {
     pub examples: &'static [&'static str],
     /// PHP manual fragment, when one exists.
     pub php_manual: Option<&'static str>,
-    /// Deprecation text, when applicable.
-    pub deprecation: Option<&'static str>,
+    /// Deprecation metadata, including its compatibility-profile boundary when applicable.
+    pub deprecation: Option<BuiltinDeprecation>,
     /// Whether strict-PHP hides this elephc-only surface.
     pub extension: bool,
     /// Whether this contract is compiler/runtime-internal and not PHP-visible.
@@ -287,5 +313,20 @@ impl BuiltinContract {
     /// Returns the fixed PHP parameter names that can contain callable descriptors.
     pub fn callback_parameter_names(&self) -> &'static [&'static str] {
         crate::callback_parameters::names(self.id)
+    }
+}
+
+#[cfg(test)]
+mod deprecation_tests {
+    use super::*;
+
+    /// The fileinfo contract activates deprecation at PHP 8.5 without changing older profiles.
+    #[test]
+    fn finfo_close_deprecation_has_a_profile_boundary() {
+        let deprecation = crate::lookup("finfo_close").unwrap().deprecation.unwrap();
+        assert_eq!(deprecation.since, Some(PhpVersion::Php85));
+        assert!(!deprecation.is_active_for(PhpVersion::Php84));
+        assert!(deprecation.is_active_for(PhpVersion::Php85));
+        assert!(BuiltinDeprecation::always("legacy").is_active_for(PhpVersion::Php84));
     }
 }

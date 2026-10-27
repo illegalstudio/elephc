@@ -348,6 +348,9 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     {
         native_requirements.push(NativeRequirement::package("libxml2"));
     }
+    if planned_link_libraries.iter().any(|lib| lib == "elephc_fileinfo") {
+        native_requirements.push(NativeRequirement::package("libmagic"));
+    }
     let resolved_native = match crate::native_deps::resolve_for_compilation(
         Path::new(filename),
         target,

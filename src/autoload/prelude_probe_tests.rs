@@ -117,3 +117,22 @@ fn probe_detects_tokenizer_in_autoloaded_classes() {
         assert!(groups.contains("tokenizer"), "autoloaded body was missed: {body}");
     }
 }
+
+/// Fileinfo classes and procedural calls hidden in Composer files both activate the prelude.
+#[test]
+fn probe_detects_fileinfo_in_autoloaded_classes() {
+    let project = ProbeProject::new();
+    let defines = std::collections::HashSet::new();
+    for body in [
+        r"return new \finfo();",
+        r"return \finfo_open();",
+        r"return \mime_content_type('input.txt');",
+    ] {
+        fs::write(project.0.join("src/Probe.php"), format!(
+            "<?php namespace App; class Probe {{ public function identify(): mixed {{ {body} }} }}",
+        )).unwrap();
+        let (registry, program) = Registry::build(&project.0, parse("<?php new App\\Probe();"));
+        let groups = autoloaded_prelude_groups(&program, &project.0, &registry, &defines);
+        assert!(groups.contains("fileinfo"), "autoloaded body was missed: {body}");
+    }
+}

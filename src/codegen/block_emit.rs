@@ -1009,7 +1009,7 @@ fn emit_main_function(
         emitter.target,
         regalloc_linear,
         false,
-        false,
+        frame::module_uses_backtrace(module),
     );
     let mut ctx = FunctionContext::new(
         module, function, emitter, data, shared, layout, true, gc_stats, heap_debug, None,

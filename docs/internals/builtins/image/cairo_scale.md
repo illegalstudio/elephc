@@ -2,7 +2,7 @@
 title: "cairo_scale() - internals"
 description: "Compiler internals for cairo_scale(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 434
+  order: 440
 ---
 
 ## `cairo_scale()` - internals

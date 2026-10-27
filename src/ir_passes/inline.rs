@@ -1,9 +1,9 @@
 //! Purpose:
 //! Small-function inliner (module-level EIR pass). Inlines `Call` and
 //! `FunctionVariantCall` sites targeting user functions, and statically bound
-//! `MethodCall` sites targeting instance methods, whose body is <=24
-//! non-Nop instructions, is non-recursive (directly or mutually), has no
-//! exception handler ops, is not a generator or fiber wrapper, and exposes a
+//! `MethodCall` sites targeting instance methods. Bodies contain at most 24
+//! non-Nop instructions for functions or 96 for methods, are non-recursive, have no
+//! exception handler ops, are not generator or fiber wrappers, and expose a
 //! provably ownership-safe destructor-free boundary/body.
 //!
 //! Called from:
@@ -42,7 +42,9 @@
 //!   A cleanup-tracked non-parameter slot returned by move is excluded only when
 //!   the callee cannot unwind: before its return, that slot still owns the value and
 //!   must be released by the callee's exceptional-cleanup frame.
-//!   Objects/closures/resources/`mixed`/`iterable` and by-ref params are excluded
+//!   Explicitly rooted method temporaries are also accepted when their complete
+//!   lifetime is block-local and they are cleared before every outgoing edge.
+//!   Other objects/closures/resources/`mixed`/`iterable` and by-ref params are excluded
 //!   because their cleanup timing or aliasing cannot be reproduced by a value-copy splice.
 //! - PHP concatenation builds intermediates in a frame-relative scratch buffer that
 //!   every function rewinds at its statement boundaries (`ConcatReset`). A real call's
@@ -56,7 +58,7 @@
 //!   parameters, nor about a sibling argument of the enclosing call, which is where the
 //!   miscompile was actually found. It is kept as a conservative second line.
 //! - Returns of the callee become `Br` to a continuation block carrying the
-//!   result via a param when the call produced a value; the original call is
+//!   result via a param when the call result is consumed; the original call is
 //!   neutralized and parked in an unreachable block to keep value-def records
 //!   consistent. IR stays validator-clean (the driver re-validates in debug).
 
@@ -75,14 +77,28 @@ use crate::types::PhpType; // used for void stores and plain-scalar checks
 
 mod methods;
 mod recursion;
+mod temporaries;
 
 /// Backstop cap on inlines performed into a single host. Recursive-cycle
 /// exclusion already guarantees termination over the acyclic candidate graph;
 /// this only bounds pathological code-size blowup and protects against bugs.
 const MAX_INLINES_PER_FUNCTION: usize = 10_000;
 
-/// Largest callee body, in non-`Nop` instructions, the inliner splices.
+/// Largest free-function body, in non-`Nop` instructions, the inliner splices.
 const MAX_INLINE_INSTRUCTIONS: usize = 24;
+
+/// Methods include receiver reads, packed address walks and explicit unwind roots.
+/// Keep their expansion bounded while admitting an eight-field vertex writer.
+const MAX_INLINE_METHOD_INSTRUCTIONS: usize = 96;
+
+/// Applies the separate, bounded method budget without widening free-function inlining.
+fn callee_fits_budget(callee: &Function, receiver: bool) -> bool {
+    count_non_nop_instructions(callee) <= if receiver {
+        MAX_INLINE_METHOD_INSTRUCTIONS
+    } else {
+        MAX_INLINE_INSTRUCTIONS
+    }
+}
 
 /// Returns true if `n` is a direct user-function call opcode we consider for inlining.
 fn is_user_call_op(op: Op) -> bool {
@@ -184,6 +200,10 @@ fn is_destructor_free(php_type: &PhpType) -> bool {
 ///    until the return executes, the slot remains an owner that an exceptional callee frame
 ///    would release, while the coarse transplanted exclusion cannot distinguish that state.
 ///
+/// Method temporaries with an explicitly published and cleared block-local lifetime are an
+/// additional safe case: their cleanup is never deferred, and their unwind records survive
+/// the splice. `temporaries::scoped_temps` proves that shape before any type exemption.
+///
 /// By-ref/variadic parameters and special-kind locals (ref-cells, statics, globals,
 /// captures, iterator/generator state) are excluded because they need aliasing/persistence
 /// machinery the value-copy splice does not reproduce.
@@ -194,6 +214,13 @@ fn is_destructor_free(php_type: &PhpType) -> bool {
 /// the splice cannot move the object's destructor. A method that returns or stores `$this`
 /// is still refused, by the return-type rule and by `callee_mutates_lifetime_tracked_parameter`.
 fn callee_is_inline_safe(callee: &Function, receiver: bool) -> bool {
+    if callee.instructions.iter().any(|inst| {
+        inst.op == Op::CoreBuiltin && inst.immediate == Some(Immediate::I64(
+            crate::ir::CoreBuiltinOp::DiagnosticCallerLine.as_i64(),
+        ))
+    }) {
+        return false;
+    }
     if !is_destructor_free(&callee.return_php_type) {
         return false;
     }
@@ -211,8 +238,11 @@ fn callee_is_inline_safe(callee: &Function, receiver: bool) -> bool {
             return false;
         }
     }
+    let scoped_temps = if receiver { temporaries::scoped_temps(callee) } else { HashSet::new() };
+    if !temporaries::owner_scopes_are_balanced(callee) { return false; }
     let receiver_slot = receiver.then(|| LocalSlotId::from_raw(0));
     for local in &callee.locals {
+        if scoped_temps.contains(&local.id) { continue; }
         if !matches!(
             local.kind,
             LocalKind::PhpLocal
@@ -350,7 +380,7 @@ fn is_eligible_callee(callee: &Function, recursive: &HashSet<String>, receiver: 
     if has_exception_handlers(callee) {
         return false;
     }
-    if count_non_nop_instructions(callee) > MAX_INLINE_INSTRUCTIONS {
+    if !callee_fits_budget(callee, receiver) {
         return false;
     }
     if recursive.contains(&callee.name) {
@@ -1006,10 +1036,14 @@ fn apply_inline_at_site(
         .expect("call inst present")
         .clone();
     // `site_is_inlinable` (checked before selection) guarantees the callee returns
-    // uniformly and that `has_result` implies a value-bearing return, so the splice
+    // uniformly and that a USED result implies a value-bearing return, so the splice
     // below is infallible: when `has_result` we join through a continuation param,
     // otherwise return values (if any) are dropped (they are plain scalars).
-    let has_result = call_inst.result.is_some() && !call_inst.result_type.is_void();
+    // Void PHP calls can still define an unused I64/null result. That placeholder must not
+    // demand a value from the callee's void Return; only actual consumers need a join value.
+    let value_uses = crate::ir_passes::rewrite::count_value_uses(host);
+    let has_result = !call_inst.result_type.is_void()
+        && call_inst.result.is_some_and(|value| value_uses.contains_key(&value));
     let orig_result_vid = call_inst.result;
 
     // Split: keep pre, separate call + post tail.
@@ -1356,6 +1390,7 @@ fn inline_into_function(host: &mut Function, callees: &Callees<'_>, data: &mut D
         // an existing loop and can itself contain further eligible call sites.
         let dominance = compute_dominance(host);
         let loops = compute_loops(host, &dominance);
+        let value_uses = crate::ir_passes::rewrite::count_value_uses(host);
         let mut site: Option<(usize, InstId, CalleeRef)> = None; // (block_idx, inst_id, callee)
         'search: for (bidx, block) in host.blocks.iter().enumerate() {
             for &iid in &block.instructions {
@@ -1366,7 +1401,8 @@ fn inline_into_function(host: &mut Function, callees: &Callees<'_>, data: &mut D
                     continue;
                 };
                 let callee = callees.body(target);
-                let has_result = inst.result.is_some() && !inst.result_type.is_void();
+                let has_result = !inst.result_type.is_void()
+                    && inst.result.is_some_and(|value| value_uses.contains_key(&value));
                 let receiver = matches!(target, CalleeRef::Method(_));
                 if is_eligible_callee(callee, callees.recursive, receiver)
                     && (loops.loop_depth(block.id) == 0
@@ -1473,8 +1509,10 @@ pub(crate) fn inline_small_functions(module: &mut Module) -> bool {
 /// are refused too. `is_refcounted_storage()` keeps the storage classification
 /// shared with EIR instead of duplicating a partial list here.
 fn callee_stores_a_refcounted_local(callee: &Function) -> bool {
+    let scoped_temps = temporaries::scoped_temps(callee);
     callee.instructions.iter().any(|inst| {
         inst.op == Op::StoreLocal
+            && !matches!(inst.immediate, Some(Immediate::LocalSlot(slot)) if scoped_temps.contains(&slot))
             && inst.operands.iter().any(|operand| {
                 callee.value(*operand).is_some_and(|value| {
                     value.ownership.may_require_release()

@@ -2,7 +2,7 @@
 title: "bcdivmod()"
 description: "Returns the quotient and remainder of arbitrary-precision division."
 sidebar:
-  order: 557
+  order: 563
 ---
 
 ## bcdivmod()

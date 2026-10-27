@@ -44,6 +44,8 @@ mod basics;
 mod branch_conditions;
 #[path = "runtime_gc/conditional_assignment_owners.rs"]
 mod conditional_assignment_owners;
+#[path = "runtime_gc/receiver_parameter_owners.rs"]
+mod receiver_parameter_owners;
 #[path = "runtime_gc/large_unary_string_results.rs"]
 mod large_unary_string_results;
 #[path = "runtime_gc/static_local_initializers.rs"]
@@ -52,6 +54,13 @@ mod static_local_initializers;
 mod ini_lookup_arguments;
 #[path = "runtime_gc/mixed_string_cast_return.rs"]
 mod mixed_string_cast_return;
+#[path = "runtime_gc/stream_registry.rs"]
+mod stream_registry;
+#[path = "runtime_gc/pointer_read_owners.rs"]
+mod pointer_read_owners;
+mod filter_brigade_owners;
+#[path = "runtime_gc/pending_return_owners.rs"]
+mod pending_return_owners;
 #[path = "runtime_gc/object_cast.rs"]
 mod object_cast;
 #[path = "runtime_gc/array_cast.rs"]
@@ -196,6 +205,7 @@ mod native_property_unset;
 mod eval_closure_receivers;
 mod eval_argument_lifetimes;
 mod eval_array_references;
+mod eval_method_adapter_owners;
 mod eval_operand_owners;
 mod eval_scope_writeback;
 mod unserialize_hydration_data;

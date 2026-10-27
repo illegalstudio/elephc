@@ -99,7 +99,9 @@ pub(crate) fn emit_json_encode_array_int(emitter: &mut Emitter) {
     emitter.instruction("ldr x4, [sp, #32]");                                   // load index
     emitter.instruction("ldr x3, [sp, #24]");                                   // load length
     emitter.instruction("cmp x4, x3");                                          // check if done
-    emitter.instruction("b.ge __rt_json_arr_int_close");                        // done
+    emitter.instruction("b.ge __rt_json_arr_int_close");                        // finish before requiring element headroom
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the current write pointer for the capacity guard
+    super::json_pretty::emit_json_headroom_guard(emitter, 24);           // reserve a separator and one signed integer
 
     // -- add comma separator if not first element --
     emitter.instruction("cbz x4, __rt_json_arr_int_elem");                      // skip comma for first element
@@ -114,6 +116,9 @@ pub(crate) fn emit_json_encode_array_int(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload write pos before optional pretty indentation
     emitter.instruction("bl __rt_json_pretty_line");                            // append newline and indentation for this element when pretty-printing
     emitter.instruction("str x11, [sp, #16]");                                  // save the write pos after any pretty indentation
+    emitter.instruction("mov x0, x11");                                         // guard the integer formatter against the arena end after indentation
+    super::json_pretty::emit_json_headroom_guard(emitter, 24);                  // reserve one signed integer at the post-indentation cursor
+    emitter.instruction("ldr x11, [sp, #16]");                                  // reload the write pointer after the guard clobbers x11
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload array ptr
     emitter.instruction("ldr x4, [sp, #32]");                                   // reload index
     emitter.instruction("add x4, x4, #3");                                      // skip 24-byte header (3 * 8 bytes)
@@ -150,7 +155,11 @@ pub(crate) fn emit_json_encode_array_int(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [sp, #24]");                                   // reload array length to decide whether closing needs its own line
     emitter.instruction("cbz x3, __rt_json_arr_int_close_emit");                // empty arrays stay compact even under JSON_PRETTY_PRINT
     emitter.instruction("bl __rt_json_pretty_line");                            // append the closing-line indentation for non-empty pretty arrays
+    emitter.instruction("str x11, [sp, #16]");                                  // persist the closing-line write pointer before the close guard
     emitter.label("__rt_json_arr_int_close_emit");
+    emitter.instruction("mov x0, x11");                                         // guard the closing bracket write
+    super::json_pretty::emit_json_headroom_guard(emitter, 1);            // reserve exactly one closing byte
+    emitter.instruction("ldr x11, [sp, #16]");                                  // reload the write pointer after the guard clobbers x11
     emitter.instruction("mov w12, #93");                                        // ASCII ']'
     emitter.instruction("strb w12, [x11]");                                     // write ']'
     emitter.instruction("add x11, x11, #1");                                    // advance
@@ -230,7 +239,10 @@ fn emit_json_encode_array_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_json_arr_int_loop");
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the current integer-array element index at the top of the JSON loop
     emitter.instruction("cmp r10, QWORD PTR [rbp - 32]");                       // have we already encoded every integer-array element?
-    emitter.instruction("jae __rt_json_arr_int_close");                         // finish by writing the closing bracket once the loop index reaches the array length
+    emitter.instruction("jae __rt_json_arr_int_close");                         // finish before requiring element headroom
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the current write pointer for the capacity guard
+    super::json_pretty::emit_json_headroom_guard(emitter, 24);           // reserve a separator and one signed integer
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the element index after the guard clobbers r10
     emitter.instruction("test r10, r10");                                       // is this the first integer-array element in the JSON output?
     emitter.instruction("jz __rt_json_arr_int_elem");                           // skip the comma separator before the first encoded integer element
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the current concat-buffer write pointer before appending a comma separator
@@ -242,6 +254,9 @@ fn emit_json_encode_array_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the current write pointer before optional pretty indentation
     emitter.instruction("call __rt_json_pretty_line");                          // append newline and indentation for this element when pretty-printing
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the write pointer after any pretty indentation
+    emitter.instruction("mov rdi, r11");                                        // guard the integer formatter against the arena end after indentation
+    super::json_pretty::emit_json_headroom_guard(emitter, 24);                  // reserve one signed integer at the post-indentation cursor
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the write pointer after the guard clobbers r10
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source integer-array pointer before loading the current element payload
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the current integer-array element index before computing the payload slot address
     emitter.instruction("add r10, 3");                                          // skip the 24-byte indexed-array header to land on the first integer payload slot
@@ -275,6 +290,8 @@ fn emit_json_encode_array_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_json_arr_int_close_emit_x");                   // empty arrays stay compact even under JSON_PRETTY_PRINT
     emitter.instruction("call __rt_json_pretty_line");                          // append the closing-line indentation for non-empty pretty arrays
     emitter.label("__rt_json_arr_int_close_emit_x");
+    emitter.instruction("mov rdi, r11");                                        // guard the closing bracket write
+    super::json_pretty::emit_json_headroom_guard(emitter, 1);            // reserve exactly one closing byte
     emitter.instruction("mov BYTE PTR [r11], 93");                              // append the closing JSON bracket to complete the encoded integer array slice
     emitter.instruction("add r11, 1");                                          // advance the concat-buffer write pointer past the closing bracket
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // checkpoint the write pointer across the depth-exit helper call

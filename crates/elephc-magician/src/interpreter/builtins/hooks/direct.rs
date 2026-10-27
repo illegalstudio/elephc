@@ -185,6 +185,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Pcntl,
     /// Dispatches the `xml_*` / `xmlwriter_*` family by forwarding to the compiled xml prelude.
     Xml,
+    /// Forwards fileinfo to the compiled host prelude.
+    Fileinfo,
     /// Dispatches `number_format(...)`.
     NumberFormat,
     /// Dispatches the bridge-backed OpenSSL cipher builtins.
@@ -457,6 +459,7 @@ impl EvalDirectHook {
             Self::MtRand => eval_builtin_mt_rand(args, context, scope, values),
             Self::NetworkEnv => eval_builtin_network_env_call(name, args, context, scope, values),
             Self::Pcntl => eval_builtin_pcntl_expr_call(name, args, context, scope, values),
+            Self::Fileinfo => eval_builtin_fileinfo_expr_call(name, args, context, scope, values),
             Self::Xml => eval_builtin_xml_expr_call(name, args, context, scope, values),
             Self::NumberFormat => eval_builtin_number_format(args, context, scope, values),
             Self::Openssl => {

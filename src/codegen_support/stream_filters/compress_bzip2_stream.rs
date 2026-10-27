@@ -130,8 +130,11 @@ where
     emitter.instruction("ldr x0, [sp, #32]");                                   // close temp fd
     emitter.syscall(6); // close
 
+    // -- release transform storage on success and decompression failure --
     emitter.label(&decompress_fail);
     emitter.label(&common_done);
+    emitter.instruction("ldr x0, [sp, #16]");                                   // release the transform buffer on every exit
+    abi::emit_call_label(emitter, "__rt_heap_free_safe");
     emitter.instruction("ldr x0, [sp, #0]");                                    // return source fd
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #96");                                     // release the bzip2 scratch frame
@@ -183,7 +186,10 @@ where
     emitter.instruction("mov DWORD PTR [rbp - 48], eax");                       // destLen u32 = capacity
     emitter.instruction("mov rdi, rax");                                        // allocation size for decompressed output
     emitter.instruction("call __rt_heap_alloc");                                // allocate output buffer
-    emitter.instruction("mov QWORD PTR [rax - 8], 1");                          // heap kind = string
+    emitter.instruction(
+        &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))
+    );                                                                          // materialize the owned string marker
+    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // mark the temporary buffer for safe release
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save output buffer ptr
 
     // BZ2_bzBuffToBuffDecompress(dest, &destLen, source, sourceLen, 0, 0).
@@ -234,8 +240,11 @@ where
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // temp fd to close after dup2
     emitter.instruction("call close");                                          // close the temporary descriptor
 
+    // -- release transform storage on success and decompression failure --
     emitter.label(&decompress_fail);
     emitter.label(&common_done);
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // release the transform buffer on every exit
+    abi::emit_call_label(emitter, "__rt_heap_free_safe");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // return source fd
     emitter.instruction("add rsp, 88");                                         // release the 88-byte frame (matches the aligned sub rsp, 88)
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

@@ -208,6 +208,8 @@ pub(crate) struct LoweringSnapshot {
     refusals: usize,
     call_argument_evaluation_scopes: Vec<CallArgumentEvaluationScope>,
     borrowed_string_call_operands: HashSet<ValueId>,
+    /// Provisional offset receiver reads belonging to this speculative function state.
+    string_offset_receivers: Vec<(Span, ValueId)>,
     borrowed_string_calls_enabled: bool,
     append_update_cell_aliases: HashSet<String>,
     pending_static_callable_result: Option<StaticCallableBinding>,
@@ -297,6 +299,14 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// String subjects borrowed through read-only builtin calls whose result must be detached.
     pub(crate) borrowed_string_call_operands: HashSet<ValueId>,
     pub(crate) borrowed_string_calls_enabled: bool,
+    /// Whole-body proof that an instance method cannot widen its immutable this slot.
+    /// Set before body lowering and preserved across speculative snapshots.
+    pub(crate) this_storage_stays_concrete: bool,
+    /// Raw offset receiver reads checked against final frame storage before replay.
+    pub(crate) string_offset_receivers: Vec<(Span, ValueId)>,
+    /// Offset sites whose final local storage requires an independent, guarded receiver.
+    /// This sealed replay proof survives speculative rollback, unlike provisional value IDs.
+    pub(crate) owned_string_offset_sites: HashSet<Span>,
     pub(crate) append_update_cell_aliases: HashSet<String>,
     initialized_slots: HashSet<LocalSlotId>,
     /// PHP slots assigned by an already lowered store, including conditional stores.
@@ -322,6 +332,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
     /// Authoritative checker result types for builtin calls in this source module.
     pub builtin_call_types: &'m HashMap<Span, PhpType>,
+    /// Checked property classes and write refusals before opaque calls erase flow facts.
+    pub array_push_property_plans: &'m HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
     /// Checker-authorized argument sites that may widen an ordinary local to boxed Mixed.
     pub boxed_reference_promotion_sites: &'m HashMap<(String, Span), HashSet<String>>,
     pub first_class_builtin_call_types: &'m HashMap<Span, PhpType>,
@@ -498,6 +510,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         extern_classes: &'m HashMap<String, ExternClassInfo>,
         throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
         builtin_call_types: &'m HashMap<Span, PhpType>,
+        array_push_property_plans: &'m HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
         boxed_reference_promotion_sites: &'m HashMap<(String, Span), HashSet<String>>,
         first_class_builtin_call_types: &'m HashMap<Span, PhpType>,
         generic_call_sites: &'m HashMap<(String, Span), String>,
@@ -565,6 +578,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             extern_classes,
             throw_access_sites,
             builtin_call_types,
+            array_push_property_plans,
             boxed_reference_promotion_sites,
             first_class_builtin_call_types,
             generic_call_sites,
@@ -614,7 +628,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             reference_call_context: None,
             call_argument_evaluation_scopes: Vec::new(),
             borrowed_string_call_operands: HashSet::new(),
+            string_offset_receivers: Vec::new(),
+            owned_string_offset_sites: HashSet::new(),
             borrowed_string_calls_enabled: true,
+            this_storage_stays_concrete: false,
             append_update_cell_aliases: HashSet::new(),
             argument_guards: HashMap::new(),
             argument_guard_scopes: Vec::new(),
@@ -676,6 +693,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             refusals: crate::ir_lower::diagnostics::mark(),
             call_argument_evaluation_scopes: self.call_argument_evaluation_scopes.clone(),
             borrowed_string_call_operands: self.borrowed_string_call_operands.clone(),
+            string_offset_receivers: self.string_offset_receivers.clone(),
             borrowed_string_calls_enabled: self.borrowed_string_calls_enabled,
             append_update_cell_aliases: self.append_update_cell_aliases.clone(),
             argument_guards: self.argument_guards.clone(),
@@ -757,6 +775,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.pointer_reference_bindings.truncate(snapshot.pointer_reference_bindings);
         self.call_argument_evaluation_scopes = snapshot.call_argument_evaluation_scopes;
         self.borrowed_string_call_operands = snapshot.borrowed_string_call_operands;
+        self.string_offset_receivers = snapshot.string_offset_receivers;
         self.borrowed_string_calls_enabled = snapshot.borrowed_string_calls_enabled;
         self.append_update_cell_aliases = snapshot.append_update_cell_aliases;
         self.argument_guards = snapshot.argument_guards;
@@ -982,17 +1001,19 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             self.builder.widen_local_storage_type(slot, ty.clone());
         }
         if track_array_conversion {
-            if let Some(target) = array_storage_conversion(self.local_types.get(name), &ty) {
-                let joined = self
-                    .array_conversions
-                    .get(name)
-                    .map_or(target.clone(), |previous| {
-                        join_array_storage_conversion(previous, &target)
-                    });
-                self.array_conversions.insert(name.to_string(), joined);
-            }
+            self.record_array_storage_conversion(name, &ty);
         }
         self.local_types.insert(name.to_string(), ty);
+    }
+
+    /// Records a runtime layout change independently of the frame slot's storage metadata.
+    fn record_array_storage_conversion(&mut self, name: &str, ty: &PhpType) {
+        if let Some(target) = array_storage_conversion(self.local_types.get(name), ty) {
+            let joined = self.array_conversions.get(name).map_or(target.clone(), |previous| {
+                join_array_storage_conversion(previous, &target)
+            });
+            self.array_conversions.insert(name.to_string(), joined);
+        }
     }
 
     /// Returns the joined array representation conversion observed for a local.
@@ -2762,6 +2783,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         php_type: PhpType,
         span: Option<Span>,
     ) -> LoweredValue {
+        self.record_array_storage_conversion(name, &php_type);
         self.store_mutated_local_impl(name, value, php_type, span, true, true, true)
     }
 
@@ -5363,8 +5385,8 @@ pub(super) fn opcode_has_opaque_user_code_target(op: Op, immediate: Option<&Imme
             ))),
         ) => true,
         (Op::CoreBuiltin, Some(Immediate::I64(selector))) => {
-            crate::ir::CoreBuiltinOp::from_i64(*selector)
-                == Some(crate::ir::CoreBuiltinOp::TriggerError)
+            matches!(crate::ir::CoreBuiltinOp::from_i64(*selector),
+                Some(crate::ir::CoreBuiltinOp::TriggerError | crate::ir::CoreBuiltinOp::BuiltinWarning | crate::ir::CoreBuiltinOp::BuiltinDeprecated))
         }
         _ => false,
     }

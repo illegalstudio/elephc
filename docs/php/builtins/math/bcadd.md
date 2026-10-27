@@ -2,7 +2,7 @@
 title: "bcadd()"
 description: "Adds two arbitrary-precision decimal numbers."
 sidebar:
-  order: 553
+  order: 559
 ---
 
 ## bcadd()

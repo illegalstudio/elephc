@@ -2,7 +2,7 @@
 title: "join() - internals"
 description: "Compiler internals for join(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 841
+  order: 847
 ---
 
 ## `join()` - internals

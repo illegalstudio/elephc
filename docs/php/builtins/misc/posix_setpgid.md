@@ -2,7 +2,7 @@
 title: "posix_setpgid()"
 description: "Moves a process into a process group for job control."
 sidebar:
-  order: 693
+  order: 699
 ---
 
 ## posix_setpgid()

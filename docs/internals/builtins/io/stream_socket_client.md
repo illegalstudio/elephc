@@ -2,7 +2,7 @@
 title: "stream_socket_client() - internals"
 description: "Compiler internals for stream_socket_client(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 387
+  order: 393
 ---
 
 ## `stream_socket_client()` - internals

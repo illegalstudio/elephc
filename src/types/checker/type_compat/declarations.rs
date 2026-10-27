@@ -674,6 +674,8 @@ impl Checker {
 
         self.active_ref_params = ref_param_names.into_iter().collect();
         self.active_external_ref_bindings = self.active_ref_params.clone();
+        self.non_builtin_ref_aliased_locals
+            .extend(self.active_ref_params.iter().cloned());
         self.boxed_ref_aliased_locals.extend(
             self.active_ref_params.iter()
                 .filter(|name| pre_bound_own_storage.get(*name)

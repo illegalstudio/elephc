@@ -64,6 +64,16 @@ pub(crate) fn emit_json_pretty_helpers(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x9]");                                       // load the active JSON flag bitmask
     emitter.instruction("tst x10, #128");                                       // is JSON_PRETTY_PRINT active?
     emitter.instruction("b.eq __rt_json_pretty_line_done");                     // compact output keeps the write pointer unchanged
+    emitter.instruction("stp x29, x30, [sp, #-32]!");                           // preserve linkage because the capacity guard is now a nested call
+    emitter.instruction("str x11, [sp, #16]");                                  // preserve the write pointer across the capacity guard
+    emitter.instruction("mov x0, x11");                                         // guard the newline and indentation this line is about to append
+    emitter.instruction("mov x1, #1");                                          // count the leading newline byte
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x10", "_json_indent_depth", 0); // load the indentation depth for the exact allowance
+    emitter.instruction("lsl x10, x10, #2");                                    // convert depth to four-space indentation bytes
+    emitter.instruction("add x1, x1, x10");                                     // include the indentation in the pending write
+    emitter.instruction("bl __rt_concat_headroom");                             // fail closed instead of indenting past the shared arena
+    emitter.instruction("ldr x11, [sp, #16]");                                  // restore the write pointer after the guard clobbers x11
+    emitter.instruction("ldp x29, x30, [sp], #32");                             // restore the caller frame pointer and return address
     emitter.instruction("mov w12, #10");                                        // ASCII newline
     emitter.instruction("strb w12, [x11]");                                     // append the pretty-print line break
     emitter.instruction("add x11, x11, #1");                                    // advance past the newline byte
@@ -87,6 +97,13 @@ pub(crate) fn emit_json_pretty_helpers(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x9]");                                       // load the active JSON flag bitmask
     emitter.instruction("tst x10, #128");                                       // is JSON_PRETTY_PRINT active?
     emitter.instruction("b.eq __rt_json_pretty_colon_space_done");              // compact output does not add a key/value space
+    emitter.instruction("stp x29, x30, [sp, #-32]!");                           // preserve linkage because the capacity guard is now a nested call
+    emitter.instruction("str x11, [sp, #16]");                                  // preserve the write pointer across the capacity guard
+    emitter.instruction("mov x0, x11");                                         // guard the single pretty-print separator space
+    emitter.instruction("mov x1, #1");                                          // the separator is one byte
+    emitter.instruction("bl __rt_concat_headroom");                             // fail closed instead of writing past the shared arena
+    emitter.instruction("ldr x11, [sp, #16]");                                  // restore the write pointer after the guard clobbers x11
+    emitter.instruction("ldp x29, x30, [sp], #32");                             // restore the caller frame pointer and return address
     emitter.instruction("mov w12, #32");                                        // ASCII space after the object colon
     emitter.instruction("strb w12, [x11]");                                     // append PHP's pretty-print key/value separator space
     emitter.instruction("add x11, x11, #1");                                    // advance past the separator space
@@ -128,6 +145,14 @@ fn emit_json_pretty_helpers_x86_64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "r10", "_json_active_flags", 0);      // load the active JSON flag bitmask
     emitter.instruction("test r10, 128");                                       // is JSON_PRETTY_PRINT active?
     emitter.instruction("je __rt_json_pretty_line_done_x");                     // compact output keeps the write pointer unchanged
+    emitter.instruction("push r11");                                            // preserve the write pointer and align the stack for the guard call
+    emitter.instruction("mov rdi, r11");                                        // guard the newline and indentation this line is about to append
+    emitter.instruction("mov rsi, 1");                                          // count the leading newline byte
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_json_indent_depth", 0); // load the indentation depth for the exact allowance
+    emitter.instruction("shl r10, 2");                                          // convert depth to four-space indentation bytes
+    emitter.instruction("add rsi, r10");                                        // include the indentation in the pending write
+    emitter.instruction("call __rt_concat_headroom");                           // fail closed instead of indenting past the shared arena
+    emitter.instruction("pop r11");                                             // restore the write pointer and caller stack alignment
     emitter.instruction("mov BYTE PTR [r11], 10");                              // append the pretty-print line break
     emitter.instruction("add r11, 1");                                          // advance past the newline byte
     abi::emit_load_symbol_to_reg(emitter, "r10", "_json_indent_depth", 0);      // load the current pretty-print indentation depth
@@ -147,8 +172,33 @@ fn emit_json_pretty_helpers_x86_64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "r10", "_json_active_flags", 0);      // load the active JSON flag bitmask
     emitter.instruction("test r10, 128");                                       // is JSON_PRETTY_PRINT active?
     emitter.instruction("je __rt_json_pretty_colon_space_done_x");              // compact output does not add a key/value space
+    emitter.instruction("push r11");                                            // preserve the write pointer and align the stack for the guard call
+    emitter.instruction("mov rdi, r11");                                        // guard the single pretty-print separator space
+    emitter.instruction("mov rsi, 1");                                          // the separator is one byte
+    emitter.instruction("call __rt_concat_headroom");                           // fail closed instead of writing past the shared arena
+    emitter.instruction("pop r11");                                             // restore the write pointer and caller stack alignment
     emitter.instruction("mov BYTE PTR [r11], 32");                              // append PHP's pretty-print key/value separator space
     emitter.instruction("add r11, 1");                                          // advance past the separator space
     emitter.label("__rt_json_pretty_colon_space_done_x");
     emitter.instruction("ret");                                                 // return r11 as the updated write pointer
+}
+
+/// Emits a JSON container's capacity guard for the next separator and scalar write.
+///
+/// `x0`/`rdi` is the current write pointer and `base` is the number of bytes the
+/// caller is about to write. Pretty-print indentation guards its own writes, so
+/// this guard only reserves what the container itself emits before the next
+/// scalar helper runs. It calls the shared `__rt_concat_headroom` helper so every
+/// encoder keeps the same fail-closed capacity boundary.
+pub(crate) fn emit_json_headroom_guard(emitter: &mut Emitter, base: u32) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("mov x1, #{}", base));                 // reserve the caller's separator and scalar bytes
+            emitter.instruction("bl __rt_concat_headroom");                     // fail closed instead of writing past the shared arena
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov rsi, {}", base));                 // reserve the caller's separator and scalar bytes
+            emitter.instruction("call __rt_concat_headroom");                   // fail closed instead of writing past the shared arena
+        }
+    }
 }

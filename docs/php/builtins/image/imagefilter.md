@@ -2,7 +2,7 @@
 title: "imagefilter()"
 description: "Applies one of GD's built-in filters to an image."
 sidebar:
-  order: 507
+  order: 513
 ---
 
 ## imagefilter()

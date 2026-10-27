@@ -2,7 +2,7 @@
 title: "cairo_matrix_init_translate()"
 description: "Creates a matrix that translates by the given x and y offsets."
 sidebar:
-  order: 417
+  order: 423
 ---
 
 ## cairo_matrix_init_translate()

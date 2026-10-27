@@ -36,6 +36,7 @@ mod shift;
 mod unshift;
 pub(in crate::codegen::lower_inst::builtins) mod values;
 mod basic;
+mod push;
 mod boxed_map_callback;
 mod boxed_merge;
 mod boxed_membership;
@@ -89,11 +90,12 @@ use in_array_coercions::*;
 use in_array_strings::*;
 
 pub(crate) use basic::{
-    lower_call_user_func_builtin_escape, lower_array_sum, lower_array_product, lower_array_push,
+    lower_call_user_func_builtin_escape, lower_array_sum, lower_array_product,
     lower_array_chunk, lower_array_pad, lower_array_fill, lower_array_fill_keys,
     lower_array_combine, lower_array_column, lower_array_flip, lower_array_reverse,
     lower_array_unique,
 };
+pub(crate) use push::lower_array_push;
 pub(crate) use filter::{
     lower_array_filter,
 };

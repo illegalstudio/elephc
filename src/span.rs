@@ -19,7 +19,7 @@
 ///
 /// Far above any plausible source file, so a synthetic span can never equal one the lexer
 /// produced. That matters because spans are used as MAP KEYS, not just as coordinates.
-const SYNTHETIC_LINE_BASE: u32 = 1_000_000;
+pub(crate) const SYNTHETIC_LINE_BASE: u32 = 1_000_000;
 
 /// Counts synthetic lines handed out this process. A compile is one process, so a given
 /// program always gets the same numbering.

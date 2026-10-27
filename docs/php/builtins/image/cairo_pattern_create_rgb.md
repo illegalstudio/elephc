@@ -2,7 +2,7 @@
 title: "cairo_pattern_create_rgb()"
 description: "Creates a solid opaque color pattern."
 sidebar:
-  order: 428
+  order: 434
 ---
 
 ## cairo_pattern_create_rgb()

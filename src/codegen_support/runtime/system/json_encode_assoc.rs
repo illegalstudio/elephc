@@ -97,7 +97,9 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.instruction("ldr x4, [sp, #40]");                                   // load items written
     emitter.instruction("ldr x3, [sp, #24]");                                   // load total count
     emitter.instruction("cmp x4, x3");                                          // check if all items written
-    emitter.instruction("b.ge __rt_json_assoc_close");                          // done
+    emitter.instruction("b.ge __rt_json_assoc_close");                          // finish before requiring entry headroom
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the current write pointer for the capacity guard
+    super::json_pretty::emit_json_headroom_guard(emitter, 33);           // reserve a separator, key syntax, and one scalar value
 
     // -- get next entry via hash_iter --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload hash ptr
@@ -146,6 +148,9 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload write pos before optional pretty indentation
     emitter.instruction("bl __rt_json_pretty_line");                            // append newline and indentation for this entry when pretty-printing
     emitter.instruction("str x11, [sp, #16]");                                  // save the write pos after any pretty indentation
+    emitter.instruction("mov x0, x11");                                         // guard the key syntax and digits after indentation
+    super::json_pretty::emit_json_headroom_guard(emitter, 24);                  // reserve a quoted integer key at the post-indentation cursor
+    emitter.instruction("ldr x11, [sp, #16]");                                  // reload the write pointer after the guard clobbers x11
     emitter.instruction("ldr x1, [sp, #48]");                                   // load key ptr (or integer payload when len = -1)
     emitter.instruction("ldr x2, [sp, #56]");                                   // load key len (or -1 sentinel for integer keys)
     emitter.instruction("cmn x2, #1");                                          // is this an integer key?
@@ -201,6 +206,10 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.instruction("str x11, [sp, #16]");                                  // save write pos after emitting the JSON key prefix
 
     emitter.label("__rt_json_assoc_after_key_prefix");
+    emitter.instruction("ldr x11, [sp, #16]");                                  // reload the current output write position after the key prefix
+    emitter.instruction("mov x0, x11");                                         // guard the scalar value after the key and indentation
+    super::json_pretty::emit_json_headroom_guard(emitter, 33);                  // reserve one scalar value at the post-indentation cursor
+    emitter.instruction("ldr x11, [sp, #16]");                                  // reload the write pointer after the guard clobbers x11
     // -- move concat_off to the current write position so nested encoders append safely --
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload the current output write position
     crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_concat_buf");
@@ -306,7 +315,11 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.instruction("ldr x5, [sp, #40]");                                   // reload written item count to decide whether closing needs its own line
     emitter.instruction("cbz x5, __rt_json_assoc_close_choose");                // empty containers stay compact even under JSON_PRETTY_PRINT
     emitter.instruction("bl __rt_json_pretty_line");                            // append the closing-line indentation for non-empty pretty containers
+    emitter.instruction("str x11, [sp, #16]");                                  // persist the closing-line write pointer before the close guard
     emitter.label("__rt_json_assoc_close_choose");
+    emitter.instruction("mov x0, x11");                                         // guard the provisional closing brace write
+    super::json_pretty::emit_json_headroom_guard(emitter, 1);            // reserve exactly one closing byte
+    emitter.instruction("ldr x11, [sp, #16]");                                  // reload the write pointer after the guard clobbers x11
     emitter.instruction("mov w12, #125");                                       // ASCII '}'
     emitter.instruction("strb w12, [x11]");                                     // write the provisional closing brace
     emitter.instruction("add x11, x11, #1");                                    // advance
@@ -488,13 +501,15 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // reload the current hash iterator cursor for the next insertion-order iteration step
     emitter.instruction("call __rt_hash_iter_next_value");                      // advance one insertion-order hash entry and return its key plus payload in the x86_64 result registers
     emitter.instruction("cmp rax, -1");                                         // has associative-array iteration reached the done sentinel?
-    emitter.instruction("je __rt_json_assoc_close");                            // finish by writing the closing brace once every hash entry has been encoded
+    emitter.instruction("je __rt_json_assoc_close");                            // finish before requiring entry headroom
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the updated hash iterator cursor for the next insertion-order loop step
     emitter.instruction("mov QWORD PTR [rbp - 48], rdi");                       // save the current associative-array key pointer for the JSON key copy loop
     emitter.instruction("mov QWORD PTR [rbp - 56], rdx");                       // save the current associative-array key length for the JSON key copy loop
     emitter.instruction("mov QWORD PTR [rbp - 64], rcx");                       // save the current associative-array value low payload word for runtime JSON dispatch
     emitter.instruction("mov QWORD PTR [rbp - 72], r8");                        // save the current associative-array value high payload word for runtime JSON dispatch
     emitter.instruction("mov QWORD PTR [rbp - 80], r9");                        // save the current associative-array runtime value tag for runtime JSON dispatch
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the current write pointer for the capacity guard
+    super::json_pretty::emit_json_headroom_guard(emitter, 33);           // reserve a separator, key syntax, and one scalar value
     emitter.instruction("cmp QWORD PTR [rbp - 96], 0");                         // is list-shape compaction still possible?
     emitter.instruction("je __rt_json_assoc_list_shape_checked_x");             // skip key checks after the first mismatch
     emitter.instruction("cmp QWORD PTR [rbp - 56], -1");                        // is this an integer key?
@@ -524,6 +539,9 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload write pos before optional pretty indentation
     emitter.instruction("call __rt_json_pretty_line");                          // append newline and indentation for this entry when pretty-printing
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save the write pos after any pretty indentation
+    emitter.instruction("mov rdi, r11");                                        // guard the key syntax and digits after indentation
+    super::json_pretty::emit_json_headroom_guard(emitter, 24);                  // reserve a quoted integer key at the post-indentation cursor
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the write pointer after the guard clobbers r10
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // load the key pointer (or integer payload when len = -1)
     emitter.instruction("mov rdx, QWORD PTR [rbp - 56]");                       // load the key length (or -1 sentinel for integer keys)
     emitter.instruction("cmp rdx, -1");                                         // is this an integer key?
@@ -578,6 +596,9 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_json_assoc_after_key_prefix");
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the current write pointer (in case we entered via the list-mode skip)
+    emitter.instruction("mov rdi, r11");                                        // guard the scalar value after the key and indentation
+    super::json_pretty::emit_json_headroom_guard(emitter, 33);                  // reserve one scalar value at the post-indentation cursor
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the write pointer after the guard clobbers r10
     abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // materialize the concat-buffer base pointer for the global offset update before nested value encoding
     emitter.instruction("mov rcx, r11");                                        // copy the current write pointer before turning it into an absolute concat offset
     emitter.instruction("sub rcx, r10");                                        // compute the concat-buffer absolute offset for the current JSON value write position
@@ -677,6 +698,8 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_json_assoc_close_choose_x");                   // empty containers stay compact even under JSON_PRETTY_PRINT
     emitter.instruction("call __rt_json_pretty_line");                          // append the closing-line indentation for non-empty pretty containers
     emitter.label("__rt_json_assoc_close_choose_x");
+    emitter.instruction("mov rdi, r11");                                        // guard the provisional closing brace write
+    super::json_pretty::emit_json_headroom_guard(emitter, 1);            // reserve exactly one closing byte
     emitter.instruction("mov BYTE PTR [r11], 125");                             // ASCII '}'
     emitter.instruction("add r11, 1");                                          // advance the concat-buffer write pointer past the closing bracket
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // checkpoint the write pointer across the depth-exit helper call

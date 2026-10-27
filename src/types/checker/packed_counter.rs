@@ -21,6 +21,8 @@ use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 pub(crate) struct PackedLoopCounter {
     /// The counter local, which is `0` at the first write and advances one slot per iteration.
     pub name: String,
+    /// Inclusive body bound when the condition is `$counter < positive_integer_literal`.
+    pub literal_max: Option<i64>,
     /// The `local_conditional_depth` the loop body runs at. A write deeper than this sits under
     /// a branch that can skip it, and a skipped iteration is exactly how a gap appears.
     pub depth: u32,
@@ -72,6 +74,12 @@ pub(super) fn packed_for_counter(
         collect_rebound_locals_from_expr(condition, &mut rebound_locals);
     }
     Some(PackedLoopCounter {
+        literal_max: condition.and_then(|condition| match &condition.kind {
+            ExprKind::BinaryOp { left, op: crate::parser::ast::BinOp::Lt, right }
+                if matches!(&left.kind, ExprKind::Variable(variable) if variable == &name) =>
+                match right.kind { ExprKind::IntLiteral(limit) if limit > 0 => Some(limit - 1), _ => None },
+            _ => None,
+        }),
         name,
         depth,
         rebound_locals,

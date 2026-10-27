@@ -2,7 +2,7 @@
 title: "cairo_arc() - internals"
 description: "Compiler internals for cairo_arc(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 400
+  order: 406
 ---
 
 ## `cairo_arc()` - internals

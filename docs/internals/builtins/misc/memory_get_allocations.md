@@ -2,7 +2,7 @@
 title: "memory_get_allocations() - internals"
 description: "Compiler internals for memory_get_allocations(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 644
+  order: 650
 ---
 
 ## `memory_get_allocations()` - internals

@@ -2,7 +2,7 @@
 title: "is_infinite()"
 description: "Checks whether a float is infinite."
 sidebar:
-  order: 585
+  order: 591
 ---
 
 ## is_infinite()

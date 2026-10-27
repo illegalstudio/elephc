@@ -2,7 +2,7 @@
 title: "ltrim() - internals"
 description: "Compiler internals for ltrim(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 844
+  order: 850
 ---
 
 ## `ltrim()` - internals

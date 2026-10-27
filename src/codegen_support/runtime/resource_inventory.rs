@@ -17,7 +17,7 @@ use crate::codegen_support::platform::Arch;
 use crate::codegen_support::RuntimeFeatures;
 
 /// Synthetic payload reserved for PHP's implicit default stream context, resource id 4.
-pub(super) const DEFAULT_CONTEXT_PAYLOAD: i64 = (1_i64 << 62) - 1;
+pub(crate) const DEFAULT_CONTEXT_PAYLOAD: i64 = (1_i64 << 62) - 1;
 
 /// Number of payload bytes in one append-only resource inventory node.
 const RESOURCE_NODE_BYTES: i64 = 48;

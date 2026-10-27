@@ -2148,16 +2148,16 @@ echo $count . ":" . $all[1][0] . ":" . $all[1][2];
     assert_eq!(out, "2:b2:2");
 }
 
-/// Verifies an invalid pattern with `$matches` present returns 0 and an empty array.
+/// Verifies an invalid pattern returns PHP false and leaves the caller's matches array untouched.
 #[test]
-fn test_preg_match_all_invalid_pattern_clears_matches() {
+fn test_preg_match_all_invalid_pattern_keeps_matches() {
     let out = compile_and_run(
         r#"<?php
 $matches = ["stale"];
 echo preg_match_all("/(/", "subject", $matches) . ":" . count($matches);
 "#,
     );
-    assert_eq!(out, "0:0");
+    assert_eq!(out, ":1");
 }
 
 /// Verifies every shim-backed regex family handles an invalid pattern without exposing a
@@ -2176,10 +2176,27 @@ echo preg_replace_callback("/(/", function($m) use (&$callbackCalls): string {
     $callbackCalls = $callbackCalls + 1;
     return "called";
 }, "subject") . ":" . $callbackCalls . "|";
-echo count(preg_split("/(/", "subject"));
+echo preg_replace_callback("/x/e", function($m) use (&$callbackCalls): string {
+    $callbackCalls = $callbackCalls + 1;
+    return "called";
+}, "x") ?? "null", ":", $callbackCalls, "|";
+var_dump(preg_split("/(/", "subject"));
 "#,
     );
-    assert_eq!(out, "0|0:0|0|subject|subject:0|0");
+    assert_eq!(out, "0|:1|||:0|null:0|bool(false)\n");
+}
+
+/// Verifies a small callback replacement allocates its output block with the
+/// right size on x86_64 and that an empty subject returns an empty string.
+#[test]
+fn test_preg_replace_callback_small_output_and_empty_subject() {
+    let out = compile_and_run(
+        r#"<?php
+echo preg_replace_callback('/[a-z]/', function ($m) { return strtoupper($m[0]); }, 'ab'), '|';
+echo preg_replace_callback('/x/', function ($m) { return 'y'; }, ''), '|';
+"#,
+    );
+    assert_eq!(out, "AB||");
 }
 
 /// Verifies `preg_replace` substitutes the first matching occurrence of a literal pattern.
@@ -2210,6 +2227,43 @@ fn test_preg_replace_unicode_property_number() {
     assert_eq!(out, "abcXdefX");
 }
 
+/// Verifies an invalid pattern and the removed `/e` modifier produce PHP null,
+/// including null identity and string predicates, instead of leaking the input or
+/// replacement string through the failure path.
+#[test]
+fn test_preg_replace_invalid_pattern_and_e_modifier_return_null() {
+    let out = compile_and_run(
+        r#"<?php
+$bad = @preg_replace("/[/", "x", "abc");
+var_dump($bad, $bad === null, is_string($bad));
+$eval = @preg_replace("/a/e", "phpversion()", "a");
+var_dump($eval, $eval === null);
+"#,
+    );
+    assert_eq!(out, "NULL\nbool(true)\nbool(false)\nNULL\nbool(true)\n");
+}
+
+/// Verifies `preg_match`, `preg_match_all`, and `preg_split` return PHP false for an
+/// invalid pattern and for the removed `/e` modifier, while a valid pattern with no
+/// match still returns integer zero or a real empty result array.
+#[test]
+fn test_regex_failure_paths_return_false() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(preg_match("/[/", "a"));
+var_dump(preg_match("/a/e", "a"));
+var_dump(preg_match("/z/", "a"));
+var_dump(preg_match_all("/[/", "a"));
+var_dump(preg_split("/a/e", "a"));
+var_dump(preg_split("/a/", "a") === false);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nbool(false)\nint(0)\nbool(false)\nbool(false)\nbool(false)\n"
+    );
+}
+
 /// Verifies `preg_replace` returns the subject unchanged when the pattern has no matches.
 #[test]
 fn test_preg_replace_no_match() {
@@ -2234,6 +2288,45 @@ echo $result;
 "#,
     );
     assert_eq!(out, "price: [123] and [456]");
+}
+
+/// Verifies a nested regex in the callback cannot free the outer replacement subject.
+///
+/// Heap debugging poisons released blocks, so the output assertion also catches a
+/// cursor that resumes inside the shared `__rt_cstr2` storage after a nested grow.
+#[test]
+fn test_preg_replace_callback_nested_regex_keeps_outer_subject_alive() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+$longer = str_repeat("c", 20000);
+$subject = str_repeat("a", 5000) . "X" . str_repeat("b", 5000);
+$result = preg_replace_callback(
+    "/X/",
+    function ($matches) use ($longer) {
+        preg_match("/c/", $longer);
+        return "Y";
+    },
+    $subject
+);
+echo strlen($result), "|", str_contains($result, "aYb") ? "match" : "bad", "|", str_ends_with($result, "bbb") ? "tail" : "bad";
+"#,
+    );
+    assert!(output.success, "stdout: {}\nstderr: {}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "10001|match|tail", "{}", output.stderr);
+}
+
+/// Verifies a grown callback replacement survives assignment instead of aliasing freed storage.
+#[test]
+fn test_preg_replace_callback_grown_result_survives_assignment() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+$subject = str_repeat("a", 5000) . "X";
+$out = preg_replace_callback('/X/', function ($m) { return str_repeat("b", 10000); }, $subject);
+echo strlen($out), "|", str_contains($out, "bbbb") ? "ok" : "bad", "\n";
+"#,
+    );
+    assert!(output.success, "stdout: {}\nstderr: {}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "15000|ok\n", "{}", output.stderr);
 }
 
 /// Verifies `preg_replace_callback` returns a valid empty string for an empty subject, so the

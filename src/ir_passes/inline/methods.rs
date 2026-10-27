@@ -27,7 +27,7 @@
 //! - The receiver null check the real call performs is reproduced at the splice by the caller
 //!   (`super::apply_inline_at_site`); this module only reports when it can be skipped.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ir::{
     Function, Immediate, Instruction, IrHeapKind, IrType, LocalSlotId, Module, Op, ValueDef,
@@ -111,7 +111,9 @@ impl MethodTargets {
                     continue;
                 };
                 let snapshot = *snapshot_of_body.entry(body).or_insert_with(|| {
-                    table.bodies.push(module.class_methods[body].clone());
+                    let mut snapshot = module.class_methods[body].clone();
+                    preserve_host_concat_scratch(&mut snapshot);
+                    table.bodies.push(snapshot);
                     table.bodies.len() - 1
                 });
                 table
@@ -252,15 +254,16 @@ fn body_is_candidate(module: &Module, function: &Function) -> bool {
     {
         return false;
     }
-    if super::count_non_nop_instructions(function) > super::MAX_INLINE_INSTRUCTIONS {
+    if !super::callee_fits_budget(function, true) {
         return false;
     }
+    let scoped_temps = super::temporaries::scoped_temps(function);
     function
         .blocks
         .iter()
         .flat_map(|block| block.instructions.iter())
         .filter_map(|&inst| function.instruction(inst))
-        .all(|inst| instruction_is_frame_independent(module, function, inst))
+        .all(|inst| instruction_is_frame_independent(module, function, inst, &scoped_temps))
 }
 
 /// Resolves a user static method with an explicit class, excluding lexical and runtime intrinsics.
@@ -300,9 +303,22 @@ pub(super) fn bound_method_name(module: &Module, function: &Function, inst: &Ins
 }
 
 /// Returns whether a method-body instruction lowers the same in any enclosing function.
-fn instruction_is_frame_independent(module: &Module, function: &Function, inst: &Instruction) -> bool {
+fn instruction_is_frame_independent(
+    module: &Module, function: &Function, inst: &Instruction,
+    scoped_temps: &HashSet<LocalSlotId>,
+) -> bool {
+    if inst.op == Op::ObjectNew {
+        return constructs_builtin_throwable(module, inst);
+    }
+    if matches!(inst.op, Op::PushCallOperandOwner | Op::PopCallOperandOwner
+        | Op::UnsetLocal | Op::ReleaseLocalSlot)
+    {
+        return matches!(inst.immediate, Some(Immediate::LocalSlot(slot)) if scoped_temps.contains(&slot));
+    }
     if !op_is_frame_independent(inst.op) { return false; }
-    if store_resets_concat_scratch(function, inst) { return false; }
+    if store_resets_concat_scratch(function, inst)
+        && !matches!(inst.immediate, Some(Immediate::LocalSlot(slot)) if scoped_temps.contains(&slot))
+    { return false; }
     if inst.op == Op::StaticMethodCall {
         return explicit_static_method_name(module, inst).is_some();
     }
@@ -381,6 +397,7 @@ fn op_is_frame_independent(op: Op) -> bool {
             | Op::IsNull
             | Op::IsTruthy
             | Op::IToF
+            | Op::IToStr
             | Op::Acquire
             | Op::Release
             | Op::Move
@@ -426,4 +443,45 @@ fn value_loads_slot(function: &Function, value: ValueId, slot: LocalSlotId) -> b
         }
     }
     false
+}
+
+/// Only checker-provided Throwable allocations use the frame-independent compact constructor.
+/// User constructors, reflection and other allocation intrinsics retain their real method frame.
+fn constructs_builtin_throwable(module: &Module, inst: &Instruction) -> bool {
+    let Some(Immediate::Data(id)) = inst.immediate else { return false; };
+    let Some(name) = module.data.class_names.get(id.as_raw() as usize) else { return false; };
+    let Some(info) = module.class_infos.get(name) else { return false; };
+    if info.method_declaring_classes.get("__construct")
+        .is_none_or(|owner| !matches!(owner.as_str(), "Exception" | "Error"))
+        || info.property_declaring_classes.values()
+            .any(|owner| !matches!(owner.as_str(), "Exception" | "Error"))
+    { return false; }
+    let mut name = name.as_str();
+    for _ in 0..module.class_infos.len() {
+        let Some(info) = module.class_infos.get(name) else { return false; };
+        if !info.is_internal { return false; }
+        if matches!(name, "Exception" | "Error") { return true; }
+        let Some(parent) = info.parent.as_deref() else { return false; };
+        name = parent;
+    }
+    false
+}
+
+/// Persists rooted concat arguments without letting their stores rewind the caller's scratch.
+/// String Acquire and StrPersist both call the same persistence helper. Using StrPersist for
+/// these scoped owners preserves the ownership operation and source span, while preventing
+/// local-store codegen's implicit Acquire(StrConcat) reset. Ordinary PHP assignments stay gated.
+fn preserve_host_concat_scratch(function: &mut Function) {
+    let scoped_temps = super::temporaries::scoped_temps(function);
+    let acquires: Vec<_> = function.instructions.iter()
+        .filter(|inst| store_resets_concat_scratch(function, inst))
+        .filter(|inst| matches!(inst.immediate, Some(Immediate::LocalSlot(slot)) if scoped_temps.contains(&slot)))
+        .filter_map(|inst| function.value(*inst.operands.first()?).map(|value| value.def))
+        .filter_map(|definition| match definition { ValueDef::Instruction { inst, .. } => Some(inst), _ => None })
+        .collect();
+    for id in acquires {
+        let inst = function.instruction_mut(id).expect("scoped string acquire");
+        inst.op = Op::StrPersist;
+        inst.effects = Op::StrPersist.default_effects();
+    }
 }

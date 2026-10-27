@@ -933,9 +933,9 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str("    .quad 0\n");
     out.push_str("    .p2align 3\n");
     out.push_str(".globl _user_wrapper_vtable_missing\n_user_wrapper_vtable_missing:\n");
-    // The method pointers plus the trailing boxed-result mask, so a class with no
+    // The method pointers plus the boxed-result mask and cast-result tag, so a class with no
     // wrapper method shares a table the helpers can read to the same extent.
-    for _ in 0..USER_WRAPPER_VTABLE_SLOTS + 1 {
+    for _ in 0..USER_WRAPPER_VTABLE_SLOTS + 2 {
         out.push_str("    .quad 0\n");
     }
     out.push_str("    .p2align 3\n");
@@ -2952,16 +2952,36 @@ fn class_uses_dynamic_property_tail(class_name: &str, class_info: &ClassInfo) ->
 /// still emitted (zero when the class does not declare the method); the runtime
 /// only reaches a slot when the corresponding builtin routes to it.
 /// Each slot is either a method-symbol pointer (when the class declares the
-/// method publicly) or zero. The stat methods must be declared WITHOUT a
-/// return type (or `: mixed`) so their associative stat array round-trips as a
-/// boxed Mixed cell — a `: array` return is integer-keyed and rejects the
-/// string keys (`size`, `mode`, ...) PHP stat arrays use.
+/// method publicly) or zero. Stat helpers normalize declared arrays and boxed
+/// Mixed results. Two metadata words follow the method slots: the existing
+/// boxed-result mask and stream_cast's declared result representation.
 pub(crate) const USER_WRAPPER_VTABLE_SLOTS: usize = 23;
 
 /// Byte offset of the boxed-result mask that follows the method pointers in every
 /// `_user_wrapper_vtable_<class_id>`. Single authority for the layout: the emitter
 /// writes the quad at this position and the runtime helpers read it from here.
 pub(crate) const USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET: usize = USER_WRAPPER_VTABLE_SLOTS * 8;
+
+/// Byte offset of stream_cast's erased result representation after the existing mask.
+pub(crate) const USER_WRAPPER_VTABLE_CAST_RESULT_OFFSET: usize = (USER_WRAPPER_VTABLE_SLOTS + 1) * 8;
+
+/// Describes stream_cast's native return registers without confusing integer and resource values.
+fn user_wrapper_cast_result_tag(class_info: &ClassInfo) -> u64 {
+    let Some(sig) = class_info.methods.get("stream_cast") else { return 8; };
+    match sig.return_type.codegen_repr() {
+        PhpType::Str => 1,
+        PhpType::Float => 2,
+        PhpType::Bool | PhpType::False => 3,
+        PhpType::Array(_) => 4,
+        PhpType::AssocArray { .. } => 5,
+        PhpType::Object(_) => 6,
+        PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable => 7,
+        PhpType::Void | PhpType::Never => 8,
+        PhpType::Resource(_) => 9,
+        PhpType::Callable => 10,
+        _ => 0,
+    }
+}
 
 /// The number of fixed-slot stream-filter methods recorded per class in
 /// `_user_filter_vtable_<class_id>` (Phase 10 tier 3). Slot order:
@@ -2970,10 +2990,11 @@ pub(crate) const USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET: usize = USER_WRAPPER_VTA
 /// `filter($in, $out, &$consumed, $closing): int` with bucket brigades.
 /// Slot 4 is a non-method byte offset for `php_user_filter::$params`, or zero
 /// when the class has no statically declared params property.
+/// Slot 5 is a bitmask of boxed Mixed parameter representations for brigade calls.
 /// The flag is read by the runtime dispatcher to choose which code path
 /// to invoke. Adding the flag inline in the vtable lets the dispatcher
 /// branch with a single load + cmp.
-pub(crate) const USER_FILTER_VTABLE_SLOTS: usize = 5;
+pub(crate) const USER_FILTER_VTABLE_SLOTS: usize = 6;
 
 /// Returns true when a method key belongs to the fixed-ABI stream-wrapper
 /// vtable surface dispatched by the runtime with raw arguments.
@@ -3149,6 +3170,16 @@ fn emit_user_filter_vtable(
         .copied()
         .unwrap_or(0);
     out.push_str(&format!("    .quad {}\n", params_offset));
+    // Slot 5 describes referent representations; consumed remains an address in both ABIs.
+    let boxed_params = class_info.methods.get("filter")
+        .map(source_method_adapters::source_visible_signature).transpose()?
+        .map(|sig| sig.params.iter().take(4).enumerate().fold(0u32, |mask, (index, (_, ty))| {
+            if matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+                mask | (1 << index)
+            } else { mask }
+        })).unwrap_or(0);
+    out.push_str(&format!("    .quad {boxed_params}\n"));
+
     Ok(())
 }
 
@@ -3180,11 +3211,12 @@ fn emit_user_wrapper_vtable(
             out.push_str("    .quad 0\n");
         }
     }
-    // One trailing quad after the method pointers: the boxed-result mask.
+    // Preserve the mask offset and append the cast-result ABI tag after it.
     out.push_str(&format!(
         "    .quad {}\n",
         user_wrapper_boxed_result_mask(class_info)
     ));
+    out.push_str(&format!("    .quad {}\n", user_wrapper_cast_result_tag(class_info)));
     Ok(())
 }
 

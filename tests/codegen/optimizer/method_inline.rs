@@ -200,3 +200,6 @@ echo $x, "\n";
 
 #[path = "method_inline_effects.rs"]
 mod effects;
+
+#[path = "method_inline_packed.rs"]
+mod packed;

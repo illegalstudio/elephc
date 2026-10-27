@@ -2363,6 +2363,14 @@ impl RuntimeFnId {
                 | RuntimeFnId::IntvalBase
                 // File writes return a bare byte count, never either input string.
                 | RuntimeFnId::FilePutContents
+                // The first byte is a scalar integer, independent of its source string.
+                | RuntimeFnId::Ord
+                // Raw-memory writes return only the byte count, never the borrowed input string.
+                | RuntimeFnId::PtrWriteString
+                // Brigade insertion mutates its inputs and returns no owning value.
+                | RuntimeFnId::StreamBucketAppend
+                | RuntimeFnId::StreamBucketPrepend
+                | RuntimeFnId::ElephcPtrWriteString
                 | RuntimeFnId::TokenizerErrorLocation
                 // Both array mutators answer the resulting element count. The returned
                 // machine integer cannot keep any variadic value operand alive.
@@ -2517,6 +2525,9 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayMerge
                 | RuntimeFnId::ArrayPad
                 | RuntimeFnId::ArrayPop
+                // Bucket construction and brigade extraction transfer an independent boxed owner.
+                | RuntimeFnId::StreamBucketNew
+                | RuntimeFnId::StreamBucketMakeWriteable
                 // `key()`/`current()` and the seek family all hand back a cell built by
                 // `__rt_mixed_from_value`, which persists strings and increfs containers, so
                 // the box is independently owned and never aliases the receiving array.
@@ -2542,6 +2553,11 @@ impl RuntimeFnId {
                 // so the default `MayAliasArguments` bucket would only keep an owned subject
                 // temporary alive for the boxed result's whole lifetime.
                 | RuntimeFnId::Base64Decode
+                // Compression allocates independent output storage, including failure cells.
+                | RuntimeFnId::Gzdeflate
+                | RuntimeFnId::Gzinflate
+                // A newly boxed file descriptor never aliases its filename, mode or context.
+                | RuntimeFnId::Fopen
                 // hexdec()/bindec()/octdec() box their `int|float` answer through
                 // `__rt_mixed_from_value`, so the cell handed back is a fresh allocation
                 // that cannot alias the parsed subject string.
@@ -2667,6 +2683,9 @@ impl RuntimeFnId {
                 | RuntimeFnId::OpensslEncrypt
                 | RuntimeFnId::OpensslGetCipherMethods
                 | RuntimeFnId::ParseUrl
+                | RuntimeFnId::PregMatch
+                | RuntimeFnId::PregMatchAll
+                | RuntimeFnId::PregReplace
                 | RuntimeFnId::PregSplit
                 // print_r renders into the `_print_r_ptr` raw buffer and `__rt_pr_finish`
                 // copies those bytes out through `__rt_str_persist`, so every mode returns
@@ -2676,7 +2695,14 @@ impl RuntimeFnId {
                 // `value_is_scratch_string` classify the return-mode string as concat scratch and
                 // skip its release, leaking one block per `print_r($v, true)` call.
                 | RuntimeFnId::PrintR
+                // Stream writes box a fresh byte count or false and never return input storage.
+                | RuntimeFnId::Fwrite
                 | RuntimeFnId::PtrReadString
+                | RuntimeFnId::ElephcPtrReadString
+                // Filter attachment boxes a new resource or false. The helper retains
+                // its own params owner, so none of the result storage aliases an input.
+                | RuntimeFnId::StreamFilterAppend
+                | RuntimeFnId::StreamFilterPrepend
                 | RuntimeFnId::Range
                 | RuntimeFnId::StrSplit
                 | RuntimeFnId::Strtotime
@@ -2721,6 +2747,16 @@ impl RuntimeFnId {
                 | RuntimeFnId::ZvalUnpack
                 // Parsed values own their storage independently of the wire input and options.
                 | RuntimeFnId::Unserialize
+                // Both callback replacement and shell output reserve or persist their own
+                // result storage; failure paths copy the borrowed subject/empty output.
+                | RuntimeFnId::PregReplaceCallback
+                | RuntimeFnId::ShellExec
+                // These string transforms always answer with a fresh mutable copy. The
+                // caller persists it for assignment and may then release the original result.
+                | RuntimeFnId::StrPad
+                | RuntimeFnId::Ucfirst
+                | RuntimeFnId::Lcfirst
+                | RuntimeFnId::Ucwords
         ) {
             BuiltinResultOwnership::Fresh
         } else if matches!(
@@ -2736,6 +2772,10 @@ impl RuntimeFnId {
                 // literals, not the inspected object's storage or its boxed read cell.
                 | RuntimeFnId::GetClass
                 | RuntimeFnId::GetParentClass
+                // Reads return stream-owned bytes, never an argument view. Scratch is
+                // ignored by validated release; detached filter output must be retired.
+                | RuntimeFnId::Fread
+                | RuntimeFnId::Fgetc
                 // `__rt_chunk_split` always writes into a reservation taken from
                 // `__rt_concat_reserve`, so the split result can never alias the subject or
                 // the separator. The default `MayAliasArguments` bucket kept an owned subject

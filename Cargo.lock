@@ -866,6 +866,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "elephc-fileinfo"
+version = "0.1.0"
+
+[[package]]
 name = "elephc-generics"
 version = "0.1.0"
 dependencies = [

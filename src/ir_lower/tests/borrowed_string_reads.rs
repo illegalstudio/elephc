@@ -7,6 +7,48 @@
 //! Key details:
 //! - Covers property receiver owners plus plain locals on all supported targets.
 
+/// Raw offsets avoid copies while final Mixed receivers keep their provisional cleanup.
+#[test]
+fn borrowed_string_offsets_follow_final_storage_on_all_targets() {
+    use crate::ir::{Immediate, Op, ValueDef};
+    let source = r#"<?php
+function rawOffset(string $s, int $i): int { return ord($s[$i]); }
+function offsetBytes(): string { return str_repeat("ab", 32); }
+function widenedOffset(int $n): int {
+    for ($i = 0; $i < $n; $i++) { $c = offsetBytes(); }
+    $result = ord($c[2]);
+    unset($c);
+    return $result;
+}
+echo rawOffset("ab", $argc), widenedOffset($argc);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let raw = module.functions.iter().find(|f| f.name == "rawOffset").unwrap();
+        assert!(raw.instructions.iter().any(|inst| inst.op == Op::StrCharAt), "{target}: raw read");
+        assert!(!raw.instructions.iter().any(|inst| {
+            inst.op == Op::Acquire && inst.operands.first().is_some_and(|value| {
+                let ValueDef::Instruction { inst, .. } = raw.value(*value).unwrap().def else { return false; };
+                raw.instruction(inst).unwrap().op == Op::StrCharAt
+            })
+        }), "{target}: raw ord offsets must avoid byte copies");
+        let widened = module.functions.iter().find(|f| f.name == "widenedOffset").unwrap();
+        assert!(widened.instructions.iter().any(|inst| {
+            if inst.op != Op::Release { return false; }
+            let value = widened.value(inst.operands[0]).unwrap();
+            let ValueDef::Instruction { inst, .. } = value.def else { return false; };
+            let load = widened.instruction(inst).unwrap();
+            let Some(Immediate::LocalSlot(slot)) = load.immediate else { return false; };
+            load.op == Op::LoadLocal && value.php_type == crate::types::PhpType::Str
+                && widened.locals[slot.as_raw() as usize].php_type.codegen_repr() == crate::types::PhpType::Mixed
+        }), "{target}: widened offset receiver must retire its detached string copy");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Literal subjects remain persistent and need no allocation for an immediately consumed slice.
 #[test]
 fn borrowed_string_reads_keep_literal_subject_views() {

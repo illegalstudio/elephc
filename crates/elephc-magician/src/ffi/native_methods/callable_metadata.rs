@@ -233,6 +233,7 @@ fn native_callable_type_variant(
         "bool" => EvalParameterTypeVariant::Bool,
         "false" => EvalParameterTypeVariant::Generic(elephc_generics::Type::atom("false")),
         "callable" => EvalParameterTypeVariant::Callable,
+        "false" => EvalParameterTypeVariant::Generic(elephc_generics::Type::atom("false")),
         "float" => EvalParameterTypeVariant::Float,
         "int" => EvalParameterTypeVariant::Int,
         "iterable" => EvalParameterTypeVariant::Iterable,

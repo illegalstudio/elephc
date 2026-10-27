@@ -2,7 +2,7 @@
 title: "strncasecmp()"
 description: "Compares the first n bytes of two strings, ignoring ASCII case."
 sidebar:
-  order: 942
+  order: 948
 ---
 
 ## strncasecmp()

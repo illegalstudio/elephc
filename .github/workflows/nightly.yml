@@ -214,7 +214,7 @@ jobs:
       # list is guarded by `every_bridge_crate_is_in_the_build_lists`; a bridge
       # missing here ships a compiler that refuses the flag it advertises.
       - name: Build release bridge staticlibs
-        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-random -p elephc-mbstring -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-probe -p elephc-instr -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-tokenizer -p elephc-magician -p elephc-curl
+        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-random -p elephc-mbstring -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-probe -p elephc-instr -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-fileinfo -p elephc-tokenizer -p elephc-magician -p elephc-curl
 
       - name: Strip binary
         run: strip target/release/elephc
@@ -254,6 +254,8 @@ jobs:
       # list instead of adding a third.
       - name: Copy mbstring data notices
         run: |
+          mkdir -p target/release/fileinfo-notices
+          cp crates/elephc-fileinfo/NOTICE.md target/release/fileinfo-notices/
           mkdir -p target/release/mbstring-notices
           cp crates/elephc-mbstring/NOTICE.md target/release/mbstring-notices/
           cp crates/elephc-mbstring/src/unicode/data/LICENSE-UNICODE target/release/mbstring-notices/
@@ -263,7 +265,7 @@ jobs:
         run: |
           cd target/release
           TARBALL="elephc-nightly-${{ matrix.target }}.tar.gz"
-          tar czf "$TARBALL" elephc libelephc_*.a mbstring-notices
+          tar czf "$TARBALL" elephc libelephc_*.a mbstring-notices fileinfo-notices
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum "$TARBALL" > "$TARBALL.sha256"
           else
@@ -349,7 +351,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
-          key: verify-native-${{ matrix.target }}-${{ hashFiles('examples/curl-get/elephc.lock', 'examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/oniguruma.rs', 'src/native_deps/recipes/oniguruma_shim.c', 'src/native_deps/recipes/oniguruma_shim.h', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          key: verify-native-${{ matrix.target }}-${{ hashFiles('examples/curl-get/elephc.lock', 'examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/oniguruma.rs', 'src/native_deps/recipes/oniguruma_shim.c', 'src/native_deps/recipes/oniguruma_shim.h', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             verify-native-${{ matrix.target }}-
 

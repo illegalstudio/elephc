@@ -2,7 +2,7 @@
 title: "imagecolorat() - internals"
 description: "Compiler internals for imagecolorat(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 467
+  order: 473
 ---
 
 ## `imagecolorat()` - internals

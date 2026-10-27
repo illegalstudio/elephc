@@ -2,7 +2,7 @@
 title: "curl_unescape()"
 description: "Decodes the given URL-encoded string."
 sidebar:
-  order: 738
+  order: 744
 ---
 
 ## curl_unescape()

@@ -406,6 +406,8 @@ impl Checker {
                 if *value_by_ref {
                     self.record_reference_alias_root(array);
                     self.ref_aliased_locals.insert(value_var.clone());
+                    self.non_builtin_ref_aliased_locals
+                        .insert(value_var.clone());
                 }
                 let value_was_bound = env.contains_key(value_var);
                 let arr_ty = self.infer_type_with_assignment_effects(array, env)?;

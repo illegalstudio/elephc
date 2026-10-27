@@ -2,7 +2,7 @@
 title: "lcg_value() - internals"
 description: "Compiler internals for lcg_value(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 587
+  order: 593
 ---
 
 ## `lcg_value()` - internals

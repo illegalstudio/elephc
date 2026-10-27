@@ -2,7 +2,7 @@
 title: "ob_list_handlers()"
 description: "Lists all output handlers in use."
 sidebar:
-  order: 353
+  order: 359
 ---
 
 ## ob_list_handlers()

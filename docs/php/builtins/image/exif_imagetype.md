@@ -2,7 +2,7 @@
 title: "exif_imagetype()"
 description: "Identifies an image file's type, or false when it is not an image."
 sidebar:
-  order: 448
+  order: 454
 ---
 
 ## exif_imagetype()

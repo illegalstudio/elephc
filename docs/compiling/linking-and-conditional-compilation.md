@@ -482,3 +482,13 @@ ifdef (DEBUG) {
 
 See [Conditional Compilation](../beyond-php/ifdef.md) for the full `ifdef` syntax
 and semantics.
+
+## Fileinfo
+
+Using `finfo` or a fileinfo function automatically links the optional
+`elephc_fileinfo` bridge. Declare its native dependency with
+`elephc native add libmagic`. The pinned package supplies
+`libelephc_magic_database.a -> libmagic.a`, including its complete compiled magic
+database, without a system-library fallback. `--with-fileinfo` also injects and
+retains the PHP surface for opaque dynamic eval. All supported targets use the
+same extern ABI and native recipe.

@@ -2,7 +2,7 @@
 title: "curl_multi_errno()"
 description: "Returns the last multi curl error number."
 sidebar:
-  order: 717
+  order: 723
 ---
 
 ## curl_multi_errno()

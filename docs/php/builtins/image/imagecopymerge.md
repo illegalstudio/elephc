@@ -2,7 +2,7 @@
 title: "imagecopymerge()"
 description: "Copies a rectangle into another image, blending it by a percentage."
 sidebar:
-  order: 483
+  order: 489
 ---
 
 ## imagecopymerge()

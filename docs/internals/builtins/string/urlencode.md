@@ -2,7 +2,7 @@
 title: "urlencode() - internals"
 description: "Compiler internals for urlencode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 961
+  order: 967
 ---
 
 ## `urlencode()` - internals

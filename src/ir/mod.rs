@@ -18,6 +18,7 @@ pub(crate) mod function_variants;
 mod instr;
 mod module;
 mod pcntl_runtime;
+pub(crate) mod parameter_roots;
 mod print;
 mod runtime_call;
 mod types;

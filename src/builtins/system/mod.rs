@@ -25,6 +25,8 @@
 //! - `json_support` holds shared helpers for the JSON/serialize check hooks.
 //! - Add `pub mod <name>;` here for every new system builtin home.
 
+pub mod __elephc_builtin_deprecated;
+pub mod __elephc_builtin_warning;
 pub mod __elephc_class_has_constructor;
 pub mod __elephc_class_is_abstract;
 pub mod __elephc_gmmktime_raw;

@@ -47,7 +47,7 @@ const VTABLE_SLOT_LOCK: usize = 11;
 const VTABLE_SLOT_TRUNCATE: usize = 12;
 
 /// `__rt_user_wrapper_fclose`: invoke the wrapper's `stream_close` (if any)
-/// and release its object owner. Always returns 1 (`true`) once the slot is
+/// and release the handle's object owner. Always returns 1 (`true`) once the slot is
 /// freed, mirroring PHP's "fclose succeeded as far as we can tell" semantics
 /// for wrappers; an empty slot still returns 1 so callers see consistent
 /// fclose-after-fclose behavior.
@@ -86,6 +86,8 @@ pub fn emit_user_wrapper_fclose(emitter: &mut Emitter) {
     // -- invoke an optional close method with exceptional object cleanup active --
     emitter.instruction("ldr x0, [sp, #0]");                                    // restore the wrapper receiver after publishing the guard
     emitter.instruction("ldr x9, [sp, #8]");                                    // only the detached failing stream suppresses its callback
+    abi::emit_load_symbol_to_reg(emitter, "x11", "_stream_close_silent", 0);
+    emitter.instruction("orr x9, x9, x11");                                     // combine XML resource suppression with native fileinfo cleanup mode
     emitter.instruction("cbnz x9, __rt_uwfclose_release");                      // skip PHP callbacks while unwinding a native-extension exception
     emit_aarch64_method_lookup(emitter, "__rt_uwfclose_release", VTABLE_SLOT_CLOSE);
     emitter.instruction("blr x11");                                             // invoke stream_close on the wrapper object
@@ -134,6 +136,8 @@ fn emit_user_wrapper_fclose_linux_x86_64(emitter: &mut Emitter) {
     // -- protect the wrapper while its optional close method executes --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the receiver after guard publication
     emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // only the detached failing stream suppresses its callback
+    abi::emit_load_symbol_to_reg(emitter, "r11", "_stream_close_silent", 0);
+    emitter.instruction("or r9, r11");                                          // combine XML resource suppression with native fileinfo cleanup mode
     emitter.instruction("test r9, r9");                                         // check the native-extension exception cleanup mode
     emitter.instruction("jnz __rt_uwfclose_release_x86");                       // release without stream_close during native-extension unwinding
     emit_x86_method_lookup(emitter, "__rt_uwfclose_release_x86", VTABLE_SLOT_CLOSE);
@@ -695,7 +699,7 @@ fn emit_user_wrapper_ftruncate_linux_x86_64(emitter: &mut Emitter) {
 /// `__rt_user_wrapper_url_stat` (url_stat).
 ///
 /// The vtable erases the method's static return type, so the shape is inspected
-/// at runtime via the heap-kind byte: `0` (scalar `false`/null) → boxed
+/// at runtime via the safe heap-kind probe: scalar/foreign values become boxed
 /// `false`; kind 5 (already a boxed Mixed cell, e.g. an `array|false` return) →
 /// returned verbatim; kind 3 (associative hash — the usual stat array) → boxed
 /// as a tag-5 Mixed; kind 2 (indexed array) → boxed as a tag-4 Mixed; any other

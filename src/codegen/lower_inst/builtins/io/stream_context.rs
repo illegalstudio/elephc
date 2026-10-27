@@ -86,7 +86,7 @@ pub(crate) fn lower_stream_context_create(
         store_stream_context_options(ctx, options, true)?;
     }
     capture_stream_notification_callback(ctx, inst.operands.get(1).copied())?;
-    emit_fd_result(ctx, 1);
+    emit_fd_result(ctx, crate::codegen_support::runtime::DEFAULT_CONTEXT_PAYLOAD);
     store_if_result(ctx, inst)
 }
 
@@ -96,7 +96,7 @@ pub(crate) fn lower_stream_context_get_default(
     inst: &Instruction,
 ) -> Result<()> {
     ensure_arg_count_between(inst, "stream_context_get_default", 0, 1)?;
-    emit_fd_result(ctx, 0);
+    emit_fd_result(ctx, crate::codegen_support::runtime::DEFAULT_CONTEXT_PAYLOAD);
     store_if_result(ctx, inst)
 }
 
@@ -106,7 +106,7 @@ pub(crate) fn lower_stream_context_set_default(
     inst: &Instruction,
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, "stream_context_set_default", 1)?;
-    emit_fd_result(ctx, 0);
+    emit_fd_result(ctx, crate::codegen_support::runtime::DEFAULT_CONTEXT_PAYLOAD);
     store_if_result(ctx, inst)
 }
 

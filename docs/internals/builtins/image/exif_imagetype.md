@@ -2,7 +2,7 @@
 title: "exif_imagetype() - internals"
 description: "Compiler internals for exif_imagetype(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 448
+  order: 454
 ---
 
 ## `exif_imagetype()` - internals

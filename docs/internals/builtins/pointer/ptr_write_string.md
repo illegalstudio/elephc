@@ -2,7 +2,7 @@
 title: "ptr_write_string() - internals"
 description: "Compiler internals for ptr_write_string(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 760
+  order: 766
 ---
 
 ## `ptr_write_string()` - internals
@@ -25,7 +25,7 @@ sidebar:
 - **Target strategy**: `runtime_call`
 - **Validation**: `checker_hook`
 - **Result type source**: `checked`
-- **Result ownership**: `may_alias_arguments`
+- **Result ownership**: `non_heap`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`

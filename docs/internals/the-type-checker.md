@@ -368,9 +368,18 @@ ptr_cast<T>($ptr: Pointer) → Pointer(Some(T))
 
 Most entries in the table above come from the builtin signature registry, while pointer-tag casts like `ptr_cast<T>()` are checked directly when the type checker visits `ExprKind::PtrCast`. `instanceof` is also checked as a dedicated expression: it always returns `Bool`, validates named `self` / `parent` / `static` targets against the current class context, checks dynamic target expressions for ordinary expression validity, and deliberately allows unknown named targets so runtime behavior can return `false` like PHP. For some built-ins the checker also enforces container shape, not just raw argument count:
 
-- `array_push($arr, $val)` requires the first argument to be an indexed `Array`, not an `AssocArray`
+- `array_push($arr, ...$values)` accepts indexed, associative, and boxed PHP array receivers. A statically typed associative receiver keeps its entry type instead of widening it (see [#1508](https://github.com/illegalstudio/elephc/issues/1508)).
 - `array_column($rows, $column_key)` requires the first argument to be an indexed array whose element type is `AssocArray`
 - `wordwrap()` accepts 1 to 4 arguments, matching the builtin checker
+
+`array_push()` distinguishes explicit `=&` groups from the broader set of escaped
+reference aliases. Plain values cannot widen a native indexed receiver in an
+explicit alias group; fresh boxed closure captures can widen. Runtime spreads
+also reject native indexed storage anywhere along an aliased receiver chain.
+For properties, the checker records the selected class, any indirect-write
+error, and whether the slot supports a live managed reference. Declared `array`
+and `mixed` slots support that path; inferred native array/hash slots use
+copy/write-back for plain values and reject runtime spreads.
 
 The type checker validates:
 1. **Argument count** — too few or too many arguments → error

@@ -2,7 +2,7 @@
 title: "mt_getrandmax()"
 description: "Show largest possible random value."
 sidebar:
-  order: 593
+  order: 599
 ---
 
 ## mt_getrandmax()

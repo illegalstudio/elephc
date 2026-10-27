@@ -96,7 +96,7 @@ pub use checker::CheckOptions;
 // production compile path; it stays public for tests that don't need `CheckOptions`.
 #[allow(unused_imports)]
 pub use result::{check_with_options_and_bounds, check_with_target, check_with_target_and_bounds};
-pub use result::{check_with_target_and_options, CheckResult, ThrowAccessInfo, ThrowAccessKind};
+pub use result::{check_with_target_and_options, ArrayPushPropertyPlan, CheckResult, ThrowAccessInfo, ThrowAccessKind};
 pub use schema::constructor_owner;
 pub use schema::{
     class_declares_private_property, class_inherits_from,

@@ -16,6 +16,7 @@ mod allocation;
 mod boxed_narrowing;
 mod bounded_mixed_counter;
 mod branch_simplify;
+mod borrowed_receiver_roots;
 mod buffer_access;
 mod buffer_property_reuse;
 mod buffer_property_loops;

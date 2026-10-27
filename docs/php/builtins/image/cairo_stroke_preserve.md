@@ -2,7 +2,7 @@
 title: "cairo_stroke_preserve()"
 description: "Strokes the current path with the current source and keeps the path."
 sidebar:
-  order: 444
+  order: 450
 ---
 
 ## cairo_stroke_preserve()

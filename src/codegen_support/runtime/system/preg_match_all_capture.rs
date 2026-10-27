@@ -80,6 +80,7 @@ fn emit_preg_match_all_capture_arm64(emitter: &mut Emitter) {
     emit_preg_match_all_capture_validate_flags_arm64(emitter, preg_flags_off);
 
     emitter.instruction("bl __rt_preg_strip");                                  // strip slash delimiters and return regex flags in x3
+    emitter.instruction("tbnz x3, #30, __rt_pma_cap_compile_fail");             // the removed /e modifier is invalid in PHP 8
     emitter.instruction(&format!("str x3, [sp, #{}]", regex_flags_off));        // save regex compilation flags
     emitter.instruction("bl __rt_pcre_to_posix");                               // materialize PCRE pattern as a C string
     emitter.instruction(&format!("str x0, [sp, #{}]", pattern_cstr_off));       // save null-terminated PCRE pattern
@@ -89,7 +90,7 @@ fn emit_preg_match_all_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x2, [sp, #{}]", regex_flags_off));        // pass PCRE2 POSIX compile flags from delimiter parsing
     emitter.instruction(&format!("add x3, sp, #{}", nmatch_off));               // receive the compiled match-slot count
     emitter.bl_c("elephc_pcre2_v1_compile");                                    // compile without exposing PCRE2-owned layouts
-    emitter.instruction("cbnz x0, __rt_pma_cap_empty");                         // compile failure returns count 0 and []
+    emitter.instruction("cbnz x0, __rt_pma_cap_compile_fail");                  // compile failure returns PHP false and []
 
     emitter.instruction(&format!("ldr x9, [sp, #{}]", nmatch_off));             // load match-slot count returned by the shim
     emitter.instruction("cmp x9, #1");                                          // a compiled pattern always has a full-match slot
@@ -109,7 +110,7 @@ fn emit_preg_match_all_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_cstr2");                                       // materialize a null-terminated subject copy
     emitter.instruction(&format!("str x0, [sp, #{}]", subject_cstr_off));       // save subject C string
     emitter.instruction(&format!("str x0, [sp, #{}]", current_cstr_off));       // start the search cursor at the subject beginning
-    emitter.bl_c("strlen");                                                      // retain the established C-string subject boundary
+    emitter.bl_c("strlen");                                                     // retain the established C-string subject boundary
     emitter.instruction(&format!("str x0, [sp, #{}]", subject_len_off));        // save the complete subject length for offset matching
 
     emit_preg_match_all_capture_init_matrix_arm64(
@@ -185,13 +186,21 @@ fn emit_preg_match_all_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_pma_cap_empty");                          // skip free when compile never allocated pairs
     emitter.bl_c("free");                                                       // release the pair vector before returning []
 
+    emitter.label("__rt_pma_cap_compile_fail");
+    emitter.instruction("mov x0, #0");                                          // empty-array capacity
+    emitter.instruction("mov x1, #8");                                          // Mixed slots store boxed pointers
+    emitter.instruction("bl __rt_array_new");                                   // allocate an empty Mixed matches array
+    emit_stamp_indexed_array_mixed_arm64(emitter, "x0");
+    emitter.instruction("mov x1, x0");                                          // return the empty array in x1
+    emitter.instruction("mov x0, #-1");                                         // failure sentinel: PHP false
+    emitter.instruction("b __rt_pma_cap_ret");                                  // return the failure result
     emitter.label("__rt_pma_cap_empty");
     emitter.instruction("mov x0, #0");                                          // empty-array capacity
     emitter.instruction("mov x1, #8");                                          // Mixed slots store boxed pointers
     emitter.instruction("bl __rt_array_new");                                   // allocate an empty Mixed matches array
     emit_stamp_indexed_array_mixed_arm64(emitter, "x0");
     emitter.instruction("mov x1, x0");                                          // return the empty array in x1
-    emitter.instruction("mov x0, #0");                                          // return count 0
+    emitter.instruction("mov x0, #0");                                          // invalid flags keep the legacy zero count
 
     emitter.label("__rt_pma_cap_ret");
     emitter.instruction(&format!("ldr x29, [sp, #{}]", save_off));              // restore frame pointer
@@ -577,6 +586,8 @@ fn emit_preg_match_all_capture_linux_x86_64(emitter: &mut Emitter) {
     emit_preg_match_all_capture_validate_flags_linux_x86_64(emitter, preg_flags_off);
 
     emitter.instruction("call __rt_preg_strip");                                // strip slash delimiters and collect regex flags
+    emitter.instruction("bt rcx, 30");                                          // did the pattern use the removed /e modifier?
+    emitter.instruction("jc __rt_pma_cap_empty_linux_x86_64");                  // PHP 8 rejects /e as an unknown modifier
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", regex_flags_off)); // save stripped regex flags
     emitter.instruction("call __rt_pcre_to_posix");                             // materialize PCRE pattern as a C string
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pattern_cstr_off)); // save null-terminated PCRE pattern
@@ -587,7 +598,7 @@ fn emit_preg_match_all_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("lea rcx, [rsp + {}]", nmatch_off));           // receive the compiled match-slot count
     emitter.bl_c("elephc_pcre2_v1_compile");                                    // compile without exposing PCRE2-owned layouts
     emitter.instruction("test eax, eax");                                       // did regex compilation succeed?
-    emitter.instruction("jnz __rt_pma_cap_empty_linux_x86_64");                 // compile failure returns count 0 and []
+    emitter.instruction("jnz __rt_pma_cap_empty_linux_x86_64");                 // compile failure returns PHP false and []
 
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", nmatch_off));  // load match-slot count returned by the shim
     emitter.instruction("cmp r9, 1");                                           // a compiled pattern always has a full-match slot
@@ -613,7 +624,7 @@ fn emit_preg_match_all_capture_linux_x86_64(emitter: &mut Emitter) {
         &format!("mov QWORD PTR [rsp + {}], rax", current_cstr_off)
     );
     emitter.instruction("mov rdi, rax");                                        // pass the subject C string to strlen
-    emitter.bl_c("strlen");                                                      // retain the established C-string subject boundary
+    emitter.bl_c("strlen");                                                     // retain the established C-string subject boundary
     emitter.instruction(                                                        // save the complete subject length for offset matching
         &format!("mov QWORD PTR [rsp + {}], rax", subject_len_off)
     );
@@ -703,7 +714,7 @@ fn emit_preg_match_all_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_array_new");                                 // allocate an empty Mixed matches array
     emit_stamp_indexed_array_mixed_x86_64(emitter, "rax");
     emitter.instruction("mov rdx, rax");                                        // return the empty array in rdx
-    emitter.instruction("xor eax, eax");                                        // return count 0
+    emitter.instruction("mov rax, -1");                                         // failure sentinel: PHP false
 
     emitter.label("__rt_pma_cap_ret_linux_x86_64");
     emitter.instruction(&format!("add rsp, {}", stack_size));                   // release capture helper local storage

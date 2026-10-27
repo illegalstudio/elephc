@@ -2,7 +2,7 @@
 title: "imagestring()"
 description: "Draws a string horizontally with a built-in font."
 sidebar:
-  order: 532
+  order: 538
 ---
 
 ## imagestring()

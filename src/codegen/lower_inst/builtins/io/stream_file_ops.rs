@@ -57,7 +57,7 @@ pub(crate) fn lower_fclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     if matches!(ctx.emitter.target.arch, Arch::X86_64) {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the descriptor to the user-filter teardown helper
     }
-    abi::emit_call_label(ctx.emitter, "__rt_user_filter_release_fd");
+    abi::emit_call_label(ctx.emitter, "__rt_user_filter_close_fd");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_symbol_address(ctx.emitter, "x9", "_stream_read_filters");

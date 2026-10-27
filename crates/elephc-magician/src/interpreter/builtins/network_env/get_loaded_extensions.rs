@@ -101,6 +101,9 @@ pub(in crate::interpreter) fn eval_get_loaded_extensions_result(
     if with_curl {
         names = values.string_array_push(names, "curl")?;
     }
+    if !zend_extensions && context.native_function("finfo_open").is_some() {
+        names = values.string_array_push(names, "fileinfo")?;
+    }
     if with_xml {
         for name in XML_BRIDGE_EXTENSIONS {
             names = values.string_array_push(names, name)?;

@@ -273,6 +273,19 @@ pub(crate) fn eval_object_clone_with_properties_result(
     let dynamic_class_name = context
         .dynamic_object_class(identity)
         .map(|class| class.name().to_string());
+    if elephc_builtin_contract::classes().iter().any(|contract| {
+        !contract.cloneable && context.native_constructor_signature(contract.name).is_some()
+    }) {
+        let runtime_name = match &dynamic_class_name {
+            Some(name) => name.clone(),
+            None => eval_runtime_object_class_name(object, values)?,
+        };
+        let mut ancestry = context.class_parent_names(&runtime_name);
+        ancestry.push(runtime_name.clone());
+        if ancestry.iter().any(|name| elephc_builtin_contract::lookup_class(name).is_some_and(|contract| !contract.cloneable)) {
+            return eval_throw_error(&format!("Trying to clone an uncloneable object of class {runtime_name}"), context, values);
+        }
+    }
     let clone_method = dynamic_class_name
         .as_deref()
         .and_then(|class_name| context.class_method(class_name, "__clone"));

@@ -2,7 +2,7 @@
 title: "get_exception_handler() - internals"
 description: "Compiler internals for get_exception_handler(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 632
+  order: 638
 ---
 
 ## `get_exception_handler()` - internals

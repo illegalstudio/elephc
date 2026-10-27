@@ -2,7 +2,7 @@
 title: "imagecreate()"
 description: "Creates an empty palette image of the given size."
 sidebar:
-  order: 487
+  order: 493
 ---
 
 ## imagecreate()

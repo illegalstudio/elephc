@@ -53,6 +53,28 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         requirements: &[],
     },
     BuiltinContract {
+        id: BuiltinId::from_canonical_name("__elephc_builtin_deprecated"),
+        name: "__elephc_builtin_deprecated", area: Area::System, module: PhpModule::Elephc,
+        since: None, kind: BuiltinKind::Function,
+        params: &[ParamSpec { name: "message", ty: TypeSpec::Str, default: None, by_ref: false }],
+        variadic: None, variadic_by_ref: false, min_args: None, max_args: None,
+        arity_error: None, returns: TypeSpec::Bool, by_ref_return: false,
+        summary: "Raises an engine deprecation through the active PHP error handler.",
+        examples: &[], php_manual: None, deprecation: None,
+        extension: false, internal: true, requirements: &[],
+    },
+    BuiltinContract {
+        id: BuiltinId::from_canonical_name("__elephc_builtin_warning"),
+        name: "__elephc_builtin_warning", area: Area::System, module: PhpModule::Elephc,
+        since: None, kind: BuiltinKind::Function,
+        params: &[ParamSpec { name: "message", ty: TypeSpec::Str, default: None, by_ref: false }],
+        variadic: None, variadic_by_ref: false, min_args: None, max_args: None,
+        arity_error: None, returns: TypeSpec::Bool, by_ref_return: false,
+        summary: "Raises an engine warning through the active PHP error handler.",
+        examples: &[], php_manual: None, deprecation: None,
+        extension: false, internal: true, requirements: &[],
+    },
+    BuiltinContract {
         id: BuiltinId::from_canonical_name("__elephc_bcnumber_add"),
         name: "__elephc_bcnumber_add",
         area: Area::Math,
@@ -22363,7 +22385,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.lcg-value.php"),
-        deprecation: Some("use \\Random\\Randomizer::getFloat() instead"),
+        deprecation: Some(crate::BuiltinDeprecation::always("use \\Random\\Randomizer::getFloat() instead")),
         extension: false,
         internal: false,
         requirements: &[],
@@ -27626,7 +27648,7 @@ echo memory_get_peak_usage();
             ParamSpec {
                 name: "matches",
                 ty: TypeSpec::Mixed,
-                default: Some(DefaultSpec::EmptyArray),
+                default: Some(DefaultSpec::Null),
                 by_ref: true,
             },
         ],
@@ -27635,7 +27657,7 @@ echo memory_get_peak_usage();
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Int,
+        returns: TypeSpec::Union(&[TypeSpec::Int, TypeSpec::False]),
         by_ref_return: false,
         summary: "Performs a regular expression match.",
         examples: &[
@@ -27669,7 +27691,7 @@ echo memory_get_peak_usage();
             ParamSpec {
                 name: "matches",
                 ty: TypeSpec::Mixed,
-                default: Some(DefaultSpec::EmptyArray),
+                default: Some(DefaultSpec::Null),
                 by_ref: true,
             },
             ParamSpec {
@@ -27684,9 +27706,9 @@ echo memory_get_peak_usage();
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Int,
+        returns: TypeSpec::Union(&[TypeSpec::Int, TypeSpec::False]),
         by_ref_return: false,
-        summary: "Performs a global regular expression match, including terminal empty matches, optionally filling `$matches`, and returns the number of matches. AOT capture output supports local variables and local references; unsupported non-local destinations are diagnosed. Unsupported flag bits or conflicting order modes return 0 and clear a supplied capture destination on both backends.",
+        summary: "Performs a global regular expression match, including terminal empty matches, optionally filling `$matches`, and returns the number of matches. AOT capture output supports local variables and local references; unsupported non-local destinations are diagnosed. Unsupported flag bits or conflicting order modes raise PHP's `ValueError` on both backends.",
         examples: &[
         ],
         php_manual: None,
@@ -27727,7 +27749,7 @@ echo memory_get_peak_usage();
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Str,
+        returns: TypeSpec::Mixed,
         by_ref_return: false,
         summary: "Performs a regular expression search and replace.",
         examples: &[
@@ -27819,7 +27841,7 @@ echo memory_get_peak_usage();
         min_args: None,
         max_args: None,
         arity_error: Some("preg_split() takes between 2 and 4 arguments"),
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Union(&[TypeSpec::Array, TypeSpec::False]),
         by_ref_return: false,
         summary: "Splits a string by a regular expression.",
         examples: &[

@@ -107,6 +107,7 @@ fn lower_interface_adapter(
         &module.extern_class_infos,
         &Default::default(), // throw access sites
         &Default::default(), // builtin call types
+        &Default::default(), // array_push property plans
         &Default::default(), // boxed reference promotions
         &Default::default(), // first-class builtin call types
         &Default::default(), // synthesized calls have no written generic arguments

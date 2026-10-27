@@ -10,6 +10,35 @@
 
 use crate::support::*;
 
+/// Publishing argument cleanup owners preserves sibling concat bytes in both optimizer modes.
+#[test]
+fn test_call_argument_unwind_pins_preserve_sibling_concat_scratch() {
+    let source = r#"<?php
+final class ScratchLabel {
+    public function wrap(string $name): string { $local = '[' . $name; return $local . ']'; }
+    public function measure(string $a, string $b): int { $local = $a . $b; return strlen($local); }
+}
+function showScratch(ScratchLabel $label, string $prefix, string $name): void {
+    printf("%s|%s\n", $prefix . '!', $label->wrap($name));
+}
+function combineScratch(string $prefix, int $length, string $suffix): string {
+    return $prefix . ':' . $length . ':' . $suffix;
+}
+$label = new ScratchLabel();
+$prefix = str_repeat('A', $argc + 4);
+$x = str_repeat('x', $argc + 1);
+$y = str_repeat('y', $argc + 1);
+showScratch($label, 'head', 'item');
+echo combineScratch($prefix . 'B', $label->measure($x, $y), $prefix . 'C'), "\n";
+"#;
+    for optimized in [false, true] {
+        let run = || compile_and_run_with_heap_debug(source);
+        let out = if optimized { run() } else { without_ir_opt(run) };
+        assert_eq!(out.stdout, "head!|[item]\nAAAAAB:4:AAAAAC\n", "--ir-opt={optimized}: {}", out.stderr);
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "--ir-opt={optimized}: {}", out.stderr);
+    }
+}
+
 /// By-value nullable callable parameters retire boxes read through positional and named references.
 #[test]
 fn test_nullable_descriptor_reference_arguments_release_materialized_boxes() {

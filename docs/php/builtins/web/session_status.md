@@ -2,7 +2,7 @@
 title: "session_status()"
 description: "Reports whether sessions are disabled, inactive, or active."
 sidebar:
-  order: 1019
+  order: 1025
 ---
 
 ## session_status()

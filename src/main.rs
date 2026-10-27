@@ -88,6 +88,7 @@ mod types;
 mod tz_prelude;
 mod xml_prelude;
 mod simplexml_prelude;
+mod fileinfo_prelude;
 mod tokenizer_prelude;
 mod var_export_prelude;
 mod version_prelude;

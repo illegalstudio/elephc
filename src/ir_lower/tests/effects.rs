@@ -334,3 +334,31 @@ function relay(LockedBox $box): int { return reveal($box); }
     );
     assert!(reveal_call.effects.contains(Effects::MAY_THROW));
 }
+
+/// Only unchanged concrete parameters make an extra receiver root non-destructing.
+#[test]
+fn receiver_root_summaries_keep_mutable_cleanup_conservative() {
+    let module = lower_source(r#"<?php
+class RootEffect {
+    public function value(int $argument): int { return $argument; }
+    public function __destruct() { echo "destroyed"; }
+}
+function stableRoot(RootEffect $value): int { return $value->value(1); }
+function mutableRoot(RootEffect $value): int {
+    return $value->value(($value = null) === null ? 1 : 0);
+}
+echo stableRoot(new RootEffect()), mutableRoot(new RootEffect());
+"#);
+    let main = module.functions.iter().find(|function| function.name == "main").unwrap();
+    let stable = named_call(main, &module, "stableRoot");
+    let mutable = named_call(main, &module, "mutableRoot");
+    assert!(!stable.effects.contains(Effects::READS_FS));
+    assert!(!stable.effects.contains(Effects::WRITES_PROCESS));
+    assert!(mutable.effects.contains(Effects::READS_FS));
+    assert!(mutable.effects.contains(Effects::OUTPUT));
+    let function = module.functions.iter().find(|function| function.name == "stableRoot").unwrap();
+    let releases = function.instructions.iter()
+        .filter(|instruction| instruction.op == Op::ReleaseLocalSlot).collect::<Vec<_>>();
+    assert!(!releases.is_empty());
+    assert!(releases.iter().all(|instruction| instruction.effects == Effects::all()));
+}

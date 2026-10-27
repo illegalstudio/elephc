@@ -2,7 +2,7 @@
 title: "cairo_arc()"
 description: "Adds a clockwise arc of the given radius and angle span to the current path."
 sidebar:
-  order: 400
+  order: 406
 ---
 
 ## cairo_arc()

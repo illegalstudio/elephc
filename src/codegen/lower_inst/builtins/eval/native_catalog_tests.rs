@@ -33,6 +33,10 @@ fn native_catalog_initialization_is_target_aware_and_module_private() {
         let target = Target::parse(name).unwrap();
         let mut module = Module::new(target);
         module.required_runtime_features.eval_bridge = true;
+        let mut attributed = helper_function("FunctionAttributeProbe", PhpType::Void);
+        attributed.attribute_names = vec!["RepeatedTag".into(), "RepeatedTag".into()];
+        attributed.attribute_args = vec![Some(Vec::new()), Some(Vec::new())];
+        module.functions.push(attributed);
         let mut function = helper_function("catalog_probe", PhpType::Void);
         function.add_local(Some("context".into()), IrType::I64, PhpType::Int, LocalKind::EvalContext);
         let layout = frame::layout_for_function(&function, target, false, false, false);
@@ -44,6 +48,14 @@ fn native_catalog_initialization_is_target_aware_and_module_private() {
                 &module, &function, &mut emitter, &mut data, &mut shared, layout,
                 false, false, false, None,
             );
+            let attributes = eval_native_member_attribute_registrations(&context);
+            assert_eq!(attributes.len(), 2, "{name}: repeated function attributes");
+            for attribute in attributes {
+                let record = super::property_attribute_registration::eval_native_member_attribute_record(&attribute);
+                assert_eq!(record[0], NATIVE_MEMBER_ATTRIBUTE_FUNCTION, "{name}: function owner tag");
+                let owner_len = u32::from_le_bytes(record[1..5].try_into().unwrap()) as usize;
+                assert_eq!(&record[5..5 + owner_len], b"FunctionAttributeProbe", "{name}: raw function key");
+            }
             ensure_eval_context(&mut context).unwrap();
             ensure_eval_context(&mut context).unwrap();
         }
@@ -87,6 +99,8 @@ fn native_catalog_initialization_is_target_aware_and_module_private() {
         )
         .unwrap();
         let helper_asm = helper_emitter.output();
+        assert_eq!(count_calls(&helper_asm, target, "__elephc_eval_register_native_member_attribute"), 2,
+            "{name}: every repeated function attribute must be registered");
         for symbol in [
             "__elephc_eval_context_native_catalog_ready",
             "__elephc_eval_context_publish_native_catalog",

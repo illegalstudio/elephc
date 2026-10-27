@@ -2,7 +2,7 @@
 title: "pow() - internals"
 description: "Compiler internals for pow(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 598
+  order: 604
 ---
 
 ## `pow()` - internals

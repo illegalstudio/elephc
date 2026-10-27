@@ -53,8 +53,8 @@ class ContractPipelineTests(unittest.TestCase):
                     # canonical `--features curl` docs configuration publishes (see
                     # extract.run_gen_builtins), the fifty-four xml_* / xmlwriter_*
                     # functions of the XML prelude, the SimpleXML, tokenizer and
-                    # random surfaces, and the remaining injected preludes.
-                    "prelude": 392,
+                    # random and fileinfo surfaces, and the remaining injected preludes.
+                    "prelude": 398,
                     # Calls rewritten from their enclosing lexical function frame.
                     "compiler-transform": 3,
                     # The date/calendar procedural families rewritten by the name resolver.

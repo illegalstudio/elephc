@@ -27,6 +27,8 @@ use std::os::fd::FromRawFd;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
+mod error;
+
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use rustls::{
@@ -236,7 +238,7 @@ pub unsafe extern "C" fn elephc_tls_connect_cafile(
     };
     let config = match cafile_client_config(cafile_path) {
         Some(c) => c,
-        None => return -1,
+        None => return error::failure("Failed to load certificate authority file"),
     };
     tls_connect_inner(host_ptr, host_len, port, config)
 }
@@ -309,7 +311,7 @@ pub unsafe extern "C" fn elephc_tls_connect_capath(
     };
     let config = match capath_client_config(capath) {
         Some(c) => c,
-        None => return -1,
+        None => return error::failure("Failed to load certificate authority directory"),
     };
     tls_connect_inner(host_ptr, host_len, port, config)
 }
@@ -403,7 +405,7 @@ pub unsafe extern "C" fn elephc_tls_connect_client_cert(
     };
     let config = match client_cert_config(cert_path, key_path) {
         Some(c) => c,
-        None => return -1,
+        None => return error::failure("Failed to load client certificate"),
     };
     tls_connect_inner(host_ptr, host_len, port, config)
 }
@@ -507,27 +509,28 @@ unsafe fn tls_connect_inner_named(
     config: Arc<ClientConfig>,
     peer_name: Option<&str>,
 ) -> i64 {
+    error::elephc_tls_clear_error();
     if host_ptr.is_null() || host_len == 0 {
-        return -1;
+        return error::failure("Invalid TLS host");
     }
     let host_bytes = std::slice::from_raw_parts(host_ptr, host_len);
     let host = match std::str::from_utf8(host_bytes) {
         Ok(s) => s,
-        Err(_) => return -1,
+        Err(error) => return error::failure(error),
     };
     // The certificate is checked against peer_name when provided, else host.
     let verify_name = peer_name.unwrap_or(host);
     let server_name: ServerName<'static> = match ServerName::try_from(verify_name.to_string()) {
         Ok(name) => name,
-        Err(_) => return -1,
+        Err(error) => return error::failure(error),
     };
     let sock = match TcpStream::connect((host, port)) {
         Ok(s) => s,
-        Err(_) => return -1,
+        Err(error) => return error::failure(error),
     };
     let conn = match ClientConnection::new(config, server_name) {
         Ok(c) => c,
-        Err(_) => return -1,
+        Err(error) => return error::failure(error),
     };
     let id = next_handle_id();
     handles()
@@ -549,6 +552,7 @@ pub unsafe extern "C" fn elephc_tls_read(
     buf_ptr: *mut u8,
     max_len: usize,
 ) -> isize {
+    error::elephc_tls_clear_error();
     if buf_ptr.is_null() || max_len == 0 {
         return 0;
     }
@@ -560,7 +564,7 @@ pub unsafe extern "C" fn elephc_tls_read(
     let mut stream = Stream::new(&mut entry.conn, &mut entry.sock);
     match stream.read(buf) {
         Ok(n) => n as isize,
-        Err(_) => -1,
+        Err(error) => { error::record(error); -1 },
     }
 }
 
@@ -576,6 +580,7 @@ pub unsafe extern "C" fn elephc_tls_write(
     buf_ptr: *const u8,
     len: usize,
 ) -> isize {
+    error::elephc_tls_clear_error();
     if buf_ptr.is_null() || len == 0 {
         return 0;
     }
@@ -587,7 +592,7 @@ pub unsafe extern "C" fn elephc_tls_write(
     let mut stream = Stream::new(&mut entry.conn, &mut entry.sock);
     match stream.write(buf) {
         Ok(n) => n as isize,
-        Err(_) => -1,
+        Err(error) => { error::record(error); -1 },
     }
 }
 

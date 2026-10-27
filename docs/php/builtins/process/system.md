@@ -2,7 +2,7 @@
 title: "system()"
 description: "Executes an external program and displays the output."
 sidebar:
-  order: 774
+  order: 780
 ---
 
 ## system()

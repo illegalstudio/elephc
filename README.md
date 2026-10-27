@@ -34,6 +34,10 @@
 
 ---
 
+PHP file information is available through `finfo`, the six fileinfo functions and
+all eleven `FILEINFO_*` constants. Run `elephc native add libmagic` in the project;
+use `--with-fileinfo` for opaque dynamic eval. See [fileinfo](docs/php/fileinfo.md).
+
 ## Support the project
 
 elephc is built and maintained independently. You can support the project by either:
@@ -354,7 +358,7 @@ elephc --no-ir-opt hot.php
 # Link extra native libraries or frameworks for FFI
 elephc app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
 
-# Force-enable an optional bridge (pdo, mysqli, tls, crypto, bcmath, random, mbstring, iconv, phar, tz, image, pcntl, xml, tokenizer, eval, regex, curl, web)
+# Force-enable an optional bridge (pdo, mysqli, tls, crypto, bcmath, random, mbstring, iconv, phar, tz, image, pcntl, xml, fileinfo, tokenizer, eval, regex, curl, web)
 elephc app.php --with-pdo --with-crypto
 # Force-inject the mysqli surface (links the shared elephc_pdo bridge, without the PDO classes)
 elephc app.php --with-mysqli
@@ -578,9 +582,9 @@ The full list of supported constructs, operators, and control structures is in t
 
 </details>
 
-### Built-in functions (1074)
+### Built-in functions (1096)
 
-The generated builtin documentation currently exposes 1076 PHP-visible entries across arrays, buffers, class introspection, databases, dates, filesystems, I/O, images, JSON, math/BCMath, multibyte strings, networking, process control, regex, SPL, streams, strings, types, web and XML, and elephc's pointer extensions. The exhaustive list, signatures, availability, and implementation links are generated from the shared contract in [Built-in functions](docs/php/builtins.md); keeping one generated index avoids a second hand-maintained list drifting here.
+The generated builtin documentation currently exposes 1096 PHP-visible entries across arrays, buffers, class introspection, databases, dates, filesystems, I/O, images, JSON, math/BCMath, multibyte strings, networking, process control, regex, SPL, streams, strings, types, web and XML, and elephc's pointer extensions. The exhaustive list, signatures, availability, and implementation links are generated from the shared contract in [Built-in functions](docs/php/builtins.md); keeping one generated index avoids a second hand-maintained list drifting here.
 
 ### Constants
 

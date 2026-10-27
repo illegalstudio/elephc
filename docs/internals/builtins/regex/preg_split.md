@@ -2,7 +2,7 @@
 title: "preg_split() - internals"
 description: "Compiler internals for preg_split(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 781
+  order: 787
 ---
 
 ## `preg_split()` - internals
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function preg_split(string $pattern, string $subject, int $limit = -1, int $flags = 0): array
+function preg_split(string $pattern, string $subject, int $limit = -1, int $flags = 0): array|false
 ```
 
 ## What the type checker enforces

@@ -9,6 +9,7 @@
 //!   real IR data model without going through AST lowering.
 
 mod branch_simplify_test;
+mod borrowed_receiver_roots_test;
 mod boxed_narrowing_test;
 mod bounded_mixed_counter_test;
 mod bounded_mixed_counter_seed_test;

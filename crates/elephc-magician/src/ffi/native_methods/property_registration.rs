@@ -217,6 +217,9 @@ pub(super) unsafe fn register_native_member_attribute_inner(
         return 0;
     };
     match record.owner_kind {
+        NATIVE_MEMBER_ATTRIBUTE_FUNCTION => {
+            i32::from(context.define_native_function_attribute(&record.member_key, record.attribute))
+        }
         NATIVE_MEMBER_ATTRIBUTE_CLASS => {
             i32::from(context.define_native_class_attribute(&record.member_key, record.attribute))
         }

@@ -2,7 +2,7 @@
 title: "cairo_new_sub_path()"
 description: "Begins a new subpath without a starting point."
 sidebar:
-  order: 422
+  order: 428
 ---
 
 ## cairo_new_sub_path()

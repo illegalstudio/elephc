@@ -2,7 +2,7 @@
 title: "pcntl_wifsignaled() - internals"
 description: "Compiler internals for pcntl_wifsignaled(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 686
+  order: 692
 ---
 
 ## `pcntl_wifsignaled()` - internals

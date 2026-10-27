@@ -2,7 +2,7 @@
 title: "decoct() - internals"
 description: "Compiler internals for decoct(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 574
+  order: 580
 ---
 
 ## `decoct()` - internals

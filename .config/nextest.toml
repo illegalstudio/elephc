@@ -111,6 +111,9 @@ relative-to = "target"
 path = "debug/libelephc_pcntl.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
+path = "debug/libelephc_fileinfo.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
 path = "debug/libelephc_xml.a"
 relative-to = "target"
 [[profile.ci.archive.include]]

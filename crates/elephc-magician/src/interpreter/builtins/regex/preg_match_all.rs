@@ -47,16 +47,14 @@ pub(in crate::interpreter) fn eval_builtin_preg_match_all_call(
         let subject = required_evaluated_ref_arg(&bound, 1)?;
         let flags = optional_evaluated_ref_arg(&bound, 3).map(|arg| arg.value);
         let Some(matches) = optional_evaluated_ref_arg(&bound, 2) else {
-            let flags = eval_preg_match_all_flags(flags, values)?;
-            if !eval_preg_match_all_flags_supported(flags) {
-                return values.int(0);
-            }
+            eval_preg_match_all_require_supported_flags(flags, context, values)?;
             return eval_preg_match_all_result(pattern.value, subject.value, values);
         };
         let target = matches
             .ref_target
             .clone()
             .ok_or(EvalStatus::RuntimeFatal)?;
+        let flags = eval_preg_match_all_require_supported_flags(flags, context, values)?;
         let (result, matches_array) =
             eval_preg_match_all_capture_result(pattern.value, subject.value, flags, values)?;
         eval_write_preg_matches_target(&target, matches_array, context, values)?;
@@ -80,14 +78,9 @@ pub(in crate::interpreter) fn eval_preg_match_all_result(
 pub(in crate::interpreter) fn eval_preg_match_all_capture_result(
     pattern: RuntimeCellHandle,
     subject: RuntimeCellHandle,
-    flags: Option<RuntimeCellHandle>,
+    flags: i64,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, RuntimeCellHandle), EvalStatus> {
-    let flags = eval_preg_match_all_flags(flags, values)?;
-    if !eval_preg_match_all_flags_supported(flags) {
-        // Match AOT's fail-closed result for invalid bits or mutually exclusive order modes.
-        return Ok((values.int(0)?, values.array_new(0)?));
-    }
     let regex = eval_preg_regex(pattern, values)?;
     let capture_count = regex.captures_len();
     let subject = values.string_bytes(subject)?;
@@ -112,7 +105,24 @@ pub(in crate::interpreter) fn eval_preg_match_all_flags(
     eval_int_value(flags, values)
 }
 
-/// Shares AOT's fail-closed policy across count-only, capture and callable eval paths.
+/// Validates an eval `preg_match_all()` flag set, raising PHP's exact `ValueError`.
+pub(in crate::interpreter) fn eval_preg_match_all_require_supported_flags(
+    flags: Option<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<i64, EvalStatus> {
+    let flags = eval_preg_match_all_flags(flags, values)?;
+    if !eval_preg_match_all_flags_supported(flags) {
+        return eval_throw_builtin_value_error(
+            "preg_match_all(): Argument #4 ($flags) must be a PREG_* constant",
+            context,
+            values,
+        );
+    }
+    Ok(flags)
+}
+
+/// Recognizes the `PREG_*` flag combinations PHP accepts for `preg_match_all()`.
 fn eval_preg_match_all_flags_supported(flags: i64) -> bool {
     let supported = EVAL_PREG_PATTERN_ORDER
         | EVAL_PREG_SET_ORDER
@@ -191,6 +201,7 @@ pub(in crate::interpreter) fn eval_preg_match_all_set_order_array(
 /// Dispatches by-value `preg_match_all()` calls after argument binding.
 pub(in crate::interpreter) fn eval_preg_match_all_values_result(
     evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match evaluated_args {
@@ -199,8 +210,12 @@ pub(in crate::interpreter) fn eval_preg_match_all_values_result(
             values.warning(
                 "preg_match_all(): Argument #3 ($matches) must be passed by reference, value given",
             )?;
-            let (count, matches) =
-                eval_preg_match_all_capture_result(*pattern, *subject, None, values)?;
+            let (count, matches) = eval_preg_match_all_capture_result(
+                *pattern,
+                *subject,
+                EVAL_PREG_PATTERN_ORDER,
+                values,
+            )?;
             values.release(matches)?;
             Ok(count)
         }
@@ -208,8 +223,9 @@ pub(in crate::interpreter) fn eval_preg_match_all_values_result(
             values.warning(
                 "preg_match_all(): Argument #3 ($matches) must be passed by reference, value given",
             )?;
+            let flags = eval_preg_match_all_require_supported_flags(Some(*flags), context, values)?;
             let (count, matches) =
-                eval_preg_match_all_capture_result(*pattern, *subject, Some(*flags), values)?;
+                eval_preg_match_all_capture_result(*pattern, *subject, flags, values)?;
             values.release(matches)?;
             Ok(count)
         }

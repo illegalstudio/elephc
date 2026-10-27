@@ -146,6 +146,7 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     emit_print_r_capture_reset(emitter);
     emit_transient_pointer_reset(emitter);
     emit_extension_request_state_reset(emitter);
+    emit_cstr_buffer_reset(emitter);
     emit_heap_arena_reset(emitter);
     abi::emit_call_label(emitter, "__rt_gc_request_start");
 
@@ -291,6 +292,19 @@ fn emit_zero_symbol_bytes(emitter: &mut Emitter, symbol: &str, byte_len: usize) 
     }
 }
 
+/// Restores the growable C-string buffers to their inline storage before the
+/// request heap is reclaimed, so the next request cannot reuse a heap pointer
+/// that now belongs to a different allocation.
+fn emit_cstr_buffer_reset(emitter: &mut Emitter) {
+    let scratch = abi::symbol_scratch_reg(emitter);
+    abi::emit_symbol_address(emitter, scratch, "_cstr_buf");
+    abi::emit_store_reg_to_symbol(emitter, scratch, "_cstr_base", 0);
+    abi::emit_store_imm_to_symbol(emitter, "_cstr_cap", 0, 4096);
+    abi::emit_symbol_address(emitter, scratch, "_cstr_buf2");
+    abi::emit_store_reg_to_symbol(emitter, scratch, "_cstr2_base", 0);
+    abi::emit_store_imm_to_symbol(emitter, "_cstr2_cap", 0, 4096);
+}
+
 /// Drains both handler stacks and their eval owners while the request heap is still valid.
 fn emit_core_handler_reset(emitter: &mut Emitter) {
     let again = "__rt_web_reset_core_handlers";
@@ -414,9 +428,13 @@ mod handler_reset_tests {
             let saved_magic_set_guards = asm.find("_fiber_main_saved_magic_set_guard").unwrap();
             let output_level = asm.find("_ob_level").unwrap();
             let print_r_mode = asm.find("_print_r_mode").unwrap();
+            let print_r_ptr = asm.find("_print_r_ptr").unwrap();
+            let print_r_cap = asm.find("_print_r_cap").unwrap();
             let stream_context = asm.find("_stream_context_options").unwrap();
             let final_output_level = asm.rfind("_ob_level").unwrap();
             let final_print_r_mode = asm.rfind("_print_r_mode").unwrap();
+            let final_print_r_ptr = asm.rfind("_print_r_ptr").unwrap();
+            let final_print_r_cap = asm.rfind("_print_r_cap").unwrap();
             let final_stream_context = asm.rfind("_stream_context_options").unwrap();
             let inventory = asm.find("__rt_resource_inventory_reset").unwrap();
             let wrapper_table = asm.find("_user_wrappers").unwrap();
@@ -436,8 +454,8 @@ mod handler_reset_tests {
             for (label, position) in [
                 ("_ob_level", output_level),
                 ("_print_r_mode", print_r_mode),
-                ("_print_r_ptr", asm.find("_print_r_ptr").unwrap()),
-                ("_print_r_cap", asm.find("_print_r_cap").unwrap()),
+                ("_print_r_ptr", print_r_ptr),
+                ("_print_r_cap", print_r_cap),
                 ("_stream_context_options", stream_context),
             ] {
                 assert!(
@@ -452,8 +470,8 @@ mod handler_reset_tests {
             for (label, position) in [
                 ("_ob_level", final_output_level),
                 ("_print_r_mode", final_print_r_mode),
-                ("_print_r_ptr", asm.rfind("_print_r_ptr").unwrap()),
-                ("_print_r_cap", asm.rfind("_print_r_cap").unwrap()),
+                ("_print_r_ptr", final_print_r_ptr),
+                ("_print_r_cap", final_print_r_cap),
                 ("_stream_context_options", final_stream_context),
             ] {
                 assert!(

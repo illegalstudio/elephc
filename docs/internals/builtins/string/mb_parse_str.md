@@ -2,7 +2,7 @@
 title: "mb_parse_str() - internals"
 description: "Compiler internals for mb_parse_str(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 880
+  order: 886
 ---
 
 ## `mb_parse_str()` - internals

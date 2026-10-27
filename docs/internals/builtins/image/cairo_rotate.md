@@ -2,7 +2,7 @@
 title: "cairo_rotate() - internals"
 description: "Compiler internals for cairo_rotate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 432
+  order: 438
 ---
 
 ## `cairo_rotate()` - internals

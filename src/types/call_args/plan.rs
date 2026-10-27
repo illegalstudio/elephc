@@ -19,6 +19,7 @@ use crate::span::Span;
 /// PHP-compatible diagnostics while preserving evaluation order.
 pub(crate) struct CallArgPlan {
     pub(crate) source_args: Vec<Expr>,
+    pub(super) source_origins: Vec<super::static_spread::ExpandedArgOrigin>,
     pub(crate) regular_args: Vec<PlannedRegularArg>,
     pub(crate) variadic_args: Vec<PlannedVariadicArg>,
     pub(crate) source_values: Vec<PlannedSourceValue>,
@@ -117,6 +118,24 @@ pub(crate) enum CallArgPlanError {
 }
 
 impl CallArgPlan {
+    /// Retains unpack provenance when literal expansion makes a value look like caller storage.
+    pub(crate) fn regular_argument_is_unpacked(&self, parameter_index: usize) -> bool {
+        let from_unpack = |source_index: usize| {
+            self.source_origins.get(source_index).is_some_and(|origin|
+                *origin != super::static_spread::ExpandedArgOrigin::Source)
+        };
+        if self.passthrough_args.is_some() {
+            return self.source_args.iter().enumerate().take(parameter_index + 1)
+                .any(|(index, arg)| matches!(arg.kind, ExprKind::Spread(_))
+                    || (index == parameter_index && from_unpack(index)));
+        }
+        match self.regular_args.get(parameter_index) {
+            Some(PlannedRegularArg::Source { source_index, .. }) => from_unpack(*source_index),
+            Some(PlannedRegularArg::SpreadElement { .. }) => true,
+            _ => false,
+        }
+    }
+
     /// Detects too-short positional plans without replacing dynamic unpack bounds checks.
     pub(crate) fn statically_missing_positionals(
         &self, sig: &crate::types::FunctionSig,

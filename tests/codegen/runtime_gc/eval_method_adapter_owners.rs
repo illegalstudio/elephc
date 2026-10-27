@@ -19,6 +19,18 @@ class EvalMethodAdapterOwners {
     public function fail(string $text, int $unused = 0): string { throw new Error($text); }
     public function __destruct() { echo "destroyed|"; }
 }
+function evalThisOwnerArgument(int $flag): int {
+    if ($flag > 0) { throw new Error("argument"); }
+    return 0;
+}
+class EvalThisArgumentOwner {
+    public function target(int $argument): void {}
+    public function guarded(int $flag, string $source): void {
+        $this->target(evalThisOwnerArgument($flag));
+        eval($source);
+    }
+    public function __destruct() { echo "guarded-destroyed|"; }
+}
 $object = new EvalMethodAdapterOwners();
 $code = $argc > 0 ? '$sentinel = 1;' : '';
 eval($code);
@@ -26,10 +38,12 @@ for ($i = 0; $i < 3; $i++) {
     echo $object->value("owned"), "|";
     try { $object->fail("failed"); } catch (Error $error) { echo $error->getMessage(), "|"; }
 }
+try { (new EvalThisArgumentOwner())->guarded($argc, ""); }
+catch (Error $error) { echo $error->getMessage(), "|"; }
 unset($object, $code, $sentinel, $error);
 "#);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, format!("{}destroyed|", "owned!|failed|".repeat(3)), "{}", out.stderr);
+    assert_eq!(out.stdout, format!("{}guarded-destroyed|argument|destroyed|", "owned!|failed|".repeat(3)), "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 

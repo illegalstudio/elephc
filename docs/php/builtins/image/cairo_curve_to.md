@@ -2,7 +2,7 @@
 title: "cairo_curve_to()"
 description: "Adds a cubic Bezier curve through two control points to the current path."
 sidebar:
-  order: 404
+  order: 410
 ---
 
 ## cairo_curve_to()

@@ -2,7 +2,7 @@
 title: "get_included_files()"
 description: "Returns the files included by the current program."
 sidebar:
-  order: 634
+  order: 640
 ---
 
 ## get_included_files()

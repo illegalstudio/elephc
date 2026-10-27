@@ -2,7 +2,7 @@
 title: "__elephc_ptr_read_string() - internals"
 description: "Compiler internals for __elephc_ptr_read_string(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1198
+  order: 1206
 ---
 
 ## `__elephc_ptr_read_string()` - internals
@@ -25,7 +25,7 @@ sidebar:
 - **Target strategy**: `runtime_call`
 - **Validation**: `checker_hook`
 - **Result type source**: `checked`
-- **Result ownership**: `may_alias_arguments`
+- **Result ownership**: `fresh`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`

@@ -38,6 +38,7 @@ mod pdo;
 mod pointers;
 mod resource_ids;
 mod resource_inventory;
+pub(crate) use resource_inventory::DEFAULT_CONTEXT_PAYLOAD;
 pub(crate) mod reference_cells;
 /// PHP's `round($num, $precision, $mode)` runtime implementation (`__rt_round_mode`).
 mod round_mode;

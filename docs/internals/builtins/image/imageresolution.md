@@ -2,7 +2,7 @@
 title: "imageresolution() - internals"
 description: "Compiler internals for imageresolution(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 525
+  order: 531
 ---
 
 ## `imageresolution()` - internals

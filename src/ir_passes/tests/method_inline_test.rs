@@ -362,3 +362,6 @@ echo inspect(new VarianceBox<InlineDog>(new InlineDog())), "\n";
 
 #[path = "method_inline_effects_test.rs"]
 mod effects;
+
+#[path = "method_inline_packed_test.rs"]
+mod packed;

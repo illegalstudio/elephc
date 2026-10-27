@@ -2,7 +2,7 @@
 title: "gethostbyaddr() - internals"
 description: "Compiler internals for gethostbyaddr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 334
+  order: 339
 ---
 
 ## `gethostbyaddr()` - internals

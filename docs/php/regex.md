@@ -193,11 +193,11 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
-| [`preg_match()`](./builtins/regex/preg_match.md) | `(string $pattern, string $subject, array $matches = []): int` | `int` | ✓ | ✓ |
-| [`preg_match_all()`](./builtins/regex/preg_match_all.md) | `(string $pattern, string $subject, mixed $matches = [], int $flags = 0): int` | `int` | ✓ | ✓ |
-| [`preg_replace()`](./builtins/regex/preg_replace.md) | `(string $pattern, string $replacement, string $subject): string` | `string` | ✓ | ✓ |
+| [`preg_match()`](./builtins/regex/preg_match.md) | `(string $pattern, string $subject, array $matches = null): int|false` | `int|false` | ✓ | ✓ |
+| [`preg_match_all()`](./builtins/regex/preg_match_all.md) | `(string $pattern, string $subject, mixed $matches = null, int $flags = 0): int|false` | `int|false` | ✓ | ✓ |
+| [`preg_replace()`](./builtins/regex/preg_replace.md) | `(string $pattern, string $replacement, string $subject): mixed` | `mixed` | ✓ | ✓ |
 | [`preg_replace_callback()`](./builtins/regex/preg_replace_callback.md) | `(string $pattern, callable $callback, string $subject): string` | `string` | ✓ | ✓ |
-| [`preg_split()`](./builtins/regex/preg_split.md) | `(string $pattern, string $subject, int $limit = -1, int $flags = 0): array` | `array` | ✓ | ✓ |
+| [`preg_split()`](./builtins/regex/preg_split.md) | `(string $pattern, string $subject, int $limit = -1, int $flags = 0): array|false` | `array|false` | ✓ | ✓ |
 
 Constants: `PREG_OFFSET_CAPTURE`, `PREG_PATTERN_ORDER`, `PREG_SET_ORDER`, `PREG_SPLIT_DELIM_CAPTURE`, `PREG_SPLIT_NO_EMPTY`, `PREG_SPLIT_OFFSET_CAPTURE`, `PREG_UNMATCHED_AS_NULL`.
 

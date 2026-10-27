@@ -157,6 +157,9 @@ impl Checker {
             pre_bound_own_storage,
             &decl.body,
             |checker| {
+                checker.boxed_parameter_locals.extend(decl.params.iter().enumerate()
+                    .filter(|(index, _)| decl.param_types.get(*index).is_none_or(Option::is_none))
+                    .map(|(_, name)| name.clone()));
                 for stmt in &decl.body {
                     if let Err(error) = checker.check_stmt(stmt, &mut local_env) {
                         errors.extend(error.flatten());

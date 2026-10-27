@@ -28,6 +28,7 @@ pub struct NativeFunction {
     pub(super) variadic_index: Option<usize>,
     pub(super) return_type: Option<EvalParameterType>,
     pub(super) returns_reference: bool,
+    pub(super) attributes: Vec<EvalAttribute>,
     pub(super) bridge_supported: bool,
     pub(super) shape: Option<NativeCallableShape>,
 }
@@ -52,6 +53,7 @@ impl NativeFunction {
             variadic_index: None,
             return_type: None,
             returns_reference: false,
+            attributes: Vec::new(),
             bridge_supported: true,
             shape: None,
         }
@@ -60,6 +62,16 @@ impl NativeFunction {
     /// Returns the lowercase name this callback was registered under, empty until registered.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Returns declaration attributes retained for native function reflection.
+    pub fn attributes(&self) -> &[EvalAttribute] {
+        &self.attributes
+    }
+
+    /// Appends one declaration attribute in source order, including repeated attributes.
+    pub fn add_attribute(&mut self, attribute: EvalAttribute) {
+        self.attributes.push(attribute);
     }
 
     /// Returns whether the generated registration identifies a compiler-internal declaration.

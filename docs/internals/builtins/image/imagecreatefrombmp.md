@@ -2,7 +2,7 @@
 title: "imagecreatefrombmp() - internals"
 description: "Compiler internals for imagecreatefrombmp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 488
+  order: 494
 ---
 
 ## `imagecreatefrombmp()` - internals

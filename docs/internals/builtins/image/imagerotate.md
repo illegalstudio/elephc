@@ -2,7 +2,7 @@
 title: "imagerotate() - internals"
 description: "Compiler internals for imagerotate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 526
+  order: 532
 ---
 
 ## `imagerotate()` - internals

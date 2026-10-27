@@ -668,6 +668,12 @@ pub enum CoreBuiltinOp {
     GetResources = 14,
     GetErrorHandler = 15,
     GetExceptionHandler = 16,
+    /// An internal prelude warning at PHP E_WARNING severity.
+    BuiltinWarning = 17,
+    /// An internal version-gated PHP E_DEPRECATED diagnostic.
+    BuiltinDeprecated = 18,
+    /// Reads the nearest source call site through compiler-generated diagnostic frames.
+    DiagnosticCallerLine = 19,
 }
 
 impl CoreBuiltinOp {
@@ -691,7 +697,8 @@ impl CoreBuiltinOp {
             | Self::ErrorReporting
             | Self::RestoreErrorHandler
             | Self::RestoreExceptionHandler
-            | Self::TriggerError => BuiltinResultOwnership::NonHeap,
+            | Self::TriggerError | Self::BuiltinWarning | Self::BuiltinDeprecated
+            | Self::DiagnosticCallerLine => BuiltinResultOwnership::NonHeap,
         }
     }
 
@@ -720,6 +727,9 @@ impl CoreBuiltinOp {
             14 => Some(Self::GetResources),
             15 => Some(Self::GetErrorHandler),
             16 => Some(Self::GetExceptionHandler),
+            17 => Some(Self::BuiltinWarning),
+            18 => Some(Self::BuiltinDeprecated),
+            19 => Some(Self::DiagnosticCallerLine),
             _ => None,
         }
     }
@@ -735,13 +745,14 @@ impl CoreBuiltinOp {
             | Self::GetResources => 1,
             Self::SetErrorHandler => 3,
             Self::SetExceptionHandler => 2,
-            Self::TriggerError => 4,
+            Self::TriggerError | Self::BuiltinWarning | Self::BuiltinDeprecated => 4,
             Self::RestoreErrorHandler
             | Self::RestoreExceptionHandler
             | Self::GetDefinedVars
             | Self::GetIncludedFiles
             | Self::GetErrorHandler
-            | Self::GetExceptionHandler => 0,
+            | Self::GetExceptionHandler
+            | Self::DiagnosticCallerLine => 0,
             Self::GetDefinedFunctions => 1,
         }
     }
@@ -750,6 +761,9 @@ impl CoreBuiltinOp {
     pub const fn effects(self) -> Effects {
         use Effects as E;
         match self {
+            Self::DiagnosticCallerLine => Effects::from_bits_retain(
+                E::READS_GLOBAL.bits() | E::READS_HEAP.bits(),
+            ),
             Self::GetDefinedConstants
             | Self::GetDefinedFunctions
             | Self::GetDefinedVars
@@ -766,7 +780,7 @@ impl CoreBuiltinOp {
                     | E::REFCOUNT_OP.bits()
                     | E::MAY_THROW.bits(),
             ),
-            Self::DebugPrintBacktrace | Self::TriggerError => E::all(),
+            Self::DebugPrintBacktrace | Self::TriggerError | Self::BuiltinWarning | Self::BuiltinDeprecated => E::all(),
             Self::ErrorReporting => {
                 Effects::from_bits_retain(E::READS_GLOBAL.bits() | E::WRITES_GLOBAL.bits())
             }

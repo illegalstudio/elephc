@@ -2,7 +2,7 @@
 title: "pcntl_wifsignaled()"
 description: "Reports whether a child wait status represents signal termination."
 sidebar:
-  order: 686
+  order: 692
 ---
 
 ## pcntl_wifsignaled()

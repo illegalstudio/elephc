@@ -306,7 +306,7 @@ impl Checker {
     }
 
     /// Resolves a stable declared property without changing its storage representation.
-    fn ref_property_slot_addressability(
+    pub(super) fn ref_property_slot_addressability(
         &mut self,
         object: &Expr,
         property: &str,

@@ -114,7 +114,7 @@ fn contract_record_json(contract: &BuiltinContract) -> Value {
         "summary": contract.summary,
         "examples": contract.examples,
         "php_manual": contract.php_manual,
-        "deprecated": contract.deprecation,
+        "deprecated": contract.deprecation.map(|deprecation| deprecation.message),
         "eval_only": matches!(aot_support(contract), BackendSupport::Unsupported(_))
             && matches!(eval_support(contract), BackendSupport::Implemented(_)),
         "aot": aot_support_json(contract),

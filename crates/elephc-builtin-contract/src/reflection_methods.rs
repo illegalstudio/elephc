@@ -151,6 +151,7 @@ pub fn has_tentative_return(class: &str, method: &str) -> bool {
             getbasename isdot valid next seek getpathname getperms getinode getsize getowner getgroup getatime \
             getmtime getctime gettype isreadable isexecutable isfile isdir islink getlinktarget getrealpath \
             getfileinfo getpathinfo openfile setfileclass setinfoclass __debuginfo",
+        "finfo" => "__construct file buffer set_flags",
         "pharfileinfo" => "chmod compress decompress delmetadata getcompressedsize getcrc32 getcontent getmetadata getpharflags \
             hasmetadata iscompressed iscrcchecked setmetadata getpath getfilename getextension getbasename \
             getpathname getperms getinode getsize getowner getgroup getatime getmtime getctime gettype \

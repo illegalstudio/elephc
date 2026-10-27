@@ -353,6 +353,7 @@ fn eval_dynamic_preg_match_all_call(
         return Ok(None);
     };
     let flags = optional_evaluated_ref_arg(&bound, 3).map(|arg| arg.value);
+    let flags = eval_preg_match_all_require_supported_flags(flags, context, values)?;
     let (result, matches_array) =
         eval_preg_match_all_capture_result(pattern.value, subject.value, flags, values)?;
     eval_write_preg_matches_target(target, matches_array, context, values)?;

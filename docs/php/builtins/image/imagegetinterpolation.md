@@ -2,7 +2,7 @@
 title: "imagegetinterpolation()"
 description: "Returns the interpolation method used when resampling."
 sidebar:
-  order: 512
+  order: 518
 ---
 
 ## imagegetinterpolation()

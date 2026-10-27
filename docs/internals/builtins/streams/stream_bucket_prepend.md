@@ -2,7 +2,7 @@
 title: "stream_bucket_prepend() - internals"
 description: "Compiler internals for stream_bucket_prepend(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 797
+  order: 803
 ---
 
 ## `stream_bucket_prepend()` - internals
@@ -25,7 +25,7 @@ sidebar:
 - **Target strategy**: `runtime_call`
 - **Validation**: `signature`
 - **Result type source**: `declared`
-- **Result ownership**: `may_alias_arguments`
+- **Result ownership**: `non_heap`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`

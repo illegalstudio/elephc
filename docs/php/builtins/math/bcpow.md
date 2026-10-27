@@ -2,7 +2,7 @@
 title: "bcpow()"
 description: "Raises an arbitrary-precision decimal number to an integral power."
 sidebar:
-  order: 561
+  order: 567
 ---
 
 ## bcpow()

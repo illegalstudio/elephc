@@ -2,7 +2,7 @@
 title: "gc_disable()"
 description: "Disables automatic collection of circular references."
 sidebar:
-  order: 623
+  order: 629
 ---
 
 ## gc_disable()

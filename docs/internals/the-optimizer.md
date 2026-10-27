@@ -526,6 +526,34 @@ on macOS. Enabling user-object atom splitting requires explicit relocation and
 metadata roots plus callable regression coverage; applying the runtime-object
 strategy directly can produce dangling callable descriptors.
 
+## EIR method inlining
+
+Statically bound instance methods can inline when the receiver class or method
+is final, or the method has no virtual dispatch slot. Free functions have a
+24-instruction budget; methods have a 96-instruction budget, counting non-`Nop`
+EIR instructions. The larger method budget covers receiver reads and nested
+packed-field address calculations, including an eight-field vertex writer.
+The ordinary recursion, signature, lexical-scope and ownership guards still apply.
+Only a consumed call result requires a value at the return join, so a discarded
+`void` method call can inline even when its EIR result is a null placeholder.
+
+A throwing guard can inline without admitting general object lifetimes.
+Checker-provided Throwables with the compact builtin constructor are frame-independent.
+An owning temporary slot (`OwnedTemp` or `HiddenTemp`) is accepted only when its entire lifetime stays within one block: publication and
+unpublication must balance, the slot must be explicitly cleared or released,
+and the owner records must form a matching stack. A store before publication and
+a clear after unpublication must be adjacent to those operations. These slots
+therefore carry no ownership into the next caller-loop iteration or normal return;
+exceptional exits keep the original runtime owner records and cleanup. Rooted
+concat arguments use `StrPersist` in the spliced snapshot instead of string
+`Acquire`, preserving the same persistence operation without the local store's
+implicit rewind of the caller's concat scratch.
+Unscoped owners, user constructors, exception handlers and observable backtrace
+frames retain their existing call boundaries.
+
+See `examples/packed-sprite-batch/main.php` for nested packed writes and a capacity
+guard that throws while preserving the counter's post-increment behavior.
+
 ## EIR tail recursion
 
 `src/ir_passes/tail_call.rs` runs once after the inliner/per-function fixed point

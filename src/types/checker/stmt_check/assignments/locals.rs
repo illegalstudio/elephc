@@ -219,6 +219,15 @@ pub(super) fn check_assign(
     update_reflection_class_assignment_metadata(checker, name, reflection_class_target);
     let merged = merge_local_assignment_type(checker, name, &ty, value, span, env, stmt_form);
     if merged.is_ok() {
+        if checker.local_conditional_depth == 0 {
+            let boxed_source = matches!(&value.kind, ExprKind::Variable(source)
+                if checker.boxed_parameter_locals.contains(source));
+            if boxed_source {
+                checker.boxed_parameter_locals.insert(name.to_string());
+            } else {
+                checker.boxed_parameter_locals.remove(name);
+            }
+        }
         // Whatever the environment holds for `name` from here on was put there by this store,
         // so a guard that narrowed the name no longer speaks for it. `merge_local_assignment_type`
         // has already consulted the guard view, which is why this runs after it and not before.
@@ -270,7 +279,12 @@ pub(super) fn check_ref_assign(
     // be killed or re-bound independently. Recorded before the per-shape checks so an aliasing
     // that fails a later validation is still treated as an alias.
     checker.ref_aliased_locals.insert(target.to_string());
+    checker
+        .non_builtin_ref_aliased_locals
+        .insert(target.to_string());
+    checker.ref_assign_aliased_locals.insert(target.to_string());
     checker.record_reference_alias_root(source);
+    checker.record_ref_assign_alias_root(source);
     let result = match &source.kind {
         ExprKind::Variable(source_name) => {
             check_ref_assign_variable(checker, target, source_name, span, env)

@@ -62,6 +62,17 @@ pub enum ThrowAccessKind {
     },
 }
 
+/// Checker-selected native property storage and any indirect-write refusal at one call site.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArrayPushPropertyPlan {
+    /// The proven receiver class, or `None` when specialization requires dynamic property access.
+    pub class_name: Option<String>,
+    /// PHP's catchable Error at reference binding, before evaluating later arguments.
+    pub rejection: Option<String>,
+    /// Whether lowering may bind a managed live reference to this exact property slot.
+    pub live_addressable: bool,
+}
+
 #[derive(Debug)]
 /// Aggregate result of type checking, carrying type environments, declarations,
 /// class metadata, warnings, FFI data, and required libraries forward to optimizer,
@@ -114,6 +125,8 @@ pub struct CheckResult {
     pub throw_access_sites: HashMap<Span, ThrowAccessInfo>,
     /// Authoritative checker result types for builtin calls, keyed by call span.
     pub builtin_call_types: HashMap<Span, PhpType>,
+    /// Native array_push property decisions, scoped to the body and original place span.
+    pub array_push_property_plans: HashMap<(String, Span), ArrayPushPropertyPlan>,
     /// Checker-authorized call-argument sites that may widen one local to a boxed Mixed cell.
     pub boxed_reference_promotion_sites: HashMap<(String, Span), HashSet<String>>,
     /// Reads proven to use native buffers on every checker visit to the source span.

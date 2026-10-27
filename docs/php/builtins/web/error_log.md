@@ -2,7 +2,7 @@
 title: "error_log()"
 description: "Sends an error message to the log, a file, or an email address."
 sidebar:
-  order: 995
+  order: 1001
 ---
 
 ## error_log()

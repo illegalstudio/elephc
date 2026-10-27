@@ -24,11 +24,8 @@ pub(super) fn lower_while(
     let exit = ctx.builder.create_named_block("while.exit", Vec::new());
     branch_to(ctx, header);
 
-    ctx.builder.position_at_end(header);
-    lower_condition(ctx, condition, body_block, exit);
-
-    retain_loop_body_facts(ctx, &closure_facts);
-    ctx.builder.position_at_end(body_block);
+    // Conditions execute on every backedge, so their first lexical store can
+    // overwrite a previous iteration's owner just like a store in the body.
     ctx.loop_stack.push(LoopFrame {
         break_block: exit,
         continue_block: header,
@@ -39,6 +36,11 @@ pub(super) fn lower_while(
         iterator_cleanup: None,
         receiver_pin: None,
     });
+    ctx.builder.position_at_end(header);
+    lower_condition(ctx, condition, body_block, exit);
+
+    retain_loop_body_facts(ctx, &closure_facts);
+    ctx.builder.position_at_end(body_block);
     lower_block(ctx, body);
     ctx.loop_stack.pop();
     branch_to(ctx, header);
@@ -72,11 +74,11 @@ pub(super) fn lower_do_while(
         receiver_pin: None,
     });
     lower_block(ctx, body);
-    ctx.loop_stack.pop();
     branch_to(ctx, cond_block);
 
     ctx.builder.position_at_end(cond_block);
     lower_condition(ctx, condition, body_block, exit);
+    ctx.loop_stack.pop();
     ctx.clear_static_callable_locals();
     ctx.builder.position_at_end(exit);
     ctx.clear_static_callable_locals();
@@ -130,6 +132,16 @@ fn lower_for_once(
     let exit = ctx.builder.create_named_block("for.exit", Vec::new());
     branch_to(ctx, header);
 
+    ctx.loop_stack.push(LoopFrame {
+        break_block: exit,
+        continue_block: update_block,
+        cleanup: None,
+        source_owner: None,
+        source_pin: None,
+        iterator_owner: None,
+        iterator_cleanup: None,
+        receiver_pin: None,
+    });
     ctx.builder.position_at_end(header);
     if let Some(condition) = condition {
         lower_condition(ctx, condition, body_block, exit);
@@ -146,24 +158,14 @@ fn lower_for_once(
 
     retain_loop_body_facts(ctx, &closure_facts);
     ctx.builder.position_at_end(body_block);
-    ctx.loop_stack.push(LoopFrame {
-        break_block: exit,
-        continue_block: update_block,
-        cleanup: None,
-        source_owner: None,
-        source_pin: None,
-        iterator_owner: None,
-        iterator_cleanup: None,
-        receiver_pin: None,
-    });
     lower_block(ctx, body);
-    ctx.loop_stack.pop();
     branch_to(ctx, update_block);
 
     ctx.builder.position_at_end(update_block);
     if let Some(update) = update {
         lower_stmt(ctx, update);
     }
+    ctx.loop_stack.pop();
     branch_to(ctx, header);
     ctx.builder.position_at_end(exit);
     ctx.clear_static_callable_locals();

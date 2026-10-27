@@ -2,7 +2,7 @@
 title: "get_exception_handler()"
 description: "Returns the currently active uncaught-exception handler, or null when none is installed."
 sidebar:
-  order: 632
+  order: 638
 ---
 
 ## get_exception_handler()

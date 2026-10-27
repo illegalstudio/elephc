@@ -90,13 +90,21 @@ pub fn emit_json_decode(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #0]");                                    // save the trimmed quoted JSON pointer across the decode loop and concat-buffer writes
     emitter.instruction("str x2, [sp, #8]");                                    // save the trimmed quoted JSON length across the decode loop and concat-buffer writes
 
-    // -- get output position in concat_buf --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // load the current concat-buffer absolute offset before writing decoded string bytes
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_concat_buf");
-    emitter.instruction("add x11, x11, x10");                                   // compute the concat-buffer write pointer where the decoded string should begin
-    emitter.instruction("str x11, [sp, #16]");                                  // save the decoded-string start pointer for the final result slice
-    emitter.instruction("str x11, [sp, #24]");                                  // save the current concat-buffer write pointer for the decode loop
+    // -- reserve the decoded result before the decode loop writes anything --
+    emitter.instruction("mov x0, x2");                                          // the decoded string cannot exceed the trimmed quoted slice length
+    emitter.instruction("bl __rt_concat_reserve");                              // reserve concat scratch or owned heap storage
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_buf"); // classify the reservation by its arena offset
+    emitter.instruction("sub x10, x0, x9");                                     // compute the candidate scratch offset
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x11", emitter.concat_capacity as i64); // load the arena capacity
+    emitter.instruction("cmp x10, x11");                                        // is the reservation outside the scratch window?
+    emitter.instruction("b.lo __rt_json_decode_mark_done");                     // scratch reservations need no transient header
+    emitter.instruction(&format!("mov x9, #{}", crate::codegen_support::sentinels::CONCAT_TEMP_HEAP_KIND)); // mark the heap block as transferable
+    emitter.instruction("str x9, [x0, #-8]");                                   // let persistence adopt the reservation
+    emitter.label("__rt_json_decode_mark_done");
+    emitter.instruction("str x0, [sp, #16]");                                   // save the decoded-string start pointer for the final result slice
+    emitter.instruction("str x0, [sp, #24]");                                   // save the current write pointer for the decode loop
+    emitter.instruction("ldr x1, [sp, #0]");                                    // reload the trimmed quoted JSON pointer after the reservation
+    emitter.instruction("ldr x2, [sp, #8]");                                    // reload the trimmed quoted JSON length after the reservation
 
     // -- skip the opening quote and stop before the closing quote --
     emitter.instruction("mov x12, #1");                                         // initialize the source index to the first byte after the opening JSON quote
@@ -326,13 +334,10 @@ pub fn emit_json_decode(emitter: &mut Emitter) {
     // -- finalize the concat-backed decoded string result --
     emitter.label("__rt_json_decode_done");
     emitter.instruction("ldr x1, [sp, #16]");                                   // return the decoded-string start pointer in the string result register pair
-    emitter.instruction("ldr x11, [sp, #24]");                                  // reload the final concat-buffer write pointer before turning it into a slice length
-    emitter.instruction("sub x2, x11, x1");                                     // compute the decoded-string length from write_end - write_start
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // reload the current concat-buffer absolute offset before publishing the decoded-string append
-    emitter.instruction("add x10, x10, x2");                                    // advance the concat-buffer absolute offset by the decoded-string length
-    emitter.instruction("str x10, [x9]");                                       // publish the updated concat-buffer absolute offset for later writers
-    emitter.instruction("b __rt_json_decode_ret");                              // return the decoded concat-backed string slice through the shared epilogue
+    emitter.instruction("ldr x2, [sp, #24]");                                   // reload the final write pointer before turning it into a slice length
+    emitter.instruction("sub x2, x2, x1");                                      // compute the decoded-string length from write_end - write_start
+    emitter.instruction("bl __rt_concat_publish");                              // advance the scratch offset only for scratch-backed results
+    emitter.instruction("b __rt_json_decode_ret");                              // return the decoded string slice through the shared epilogue
 
     // -- empty input decodes to the empty string slice --
     emitter.label("__rt_json_decode_empty");

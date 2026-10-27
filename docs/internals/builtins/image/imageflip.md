@@ -2,7 +2,7 @@
 title: "imageflip() - internals"
 description: "Compiler internals for imageflip(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 508
+  order: 514
 ---
 
 ## `imageflip()` - internals

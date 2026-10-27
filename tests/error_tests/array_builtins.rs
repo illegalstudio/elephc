@@ -1269,3 +1269,449 @@ fn test_error_array_pointer_literal_receiver() {
         "reset(): Argument #1 ($array) could not be passed by reference",
     );
 }
+
+/// Associative receiver support must continue to reject scalar variables, including named calls.
+#[test]
+fn test_error_associative_push_rejects_non_array_receiver() {
+    for source in [
+        "<?php $h = 1; array_push($h, 2);",
+        "<?php $h = 'text'; ARRAY_PUSH(array: $h);",
+    ] {
+        expect_error(source, "array_push() first argument must be array");
+    }
+}
+
+/// Literal unpack entries have their own storage and cannot masquerade as the original receiver.
+#[test]
+fn test_error_array_push_unpack_cannot_supply_receiver_storage() {
+    for source in [
+        r#"<?php $h = ["a" => 1, "b" => "x"]; array_push(...["array" => $h]);"#,
+        r#"<?php $h = ["a" => 1, "b" => "x"]; array_push(...["array" => $h], ...[2, 3]);"#,
+        r#"<?php $h = [1]; array_push(...[$h]);"#,
+        r#"<?php $h = [1]; array_push(...[$h], ...[2, 3]);"#,
+        r#"<?php $h = [1]; array_push(...[0 => $h], ...[2, 3]);"#,
+        r#"<?php $h = [1]; array_push(...[], array: $h);"#,
+        r#"<?php $h = [1]; $empty = []; array_push(...$empty, array: $h);"#,
+    ] {
+        expect_error(source, "array_push() receiver must be supplied directly before unpacked arguments");
+    }
+}
+
+/// Dynamic property reads do not expose the writable binding required by array_push.
+#[test]
+fn test_error_array_push_dynamic_property_requires_supported_binding() {
+    for source in [
+        r#"<?php
+class DynamicIndexedPushBox { public array<int> $items = [1]; }
+$box = new DynamicIndexedPushBox(); array_push($box->{"items"}, 2);
+"#,
+        r#"<?php
+class DynamicAssocPushBox { public array<string, int> $items = ["a" => 1]; }
+$box = new DynamicAssocPushBox(); array_push($box->{"items"}, 2);
+"#,
+        r#"<?php
+class DynamicBoxedPushBox { public array $items = [1]; }
+$box = new DynamicBoxedPushBox(); $name = "items"; array_push($box->{$name}, 2);
+"#,
+        r#"<?php
+class DynamicNestedPushBox { public array<array<int>> $items = [[1]]; }
+$box = new DynamicNestedPushBox(); array_push($box->{"items"}[0], 2);
+"#,
+    ] {
+        expect_error(source, "array_push() dynamic property receivers are not supported");
+    }
+}
+
+/// Nullsafe selection cannot bind a reference, including when a final member or index is ordinary.
+#[test]
+fn test_error_array_push_nullsafe_receiver_cannot_bind_reference() {
+    for source in [
+        r#"<?php
+class NullsafePushBox { public array<int> $items = [1]; }
+$box = new NullsafePushBox(); array_push($box?->items, 2);
+"#,
+        r#"<?php
+class NullsafeDynamicPushBox { public array<int> $items = [1]; }
+$box = new NullsafeDynamicPushBox(); array_push($box?->{"items"}, 2);
+"#,
+        r#"<?php
+class NullsafeNestedPushBox { public array<array<int>> $items = [[1]]; }
+$box = new NullsafeNestedPushBox(); array_push($box?->items[0], 2);
+"#,
+        r#"<?php
+class NullsafeInnerPushBox { public array<int> $items = [1]; }
+class NullsafeOuterPushBox {
+    public NullsafeInnerPushBox $child;
+    public function __construct() { $this->child = new NullsafeInnerPushBox(); }
+}
+$box = new NullsafeOuterPushBox(); array_push($box?->child->items, 2);
+"#,
+    ] {
+        expect_error(source, "array_push(): Argument #1 ($array) could not be passed by reference");
+    }
+}
+
+/// Temporary hash and boxed receivers need an addressable parent to publish mutations.
+#[test]
+fn test_error_array_push_temporary_hash_receiver_requires_local_parent() {
+    for source in [
+        r#"<?php
+function temporaryHashPushRows(): array<array<string, int>> { return [["a" => 1]]; }
+array_push(temporaryHashPushRows()[0], 2);
+"#,
+        r#"<?php array_push([["a" => 1]][0], 2);"#,
+        r#"<?php
+function temporaryBoxedPushRows(): array<array> { return [[1]]; }
+array_push(temporaryBoxedPushRows()[0], 2);
+"#,
+    ] {
+        expect_error(source, "array_push() temporary associative or declared-array receivers require a local parent variable");
+    }
+}
+
+/// Buffer factories that can reach caller state cannot bypass native place selection safeguards.
+#[test]
+fn test_error_array_push_buffer_factories_cannot_access_caller_storage() {
+    for source in [
+        r#"<?php
+class InputBufferPushPool { public array<buffer<int> > $pages = []; }
+function inputPushPage(InputBufferPushPool $pool): buffer<int> {
+    $pool->pages = []; return buffer_new<int>(1);
+}
+$pool = new InputBufferPushPool(); array_push($pool->pages, inputPushPage($pool));
+"#,
+        r#"<?php
+class GlobalBufferPushPool { public array<buffer<int> > $pages = []; }
+function globalPushPage(): buffer<int> {
+    global $pool; $pool->pages = []; return buffer_new<int>(1);
+}
+$pool = new GlobalBufferPushPool(); array_push($pool->pages, globalPushPage());
+"#,
+        r#"<?php
+class CalledBufferPushPool { public array<buffer<int> > $pages = []; }
+function resetPushPages(): void { global $pool; $pool->pages = []; }
+function calledPushPage(): buffer<int> { resetPushPages(); return buffer_new<int>(1); }
+$pool = new CalledBufferPushPool(); array_push($pool->pages, calledPushPage());
+"#,
+        r#"<?php
+class ReferenceBufferPushPool { public array<buffer<int> > $pages = []; }
+function referencePushPage(int &$value): buffer<int> { $value = 3; return buffer_new<int>(1); }
+$pool = new ReferenceBufferPushPool(); $value = 1;
+array_push($pool->pages, referencePushPage($value));
+"#,
+    ] {
+        expect_error(source, "array_push() native receiver places require literal or local values");
+    }
+}
+
+/// A scalar-looking cast must not hide an object method that can alter receiver storage.
+#[test]
+fn test_error_array_push_computed_values_cannot_invoke_php_methods() {
+    expect_error(r#"<?php
+class NumericPushBox { public $items = ["a" => 1, "s" => "s"]; }
+class StringPushValue { public function __toString(): string { echo "callback"; return "s"; } }
+$box = new NumericPushBox(); $value = new StringPushValue();
+array_push($box->items, (string) $value);
+"#, "array_push() native receiver places require literal or local values");
+}
+
+/// Float coercions and overflowing arithmetic must not hide entry into PHP warning handlers.
+#[test]
+fn test_error_array_push_numeric_values_cannot_invoke_warning_handlers() {
+    for value in ["(int) $value", "(bool) $value", "!$value", "(int) ($integer * $integer)"] {
+        let source = format!(r#"<?php
+class WarningPushBox {{ public $items = ["a" => 1, "s" => "s"]; }}
+function appendWarningPushValue(float $value, int $integer): void {{
+    $box = new WarningPushBox();
+    array_push($box->items, {value});
+}}
+appendWarningPushValue(1e309, 9000000000000000000);
+"#);
+        expect_error(&source, "array_push() native receiver places require literal or local values");
+    }
+}
+
+/// Native copy/write-back cannot keep a selected root or property across arbitrary PHP effects.
+#[test]
+fn test_error_array_push_native_place_rejects_effectful_values() {
+    for source in [
+        r#"<?php
+$rows = [["a" => 1, "s" => "s"]];
+$alias =& $rows;
+array_push($rows[0], (function () use (&$rows) {
+    $rows = [["b" => 9, "s" => "s"]];
+    return 2;
+})());
+"#,
+        r#"<?php
+class FallbackMixedBox { public $items = ["a" => 1, "s" => "s"]; }
+$box = new FallbackMixedBox();
+$held = $box;
+array_push($box->items, (function () use (&$box) {
+    $box = new FallbackMixedBox();
+    return 2;
+})());
+"#,
+        r#"<?php
+$rows = [["a" => 1, "s" => "s"], ["b" => 9, "s" => "s"]];
+$alias =& $rows;
+$key = 0;
+array_push($rows[$key], (function () use (&$key) { $key = 1; return 2; })());
+"#,
+    ] {
+        expect_error(source, "array_push() native receiver places require literal or local values");
+    }
+    expect_error(r#"<?php
+$rows = [["a" => 1, "s" => "s"]];
+$alias =& $rows;
+array_push($rows[(function () use (&$rows) {
+    $rows = [["b" => 9, "s" => "s"]];
+    return 0;
+})()], 2);
+"#, "array_push() native receiver places require literal or local indexes");
+}
+
+/// Typed associative storage rejects every pushed value whose representation cannot fit.
+#[test]
+fn test_error_associative_push_typed_entries_reject_mismatched_values() {
+    for source in [
+        r#"<?php
+$rows = ["row" => ["value" => 1]];
+$alias =& $rows;
+array_push($rows["row"], 2);
+array_push($rows["row"], "wrong");
+"#,
+        r#"<?php
+function generatedPushValues(): Generator { yield 1; yield 2; }
+$values = ["a" => 1];
+array_push($values, ...generatedPushValues());
+"#,
+        r#"<?php
+$values = ["a" => 1];
+function boxedPushTail(): array { return [1, 2]; }
+$tail = boxedPushTail();
+array_push($values, ...$tail);
+"#,
+        r#"<?php
+$values = ["a" => 1];
+array_push($values, "wrong");
+"#,
+        r#"<?php
+$value = 2;
+function pushGlobalValue(): void {
+    global $value;
+    $values = ["a" => 1];
+    array_push($values, $value);
+}
+pushGlobalValue();
+"#,
+        r#"<?php
+$tail = [2, 3];
+function pushGlobalTail(): void {
+    global $tail;
+    $values = ["a" => 1];
+    array_push($values, ...$tail);
+}
+pushGlobalTail();
+"#,
+    ] {
+        expect_error(
+            source,
+            "array_push() values must match the associative receiver entry type",
+        );
+    }
+}
+
+/// Runtime spreads reject receivers whose live representation can change through an alias.
+#[test]
+fn test_error_array_push_runtime_spread_rejects_unstable_receivers() {
+    for source in [
+        r#"<?php
+function generatedAliasValues(): Generator { yield 5; yield 7; }
+$values = ["s"];
+$alias =& $values;
+array_push($alias, ...generatedAliasValues());
+"#,
+        r#"<?php
+$values = [1];
+$alias =& $values;
+$tail = [$argc + 1];
+array_push($values, ...$tail);
+"#,
+        r#"<?php
+$values = [1, "s"];
+$alias =& $values;
+$tail = [$argc + 1];
+array_push($values, ...$tail);
+"#,
+        r#"<?php
+$values = [1];
+$tail = [$argc + 4];
+$iteration = 0;
+while ($iteration < 2) {
+    if ($iteration === 1) { $alias =& $values; }
+    array_push($values, ...$tail);
+    $iteration++;
+}
+"#,
+        r#"<?php
+class RuntimePushBox { public $items = [1]; }
+function runtimePropertyTail(int $value) { return [$value]; }
+$box = new RuntimePushBox();
+array_push($box->items, ...runtimePropertyTail(2));
+"#,
+        r#"<?php
+class RuntimeAssocPushBox { public $items = ["a" => 1]; }
+function runtimeAssocPropertyTail(int $value) { return [$value]; }
+$box = new RuntimeAssocPushBox();
+array_push($box->items, ...runtimeAssocPropertyTail(2));
+"#,
+        r#"<?php
+class RuntimeStaticPushBox { public static $items = [1]; }
+function runtimeStaticTail(int $value) { return [$value]; }
+array_push(RuntimeStaticPushBox::$items, ...runtimeStaticTail(2));
+"#,
+        r#"<?php
+$rows = [["a" => 1]];
+$alias =& $rows;
+$tail = [2];
+array_push($rows[0], ...$tail);
+"#,
+    ] {
+        expect_error(
+            source,
+            "array_push() runtime spreads require stable non-aliased receiver storage",
+        );
+    }
+}
+
+/// Incompatible object specializations cannot leave a concrete property layout behind.
+#[test]
+fn test_error_array_push_rejects_ambiguous_property_layouts() {
+    for calls in ["pushPlan($a); pushPlan($b);", "pushPlan($b); pushPlan($a);"] {
+        let source = format!(r#"<?php
+class PushPlanA {{ public array $items = []; }}
+class PushPlanB {{ public int $pad = 7; public string $text = "s"; public array $items = []; }}
+function pushPlan($box) {{ return array_push($box->items, 1); }}
+$a = new PushPlanA(); $b = new PushPlanB();
+{calls}
+"#);
+        expect_error(&source, "array_push() property reference has ambiguous receiver classes");
+    }
+}
+
+/// Unsupported static and global-nested storage is diagnosed before backend emission.
+#[test]
+fn test_error_array_push_rejects_unsupported_static_and_global_places() {
+    expect_error(r#"<?php
+function staticHashPush() { static $items = ["a" => 1, "b" => "s"]; return array_push($items, 5); }
+staticHashPush();
+"#, "array_push() does not support associative static-local receivers");
+    for source in [
+        r#"<?php
+function staticSpreadValues(): Generator { yield 3; }
+function staticListPush() { static $items = [1, 2]; return array_push($items, ...staticSpreadValues()); }
+staticListPush();
+"#,
+        r#"<?php
+$rows = [[1]];
+function globalSpreadValues(): Generator { yield 3; }
+function globalNestedPush() { global $rows; return array_push($rows[0], ...globalSpreadValues()); }
+globalNestedPush();
+"#,
+    ] {
+        expect_error(source, "array_push() runtime spreads require stable non-aliased receiver storage");
+    }
+}
+
+/// Boxed untyped parameters produce a source diagnostic when typed hash storage cannot accept them.
+#[test]
+fn test_error_array_push_boxed_parameters_have_source_diagnostics() {
+    for source in [
+        r#"<?php
+function pushUntypedInt($value) { $items = ["a" => 1]; return array_push($items, $value); }
+pushUntypedInt(5);
+"#,
+        r#"<?php
+function pushUntypedString($value) { $items = ["a" => "x"]; return array_push($items, $value); }
+pushUntypedString("y");
+"#,
+        r#"<?php
+class UntypedPushMethod {
+    public function push($value) { $items = ["a" => 1]; return array_push($items, $value); }
+}
+$pusher = new UntypedPushMethod(); $pusher->push(5);
+"#,
+        r#"<?php
+$push = function ($value) { $items = ["a" => 1]; return array_push($items, $value); };
+$push(5);
+"#,
+        r#"<?php
+function pushCopiedUntyped($value) { $copy = $value; $items = ["a" => 1]; return array_push($items, $copy); }
+pushCopiedUntyped(5);
+"#,
+    ] {
+        expect_error(source, "array_push() values must match the associative receiver entry type");
+    }
+}
+
+/// Nested parameter storage and its boxed local copies fail before unsupported backend lowering.
+#[test]
+fn test_error_array_push_nested_parameter_storage_has_source_diagnostics() {
+    for source in [
+        r#"<?php
+function parameterPush($rows) { array_push($rows[0], 2); return $rows; }
+echo json_encode(parameterPush([[1]]));
+"#,
+        r#"<?php
+function copiedParameterPush($rows) { $copy = $rows; array_push($copy[0], 2); return $copy; }
+echo json_encode(copiedParameterPush([[1]]));
+"#,
+        r#"<?php
+$push = function (array $rows) { array_push($rows[0], 2); return $rows; };
+echo json_encode($push([[1]]));
+"#,
+        r#"<?php
+class ParameterPusher { public function push(array $rows) { array_push($rows[0], 2); return $rows; } }
+$pusher = new ParameterPusher(); echo json_encode($pusher->push([[1]]));
+"#,
+    ] {
+        expect_error(source, "array_push() nested parameter storage is not supported");
+    }
+}
+
+/// Reference-aliased indexed receivers reject a plain value that would retype one alias slot.
+#[test]
+fn test_error_array_push_reference_alias_rejects_incompatible_plain_value() {
+    for source in [
+        r#"<?php
+$rows = [[1]];
+$push = function () use (&$rows) { array_push($rows[0], "x"); };
+$push(); echo $rows[0][1];
+"#,
+        r#"<?php
+$rows = [[[1]]];
+$push = function () use (&$rows) { array_push($rows[0][0], "x"); };
+$push(); echo $rows[0][0][1];
+"#,
+        r#"<?php
+$values = [1];
+$alias =& $values;
+array_push($alias, "wrong");
+"#,
+        r#"<?php
+$values = [1];
+$show = function () use (&$values) { return json_encode($values); };
+array_push($values, "wrong");
+echo $show();
+"#,
+        r#"<?php
+$values = [1];
+$alias =& $values;
+$push = function () use (&$values) { array_push($values, "wrong"); };
+$push();
+"#,
+    ] {
+        expect_error(source, "array_push() cannot widen a reference-aliased indexed receiver");
+    }
+}

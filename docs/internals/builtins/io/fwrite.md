@@ -2,7 +2,7 @@
 title: "fwrite() - internals"
 description: "Compiler internals for fwrite(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 333
+  order: 338
 ---
 
 ## `fwrite()` - internals

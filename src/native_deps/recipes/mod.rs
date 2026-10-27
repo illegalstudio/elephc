@@ -11,6 +11,7 @@ pub(super) mod util;
 pub mod curl;
 pub mod libssh2;
 pub mod libxml2;
+pub mod libmagic;
 pub mod nghttp2;
 pub mod oniguruma;
 pub mod openssl;

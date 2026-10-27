@@ -396,7 +396,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_hash_algos_list` | Build the `hash_algos()` array of supported algorithm names | — | `x0` (array ptr) |
 | `__rt_digest_to_string` | Format a raw digest as lowercase hex | digest | `x1`/`x2` |
 | `__rt_crc32` | CRC32 checksum | `x1`/`x2` | `x0` |
-| `__rt_inet_ntop` / `__rt_inet_pton` | IPv4/IPv6 address ↔ packed-binary conversion. IPv4 is parsed and rendered here (`__rt_ip2long`/`__rt_long2ip`); IPv6 goes through libc `inet_pton(3)`/`inet_ntop(3)`, which own `::` compression and the embedded-IPv4 form — and which disagree about zone identifiers (macOS accepts and ignores one, glibc refuses it), a split PHP inherits too. Both destinations come from `__rt_concat_reserve` and are published with `__rt_concat_publish`, so a 16-byte packed address or a 45-byte rendering cannot run off the end of the 64 KiB scratch buffer. The family is chosen the way php-src chooses it — a `:` in the text, the packed LENGTH on the way back — and `AF_INET6` is the TARGET's value (30 on Darwin, 10 on Linux), pinned by emitter tests because a wrong one turns every IPv6 address into `false` only on the cross-compiled binary | address | `x1`/`x2` |
+| `__rt_inet_ntop` / `__rt_inet_pton` | IPv4/IPv6 address ↔ packed-binary conversion. IPv4 is parsed and rendered here (`__rt_ip2long`/`__rt_long2ip`); IPv6 goes through libc `inet_pton(3)`/`inet_ntop(3)`, which own `::` compression and the embedded-IPv4 form — and which disagree about zone identifiers (macOS accepts and ignores one, glibc refuses it), a split PHP inherits too. Both destinations come from `__rt_concat_reserve` and are published with `__rt_concat_publish`, so a 16-byte packed address or a 45-byte rendering cannot run off the end of the shared result arena. The family is chosen the way php-src chooses it — a `:` in the text, the packed LENGTH on the way back — and `AF_INET6` is the TARGET's value (30 on Darwin, 10 on Linux), pinned by emitter tests because a wrong one turns every IPv6 address into `false` only on the cross-compiled binary | address | `x1`/`x2` |
 | `__rt_long2ip` / `__rt_ip2long` | Dotted-quad string ↔ integer conversion | `x0` or `x1`/`x2` | `x1`/`x2` or `x0` |
 | `__rt_vsprintf` | `vsprintf()` formatting with an argument array | format + array + optional eval context | `x1`/`x2` |
 | `__rt_sscanf` | Parse string with format | str + format | `x0` (array ptr) |
@@ -1710,7 +1710,7 @@ The cdylib boundary also makes recoverable unwinding explicit. Each cdylib user 
 The runtime data layer lives in `src/codegen_support/runtime/data/`. `fixed.rs` emits shared buffers, error strings, and lookup tables; `user.rs` emits per-program globals, statics, enum-case slots, and metadata tables; `instanceof.rs` formats dynamic `instanceof` lookup names. Together they declare global buffers using `.comm` and static data tables:
 
 ```asm
-.comm _concat_buf, 65536     ; 64KB string buffer
+.comm _concat_buf, <heap-size> ; heap-sized string buffer (default 8 MB)
 .comm _concat_off, 8         ; current offset into string buffer
 .comm _print_r_mode, 8       ; print_r rendering capture flag
 .comm _print_r_off, 8        ; print_r capture write offset
@@ -1778,8 +1778,12 @@ _heap_max:
 .comm _gc_frees, 8           ; free counter
 .comm _gc_live, 8            ; current live heap footprint in bytes
 .comm _gc_peak, 8            ; high-water mark counter
-.comm _cstr_buf, 4096        ; 4KB C-string conversion buffer
-.comm _cstr_buf2, 4096       ; 4KB second C-string buffer
+.comm _cstr_buf, 4096        ; 4KB inline C-string conversion buffer
+.comm _cstr_buf2, 4096       ; 4KB second inline C-string buffer
+_cstr_base: .quad _cstr_buf  ; current primary C-string block
+_cstr_cap: .quad 4096        ; current primary C-string capacity
+_cstr2_base: .quad _cstr_buf2; current secondary C-string block
+_cstr2_cap: .quad 4096       ; current secondary C-string capacity
 .comm _eof_flags, 256        ; EOF flag per file descriptor
 .comm _principal_lookup_buf, 4096 ; passwd/group lookup line buffer
 .comm _elephc_crypto_cipher_iv_length_fn, 8 ; published crypto bridge IV-length callback
@@ -1844,3 +1848,22 @@ When `--heap-debug` is enabled, the runtime also activates `__rt_heap_debug_chec
 Every heap allocation now also carries a uniform 8-byte kind tag in its 16-byte allocator header. The current runtime uses `0=raw/untyped`, `1=string`, `2=indexed array`, `3=assoc/hash`, `4=object`, `5=boxed mixed`, and `6=throwable` (the compact runtime-thrown exception/error payloads, accepted by the release dispatchers and routed through the object release path), which lets runtime dispatch stay independent from each payload's internal layout. Generator frames use heap kind `4` because `Generator` is a built-in object with a custom payload layout. On x86_64 the kind word additionally carries the ASCII marker `"ELPH"` in its high 32 bits; every stamp is built through the shared `codegen_support::sentinels` helpers (`x86_64_heap_kind_word()` / `X86_64_HEAP_MAGIC_HI32`) rather than hand-typed immediates, and the refcount/free helpers ignore pointers whose header lacks the marker. The low 16 bits keep the persistent container metadata: low byte = heap kind, bits `8..14` = indexed-array runtime `value_type`, and bit `15` = copy-on-write container flag. The collector reuses higher bits for transient reachable/incoming-edge metadata during `__rt_gc_collect_cycles`. Runtime data also now includes `_gc_collecting`, `_gc_release_suppressed`, `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_vtable_ptrs`, `_class_static_vtable_ptrs`, and static-property storage slots so deep-free / cycle-collection paths can coordinate nested releases, discover class property traversal metadata, and support inherited instance dispatch, static-property reads/writes, and late static binding.
 
 See [Memory Model](memory-model.md) for details on how these buffers work.
+
+Fileinfo instances keep their native libmagic handle in a private final owner
+object. Releasing the PHP object's properties therefore releases the handle even
+when a subclass overrides its destructor. The shared builtin class contract marks
+`finfo` uncloneable: the typed clone operation and reflection apply that policy
+through the internal class's ancestry, including in eval. Serialization uses the
+existing internal-class refusal table before any user subclass hook runs.
+
+Compiler preludes raise engine warnings through the internal
+`__elephc_builtin_warning` alias and the typed `CoreBuiltinOp::BuiltinWarning`
+operation. It carries source metadata and `E_WARNING` through the ordinary handler
+and reporting machinery, while PHP's public `trigger_error()` retains its restricted
+user-level error categories.
+
+Version-gated prelude deprecations use the corresponding
+`__elephc_builtin_deprecated` alias and `CoreBuiltinOp::BuiltinDeprecated`, with
+`E_DEPRECATED`. Public buffer wrappers inspect the actual source argument count
+before calling their native engine helper, so an omitted context stays distinct
+from an explicitly supplied null context.

@@ -2,7 +2,7 @@
 title: "session_encode()"
 description: "Serializes the current session data into a string."
 sidebar:
-  order: 1006
+  order: 1012
 ---
 
 ## session_encode()

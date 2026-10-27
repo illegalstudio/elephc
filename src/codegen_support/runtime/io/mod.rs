@@ -32,6 +32,9 @@ mod file_get_contents;
 mod file_get_contents_range;
 mod file_get_contents_url;
 mod file_put_contents;
+mod fileinfo_streams;
+mod fileinfo_stat;
+mod fileinfo_cast;
 mod fd_write;
 mod fnmatch;
 mod fopen;
@@ -92,7 +95,7 @@ mod https;
 mod notification;
 mod stream_wrapper_register;
 mod stream_wrapper_unregister;
-mod stream_registry_cleanup;
+mod stream_registry;
 mod http_build_request;
 mod stream_context_get_ssl_peer_name;
 mod apply_socket_opts;
@@ -130,6 +133,7 @@ mod tempnam;
 mod path_is_wrapper;
 mod readfile_wrapper;
 mod user_filter;
+mod user_filter_lifecycle;
 mod user_filter_brigade;
 mod stash_connect_host;
 mod touch_meta_array;
@@ -162,6 +166,7 @@ pub(crate) use file_get_contents_range::{
 pub(crate) use file_get_contents_url::emit_file_get_contents_url;
 pub(crate) use fd_write::emit_fd_write;
 pub(crate) use file_put_contents::emit_file_put_contents;
+pub(crate) use fileinfo_streams::emit_fileinfo_streams;
 pub(crate) use fnmatch::emit_fnmatch;
 pub(crate) use fopen::emit_fopen;
 pub(crate) use fputcsv::emit_fputcsv;
@@ -214,6 +219,7 @@ pub(crate) use http::emit_http;
 pub(crate) use https::emit_https;
 pub(crate) use stream_wrapper_register::emit_stream_wrapper_register;
 pub(crate) use stream_wrapper_unregister::emit_stream_wrapper_unregister;
+pub(crate) use stream_registry::emit_stream_registry;
 pub(crate) use http_build_request::emit_http_build_request;
 pub(crate) use stream_context_get_ssl_peer_name::emit_get_ssl_peer_name;
 pub(crate) use apply_socket_opts::{
@@ -253,11 +259,10 @@ pub(crate) use tempnam::emit_tempnam;
 pub(crate) use user_filter::{
     emit_apply_user_stream_filter, emit_resolve_user_filter_id,
     emit_stream_filter_attach_user, emit_stream_filter_register,
-    emit_user_filter_release_fd,
 };
 pub(crate) use user_filter_brigade::emit_user_filter_brigade_invoke;
-pub(crate) use stream_registry_cleanup::emit_stream_registry_cleanup;
 pub(crate) use user_wrapper::emit_stream_close_mode;
+pub(crate) use user_filter_lifecycle::emit_user_filter_release_fd;
 pub(crate) use user_wrapper::{
     emit_box_wrapper_stat_result, emit_user_wrapper_fclose, emit_user_wrapper_feof,
     emit_user_wrapper_fflush, emit_user_wrapper_flock, emit_user_wrapper_fread,

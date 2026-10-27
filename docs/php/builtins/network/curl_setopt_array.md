@@ -2,7 +2,7 @@
 title: "curl_setopt_array()"
 description: "Sets multiple options for a cURL transfer."
 sidebar:
-  order: 730
+  order: 736
 ---
 
 ## curl_setopt_array()

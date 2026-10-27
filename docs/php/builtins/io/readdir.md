@@ -2,7 +2,7 @@
 title: "readdir()"
 description: "Read entry from directory handle."
 sidebar:
-  order: 356
+  order: 362
 ---
 
 ## readdir()

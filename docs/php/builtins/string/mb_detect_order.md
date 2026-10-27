@@ -2,7 +2,7 @@
 title: "mb_detect_order()"
 description: "Reads or updates the request's encoding detection order."
 sidebar:
-  order: 854
+  order: 860
 ---
 
 ## mb_detect_order()

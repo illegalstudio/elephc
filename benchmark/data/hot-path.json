@@ -3,7 +3,7 @@
   "suite": "hot-path",
   "branch": "main",
   "sampling": "latest-per-UTC-day-and-platform",
-  "points": 13,
+  "points": 14,
   "series": [
     {
       "date": "2026-10-13",
@@ -803,6 +803,68 @@
                 69.96312499995838,
                 52.84512499997618,
                 67.670833999955
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "date": "2026-10-26",
+      "timestamp": "2026-10-26T21:46:40Z",
+      "measurement_timestamp": "2026-10-26T21:43:52Z",
+      "commit": "96086f2f330b1be39f7289d47899d46f058a7be4",
+      "run_id": 40405212061,
+      "run_attempt": 1,
+      "artifact_id": 12691243414,
+      "environment": {
+        "runner": "macos-15",
+        "os": "Darwin",
+        "architecture": "arm64",
+        "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "php": "PHP 8.5.12 (cli) (built: Oct 19 2026 17:02:46) (NTS)",
+        "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+        "php_mode": "CLI; OPcache/JIT disabled",
+        "measurement": "process-wall",
+        "iterations": 3,
+        "warmup": 1
+      },
+      "cases": [
+        {
+          "case": "buffer-vs-arrays",
+          "fixture_sha256": "6408d8d3b03fa555fe859c2f17e7c687b196104ca8843f9308eca6eff4946dc8",
+          "metadata": {
+            "description": "Equivalent position updates with three storage representations"
+          },
+          "variants": {
+            "buffer": {
+              "median_ms": 3.6317499999540814,
+              "samples_ms": [
+                3.693959000088398,
+                3.6317499999540814,
+                3.5321249999924476
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "indexed": {
+              "median_ms": 37.81279199995424,
+              "samples_ms": [
+                37.42341699989993,
+                37.81279199995424,
+                40.83933300000808
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "assoc": {
+              "median_ms": 26.985707999983788,
+              "samples_ms": [
+                27.458249999995132,
+                26.952957999924365,
+                26.985707999983788
               ],
               "skipped": false,
               "detail": "3 runs"

@@ -2,7 +2,7 @@
 title: "stream_bucket_append() - internals"
 description: "Compiler internals for stream_bucket_append(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 796
+  order: 802
 ---
 
 ## `stream_bucket_append()` - internals
@@ -25,7 +25,7 @@ sidebar:
 - **Target strategy**: `runtime_call`
 - **Validation**: `signature`
 - **Result type source**: `declared`
-- **Result ownership**: `may_alias_arguments`
+- **Result ownership**: `non_heap`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`

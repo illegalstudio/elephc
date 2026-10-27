@@ -24,6 +24,7 @@ mod buffer_element_updates;
 mod ref_local_append;
 mod string_offset_lifetime;
 mod arrays;
+mod assoc_push;
 mod append_writes;
 mod nullable_array_merges;
 mod array_reference_outputs;
@@ -45,6 +46,7 @@ mod destructor_catch_preservation;
 mod dom_html_review;
 mod dynamic_spreads;
 mod effects;
+mod method_receiver_roots;
 mod enum_argument_boundaries;
 mod enum_review;
 mod enum_result_owners;
@@ -192,6 +194,7 @@ fn try_lower_source_at_for_target(
     let ast = crate::testing_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::fileinfo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::tokenizer_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::version_prelude::inject_if_used(

@@ -2,7 +2,7 @@
 title: "ceil()"
 description: "Rounds a number up to the nearest integer."
 sidebar:
-  order: 568
+  order: 574
 ---
 
 ## ceil()

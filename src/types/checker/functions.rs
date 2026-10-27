@@ -12,5 +12,6 @@
 mod call_validation;
 mod param_binding;
 mod reference_outputs;
+mod array_push_values;
 mod resolution;
 mod returns;

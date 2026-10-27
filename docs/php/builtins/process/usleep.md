@@ -2,7 +2,7 @@
 title: "usleep()"
 description: "Delays execution for a number of microseconds."
 sidebar:
-  order: 775
+  order: 781
 ---
 
 ## usleep()

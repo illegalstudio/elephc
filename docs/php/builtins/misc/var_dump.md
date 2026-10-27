@@ -2,7 +2,7 @@
 title: "var_dump()"
 description: "Dumps information about a variable, including its type and value."
 sidebar:
-  order: 705
+  order: 711
 ---
 
 ## var_dump()

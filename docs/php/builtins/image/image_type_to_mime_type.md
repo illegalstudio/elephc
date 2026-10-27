@@ -2,7 +2,7 @@
 title: "image_type_to_mime_type()"
 description: "Returns the MIME type for an IMAGETYPE_* constant."
 sidebar:
-  order: 456
+  order: 462
 ---
 
 ## image_type_to_mime_type()

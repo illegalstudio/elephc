@@ -24,6 +24,11 @@ pub struct Emitter {
     /// addressing. Required for shared-library output, where the loader cannot
     /// resolve cross-object `R_X86_64_PC32` relocations at dlopen time.
     pub pic_data_refs: bool,
+    /// Capacity of the shared `_concat_buf` result arena in bytes. The default
+    /// matches the historical 64 KiB scratch buffer; runtime generation raises
+    /// it to the program's configured heap budget so string producers can use
+    /// the same memory ceiling as PHP instead of an artificial 64 KiB cap.
+    pub concat_capacity: usize,
     /// When `true`, user frames publish exceptional cleanup activations and
     /// process-fatal runtime paths may unwind through the cdylib host boundary.
     /// This is deliberately independent from position-independent addressing:
@@ -65,6 +70,7 @@ impl Emitter {
             target,
             platform: target.platform,
             pic_data_refs: false,
+            concat_capacity: 65_536,
             cdylib_boundary: false,
             dead_strip: false,
             internal_labels: HashSet::new(),

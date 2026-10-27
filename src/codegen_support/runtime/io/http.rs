@@ -422,6 +422,11 @@ pub fn emit_http(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the http:// stream descriptor
 
     emitter.label("__rt_http_open_fail");
+    // -- retain the connection's cause across reentrant notification callbacks --
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_stream_error_code", 0);
+    emitter.instruction("str x9, [sp, #48]");                                   // reuse the no-longer-needed redirect address slot for the outer errno
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_stream_error_tls", 0);
+    emitter.instruction("str x9, [sp, #56]");                                   // retain the diagnostic kind across nested stream calls
     // -- fire STREAM_NOTIFY_FAILURE (code 9, ERR) before returning -1 --
     emitter.instruction("mov x0, #9");                                          // notification code 9 = STREAM_NOTIFY_FAILURE
     emitter.instruction("mov x1, #2");                                          // severity 2 = STREAM_NOTIFY_SEVERITY_ERR
@@ -430,6 +435,10 @@ pub fn emit_http(emitter: &mut Emitter) {
     emitter.instruction("mov x4, #0");                                          // bytes_transferred 0 on failure
     emitter.instruction("mov x5, #0");                                          // bytes_max 0
     emitter.instruction("bl __rt_http_fire_notification");                      // invoke the registered notification callback (no-op if none)
+    emitter.instruction("ldr x9, [sp, #48]");                                   // restore the failing connection's errno after the notification
+    abi::emit_store_reg_to_symbol(emitter, "x9", "_stream_error_code", 0);
+    emitter.instruction("ldr x9, [sp, #56]");                                   // restore its diagnostic kind after nested operations
+    abi::emit_store_reg_to_symbol(emitter, "x9", "_stream_error_tls", 0);
     emitter.instruction("mov x0, #-1");                                         // -1 signals a failed http:// open
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #80");                                     // release the helper frame
@@ -802,6 +811,11 @@ fn emit_http_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the http:// stream descriptor
 
     emitter.label("__rt_http_open_fail_x86");
+    // -- preserve the outer failure across callbacks that perform their own I/O --
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_stream_error_code", 0);
+    emitter.instruction("mov QWORD PTR [rbp - 56], r9");                        // reuse the redirect address slot for the outer native errno
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_stream_error_tls", 0);
+    emitter.instruction("mov QWORD PTR [rbp - 64], r9");                        // retain the outer failure's diagnostic kind
     // -- fire STREAM_NOTIFY_FAILURE (code 9, ERR) before returning -1 --
     emitter.instruction("mov edi, 9");                                          // notification code 9 = STREAM_NOTIFY_FAILURE
     emitter.instruction("mov esi, 2");                                          // severity 2 = STREAM_NOTIFY_SEVERITY_ERR
@@ -810,6 +824,10 @@ fn emit_http_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor r8d, r8d");                                        // bytes_transferred 0 on failure
     emitter.instruction("xor r9d, r9d");                                        // bytes_max 0
     emitter.instruction("call __rt_http_fire_notification");                    // invoke the registered notification callback (no-op if none)
+    emitter.instruction("mov r9, QWORD PTR [rbp - 56]");                        // restore the outer errno after a reentrant notification
+    abi::emit_store_reg_to_symbol(emitter, "r9", "_stream_error_code", 0);
+    emitter.instruction("mov r9, QWORD PTR [rbp - 64]");                        // restore its diagnostic kind after nested I/O
+    abi::emit_store_reg_to_symbol(emitter, "r9", "_stream_error_tls", 0);
     emitter.instruction("mov rax, -1");                                         // -1 signals a failed http:// open
     emitter.instruction("add rsp, 80");                                         // release the helper frame (matches the prologue's sub rsp, 80)
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

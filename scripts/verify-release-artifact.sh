@@ -147,6 +147,14 @@ while IFS=$'\t' read -r kind name archives; do
     if [ "$native_ready" = false ]; then
         continue
     fi
+    if [ "$name" = "fileinfo" ]; then
+        echo "  ...   $kind $name: adding managed native libmagic"
+        if ! "$ELEPHC" native add libmagic >native-add.log 2>&1; then
+            fail "$kind $name: native add libmagic failed"
+            sed 's/^/          /' native-add.log
+            continue
+        fi
+    fi
     if [ "$name" = "xml" ]; then
         echo "  ...   $kind $name: adding managed native package libxml2 before --with-xml"
         if ! "$ELEPHC" native add libxml2 >native-add.log 2>&1; then

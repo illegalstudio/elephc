@@ -106,6 +106,7 @@ pub(crate) fn lower_main(
         &check_result.extern_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.array_push_property_plans,
 
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
@@ -250,6 +251,7 @@ pub(crate) fn lower_user_function(
         &check_result.extern_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.array_push_property_plans,
 
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
@@ -375,6 +377,7 @@ pub(crate) fn lower_class_method(
         &check_result.extern_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.array_push_property_plans,
 
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
@@ -493,6 +496,7 @@ pub(crate) fn lower_eval_aot_function(
         &check_result.extern_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.array_push_property_plans,
 
         &boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
@@ -622,6 +626,7 @@ pub(crate) fn lower_eval_aot_scope_function(
         &check_result.extern_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.array_push_property_plans,
 
         &boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
@@ -741,6 +746,7 @@ pub(crate) fn lower_property_init_thunk(
         &check_result.extern_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.array_push_property_plans,
 
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
@@ -1108,6 +1114,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         &check_result.extern_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.array_push_property_plans,
 
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
@@ -1231,6 +1238,7 @@ pub(crate) fn lower_clone_override_function(
         &check_result.extern_classes,
         &check_result.throw_access_sites,
         &check_result.builtin_call_types,
+        &check_result.array_push_property_plans,
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
         &check_result.generic_call_sites,
@@ -1398,6 +1406,7 @@ pub(crate) fn lower_eval_native_default_helpers(
             &check_result.extern_classes,
             &check_result.throw_access_sites,
             &check_result.builtin_call_types,
+            &check_result.array_push_property_plans,
             &check_result.boxed_reference_promotion_sites,
             &check_result.first_class_builtin_call_types,
             &check_result.generic_call_sites,
@@ -1631,6 +1640,7 @@ fn lower_closure_function_with_signature(
         parent.extern_classes,
         parent.throw_access_sites,
         parent.builtin_call_types,
+        parent.array_push_property_plans,
 
         parent.boxed_reference_promotion_sites,
         parent.first_class_builtin_call_types,
@@ -1686,6 +1696,7 @@ fn lower_body_into_function(
     extern_classes: &std::collections::HashMap<String, crate::types::ExternClassInfo>,
     throw_access_sites: &std::collections::HashMap<Span, crate::types::ThrowAccessInfo>,
     builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    array_push_property_plans: &std::collections::HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
 
     boxed_reference_promotion_sites: &std::collections::HashMap<
         (String, Span),
@@ -1754,6 +1765,7 @@ fn lower_body_into_function(
         extern_classes,
         throw_access_sites,
         builtin_call_types,
+        array_push_property_plans,
 
         boxed_reference_promotion_sites,
         first_class_builtin_call_types,
@@ -1778,6 +1790,12 @@ fn lower_body_into_function(
     if let Some(function_global_names) = function_global_names {
         ctx.set_function_global_names(function_global_names);
     }
+    ctx.this_storage_stays_concrete = {
+        let flags = &ctx.builder.function().flags;
+        flags.is_method && !flags.is_static && !flags.is_closure
+            && property_initializers.is_none() && !body.is_empty()
+            && !crate::ir_lower::body_contains_eval_call(body)
+    };
     ctx.by_ref_return = function_by_ref_return;
     ctx.return_type_is_declared = return_type_is_declared;
     if let Some((scope_param, read_names, write_names, flush_names)) = eval_scope_reads {

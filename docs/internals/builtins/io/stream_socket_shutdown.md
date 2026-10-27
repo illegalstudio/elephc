@@ -2,7 +2,7 @@
 title: "stream_socket_shutdown() - internals"
 description: "Compiler internals for stream_socket_shutdown(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 394
+  order: 400
 ---
 
 ## `stream_socket_shutdown()` - internals

@@ -2,7 +2,7 @@
 title: "imageantialias()"
 description: "Turns antialiased drawing on or off for lines and polygons."
 sidebar:
-  order: 460
+  order: 466
 ---
 
 ## imageantialias()

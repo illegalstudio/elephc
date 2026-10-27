@@ -173,7 +173,10 @@ pub fn emit_https(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #16]");                                   // request length for the TLS write
     abi::emit_symbol_address(emitter, "x9", "_elephc_tls_write_fn");
     emitter.instruction("ldr x9, [x9]");                                        // load the elephc_tls_write entry pointer
+    emitter.instruction("str xzr, [sp, #24]");                                  // ensure a failed initial TLS write has no received response bytes
     emitter.instruction("blr x9");                                              // send the HTTP request through TLS
+    emitter.instruction("cmp x0, #0");                                          // check whether request transmission or its deferred handshake failed
+    emitter.instruction("b.lt __rt_https_open_read_error");                     // close the failed session while retaining the bridge's cause
 
     // -- read the whole TLS-decrypted response into _https_resp_buf --
     emitter.instruction("str xzr, [sp, #24]");                                  // accumulated response length = 0
@@ -189,7 +192,8 @@ pub fn emit_https(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x9]");                                        // load the elephc_tls_read entry pointer
     emitter.instruction("blr x9");                                              // read more decrypted bytes from the TLS session
     emitter.instruction("cmp x0, #0");                                          // did the read hit EOF or fail?
-    emitter.instruction("b.le __rt_https_open_read_done");                      // the server closed the TLS session
+    emitter.instruction("b.lt __rt_https_open_read_error");                     // preserve a TLS failure before any response bytes arrive
+    emitter.instruction("b.eq __rt_https_open_read_done");                      // finish on a clean TLS EOF
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the accumulated response length
     emitter.instruction("add x9, x9, x0");                                      // advance by the bytes just read
     emitter.instruction("str x9, [sp, #24]");                                   // store the updated response length
@@ -259,7 +263,16 @@ pub fn emit_https(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #80");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the https:// stream descriptor
 
+    // -- reject a failed handshake while preserving the existing partial-response EOF behavior --
+    emitter.label("__rt_https_open_read_error");
+    emitter.instruction("ldr x9, [sp, #24]");                                   // test whether any response bytes preceded the read error
+    emitter.instruction("cbnz x9, __rt_https_open_read_done");                  // retain received bytes when a peer omits close_notify
+    emitter.instruction("ldr x0, [sp, #0]");                                    // close the TLS session whose first response read failed
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_elephc_tls_close_fn", 0);
+    emitter.instruction("blr x9");                                              // release the failed session without clearing its recorded cause
+    emitter.instruction("b __rt_https_open_fail");                              // return failure rather than an empty successful response
     emitter.label("__rt_https_open_fail");
+    abi::emit_store_imm_to_symbol(emitter, "_stream_error_tls", 0, 1);
     emitter.instruction("mov x0, #-1");                                         // -1 signals a failed https:// open
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #80");                                     // release the helper frame
@@ -408,7 +421,10 @@ fn emit_https_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // arg 1 = request pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // arg 2 = request length
     abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_tls_write_fn", 0);     // load the elephc_tls_write entry pointer
+    emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // ensure a failed initial TLS write has no response bytes
     emitter.instruction("call r9");                                             // send the HTTP request through TLS
+    emitter.instruction("test rax, rax");                                       // check whether request transmission or its deferred handshake failed
+    emitter.instruction("js __rt_https_open_read_error_x86");                   // close the failed session while retaining the bridge's cause
 
     // -- read the whole TLS-decrypted response into _https_resp_buf --
     emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // accumulated response length = 0
@@ -423,7 +439,8 @@ fn emit_https_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_tls_read_fn", 0);      // load the elephc_tls_read entry pointer
     emitter.instruction("call r9");                                             // read more decrypted bytes from the TLS session
     emitter.instruction("cmp rax, 0");                                          // did the read hit EOF or fail?
-    emitter.instruction("jle __rt_https_open_read_done_x86");                   // the server closed the TLS session
+    emitter.instruction("jl __rt_https_open_read_error_x86");                   // preserve a TLS failure before any response bytes arrive
+    emitter.instruction("je __rt_https_open_read_done_x86");                    // finish on a clean TLS EOF
     emitter.instruction("mov r10, QWORD PTR [rbp - 56]");                       // reload the accumulated response length
     emitter.instruction("add r10, rax");                                        // advance by the bytes just read
     emitter.instruction("mov QWORD PTR [rbp - 56], r10");                       // store the updated response length
@@ -492,7 +509,16 @@ fn emit_https_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the https:// stream descriptor
 
+    // -- reject a failed handshake while retaining already received response bytes --
+    emitter.label("__rt_https_open_read_error_x86");
+    emitter.instruction("cmp QWORD PTR [rbp - 56], 0");                         // test whether any response bytes preceded the read error
+    emitter.instruction("jne __rt_https_open_read_done_x86");                   // retain received bytes when close_notify is omitted
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // close the TLS session whose first response read failed
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_tls_close_fn", 0);
+    emitter.instruction("call r9");                                             // release the failed session while retaining its recorded cause
+    emitter.instruction("jmp __rt_https_open_fail_x86");                        // return failure rather than an empty successful response
     emitter.label("__rt_https_open_fail_x86");
+    abi::emit_store_imm_to_symbol(emitter, "_stream_error_tls", 0, 1);
     emitter.instruction("mov rax, -1");                                         // -1 signals a failed https:// open
     emitter.instruction("add rsp, 96");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

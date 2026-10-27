@@ -1974,6 +1974,246 @@
         {
           "by_ref": false,
           "default": null,
+          "name": "message",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "__elephc_builtin_deprecated",
+    "description": "Raises an engine deprecation through the active PHP error handler.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 706,
+      "notes": [
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/__elephc_builtin_deprecated.rs",
+      "sig_line": null
+    },
+    "module": "elephc",
+    "name": "__elephc_builtin_deprecated",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "writes_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "refcount_op",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt",
+          "blocking_io",
+          "network_io"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "non_heap"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "message",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_builtin_deprecated",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "message",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "__elephc_builtin_warning",
+    "description": "Raises an engine warning through the active PHP error handler.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 706,
+      "notes": [
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/__elephc_builtin_warning.rs",
+      "sig_line": null
+    },
+    "module": "elephc",
+    "name": "__elephc_builtin_warning",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "writes_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "refcount_op",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt",
+          "blocking_io",
+          "network_io"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "non_heap"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "message",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_builtin_warning",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
           "name": "value",
           "optional": false,
           "type": "mixed"
@@ -13804,7 +14044,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -13940,7 +14180,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "non_heap"
       },
       "requirements": {
         "kind": "static",
@@ -20280,7 +20520,7 @@
       "target_support_kind": "all",
       "validation": {
         "kind": "checker_hook",
-        "lazy": false
+        "lazy": true
       }
     },
     "sig": {
@@ -46709,7 +46949,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "independent"
       },
       "requirements": {
         "kind": "static",
@@ -49065,6 +49305,594 @@
     "since": null,
     "slug": "filetype",
     "sub_area": "Filesystem"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "finfo",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "flags",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "IO",
+    "canonical_name": "finfo_buffer",
+    "description": "Identifies the type and encoding of binary string contents.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "filesystem",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/fileinfo/finfo_buffer.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "finfo",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/fileinfo_prelude/build.rs",
+      "codegen_function": "finfo_buffer",
+      "codegen_line": 163,
+      "notes": [
+        "Implemented by the compiler-injected fileinfo prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
+      "sig_line": null
+    },
+    "module": "fileinfo",
+    "name": "finfo_buffer",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "finfo",
+          "optional": false,
+          "type": "finfo"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "?resource"
+        }
+      ],
+      "return_type": "string|false",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "finfo_buffer",
+    "sub_area": "IO"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "finfo",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "IO",
+    "canonical_name": "finfo_close",
+    "description": "Returns true; PHP 8 finfo instances are freed automatically. Deprecated since PHP 8.5.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "filesystem",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/fileinfo/finfo_close.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "finfo",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/fileinfo_prelude/build.rs",
+      "codegen_function": "finfo_close",
+      "codegen_line": 156,
+      "notes": [
+        "Implemented by the compiler-injected fileinfo prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
+      "sig_line": null
+    },
+    "module": "fileinfo",
+    "name": "finfo_close",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "finfo",
+          "optional": false,
+          "type": "finfo"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "finfo_close",
+    "sub_area": "IO"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "finfo",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "filename",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "flags",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "IO",
+    "canonical_name": "finfo_file",
+    "description": "Identifies the type and encoding of a file or stream URL.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "filesystem",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/fileinfo/finfo_file.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "finfo",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "filename",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/fileinfo_prelude/build.rs",
+      "codegen_function": "finfo_file",
+      "codegen_line": 169,
+      "notes": [
+        "Implemented by the compiler-injected fileinfo prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
+      "sig_line": null
+    },
+    "module": "fileinfo",
+    "name": "finfo_file",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "finfo",
+          "optional": false,
+          "type": "finfo"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "filename",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "?resource"
+        }
+      ],
+      "return_type": "string|false",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "finfo_file",
+    "sub_area": "IO"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "flags",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "magic_database",
+          "optional": true,
+          "type": "?string"
+        }
+      ],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "IO",
+    "canonical_name": "finfo_open",
+    "description": "Creates a finfo instance using the embedded or a custom magic database.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "filesystem",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/fileinfo/finfo_open.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "magic_database",
+          "optional": true,
+          "type": "?string"
+        }
+      ],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/fileinfo_prelude/build.rs",
+      "codegen_function": "finfo_open",
+      "codegen_line": 146,
+      "notes": [
+        "Implemented by the compiler-injected fileinfo prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
+      "sig_line": null
+    },
+    "module": "fileinfo",
+    "name": "finfo_open",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "magic_database",
+          "optional": true,
+          "type": "?string"
+        }
+      ],
+      "return_type": "finfo|false",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "finfo_open",
+    "sub_area": "IO"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "finfo",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "flags",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "IO",
+    "canonical_name": "finfo_set_flags",
+    "description": "Changes the persistent fileinfo configuration flags.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "filesystem",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/fileinfo/finfo_set_flags.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "finfo",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "flags",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/fileinfo_prelude/build.rs",
+      "codegen_function": "finfo_set_flags",
+      "codegen_line": 160,
+      "notes": [
+        "Implemented by the compiler-injected fileinfo prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
+      "sig_line": null
+    },
+    "module": "fileinfo",
+    "name": "finfo_set_flags",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "finfo",
+          "optional": false,
+          "type": "finfo"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "flags",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "finfo_set_flags",
+    "sub_area": "IO"
   },
   {
     "aot": {
@@ -58704,7 +59532,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -58871,7 +59699,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -79902,7 +80730,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -94324,6 +95152,90 @@
   },
   {
     "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "filename",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "IO",
+    "canonical_name": "mime_content_type",
+    "description": "Detects a file or stream resource MIME content type.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "filesystem",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/fileinfo/mime_content_type.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "filename",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/fileinfo_prelude/build.rs",
+      "codegen_function": "mime_content_type",
+      "codegen_line": 172,
+      "notes": [
+        "Implemented by the compiler-injected fileinfo prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
+      "sig_line": null
+    },
+    "module": "fileinfo",
+    "name": "mime_content_type",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "filename",
+          "optional": false,
+          "type": "string|resource"
+        }
+      ],
+      "return_type": "string|false",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "mime_content_type",
+    "sub_area": "IO"
+  },
+  {
+    "aot": {
       "kind": "registry",
       "params": [
         {
@@ -105174,7 +106086,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "non_heap"
       },
       "requirements": {
         "kind": "static",
@@ -111716,7 +112628,7 @@
         },
         {
           "by_ref": true,
-          "default": [],
+          "default": null,
           "name": "matches",
           "optional": true,
           "type": "mixed"
@@ -111832,7 +112744,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -111874,13 +112786,13 @@
         },
         {
           "by_ref": true,
-          "default": "[]",
+          "default": "null",
           "name": "matches",
           "optional": true,
           "type": "array"
         }
       ],
-      "return_type": "int",
+      "return_type": "int|false",
       "variadic": null
     },
     "since": null,
@@ -111907,7 +112819,7 @@
         },
         {
           "by_ref": true,
-          "default": [],
+          "default": null,
           "name": "matches",
           "optional": true,
           "type": "mixed"
@@ -111927,7 +112839,7 @@
     },
     "area": "Regex",
     "canonical_name": "preg_match_all",
-    "description": "Performs a global regular expression match, including terminal empty matches, optionally filling `$matches`, and returns the number of matches. AOT capture output supports local variables and local references; unsupported non-local destinations are diagnosed. Unsupported flag bits or conflicting order modes return 0 and clear a supplied capture destination on both backends.",
+    "description": "Performs a global regular expression match, including terminal empty matches, optionally filling `$matches`, and returns the number of matches. AOT capture output supports local variables and local references; unsupported non-local destinations are diagnosed. Unsupported flag bits or conflicting order modes raise PHP's `ValueError` on both backends.",
     "eval": {
       "adapter_reason": "by-reference-or-lvalue",
       "area": "regex",
@@ -111955,7 +112867,7 @@
         },
         {
           "by_ref": true,
-          "default": "[]",
+          "default": "null",
           "name": "matches",
           "optional": true,
           "type": "mixed"
@@ -112030,7 +112942,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -112072,7 +112984,7 @@
         },
         {
           "by_ref": true,
-          "default": "[]",
+          "default": "null",
           "name": "matches",
           "optional": true,
           "type": "mixed"
@@ -112085,7 +112997,7 @@
           "type": "int"
         }
       ],
-      "return_type": "int",
+      "return_type": "int|false",
       "variadic": null
     },
     "since": null,
@@ -112221,7 +113133,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -112268,7 +113180,7 @@
           "type": "string"
         }
       ],
-      "return_type": "string",
+      "return_type": "mixed",
       "variadic": null
     },
     "since": null,
@@ -112404,7 +113316,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -112657,7 +113569,7 @@
           "type": "int"
         }
       ],
-      "return_type": "array",
+      "return_type": "array|false",
       "variadic": null
     },
     "since": null,
@@ -116082,7 +116994,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "non_heap"
       },
       "requirements": {
         "kind": "static",
@@ -122497,7 +123409,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -126263,7 +127175,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -127525,7 +128437,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "non_heap"
       },
       "requirements": {
         "kind": "static",
@@ -127673,7 +128585,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -127828,7 +128740,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -127990,7 +128902,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "non_heap"
       },
       "requirements": {
         "kind": "static",
@@ -140426,7 +141338,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -140564,7 +141476,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",

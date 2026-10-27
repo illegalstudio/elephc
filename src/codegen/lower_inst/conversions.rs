@@ -220,6 +220,7 @@ pub(super) fn lower_cast_to_string(
     match raw_ty.codegen_repr() {
         PhpType::Str => {
             ctx.load_value_to_result(value)?;
+            normalize_missing_string_cast(ctx);
             store_if_result(ctx, inst)
         }
         PhpType::Float => strings::lower_float_to_string(ctx, inst),
@@ -247,6 +248,34 @@ pub(super) fn lower_cast_to_string(
             other
         ))),
     }
+}
+
+/// Converts the runtime's in-band missing-string marker into a real empty string.
+///
+/// A missing element of a concrete typed array reaches a `(string)` cast as the
+/// shared `NULL_SENTINEL` pointer with zero length. The cast must publish the
+/// canonical empty-string pair instead, leaving a bare read's `NULL` distinction
+/// intact for `var_dump` and null checks.
+fn normalize_missing_string_cast(ctx: &mut FunctionContext<'_>) {
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    let scratch = abi::secondary_scratch_reg(ctx.emitter);
+    let done = ctx.next_label("str_cast_missing_done");
+    abi::emit_load_int_immediate(ctx.emitter, scratch, crate::codegen::sentinels::NULL_SENTINEL);
+    ctx.emitter
+        .instruction(&format!("cmp {}, {}", ptr_reg, scratch));                 // is the cast source the missing-string marker?
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("b.ne {}", done));                 // real strings keep their original payload
+            ctx.emitter.instruction(&format!("mov {}, #0", ptr_reg));           // publish the canonical empty-string pointer
+            ctx.emitter.instruction(&format!("mov {}, #0", len_reg));           // publish the canonical empty-string length
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("jne {}", done));                  // real strings keep their original payload
+            ctx.emitter.instruction("xor eax, eax");                            // publish the canonical empty-string pointer
+            ctx.emitter.instruction("xor edx, edx");                            // publish the canonical empty-string length
+        }
+    }
+    ctx.emitter.label(&done);
 }
 
 /// Leaves a string result for a boxed Mixed value, dispatching objects through `__toString()`.

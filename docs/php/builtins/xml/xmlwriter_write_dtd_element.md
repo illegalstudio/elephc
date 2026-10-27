@@ -2,7 +2,7 @@
 title: "xmlwriter_write_dtd_element()"
 description: "Writes a complete DTD element declaration."
 sidebar:
-  order: 1085
+  order: 1091
 ---
 
 ## xmlwriter_write_dtd_element()

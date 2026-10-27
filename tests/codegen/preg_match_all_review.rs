@@ -18,43 +18,58 @@ function pattern(): string { echo 'P'; return '/(a)/'; }
 function subject(): string { echo 'S'; return 'aaa'; }
 function flags(int $value): int { echo 'F'; return $value; }
 foreach ([3, 4, 7, -1] as $flag) {
-    echo \PrEg_MaTcH_AlL(pattern: pattern(), subject: subject(), flags: flags($flag)), '|';
+    try {
+        echo \PrEg_MaTcH_AlL(pattern: pattern(), subject: subject(), flags: flags($flag)), '|';
+    } catch (ValueError $e) {
+        echo 'VE|';
+    }
 }
 foreach ([0, PREG_PATTERN_ORDER, PREG_SET_ORDER, PREG_OFFSET_CAPTURE, PREG_UNMATCHED_AS_NULL] as $flag) {
     echo preg_match_all('/(a)/', 'aaa', flags: $flag), '|';
 }
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "PSF0|PSF0|PSF0|PSF0|3|3|3|3|3|");
+    assert_eq!(out.stdout, "PSFVE|PSFVE|PSFVE|PSFVE|3|3|3|3|3|");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// Native-backed eval uses the same invalid-flag result even without a capture destination.
+/// Invalid flags raise PHP's exact `ValueError` message in native and eval calls.
+#[test]
+fn preg_match_all_third_review_invalid_flags_value_error_message() {
+    let out = compile_and_run_with_regex(r#"<?php
+try { preg_match_all('/(a)/', 'aaa', $m, 3); } catch (ValueError $e) { echo get_class($e), ':', $e->getMessage(), '|'; }
+$source = 'try { preg_match_all("/(a)/", "aaa", $m, 3); } catch (ValueError $e) { echo get_class($e), ":", $e->getMessage(), "|"; }' . ' // ' . $argc;
+eval($source);
+"#);
+    assert_eq!(out, "ValueError:preg_match_all(): Argument #4 ($flags) must be a PREG_* constant|ValueError:preg_match_all(): Argument #4 ($flags) must be a PREG_* constant|");
+}
+
+/// Native-backed eval raises the same invalid-flag `ValueError` without a capture destination.
 #[test]
 fn preg_match_all_third_review_eval_omitted_invalid_flags() {
     let out = compile_and_run_with_regex(r#"<?php
-$source = 'foreach ([3, 4, 7, -1] as $flag) { echo preg_match_all("/(a)/", "aaa", flags: $flag), "|"; }
+$source = 'foreach ([3, 4, 7, -1] as $flag) { try { echo preg_match_all("/(a)/", "aaa", flags: $flag), "|"; } catch (ValueError $e) { echo "VE|"; } }
 foreach ([0, PREG_PATTERN_ORDER, PREG_SET_ORDER, PREG_OFFSET_CAPTURE, PREG_UNMATCHED_AS_NULL] as $flag) {
     echo preg_match_all("/(a)/", "aaa", flags: $flag), "|";
 }' . ' // ' . $argc;
 eval($source);
 "#);
-    assert_eq!(out, "0|0|0|0|3|3|3|3|3|");
+    assert_eq!(out, "VE|VE|VE|VE|3|3|3|3|3|");
 }
 
-/// Extra bits clear an existing capture destination identically in native and eval calls.
+/// Extra bits raise the invalid-flag `ValueError` in native and eval calls without mutating captures.
 #[test]
 fn preg_match_all_third_review_eval_extra_flag_bits() {
     let out = compile_and_run_with_regex(r#"<?php
 $matches = ['old'];
-echo preg_match_all('/(a)/', 'aaa', $matches, PREG_SPLIT_OFFSET_CAPTURE), ':', count($matches), '|';
+try { echo preg_match_all('/(a)/', 'aaa', $matches, PREG_SPLIT_OFFSET_CAPTURE), ':', count($matches), '|'; } catch (ValueError $e) { echo 'VE|'; }
 $source = '$eval_matches = ["old"]; $alias =& $eval_matches;
 foreach ([PREG_SPLIT_OFFSET_CAPTURE, -1, PREG_SET_ORDER | PREG_SPLIT_OFFSET_CAPTURE] as $flag) {
-    echo preg_match_all("/(a)/", "aaa", $alias, $flag), ":", count($eval_matches), "|";
+    try { echo preg_match_all("/(a)/", "aaa", $alias, $flag), ":", count($eval_matches), "|"; } catch (ValueError $e) { echo "VE|"; }
 }' . ' // ' . $argc;
 eval($source);
 "#);
-    assert_eq!(out, "0:0|0:0|0:0|0:0|");
+    assert_eq!(out, "VE|VE|VE|VE|");
 }
 
 /// A subject aliased with its output is captured as a string before output storage widens.
@@ -169,12 +184,12 @@ echo preg_match(matches: $single, pattern: '/(a)/', subject: 'a'), ':', $single[
 #[test]
 fn preg_match_all_oct9_conflicting_eval_order() {
     let out = compile_and_run_with_regex(r#"<?php
-echo preg_match_all('/(a)/', 'a', $native, PREG_PATTERN_ORDER | PREG_SET_ORDER), ':', count($native), '|';
-$source = 'echo preg_match_all("/(a)/", "a", $matches, PREG_PATTERN_ORDER | PREG_SET_ORDER), ":", count($matches);'
+try { echo preg_match_all('/(a)/', 'a', $native, PREG_PATTERN_ORDER | PREG_SET_ORDER), ':', count($native), '|'; } catch (ValueError $e) { echo 'VE|'; }
+$source = 'try { echo preg_match_all("/(a)/", "a", $matches, PREG_PATTERN_ORDER | PREG_SET_ORDER), ":", count($matches); } catch (ValueError $e) { echo "VE|"; }'
     . ' // ' . $argc;
 eval($source);
 "#);
-    assert_eq!(out, "0:0|0:0");
+    assert_eq!(out, "VE|VE|");
 }
 
 /// Keeps the original subject visible for later alternatives in both count and capture modes.
@@ -242,7 +257,7 @@ echo preg_match_all('/x/', 'b', $alias), ':', count($matches[0]), '|';
 echo preg_match_all('/(/', 'b', $alias), ':', count($matches);
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, format!("{}0:0|0:0", "1:n:b|".repeat(8)));
+    assert_eq!(out.stdout, format!("{}0:0|:1", "1:n:b|".repeat(8)));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 

@@ -40,6 +40,7 @@ use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{FunctionSig, PhpType};
 
 mod key_sort;
+mod array_push;
 
 use super::{
     call_signature, is_spread_arg, lower_expr, lower_function_call,
@@ -83,6 +84,9 @@ pub(super) fn lower_builtin_ref_place_call(
     let mb_variables = canonical.eq_ignore_ascii_case("mb_convert_variables");
     if !sig.ref_params.iter().any(|is_ref| *is_ref) {
         return None;
+    }
+    if let Some(result) = array_push::lower_live_array_push_place(ctx, name, &sig, args, expr) {
+        return Some(result);
     }
     if args.iter().any(is_spread_arg) {
         // A spread cannot be split into per-parameter places here; PHP also rejects spreading

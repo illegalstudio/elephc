@@ -2,7 +2,7 @@
 title: "php_sapi_name()"
 description: "Returns the name of the server API this build runs under."
 sidebar:
-  order: 690
+  order: 696
 ---
 
 ## php_sapi_name()

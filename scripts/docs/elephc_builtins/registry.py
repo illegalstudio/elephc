@@ -319,6 +319,11 @@ REGISTRY_AREA_OVERRIDES: Dict[str, Tuple[str, str]] = {
 ParamSpec = object  # str | Tuple[str, str] | None — kept loose for legibility
 PARAM_TYPES: Dict[str, List[Optional[ParamSpec]]] = {
     'simplexml_import_dom': ['DOMNode|Dom\\Node', '?string'],
+    'finfo_buffer': ['finfo', 'string', 'int', '?resource'],
+    'finfo_file': ['finfo', 'string', 'int', '?resource'],
+    'finfo_close': ['finfo'],
+    'finfo_set_flags': ['finfo', 'int'],
+    'mime_content_type': ['string|resource'],
     '__elephc_gmmktime_raw': ['int', 'int', 'int', 'int', 'int', 'int'],
     '__elephc_mktime_raw': ['int', 'int', 'int', 'int', 'int', 'int'],
     '__elephc_strtotime_raw': ['string', 'int'],
@@ -855,6 +860,7 @@ RETURN_TYPE_OVERRIDES: Dict[str, str] = {
     "simplexml_import_dom": "?SimpleXMLElement",
     "simplexml_load_file": "SimpleXMLElement|false",
     "simplexml_load_string": "SimpleXMLElement|false",
+    "finfo_open": "finfo|false",
     # Numeric aggregates preserve integer overflow and floating-point values.
     # Their neutral Mixed contract covers this union because TypeSpec has no union variant.
     "array_sum": "int|float",

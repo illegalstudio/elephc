@@ -50,6 +50,24 @@
       "internal": true,
       "kind": "class",
       "module": "elephc",
+      "name": "__ElephcFinfoHandle",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": false,
+      "eval": {
+        "reason": "internal-compiler-surface",
+        "supported": false
+      },
+      "extension": false,
+      "internal": true,
+      "kind": "class",
+      "module": "elephc",
       "name": "__ElephcMysqliResultIterator",
       "php_manual": null,
       "since": null
@@ -1833,6 +1851,24 @@
       "kind": "class",
       "module": "spl",
       "name": "FilterIterator",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "fileinfo",
+      "name": "finfo",
       "php_manual": null,
       "since": null
     },
@@ -17866,6 +17902,204 @@
       "route": "predefined",
       "since": null,
       "value": false
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "fileinfo",
+      "name": "FILEINFO_APPLE",
+      "route": "predefined",
+      "since": null,
+      "value": 2048
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "fileinfo",
+      "name": "FILEINFO_CONTINUE",
+      "route": "predefined",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "fileinfo",
+      "name": "FILEINFO_DEVICES",
+      "route": "predefined",
+      "since": null,
+      "value": 8
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "fileinfo",
+      "name": "FILEINFO_EXTENSION",
+      "route": "predefined",
+      "since": null,
+      "value": 16777216
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "fileinfo",
+      "name": "FILEINFO_MIME",
+      "route": "predefined",
+      "since": null,
+      "value": 1040
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "fileinfo",
+      "name": "FILEINFO_MIME_ENCODING",
+      "route": "predefined",
+      "since": null,
+      "value": 1024
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "fileinfo",
+      "name": "FILEINFO_MIME_TYPE",
+      "route": "predefined",
+      "since": null,
+      "value": 16
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "fileinfo",
+      "name": "FILEINFO_NONE",
+      "route": "predefined",
+      "since": null,
+      "value": 0
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "fileinfo",
+      "name": "FILEINFO_PRESERVE_ATIME",
+      "route": "predefined",
+      "since": null,
+      "value": 128
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "fileinfo",
+      "name": "FILEINFO_RAW",
+      "route": "predefined",
+      "since": null,
+      "value": 256
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "fileinfo",
+      "name": "FILEINFO_SYMLINK",
+      "route": "predefined",
+      "since": null,
+      "value": 2
     },
     {
       "aot": {

@@ -45,5 +45,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             "preg_match() parameter $matches must be passed a variable",
         ));
     }
-    Ok(PhpType::Int)
+    Ok(PhpType::Mixed)
 }

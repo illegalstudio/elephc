@@ -2,7 +2,7 @@
 title: "bcceil() - internals"
 description: "Compiler internals for bcceil(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 554
+  order: 560
 ---
 
 ## `bcceil()` - internals

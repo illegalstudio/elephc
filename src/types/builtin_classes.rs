@@ -113,6 +113,20 @@ pub(crate) fn native_property_method(
     None
 }
 
+/// Checks inherited PHP internal clone restrictions without rejecting user declarations.
+pub(crate) fn class_allows_clone(name: &str, classes: &HashMap<String, crate::types::ClassInfo>) -> bool {
+    let mut current = name.trim_start_matches('\\');
+    for _ in 0..=classes.len() {
+        let Some(info) = classes.get(current) else { return true; };
+        if info.is_internal && lookup_class(current).is_some_and(|contract| !contract.cloneable) {
+            return false;
+        }
+        let Some(parent) = info.parent.as_deref() else { return true; };
+        current = parent.trim_start_matches('\\');
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;

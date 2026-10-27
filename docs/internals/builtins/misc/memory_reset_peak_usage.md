@@ -2,7 +2,7 @@
 title: "memory_reset_peak_usage() - internals"
 description: "Compiler internals for memory_reset_peak_usage(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 648
+  order: 654
 ---
 
 ## `memory_reset_peak_usage()` - internals

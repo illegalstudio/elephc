@@ -346,6 +346,15 @@ impl ElephcEvalContext {
             .is_some_and(|function| function.set_variadic_index(index))
     }
 
+    /// Retains one attribute on an already registered native AOT function.
+    pub fn define_native_function_attribute(&mut self, function_name: &str, attribute: EvalAttribute) -> bool {
+        let key = function_name.trim_start_matches('\\').to_ascii_lowercase();
+        self.native_functions.get_mut(&key).is_some_and(|function| {
+            function.add_attribute(attribute);
+            true
+        })
+    }
+
     /// Records that one native AOT callback is declared `function &name()`.
     pub fn define_native_function_returns_reference(&mut self, function_name: &str) -> bool {
         self.native_functions

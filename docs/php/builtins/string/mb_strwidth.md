@@ -2,7 +2,7 @@
 title: "mb_strwidth()"
 description: "Returns the display width of a string in the requested encoding."
 sidebar:
-  order: 903
+  order: 909
 ---
 
 ## mb_strwidth()

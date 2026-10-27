@@ -2,7 +2,7 @@
 title: "json_validate() - internals"
 description: "Compiler internals for json_validate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 546
+  order: 552
 ---
 
 ## `json_validate()` - internals

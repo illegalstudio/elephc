@@ -503,12 +503,20 @@ impl Checker {
             }
         }
         closure_ref_params.extend(capture_refs.iter().cloned());
+        let ref_assign_captures: Vec<String> = capture_refs.iter()
+            .filter(|capture| self.ref_assign_aliased_locals.contains(*capture))
+            .cloned().collect();
         // A `use (&$x)` capture aliases the ENCLOSING body's local: the closure can outlive
         // this statement and write through the reference, so `$x` is aliased there from here
         // on. Recorded before entering the closure scope, which saves and restores the
         // enclosing set.
         for capture in capture_refs {
             self.ref_aliased_locals.insert(capture.clone());
+            self.non_builtin_ref_aliased_locals.insert(capture.clone());
+            if expr.span.identifies_a_node() {
+                self.array_push_capture_sites.entry(capture.clone())
+                    .or_default().insert(expr.span);
+            }
         }
         // Every closure parameter is bound unconditionally on entry, so all of them are
         // recorded at binding depth 0. A `use ($x)` CAPTURE is deliberately absent: it is
@@ -552,6 +560,10 @@ impl Checker {
             pre_bound_own_storage,
             body,
             |checker| {
+                checker.boxed_parameter_locals.extend(params.iter()
+                    .filter(|(_, annotation, _, _)| annotation.is_none())
+                    .map(|(name, _, _, _)| name.clone()));
+                checker.ref_assign_aliased_locals.extend(ref_assign_captures);
                 for stmt in body {
                     checker.check_stmt(stmt, &mut closure_sig.env)?;
                 }
@@ -1544,6 +1556,11 @@ impl Checker {
             self.callable_sigs.insert(var.to_string(), sig.clone());
         }
         Ok(sig)
+    }
+
+    /// Shares the nullsafe selection-chain check with by-reference receiver validation.
+    pub(crate) fn reference_receiver_uses_nullsafe(receiver: &Expr) -> bool {
+        expr_contains_nullsafe_member(receiver)
     }
 
     /// Returns `true` if `callee_ty` is a union containing both `Callable` and

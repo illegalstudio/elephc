@@ -445,6 +445,8 @@ pub(crate) struct Checker {
     /// Authoritative result type of each checked builtin call, keyed by call span.
     /// EIR lowering consumes this instead of reimplementing builtin return inference.
     pub builtin_call_types: HashMap<Span, PhpType>,
+    /// Native property reference plans retain checker facts across opaque argument effects.
+    pub array_push_property_plans: HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
     /// Caller locals converted to canonical boxed storage by a validated by-reference call.
     /// Scoped call sites keep recursive signature checking from changing another body's env.
     pub boxed_reference_outputs: HashMap<(String, Span), HashMap<String, PhpType>>,
@@ -516,6 +518,20 @@ pub(crate) struct Checker {
     /// A reference can escape through a callee, so the alias is permanent for the rest of the
     /// body.
     pub ref_aliased_locals: HashSet<String>,
+    /// Reference-aliased locals whose alias did not arise solely from a registry builtin call.
+    ///
+    /// Registry builtins can mutate by-reference arguments but do not retain their cells. Direct
+    /// PHP aliases, captures, by-reference parameters, foreach references, and user callees can
+    /// keep another path to the storage, so representation-changing writes must distinguish this
+    /// subset from the broader kill/retype conservatism in `ref_aliased_locals`.
+    pub non_builtin_ref_aliased_locals: HashSet<String>,
+    /// Locals joined by an explicit `=&` assignment in the current body.
+    ///
+    /// Unlike captures and by-reference parameters, these can retain native packed-array
+    /// storage through multiple local names, so a write must not widen only one view.
+    pub ref_assign_aliased_locals: HashSet<String>,
+    /// Earlier by-reference captures whose native element layout a later push must preserve.
+    pub array_push_capture_sites: HashMap<String, HashSet<Span>>,
     /// Current local bindings that alias a managed container entry whose physical cell payload
     /// is canonical boxed `Mixed`, even when the checker's logical value type is narrower.
     pub boxed_ref_aliased_locals: HashSet<String>,
@@ -528,6 +544,8 @@ pub(crate) struct Checker {
     /// re-bind skips these: backtrace frames read a parameter's argument value from the FIRST
     /// slot of that name, so splitting a parameter's binding would report a stale argument.
     pub local_parameter_names: HashSet<String>,
+    /// Untyped formal bindings that still load through the callee's boxed incoming storage.
+    pub boxed_parameter_locals: HashSet<String>,
     /// Names whose type was DECLARED in the current body by a `TypedAssign` local
     /// (`int $x = …`), and what each was declared AS. A declaration is a programmer contract
     /// and stays strict in both permissive and `--strict-locals` mode.
@@ -667,10 +685,14 @@ pub(crate) struct SavedLocalBindingScope {
     binding_depth: HashMap<String, u32>,
     narrowed_origins: HashMap<String, NarrowedLocalOrigin>,
     ref_aliased: HashSet<String>,
+    non_builtin_ref_aliased: HashSet<String>,
+    ref_assign_aliased: HashSet<String>,
+    array_push_capture_sites: HashMap<String, HashSet<Span>>,
     boxed_ref_aliased: HashSet<String>,
     boxed_ref_invalidations: Vec<HashSet<String>>,
     statics: HashSet<String>,
     parameters: HashSet<String>,
+    boxed_parameters: HashSet<String>,
     typed: HashMap<String, PhpType>,
     mixed_storage: HashSet<String>,
     guarded_unions: HashMap<String, PhpType>,
@@ -862,12 +884,18 @@ impl Checker {
             // origin would measure the closure's store against a binding it does not own.
             narrowed_origins: std::mem::take(&mut self.narrowed_local_origins),
             ref_aliased: std::mem::take(&mut self.ref_aliased_locals),
+            non_builtin_ref_aliased: std::mem::take(
+                &mut self.non_builtin_ref_aliased_locals,
+            ),
+            ref_assign_aliased: std::mem::take(&mut self.ref_assign_aliased_locals),
+            array_push_capture_sites: std::mem::take(&mut self.array_push_capture_sites),
             boxed_ref_aliased: std::mem::take(&mut self.boxed_ref_aliased_locals),
             boxed_ref_invalidations: std::mem::take(
                 &mut self.conditional_boxed_ref_invalidations,
             ),
             statics: std::mem::take(&mut self.static_local_names),
             parameters: std::mem::take(&mut self.local_parameter_names),
+            boxed_parameters: std::mem::take(&mut self.boxed_parameter_locals),
             typed: std::mem::take(&mut self.typed_local_names),
             // The mixed-storage marking describes ONE frame: a name boxed in the caller says
             // nothing about a same-named local in the callee, and leaking the set inward would
@@ -895,10 +923,14 @@ impl Checker {
         self.local_binding_depth = saved.binding_depth;
         self.narrowed_local_origins = saved.narrowed_origins;
         self.ref_aliased_locals = saved.ref_aliased;
+        self.non_builtin_ref_aliased_locals = saved.non_builtin_ref_aliased;
+        self.ref_assign_aliased_locals = saved.ref_assign_aliased;
+        self.array_push_capture_sites = saved.array_push_capture_sites;
         self.boxed_ref_aliased_locals = saved.boxed_ref_aliased;
         self.conditional_boxed_ref_invalidations = saved.boxed_ref_invalidations;
         self.static_local_names = saved.statics;
         self.local_parameter_names = saved.parameters;
+        self.boxed_parameter_locals = saved.boxed_parameters;
         self.typed_local_names = saved.typed;
         self.mixed_storage_locals = saved.mixed_storage;
         self.guarded_union_types = saved.guarded_unions;
@@ -1015,6 +1047,8 @@ impl Checker {
     /// captures, or reflected class of the binding that is gone — that is how a stale
     /// `$f()` signature would survive an `unset($f)`.
     pub(crate) fn clear_local_binding_metadata(&mut self, name: &str) {
+        self.boxed_parameter_locals.remove(name);
+        self.array_push_capture_sites.remove(name);
         self.invalidate_boxed_ref_alias_binding(name);
         self.closure_return_types.remove(name);
         self.callable_sigs.remove(name);
@@ -1057,11 +1091,74 @@ impl Checker {
     /// `sort(array: $a)` all reach the local behind the wrapper, and a shape one walker sees
     /// through while the other stops at is exactly how the checker and the pre-scan drift apart.
     pub(crate) fn record_reference_alias_root(&mut self, expr: &Expr) {
+        self.record_reference_alias_root_with_origin(expr, true);
+    }
+
+    /// Records a registry builtin's by-reference argument without treating it as an escaped cell.
+    pub(crate) fn record_builtin_reference_alias_root(&mut self, expr: &Expr) {
+        self.record_reference_alias_root_with_origin(expr, false);
+    }
+
+    /// Returns whether a local at an indexed receiver's root has a non-builtin reference alias.
+    pub(crate) fn local_has_non_builtin_reference_alias(&self, expr: &Expr) -> bool {
+        self.local_root_is_in_set(expr, &self.non_builtin_ref_aliased_locals)
+    }
+
+    /// Returns whether a local at an indexed receiver's root belongs to an explicit `=&` group.
+    pub(crate) fn local_has_ref_assign_alias(&self, expr: &Expr) -> bool {
+        self.local_root_is_in_set(expr, &self.ref_assign_aliased_locals)
+    }
+
+    /// Returns whether an earlier closure in this body can still read the receiver's native layout.
+    pub(crate) fn local_has_prior_array_capture(&self, expr: &Expr) -> bool {
+        let mut current = expr;
+        while let ExprKind::ArrayAccess { array, .. }
+        | ExprKind::NamedArg { value: array, .. }
+        | ExprKind::ErrorSuppress(array) = &current.kind { current = array; }
+        matches!(&current.kind, ExprKind::Variable(name) if self.array_push_capture_sites.contains_key(name))
+    }
+
+    /// Returns whether the local at an expression's root belongs to `names`.
+    fn local_root_is_in_set(&self, expr: &Expr, names: &HashSet<String>) -> bool {
+        let mut current = expr;
+        while let ExprKind::ArrayAccess { array: value, .. }
+        | ExprKind::NamedArg { value, .. }
+        | ExprKind::ErrorSuppress(value) = &current.kind
+        {
+            current = value;
+        }
+        matches!(&current.kind, ExprKind::Variable(name)
+            if names.contains(name))
+    }
+
+    /// Records the local root of an explicit `=&` source.
+    pub(crate) fn record_ref_assign_alias_root(&mut self, expr: &Expr) {
+        let mut current = expr;
+        while let ExprKind::ArrayAccess { array: value, .. }
+        | ExprKind::PropertyAccess { object: value, .. }
+        | ExprKind::NullsafePropertyAccess { object: value, .. }
+        | ExprKind::DynamicPropertyAccess { object: value, .. }
+        | ExprKind::NullsafeDynamicPropertyAccess { object: value, .. }
+        | ExprKind::ErrorSuppress(value)
+        | ExprKind::NamedArg { value, .. } = &current.kind
+        {
+            current = value;
+        }
+        if let ExprKind::Variable(name) = &current.kind {
+            self.ref_assign_aliased_locals.insert(name.clone());
+        }
+    }
+
+    /// Records the local root of a reference-producing expression and its origin category.
+    fn record_reference_alias_root_with_origin(&mut self, expr: &Expr, non_builtin: bool) {
         let mut current = expr;
         loop {
             match &current.kind {
                 ExprKind::Variable(name) => {
                     self.ref_aliased_locals.insert(name.clone());
+                    if non_builtin {
+                        self.non_builtin_ref_aliased_locals.insert(name.clone());
+                    }
                     return;
                 }
                 ExprKind::ArrayAccess { array: base, .. }
@@ -1341,6 +1438,7 @@ fn check_types_on_compiler_stack(
         warnings,
         throw_access_sites: checker.throw_access_sites,
         builtin_call_types: checker.builtin_call_types,
+        array_push_property_plans: checker.array_push_property_plans,
         boxed_reference_promotion_sites: checker.boxed_reference_promotion_sites,
         buffer_read_sites: checker.buffer_read_observations.into_iter()
             .filter_map(|(span, buffer)| buffer.then_some(span)).collect(),

@@ -2,7 +2,7 @@
 title: "mb_regex_encoding() - internals"
 description: "Compiler internals for mb_regex_encoding(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 882
+  order: 888
 ---
 
 ## `mb_regex_encoding()` - internals

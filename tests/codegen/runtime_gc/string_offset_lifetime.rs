@@ -12,6 +12,42 @@ use crate::support::{
     selected_function_assembly,
 };
 
+/// Final Mixed storage retires detached receiver copies across reads, returns and throws.
+#[test]
+fn test_string_offset_lifetime_widened_local_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function widenedOffsetBytes(): string { return str_repeat("AB", 32); }
+function widenedOffsetReturn(bool $keep): string {
+    for ($i = 0; $i < 4; $i++) { $bytes = widenedOffsetBytes(); }
+    if ($keep) { return $bytes[2]; }
+    unset($bytes);
+    return "";
+}
+function widenedOffsetIndex(): int { throw new Error("index"); }
+function widenedOffsetConsumer(string $byte): void { throw new Error("consumer"); }
+for ($i = 0; $i < 4; $i++) { $bytes = widenedOffsetBytes(); }
+$stored = $bytes[1];
+echo ord($bytes[2]), ":", isset($bytes[500]) ? "yes" : "no", ":", widenedOffsetReturn(true), "\n";
+try { widenedOffsetConsumer($bytes[2]); } catch (Error $error) { echo $error->getMessage(), "\n"; }
+try { echo $bytes[widenedOffsetIndex()]; } catch (Error $error) { echo $error->getMessage(), "\n"; }
+set_error_handler(function(int $level, string $message): bool { throw new Error("warning"); });
+try { echo $bytes[500]; } catch (Error $error) { echo $error->getMessage(), "\n"; }
+restore_error_handler();
+unset($bytes);
+echo $stored, "\n";
+unset($stored, $error);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "65:no:A\nconsumer\nindex\nwarning\nB\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Storage-aware receiver ownership also holds when EIR optimizations are disabled.
+#[test]
+fn test_string_offset_lifetime_widened_local_owners_without_ir_opt() {
+    crate::support::without_ir_opt(test_string_offset_lifetime_widened_local_owners);
+}
+
 /// Borrowed local views are pinned before a later argument replaces their source string.
 #[test]
 fn test_string_offset_lifetime_later_source_replacement() {

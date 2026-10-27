@@ -550,6 +550,7 @@ def validate_presentation_overrides(repo: Path, entries: list[dict]) -> None:
 # ``prelude_contracts_match_their_injected_signatures`` proves each contract is declared
 # by exactly one of them.
 PRELUDE_SOURCES: dict[str, tuple[str | tuple[str, ...], str, str]] = {
+    "io": ("fileinfo_prelude/build.rs", "fileinfo", "crates/elephc-builtin-contract/src/catalog_surfaces.rs"),
     "tokenizer": ("tokenizer_prelude.rs", "tokenizer", "crates/elephc-builtin-contract/src/catalog_data.rs"),
     "curl": (
         "curl_prelude.rs",

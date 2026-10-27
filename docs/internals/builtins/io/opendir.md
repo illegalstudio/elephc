@@ -2,7 +2,7 @@
 title: "opendir() - internals"
 description: "Compiler internals for opendir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 355
+  order: 361
 ---
 
 ## `opendir()` - internals

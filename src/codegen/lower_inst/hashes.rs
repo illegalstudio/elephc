@@ -518,6 +518,28 @@ pub(super) fn lower_hash_unset(ctx: &mut FunctionContext<'_>, inst: &Instruction
 pub(super) fn lower_hash_append(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let hash = expect_operand(inst, 0)?;
     let value = expect_operand(inst, 1)?;
+    let receiver = ReceiverPlace::resolve(ctx, hash)?;
+    append_one_value_to_hash(ctx, hash, value, inst, &receiver, false)?;
+    ctx.store_result_value(hash)?;
+    receiver.store_back_container_writeback(ctx, hash)?;
+    ctx.writeback_global_array_source(hash)?;
+    Ok(())
+}
+
+/// Appends one value at PHP's next automatic integer key: the `$hash[] = $value` primitive,
+/// without the receiver bookkeeping around it.
+///
+/// Shared with `array_push()` so both forms retain PHP append history and target parity.
+/// The receiver owner is prepared only after checking the next key, so an exhausted index
+/// cannot leak a reference. The caller publishes each result before inserting the next value.
+pub(super) fn append_one_value_to_hash(
+    ctx: &mut FunctionContext<'_>,
+    hash: ValueId,
+    value: ValueId,
+    inst: &Instruction,
+    receiver: &ReceiverPlace,
+    repeated: bool,
+) -> Result<()> {
     let hash_ty = ctx.value_php_type(hash)?;
     require_hash(hash_ty.clone(), inst)?;
     let storage_value_ty = assoc_value_type(&hash_ty, inst)?;
@@ -526,16 +548,10 @@ pub(super) fn lower_hash_append(ctx: &mut FunctionContext<'_>, inst: &Instructio
         &storage_value_ty,
         inst,
     )?;
-    let receiver = ReceiverPlace::resolve(ctx, hash)?;
-    receiver.prepare_consuming_storeback(ctx, hash)?;
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_hash_append_aarch64(ctx, hash, value, &value_ty, &storage_value_ty)?,
-        Arch::X86_64 => lower_hash_append_x86_64(ctx, hash, value, &value_ty, &storage_value_ty)?,
+        Arch::AArch64 => lower_hash_append_aarch64(ctx, hash, value, &value_ty, &storage_value_ty, receiver, repeated),
+        Arch::X86_64 => lower_hash_append_x86_64(ctx, hash, value, &value_ty, &storage_value_ty, receiver, repeated),
     }
-    ctx.store_result_value(hash)?;
-    receiver.store_back_container_writeback(ctx, hash)?;
-    ctx.writeback_global_array_source(hash)?;
-    Ok(())
 }
 
 /// Lowers associative+associative array union through the shared hash helper.
@@ -785,6 +801,8 @@ fn lower_hash_append_aarch64(
     value: ValueId,
     value_ty: &PhpType,
     storage_value_ty: &PhpType,
+    receiver: &ReceiverPlace,
+    repeated: bool,
 ) -> Result<()> {
     let value_ty = &hash_payload_value_type(ctx, value, value_ty, storage_value_ty)?;
     ctx.emitter.instruction("sub sp, sp, #32");                                 // reserve temporary slots for the hash pointer and computed append key
@@ -792,6 +810,11 @@ fn lower_hash_append_aarch64(
     ctx.emitter.instruction("str x0, [sp, #0]");                                // preserve the hash pointer across value materialization
     abi::emit_call_label(ctx.emitter, "__rt_hash_next_index");
     ctx.emitter.instruction("str x0, [sp, #8]");                                // preserve the checked next index before acquiring a value owner
+    if repeated {
+        receiver.reprepare_consuming_storeback(ctx, hash)?;
+    } else {
+        receiver.prepare_consuming_storeback(ctx, hash)?;
+    }
     materialize_hash_value_aarch64(ctx, value, value_ty, storage_value_ty)?;
     ctx.emitter.instruction("ldr x0, [sp, #0]");                                // pass the hash pointer to hash_set
     ctx.emitter.instruction("ldr x1, [sp, #8]");                                // pass the computed integer append key
@@ -846,6 +869,8 @@ fn lower_hash_append_x86_64(
     value: ValueId,
     value_ty: &PhpType,
     storage_value_ty: &PhpType,
+    receiver: &ReceiverPlace,
+    repeated: bool,
 ) -> Result<()> {
     let value_ty = &hash_payload_value_type(ctx, value, value_ty, storage_value_ty)?;
     ctx.emitter.instruction("sub rsp, 32");                                     // reserve aligned slots for the hash pointer and computed append key
@@ -853,6 +878,11 @@ fn lower_hash_append_x86_64(
     ctx.emitter.instruction("mov QWORD PTR [rsp], rdi");                        // preserve the hash pointer across value materialization
     abi::emit_call_label(ctx.emitter, "__rt_hash_next_index");
     ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");                    // preserve the checked next index before acquiring a value owner
+    if repeated {
+        receiver.reprepare_consuming_storeback(ctx, hash)?;
+    } else {
+        receiver.prepare_consuming_storeback(ctx, hash)?;
+    }
     materialize_hash_value_x86_64(ctx, value, value_ty, storage_value_ty)?;
     ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                        // pass the hash pointer to hash_set
     ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");                    // pass the computed integer append key

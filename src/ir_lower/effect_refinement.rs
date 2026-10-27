@@ -133,6 +133,12 @@ fn all_functions(module: &Module) -> impl Iterator<Item = &Function> {
 /// Computes the caller-visible union of instruction and terminator effects for one body.
 fn summarize_function(function: &Function, context: &RefinementContext<'_>) -> Effects {
     let mut effects = Effects::PURE;
+    let borrowed_roots = if context.has_dynamic_class_barrier {
+        // Dynamic scope operations may write a parameter by name instead of a visible slot op.
+        std::collections::HashSet::new()
+    } else {
+        crate::ir::parameter_roots::borrowed_parameter_roots(function)
+    };
     // A literal false signature has a throwing call-boundary guard even if its body is empty.
     if function.params.iter().any(|parameter| parameter.php_type == PhpType::False) {
         effects |= Effects::READS_HEAP | Effects::ALLOC_HEAP | Effects::MAY_THROW | Effects::MAY_DEOPT;
@@ -143,7 +149,16 @@ fn summarize_function(function: &Function, context: &RefinementContext<'_>) -> E
         if instruction.op == Op::ConcatReset {
             continue;
         }
-        effects |= refined_instruction_effects(function, instruction, context);
+        if instruction.op == Op::ReleaseLocalSlot
+            && matches!(instruction.immediate, Some(Immediate::LocalSlot(slot))
+                if borrowed_roots.contains(&slot))
+        {
+            // The unchanged parameter or its caller still owns the payload at this release.
+            // Keep the instruction's full effects; only the caller-visible summary is narrower.
+            effects |= Op::Release.default_effects();
+        } else {
+            effects |= refined_instruction_effects(function, instruction, context);
+        }
     }
     for block in &function.blocks {
         effects |= match block.terminator.as_ref() {

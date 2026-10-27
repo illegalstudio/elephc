@@ -2,7 +2,7 @@
 title: "iconv_set_encoding()"
 description: "Sets the input, output, or internal character encoding."
 sidebar:
-  order: 832
+  order: 838
 ---
 
 ## iconv_set_encoding()

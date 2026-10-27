@@ -2,7 +2,7 @@
 title: "imagesx() - internals"
 description: "Compiler internals for imagesx(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 534
+  order: 540
 ---
 
 ## `imagesx()` - internals

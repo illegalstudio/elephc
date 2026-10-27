@@ -10,6 +10,26 @@
 
 use crate::support::*;
 
+/// A throwing PHP warning handler retires its boxed argument array before a same-frame catch.
+#[test]
+fn test_core_error_handler_throw_releases_argument_array() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+set_error_handler(function(int $level, string $message, string $file, int $line): bool {
+    throw new RuntimeException($message);
+});
+for ($i = 0; $i < 3; $i++) {
+    try { trigger_error("warning " . $i, E_USER_WARNING); }
+    catch (RuntimeException $error) { echo $error->getMessage(), "|"; }
+}
+restore_error_handler();
+unset($error);
+echo "done";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "warning 0|warning 1|warning 2|done", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Throwing captured destructors do not skip previous-handler restoration or leave detached owners.
 #[test]
 fn test_core_handler_restore_finishes_cleanup_before_propagating_destructor_throw() {

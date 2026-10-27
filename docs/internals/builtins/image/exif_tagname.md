@@ -2,7 +2,7 @@
 title: "exif_tagname() - internals"
 description: "Compiler internals for exif_tagname(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 450
+  order: 456
 ---
 
 ## `exif_tagname()` - internals

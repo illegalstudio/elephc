@@ -2,7 +2,7 @@
 title: "ptr_read_f32() - internals"
 description: "Compiler internals for ptr_read_f32(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 750
+  order: 756
 ---
 
 ## `ptr_read_f32()` - internals

@@ -106,6 +106,9 @@ fn eval_call_with_error_name(
     }
     // The xml surface forwards to the host's compiled prelude; the source-level path keeps
     // `xml_parse_into_struct()`'s by-reference outputs and named arguments intact.
+    if eval_fileinfo_builtin_name(name) {
+        return eval_builtin_fileinfo_call(name, args, context, scope, values);
+    }
     if eval_xml_builtin_name(name) {
         return eval_builtin_xml_call(name, args, context, scope, values);
     }

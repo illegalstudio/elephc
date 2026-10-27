@@ -2,7 +2,7 @@
 title: "error_log() - internals"
 description: "Compiler internals for error_log(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 995
+  order: 1001
 ---
 
 ## `error_log()` - internals

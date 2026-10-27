@@ -2,7 +2,7 @@
 title: "fpassthru() - internals"
 description: "Compiler internals for fpassthru(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 323
+  order: 328
 ---
 
 ## `fpassthru()` - internals

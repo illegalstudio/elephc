@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3180 constants).
 
-Overall coverage: functions **997 / 2169** (46%), classes **185 / 329** (56%), constants **1341 / 3180** (42%).
+Overall coverage: functions **1003 / 2169** (46%), classes **186 / 329** (57%), constants **1352 / 3180** (43%).
 
 ## Coverage by PHP module
 
@@ -30,7 +30,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `enchant` | 0 / 25 · 0% | 0 / 2 · 0% | 0 / 3 · 0% |
 | [`exif`](./image.md#functions) | 4 / 4 · 100% | - | 1 / 1 · 100% |
 | `ffi` | - | 0 / 5 · 0% | - |
-| `fileinfo` | 0 / 6 · 0% | 0 / 1 · 0% | 0 / 11 · 0% |
+| [`fileinfo`](./fileinfo.md#functions) | 6 / 6 · 100% | 1 / 1 · 100% | 11 / 11 · 100% |
 | `filter` | 0 / 7 · 0% | 0 / 2 · 0% | 0 / 56 · 0% |
 | `ftp` | 0 / 36 · 0% | 0 / 1 · 0% | 0 / 11 · 0% |
 | [`gd`](./image.md#functions) | 83 / 106 · 78% | 1 / 2 · 50% | 67 / 89 · 75% |
@@ -160,6 +160,7 @@ elephc also provides 91 symbols from PECL extensions php-src does not bundle, wh
 | [cURL](./curl.md) ([PHP](https://www.php.net/manual/en/book.curl.php)) | ✅ Supported | All 35 functions, 6 classes and 689 constants on a pinned static libcurl 8.21.0; declare the managed curl package (elephc native add curl). 260 of 271 CURLOPT_* implemented, the rest rejected with PHP's warning. eval() covers the easy, multi and share interfaces. The coverage row counts the 34 shared-contract functions; curl_file_create() is a plain prelude alias of the CURLFile constructor with no registry binding on either backend, so it carries no shared contract and is the one function the row does not count. |
 | OpenSSL ([PHP](https://www.php.net/manual/en/book.openssl.php)) | 🟡 Partial | Encrypt/decrypt subset |
 | [OPcache](./opcache.md) ([PHP](https://www.php.net/manual/en/book.opcache.php)) | 🟡 Partial | Compiled-script manifest plus a runtime parsed-script cache for dynamic include/require through eval(), with optional persistent file caching; ordinary code remains AOT-compiled and there is no tracing JIT |
+| [File information](./fileinfo.md) ([PHP](https://www.php.net/manual/en/book.fileinfo.php)) | ✅ Supported | Six functions, finfo and eleven constants, backed by pinned static libmagic 5.46 with an embedded database; native and eval use the same declarations. Declare the libmagic native package; --with-fileinfo enables opaque dynamic use. |
 
 ## Beyond PHP
 

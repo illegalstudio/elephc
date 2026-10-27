@@ -2,7 +2,7 @@
 title: "mb_strstr()"
 description: "Returns text before or from the first matching substring, or false."
 sidebar:
-  order: 900
+  order: 906
 ---
 
 ## mb_strstr()
