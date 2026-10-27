@@ -614,6 +614,9 @@ pub(super) fn property_existence_magic_class(
     magic: &str,
 ) -> Option<String> {
     let class_name = instance_callable_object_class(ctx, object)?;
+    if crate::types::builtin_classes::native_property_method(
+        &class_name, property, elephc_builtin_contract::ObjectProperty::Probe, ctx.classes,
+    ).is_some() { return None; }
     let class_info = ctx.classes.get(&class_name)?;
     if property_is_accessible_for_ir(ctx, &class_name, class_info, property) {
         return None;

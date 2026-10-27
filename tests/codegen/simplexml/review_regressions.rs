@@ -467,7 +467,39 @@ unset($updates, $existingUpdate, $attributeUpdate, $liveUpdate, $offsetUpdate, $
         .replace("__CAPTURE_LIFETIMES__", &native_captures);
     let runtime_updates = updates.replace("__EXPRESSION_UPDATES__", "")
         .replace("__CAPTURE_LIFETIMES__", &runtime_captures);
+    let quiet_probes = r####"
+$quietXml = simplexml_load_string('<r id="1"><a>x</a></r>', 'ReviewQuietOwnerXml');
+$quietAttributes = $quietXml->attributes();
+$quietName = 'a';
+echo 's|';
+var_dump(isset($quietXml->a), isset($quietXml->{$quietName}), isset($quietXml['id']), isset($quietXml[0]), isset($quietXml[-1]));
+var_dump(isset($quietAttributes->missing), $quietAttributes->missing);
+echo 'm|'; reviewQuietOwnerMixed($quietXml);
+echo $quietXml->missing ?? 'fb', '|c|', $quietXml->a ?? 'fb', '|e|';
+var_dump(empty($quietXml->a), empty($quietXml->{$quietName}), empty($quietXml['id']));
+echo 'u|'; unset($quietAttributes, $quietXml); echo 'end|';
+reviewNativeHookCoalesce();
+"####;
     let declarations = r####"<?php
+class ReviewQuietOwnerXml extends SimpleXMLElement {
+    public function __destruct() { echo 'D|'; }
+}
+function reviewQuietOwnerMixed(mixed $node): void {
+    $name = 'a';
+    var_dump(isset($node->a), isset($node->{$name}), isset($node['id']), isset($node[0]));
+}
+class ReviewTrueHookXml extends SimpleXMLElement {
+    public function __isset(string $name): bool { echo 'wrong-isset|'; return true; }
+    public function __get(string $name): mixed { echo 'wrong-get|'; return 'wrong'; }
+    public function selfProbe(): mixed { return $this->missing ?? 'self-fb'; }
+}
+function reviewNullableHookCoalesce(?ReviewTrueHookXml $node): mixed { return $node->missing ?? 'nullable-fb'; }
+function reviewNativeHookCoalesce(): void {
+    $node = new ReviewTrueHookXml('<r><a>native</a></r>');
+    echo $node->missing ?? 'fallback', '|';
+    $node->added ??= 'v';
+    echo (string)$node->added, '|', $node->selfProbe(), '|', reviewNullableHookCoalesce($node), '|', reviewNullableHookCoalesce(null), '|';
+}
 class ReviewNumericZeroXml extends SimpleXMLElement {}
 function reviewWriteNestedXml(mixed $node, string $name): void { $node->opaque->{$name}->leaf = 'boxed'; }
 function reviewThrowWriteName(): string { throw new RuntimeException('write-name'); }
@@ -559,6 +591,7 @@ stream_filter_register('xml.review.throw', 'XmlReviewThrowFilter');
     let eval_filters = filters.replace('\\', "\\\\").replace('\'', "\\'");
     let eval_semantics = semantics.replace('\\', "\\\\").replace('\'', "\\'");
     let eval_updates = runtime_updates.replace('\\', "\\\\").replace('\'', "\\'");
+    let eval_quiet_probes = quiet_probes.replace('\\', "\\\\").replace('\'', "\\'");
     let source = format!("{declarations}
         if ($argc === 1) {{ {names} }}
         elseif ($argc === 2) {{ $source = $argc > 0 ? '{eval_names}' : ''; eval($source); }}
@@ -566,6 +599,8 @@ stream_filter_register('xml.review.throw', 'XmlReviewThrowFilter');
         elseif ($argc === 8) {{ $source = $argc > 0 ? '{eval_semantics}' : ''; eval($source); }}
         elseif ($argc === 9) {{ {native_updates} }}
         elseif ($argc === 10) {{ $source = $argc > 0 ? '{eval_updates}' : ''; eval($source); }}
+        elseif ($argc === 11) {{ {quiet_probes} }}
+        elseif ($argc === 12) {{ $source = $argc > 0 ? '{eval_quiet_probes}' : ''; eval($source); }}
         else {{
             set_error_handler(function(int $level, string $message): bool {{ return true; }});
             $constructor = $argc === 4 || $argc === 6;
@@ -573,7 +608,7 @@ stream_filter_register('xml.review.throw', 'XmlReviewThrowFilter');
             else {{ $source = $argc > 0 ? '{eval_filters}' : ''; eval($source); }}
             restore_error_handler();
         }}");
-    let args: Vec<_> = (0..10).map(|count| vec!["x"; count]).collect();
+    let args: Vec<_> = (0..12).map(|count| vec!["x"; count]).collect();
     let argvs: Vec<_> = args.iter().map(Vec::as_slice).collect();
     let runs = compile_and_run_with_heap_debug_per_argv(&source, &argvs);
     let names_expected = "<?xml version=\"1.0\"?>\n<r xmlns:p=\"urn:p\" at=\"base\" p:at=\"literal\"><p:q>value</p:q><a:b><c>nested</c></a:b><p:q>second</p:q></r>\n1:value:second:0|base:literal:a:b|method:qualified|:a|SimpleXMLElement::addAttribute(): Attribute requires prefix for namespace|SimpleXMLElement::addAttribute(): Attribute already exists|<?xml version=\"1.0\"?>\n<r xmlns:p=\"urn:p\" at=\"base\" p:at=\"literal\" :c=\"1\"><p:q>value</p:q><a:b><c>nested</c></a:b><p:q>second</p:q><p:method>qualified</p:method><:a>leading</:a></r>\n";
@@ -582,7 +617,8 @@ stream_filter_register('xml.review.throw', 'XmlReviewThrowFilter');
     let semantics_expected = "A:B|{\"a\":\"urn:a\",\"b\":\"urn:b\",\"\":\"\"}|{\"a\":\"urn:a\"}|{\"a\":\"urn:a\"}|{\"a\":\"urn:a\"}|{\"b\":\"urn:b\"}|[]|simplexml_load_string(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, MissingXmlReviewClass given|simplexml_load_file(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, MissingXmlReviewClass given|simplexml_import_dom(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, MissingXmlReviewClass given|simplexml_load_string(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, stdClass given|simplexml_load_file(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, stdClass given|simplexml_import_dom(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, stdClass given|float(-0)\nfloat(-0)\nfloat(0)\nfloat(0)\nfloat(-0)\n0|original:copy|1|<a><b>copy</b></a>|NULL\nNULL\nNULL\nNULL\n1:1|written|deep|four|attribute|tail|dynamic|boxed|<sum><deep><leaf/></deep></sum>|1|1|write-name:0|NULL\nNULL\n";
     let updates_expected = "<?xml version=\"1.0\"?>\n<r><a><b><c/></b></a><d><e><f/></e></d><text/></r>\n|<?xml version=\"1.0\"?>\n<r><c>1</c></r>\n|<?xml version=\"1.0\"?>\n<r a=\"5\" b=\"\"/>\n|0|8|<?xml version=\"1.0\"?>\n<r><a><b>1</b></a><a><b>2</b></a></r>\n|get|get|set|count|int(11)\nget|get|direct|count|count|1110|gf|<?xml version=\"1.0\"?>\n<r><a><c>1</c></a></r>\nkf|<?xml version=\"1.0\"?>\n<r><a><c>1</c></a></r>\ngf|<?xml version=\"1.0\"?>\n<r><a><list>1</list></a></r>\nkf|<?xml version=\"1.0\"?>\n<r><a><c/></a></r>\nk|<?xml version=\"1.0\"?>\n<r><a><c/></a></r>\ng|<?xml version=\"1.0\"?>\n<r><a><b><c/></b></a></r>\nkf|1|kDreleased|kDreleased|kkNULL\nstring(2) \"aa\"\nIt's not possible to assign a complex type to properties, resource given|It's not possible to assign a complex type to attributes, resource given|It's not possible to assign a complex type to properties, resource given|It's not possible to assign a complex type to attributes, resource given|<?xml version=\"1.0\"?>\n<r id=\"old\"><a>old</a></r>\n|rhs|<?xml version=\"1.0\"?>\n<r><new/></r>\n|rhs|<?xml version=\"1.0\"?>\n<r><new><leaf>1</leaf></new></r>\n|rhs|name|<?xml version=\"1.0\"?>\n<r><new><leaf>1</leaf></new><converted>1</converted></r>\n|g|f|str|~name|after-plain|g|str|~name|after-compound|g|str|~name|after-incdec|g|f|str|~name|~text|after-name-text|kkf|~text|after-text|g|~name|capture-rhs|g|f|str|~name|capture-name|g|str|~name|after-keep|g|str|f|str|~name|after-fallback|g|str|~name|after-loop|g|str|~name|after-loop|~key|after-key|end-captures|string(1) \"6\"\nstring(1) \"6\"\nint(6)\nbool(true)\nstring(16) \"SimpleXMLElement\"\nstring(1) \"8\"\nstring(1) \"8\"\nint(10)\nint(9)\nint(1)\nint(1)\n<?xml version=\"1.0\"?>\n<r><c/><d/></r>\n|0|<?xml version=\"1.0\"?>\n<r><a>0</a></r>\n|write-name|<?xml version=\"1.0\"?>\n<r/>\n|0|<?xml version=\"1.0\"?>\n<r><a>0</a></r>\n|write-name|<?xml version=\"1.0\"?>\n<r/>\n|rhs-throw:0|2:main(): Cannot add element a number 1 when only 0 such elements exist|8:Indirect modification of overloaded element of SimpleXMLElement has no effect|Attempt to assign property \"b\" on null|<?xml version=\"1.0\"?>\n<r><a/></r>\n|2:main(): Cannot add element a number 3 when only 1 such elements exist|<?xml version=\"1.0\"?>\n<r><a/><a><b>3</b></a></r>\n|8:Indirect modification of overloaded element of ReviewNumericZeroXml has no effect|Attempt to assign property \"b\" on null|<?xml version=\"1.0\"?>\n<r><a>1</a></r>\n|";
     let eval_updates_expected = "<?xml version=\"1.0\"?>\n<r><a><b><c/></b></a><d><e><f/></e></d><text/></r>\n|<?xml version=\"1.0\"?>\n<r><c>1</c></r>\n|<?xml version=\"1.0\"?>\n<r a=\"5\" b=\"\"/>\n|0|8|<?xml version=\"1.0\"?>\n<r><a><b>1</b></a><a><b>2</b></a></r>\n|get|get|set|count|int(11)\nget|get|direct|count|count|1110|gf|<?xml version=\"1.0\"?>\n<r><a><c>1</c></a></r>\nkf|<?xml version=\"1.0\"?>\n<r><a><c>1</c></a></r>\ngf|<?xml version=\"1.0\"?>\n<r><a><list>1</list></a></r>\nkf|<?xml version=\"1.0\"?>\n<r><a><c/></a></r>\nk|<?xml version=\"1.0\"?>\n<r><a><c/></a></r>\ng|<?xml version=\"1.0\"?>\n<r><a><b><c/></b></a></r>\nkf|1|kDreleased|kDreleased|kkNULL\nstring(2) \"aa\"\nIt's not possible to assign a complex type to properties, resource given|It's not possible to assign a complex type to attributes, resource given|It's not possible to assign a complex type to properties, resource given|It's not possible to assign a complex type to attributes, resource given|<?xml version=\"1.0\"?>\n<r id=\"old\"><a>old</a></r>\n|rhs|<?xml version=\"1.0\"?>\n<r><new/></r>\n|rhs|<?xml version=\"1.0\"?>\n<r><new><leaf>1</leaf></new></r>\n|rhs|name|<?xml version=\"1.0\"?>\n<r><new><leaf>1</leaf></new><converted>1</converted></r>\n|g|f|str|~name|after-plain|g|str|~name|after-compound|g|str|~name|after-incdec|g|f|str|~name|~text|after-name-text|kkf|~text|after-text|g|~name|capture-rhs|g|f|str|~name|capture-name|g|str|~name|after-keep|g|str|f|str|~name|after-fallback|g|str|~name|after-loop|g|str|~name|after-loop|~key|after-key|end-captures|string(1) \"6\"\nstring(1) \"6\"\n2:Unknown: Cannot add element a number 1 when only 0 such elements exist|8:Indirect modification of overloaded element of SimpleXMLElement has no effect|Attempt to assign property \"b\" on null|<?xml version=\"1.0\"?>\n<r><a/></r>\n|2:Unknown: Cannot add element a number 3 when only 1 such elements exist|<?xml version=\"1.0\"?>\n<r><a/><a><b>3</b></a></r>\n|8:Indirect modification of overloaded element of ReviewNumericZeroXml has no effect|Attempt to assign property \"b\" on null|<?xml version=\"1.0\"?>\n<r><a>1</a></r>\n|";
-    let expected = [names_expected, names_expected, factory, constructor, factory, constructor, semantics_expected, semantics_expected, updates_expected, eval_updates_expected];
+    let quiet_expected = "s|bool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(false)\nbool(false)\nNULL\nm|bool(true)\nbool(true)\nbool(true)\nbool(true)\nfb|c|xD||e|bool(false)\nbool(false)\nbool(false)\nu|D|D|end|fallback|v|self-fb|nullable-fb|nullable-fb|";
+    let expected = [names_expected, names_expected, factory, constructor, factory, constructor, semantics_expected, semantics_expected, updates_expected, eval_updates_expected, quiet_expected, quiet_expected];
     assert_eq!(runs.len(), expected.len());
     for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {
         assert!(out.success, "mode={mode} stdout={:?} stderr={}", out.stdout, out.stderr);

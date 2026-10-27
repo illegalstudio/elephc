@@ -80,6 +80,7 @@ pub(super) fn dynamic(
     register_owned_call_operand(ctx, slot, expr.span);
     let method = if write_select { "__elephc_property_write_fetch" }
         else if mode == PropertyFetchMode::Read { "__elephc_property_get" }
+        else if mode == PropertyFetchMode::Isset { "__elephc_property_presence" }
         else { "__elephc_property_probe" };
     let result = dispatch(
         ctx, object, expr, PhpType::Mixed, known_native,

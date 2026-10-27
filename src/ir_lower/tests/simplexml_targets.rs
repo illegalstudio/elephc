@@ -12,6 +12,17 @@ fn verify_simplexml_target(target: &str) {
     let module = super::lower_source_at_for_target(r###"<?php
 debug_backtrace();
 $counterXml = new SimpleXMLElement('<r>2</r>');
+class TargetHookedCoalesceXml extends SimpleXMLElement {
+    public function __isset(string $name): bool { return true; }
+    public function __get(string $name): mixed { return 'wrong'; }
+    public function selfProbe(): mixed { return $this->missing ?? 'self-fallback'; }
+}
+function xmlNullableHookCoalesce(?TargetHookedCoalesceXml $node): mixed { return $node->missing ?? 'fallback'; }
+$hookedQuietXml = new TargetHookedCoalesceXml('<r/>');
+$hookedQuietXml->added ??= 'value';
+echo $hookedQuietXml->selfProbe(), xmlNullableHookCoalesce($hookedQuietXml);
+$quietPropertyName = 'added';
+var_dump(isset($hookedQuietXml->{$quietPropertyName}), isset($hookedQuietXml['id']));
 function xmlQuietScalarProbes(int $number): void {
     var_dump(isset($number->a), empty($number->{xmlComputedTargetName()}));
 }

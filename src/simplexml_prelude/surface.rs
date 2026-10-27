@@ -221,9 +221,12 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $handle = $this->__elephc_handle;
         $mode = elephc_xml_sx_int($handle, 5);
         if ($mode !== 1 && elephc_xml_sx_int($handle, 1) === 0) { return null; }
-        $selected = $this->__elephc_property_select($name);
-        if ($mode === 3 && elephc_xml_sx_int($selected->__elephc_handle, 1) === 0) { return null; }
-        return $selected;
+        $selected = elephc_xml_sx_select($handle, 2, $name, "", 0, 0);
+        if ($mode === 3 && elephc_xml_sx_int($selected, 1) === 0) {
+            elephc_xml_sx_free($selected);
+            return null;
+        }
+        return __elephc_simplexml_wrap($selected, get_class($this));
     }
     final public function __elephc_property_select(string $name): static {
         $handle = $this->__elephc_handle;
@@ -298,12 +301,17 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         if ($status === -2) { __elephc_simplexml_write_warning('Cannot assign to an array of nodes (duplicate subnodes or attr detected)', $caller); }
     }
     final public function __elephc_property_isset(string $name): bool {
-        $node = $this->__elephc_property_select($name);
-        $handle = $node->__elephc_handle;
-        return elephc_xml_sx_int($handle, 1) !== 0;
+        $handle = $this->__elephc_handle;
+        $selected = elephc_xml_sx_select($handle, 2, $name, "", 0, 0);
+        $present = elephc_xml_sx_int($selected, 1) !== 0;
+        elephc_xml_sx_free($selected);
+        return $present;
+    }
+    final public function __elephc_property_presence(string $name): ?bool {
+        return $this->__elephc_property_isset($name) ? true : null;
     }
     final public function __elephc_property_probe(string $name): mixed {
-        if (!$this->__elephc_property_isset($name)) { return null; }
+        if ($this->__elephc_property_presence($name) === null) { return null; }
         return $this->__elephc_property_get($name);
     }
     final public function __elephc_property_empty(string $name): bool {
@@ -336,7 +344,12 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         return __elephc_simplexml_wrap($selected, get_class($this));
     }
     final public function __elephc_dimension_isset(mixed $offset): bool {
-        return $this->__elephc_dimension_get($offset) !== null;
+        $handle = $this->__elephc_handle;
+        if (is_int($offset)) { $selected = elephc_xml_sx_select($handle, 4, "", "", 0, $offset); }
+        else { $selected = elephc_xml_sx_select($handle, 3, (string)$offset, "", 0, 0); }
+        $present = elephc_xml_sx_int($selected, 1) !== 0;
+        elephc_xml_sx_free($selected);
+        return $present;
     }
     final public function __elephc_dimension_select(mixed $offset): mixed {
         $selected = $this->__elephc_dimension_get($offset);
