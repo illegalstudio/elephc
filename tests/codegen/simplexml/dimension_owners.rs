@@ -48,7 +48,7 @@ unset($xml, $view);
 #[test]
 fn test_simplexml_dimension_write_owners_isolated_bundle() {
     if skip_without_xml_native("test_simplexml_dimension_write_owners_isolated_bundle") { return; }
-    let args: Vec<_> = (0..22).map(|count| vec!["x"; count]).collect();
+    let args: Vec<_> = (0..25).map(|count| vec!["x"; count]).collect();
     let argvs: Vec<_> = args.iter().map(Vec::as_slice).collect();
     let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(r#"<?php
 function appendIsolatedXmlMixed(mixed $view): void { $view[] = 'a'; }
@@ -119,12 +119,27 @@ elseif ($argc === 2) {
     set_error_handler(function(int $level, string $message): bool { return true; });
     $isolatedGlobalXml->item[isolatedGlobalXmlKey()] += isolatedGlobalXmlRhs();
     restore_error_handler(); echo count($isolatedGlobalXml->item), ':', (string)$isolatedGlobalXml->item;
-} else {
+} elseif ($argc === 22) {
     $source = $argc > 0 ? '$evalGlobalOwnerXml = new SimpleXMLElement("<r/>"); function evalGlobalOwnerKey(): int { global $evalGlobalOwnerXml; echo (int)isset($evalGlobalOwnerXml->item), "|"; return 1; } function evalGlobalOwnerRhs(): int { global $evalGlobalOwnerXml; echo (int)isset($evalGlobalOwnerXml->item), "|"; return 1; } set_error_handler(function(int $level, string $message): bool { return true; }); $evalGlobalOwnerXml->item[evalGlobalOwnerKey()] += evalGlobalOwnerRhs(); restore_error_handler(); echo count($evalGlobalOwnerXml->item), ":", (string)$evalGlobalOwnerXml->item;' : '';
     eval($source);
+} elseif ($argc === 23) {
+    $xml = new SimpleXMLElement('<old><item>1</item></old>'); $old = $xml;
+    $amount = (function() use (&$xml): int { $xml = new SimpleXMLElement('<new><item>5</item></new>'); return 1; })();
+    echo (string)$old->item, ':', (string)$xml->item;
+} elseif ($argc === 24) {
+    $xml = new SimpleXMLElement('<old><item>1</item></old>'); $old = $xml;
+    $rebindXml = function() use (&$xml): int { $xml = new SimpleXMLElement('<new><item>5</item></new>'); return 1; };
+    $xml->item[0] += $rebindXml();
+    unset($rebindXml);
+    echo (string)$old->item, ':', (string)$xml->item;
+} else {
+    $xml = new SimpleXMLElement('<old><item>1</item></old>'); $old = $xml;
+    $amount = (function() use (&$xml): int { $xml = new SimpleXMLElement('<new><item>5</item></new>'); return 1; })();
+    $xml->item[0] += $amount;
+    echo (string)$old->item, ':', (string)$xml->item;
 }
 "#, &argvs);
-    let expected = ["r", "null", "null", "null", "a", "a", "a", "a", "a", "append", "append", "a", "g", "h", "1:", "old:0|new:v", "1:6", "sold:0|snew:s", "2", "old:0|new:v", "0|0|1:", "0|0|1:"];
+    let expected = ["r", "null", "null", "null", "a", "a", "a", "a", "a", "append", "append", "a", "g", "h", "1:", "old:0|new:v", "1:6", "sold:0|snew:s", "2", "old:0|new:v", "0|0|1:", "0|0|1:", "1:5", "1:6", "1:6"];
     assert_eq!(runs.len(), expected.len());
     let mut failures = Vec::new();
     for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {
@@ -141,7 +156,7 @@ elseif ($argc === 2) {
         elephc::names::static_method_symbol("SimpleXMLElement", "__elephc_add"),
         elephc::names::function_symbol("freshIsolatedXmlMixed"),
     ];
-    symbols.extend((0..5).map(|index|
+    symbols.extend((0..8).map(|index|
         elephc::names::function_symbol(&format!("__eir_closure_main_{index}"))));
     assert!(failures.is_empty(), "{}\nDimension owner assembly:\n{}", failures.join("\n"), selected_function_assembly(&assembly, &symbols));
 }

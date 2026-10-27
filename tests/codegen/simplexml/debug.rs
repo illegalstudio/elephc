@@ -72,9 +72,8 @@ echo (int)str_contains($dump, "[\"k\"]=>\n  HOOK\nobject(EchoXmlDebug)#"), "\n";
 unset($node, $echoed, $result, $dump, $flag);
 "###;
     let quoted_body = body.replace('\\', "\\\\").replace('\'', "\\'");
-    let source = format!("<?php\n{definitions}\n{body}\n$source = $argc > 0 ? '{quoted_body}' : '';\neval($source);");
-    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(&source);
-    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    let source = format!("<?php\n{definitions}\n{body}\n$source = $argc === 1 ? '{quoted_body}' : '';\neval($source);");
+    let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(&source, &[&[], &["native-only"]]);
     let expected = r###""SimpleXMLElement Object\n(\n    [@attributes] => Array\n        (\n            [a] => 1\n        )\n\n    [b] => Array\n        (\n            [0] => 2\n            [1] => 3\n        )\n\n)\n"
 111
 \SimpleXMLElement::__set_state(array(
@@ -116,8 +115,14 @@ null-handler|after-null
 1|"string(5) \"inner\"\nArray\n(\n    [k] => CallbackXmlDebug Object\n        (\n            [visible] => Array\n(\n    [inside] => 7\n)\n\n            [zero] => 0\n        )\n\n)\n"
 1
 "###.replace(" =>\n", " => \n");
-    assert_eq!(out.stdout, expected.repeat(2));
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\nDebug composite assembly:\n{}", out.stderr, selected_function_assembly(&assembly, &["_main".into()]));
+    let mut failures = Vec::new();
+    for (mode, out) in runs.iter().enumerate() {
+        let expected = expected.repeat(if mode == 0 { 2 } else { 1 });
+        if !out.success || out.stdout != expected || !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
+            failures.push(format!("mode={mode} stdout={:?}\n{}", out.stdout, out.stderr));
+        }
+    }
+    assert!(failures.is_empty(), "{}\nDebug composite assembly:\n{}", failures.join("\n"), selected_function_assembly(&assembly, &["_main".into()]));
 }
 
 /// Throwing debug hooks bypass user handlers and remain fatal in AOT and dynamic eval.
@@ -168,30 +173,46 @@ class EvalNullXmlDebug extends SimpleXMLElement {
 }
 $node = new EvalXmlDebug('<r><ignored>parent</ignored></r>');
 echo json_encode(print_r($node, true)), "\n";
+if ($argc === 1 || $argc >= 3) {
 ob_start(); var_dump($node); $dump = ob_get_clean();
 echo (int)str_contains($dump, 'object(EvalXmlDebug)#'), (int)str_contains($dump, "[0]=>\n"), (int)str_contains($dump, '["k"]=>'), "\n";
+}
+if ($argc === 1 || $argc >= 4) {
 ob_start(); var_dump(new EvalGuardedXmlDebug('<r/>')); $dump = ob_get_clean();
 echo (int)(count(explode('GUARD|', $dump)) === 2), (int)str_contains($dump, '*RECURSION*'), "\n";
+}
+if ($argc === 1 || $argc >= 5) {
 $node = new EvalNullXmlDebug('<r/>');
 set_error_handler(function(int $level, string $message): bool {
     echo 'null:', $level, ':', (int)str_starts_with($message, 'Returning null from EvalNullXmlDebug::__debugInfo()'), '|'; return true;
 });
 echo json_encode(print_r($node, true)), "\n";
 restore_error_handler();
+}
+if ($argc === 1 || $argc >= 6) {
 set_error_handler(function(int $level, string $message): bool { throw new RuntimeException('eval-null'); });
 try { print_r($node, true); } catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
 restore_error_handler(); echo 'after', "\n";
+}
 unset($node, $dump);
 "###;
     let quoted = body.replace('\\', "\\\\").replace('\'', "\\'");
     let source = format!("<?php $anchor = new SimpleXMLElement('<r/>'); $source = $argc > 0 ? '{quoted}' : ''; eval($source); unset($anchor);");
-    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(&source);
-    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, r###""EvalXmlDebug Object\n(\n    [0] => zero\n    [k] => 1\n)\n"
+    let args: Vec<_> = (0..6).map(|count| vec!["x"; count]).collect();
+    let argvs: Vec<_> = args.iter().map(Vec::as_slice).collect();
+    let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(&source, &argvs);
+    let expected = r###""EvalXmlDebug Object\n(\n    [0] => zero\n    [k] => 1\n)\n"
 111
 11
 null:8192:1|"EvalNullXmlDebug Object\n(\n)\n"
 eval-null|after
-"###);
-    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\nDebug composite assembly:\n{}", out.stderr, selected_function_assembly(&assembly, &["_main".into()]));
+"###;
+    let mut failures = Vec::new();
+    for (mode, out) in runs.iter().enumerate() {
+        let expected = expected.lines().take(if mode == 0 { 5 } else { mode }).collect::<Vec<_>>().join("\n") + "\n";
+        if !out.success || out.stdout != expected || !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
+            failures.push(format!("mode={mode} stdout={:?} expected={expected:?}\n{}", out.stdout, out.stderr));
+        }
+    }
+    assert!(failures.is_empty(), "{}\nDebug composite assembly:\n{}", failures.join("\n"), selected_function_assembly(&assembly, &["_main".into()]));
 }
