@@ -15,10 +15,12 @@ mod compound;
 use compound::{compound_source, with_compound_value, write_ordinary_compound};
 
 /// Defers storage-only receiver chains while preserving early evaluation of computed receivers.
-fn deferred_property_receiver(object: &Expr) -> bool {
+fn deferred_property_receiver(ctx: &LoweringContext<'_, '_>, object: &Expr) -> bool {
     match &object.kind {
         ExprKind::Variable(_) | ExprKind::This | ExprKind::StaticPropertyAccess { .. } => true,
-        ExprKind::PropertyAccess { object, .. } => deferred_property_receiver(object),
+        ExprKind::PropertyAccess { object, .. } => deferred_property_receiver(ctx, object),
+        ExprKind::DynamicPropertyAccess { .. } | ExprKind::ArrayAccess { .. } =>
+            crate::ir_lower::expr::defer_native_property_write_receiver(ctx, object),
         _ => false,
     }
 }
@@ -36,7 +38,7 @@ pub(super) fn lower_property_array_push(
     }, span);
     if crate::ir_lower::expr::lower_weak_map_denied_append(ctx, &receiver, value, span) { return; }
     let mut roots = Vec::new();
-    let (mut receiver, value) = if deferred_property_receiver(object) {
+    let (mut receiver, value) = if deferred_property_receiver(ctx, object) {
         let value = lower_rooted_property_write_operand(ctx, value, &mut roots);
         let receiver = crate::ir_lower::expr::lower_static_property_write_chain(ctx, object, value, span);
         (receiver, value)
@@ -232,7 +234,7 @@ pub(super) fn lower_property_array_assign_with_update(
     let index_expression = index;
     let source_value = compound.map_or(value, |(_, rhs)| rhs);
     let mut roots = Vec::new();
-    let (mut receiver, index, value) = if deferred_property_receiver(object) && !known_buffer_property(ctx, object, property) {
+    let (mut receiver, index, value) = if deferred_property_receiver(ctx, object) && !known_buffer_property(ctx, object, property) {
         let source = match update {
             PropertyElementUpdate::Stored(stored) => PropertyWriteValue::Stored(stored),
             PropertyElementUpdate::Written | PropertyElementUpdate::IncDec(_) => {

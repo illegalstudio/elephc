@@ -19,6 +19,9 @@ pub(super) fn lower_assignment_expr(
     conditional_value_temp: Option<&str>,
     expr: &Expr,
 ) -> LoweredValue {
+    if let Some(result) = native_xml_updates::lower_assignment(
+        ctx, target, value, result_target, prelude, conditional_value_temp, expr,
+    ) { return result; }
     if let Some(result) = super::append_updates::lower(ctx, value, prelude) {
         return result;
     }
@@ -502,7 +505,16 @@ pub(super) fn lower_dynamic_property_assign(
     value: &Expr,
     span: Span,
 ) {
-    let (mut receiver, property, value) = if is_static_property_write_chain(object) {
+    if native_xml_updates::lower_plain_dynamic(ctx, object, property, value, span) { return; }
+    lower_dynamic_property_assign_prepared(ctx, object, property, value, span);
+}
+
+/// Emits a dynamic property assignment after any source-order receiver staging.
+pub(super) fn lower_dynamic_property_assign_prepared(
+    ctx: &mut LoweringContext<'_, '_>, object: &Expr, property: &Expr, value: &Expr, span: Span,
+) {
+    let (mut receiver, property, value) = if is_static_property_write_chain(object)
+        || defer_native_property_write_receiver(ctx, object) {
         let property = lower_expr(ctx, property);
         let property = property_access::coerce_runtime_property_name(ctx, property, span);
         let property = crate::ir_lower::ownership::persist_string_byte_view(ctx, property, Some(span));

@@ -300,7 +300,7 @@ $writeName = 'middle'; $writes->runtime->{$writeName}->leaf = 'dynamic';
 echo (string)$writes->runtime->middle->leaf, '|';
 reviewWriteNestedXml($writes, $writeName);
 echo (string)$writes->opaque->middle->leaf, '|';
-var_dump($writes->sum->deep->leaf += 1);
+$writes->sum->deep->leaf += 1; echo $writes->sum->asXML(), '|';
 echo (int)isset($writes->sum->deep->leaf), '|';
 $writes->increment->deep->leaf++; echo (int)isset($writes->increment->deep->leaf), '|';
 try { $writes->throwing->{reviewThrowWriteName()}->leaf = 'unused'; }
@@ -315,10 +315,95 @@ for ($iteration = 0; $iteration < 32; $iteration++) {
 unset($temporaryClone, $reads, $emptyAttributes, $dynamicName, $iteration);
 unset($prefixes, $declarationsXml, $className, $error, $zero, $negativeZero, $maybeZero, $copied);
 "####;
+    let update_expressions = r####"
+$counter = new SimpleXMLElement('<r><c>5</c></r>');
+var_dump(++$counter->c, ++$counter->c === 7);
+$previousCounter = $counter->c++;
+var_dump(get_class($previousCounter), (string)$previousCounter, (string)$counter->c);
+var_dump($counter->c += 2, --$counter->c);
+$missingCounter = new SimpleXMLElement('<r/>');
+var_dump($missingCounter->c += 1, ++$missingCounter->d);
+echo $missingCounter->asXML(), '|';
+$throwingUpdate = new SimpleXMLElement('<r/>');
+try { $throwingUpdate->absent->leaf += throw new RuntimeException('rhs-throw'); }
+catch (RuntimeException $updateError) { echo $updateError->getMessage(), ':', (int)isset($throwingUpdate->absent), '|'; }
+unset($counter, $previousCounter, $missingCounter, $throwingUpdate, $updateError);
+"####;
+    let updates = r####"
+set_error_handler(function(int $level, string $message): bool { throw new RuntimeException($message); });
+$updates = new SimpleXMLElement('<r/>');
+$updates->a->b->c += 1;
+$updates->d->e->f++;
+$updates->text .= 'suffix';
+echo $updates->asXML(), '|';
+$existingUpdate = new SimpleXMLElement('<r><c/></r>');
+$existingUpdate->c += 1; echo $existingUpdate->asXML(), '|';
+$attributeUpdate = new SimpleXMLElement('<r a="5"/>');
+$attributeUpdate->attributes()->a += 1;
+$attributeUpdate->attributes()->b += 1;
+echo $attributeUpdate->asXML(), '|';
+$liveUpdate = new SimpleXMLElement('<r/>');
+$liveUpdate->a->b->c += reviewCreateUpdateNode();
+echo (string)$liveUpdate->a->b->c, '|';
+$offsetUpdate = new SimpleXMLElement('<r/>');
+$offsetUpdate->a[0]->b = 1;
+$offsetUpdate->a[1]->b = 2;
+echo $offsetUpdate->asXML(), '|';
+$hookUpdate = new ReviewHookOuter();
+reviewWriteHookLabel($hookUpdate); echo $hookUpdate->child->label, '|';
+var_dump(reviewBumpHookCount($hookUpdate));
+$hookUpdate->child->label = 'direct'; echo $hookUpdate->child->label, '|';
+$hookUpdate->count += 1; echo $hookUpdate->count, '|';
+$lateName = 'old'; $lateUpdate = new SimpleXMLElement('<r/>');
+$lateUpdate->{$lateName} += reviewChangeWriteName();
+echo $lateUpdate->asXML(), '|';
+$lateName = 'old'; $lateUpdate = new SimpleXMLElement('<r/>');
+$lateUpdate->{$lateName}->leaf = reviewChangeWriteName();
+echo $lateUpdate->asXML(), '|';
+$nameObject = new ReviewWriteName();
+$lateUpdate->{$nameObject} = reviewChangeWriteName();
+echo $lateUpdate->asXML(), '|';
+unset($lateName, $lateUpdate, $nameObject);
+__EXPRESSION_UPDATES__
+restore_error_handler();
+set_error_handler(function(int $level, string $message): bool { echo $level, ':', $message, '|'; return true; });
+$badOffset = new SimpleXMLElement('<r/>');
+try { $badOffset->a[1]->b = 1; } catch (Error $offsetError) { echo $offsetError->getMessage(), '|'; }
+echo $badOffset->asXML(), '|';
+$appendedOffset = new SimpleXMLElement('<r><a/></r>');
+$appendedOffset->a[3]->b = 3;
+echo $appendedOffset->asXML(), '|';
+restore_error_handler();
+unset($updates, $existingUpdate, $attributeUpdate, $liveUpdate, $offsetUpdate, $hookUpdate, $badOffset, $appendedOffset, $offsetError);
+"####;
+    let native_updates = updates.replace("__EXPRESSION_UPDATES__", update_expressions);
+    let runtime_updates = updates.replace("__EXPRESSION_UPDATES__", "");
     let declarations = r####"<?php
 class ReviewNumericZeroXml extends SimpleXMLElement {}
 function reviewWriteNestedXml(mixed $node, string $name): void { $node->opaque->{$name}->leaf = 'boxed'; }
 function reviewThrowWriteName(): string { throw new RuntimeException('write-name'); }
+function reviewCreateUpdateNode(): int {
+    global $liveUpdate;
+    echo (int)isset($liveUpdate->a->b->c), '|';
+    $liveUpdate->a->b->c = 7;
+    return 1;
+}
+class ReviewWriteName {
+    public function __toString(): string { echo 'name|'; return 'converted'; }
+}
+function reviewChangeWriteName(): int {
+    global $lateName;
+    echo 'rhs|'; $lateName = 'new'; return 1;
+}
+class ReviewHookInner { public string $label = ''; }
+class ReviewHookOuter {
+    private ReviewHookInner $inner;
+    public ReviewHookInner $child { get { echo 'get|'; return $this->inner; } }
+    public int $count = 1 { get { echo 'count|'; return $this->count * 10; } }
+    public function __construct() { $this->inner = new ReviewHookInner(); }
+}
+function reviewWriteHookLabel(mixed $node): void { $node->child->label = 'set'; }
+function reviewBumpHookCount(mixed $node): int { return $node->count += 1; }
 function reviewNegateXmlMixed(mixed $value): mixed { return -$value; }
 function reviewNegateXmlSubclass(ReviewNumericZeroXml $value): mixed { return -$value; }
 class XmlReviewOtherFilter extends php_user_filter {
@@ -341,11 +426,14 @@ stream_filter_register('xml.review.throw', 'XmlReviewThrowFilter');
     let eval_names = names.replace('\\', "\\\\").replace('\'', "\\'");
     let eval_filters = filters.replace('\\', "\\\\").replace('\'', "\\'");
     let eval_semantics = semantics.replace('\\', "\\\\").replace('\'', "\\'");
+    let eval_updates = runtime_updates.replace('\\', "\\\\").replace('\'', "\\'");
     let source = format!("{declarations}
         if ($argc === 1) {{ {names} }}
         elseif ($argc === 2) {{ $source = $argc > 0 ? '{eval_names}' : ''; eval($source); }}
         elseif ($argc === 7) {{ {semantics} }}
         elseif ($argc === 8) {{ $source = $argc > 0 ? '{eval_semantics}' : ''; eval($source); }}
+        elseif ($argc === 9) {{ {native_updates} }}
+        elseif ($argc === 10) {{ $source = $argc > 0 ? '{eval_updates}' : ''; eval($source); }}
         else {{
             set_error_handler(function(int $level, string $message): bool {{ return true; }});
             $constructor = $argc === 4 || $argc === 6;
@@ -353,18 +441,21 @@ stream_filter_register('xml.review.throw', 'XmlReviewThrowFilter');
             else {{ $source = $argc > 0 ? '{eval_filters}' : ''; eval($source); }}
             restore_error_handler();
         }}");
-    let args: Vec<_> = (0..8).map(|count| vec!["x"; count]).collect();
+    let args: Vec<_> = (0..10).map(|count| vec!["x"; count]).collect();
     let argvs: Vec<_> = args.iter().map(Vec::as_slice).collect();
     let runs = compile_and_run_with_heap_debug_per_argv(&source, &argvs);
     let names_expected = "<?xml version=\"1.0\"?>\n<r xmlns:p=\"urn:p\" at=\"base\" p:at=\"literal\"><p:q>value</p:q><a:b><c>nested</c></a:b><p:q>second</p:q></r>\n1:value:second:0|base:literal:a:b|method:qualified|:a|SimpleXMLElement::addAttribute(): Attribute requires prefix for namespace|SimpleXMLElement::addAttribute(): Attribute already exists|<?xml version=\"1.0\"?>\n<r xmlns:p=\"urn:p\" at=\"base\" p:at=\"literal\" :c=\"1\"><p:q>value</p:q><a:b><c>nested</c></a:b><p:q>second</p:q><p:method>qualified</p:method><:a>leading</:a></r>\n";
     let factory = "create|other-close|drop|RuntimeException:filter|";
     let constructor = "create|other-close|drop|Exception:String could not be parsed as XML|RuntimeException|";
-    let semantics_expected = "A:B|{\"a\":\"urn:a\",\"b\":\"urn:b\",\"\":\"\"}|{\"a\":\"urn:a\"}|{\"a\":\"urn:a\"}|{\"a\":\"urn:a\"}|{\"b\":\"urn:b\"}|[]|simplexml_load_string(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, MissingXmlReviewClass given|simplexml_load_file(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, MissingXmlReviewClass given|simplexml_import_dom(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, MissingXmlReviewClass given|simplexml_load_string(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, stdClass given|simplexml_load_file(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, stdClass given|simplexml_import_dom(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, stdClass given|float(-0)\nfloat(-0)\nfloat(0)\nfloat(0)\nfloat(-0)\n0|original:copy|1|<a><b>copy</b></a>|NULL\nNULL\nNULL\nNULL\n1:1|written|deep|four|attribute|tail|dynamic|boxed|int(1)\n1|1|write-name:0|NULL\nNULL\n";
-    let expected = [names_expected, names_expected, factory, constructor, factory, constructor, semantics_expected, semantics_expected];
+    let semantics_expected = "A:B|{\"a\":\"urn:a\",\"b\":\"urn:b\",\"\":\"\"}|{\"a\":\"urn:a\"}|{\"a\":\"urn:a\"}|{\"a\":\"urn:a\"}|{\"b\":\"urn:b\"}|[]|simplexml_load_string(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, MissingXmlReviewClass given|simplexml_load_file(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, MissingXmlReviewClass given|simplexml_import_dom(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, MissingXmlReviewClass given|simplexml_load_string(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, stdClass given|simplexml_load_file(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, stdClass given|simplexml_import_dom(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, stdClass given|float(-0)\nfloat(-0)\nfloat(0)\nfloat(0)\nfloat(-0)\n0|original:copy|1|<a><b>copy</b></a>|NULL\nNULL\nNULL\nNULL\n1:1|written|deep|four|attribute|tail|dynamic|boxed|<sum><deep><leaf/></deep></sum>|1|1|write-name:0|NULL\nNULL\n";
+    let updates_expected = "<?xml version=\"1.0\"?>\n<r><a><b><c/></b></a><d><e><f/></e></d><text/></r>\n|<?xml version=\"1.0\"?>\n<r><c>1</c></r>\n|<?xml version=\"1.0\"?>\n<r a=\"5\" b=\"\"/>\n|0|8|<?xml version=\"1.0\"?>\n<r><a><b>1</b></a><a><b>2</b></a></r>\n|get|get|set|count|int(11)\nget|get|direct|count|count|1110|rhs|<?xml version=\"1.0\"?>\n<r><new/></r>\n|rhs|<?xml version=\"1.0\"?>\n<r><new><leaf>1</leaf></new></r>\n|rhs|name|<?xml version=\"1.0\"?>\n<r><new><leaf>1</leaf></new><converted>1</converted></r>\n|int(6)\nbool(true)\nstring(16) \"SimpleXMLElement\"\nstring(1) \"8\"\nstring(1) \"8\"\nint(10)\nint(9)\nint(1)\nint(1)\n<?xml version=\"1.0\"?>\n<r><c/><d/></r>\n|rhs-throw:0|2:main(): Cannot add element a number 1 when only 0 such elements exist|8:Indirect modification of overloaded element of SimpleXMLElement has no effect|Attempt to assign property \"b\" on null|<?xml version=\"1.0\"?>\n<r><a/></r>\n|2:main(): Cannot add element a number 3 when only 1 such elements exist|<?xml version=\"1.0\"?>\n<r><a/><a><b>3</b></a></r>\n|";
+    let eval_updates_expected = "<?xml version=\"1.0\"?>\n<r><a><b><c/></b></a><d><e><f/></e></d><text/></r>\n|<?xml version=\"1.0\"?>\n<r><c>1</c></r>\n|<?xml version=\"1.0\"?>\n<r a=\"5\" b=\"\"/>\n|0|8|<?xml version=\"1.0\"?>\n<r><a><b>1</b></a><a><b>2</b></a></r>\n|get|get|set|count|int(11)\nget|get|direct|count|count|1110|rhs|<?xml version=\"1.0\"?>\n<r><new/></r>\n|rhs|<?xml version=\"1.0\"?>\n<r><new><leaf>1</leaf></new></r>\n|rhs|name|<?xml version=\"1.0\"?>\n<r><new><leaf>1</leaf></new><converted>1</converted></r>\n|2:Unknown: Cannot add element a number 1 when only 0 such elements exist|8:Indirect modification of overloaded element of SimpleXMLElement has no effect|Attempt to assign property \"b\" on null|<?xml version=\"1.0\"?>\n<r><a/></r>\n|2:Unknown: Cannot add element a number 3 when only 1 such elements exist|<?xml version=\"1.0\"?>\n<r><a/><a><b>3</b></a></r>\n|";
+    let expected = [names_expected, names_expected, factory, constructor, factory, constructor, semantics_expected, semantics_expected, updates_expected, eval_updates_expected];
     assert_eq!(runs.len(), expected.len());
     for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {
         assert!(out.success, "mode={mode} stdout={:?} stderr={}", out.stdout, out.stderr);
         assert_eq!(out.stdout, expected, "mode={mode}: {}", out.stderr);
         assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "mode={mode}: {}", out.stderr);
+        assert!(!out.stderr.contains("Warning:"), "mode={mode}: {}", out.stderr);
     }
 }

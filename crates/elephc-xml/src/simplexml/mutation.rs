@@ -22,6 +22,17 @@ pub(super) enum AddError {
 }
 
 impl View {
+    /// Creates the sibling selected by an absent writable numeric offset.
+    pub(super) fn append_sibling(&self) -> Option<Self> {
+        let base = if matches!(self.scope, Scope::Children(_, None)) { self.identity } else { self.first()? };
+        let node = unsafe { ffi::append_sibling(base) };
+        if node.is_null() { return None; }
+        let mut view = self.with_scope(Scope::Node(node));
+        if unsafe { ffi::parent(node).is_null() } {
+            view._clone_owner = Some(Rc::new(CloneOwner { node, doc: self.doc.clone() }));
+        }
+        Some(view)
+    }
     /// Creates a missing named child and its missing ancestors for a chained write.
     pub(super) fn ensure_first(&self) -> Option<Node> {
         if let Some(node) = self.first() { return Some(node); }

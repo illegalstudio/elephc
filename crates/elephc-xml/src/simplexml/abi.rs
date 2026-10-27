@@ -184,12 +184,15 @@ fn projection_uses_items(node: Node) -> bool {
 /// Copies string conversion (0), local name (1), or XML serialization (2).
 #[no_mangle]
 pub extern "C" fn elephc_xml_sx_string(handle: i64, operation: i64) -> *const c_char {
-    guard(|| output(view(handle).and_then(|v| v.first().map(|n| unsafe { match operation {
+    guard(|| output(view(handle).and_then(|v| {
+        let node = if operation == 5 { (!v.identity.is_null()).then_some(v.identity) } else { v.first() };
+        node.map(|n| unsafe { match operation {
         0 => owned_string(ffi::text(n)), 1 => string(ffi::name(n)),
         2 => owned_string(ffi::dump(v.doc.raw, n)),
         3 => owned_string(ffi::full_text(n)), 4 => owned_string(ffi::dump_node(v.doc.raw, n)),
+        5 => string(ffi::name(n)),
         _ => String::new(),
-    } })).unwrap_or_default()))
+    } }) }).unwrap_or_default()))
 }
 /// Returns the indexed child visited by foreach and explicit iterator methods.
 #[no_mangle]
@@ -243,6 +246,7 @@ pub unsafe extern "C" fn elephc_xml_sx_mutate(handle: i64, operation: i64, key: 
                 }).unwrap_or_else(|error| error as i64),
             22 => v.first().map(|n| { v.assign_node(n, &text); 1 }).unwrap_or(0),
             23 => v.ensure_first().map(|node| insert(v.with_scope(Scope::Node(node)))).unwrap_or(0),
+            24 => v.append_sibling().map(insert).unwrap_or(0),
             _ => 0,
         }
     })

@@ -563,3 +563,25 @@ fn simplexml_stream_input_keeps_parser_url() {
         assert!(string(abi::elephc_xml_sx_diagnostics()).contains("I/O warning"));
     }
 }
+
+/// Writable offsets append same-name, same-namespace siblings and retain detached ownership.
+#[test]
+fn simplexml_writable_offset_siblings_keep_namespace_and_clone_owners() {
+    let root = parse(b"<r xmlns:p='urn:p'><p:a>one</p:a></r>", 0, "", false).unwrap();
+    let items = root.select(0, "", "urn:p", false, 0).select(2, "a", "", false, 0);
+    let added = items.append_sibling().unwrap();
+    assert_eq!(items.items().len(), 2);
+    assert_eq!(unsafe { string(ffi::name(added.first().unwrap())) }, "a");
+    assert_eq!(unsafe { string(ffi::ns(added.first().unwrap(), 0)) }, "urn:p");
+    added.assign_node(added.first().unwrap(), "two");
+    let child = items.select(4, "", "", false, 0).deep_clone().unwrap();
+    let orphan = child.append_sibling().unwrap();
+    assert!(unsafe { ffi::parent(orphan.first().unwrap()) }.is_null());
+    drop(child);
+    drop(added);
+    drop(items);
+    drop(root);
+    assert_eq!(unsafe { string(ffi::ns(orphan.first().unwrap(), 0)) }, "urn:p");
+    orphan.assign_node(orphan.first().unwrap(), "kept");
+    assert_eq!(unsafe { owned_string(ffi::text(orphan.first().unwrap())) }, "kept");
+}

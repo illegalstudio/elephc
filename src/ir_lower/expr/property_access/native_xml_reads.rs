@@ -24,6 +24,20 @@ pub(super) fn lower(
     )
 }
 
+/// Keeps named ordinary-object hooks when selecting a boxed native write receiver.
+pub(super) fn select(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, expr: &Expr,
+) -> LoweredValue {
+    let name = Expr::new(ExprKind::StringLiteral(property.into()), expr.span);
+    dispatch(
+        ctx, object, expr, PhpType::Mixed, false,
+        |ctx, receiver| lower_method_call_with_receiver(
+            ctx, receiver, "__elephc_property_write_fetch", &[name.clone()], Op::MethodCall, expr,
+        ),
+        |ctx, receiver| lower_property_get_without_native_dispatch(ctx, receiver, property, Op::PropGet, expr),
+    )
+}
+
 /// Tests an XML property without materializing a phantom child selection.
 pub(super) fn isset(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, expr: &Expr,
@@ -64,7 +78,7 @@ pub(super) fn dynamic(
     store_value_into_temp(ctx, &temp, PhpType::Str, property, expr.span);
     let slot = ctx.local_slots[&temp];
     register_owned_call_operand(ctx, slot, expr.span);
-    let method = if write_select { "__elephc_property_select" }
+    let method = if write_select { "__elephc_property_write_fetch" }
         else if mode == PropertyFetchMode::Read { "__elephc_property_get" }
         else { "__elephc_property_probe" };
     let result = dispatch(
@@ -87,7 +101,7 @@ pub(super) fn dynamic(
 }
 
 /// Joins the native getter or presence adapter with an ordinary-object fallback.
-fn dispatch(
+pub(in crate::ir_lower::expr) fn dispatch(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, expr: &Expr,
     result_type: PhpType, known_native: bool,
     native_call: impl FnOnce(&mut LoweringContext<'_, '_>, LoweredValue) -> LoweredValue,

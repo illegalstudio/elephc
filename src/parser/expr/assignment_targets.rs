@@ -192,6 +192,27 @@ pub(super) fn desugar_lvalue_incdec(
             }, span));
         }
     }
+    if matches!(target.kind, ExprKind::PropertyAccess { .. } | ExprKind::DynamicPropertyAccess { .. }) {
+        let old = crate::names::generated_local_name(&format!("__elephc_incdec_old_{}_{}", span.line, span.col));
+        let new = crate::names::generated_local_name(&format!("__elephc_incdec_new_{}_{}", span.line, span.col));
+        prelude.push(Stmt::new(StmtKind::Assign { name: old.clone(), value: target.clone() }, span));
+        prelude.push(Stmt::new(StmtKind::Assign {
+            name: new.clone(),
+            value: Expr::new(ExprKind::BinaryOp {
+                left: Box::new(Expr::new(ExprKind::Variable(old.clone()), span)),
+                op: if increment { BinOp::Add } else { BinOp::Sub },
+                right: Box::new(Expr::new(ExprKind::IntLiteral(1), span)),
+            }, span),
+        }, span));
+        let result = if prefix { new.clone() } else { old };
+        return Some(Expr::new(ExprKind::Assignment {
+            target: Box::new(target),
+            value: Box::new(Expr::new(ExprKind::Variable(new), span)),
+            result_target: Some(Box::new(Expr::new(ExprKind::Variable(result), span))),
+            prelude,
+            conditional_value_temp: None,
+        }, span));
+    }
     let mut write = lower_postfix_incdec_assignment(target.clone(), increment, span).ok()?;
     let value = if prefix {
         // Nested static incdec already captures its new value. Re-reading the place

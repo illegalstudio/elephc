@@ -10,6 +10,7 @@
 //! - Every retained operand is released after normal completion or an exception.
 
 use super::*;
+use super::property_write_receivers::{PreparedPropertyName, prepare_index, finish_name};
 
 /// Supplies a literal property or a computed member name at its original source position.
 pub(super) enum DimensionProperty<'a> {
@@ -25,18 +26,24 @@ pub(super) fn eval_property_dimension_write(
 ) -> Result<(), EvalStatus> {
     let mut operands = Vec::new();
     let mut result = (|| {
-        let early_object = if deferred_receiver(object) { None } else {
-            let object = eval_property_write_receiver(object, context, scope, values)?;
+        let mut receiver = Some(prepare_property_write_receiver(object, &mut operands, context, scope, values)?);
+        let property = match property {
+            DimensionProperty::Literal(name) => PreparedPropertyName::Literal(name.to_string()),
+            DimensionProperty::Dynamic(name) => PreparedPropertyName::Dynamic(
+                prepare_index(name, &mut operands, context, scope, values)?),
+        };
+        let (key, assigned) = stage_operands(index, value, &mut operands, context, scope, values)?;
+        let early = if matches!(object, EvalExpr::LoadVar(_)) { None } else {
+            let object = finish_property_write_receiver(receiver.take().ok_or(EvalStatus::RuntimeFatal)?, &mut operands, context, scope, values)?;
             operands.push(object);
             Some(object)
         };
         let property = match property {
-            DimensionProperty::Literal(name) => name.to_string(),
-            DimensionProperty::Dynamic(name) => eval_dynamic_member_name(name, context, scope, values)?,
+            PreparedPropertyName::Literal(name) => name,
+            PreparedPropertyName::Dynamic(name) => finish_name(name, &mut operands, context, scope, values)?,
         };
-        let (key, assigned) = stage_operands(index, value, &mut operands, context, scope, values)?;
-        let object = if let Some(object) = early_object { object } else {
-            let object = eval_property_write_receiver(object, context, scope, values)?;
+        let object = if let Some(object) = early { object } else {
+            let object = finish_property_write_receiver(receiver.take().ok_or(EvalStatus::RuntimeFatal)?, &mut operands, context, scope, values)?;
             operands.push(object);
             object
         };
@@ -67,15 +74,6 @@ fn stage_operands(
         Some(key)
     } else { early };
     Ok((key, assigned))
-}
-
-/// Recognizes storage-only chains whose fetches belong after assignment operands.
-fn deferred_receiver(object: &EvalExpr) -> bool {
-    match object {
-        EvalExpr::LoadVar(_) | EvalExpr::StaticPropertyGet { .. } => true,
-        EvalExpr::PropertyGet { object, .. } => deferred_receiver(object),
-        _ => false,
-    }
 }
 
 /// Selects a native writable child or ordinary property only after key and RHS evaluation.

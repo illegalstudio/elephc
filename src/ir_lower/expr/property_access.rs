@@ -9,10 +9,13 @@
 
 use super::*;
 
-mod native_xml_reads;
+pub(super) mod native_xml_reads;
 mod runtime_hooks;
+mod write_dimensions;
+pub(crate) use write_dimensions::lower_native_dimension_write_select;
 pub(super) mod write_select;
 pub(crate) use write_select::lower_property_write_receiver;
+pub(crate) use write_select::defer_native_property_write_receiver;
 pub(super) use write_select::lower_property_write_prelude;
 
 /// Borrows guarded XML storage, narrowing opaque object metadata while preserving boxed unions.

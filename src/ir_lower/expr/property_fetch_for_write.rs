@@ -52,7 +52,7 @@ pub(crate) fn lower_static_property_write_chain_with_operands(
         let borrowed = ctx.emit_value(Op::Borrow, vec![parent.value.value], None, ty,
             Op::Borrow.default_effects(), Some(span));
         ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
-        let child = lower_array_access_from_lowered_receiver(ctx, borrowed, index, expr);
+        let child = lower_native_dimension_write_select(ctx, borrowed, index, expr);
         return capture_static_write_child(ctx, parent, child, span);
     }
     if let ExprKind::DynamicPropertyAccess { object, property } = &expr.kind {

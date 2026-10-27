@@ -10,6 +10,46 @@
 
 use super::*;
 
+/// Applies a native read-modify-write after its RHS has been evaluated by the caller.
+pub(in crate::interpreter) fn update(
+    values: &mut impl RuntimeValueOps, object: RuntimeCellHandle, property: &str,
+    operation: EvalBinOp, right: RuntimeCellHandle, post: bool,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    use elephc_builtin_contract::ObjectPropertyUpdate as Update;
+    let operation = match operation {
+        EvalBinOp::Add => Update::Add, EvalBinOp::Sub => Update::Sub,
+        EvalBinOp::Mul => Update::Mul, EvalBinOp::Div => Update::Div,
+        EvalBinOp::Mod => Update::Mod, EvalBinOp::Pow => Update::Pow,
+        EvalBinOp::Concat => Update::Concat, EvalBinOp::BitAnd => Update::BitAnd,
+        EvalBinOp::BitOr => Update::BitOr, EvalBinOp::BitXor => Update::BitXor,
+        EvalBinOp::ShiftLeft => Update::ShiftLeft, EvalBinOp::ShiftRight => Update::ShiftRight,
+        _ => return Ok(None),
+    };
+    if !is_native(values, object, property)? { return Ok(None); }
+    let method = elephc_builtin_contract::lookup_class("SimpleXMLElement")
+        .and_then(|class| class.operators)
+        .and_then(|operators| operators.property_method(elephc_builtin_contract::ObjectProperty::Update))
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    let mut owners = Vec::new();
+    let result = (|| {
+        owners.push(values.string(property)?);
+        owners.push(values.int(operation as i64)?);
+        owners.push(values.bool_value(post)?);
+        values.operator_method_call(object.borrowed(), method,
+            vec![owners[0].borrowed(), right.borrowed(), owners[1].borrowed(), owners[2].borrowed()])
+    })();
+    let mut cleanup = Ok(());
+    for owner in owners.into_iter().rev() {
+        let released = values.release(owner);
+        if cleanup.is_ok() { cleanup = released; }
+    }
+    match (result, cleanup) {
+        (Err(status), _) => Err(status),
+        (Ok(value), Err(status)) => { let _ = values.release(value); Err(status) }
+        (Ok(value), Ok(())) => Ok(Some(value)),
+    }
+}
+
 /// Recognizes native XML properties without fetching or materializing a selection.
 pub(in crate::interpreter) fn is_native(
     values: &mut impl RuntimeValueOps, object: RuntimeCellHandle, property: &str,

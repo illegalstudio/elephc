@@ -309,4 +309,3 @@ fn emit_stream_filter_attach_user_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to the caller
 }
-

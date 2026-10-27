@@ -40,11 +40,19 @@ pub enum ObjectCast { Int, Float, Array }
 
 /// Native property operation that takes precedence over PHP slots and magic methods.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ObjectProperty { Get, Set, Isset, Unset, Probe, Empty, WriteFetch, WriteSelect }
+pub enum ObjectProperty { Get, Set, Isset, Unset, Probe, Empty, WriteFetch, WriteSelect, Update }
+
+/// Stable operation codes shared by compiled and eval native property updates.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(i64)]
+pub enum ObjectPropertyUpdate {
+    Add = 0, Sub = 1, Mul = 2, Div = 3, Mod = 4, Pow = 5, Concat = 6,
+    BitAnd = 7, BitOr = 8, BitXor = 9, ShiftLeft = 10, ShiftRight = 11,
+}
 
 /// Native dimension operations, independent of userland ArrayAccess method overrides.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ObjectDimension { Get, Set, Isset, Unset, Append }
+pub enum ObjectDimension { Get, Set, Isset, Unset, Append, WriteSelect }
 
 /// Methods implementing an internal class's native operators and clone protocol.
 #[derive(Clone, Copy, Debug)]
@@ -116,13 +124,15 @@ pub const SIMPLEXML_OPERATORS: ClassOperators = ClassOperators {
         (ObjectDimension::Set, "__elephc_dimension_set"),
         (ObjectDimension::Isset, "__elephc_dimension_isset"),
         (ObjectDimension::Unset, "__elephc_dimension_unset"),
-        (ObjectDimension::Append, "__elephc_append")],
+        (ObjectDimension::Append, "__elephc_append"),
+        (ObjectDimension::WriteSelect, "__elephc_dimension_select")],
     properties: &[(ObjectProperty::Get, "__elephc_property_get"),
         (ObjectProperty::Set, "__elephc_property_set"),
         (ObjectProperty::Isset, "__elephc_property_isset"),
         (ObjectProperty::Empty, "__elephc_property_empty"),
         (ObjectProperty::WriteFetch, "__elephc_property_write_fetch"),
-        (ObjectProperty::WriteSelect, "__elephc_property_select"),
+        (ObjectProperty::WriteSelect, "__elephc_property_write_fetch"),
+        (ObjectProperty::Update, "__elephc_property_update"),
         (ObjectProperty::Unset, "__elephc_property_unset"),
         (ObjectProperty::Probe, "__elephc_property_probe")],
     native_clone: Some("__elephc_clone_initialize"),

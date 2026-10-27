@@ -101,4 +101,3 @@ fn eval_closure_capture(
     };
     Ok(EvalClosureCaptureBinding::new(capture.name(), value, None))
 }
-

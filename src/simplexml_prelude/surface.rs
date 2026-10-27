@@ -141,6 +141,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     private int $__elephc_position = -1;
     private mixed $__elephc_current = null;
     private mixed $__elephc_owner = null;
+    private mixed $__elephc_write_tmp = null;
     public function __elephc_attach(int $handle): void {
         $this->__elephc_handle = $handle;
         $this->__elephc_owner = new __ElephcSimpleXMLLease($handle);
@@ -171,6 +172,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $this->__elephc_attach(elephc_xml_sx_clone($handle));
         $this->__elephc_current = null;
         $this->__elephc_position = -1;
+        $this->__elephc_write_tmp = null;
     }
     public function __toString(): string {
         $handle = $this->__elephc_handle;
@@ -230,16 +232,59 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     }
     final public function __elephc_property_write_fetch(string $name): static {
         if ($name === '') { throw new ValueError('Cannot create element with an empty name'); }
-        $selected = $this->__elephc_property_select($name);
-        $handle = $selected->__elephc_handle;
-        if (elephc_xml_sx_int($handle, 1) === 0) {
-            $created = elephc_xml_sx_mutate($handle, 23, '', '', '', 0, 0);
-            if ($created > 0) { return __elephc_simplexml_wrap($created, get_class($this)); }
+        $handle = $this->__elephc_handle;
+        $view = elephc_xml_sx_select($handle, 2, $name, '', 0, 0);
+        $present = elephc_xml_sx_int($view, 1) !== 0;
+        $persist = !$present || elephc_xml_sx_int($handle, 5) >= 3;
+        if (!$present) {
+            $created = elephc_xml_sx_mutate($view, 23, '', '', '', 0, 0);
+            if ($created > 0) {
+                elephc_xml_sx_free($view);
+                $view = $created;
+            }
         }
+        $selected = __elephc_simplexml_wrap($view, get_class($this));
+        if ($persist) { $this->__elephc_write_tmp = $selected; }
         return $selected;
     }
     final public function __elephc_property_set(string $name, mixed $value): void {
         $this->__elephc_property_write($name, $value, '');
+    }
+    final public function __elephc_property_update_fetch(string $name): array {
+        if ($name === '') { throw new ValueError('Cannot create element with an empty name'); }
+        $handle = $this->__elephc_handle;
+        $view = elephc_xml_sx_select($handle, 2, $name, '', 0, 0);
+        $present = elephc_xml_sx_int($view, 1) !== 0;
+        $store = elephc_xml_sx_int($handle, 5) < 3 && $present;
+        if (!$present) {
+            $created = elephc_xml_sx_mutate($view, 23, '', '', '', 0, 0);
+            if ($created > 0) { elephc_xml_sx_free($view); $view = $created; }
+        }
+        $selected = __elephc_simplexml_wrap($view, get_class($this));
+        if (!$store) { $this->__elephc_write_tmp = $selected; }
+        return [$selected, $store];
+    }
+    final public function __elephc_property_update(string $name, mixed $right, int $operation, bool $post = false): mixed {
+        $fetch = $this->__elephc_property_update_fetch($name);
+        $current = $fetch[0];
+        $result = self::__elephc_apply_property_update($current, $right, $operation);
+        if ($fetch[1]) { $this->__elephc_property_set($name, $result); }
+        return $post ? $current : $result;
+    }
+    private static function __elephc_apply_property_update(mixed $left, mixed $right, int $operation): mixed {
+        if ($operation === 0) { return $left + $right; }
+        if ($operation === 1) { return $left - $right; }
+        if ($operation === 2) { return $left * $right; }
+        if ($operation === 3) { return $left / $right; }
+        if ($operation === 4) { return $left % $right; }
+        if ($operation === 5) { return $left ** $right; }
+        if ($operation === 6) { return (string)$left . (string)$right; }
+        if ($operation === 7) { return $left & $right; }
+        if ($operation === 8) { return $left | $right; }
+        if ($operation === 9) { return $left ^ $right; }
+        if ($operation === 10) { return $left << $right; }
+        if ($operation === 11) { return $left >> $right; }
+        throw new Error('Unknown SimpleXML property update operation');
     }
     final public function __elephc_eval_property_set(string $name, mixed $value, string $caller): void {
         $this->__elephc_property_write($name, $value, $caller);
@@ -292,6 +337,36 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     }
     final public function __elephc_dimension_isset(mixed $offset): bool {
         return $this->__elephc_dimension_get($offset) !== null;
+    }
+    final public function __elephc_dimension_select(mixed $offset): mixed {
+        $selected = $this->__elephc_dimension_get($offset);
+        if ($selected !== null) { return $selected; }
+        if (!is_int($offset)) {
+            __elephc_simplexml_warning("Notice: Indirect modification of overloaded element of SimpleXMLElement has no effect\n");
+            return null;
+        }
+        $handle = $this->__elephc_handle;
+        $mode = elephc_xml_sx_int($handle, 5);
+        $length = elephc_xml_sx_int($handle, 0);
+        if ($mode === 2 && $length === 0) {
+            $created = elephc_xml_sx_mutate($handle, 23, '', '', '', 0, 0);
+            if ($offset === 0 && $created > 0) { return __elephc_simplexml_wrap($created, get_class($this)); }
+            elephc_xml_sx_free($created);
+            $mode = 0;
+        }
+        if ($mode < 3) {
+            $length = $mode === 0 ? 0 : $length;
+            if ($offset < 0 || $offset > $length || $mode === 0) {
+                $name = elephc_xml_sx_string($handle, $mode === 1 ? 5 : 1);
+                __elephc_simplexml_write_warning('Cannot add element ' . $name . ' number ' . $offset . ' when only ' . $length . ' such elements exist');
+            }
+            if ($offset >= 0 && $mode !== 0) {
+                $added = elephc_xml_sx_mutate($handle, 24, '', '', '', 0, 0);
+                if ($added > 0) { return __elephc_simplexml_wrap($added, get_class($this)); }
+            }
+        }
+        __elephc_simplexml_warning("Notice: Indirect modification of overloaded element of SimpleXMLElement has no effect\n");
+        return null;
     }
     final public function __elephc_dimension_set(mixed $offset, mixed $value): void {
         $this->__elephc_dimension_write($offset, $value, false);

@@ -37,19 +37,19 @@ pub(super) fn eval_property_compound_assign_result(
     object: RuntimeCellHandle,
     property: &str,
     op: EvalBinOp,
-    right: &EvalExpr,
+    right: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    if let Some(result) = super::super::runtime_ops::simplexml_properties::update(
+        values, object, property, op, right, false,
+    )? { return eval_release_value(context, values, result); }
     let current = eval_write_property_get_result(object, property, context, values)?;
     with_eval_value_lease(current, context, values, |current, context, values| {
-        with_eval_void_operands(&[right], context, scope, values, |args, context, _, values| {
-            let value = eval_binary_result(op, current, args[0], context, values)?;
+            let value = eval_binary_result(op, current, right, context, values)?;
             with_eval_value_lease(value, context, values, |value, context, values| {
                 eval_property_set_result(object, property, value, context, values)
             })
-        })
     })
 }
 
@@ -61,6 +61,16 @@ pub(super) fn eval_property_inc_dec_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    if super::super::runtime_ops::simplexml_properties::is_native(values, object, property)? {
+        let one = values.int(1)?;
+        return with_eval_value_lease(one, context, values, |one, context, values| {
+            let operation = if increment { EvalBinOp::Add } else { EvalBinOp::Sub };
+            let result = super::super::runtime_ops::simplexml_properties::update(
+                values, object, property, operation, one, false,
+            )?.ok_or(EvalStatus::RuntimeFatal)?;
+            eval_release_value(context, values, result)
+        });
+    }
     let current = eval_write_property_get_result(object, property, context, values)?;
     with_eval_value_lease(current, context, values, |current, context, values| {
         let value = eval_inc_dec_value(current, increment, values)?;

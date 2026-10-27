@@ -49,7 +49,8 @@ mod static_property_access;
 mod trait_declarations;
 
 use super::*;
-use property_write_receivers::{eval_property_write_receiver, eval_write_property_get_result, with_eval_property_write_operands};
+use property_write_receivers::{prepare_property_write_receiver, finish_property_write_receiver,
+    eval_write_property_get_result, with_eval_property_write_operands, with_eval_named_property_write_operands};
 use crate::context::{
     NativeCallableArrayDefaultElement, NativeCallableArrayDefaultKey,
     NativeCallableObjectDefaultArg, NativeCallableSignature,

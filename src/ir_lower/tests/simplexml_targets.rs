@@ -78,6 +78,12 @@ function xmlNullablePropertyReads(SimpleXMLElement $node): void {
     $name = 'middle'; $node->dynamic->{$name}->leaf = 'runtime';
     $node->sum->middle->leaf += 1;
     $node->increment->middle->leaf++;
+    $node->indexed[0]->leaf = 1;
+    $node->indexed[1]->leaf = 2;
+    var_dump(++$node->counter, $node->counter++);
+    $node->attributes()->temporary += 1;
+    try { $node->thrown->leaf += throw new RuntimeException('rhs'); }
+    catch (RuntimeException $error) { echo $error->getMessage(); }
     var_dump($node->created->child, $node->missing->child?->getName());
 }
 xmlNullablePropertyReads($xml);

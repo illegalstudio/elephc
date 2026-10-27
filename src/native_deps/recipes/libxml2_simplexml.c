@@ -12,6 +12,21 @@
 #include <stdio.h>
 #include <string.h>
 
+/* Creates the empty sibling used by writable SimpleXML dimension fetches. */
+void *elephc_libxml2_v1_sx_append_sibling(void *raw) {
+    xmlNodePtr node = raw;
+    if (!node || node->type != XML_ELEMENT_NODE) return NULL;
+    xmlNodePtr added = xmlNewTextChild(node->parent, node->ns, node->name, NULL);
+    if (added && !added->parent && node->doc) {
+        xmlSetTreeDoc(added, node->doc);
+        if (xmlReconciliateNs(node->doc, added) < 0) {
+            xmlFreeNode(added);
+            return NULL;
+        }
+    }
+    return added;
+}
+
 /* Capture libxml diagnostics per operation, without replacing any global handler. */
 struct sx_diagnostics { xmlBufferPtr text; int options; int formatted; xmlParserCtxtPtr parser; };
 /* Concatenate printf fragments before PHP splits complete warning lines. */

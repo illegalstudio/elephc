@@ -1,16 +1,45 @@
 //! Purpose:
-//! Preserve lazy native XML selections along property write receiver chains.
+//! Preserve native XML selections along deferred property write receiver chains.
 //!
 //! Called from:
 //! - Instance property assignment and property dimension write lowering.
 //!
 //! Key details:
-//! - Selection does not create nodes before assignment operands have run.
+//! - Deferred traversal materializes nodes only after assignment operands have run.
 //! - Ordinary object reads retain their existing dispatch and ownership rules.
 
 use super::*;
 
-/// Evaluates intermediate write receivers without converting missing XML selections to null.
+/// Keeps storage-only XML receiver fetches after assignment operands, including indexed hops.
+pub(crate) fn defer_native_property_write_receiver(
+    ctx: &LoweringContext<'_, '_>, expr: &Expr,
+) -> bool {
+    let storage = match &expr.kind {
+        ExprKind::Variable(_) | ExprKind::This | ExprKind::StaticPropertyAccess { .. } => true,
+        ExprKind::PropertyAccess { object, .. } | ExprKind::DynamicPropertyAccess { object, .. } =>
+            deferred_storage_chain(object),
+        ExprKind::ArrayAccess { array, .. } => deferred_storage_chain(array),
+        _ => false,
+    };
+    if !storage || !ctx.classes.contains_key("SimpleXMLElement") { return false; }
+    let ty = super::super::array_cast_source::array_cast_source_type_for_ir(ctx, expr);
+    matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        || is_opaque_property_object(ctx, &ty)
+        || singular_object_class(&ty).is_some_and(|(class, _)|
+            crate::types::builtin_classes::has_native_dimensions(class, ctx.classes))
+}
+
+/// Recognizes receiver paths whose computed operands have been stabilized by the parser.
+fn deferred_storage_chain(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(_) | ExprKind::This | ExprKind::StaticPropertyAccess { .. } => true,
+        ExprKind::PropertyAccess { object, .. } | ExprKind::DynamicPropertyAccess { object, .. } => deferred_storage_chain(object),
+        ExprKind::ArrayAccess { array, .. } => deferred_storage_chain(array),
+        _ => false,
+    }
+}
+
+/// Evaluates writable receivers without converting missing XML selections to null.
 pub(crate) fn lower_property_write_receiver(
     ctx: &mut LoweringContext<'_, '_>, expr: &Expr,
 ) -> LoweredValue {
@@ -36,7 +65,7 @@ pub(crate) fn lower_property_write_receiver(
         }
         ExprKind::ArrayAccess { array, index } => {
             let array = lower_property_write_receiver(ctx, array);
-            lower_array_access_from_lowered_receiver(ctx, array, index, expr)
+            lower_native_dimension_write_select(ctx, array, index, expr)
         }
         _ => lower_expr(ctx, expr),
     }
@@ -58,8 +87,7 @@ pub(in crate::ir_lower::expr) fn select_named(
     if !property.starts_with("__elephc_") && ctx.classes.contains_key("SimpleXMLElement")
         && matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
     {
-        let name = lower_expr(ctx, &Expr::new(ExprKind::StringLiteral(property.into()), expr.span));
-        return select_dynamic(ctx, object, name, expr);
+        return native_xml_reads::select(ctx, object, property, expr);
     }
     lower_property_get_from_value(ctx, object, property, Op::PropGet, expr)
 }

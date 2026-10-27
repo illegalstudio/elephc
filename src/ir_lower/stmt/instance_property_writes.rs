@@ -25,6 +25,9 @@ pub(super) fn lower_property_assign(
     value: &Expr,
     span: Span,
 ) {
+    if crate::ir_lower::expr::lower_native_xml_property_update(ctx, object, property, value, span) {
+        return;
+    }
     // Readonly errors depend on runtime initialization, after receiver and RHS effects.
     let readonly_write = ctx.throw_access_sites.get(&span).and_then(|info| {
         if let ThrowAccessKind::ReadonlyProperty { class_name, property, initialization_error } = &info.kind {
@@ -56,7 +59,8 @@ pub(super) fn lower_property_assign(
         }
     }
     let value_expr = value;
-    let (mut receiver, lowered_value) = if crate::ir_lower::expr::is_static_property_write_chain(object) {
+    let (mut receiver, lowered_value) = if crate::ir_lower::expr::is_static_property_write_chain(object)
+        || (!property.starts_with("__elephc_") && crate::ir_lower::expr::defer_native_property_write_receiver(ctx, object)) {
         let rhs = lower_expr(ctx, value_expr);
         let receiver = crate::ir_lower::expr::lower_static_property_write_chain(ctx, object, rhs, span);
         (receiver, rhs)
