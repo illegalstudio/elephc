@@ -18,6 +18,10 @@ fn test_eval_reflection_factory_results_release_metadata_graphs() {
 $source = $argc > 0 ? '
 class EvalReflectionFactoryTarget { public string $name = "kept"; }
 function evalReflectionFactoryArgument(string $text = "default"): string { return $text; }
+#[Attribute(Attribute::TARGET_FUNCTION)]
+class EvalReflectionFactoryMarker { public function __construct(public string $name) {} }
+#[EvalReflectionFactoryMarker("attribute")]
+function evalReflectionFactoryMarked(): void {}
 for ($index = 0; $index < 3; $index++) {
     $class = new ReflectionClass("EvalReflectionFactoryTarget");
     $object = $class->newInstanceWithoutConstructor();
@@ -25,12 +29,17 @@ for ($index = 0; $index < 3; $index++) {
     echo $object->name, ":", $class->getName(), ":", $parameter->getName(), ":", $parameter->getDefaultValue(), "|";
     unset($class, $object, $parameter);
 }
+$attributes = (new ReflectionFunction("evalReflectionFactoryMarked"))->getAttributes();
+echo $attributes[0]->getName(), ":", $attributes[0]->getArguments()[0], "|";
+unset($attributes);
 ' : '';
 eval($source);
 unset($source);
 "#);
     assert!(out.success, "stdout={:?}\n{}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "kept:EvalReflectionFactoryTarget:text:default|".repeat(3), "{}", out.stderr);
+    let expected = "kept:EvalReflectionFactoryTarget:text:default|".repeat(3)
+        + "EvalReflectionFactoryMarker:attribute|";
+    assert_eq!(out.stdout, expected, "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 

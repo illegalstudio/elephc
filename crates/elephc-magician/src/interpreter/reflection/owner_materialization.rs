@@ -220,14 +220,20 @@ pub(super) fn eval_reflection_owner_object_with_members(
             Some(type_metadata) => eval_reflection_type_object_result(type_metadata, values)?,
             None => values.null()?,
         };
-        eval_reflection_with_declaring_class_scope(
+        let stored = eval_reflection_with_declaring_class_scope(
             "ReflectionClassConstant",
             context,
             |_| -> Result<(), EvalStatus> {
                 values.property_set(object, "__has_type", has_type)?;
                 values.property_set(object, "__type", type_value)
             },
-        )?;
+        );
+        let has_type_released = values.release(has_type);
+        let type_value_released = values.release(type_value);
+        if let Err(status) = stored.and(has_type_released).and(type_value_released) {
+            let _ = eval_release_value(context, values, object);
+            return Err(status);
+        }
     }
     if matches!(
         owner_kind,
@@ -551,7 +557,7 @@ pub(super) fn eval_reflection_string_assoc_result(
     for (key, value) in pairs {
         let key = values.string(&key)?;
         let value = values.string(&value)?;
-        result = values.array_set(result, key, value)?;
+        result = crate::interpreter::reflection::owned_collections::insert_owned_element(values, result, key, value)?;
     }
     Ok(result)
 }
@@ -566,7 +572,7 @@ pub(super) fn eval_reflection_class_object_map_result(
     for name in names {
         let key = values.string(name)?;
         let object = eval_reflection_full_class_object_result(name, context, values)?;
-        result = values.array_set(result, key, object)?;
+        result = crate::interpreter::reflection::owned_collections::insert_owned_element(values, result, key, object)?;
     }
     Ok(result)
 }
@@ -605,7 +611,7 @@ pub(super) fn eval_reflection_parameter_object_array_result(
     for parameter in parameters {
         let parameter_object = eval_reflection_parameter_object_result(parameter, context, values)?;
         let key = values.int(parameter.position as i64)?;
-        result = values.array_set(result, key, parameter_object)?;
+        result = crate::interpreter::reflection::owned_collections::insert_owned_element(values, result, key, parameter_object)?;
     }
     Ok(result)
 }
@@ -1000,7 +1006,7 @@ pub(super) fn eval_reflection_named_type_object_array_result(
     for (position, type_metadata) in types.iter().enumerate() {
         let type_object = eval_reflection_named_type_object_result(type_metadata, values)?;
         let key = values.int(position as i64)?;
-        result = values.array_set(result, key, type_object)?;
+        result = crate::interpreter::reflection::owned_collections::insert_owned_element(values, result, key, type_object)?;
     }
     Ok(result)
 }
@@ -1142,7 +1148,7 @@ pub(super) fn eval_reflection_member_object_array_result(
         let member_object =
             eval_reflection_member_object_result(owner_kind, name, &member, context, values)?;
         let key = values.int(index)?;
-        result = values.array_set(result, key, member_object)?;
+        result = crate::interpreter::reflection::owned_collections::insert_owned_element(values, result, key, member_object)?;
         index += 1;
     }
     Ok(result)
@@ -1187,7 +1193,7 @@ pub(super) fn eval_reflection_aot_member_object_array_result(
         let member_object =
             eval_reflection_member_object_result(owner_kind, name, &member, context, values)?;
         let key = values.int(index)?;
-        result = values.array_set(result, key, member_object)?;
+        result = crate::interpreter::reflection::owned_collections::insert_owned_element(values, result, key, member_object)?;
         index += 1;
     }
     Ok(result)

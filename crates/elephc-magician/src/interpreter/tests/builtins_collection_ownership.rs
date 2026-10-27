@@ -257,3 +257,22 @@ fn core_integer_arguments_release_conversion_cells() {
         }
     }
 }
+
+/// Reflection insertions consume operand leases and abandon a failed metadata array.
+#[test]
+fn reflection_metadata_insertion_releases_owned_operands() {
+    for fail in [false, true] {
+        let mut values = FakeOps::default();
+        let array = values.array_new(1).unwrap();
+        let key = values.int(0).unwrap();
+        let value = values.string("metadata").unwrap();
+        if fail { values.fail_array_set_call(0); }
+        let result = crate::interpreter::reflection::owned_collections::insert_owned_element(
+            &mut values, array, key, value,
+        );
+        assert_eq!(result, if fail { Err(EvalStatus::UnsupportedConstruct) } else { Ok(array) });
+        assert_eq!(values.releases.iter().filter(|cell| **cell == key).count(), 1);
+        assert_eq!(values.releases.iter().filter(|cell| **cell == value).count(), 1);
+        assert_eq!(values.releases.iter().filter(|cell| **cell == array).count(), usize::from(fail));
+    }
+}

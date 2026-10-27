@@ -26,6 +26,7 @@ mod member_api;
 mod member_construction;
 mod member_metadata;
 mod owner_materialization;
+pub(super) mod owned_collections;
 mod parameter_construction;
 mod parameter_lazy_defaults;
 mod parameter_metadata;

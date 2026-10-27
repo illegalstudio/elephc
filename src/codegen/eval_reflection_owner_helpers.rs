@@ -880,7 +880,7 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
 
 /// Transfers the factory's raw allocation owner into the retaining Mixed result cell.
 /// The boxed return stays stable while the original object reference is retired.
-fn retire_reflection_owner_allocation_after_boxing(emitter: &mut Emitter, object_offset: usize) {
+pub(super) fn retire_reflection_owner_allocation_after_boxing(emitter: &mut Emitter, object_offset: usize) {
     let result = abi::int_result_reg(emitter);
     abi::emit_push_reg(emitter, result);
     abi::load_at_offset(emitter, result, object_offset);
