@@ -3284,10 +3284,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Widens a concrete local to boxed `Mixed` storage, then promotes that storage to a
     /// durable heap reference cell suitable for an escaping by-reference parameter.
     pub(crate) fn promote_local_mixed_ref_cell(&mut self, name: &str, span: Option<Span>) {
-        if self.is_ref_bound_local(name) && self.local_type(name).codegen_repr() == PhpType::Mixed {
+        // The alias map is a MAY fact across branches; owner initialization is a MUST fact.
+        // Promote before loading a narrowed view when an earlier alternative only declared
+        // the owner, so this path publishes its cell and retires the raw value it replaces.
+        let owner_needs_promotion = self.ref_cell_owner_slot(name)
+            .is_some_and(|owner| !self.slot_is_initialized(owner));
+        if self.is_ref_bound_local(name) && self.local_type(name).codegen_repr() == PhpType::Mixed
+            && !owner_needs_promotion
+        {
             return;
         }
-        if !self.is_ref_bound_local(name) {
+        if !self.is_ref_bound_local(name) || owner_needs_promotion {
             // Frame layout applies the final slot representation to all earlier stores.
             // Widen the slot directly: reading it as a concrete value and boxing it again
             // would introduce an unnecessary conversion owner during reference promotion.

@@ -16,6 +16,39 @@ const TARGETS: [&str; 5] = [
     "macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64",
 ];
 
+/// Alternative captures each publish the same fallback owner before their closure is built.
+#[test]
+fn alternative_mutating_captures_publish_cell_owners_on_every_target() {
+    let source = r#"<?php
+class AlternativeCaptureOwner { public string $name = 'old'; }
+function alternativeCaptureOwners(int $mode): void {
+    $item = new AlternativeCaptureOwner();
+    if ($mode === 0) {
+        $change = function() use (&$item): int { $item = new AlternativeCaptureOwner(); return 1; };
+    } else {
+        $change = function() use (&$item): int { $item = new AlternativeCaptureOwner(); return 2; };
+    }
+    echo $change();
+}
+alternativeCaptureOwners($argc);
+"#;
+    for target in TARGETS {
+        let (module, function) = lower_function(source, target, "alternativeCaptureOwners");
+        let item = function.locals.iter().find(|local| local.name.as_deref() == Some("item")).unwrap();
+        let owners = function.instructions.iter().filter_map(|inst| {
+            if inst.op != Op::PromoteLocalRefCell { return None; }
+            match inst.immediate {
+                Some(Immediate::LocalSlotPair { first, second }) if first == item.id => Some(second),
+                _ => None,
+            }
+        }).collect::<Vec<_>>();
+        assert_eq!(owners.len(), 2, "{target}: both alternatives must promote their raw path");
+        assert_eq!(owners[0], owners[1], "{target}: alternatives share a single owner slot");
+        assert_eq!(function.locals[owners[0].as_raw() as usize].kind, LocalKind::RefCell, "{target}");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Lowers one source and returns the named function beside its complete module.
 fn lower_function(source: &str, target: &str, name: &str) -> (crate::ir::Module, Function) {
     let module = super::lower_source_at_for_target(
