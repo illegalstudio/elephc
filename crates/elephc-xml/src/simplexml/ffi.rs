@@ -114,6 +114,9 @@ extern "C" {
     /// Calls the opaque shim xpath_register operation.
     #[link_name = "elephc_libxml2_v1_sx_xpath_register"]
     pub(super) fn xpath_register(ctx: Node, prefix: *const c_char, uri: *const c_char) -> c_int;
+    /// Looks up the context's in-scope binding through libxml2's opaque public API.
+    #[link_name = "xmlXPathNsLookup"]
+    pub(super) fn xpath_lookup(ctx: Node, prefix: *const c_char) -> *const c_char;
     /// Calls the opaque shim xpath_eval operation.
     #[link_name = "elephc_libxml2_v1_sx_xpath_eval"]
     pub(super) fn xpath_eval(ctx: Node, expression: *const c_char, diagnostics: *mut *mut c_char) -> Node;

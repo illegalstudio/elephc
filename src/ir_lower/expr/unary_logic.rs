@@ -18,9 +18,15 @@ pub(super) fn lower_numeric_unary(
     expr: &Expr,
 ) -> LoweredValue {
     let value = lower_expr(ctx, inner);
-    if int_op == Op::INeg && crate::types::object_operators::operator_class(&ctx.builder.value_php_type(value.value)).is_some() {
-        let zero = lower_int_literal(ctx, 0, expr);
-        if let Some(result) = object_operators::lower_object_binary_values(ctx, zero, &BinOp::Sub, value, expr) {
+    let operand_type = ctx.builder.value_php_type(value.value);
+    let number_class = crate::types::object_operators::binary_plan_with_classes(
+        &BinOp::Mul, &PhpType::Int, &operand_type, ctx.classes,
+    ).is_some_and(|plan| plan.class.operators.is_some_and(|operators|
+        operators.arithmetic_result == elephc_builtin_contract::ObjectArithmeticResult::Number));
+    if int_op == Op::INeg && (number_class || crate::types::object_operators::operator_class(&operand_type).is_some()) {
+        let factor = lower_int_literal(ctx, if number_class { -1 } else { 0 }, expr);
+        let operation = if number_class { BinOp::Mul } else { BinOp::Sub };
+        if let Some(result) = object_operators::lower_object_binary_values(ctx, factor, &operation, value, expr) {
             return result;
         }
     }
@@ -43,8 +49,8 @@ pub(super) fn lower_numeric_unary(
         }
         _ if int_op == Op::INeg => {
             let zero = lower_int_literal(ctx, 0, expr);
-            if let Some(result) = object_operators::lower_dynamic_object_binary(
-                ctx, zero, &BinOp::Sub, value, expr, true, |ctx| {
+            if let Some(result) = object_operators::lower_dynamic_object_negate(
+                ctx, zero, value, expr, |ctx| {
                     let result = lower_mixed_numeric_binary(ctx, zero, value, MixedNumericOp::Sub, expr);
                     release_binary_operand_temporary(ctx, value, expr.span);
                     result

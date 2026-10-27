@@ -61,6 +61,14 @@ xmlAppendOpaqueParameter($xml->item);
 function xmlMixedArithmetic(mixed $node): mixed { return $node + 1; }
 $otherNumber = new \BcMath\Number('1');
 echo xmlMixedArithmetic($xml->item[0]), xmlMixedArithmetic($otherNumber);
+class TargetZeroXml extends SimpleXMLElement {}
+function xmlMixedNegation(mixed $node): mixed { return -$node; }
+function xmlTypedNegation(SimpleXMLElement $node): mixed { return -$node; }
+function xmlSubclassNegation(TargetZeroXml $node): mixed { return -$node; }
+function xmlUnionNegation(SimpleXMLElement|null $node): mixed { return -$node; }
+$zeroXml = new TargetZeroXml('<r>0.0</r>');
+echo xmlMixedNegation($zeroXml), xmlTypedNegation($zeroXml), xmlSubclassNegation($zeroXml), xmlUnionNegation($zeroXml);
+echo xmlMixedNegation($otherNumber);
 echo (int)($xml->item[0] > 1), (int)($xml->item[0] == '7'), $xml <=> $xml->item;
 $xml->item[0] += 1;
 try { $xml->item[0][null] = 'invalid'; } catch (ValueError $error) { echo $error->getMessage(); }
@@ -85,6 +93,25 @@ echo $doc->saveXML();
                     if module.data.strings.get(id.as_raw() as usize) == Some(&expected))
         }), "{target}: missing arithmetic adapter {expected}");
     }
+    for name in ["xmlMixedNegation", "xmlTypedNegation", "xmlSubclassNegation", "xmlUnionNegation"] {
+        let function = module.functions.iter().find(|function| function.name == name).unwrap();
+        let method = elephc_builtin_contract::lookup_class("SimpleXMLElement").unwrap().operators.unwrap()
+            .arithmetic_method(elephc_builtin_contract::ObjectArithmetic::Mul).unwrap();
+        let expected = format!("SimpleXMLElement::{method}");
+        assert!(function.instructions.iter().any(|inst| {
+            inst.op == crate::ir::Op::StaticMethodCall
+                && matches!(inst.immediate, Some(crate::ir::Immediate::Data(id))
+                    if module.data.strings.get(id.as_raw() as usize) == Some(&expected))
+        }), "{target}: {name} must preserve Number-class negative zero through {expected}");
+    }
+    let negate = module.functions.iter().find(|function| function.name == "xmlMixedNegation").unwrap();
+    let method = elephc_builtin_contract::lookup_class("BcMath\\Number").unwrap().operators.unwrap()
+        .arithmetic_method(elephc_builtin_contract::ObjectArithmetic::Sub).unwrap();
+    let expected = format!("BcMath\\Number::{method}");
+    assert!(negate.instructions.iter().any(|inst| {
+        inst.op == crate::ir::Op::StaticMethodCall && matches!(inst.immediate, Some(crate::ir::Immediate::Data(id))
+            if module.data.strings.get(id.as_raw() as usize) == Some(&expected))
+    }), "{target}: object-result classes retain their subtraction adapter");
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     assert!(assembly.contains("__rt_gc_collect_cycles_explicit"), "{target}: shutdown retires native document cycles");
     assert!(assembly.contains("__rt_sprintf_mixed_to_string"), "{target}: erased object string-context ABI");

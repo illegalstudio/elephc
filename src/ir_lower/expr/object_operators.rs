@@ -50,13 +50,34 @@ pub(crate) fn lower_dynamic_object_binary(
     plans.sort_unstable_by_key(|plan| plan.class.name);
     plans.dedup_by_key(|plan| plan.class.name);
     if plans.is_empty() { return None; }
-    Some(lower_dynamic_operator_plans(ctx, lhs, op, rhs, expr, consume, &plans, scalar))
+    Some(lower_dynamic_operator_plans(ctx, lhs, op, rhs, expr, consume, &plans, false, scalar))
+}
+
+/// Negates numeric-result classes with multiplication while retaining other classes' subtraction.
+pub(super) fn lower_dynamic_object_negate(
+    ctx: &mut LoweringContext<'_, '_>, zero: LoweredValue, value: LoweredValue,
+    expr: &Expr, scalar: impl FnOnce(&mut LoweringContext<'_, '_>) -> LoweredValue,
+) -> Option<LoweredValue> {
+    let ty = ctx.builder.value_php_type(value.value);
+    if !matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_) | PhpType::Object(_)) { return None; }
+    let mut plans = ctx.classes.keys().filter_map(|name| {
+        let ty = PhpType::Object(name.clone());
+        let class = crate::types::object_operators::operator_class(&ty)?;
+        let operation = if class.operators?.arithmetic_result == elephc_builtin_contract::ObjectArithmeticResult::Number {
+            BinOp::Mul
+        } else { BinOp::Sub };
+        crate::types::object_operators::binary_plan(&operation, &PhpType::Int, &ty)
+    }).collect::<Vec<_>>();
+    plans.sort_unstable_by_key(|plan| plan.class.name);
+    plans.dedup_by_key(|plan| plan.class.name);
+    if plans.is_empty() { return None; }
+    Some(lower_dynamic_operator_plans(ctx, zero, &BinOp::Sub, value, expr, true, &plans, true, scalar))
 }
 
 /// Tries every applicable internal class before taking the ordinary scalar/object path.
 fn lower_dynamic_operator_plans(
     ctx: &mut LoweringContext<'_, '_>, lhs: LoweredValue, op: &BinOp, rhs: LoweredValue,
-    expr: &Expr, consume: bool, plans: &[crate::types::object_operators::ObjectOperatorPlan],
+    expr: &Expr, consume: bool, plans: &[crate::types::object_operators::ObjectOperatorPlan], negate: bool,
     scalar: impl FnOnce(&mut LoweringContext<'_, '_>) -> LoweredValue,
 ) -> LoweredValue {
     let Some((plan, rest)) = plans.split_first() else { return scalar(ctx); };
@@ -77,14 +98,17 @@ fn lower_dynamic_operator_plans(
     ctx.builder.terminate(Terminator::CondBr { cond: condition.value,
         then_target: object_block, then_args: vec![], else_target: scalar_block, else_args: vec![] });
     ctx.builder.position_at_end(object_block);
-    let value = emit_object_binary_plan(ctx, plan, lhs, op, rhs, expr, consume);
+    let (object_lhs, object_op) = if negate && plan.class.operators.is_some_and(|operators|
+        operators.arithmetic_result == elephc_builtin_contract::ObjectArithmeticResult::Number
+    ) { (lower_int_literal(ctx, -1, expr), &BinOp::Mul) } else { (lhs, op) };
+    let value = emit_object_binary_plan(ctx, plan, object_lhs, object_op, rhs, expr, consume);
     store_value_into_temp(ctx, &temp, result_type.clone(), value, expr.span);
     branch_to(ctx, merge);
     let object_initialized = ctx.initialized_slots_snapshot();
     ctx.builder.position_at_end(scalar_block);
     ctx.restore_initialized_slots(initialized.clone());
     let scalar_pins = pin_in_flight_owners(ctx, &[lhs.value, rhs.value], expr.span);
-    let value = lower_dynamic_operator_plans(ctx, lhs, op, rhs, expr, consume, rest, scalar);
+    let value = lower_dynamic_operator_plans(ctx, lhs, op, rhs, expr, consume, rest, negate, scalar);
     unpin_in_flight_owners(ctx, scalar_pins, expr.span);
     store_value_into_temp(ctx, &temp, result_type, value, expr.span);
     branch_to(ctx, merge);

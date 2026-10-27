@@ -241,6 +241,47 @@ fn simplexml_xpath_namespace_and_text_nodes() {
     assert_eq!(root.xpath("count(//a)"), Err(query::XPathError::Scalar(3)));
 }
 
+/// In-scope XPath prefixes win, and declared namespace queries use the wrapper's base node.
+#[test]
+fn simplexml_namespace_precedence_empty_declarations_and_base_nodes() {
+    let root = parse(b"<r xmlns:p='urn:a' xmlns:q='urn:b'><p:c>A</p:c><q:c>B</q:c></r>", 0, "", false).unwrap();
+    root.xpath_ns.borrow_mut().insert("p".into(), "urn:b".into());
+    root.xpath_ns.borrow_mut().insert("alias".into(), "urn:b".into());
+    for (expression, text) in [("//p:c", "A"), ("//alias:c", "B")] {
+        let nodes = root.xpath(expression).unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(unsafe { owned_string(ffi::text(nodes[0])) }, text);
+    }
+    let root = parse(b"<r xmlns:a='urn:a'><c xmlns:b='urn:b'/><empty xmlns=''/></r>", 0, "", false).unwrap();
+    assert_eq!(root.namespaces(true, true, true), vec![("a".into(), "urn:a".into()), ("b".into(), "urn:b".into()), ("".into(), "".into())]);
+    for selected in [root.select(2, "c", "", false, 0), root.select(0, "", "", false, 0), root.select(2, "missing", "", false, 0)] {
+        assert_eq!(selected.namespaces(true, false, false), vec![("a".into(), "urn:a".into())]);
+    }
+    let child = root.select(2, "c", "", false, 0).select(4, "", "", false, 0);
+    assert_eq!(child.namespaces(true, false, false), vec![("b".into(), "urn:b".into())]);
+    assert!(root.namespaces(false, true, false).is_empty());
+}
+
+/// Non-root clones retain their document owner while copying only a detached subtree.
+#[test]
+fn simplexml_non_root_clone_is_detached_and_shares_only_document_ownership() {
+    let root = parse(b"<r><a><b>original</b></a></r>", 0, "", false).unwrap();
+    let named = root.select(2, "a", "", false, 0);
+    let selected = named.select(4, "", "", false, 0);
+    let copied = selected.deep_clone().unwrap();
+    assert!(Rc::ptr_eq(&root.doc, &copied.doc));
+    assert_ne!(selected.first(), copied.first());
+    assert!(unsafe { ffi::parent(copied.first().unwrap()).is_null() });
+    assert!(copied.xpath("..").unwrap().is_empty());
+    assert_eq!(copied.write(2, "b", 0, "copy"), 1);
+    assert_eq!(unsafe { owned_string(ffi::text(selected.first().unwrap())) }, "original");
+    let group_copy = named.deep_clone().unwrap();
+    assert!(!Rc::ptr_eq(&root.doc, &group_copy.doc));
+    assert_eq!(group_copy.xpath("..").unwrap().len(), 1);
+    drop(selected); drop(named); drop(root);
+    assert_eq!(unsafe { owned_string(ffi::text(copied.first().unwrap())) }, "copy");
+}
+
 /// Newly materialized wrappers own independent prefix maps while aliases and clones preserve theirs.
 #[test]
 fn simplexml_derived_xpath_registrations_are_isolated() {

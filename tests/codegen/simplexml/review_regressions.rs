@@ -218,7 +218,7 @@ eval($source);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// Literal names and failed filter closes share one catalog compile and independent AOT/eval heaps.
+/// Review regressions share one catalog compile and independent AOT/eval process heaps.
 #[test]
 fn test_simplexml_review_names_and_filter_close_bundle() {
     if skip_without_xml_native("test_simplexml_review_names_and_filter_close_bundle") { return; }
@@ -254,7 +254,44 @@ try {
 }
 unset($error, $uri);
 "####;
+    let semantics = r####"
+$prefixes = new SimpleXMLElement('<r xmlns:p="urn:a" xmlns:q="urn:b"><p:c>A</p:c><q:c>B</q:c></r>');
+$prefixes->registerXPathNamespace('p', 'urn:b');
+$prefixes->registerXPathNamespace('alias', 'urn:b');
+echo (string)$prefixes->xpath('//p:c')[0], ':', (string)$prefixes->xpath('//alias:c')[0], '|';
+$declarationsXml = new SimpleXMLElement('<r xmlns:a="urn:a"><c xmlns:b="urn:b"/><empty xmlns=""/></r>');
+echo json_encode($declarationsXml->getDocNamespaces(true)), '|';
+echo json_encode($declarationsXml->c->getDocNamespaces(false, false)), '|';
+echo json_encode($declarationsXml->children()->getDocNamespaces(false, false)), '|';
+echo json_encode($declarationsXml->missing->getDocNamespaces(false, false)), '|';
+echo json_encode($declarationsXml->c[0]->getDocNamespaces(false, false)), '|';
+echo json_encode($declarationsXml->getNamespaces(true)), '|';
+foreach (['MissingXmlReviewClass', 'stdClass'] as $className) {
+    try { simplexml_load_string('<r/>', $className); }
+    catch (TypeError $error) { echo $error->getMessage(), '|'; }
+    try { simplexml_load_file('no-such-review.xml', $className); }
+    catch (TypeError $error) { echo $error->getMessage(), '|'; }
+    try { simplexml_import_dom(new DOMDocument(), $className); }
+    catch (TypeError $error) { echo $error->getMessage(), '|'; }
+}
+$zero = new SimpleXMLElement('<r>0.0</r>');
+$negativeZero = new ReviewNumericZeroXml('<r>-0.0</r>');
+var_dump(-$zero, reviewNegateXmlMixed($zero), -$negativeZero, reviewNegateXmlSubclass($negativeZero));
+$maybeZero = $argc > 0 ? $zero : null;
+var_dump(-$maybeZero);
+$document = new SimpleXMLElement('<r><a><b>original</b></a></r>');
+$node = $document->a[0]; $copied = clone $node;
+echo count($copied->xpath('..')), '|';
+$copied->b = 'copy'; echo (string)$document->a->b, ':', (string)$copied->b, '|';
+$group = clone $document->a; echo count($group->xpath('..')), '|';
+unset($node, $group, $document);
+echo $copied->asXML(), '|';
+unset($prefixes, $declarationsXml, $className, $error, $zero, $negativeZero, $maybeZero, $copied);
+"####;
     let declarations = r####"<?php
+class ReviewNumericZeroXml extends SimpleXMLElement {}
+function reviewNegateXmlMixed(mixed $value): mixed { return -$value; }
+function reviewNegateXmlSubclass(ReviewNumericZeroXml $value): mixed { return -$value; }
 class XmlReviewOtherFilter extends php_user_filter {
     public function onClose(): void { echo 'other-close|'; }
 }
@@ -274,9 +311,12 @@ stream_filter_register('xml.review.throw', 'XmlReviewThrowFilter');
 "####;
     let eval_names = names.replace('\\', "\\\\").replace('\'', "\\'");
     let eval_filters = filters.replace('\\', "\\\\").replace('\'', "\\'");
+    let eval_semantics = semantics.replace('\\', "\\\\").replace('\'', "\\'");
     let source = format!("{declarations}
         if ($argc === 1) {{ {names} }}
         elseif ($argc === 2) {{ $source = $argc > 0 ? '{eval_names}' : ''; eval($source); }}
+        elseif ($argc === 7) {{ {semantics} }}
+        elseif ($argc === 8) {{ $source = $argc > 0 ? '{eval_semantics}' : ''; eval($source); }}
         else {{
             set_error_handler(function(int $level, string $message): bool {{ return true; }});
             $constructor = $argc === 4 || $argc === 6;
@@ -284,13 +324,14 @@ stream_filter_register('xml.review.throw', 'XmlReviewThrowFilter');
             else {{ $source = $argc > 0 ? '{eval_filters}' : ''; eval($source); }}
             restore_error_handler();
         }}");
-    let args: Vec<_> = (0..6).map(|count| vec!["x"; count]).collect();
+    let args: Vec<_> = (0..8).map(|count| vec!["x"; count]).collect();
     let argvs: Vec<_> = args.iter().map(Vec::as_slice).collect();
     let runs = compile_and_run_with_heap_debug_per_argv(&source, &argvs);
     let names_expected = "<?xml version=\"1.0\"?>\n<r xmlns:p=\"urn:p\" at=\"base\" p:at=\"literal\"><p:q>value</p:q><a:b><c>nested</c></a:b><p:q>second</p:q></r>\n1:value:second:0|base:literal:a:b|method:qualified|:a|SimpleXMLElement::addAttribute(): Attribute requires prefix for namespace|SimpleXMLElement::addAttribute(): Attribute already exists|<?xml version=\"1.0\"?>\n<r xmlns:p=\"urn:p\" at=\"base\" p:at=\"literal\" :c=\"1\"><p:q>value</p:q><a:b><c>nested</c></a:b><p:q>second</p:q><p:method>qualified</p:method><:a>leading</:a></r>\n";
     let factory = "create|other-close|drop|RuntimeException:filter|";
     let constructor = "create|other-close|drop|Exception:String could not be parsed as XML|RuntimeException|";
-    let expected = [names_expected, names_expected, factory, constructor, factory, constructor];
+    let semantics_expected = "A:B|{\"a\":\"urn:a\",\"b\":\"urn:b\",\"\":\"\"}|{\"a\":\"urn:a\"}|{\"a\":\"urn:a\"}|{\"a\":\"urn:a\"}|{\"b\":\"urn:b\"}|[]|simplexml_load_string(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, MissingXmlReviewClass given|simplexml_load_file(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, MissingXmlReviewClass given|simplexml_import_dom(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, MissingXmlReviewClass given|simplexml_load_string(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, stdClass given|simplexml_load_file(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, stdClass given|simplexml_import_dom(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, stdClass given|float(-0)\nfloat(-0)\nfloat(0)\nfloat(0)\nfloat(-0)\n0|original:copy|1|<a><b>copy</b></a>|";
+    let expected = [names_expected, names_expected, factory, constructor, factory, constructor, semantics_expected, semantics_expected];
     assert_eq!(runs.len(), expected.len());
     for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {
         assert!(out.success, "mode={mode} stdout={:?} stderr={}", out.stdout, out.stderr);

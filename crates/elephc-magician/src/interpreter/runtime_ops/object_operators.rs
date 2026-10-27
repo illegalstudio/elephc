@@ -3,13 +3,14 @@
 //!
 //! Called from:
 //! - RuntimeValueOps arithmetic, comparison, boolean, cast, and clone entry points.
+//! - EvalIR unary arithmetic for native internal-class operands.
 //!
 //! Key details:
 //! - Native method bridges borrow operands and transfer an owned result cell.
 //! - Strict identity bypasses dispatch; class-name and comparison temporaries are released.
 
 use super::*;
-use elephc_builtin_contract::{ClassContract, ObjectArithmetic};
+use elephc_builtin_contract::{ClassContract, ObjectArithmetic, ObjectArithmeticResult};
 
 /// Resolves the actual runtime class without retaining a transient class-name cell.
 fn operator_class(
@@ -26,6 +27,25 @@ fn operator_class(
         if values.object_is_a(value, class.name, false)? { return Ok(Some(class)); }
     }
     Ok(None)
+}
+
+/// Preserves numeric-result float zero signs without changing other native classes' unary adapter.
+pub(in crate::interpreter) fn negate(
+    values: &mut (impl RuntimeValueOps + ?Sized), value: RuntimeCellHandle,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let Some(class) = operator_class(values, value)? else { return Ok(None); };
+    let Some(operators) = class.operators else { return Ok(None); };
+    let number = operators.arithmetic_result == ObjectArithmeticResult::Number;
+    let operation = if number { ObjectArithmetic::Mul } else { ObjectArithmetic::Sub };
+    let Some(method) = operators.arithmetic_method(operation) else { return Ok(None); };
+    let factor = values.int(if number { -1 } else { 0 })?;
+    let result = values.operator_static_call(class.name, method, vec![factor, value]);
+    let released = values.release(factor);
+    match (result, released) {
+        (Err(status), _) => Err(status),
+        (Ok(result), Err(status)) => { let _ = values.release(result); Err(status) },
+        (Ok(result), Ok(())) => Ok(Some(result)),
+    }
 }
 
 /// Runs a native clone handler and reports whether it replaces userland clone dispatch.

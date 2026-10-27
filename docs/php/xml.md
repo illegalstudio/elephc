@@ -42,6 +42,7 @@ Element properties select children with the requested name. Integer offsets
 select repeated elements; string offsets select attributes. `children()` and
 `attributes()` accept either a namespace URI or a prefix, selected by their
 second argument. `registerXPathNamespace()` registers prefixes for XPath queries.
+In-scope declarations take precedence over registered aliases with the same prefix.
 `getNamespaces()` reports used namespaces and `getDocNamespaces()` reports
 namespace declarations. Both support recursive traversal.
 
@@ -49,8 +50,8 @@ Assignments, `unset()`, `addChild()`, and `addAttribute()` modify the underlying
 document. Property and string-offset writes keep the complete literal name,
 including colons. `addChild()` and `addAttribute()` interpret a nonempty prefix
 before a colon as part of a qualified name. Existing selections observe subsequent
-changes and retain their document after the original root variable is released. String conversion reads
-direct text and CDATA. `asXML()` and its `saveXML()` alias return XML, or write
+changes and retain their document after the original root variable is released.
+String conversion reads direct text and CDATA. `asXML()` and its `saveXML()` alias return XML, or write
 to a filename and return success. Both classes support `count()`, `foreach`,
 and the `RecursiveIterator` methods. Integer and float casts read the selected
 node text. Array casts, `get_object_vars()`, `__debugInfo()`, and JSON encoding expose XML
@@ -58,6 +59,9 @@ properties, including `@attributes` and repeated children. DOM imports share
 their document, so edits through either API remain visible through the other.
 Importing a DOM node created by `ReflectionClass::newInstanceWithoutConstructor()`
 raises `TypeError`, matching PHP's rejection of uninitialized native nodes.
+
+Cloning a root copies its document. Cloning an indexed child such as
+`$xml->item[0]` creates a detached copy of that subtree.
 
 `print_r()` and `var_dump()` render SimpleXML's native debug projection, including
 subclass `__debugInfo()` overrides, both in compiled code and opaque dynamic

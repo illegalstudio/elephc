@@ -42,11 +42,11 @@ function __elephc_simplexml_wrap(int $handle, string $class): SimpleXMLElement {
     throw new TypeError("SimpleXML class must extend SimpleXMLElement");
 }
 
-function __elephc_simplexml_class(?string $class): string {
+function __elephc_simplexml_class(?string $class, string $caller): string {
     if ($class === null) { return "SimpleXMLElement"; }
     $name = (string)$class;
     if (!is_a($name, "SimpleXMLElement", true)) {
-        throw new TypeError("SimpleXML class must be derived from SimpleXMLElement");
+        throw new TypeError($caller . '(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, ' . $name . ' given');
     }
     return $name;
 }
@@ -650,7 +650,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
 class SimpleXMLIterator extends SimpleXMLElement {}
 
 function simplexml_load_string(string $data, ?string $class_name = "SimpleXMLElement", int $options = 0, string $namespace_or_prefix = "", bool $is_prefix = false): SimpleXMLElement|false {
-    $class = __elephc_simplexml_class($class_name);
+    $class = __elephc_simplexml_class($class_name, 'simplexml_load_string');
     $handle = elephc_xml_sx_load($data, strlen($data), $options, $namespace_or_prefix, (int)$is_prefix, "");
     if ($handle === 0) {
         __elephc_simplexml_report_diagnostics('simplexml_load_string()');
@@ -662,7 +662,7 @@ function simplexml_load_string(string $data, ?string $class_name = "SimpleXMLEle
 }
 function simplexml_load_file(string $filename, ?string $class_name = "SimpleXMLElement", int $options = 0, string $namespace_or_prefix = "", bool $is_prefix = false): SimpleXMLElement|false {
     if (strpos($filename, "\0") !== false) { throw new ValueError('simplexml_load_file(): Argument #1 ($filename) must not contain any null bytes'); }
-    $class = __elephc_simplexml_class($class_name);
+    $class = __elephc_simplexml_class($class_name, 'simplexml_load_file');
     $handle = __elephc_simplexml_file_handle($filename, $options, $namespace_or_prefix, $is_prefix, 'simplexml_load_file()');
     if ($handle === 0) {
         __elephc_simplexml_report_diagnostics('simplexml_load_file()');
@@ -712,7 +712,7 @@ function __elephc_simplexml_bind_dom(DOMNode $node, SimpleXMLElement $view): voi
 }
 
 function simplexml_import_dom(object $node, ?string $class_name = "SimpleXMLElement"): ?SimpleXMLElement {
-    $class = __elephc_simplexml_class($class_name);
+    $class = __elephc_simplexml_class($class_name, 'simplexml_import_dom');
     if ($node instanceof DOMNode) { return __elephc_simplexml_import_node($node, $class); }
     throw new TypeError('simplexml_import_dom(): Argument #1 ($node) must be a valid XML node');
 }
