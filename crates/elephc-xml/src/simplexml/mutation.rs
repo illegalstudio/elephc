@@ -28,22 +28,31 @@ impl View {
         match &self.scope {
             Scope::Children(parent, Some(name)) => {
                 let node = parent.ensure_first()?;
-                parent.with_scope(Scope::Node(node)).add(name, None, None, false)
+                parent.with_scope(Scope::Node(node)).add_literal(name, None, false)
             },
             Scope::Attributes(parent, Some(name)) => {
                 let node = parent.ensure_first()?;
-                parent.with_scope(Scope::Node(node)).add(name, None, None, true)
+                parent.with_scope(Scope::Node(node)).add_literal(name, None, true)
             },
             Scope::Index(parent, 0) => parent.ensure_first(),
             _ => None,
         }
     }
     /// Adds an element or attribute under the first selected element.
+    #[cfg(test)]
     pub(super) fn add(&self, name: &str, value: Option<&str>, namespace: Option<&str>, attribute: bool) -> Option<Node> {
         self.add_checked(name, value, namespace, attribute).ok()
     }
     /// Resolves non-element attribute receivers to their element parent and reports precise failures.
     pub(super) fn add_checked(&self, name: &str, value: Option<&str>, namespace: Option<&str>, attribute: bool) -> Result<Node, AddError> {
+        self.add_with_name_mode(name, value, namespace, attribute, false)
+    }
+    /// Adds property/dimension names without interpreting their colon as a namespace prefix.
+    fn add_literal(&self, name: &str, value: Option<&str>, attribute: bool) -> Option<Node> {
+        self.add_with_name_mode(name, value, None, attribute, true).ok()
+    }
+    /// Shares receiver validation while preserving the caller's literal or qualified name rules.
+    fn add_with_name_mode(&self, name: &str, value: Option<&str>, namespace: Option<&str>, attribute: bool, literal: bool) -> Result<Node, AddError> {
         let missing = if attribute { AddError::MissingAttributeParent } else { AddError::MissingChildParent };
         if !attribute && matches!(self.scope, Scope::Attributes(..)) { return Err(AddError::ElementToAttributes); }
         let mut parent = self.first().ok_or(missing)?;
@@ -54,8 +63,9 @@ impl View {
         if name.is_empty() { return Err(AddError::InvalidName); }
         if attribute {
             let uri = namespace.unwrap_or("");
-            if !uri.is_empty() && !name.contains(':') { return Err(AddError::AttributePrefix); }
-            let local = name.split_once(':').map(|(_, local)| local).unwrap_or(name);
+            let qualified = name.split_once(':').filter(|(prefix, _)| !prefix.is_empty());
+            if !uri.is_empty() && qualified.is_none() { return Err(AddError::AttributePrefix); }
+            let local = if literal { name } else { qualified.map(|(_, local)| local).unwrap_or(name) };
             let mut current = unsafe { ffi::attrs(parent) };
             while !current.is_null() {
                 let current_uri = unsafe { ffi::ns(current, 0) };
@@ -72,8 +82,14 @@ impl View {
         let name = cstring(name);
         let text = cstring(value.unwrap_or(""));
         let uri = cstring(namespace.unwrap_or(""));
-        let raw = unsafe { ffi::add(parent, name.as_ptr(), text.as_ptr(), uri.as_ptr(),
-            i32::from(namespace.is_some()), i32::from(attribute), i32::from(value.is_some())) };
+        let raw = unsafe {
+            if literal {
+                ffi::add_literal(parent, name.as_ptr(), text.as_ptr(), i32::from(attribute), i32::from(value.is_some()))
+            } else {
+                ffi::add(parent, name.as_ptr(), text.as_ptr(), uri.as_ptr(),
+                    i32::from(namespace.is_some()), i32::from(attribute), i32::from(value.is_some()))
+            }
+        };
         if raw.is_null() { Err(missing) } else { Ok(raw) }
     }
     /// Replaces direct content without freeing child wrappers that remain in user storage.
@@ -104,7 +120,7 @@ impl View {
                     .map(|node| { self.assign_node(node, value); 1 }).unwrap_or(0);
             }
             if let Scope::Children(parent, Some(name)) = &self.scope {
-                return parent.add(name, None, None, false).map(|node| { self.assign_node(node, value); 1 }).unwrap_or(0);
+                return parent.add_literal(name, None, false).map(|node| { self.assign_node(node, value); 1 }).unwrap_or(0);
             }
             return 0;
         }
@@ -115,7 +131,7 @@ impl View {
         if kind == 3 || (kind == 2 && matches!(self.scope, Scope::Attributes(..))) {
             let owner = if matches!(self.scope, Scope::Attributes(..)) { parent_for_attributes(self) } else { Rc::new(self.clone()) };
             return i64::from(owner.ensure_first().and_then(|node| {
-                owner.with_scope(Scope::Node(node)).add(key, Some(value), None, true)
+                owner.with_scope(Scope::Node(node)).add_literal(key, Some(value), true)
             }).is_some());
         }
         if kind == 2 {
@@ -123,7 +139,7 @@ impl View {
         }
         if kind == 4 || kind == 5 {
             if let Scope::Children(parent, Some(name)) = &self.scope {
-                if let Some(node) = parent.add(name, None, None, false) { self.assign_node(node, value); return 1; }
+                if let Some(node) = parent.add_literal(name, None, false) { self.assign_node(node, value); return 1; }
             }
         }
         0

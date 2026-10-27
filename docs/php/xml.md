@@ -46,8 +46,10 @@ second argument. `registerXPathNamespace()` registers prefixes for XPath queries
 namespace declarations. Both support recursive traversal.
 
 Assignments, `unset()`, `addChild()`, and `addAttribute()` modify the underlying
-document. Existing selections observe subsequent changes and retain their
-document after the original root variable is released. String conversion reads
+document. Property and string-offset writes keep the complete literal name,
+including colons. `addChild()` and `addAttribute()` interpret a nonempty prefix
+before a colon as part of a qualified name. Existing selections observe subsequent
+changes and retain their document after the original root variable is released. String conversion reads
 direct text and CDATA. `asXML()` and its `saveXML()` alias return XML, or write
 to a filename and return success. Both classes support `count()`, `foreach`,
 and the `RecursiveIterator` methods. Integer and float casts read the selected

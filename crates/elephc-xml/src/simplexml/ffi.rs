@@ -96,6 +96,9 @@ extern "C" {
     /// Calls the opaque shim add operation.
     #[link_name = "elephc_libxml2_v1_sx_add"]
     pub(super) fn add(node: Node, name: *const c_char, value: *const c_char, uri: *const c_char, has_uri: c_int, attribute: c_int, has_value: c_int) -> Node;
+    /// Creates a property/dimension node with its complete literal PHP name.
+    #[link_name = "elephc_libxml2_v1_sx_add_literal"]
+    pub(super) fn add_literal(node: Node, name: *const c_char, value: *const c_char, attribute: c_int, has_value: c_int) -> Node;
     /// Calls the opaque shim ns_defs operation.
     #[link_name = "elephc_libxml2_v1_sx_ns_defs"]
     pub(super) fn ns_defs(node: Node) -> Node;

@@ -428,6 +428,30 @@ fn simplexml_checked_add_resolves_parent_and_reports_failures() {
     assert_eq!(unsafe { string(ffi::ns(child.first().unwrap(), 1)) }, "p");
 }
 
+/// Literal writes retain colons, while add methods split only a nonempty namespace prefix.
+#[test]
+fn simplexml_literal_writes_and_leading_colon_additions() {
+    let root = parse(b"<r xmlns:p='urn:p' at='base'/>", 0, "", false).unwrap();
+    assert_eq!(root.write(2, "p:q", 0, "value"), 1);
+    assert_eq!(root.write(3, "p:at", 0, "literal"), 1);
+    let child = root.select(2, "p:q", "", false, 0);
+    assert_eq!(unsafe { string(ffi::name(child.first().unwrap())) }, "p:q");
+    assert_eq!(unsafe { owned_string(ffi::text(child.first().unwrap())) }, "value");
+    assert!(root.select(0, "", "urn:p", false, 0).nodes().is_empty());
+    for (name, expected) in [("at", "base"), ("p:at", "literal")] {
+        let attribute = root.select(3, name, "", false, 0).first().unwrap();
+        assert_eq!(unsafe { owned_string(ffi::text(attribute)) }, expected);
+    }
+    let missing = root.select(2, "a:b", "", false, 0);
+    assert!(missing.ensure_first().is_some());
+    assert_eq!(missing.write(2, "c", 0, "nested"), 1);
+    let leading = root.add_checked(":a", Some("method"), None, false).unwrap();
+    assert_eq!(unsafe { string(ffi::name(leading)) }, ":a");
+    assert_eq!(root.add_checked(":b", Some("1"), Some("urn:q"), true), Err(mutation::AddError::AttributePrefix));
+    assert!(root.add_checked(":c", Some("1"), None, true).is_ok());
+    assert_eq!(root.add_checked(":c", Some("2"), None, true), Err(mutation::AddError::DuplicateAttribute));
+}
+
 /// Write-fetch creates a stable empty node, while ordinary absent selections stay lazy.
 #[test]
 fn simplexml_write_fetch_and_absent_read_views() {

@@ -335,7 +335,7 @@ const LIBXML2_VERSIONS: &[PackageVersion] = &[PackageVersion {
         exact_size: 3_152_452,
         body_limit: 16 * 1024 * 1024,
     },
-    recipe_revision: 6,
+    recipe_revision: 7,
     dependencies: &[],
     supported_targets: TARGETS,
     ordered_link_outputs: LIBXML2_ARCHIVES,

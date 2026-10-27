@@ -180,10 +180,19 @@ void elephc_libxml2_v1_sx_assign(void *raw, const char *value) {
     xmlNodePtr text = xmlNewDocText(node->doc, (const xmlChar *)value);
     if (text) xmlAddChild(node, text);
 }
+/* PHP property/dimension names remain literal, even when they contain a colon. */
+void *elephc_libxml2_v1_sx_add_literal(void *raw, const char *name, const char *value,
+        int attribute, int has_value) {
+    xmlNodePtr parent = raw;
+    if (attribute) return xmlNewProp(parent, (const xmlChar *)name, (const xmlChar *)value);
+    return xmlNewChild(parent, parent->ns, (const xmlChar *)name,
+        has_value ? (const xmlChar *)value : NULL);
+}
 void *elephc_libxml2_v1_sx_add(void *raw, const char *qualified, const char *value,
         const char *uri, int has_uri, int attribute, int has_value) {
     xmlNodePtr parent = raw;
     const char *colon = strchr(qualified, ':');
+    if (colon == qualified) colon = NULL;
     const xmlChar *name = (const xmlChar *)(colon ? colon + 1 : qualified);
     xmlChar *prefix = colon ? xmlStrndup((const xmlChar *)qualified, (int)(colon - qualified)) : NULL;
     xmlNsPtr ns = NULL;

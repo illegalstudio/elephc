@@ -217,3 +217,84 @@ eval($source);
     assert_eq!(out.stdout, "64");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Literal names and failed filter closes share one catalog compile and independent AOT/eval heaps.
+#[test]
+fn test_simplexml_review_names_and_filter_close_bundle() {
+    if skip_without_xml_native("test_simplexml_review_names_and_filter_close_bundle") { return; }
+    let names = r####"
+$xml = new SimpleXMLElement('<r xmlns:p="urn:p" at="base"/>');
+$xml->{'p:q'} = 'value';
+$xml['p:at'] = 'literal';
+$xml->{'a:b'}->c = 'nested';
+$xml->{'p:q'}[] = 'second';
+echo $xml->asXML();
+echo (int)isset($xml->{'p:q'}), ':', (string)$xml->{'p:q'}[0], ':', (string)$xml->{'p:q'}[1], ':', count($xml->children('urn:p')), '|';
+echo (string)$xml['at'], ':', (string)$xml['p:at'], ':', $xml->{'a:b'}->getName(), '|';
+$added = $xml->addChild('p:method', 'qualified', 'urn:p');
+echo $added->getName(), ':', (string)$xml->children('urn:p')->method, '|';
+$leading = $xml->addChild(':a', 'leading');
+echo $leading->getName(), '|';
+set_error_handler(function(int $level, string $message): bool { echo $message, '|'; return true; });
+$xml->addAttribute(':b', '1', 'urn:q');
+$xml->addAttribute(':c', '1');
+$xml->addAttribute(':c', '2');
+restore_error_handler();
+echo $xml->asXML();
+unset($added, $leading, $xml);
+"####;
+    let filters = r####"
+$uri = 'php://filter/read=xml.review.throw/resource=data://text/plain,%3Cr%2F%3E';
+try {
+    if ($constructor) { new SimpleXMLElement($uri, 0, true); }
+    else { simplexml_load_file($uri); }
+} catch (Throwable $error) {
+    echo get_class($error), ':', $error->getMessage(), '|';
+    if ($constructor) { echo get_class($error->getPrevious()), '|'; }
+}
+unset($error, $uri);
+"####;
+    let declarations = r####"<?php
+class XmlReviewOtherFilter extends php_user_filter {
+    public function onClose(): void { echo 'other-close|'; }
+}
+class XmlReviewThrowFilter extends php_user_filter {
+    public function onCreate(): bool { echo 'create|'; return true; }
+    public function filter($in, $out, &$consumed, bool $closing): int { throw new RuntimeException('filter'); }
+    public function onClose(): void { echo 'unexpected-close|'; }
+    public function __destruct() {
+        $other = fopen('php://temp', 'w+');
+        stream_filter_append($other, 'xml.review.other', STREAM_FILTER_READ);
+        fclose($other);
+        echo 'drop|';
+    }
+}
+stream_filter_register('xml.review.other', 'XmlReviewOtherFilter');
+stream_filter_register('xml.review.throw', 'XmlReviewThrowFilter');
+"####;
+    let eval_names = names.replace('\\', "\\\\").replace('\'', "\\'");
+    let eval_filters = filters.replace('\\', "\\\\").replace('\'', "\\'");
+    let source = format!("{declarations}
+        if ($argc === 1) {{ {names} }}
+        elseif ($argc === 2) {{ $source = $argc > 0 ? '{eval_names}' : ''; eval($source); }}
+        else {{
+            set_error_handler(function(int $level, string $message): bool {{ return true; }});
+            $constructor = $argc === 4 || $argc === 6;
+            if ($argc <= 4) {{ {filters} }}
+            else {{ $source = $argc > 0 ? '{eval_filters}' : ''; eval($source); }}
+            restore_error_handler();
+        }}");
+    let args: Vec<_> = (0..6).map(|count| vec!["x"; count]).collect();
+    let argvs: Vec<_> = args.iter().map(Vec::as_slice).collect();
+    let runs = compile_and_run_with_heap_debug_per_argv(&source, &argvs);
+    let names_expected = "<?xml version=\"1.0\"?>\n<r xmlns:p=\"urn:p\" at=\"base\" p:at=\"literal\"><p:q>value</p:q><a:b><c>nested</c></a:b><p:q>second</p:q></r>\n1:value:second:0|base:literal:a:b|method:qualified|:a|SimpleXMLElement::addAttribute(): Attribute requires prefix for namespace|SimpleXMLElement::addAttribute(): Attribute already exists|<?xml version=\"1.0\"?>\n<r xmlns:p=\"urn:p\" at=\"base\" p:at=\"literal\" :c=\"1\"><p:q>value</p:q><a:b><c>nested</c></a:b><p:q>second</p:q><p:method>qualified</p:method><:a>leading</:a></r>\n";
+    let factory = "create|other-close|drop|RuntimeException:filter|";
+    let constructor = "create|other-close|drop|Exception:String could not be parsed as XML|RuntimeException|";
+    let expected = [names_expected, names_expected, factory, constructor, factory, constructor];
+    assert_eq!(runs.len(), expected.len());
+    for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {
+        assert!(out.success, "mode={mode} stdout={:?} stderr={}", out.stdout, out.stderr);
+        assert_eq!(out.stdout, expected, "mode={mode}: {}", out.stderr);
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "mode={mode}: {}", out.stderr);
+    }
+}
