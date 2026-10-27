@@ -69,7 +69,40 @@ impl Polarity {
 }
 
 /// Rejects every template whose body breaks the promise its variance markers make.
-pub fn verify(templates: &Templates) -> Result<(), CompileError> {
+///
+/// A NATIVE marker (`+T`) that the body breaks is an error. A PHPDoc marker
+/// (`@template-covariant`) is a claim php-src never checks, and real code (Laravel's
+/// collections and paginators) declares it on templates that also consume the parameter. Such a
+/// marker is demoted to invariant with a warning: widening through it would be unsound, and
+/// rejecting the file would refuse a program PHP runs.
+pub fn verify(
+    templates: &mut Templates,
+) -> Result<Vec<crate::errors::CompileWarning>, CompileError> {
+    let mut warnings = Vec::new();
+    loop {
+        let violation = match first_violation(templates) {
+            Ok(()) => return Ok(warnings),
+            Err(violation) => violation,
+        };
+        let (key, param, from_docblock, error) = *violation;
+        if !from_docblock || !templates.demote_to_invariant(&key, &param) {
+            return Err(error);
+        }
+        warnings.push(crate::errors::CompileWarning::new(
+            error.span,
+            &format!(
+                "{}; the PHPDoc variance marker is ignored and the parameter is invariant",
+                error.message
+            ),
+        ));
+    }
+}
+
+/// The first marker some template breaks: (template key, parameter, PHPDoc origin, error).
+type Violation = Box<(String, String, bool, CompileError)>;
+
+/// Walks every marked parameter and reports the first one its declaration does not keep.
+fn first_violation(templates: &Templates) -> Result<(), Violation> {
     // Variance is rare and the walk is not free, so the common program pays one map lookup.
     let markers = marker_table(templates);
     if markers.is_empty() {
@@ -89,7 +122,15 @@ pub fn verify(templates: &Templates) -> Result<(), CompileError> {
                 templates,
                 &[],
                 0,
-            )?;
+            )
+            .map_err(|error| {
+                Box::new((
+                    template_key(&template.declared_name),
+                    param.name.clone(),
+                    param.from_docblock,
+                    error,
+                ))
+            })?;
         }
     }
     Ok(())

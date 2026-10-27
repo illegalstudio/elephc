@@ -21,6 +21,7 @@
 
 pub mod classes;
 mod constructors;
+mod dispatch;
 pub(crate) use constructors::parameter_name;
 pub mod methods;
 mod report;
@@ -93,11 +94,14 @@ where
     // in the pipeline is what keeps the two in step — an instantiated FUNCTION body can name
     // `Box<T>`, which only becomes the concrete `Box<int>` once the checker has bound `T`.
     let program = constructors::lift(program);
+    // A generic method reached through dynamic dispatch cannot be monomorphized (instantiations
+    // are called statically), so it is erased before any template is collected or copied.
+    let program = dispatch::erase_dispatched(program);
     let mut class_templates = classes::collect(&program);
     // A variance marker is a promise about the DECLARATION, so it is checked once, here, before
     // anything is spliced. Checking it per instantiation would name a class the programmer never
     // wrote, and checking it after splicing would be too late to name the member at fault.
-    variance::verify(&class_templates)?;
+    let variance_warnings = variance::verify(&mut class_templates)?;
     let first = constructors::instantiate(
         program,
         &mut class_templates,
@@ -107,7 +111,8 @@ where
     let obligations = first.obligations;
     // Warnings the INSTANTIATING pass produced — a bare template name read as an instantiation —
     // travel with the checker's, so a compile reports both in one place.
-    let mut instantiation_warnings = first.warnings;
+    let mut instantiation_warnings = variance_warnings;
+    instantiation_warnings.extend(first.warnings);
     let mut context = GenericContext {
         class_type_argument_bounds: obligations,
         // Carried for the checker's own half of the job: `new Box(5)` writes no type arguments,
@@ -804,6 +809,7 @@ mod tests {
             bound: None,
             default: None,
             variance: Variance::Invariant,
+            from_docblock: false,
         }
     }
 
@@ -924,6 +930,7 @@ mod tests {
             bound: None,
             default: Some(TypeExpr::Str),
             variance: Variance::Invariant,
+            from_docblock: false,
         };
         let bindings = infer_bindings(&[declared], &[param(TypeExpr::Int)], &[PhpType::Int])
             .expect("the default determines K");
@@ -938,6 +945,7 @@ mod tests {
             bound: None,
             default: Some(TypeExpr::Str),
             variance: Variance::Invariant,
+            from_docblock: false,
         };
         let bindings = infer_bindings(&[declared], &[param(t("T"))], &[PhpType::Int])
             .expect("T is constrained by the argument");

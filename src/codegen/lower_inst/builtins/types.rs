@@ -1412,6 +1412,16 @@ fn static_relation_holds(
     let object_class = object_class.trim_start_matches('\\');
     let target_class = target_class.trim_start_matches('\\');
     let target_key = php_symbol_key(target_class);
+    if exclude_self && super::class_relations::reflection_hidden_interface(ctx, target_class) {
+        // `Box` names a generic class template, and php-src's `Box` is the one class every
+        // instantiation stands for: `is_subclass_of` holds for a class EXTENDING an
+        // instantiation, never for the instantiation itself.
+        return Ok(lookup_class(ctx, object_class)
+            .and_then(|info| info.parent.clone())
+            .is_some_and(|parent| {
+                class_interfaces_contain(ctx, parent.trim_start_matches('\\'), &target_key)
+            }));
+    }
     if !exclude_self && php_symbol_key(object_class) == target_key {
         return Ok(true);
     }
@@ -1489,6 +1499,10 @@ fn declared_names(ctx: &FunctionContext<'_>, name: &str) -> Result<Vec<String>> 
             "get_declared_traits" => ctx.module.trait_table.names.clone(),
             _ => unreachable!(),
         };
+    }
+    if name == "get_declared_interfaces" {
+        // A class template's marker interface is not an interface php-src would declare.
+        names.retain(|interface| !super::class_relations::reflection_hidden_interface(ctx, interface));
     }
     Ok(names)
 }
