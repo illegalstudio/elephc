@@ -19,7 +19,7 @@ class ConditionalAssignmentOwner {
     public string $name = 'owner';
     public function __destruct() { self::$destroyed++; }
 }
-function conditionalAssignmentOwners(int $flags): void {
+function conditionalAssignmentOwners(int $flags, mixed $boxed = null): void {
     if (($flags & 1) !== 0) {
         $text = str_repeat('a', 80);
         $object = new ConditionalAssignmentOwner();
