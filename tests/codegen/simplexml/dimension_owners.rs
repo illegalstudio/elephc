@@ -135,11 +135,16 @@ elseif ($argc === 2) {
             failures.push(format!("mode={mode} success={} stdout={:?} expected={expected:?}\n{}", out.success, out.stdout, out.stderr));
         }
     }
-    let symbols = ["_main".into(),
+    let mut symbols = vec!["_main".into(),
         elephc::names::method_symbol("SimpleXMLElement", "__elephc_append"),
         elephc::names::method_symbol("SimpleXMLElement", "__elephc_property_write_fetch"),
-        elephc::names::method_symbol("SimpleXMLElement", "__elephc_offset_set"),
+        elephc::names::method_symbol("SimpleXMLElement", "__elephc_dimension_set"),
+        elephc::names::method_symbol("SimpleXMLElement", "__elephc_dimension_get"),
+        elephc::names::method_symbol("SimpleXMLElement", "__elephc_number"),
+        elephc::names::static_method_symbol("SimpleXMLElement", "__elephc_add"),
         elephc::names::function_symbol("freshIsolatedXmlMixed"),
     ];
+    symbols.extend((0..5).map(|index|
+        elephc::names::function_symbol(&format!("__eir_closure_main_{index}"))));
     assert!(failures.is_empty(), "{}\nDimension owner assembly:\n{}", failures.join("\n"), selected_function_assembly(&assembly, &symbols));
 }
