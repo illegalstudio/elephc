@@ -196,7 +196,6 @@ fn test_this_property_element_increment_retains_php_incdec() {
 #[test]
 fn test_computed_property_write_statements_preserve_writable_traversal() {
     for source in [
-        "<?php $x->{g()}->c = f();", "<?php $x->a[k()]->c = f();",
         "<?php $x->a[k()]->c .= f();", "<?php $x->a[k()]->c++;",
         "<?php $x->{g()}->b->c += 1;",
     ] {
@@ -222,4 +221,25 @@ fn test_computed_property_append_keeps_receiver_chain() {
         if matches!(value.kind, ExprKind::FunctionCall { .. })));
     assert!(matches!(&prelude.last().unwrap().kind, StmtKind::PropertyArrayPush { object, .. }
         if matches!(object.kind, ExprKind::DynamicPropertyAccess { .. })));
+}
+
+/// Plain computed storage writes keep their RHS inline rather than in a frame-lived capture.
+#[test]
+fn test_computed_plain_property_statements_keep_inline_rhs() {
+    for source in ["<?php $x->{g()}->c = f();", "<?php $x->a[k()]->c = f();"] {
+        let statements = parse_source(source);
+        let StmtKind::Synthetic(body) = &statements[0].kind else { panic!("expected captured key"); };
+        assert!(matches!(&body.last().unwrap().kind, StmtKind::PropertyAssign { value, .. }
+            if matches!(value.kind, ExprKind::FunctionCall { .. })), "{source}");
+    }
+}
+
+/// Computed element increments keep the PHP incdec kernel instead of numeric arithmetic.
+#[test]
+fn test_computed_property_element_increment_retains_php_incdec() {
+    let statements = parse_source("<?php $obj->arr[k()]++;");
+    let StmtKind::Synthetic(body) = &statements[0].kind else { panic!("expected captured key"); };
+    let StmtKind::PropertyArrayAssign { value, .. } = &body.last().unwrap().kind else { panic!("expected element writeback"); };
+    let ExprKind::Assignment { value, .. } = &value.kind else { panic!("expected captured increment"); };
+    assert!(matches!(value.kind, ExprKind::PreIncrement(_)));
 }

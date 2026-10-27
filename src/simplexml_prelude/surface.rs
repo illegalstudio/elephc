@@ -57,7 +57,7 @@ function __elephc_simplexml_assigned_value(mixed $value, bool $attribute): strin
     $target = $attribute ? 'attributes' : 'properties';
     $type = gettype($value);
     if (is_object($value)) { $type = (string)explode("\0", get_class($value))[0]; }
-    elseif (is_resource($value)) { $type = 'resource (' . get_resource_type($value) . ')'; }
+    elseif (is_resource($value) || str_starts_with($type, 'resource')) { $type = 'resource'; }
     throw new TypeError("It's not possible to assign a complex type to " . $target . ', ' . $type . ' given');
 }
 

@@ -314,8 +314,7 @@ impl Scanner<'_> {
             }
             "method_exists" => self.method_exists(args),
             "get_class_methods" => self.usage.hazards.dynamic_method = true,
-            "class_exists" | "interface_exists" | "enum_exists" | "trait_exists"
-            | "is_a" | "is_subclass_of" => self.literal_class_or_hazard(first),
+            "class_exists" | "interface_exists" | "enum_exists" | "trait_exists" => self.literal_class_or_hazard(first),
             "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" | "unserialize"
             | "__elephc_simplexml_allocate" => self.usage.hazards.dynamic_class = true,
             "eval" => self.literal_eval_or_hazard(first),
@@ -334,7 +333,21 @@ impl Scanner<'_> {
                 self.scan_class_argument(name, args, 0, false);
             }
             "is_a" | "is_subclass_of" => {
-                self.scan_class_argument(name, args, 0, false);
+                let normalized = self.normalized_function_arguments(name, args);
+                let allow_string = match normalized.get(2).map(unwrap_named_arg) {
+                    Some(Expr { kind: ExprKind::BoolLiteral(false), .. }) => false,
+                    Some(_) => true,
+                    None => name == "is_subclass_of",
+                };
+                let first = normalized.first().map(unwrap_named_arg);
+                if let Some(first) = first {
+                    let classes = self.expr_classes(first);
+                    if !classes.is_empty() {
+                        self.usage.classes.extend(classes);
+                    } else if allow_string && !matches!(first.kind, ExprKind::This | ExprKind::NewObject { .. } | ExprKind::NewGeneric { .. }) {
+                        self.literal_class_or_hazard(Some(first));
+                    }
+                } else if allow_string { self.usage.hazards.dynamic_class = true; }
                 self.scan_class_argument(name, args, 1, false);
             }
             "stream_wrapper_register" | "stream_filter_register" => {

@@ -31,10 +31,13 @@ class ComplexAssignedXml extends SimpleXMLElement {
     public function __toString(): string { echo 'wrong|'; return 'wrong'; }
 }
 $xml = new SimpleXMLElement('<r id="1"><item>old</item></r>');
-foreach ([['x'], new stdClass(), new ComplexAssignedXml('<v>wrong</v>')] as $value) {
+$open = fopen('php://memory', 'r');
+$closed = fopen('php://memory', 'r'); fclose($closed);
+foreach ([['x'], new stdClass(), new ComplexAssignedXml('<v>wrong</v>'), $open, $closed] as $value) {
     try { $xml->item = $value; } catch (TypeError $error) { echo $error->getMessage(), '|'; }
     try { $xml['id'] = $value; } catch (TypeError $error) { echo $error->getMessage(), '|'; }
 }
+fclose($open);
 echo (string)$xml->item, ':', (string)$xml['id'], '|';
 $xml->item = new SimpleXMLElement('<v>accepted</v>');
 echo (string)$xml->item;
@@ -46,7 +49,11 @@ echo (string)$xml->item;
         "It's not possible to assign a complex type to properties, stdClass given|",
         "It's not possible to assign a complex type to attributes, stdClass given|",
         "It's not possible to assign a complex type to properties, ComplexAssignedXml given|",
-        "It's not possible to assign a complex type to attributes, ComplexAssignedXml given|old:1|accepted",
+        "It's not possible to assign a complex type to attributes, ComplexAssignedXml given|",
+        "It's not possible to assign a complex type to properties, resource given|",
+        "It's not possible to assign a complex type to attributes, resource given|",
+        "It's not possible to assign a complex type to properties, resource given|",
+        "It's not possible to assign a complex type to attributes, resource given|old:1|accepted",
     ));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

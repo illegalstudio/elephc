@@ -70,7 +70,7 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     // Runtime-name writes need the expression lowerer's captured RHS and lazy ??= plan.
     // A handcrafted assignment without its result target evaluated the value twice.
     if !is_append && (matches!(lhs_expr.kind, ExprKind::DynamicPropertyAccess { .. })
-        || (!can_replay_assignment_target(&lhs_expr) && is_instance_property_assignment_target(&lhs_expr))) {
+        || (op != AssignmentOperator::Assign && computed_storage_property_target(&lhs_expr))) {
         let value = parse_expr(tokens, pos)?;
         expect_semicolon(tokens, pos)?;
         return Ok(Some(Stmt::new(StmtKind::ExprStmt(value), span)));
@@ -101,8 +101,7 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
         // afterwards. A child-property append must not retain the old static object chain.
         let target = hoisted.stabilize_array_base(lhs_expr);
         (target, hoisted.stabilize_unconditionally(rhs))
-    } else if is_append && is_instance_property_assignment_target(&lhs_expr)
-        && !can_replay_assignment_target(&lhs_expr) {
+    } else if op == AssignmentOperator::Assign && computed_storage_property_target(&lhs_expr) {
         // Settle computed names and keys before the RHS, retaining writable traversal.
         (hoisted.stabilize_array_base(lhs_expr), rhs)
     } else {
@@ -539,6 +538,22 @@ fn is_instance_property_assignment_target(target: &Expr) -> bool {
     }
 }
 
+/// Recognizes computed hops in a property-ending chain with a live storage root.
+fn computed_storage_property_target(target: &Expr) -> bool {
+    matches!(target.kind, ExprKind::PropertyAccess { .. } | ExprKind::DynamicPropertyAccess { .. })
+        && storage_receiver_root(target) && !can_replay_assignment_target(target)
+}
+
+/// Excludes computed object roots whose statement lowering already owns their lifetime.
+fn storage_receiver_root(target: &Expr) -> bool {
+    match &target.kind {
+        ExprKind::PropertyAccess { object, .. } | ExprKind::DynamicPropertyAccess { object, .. } => storage_receiver_root(object),
+        ExprKind::ArrayAccess { array, .. } => storage_receiver_root(array),
+        ExprKind::Variable(_) | ExprKind::This | ExprKind::StaticPropertyAccess { .. } => true,
+        _ => false,
+    }
+}
+
 /// Finds a delayed static receiver through literal, runtime-name, and array traversal.
 fn has_delayed_static_receiver(target: &Expr) -> bool {
     match &target.kind {
@@ -827,7 +842,7 @@ pub(crate) fn lower_postfix_incdec_assignment(
     };
     let one = Expr::new(ExprKind::IntLiteral(1), span);
 
-    if is_instance_property_assignment_target(&lhs_expr) && !can_replay_assignment_target(&lhs_expr) {
+    if computed_storage_property_target(&lhs_expr) {
         if let Some(expression) = crate::parser::expr::desugar_lvalue_incdec(
             lhs_expr.clone(), is_increment, false, span,
         ) {
