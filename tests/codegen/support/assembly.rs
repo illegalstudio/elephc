@@ -69,7 +69,9 @@ fn append_function_body(output: &mut String, body: &[&str]) {
         include[body.len() - 32..].fill(true);
         for (index, line) in body.iter().enumerate() {
             if is_ownership_call(line) {
-                include[index.saturating_sub(16)..(index + 25).min(body.len())].fill(true);
+                // Offset reads need the original receiver and key setup above diagnostic metadata.
+                let before = if line.trim_end().ends_with("__rt_mixed_array_get") { 96 } else { 16 };
+                include[index.saturating_sub(before)..(index + 25).min(body.len())].fill(true);
             }
         }
     }
