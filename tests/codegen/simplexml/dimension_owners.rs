@@ -9,7 +9,7 @@
 
 use crate::support::*;
 
-/// Detached clone appends own their namespace after every source wrapper has been released.
+/// Parentless write fetches fail while scalar appends retain their clone's namespace and owner.
 #[test]
 fn test_simplexml_detached_clone_append_owners_bundle() {
     if skip_without_xml_native("test_simplexml_detached_clone_append_owners_bundle") { return; }
@@ -17,6 +17,8 @@ fn test_simplexml_detached_clone_append_owners_bundle() {
 $root = new SimpleXMLElement('<r xmlns:p="urn:p"><p:a>one</p:a></r>');
 $original = $root->children('urn:p')->a[0];
 $orphan = clone $original;
+try { $orphan->children('urn:p')[0]->child = 'new'; }
+catch (Error $error) { echo $error->getMessage(), "\n"; }
 $orphan[] = 'two';
 echo (string)$original, ':', (string)$orphan, "\n";
 unset($original, $root);
@@ -24,10 +26,20 @@ echo $orphan->asXML(), "\n";
 $orphan[0] = 'kept';
 echo (string)$orphan, "\n";
 unset($orphan);
+$attached = new SimpleXMLElement('<r/>');
+$attached->children()[0]->mark = 'yes';
+echo $attached->asXML();
+$retirement = new SimpleXMLElement('<r><b><child/></b></r>');
+$removed = $retirement->b[0];
+unset($retirement->b[0]);
+try { $removed->children()[1]->z = 'w'; }
+catch (Error $error) { echo $error->getMessage(), "\n"; }
+echo $removed->asXML(), "\n";
+unset($attached, $retirement, $removed, $error);
 "#;
     let body = source.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
-    let expected = "one:two\n<p:a xmlns:p=\"urn:p\">two</p:a>\nkept\n";
+    let expected = "SimpleXMLElement is not properly initialized\none:two\n<p:a xmlns:p=\"urn:p\">two</p:a>\nkept\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark>yes</mark></r>\nSimpleXMLElement is not properly initialized\n<b><child/></b>\n";
     assert_bundle_with(&[
         BundleCase { name: "detached_append_aot", source, expected },
         BundleCase { name: "detached_append_eval", source: &eval, expected },

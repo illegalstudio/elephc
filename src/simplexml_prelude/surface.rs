@@ -383,6 +383,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
             if ($offset >= 0 && $mode !== 0) {
                 $added = elephc_xml_sx_mutate($handle, 24, '', '', '', 0, 0);
                 if ($added > 0) { return __elephc_simplexml_wrap($added, get_class($this)); }
+                throw new Error('SimpleXMLElement is not properly initialized');
             }
         }
         __elephc_simplexml_warning("Notice: Indirect modification of overloaded element of " . get_class($this) . " has no effect\n");

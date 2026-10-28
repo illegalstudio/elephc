@@ -335,7 +335,7 @@ const LIBXML2_VERSIONS: &[PackageVersion] = &[PackageVersion {
         exact_size: 3_152_452,
         body_limit: 16 * 1024 * 1024,
     },
-    recipe_revision: 10,
+    recipe_revision: 9,
     dependencies: &[],
     supported_targets: TARGETS,
     ordered_link_outputs: LIBXML2_ARCHIVES,
@@ -624,7 +624,7 @@ mod tests {
         assert!(version.retained_headers.contains(&"include/libxml/xmlversion.h"));
         assert!(version.retained_headers.contains(&"include/libxml/xmlwriter.h"));
         assert!(version.retained_headers.iter().all(|header| header.starts_with("include/libxml/") && header.ends_with(".h")));
-        assert_eq!(version.recipe_revision, 10);
+        assert_eq!(version.recipe_revision, 9);
         assert!(version.dependencies.is_empty());
         assert_eq!(version.supported_targets, TARGETS);
     }
