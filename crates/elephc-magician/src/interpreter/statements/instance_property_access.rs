@@ -655,6 +655,7 @@ pub(super) fn eval_property_reference_bind_result(
         return Err(EvalStatus::RuntimeFatal);
     }
     let storage_property_name = eval_instance_property_storage_name(&declaring_class, &property);
+    eval_preflight_property_reference_source(&declaring_class, &property, source_name, context, scope, values)?;
     let target = eval_property_reference_target(
         identity,
         &storage_property_name,

@@ -142,3 +142,27 @@ pub(in crate::interpreter) fn eval_reject_null_object_static_property(
     }
     Ok(())
 }
+
+/// Checks a top-level source before preparation can retarget an already published hidden alias.
+pub(in crate::interpreter) fn eval_preflight_property_reference_source(
+    owner: &str, property: &EvalClassProperty, source: &str,
+    context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if context.current_function().is_some() || scope.reference_target(source).is_some()
+        || !property.property_type().is_some_and(eval_nonnull_object_boundary) {
+        return Ok(());
+    }
+    let value = match visible_scope_cell(context, scope, source) {
+        Some(value) => value,
+        None => {
+            // PHP creates an absent source as null even when the property bind is refused.
+            let value = values.null()?;
+            for previous in set_owned_scope_cell(context, scope, source.to_string(), value, values)? {
+                eval_release_value(context, values, previous)?;
+            }
+            value
+        }
+    };
+    eval_reject_null_object_property(owner, property, value, context, values)
+}

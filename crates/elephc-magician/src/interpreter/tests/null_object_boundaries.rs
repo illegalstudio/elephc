@@ -230,7 +230,7 @@ return true;
 #[test]
 fn eval_null_object_property_reference_binds_preserve_storage() {
     assert_null_boundary_output(br#"
-class NullRefBox { public object $node; }
+class NullRefBox { public object $node; public static object $shared; }
 $box = new NullRefBox();
 $missing = null;
 try { $box->node =& $missing; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
@@ -245,12 +245,45 @@ try { $box->{$name} =& $missing; } catch (TypeError $e) { echo $e->getMessage(),
 echo $box->node === $good ? 'preserved|' : 'bad';
 $missing = new stdClass();
 echo $box->node === $good ? 'detached|' : 'bad';
+$original = new stdClass();
+$box->node =& $original;
+$rejected = null;
+try { $box->node =& $rejected; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { $box->{$name} =& $rejected; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+echo $box->node === $original ? 'live|' : 'bad';
+$rejected = new stdClass();
+echo $box->node === $original ? 'kept|' : 'bad';
+$original = new stdClass();
+echo $box->node === $original ? 'followed|' : 'bad';
+$staticOriginal = new stdClass();
+NullRefBox::$shared =& $staticOriginal;
+$staticRejected = null;
+try { NullRefBox::$shared =& $staticRejected; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+$staticName = 'shared';
+try { NullRefBox::${$staticName} =& $staticRejected; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+echo NullRefBox::$shared === $staticOriginal ? 'static_live|' : 'bad';
+$staticRejected = new stdClass();
+echo NullRefBox::$shared === $staticOriginal ? 'static_kept|' : 'bad';
+$staticOriginal = new stdClass();
+echo NullRefBox::$shared === $staticOriginal ? 'static_followed|' : 'bad';
+try { $box->node =& $absentReferenceSource; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+echo array_key_exists('absentReferenceSource', get_defined_vars()) ? 'source_created|' : 'bad';
+echo $box->node === $original ? 'live|' : 'bad';
+try { NullRefBox::$shared =& $absentStaticReferenceSource; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+echo array_key_exists('absentStaticReferenceSource', get_defined_vars()) ? 'static_source_created|' : 'bad';
+echo NullRefBox::$shared === $staticOriginal ? 'static_live|' : 'bad';
 return true;
 "#, concat!(
         "Cannot assign null to property NullRefBox::$node of type object\n",
         "Cannot assign null to property NullRefBox::$node of type object\nuninitialized|",
         "Cannot assign null to property NullRefBox::$node of type object\n",
         "Cannot assign null to property NullRefBox::$node of type object\npreserved|detached|",
+        "Cannot assign null to property NullRefBox::$node of type object\n",
+        "Cannot assign null to property NullRefBox::$node of type object\nlive|kept|followed|",
+        "Cannot assign null to property NullRefBox::$shared of type object\n",
+        "Cannot assign null to property NullRefBox::$shared of type object\nstatic_live|static_kept|static_followed|",
+        "Cannot assign null to property NullRefBox::$node of type object\nsource_created|live|",
+        "Cannot assign null to property NullRefBox::$shared of type object\nstatic_source_created|static_live|",
     ));
 }
 

@@ -577,6 +577,7 @@ pub(super) fn eval_static_property_reference_bind_result(
                 values,
             );
         }
+        eval_preflight_property_reference_source(&declaring_class, &property, source_name, context, scope, values)?;
         let target = eval_static_property_reference_target(
             &declaring_class,
             property.name(),
