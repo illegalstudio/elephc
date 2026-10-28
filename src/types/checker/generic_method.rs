@@ -148,8 +148,8 @@ impl Checker {
             };
             // Substituted first, as for a generic function: `<U : Cmp<U>>` names `U` itself.
             let bound_ty =
-                self.resolve_type_expr(&bound.substitute_type_params(&bindings), expr.span)?;
-            let argument_ty = self.resolve_type_expr(argument, expr.span)?;
+                self.resolve_type_expr(&generics::substitute_value_type(bound, &bindings), expr.span)?;
+            let argument_ty = self.resolve_generic_bound_argument(argument, expr.span)?;
             if !self.type_accepts(&bound_ty, &argument_ty) {
                 return Err(CompileError::new(
                     expr.span,
@@ -182,7 +182,7 @@ impl Checker {
         // the next round sees an ordinary method and checks the call properly.
         match &template.return_type {
             Some(ty) => {
-                let substituted = ty.substitute_type_params(&bindings);
+                let substituted = generics::substitute_value_type(ty, &bindings);
                 Ok(Some(self.resolve_type_expr(&substituted, expr.span)?))
             }
             None => Ok(Some(PhpType::Mixed)),

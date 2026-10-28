@@ -255,14 +255,14 @@ fn substitute(mut method: ClassMethod, instantiated: &str, bindings: &Bindings) 
     method.type_params = Vec::new();
     for (_, declared, _, _) in method.params.iter_mut() {
         if let Some(ty) = declared.as_mut() {
-            *ty = ty.substitute_type_params(bindings);
+            *ty = super::substitute_value_type(ty, bindings);
         }
     }
     if let Some(ty) = method.variadic_type.as_mut() {
-        *ty = ty.substitute_type_params(bindings);
+        *ty = super::substitute_value_type(ty, bindings);
     }
     if let Some(ty) = method.return_type.as_mut() {
-        *ty = ty.substitute_type_params(bindings);
+        *ty = super::substitute_value_type(ty, bindings);
     }
     method.body = substitute_body(std::mem::take(&mut method.body), bindings);
     method
@@ -376,6 +376,11 @@ impl crate::magic_constants::walker::Pass for Substitute {
     /// Substitutes the concrete method bindings at every visited type position.
     fn transform_type(&self, ty: TypeExpr, _span: Span) -> TypeExpr {
         ty.substitute_type_params(&self.bindings)
+    }
+
+    /// Materializes the PHP value carrier for a method-local width binding.
+    fn transform_value_type(&self, ty: TypeExpr, _span: Span) -> TypeExpr {
+        super::substitute_value_type(&ty, &self.bindings)
     }
 }
 

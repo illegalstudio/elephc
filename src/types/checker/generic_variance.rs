@@ -28,6 +28,9 @@ use super::Checker;
 
 /// Whether a type argument is an object, and so shares storage with every other object.
 fn is_object_argument(ty: &TypeExpr) -> bool {
+    if crate::types::width_type_from_type_expr(ty).is_some() {
+        return false;
+    }
     matches!(ty, TypeExpr::Named(_) | TypeExpr::GenericClass { .. })
 }
 
@@ -146,6 +149,11 @@ impl Checker {
 
     /// Whether a `from` value may be used where `to` is expected, with identical storage.
     fn argument_widens(&self, to: &TypeExpr, from: &TypeExpr) -> bool {
+        if crate::types::width_type_from_type_expr(to).is_some()
+            || crate::types::width_type_from_type_expr(from).is_some()
+        {
+            return to == from;
+        }
         match (to, from) {
             (TypeExpr::Named(to_name), TypeExpr::Named(from_name)) => {
                 let (to_name, from_name) = (to_name.as_str(), from_name.as_str());

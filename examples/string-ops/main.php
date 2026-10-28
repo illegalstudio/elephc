@@ -32,6 +32,14 @@ echo "coalesce[99]: " . ($str[99] ?? "missing") . "\n";
 // A float offset truncates toward zero, so 1.9 selects the same byte as 1
 // and warns once on stderr: Warning: String offset cast occurred
 echo "index[1.9]: " . $str[1.9] . "\n";
+// Writing an offset replaces one byte; a copy keeps the old bytes, and writing past the
+// end pads with spaces
+$word = "hello";
+$copy = $word;
+$word[0] = "J";
+$word[-1] = "y";
+$word[7] = "!";
+echo "offset write: [" . $word . "] copy: " . $copy . "\n";
 
 // Case
 echo "\n--- Case ---\n";

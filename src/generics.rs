@@ -21,10 +21,13 @@
 
 pub mod classes;
 mod constructors;
+mod function_variants;
 pub(crate) use constructors::parameter_name;
 pub mod methods;
 mod report;
 mod shared;
+mod value_types;
+pub(crate) use value_types::{substitute_value_type, value_carrier_type};
 mod site_scope;
 mod splice;
 pub mod variance;
@@ -208,6 +211,7 @@ where
     check_result.warnings = collected_warnings;
     // A template is not a function: its annotations name types with no representation, so it
     // must never reach lowering. Every instantiation the program reaches now exists.
+    let program = function_variants::specialize(program, &mut check_result);
     let program = strip_templates(program);
     // A generic METHOD is a template too, and lives on a class that itself survives. Its body
     // names types with no representation — `new Box<U>` — so leaving it in reaches lowering and
@@ -239,6 +243,9 @@ pub fn type_expr_for_php_type(ty: &PhpType) -> Option<TypeExpr> {
         PhpType::Iterable => TypeExpr::Iterable,
         PhpType::Mixed => TypeExpr::Named(Name::unqualified("mixed")),
         PhpType::Callable => TypeExpr::Named(Name::unqualified("callable")),
+        PhpType::Object(name) if crate::parser::ast::is_c_width_type_name(name) => {
+            TypeExpr::Named(Name::from_parts(crate::names::NameKind::FullyQualified, vec![name.clone()]))
+        }
         PhpType::Object(name) => TypeExpr::Named(Name::unqualified(name)),
         PhpType::Array(elem) => TypeExpr::Array(Box::new(type_expr_for_php_type(elem)?)),
         PhpType::AssocArray { key, value } => TypeExpr::AssocArray {
@@ -637,6 +644,16 @@ pub fn describe_type(ty: &TypeExpr) -> String {
 
 /// Renders a `TypeExpr` for a diagnostic, in the spelling a programmer would write.
 fn describe(ty: &TypeExpr) -> String {
+    describe_with_roots(ty, false)
+}
+
+/// Renders parser-owned call arguments without losing explicit roots before name resolution.
+pub(crate) fn describe_written_type(ty: &TypeExpr) -> String {
+    describe_with_roots(ty, true)
+}
+
+/// Renders nested type syntax in either canonical identity or unresolved source mode.
+fn describe_with_roots(ty: &TypeExpr, preserve_roots: bool) -> String {
     match ty {
         TypeExpr::Int => "int".to_string(),
         TypeExpr::Float => "float".to_string(),
@@ -648,34 +665,37 @@ fn describe(ty: &TypeExpr) -> String {
         TypeExpr::Iterable => "iterable".to_string(),
         TypeExpr::CallableSig { params, ret } => format!(
             "callable({}): {}",
-            params.iter().map(describe).collect::<Vec<_>>().join(", "),
-            describe(ret)
+            params.iter().map(|ty| describe_with_roots(ty, preserve_roots)).collect::<Vec<_>>().join(", "),
+            describe_with_roots(ret, preserve_roots)
         ),
-        TypeExpr::Named(name) => name.as_str().to_string(),
-        TypeExpr::Array(inner) => format!("array<{}>", describe(inner)),
+        TypeExpr::Named(name) => {
+            let root = if (preserve_roots && name.is_fully_qualified()) || (!name.is_unqualified() && crate::parser::ast::is_c_width_type_name(name.as_str())) { "\\" } else { "" };
+            format!("{}{}", root, name.as_str())
+        },
+        TypeExpr::Array(inner) => format!("array<{}>", describe_with_roots(inner, preserve_roots)),
         TypeExpr::AssocArray { key, value } => {
-            format!("array<{}, {}>", describe(key), describe(value))
+            format!("array<{}, {}>", describe_with_roots(key, preserve_roots), describe_with_roots(value, preserve_roots))
         }
-        TypeExpr::Buffer(inner) => format!("buffer<{}>", describe(inner)),
-        TypeExpr::GenericClass { name, args } => format!(
-            "{}<{}>",
-            name.as_str(),
-            args.iter().map(describe).collect::<Vec<_>>().join(", ")
-        ),
-        TypeExpr::Nullable(inner) => format!("?{}", describe(inner)),
+        TypeExpr::Buffer(inner) => format!("buffer<{}>", describe_with_roots(inner, preserve_roots)),
+        TypeExpr::GenericClass { name, args } => {
+            let root = if preserve_roots && name.is_fully_qualified() { "\\" } else { "" };
+            format!("{}{}<{}>", root, name.as_str(),
+                args.iter().map(|ty| describe_with_roots(ty, preserve_roots)).collect::<Vec<_>>().join(", "))
+        },
+        TypeExpr::Nullable(inner) => format!("?{}", describe_with_roots(inner, preserve_roots)),
         TypeExpr::Ptr(Some(name)) => {
-            let root = if !name.is_unqualified() && crate::parser::ast::is_c_width_type_name(name.as_str()) { "\\" } else { "" };
+            let root = if (preserve_roots && name.is_fully_qualified()) || (!name.is_unqualified() && crate::parser::ast::is_c_width_type_name(name.as_str())) { "\\" } else { "" };
             format!("ptr<{}{}>", root, name.as_str())
         },
         TypeExpr::Ptr(None) => "ptr".to_string(),
         TypeExpr::Union(members) => members
             .iter()
-            .map(describe)
+            .map(|ty| describe_with_roots(ty, preserve_roots))
             .collect::<Vec<_>>()
             .join("|"),
         TypeExpr::Intersection(members) => members
             .iter()
-            .map(describe)
+            .map(|ty| describe_with_roots(ty, preserve_roots))
             .collect::<Vec<_>>()
             .join("&"),
     }

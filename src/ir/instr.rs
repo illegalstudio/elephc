@@ -165,7 +165,9 @@ impl Instruction {
                             | crate::builtins::semantics::BuiltinResultOwnership::Independent
                     ) || matches!(target, RuntimeFnId::GetClass | RuntimeFnId::GetParentClass)
                 }
-                Some(Immediate::RuntimeCall(RuntimeCallTarget::UnaryString(_))) => true,
+                Some(Immediate::RuntimeCall(
+                    RuntimeCallTarget::UnaryString(_) | RuntimeCallTarget::StringOffsetSet,
+                )) => true,
                 Some(Immediate::RuntimeCall(RuntimeCallTarget::ExecutablePath)) => true,
                 Some(Immediate::RuntimeCall(RuntimeCallTarget::Pcntl(target))) => matches!(
                     target.result_ownership(),

@@ -10,6 +10,7 @@
 
 mod expressions;
 mod function_fallbacks;
+mod generic_calls;
 mod names;
 mod declarations;
 mod statements;

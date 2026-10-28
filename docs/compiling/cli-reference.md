@@ -964,6 +964,10 @@ The other 36 directives of the PHP 8.5 set are runtime-overridable.
 | `--print-capabilities` | — | off | List the optional capabilities **this** binary accepts and the bridge archives each one needs, then exit successfully. One tab-separated line per capability: `<kind>\t<name>[\t<archive>...]`, where `kind` is `bridge` for a capability backed by one archive of its own and `capability` for one that is not — because it needs no archive (`regex`, whose provider is a managed native package) or because it is built out of several (`monitoring`). Every field is derived from the compiler's own bridge table, so this is the authoritative answer for the binary you are holding, not for the version the documentation was written against. A bridge archive is resolved from the directory the binary lives in, its sibling `lib/`, `$CARGO_TARGET_DIR/{debug,release}` when that variable is set, and `target/{debug,release}` relative to the current directory, with a per-bridge `ELEPHC_<NAME>_LIB_DIR` override that REPLACES all four when it is set — see [Where bridge archives are found](linking-and-conditional-compilation.md#where-bridge-archives-are-found) for the full order and what a relocated binary reports when one is missing. `scripts/verify-release-artifact.sh` uses this flag to check a packaged tarball actually carries everything the compiler inside it advertises. |
 | `--mascotte` | — | off | Print the embedded ASCII mascot and a randomly selected quote before normal output. |
 
+For include-loaded generic functions, the per-template summary counts each public
+specialization once. Private dispatch variant bodies do not add templates or
+instantiations to that summary.
+
 Exact monitoring rows also append inclusive/exclusive network operations and
 network wait. Curl reports those dimensions through network-specific runtime
 slots, separate from PDO query and wait counters, and propagates the active W3C

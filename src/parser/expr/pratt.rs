@@ -300,7 +300,7 @@ fn parse_expr_bp_inner(
                         )?;
                         let rendered = args
                             .iter()
-                            .map(crate::generics::describe_type)
+                            .map(crate::generics::describe_written_type)
                             .collect::<Vec<_>>()
                             .join(", ");
                         format!("{}<{}>", member, rendered)

@@ -12,3 +12,4 @@ mod instantiate;
 mod resolved;
 mod signature;
 mod specialization;
+mod variants;

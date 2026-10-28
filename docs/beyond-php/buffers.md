@@ -79,6 +79,11 @@ written to `f32` rounds to single precision). `buffer<i32>` and `buffer<int>` ar
 types because their strides differ. Packed classes take the same width names for their fields;
 see [Field widths](packed-classes.md#field-widths).
 
+Generic containers can use these widths as type arguments. A `Buffer<u32>` with
+`buffer<T>` storage keeps four-byte elements while `get(): T`, `set(int, T)`, and
+`fill(T)` use PHP `int` values. An `f32` specialization uses PHP `float` values.
+See [Native storage widths as type arguments](generics.md#native-storage-widths-as-type-arguments).
+
 `buffer_ptr($buf)` is the address of the payload, so a width buffer reaches C at its width:
 `buffer_ptr($indices)` of a `buffer<u16>` is the `const void*` index list that
 `SDL_RenderGeometryRaw` takes with `size_indices` 2, and `buffer_ptr($positions)` of a

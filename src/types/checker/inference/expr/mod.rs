@@ -200,8 +200,9 @@ impl Checker {
 /// Returns `true` if `index` is a valid string offset index for a string receiver.
 ///
 /// A valid index is an integer or float type, or a string literal whose value
-/// can be parsed as a PHP string offset (e.g. `"0"`, `"-1"`, `"10"`).
-fn is_valid_string_offset_index(index: &Expr, idx_ty: &PhpType) -> bool {
+/// can be parsed as a PHP string offset (e.g. `"0"`, `"-1"`, `"10"`). Shared by string offset
+/// reads and writes (`$s[$i] = $v`), so both accept the same offsets.
+pub(crate) fn is_valid_string_offset_index(index: &Expr, idx_ty: &PhpType) -> bool {
     *idx_ty == PhpType::Int
         || *idx_ty == PhpType::Float
         // A boxed offset is decided at runtime, and a union IS boxed — `int|float`, what an

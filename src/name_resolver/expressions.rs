@@ -440,7 +440,9 @@ pub(super) fn resolve_expr(
         },
         ExprKind::MethodCall { object, method, args } => ExprKind::MethodCall {
             object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
-            method: method.clone(),
+            method: super::generic_calls::resolve_method_reference(
+                method, current_namespace, imports, symbols, false,
+            ),
             args: args
                 .iter()
                 .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))
@@ -448,7 +450,9 @@ pub(super) fn resolve_expr(
         },
         ExprKind::NullsafeMethodCall { object, method, args } => ExprKind::NullsafeMethodCall {
             object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
-            method: method.clone(),
+            method: super::generic_calls::resolve_method_reference(
+                method, current_namespace, imports, symbols, false,
+            ),
             args: args
                 .iter()
                 .map(|arg| resolve_expr(arg, current_namespace, imports, symbols))
@@ -532,7 +536,9 @@ pub(super) fn resolve_expr(
             } else {
                 ExprKind::StaticMethodCall {
                     receiver: resolved_receiver,
-                    method: method.clone(),
+                    method: super::generic_calls::resolve_method_reference(
+                        method, current_namespace, imports, symbols, false,
+                    ),
                     args: resolved_args,
                 }
             }
@@ -561,11 +567,15 @@ pub(super) fn resolve_expr(
                 ),
                 _ => receiver.clone(),
                 },
-                method: php_symbol_key(method),
+                method: super::generic_calls::resolve_method_reference(
+                    method, current_namespace, imports, symbols, true,
+                ),
             },
             CallableTarget::Method { object, method } => CallableTarget::Method {
                 object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
-                method: php_symbol_key(method),
+                method: super::generic_calls::resolve_method_reference(
+                    method, current_namespace, imports, symbols, true,
+                ),
             },
         }),
         ExprKind::PtrCast { target_type, expr } => ExprKind::PtrCast {

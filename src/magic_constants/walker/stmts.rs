@@ -91,7 +91,7 @@ pub(super) fn walk_type_params<P: Pass>(
     type_params
         .into_iter()
         .map(|param| crate::parser::ast::TypeParam {
-            bound: param.bound.map(|ty| pass.transform_type(ty, span)),
+            bound: param.bound.map(|ty| pass.transform_value_type(ty, span)),
             default: param.default.map(|ty| pass.transform_type(ty, span)),
             ..param
         })
@@ -144,7 +144,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             name,
             value,
         } => StmtKind::TypedAssign {
-            type_expr: pass.transform_type(type_expr, span),
+            type_expr: pass.transform_value_type(type_expr, span),
             name,
             value: walk_expr(value, pass),
         },
@@ -349,7 +349,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
                 .map(|(n, t, default, by_ref)| {
                     (
                         n,
-                        t.map(|ty| pass.transform_type(ty, span)),
+                        t.map(|ty| pass.transform_value_type(ty, span)),
                         default.map(|d| walk_expr(d, pass)),
                         by_ref,
                     )
@@ -360,8 +360,8 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             // after the statements above it, so writing these inline below `leave_function`
             // handed them to the pass with the ENCLOSING scope active — the one type position
             // in a function that is not covered by its own declaration.
-            let new_variadic_type = variadic_type.map(|ty| pass.transform_type(ty, span));
-            let new_return_type = return_type.map(|ty| pass.transform_type(ty, span));
+            let new_variadic_type = variadic_type.map(|ty| pass.transform_value_type(ty, span));
+            let new_return_type = return_type.map(|ty| pass.transform_value_type(ty, span));
             pass.leave_function();
             StmtKind::FunctionDecl {
                 by_ref_return,
@@ -577,11 +577,11 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
         | StmtKind::ExternClassDecl { .. }
         | StmtKind::ExternGlobalDecl { .. }) => other,
     };
-    Stmt {
+    pass.transform_stmt(Stmt {
         kind,
         span,
         source_mode,
         strict_types,
         attributes,
-    }
+    })
 }

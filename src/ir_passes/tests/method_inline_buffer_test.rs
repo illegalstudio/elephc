@@ -9,6 +9,37 @@
 
 use super::*;
 
+/// Native-width specializations inline scalar accessors on every supported target.
+#[test]
+fn generic_native_storage_carriers_inline_on_every_target() {
+    let source = r#"<?php
+final class WidthCell<T> {
+    private buffer<T> $data;
+    public function __construct() { $this->data = buffer_new<T>(1); }
+    public function get(): T { return $this->data[0]; }
+    public function set(T $value): void { $this->data[0] = $value; }
+}
+function updateWidth(WidthCell<u32> $words, WidthCell<u8> $bytes, WidthCell<f32> $floats, int $n): void {
+    for ($i = 0; $i < $n; $i++) {
+        $words->set($words->get() + 1);
+        $bytes->set($bytes->get() + 1);
+        $floats->set($floats->get() + 0.5);
+    }
+}
+updateWidth(new WidthCell<u32>(), new WidthCell<u8>(), new WidthCell<f32>(), $argc);
+"#;
+    for target in TARGETS {
+        let module = optimized(source, target);
+        let update = function(&module, "updateWidth");
+        assert!(called_methods(&module, update).is_empty(),
+            "{target}: width accessor calls survived\n{}", crate::ir::print_function(update));
+        assert!(placed(update).any(|inst| matches!(inst.op, Op::BufferGet | Op::BufferGetResolved)));
+        assert!(placed(update).any(|inst| matches!(inst.op, Op::BufferSet | Op::BufferSetResolved)));
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
 /// Scalar generic accessors and their private guard chain splice into the actual loop.
 #[test]
 fn checked_managed_buffer_accessors_inline_on_every_target() {

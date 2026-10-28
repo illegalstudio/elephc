@@ -91,11 +91,38 @@ statement, including the `exit()` appended by the native test driver. A generic
 class reached only from a test method uses the same specialization path as an
 ordinary program.
 
+Included generic functions retain their runtime include dispatch. The checker binds the
+public template at each call and specializes every possible include variant before
+comparing their concrete signatures. Variants must declare matching type parameter
+contracts, including bounds and defaults; parameter names may differ. After the fixed
+point, each public specialization has its own dispatcher and activation marks at the
+original include positions. This also applies to functions declared in files required
+by `elephc test`.
+The rewrite updates both the AST and the checker's retained class and enum method
+bodies, including flattened trait methods, because EIR lowers those retained copies.
+
 The checker validates bounds and variance, and records resolved call, construction,
 and method sites in `CheckResult`. Site keys include the enclosing body scope and
 source span, so one template coordinate can select different instantiations.
 Typed arrays retain their declared element or key/value storage, and callable
 signatures carry inference information while keeping ordinary descriptor storage.
+
+Native storage widths remain in generic bindings and specialization identities.
+`generics::substitute_value_type()` maps a bound width to its PHP scalar carrier
+only when materializing a value annotation. The AST walker's `transform_value_type`
+hook covers parameters, returns, ordinary members, locals, and closure signatures;
+buffer allocation elements, nested buffer types, class arguments, and type defaults
+retain raw substitution. Checker-created signatures use the same value helper as
+the spliced AST, so `T = u32` yields an `int` method ABI over `buffer<u32>` storage.
+Concrete bindings recurse through PHP value wrappers before their annotations resolve;
+widths nested inside `buffer<T>` or class arguments remain storage identities. Bounds
+check the same PHP carriers. Written generic call suffixes resolve in caller scope and
+participate in the shared AST type walk. Parser-owned suffixes retain all explicit
+root qualifiers until resolution; no-op type walks preserve their original spelling.
+Resolved suffixes then use canonical specialization names. Rooted width-named classes retain that marker
+through binding adaptation and name decoding, so they cannot be confused with bare
+storage widths. The dispatch stability proof treats native width slots as scalars,
+allowing final accessors to inline without permitting width arguments to widen.
 
 Supported PHPDoc templates are applied per physical file after the strict-PHP
 audit. They affect type checking and specialization in both modes; strict mode

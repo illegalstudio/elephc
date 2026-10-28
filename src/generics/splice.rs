@@ -9,13 +9,14 @@
 //!   inside the checker is invisible to codegen. This pass is what makes it real.
 //! - The spliced declaration is an ORDINARY `FunctionDecl` with no type parameters, so every
 //!   pass after this one handles it without knowing generics exist.
+//! - Concrete declarations precede executable statements so top-level exits cannot prune them.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::generics::{instantiated_name, Bindings};
 use crate::parser::ast::{Program, Stmt, StmtKind};
 
-/// Appends a monomorphic declaration for every instantiation in `requested` that the program
+/// Prepends a monomorphic declaration for every instantiation in `requested` that the program
 /// does not already carry, and returns the new program plus how many were added.
 ///
 /// A zero count is the fixpoint signal: no call site asked for anything the program does not
@@ -55,8 +56,7 @@ pub fn splice_instantiations(
         })
         .collect();
 
-    let mut program = program;
-    let mut added = 0usize;
+    let mut instances = Vec::new();
     for (base, bindings) in requested {
         let target = instantiated_name(base, bindings);
         if declared.contains(&target) {
@@ -69,10 +69,11 @@ pub fn splice_instantiations(
             continue;
         };
         declared.insert(target);
-        program.push(instance);
-        added += 1;
+        instances.push(instance);
     }
-    (program, added)
+    let added = instances.len();
+    instances.extend(program);
+    (instances, added)
 }
 
 /// Substitutes type parameters at every type position the AST walker reaches.
@@ -105,6 +106,15 @@ impl crate::magic_constants::walker::Pass for TypeParamSubstitution<'_> {
         _span: crate::span::Span,
     ) -> crate::parser::ast::TypeExpr {
         ty.substitute_type_params(self.bindings)
+    }
+
+    /// Materializes scalar carriers in PHP annotations while retaining nested storage widths.
+    fn transform_value_type(
+        &self,
+        ty: crate::parser::ast::TypeExpr,
+        _span: crate::span::Span,
+    ) -> crate::parser::ast::TypeExpr {
+        super::substitute_value_type(&ty, self.bindings)
     }
 }
 
@@ -153,7 +163,7 @@ fn instantiate_declaration(template: &Stmt, target: &str, bindings: &Bindings) -
                     name.clone(),
                     declared
                         .as_ref()
-                        .map(|ty| ty.substitute_type_params(bindings)),
+                        .map(|ty| super::substitute_value_type(ty, bindings)),
                     default.clone(),
                     *by_ref,
                 )
@@ -164,10 +174,10 @@ fn instantiate_declaration(template: &Stmt, target: &str, bindings: &Bindings) -
         variadic_by_ref: *variadic_by_ref,
         variadic_type: variadic_type
             .as_ref()
-            .map(|ty| ty.substitute_type_params(bindings)),
+            .map(|ty| super::substitute_value_type(ty, bindings)),
         return_type: return_type
             .as_ref()
-            .map(|ty| ty.substitute_type_params(bindings)),
+            .map(|ty| super::substitute_value_type(ty, bindings)),
         by_ref_return: *by_ref_return,
         // The body goes through the exhaustive walker, so a type parameter named in a typed
         // local, a `buffer<T>`, or a nested closure's signature is substituted too — not only
@@ -243,18 +253,24 @@ mod tests {
         })
     }
 
-    /// One declaration is added per request, and its parameter carries the concrete type: reusing
-    /// the clone's body must not skip the substitution of the signature.
+    /// A concrete declaration retains its substituted signature and survives a top-level exit.
     #[test]
     fn splices_one_declaration_per_instantiation() {
         let requested = vec![(
             "identity".to_string(),
             vec![("T".to_string(), TypeExpr::Int)],
         )];
-        let (program, added) = splice_instantiations(template_program(), &requested);
+        let mut program = template_program();
+        let tokens = crate::lexer::tokenize("<?php exit(0);").expect("exit tokens");
+        program.extend(crate::parser::parse(&tokens).expect("exit program"));
+        let (program, added) = splice_instantiations(program, &requested);
         assert_eq!(added, 1);
-        assert_eq!(function_names(&program), vec!["identity", "identity<int>"]);
+        assert_eq!(function_names(&program), vec!["identity<int>", "identity"]);
         assert_eq!(param_type(&program, "identity<int>"), Some(TypeExpr::Int));
+        let pruned = crate::optimize::prune_constant_control_flow(
+            strip_templates(program), HashSet::new(),
+        );
+        assert_eq!(function_names(&pruned), vec!["identity<int>"]);
     }
 
     /// A duplicate request inside one call is one declaration, and a second splice of the same
@@ -267,10 +283,10 @@ mod tests {
         ];
         let (program, added) = splice_instantiations(template_program(), &requested);
         assert_eq!(added, 1, "a repeated request is one declaration");
-        assert_eq!(function_names(&program), vec!["identity", "identity<int>"]);
+        assert_eq!(function_names(&program), vec!["identity<int>", "identity"]);
         let (program, added_again) = splice_instantiations(program, &requested);
         assert_eq!(added_again, 0, "the fixpoint adds nothing on a second pass");
-        assert_eq!(function_names(&program), vec!["identity", "identity<int>"]);
+        assert_eq!(function_names(&program), vec!["identity<int>", "identity"]);
     }
 
     /// A request naming no declared template is skipped rather than invented.

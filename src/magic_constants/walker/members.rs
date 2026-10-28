@@ -35,7 +35,7 @@ pub(in crate::magic_constants) fn walk_class_property<P: Pass>(
 ) -> ClassProperty {
     let span = prop.span;
     ClassProperty {
-        type_expr: prop.type_expr.map(|ty| pass.transform_type(ty, span)),
+        type_expr: prop.type_expr.map(|ty| pass.transform_value_type(ty, span)),
         default: prop.default.map(|e| walk_expr(e, pass)),
         ..prop
     }
@@ -52,7 +52,7 @@ pub(in crate::magic_constants) fn walk_class_const<P: Pass>(
 ) -> ClassConst {
     let span = konst.span;
     ClassConst {
-        type_expr: konst.type_expr.map(|ty| pass.transform_type(ty, span)),
+        type_expr: konst.type_expr.map(|ty| pass.transform_value_type(ty, span)),
         ..konst
     }
 }
@@ -79,7 +79,7 @@ pub(in crate::magic_constants) fn walk_class_method<P: Pass>(
         .map(|(n, t, default, by_ref)| {
             (
                 n,
-                t.map(|ty| pass.transform_type(ty, span)),
+                t.map(|ty| pass.transform_value_type(ty, span)),
                 default.map(|d| walk_expr(d, pass)),
                 by_ref,
             )
@@ -92,8 +92,8 @@ pub(in crate::magic_constants) fn walk_class_method<P: Pass>(
     // lifted — and emit a class literally called `Box<U>`. The same ordering bug was fixed for
     // functions; it could not show here until a method could carry type parameters.
     let type_params = super::stmts::walk_type_params(method.type_params, pass, span);
-    let variadic_type = method.variadic_type.map(|ty| pass.transform_type(ty, span));
-    let return_type = method.return_type.map(|ty| pass.transform_type(ty, span));
+    let variadic_type = method.variadic_type.map(|ty| pass.transform_value_type(ty, span));
+    let return_type = method.return_type.map(|ty| pass.transform_value_type(ty, span));
     pass.leave_method();
     ClassMethod {
         type_params,

@@ -72,7 +72,9 @@ fn emit_function_variant_dispatcher(
     data.add_comm(active_symbol.clone(), 8);
 
     let fail_label = format!("{}_undefined_variant", label);
-    let message = format!("Fatal error: Call to undefined function {}()\n", name);
+    // Instantiated symbols are internal; PHP diagnostics name the source-level function.
+    let public_name = name.split_once('<').map_or(name, |(base, _)| base);
+    let message = format!("Fatal error: Call to undefined function {}()\n", public_name);
     let (message_label, message_len) = data.add_string(message.as_bytes());
     let target_reg = abi::symbol_scratch_reg(emitter);
 

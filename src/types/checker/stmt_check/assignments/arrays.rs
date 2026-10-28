@@ -9,7 +9,7 @@
 //! - Assignment checking must distinguish value writes, by-reference mutation, nullable access, and declared property contracts.
 
 use crate::errors::CompileError;
-use crate::parser::ast::{Expr, ExprKind};
+use crate::parser::ast::{BinOp, Expr, ExprKind, NESTED_APPEND_TEMP_PREFIX};
 use crate::span::Span;
 use crate::types::{
     array_key_contiguity_is_unproven, merge_array_key_types, normalized_array_key_type,
@@ -20,13 +20,13 @@ use super::super::super::Checker;
 
 /// Validates and updates the type environment for `$array[$index] = $value` assignments.
 ///
-/// Validates that the target is not a string, merges element types for arrays/assoc-arrays,
+/// Checks direct string offset writes and merges element types for arrays/assoc-arrays,
 /// checks buffer index type and element type compatibility, and requires ArrayAccess for objects.
 /// Updates `env` with the merged key/value types; returns an error for invalid targets or type mismatches.
 ///
 /// Errors:
 /// - Undefined variable
-/// - String offset assignment
+/// - Invalid direct string offset or unsupported update operator
 /// - Buffer element type mismatch
 /// - Object assignment without ArrayAccess
 pub(super) fn check_array_assign(
@@ -45,10 +45,7 @@ pub(super) fn check_array_assign(
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     super::locals::update_callable_assignment_metadata(checker, array, value, &val_ty, env)?;
     if arr_ty == PhpType::Str {
-        return Err(CompileError::new(
-            span,
-            "String offset assignment is not supported",
-        ));
+        return check_string_offset_assign(array, index, &idx_ty, value, span);
     }
     if let PhpType::Array(elem_ty) = &arr_ty {
         let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone());
@@ -167,6 +164,88 @@ pub(super) fn check_array_assign(
         }
     }
     Ok(())
+}
+
+/// Diagnostic for a string offset write whose string lives in a property.
+pub(super) const STRING_OFFSET_ON_PROPERTY_UNSUPPORTED: &str =
+    "String offset assignment on a property is not supported; copy the property into a local \
+     variable, assign the offset there, and store the local back";
+
+/// Validates a string offset write `$s[$i] = $v` on a local typed `string`.
+///
+/// The offset must be one a string read also accepts (integer, float, `mixed`, or a numeric
+/// string literal). PHP refuses a compound operator on a string offset
+/// (`$s[0] .= "x"`) with a runtime `Error`; that shape always fails, so it is refused here
+/// with PHP's wording. The local keeps its `string` type.
+fn check_string_offset_assign(
+    array: &str,
+    index: &Expr,
+    idx_ty: &PhpType,
+    value: &Expr,
+    span: Span,
+) -> Result<(), CompileError> {
+    if let Some(message) = string_offset_read_modify_write_error(array, index, value, span) {
+        return Err(CompileError::new(span, message));
+    }
+    if !crate::types::checker::inference::is_valid_string_offset_index(index, idx_ty) {
+        return Err(CompileError::new(span, "String index must be integer"));
+    }
+    Ok(())
+}
+
+/// Returns PHP's error for a desugared read-modify-write of a string offset, if `value` is one.
+///
+/// The parser rewrites `$s[$i] <op>= $v` and the statement form of `$s[$i]++` / `--$s[$i]`
+/// into `$s[$i] = $s[$i] <op> <rhs>`, giving the synthesized value the statement's own span;
+/// that separates it from a user-written `$s[0] = $s[0] . "x"`, which PHP allows. An
+/// increment's synthesized `1` also carries the statement span, whereas the `1` of a written
+/// `$s[0] += 1` carries its own. `??=` desugars to a null-coalesce and stays allowed, as in PHP.
+fn string_offset_read_modify_write_error(
+    array: &str,
+    index: &Expr,
+    value: &Expr,
+    span: Span,
+) -> Option<&'static str> {
+    if value.span != span {
+        return None;
+    }
+    if let ExprKind::Assignment { value: step, prelude, .. } = &value.kind {
+        if prelude.iter().any(|stmt| matches!(&stmt.kind,
+            crate::parser::ast::StmtKind::Assign { value: read, .. }
+                if expr_is_string_offset_target(read, array, index)))
+        {
+            return Some("Cannot increment/decrement string offsets");
+        }
+        if prelude.is_empty() {
+            return string_offset_read_modify_write_error(array, index, step, span);
+        }
+    }
+    let ExprKind::BinaryOp { left, op, right } = &value.kind else {
+        return None;
+    };
+    if !expr_is_string_offset_target(left, array, index) {
+        return None;
+    }
+    let synthesized_step = right.span == span && matches!(right.kind, ExprKind::IntLiteral(1));
+    if synthesized_step && matches!(op, BinOp::Add | BinOp::Sub) {
+        Some("Cannot increment/decrement string offsets")
+    } else {
+        Some("Cannot use assign-op operators with string offsets")
+    }
+}
+
+/// Returns whether `expr` is exactly the string offset target `$array[index]`.
+pub(in crate::types::checker) fn expr_is_string_offset_target(
+    expr: &Expr,
+    array: &str,
+    index: &Expr,
+) -> bool {
+    matches!(
+        &expr.kind,
+        ExprKind::ArrayAccess { array: receiver, index: read_index }
+            if matches!(&receiver.kind, ExprKind::Variable(name) if name == array)
+                && read_index.as_ref() == index
+    )
 }
 
 /// Validates the index and value types for a whole-element buffer write.
@@ -387,6 +466,10 @@ pub(super) fn check_array_push(
         .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", array)))?;
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     super::locals::update_callable_assignment_metadata(checker, array, value, &val_ty, env)?;
+    // Nested appends retain their catchable runtime Error through the generated temporary.
+    if arr_ty == PhpType::Str && !array.starts_with(NESTED_APPEND_TEMP_PREFIX) {
+        return Err(CompileError::new(span, "[] operator not supported for strings"));
+    }
     if let PhpType::Array(elem_ty) = &arr_ty {
         if **elem_ty != val_ty {
             let merged_ty = checker

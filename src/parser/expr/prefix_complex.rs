@@ -706,7 +706,7 @@ pub(super) fn parse_named_expr(
                 let (_, args) =
                     crate::parser::stmt::parse_inherited_name_at(tokens, pos, span, &name)?;
                 if !args.is_empty() {
-                    name = name.with_type_arguments(&args);
+                    name = name.with_written_type_arguments(&args);
                 }
             }
             _ => {}

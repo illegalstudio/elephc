@@ -18,7 +18,8 @@ pub(crate) fn has_fixed_instantiation(class: &str) -> bool {
         return false;
     };
     !args.is_empty() && args.iter().all(|arg| {
-        !matches!(arg, TypeExpr::Named(_) | TypeExpr::GenericClass { .. })
+        crate::types::width_type_from_type_expr(arg).is_some()
+            || !matches!(arg, TypeExpr::Named(_) | TypeExpr::GenericClass { .. })
     })
 }
 
@@ -29,10 +30,10 @@ mod tests {
     /// Scalar slots cannot select a variance sibling, including mixed and container arguments.
     #[test]
     fn checked_managed_buffer_scalar_instantiations_are_fixed() {
-        for name in ["Owner", "Owner<int>", "Owner<float>", "Owner<int,string>", "Owner<array<int>>"] {
+        for name in ["Owner", "Owner<int>", "Owner<float>", "Owner<int,string>", "Owner<array<int>>", "Owner<u8>", "Owner<u32>", "Owner<f32>", "Owner<f64>"] {
             assert!(has_fixed_instantiation(name), "{name}");
         }
-        for name in ["Owner<Animal>", "Owner<int,Animal>", "Owner<Owner<int>>", "Owner<", "Owner<>"] {
+        for name in ["Owner<Animal>", "Owner<int,Animal>", "Owner<Owner<int>>", "Owner<\\u8>", "Owner<\\f32>", "Owner<", "Owner<>"] {
             assert!(!has_fixed_instantiation(name), "{name}");
         }
     }

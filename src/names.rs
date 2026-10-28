@@ -159,12 +159,25 @@ impl Name {
     /// The namespace parts are untouched: `App\identity<int>` keeps resolving as `App\identity`
     /// would.
     pub fn with_type_arguments(self, args: &[crate::parser::ast::TypeExpr]) -> Self {
+        self.with_rendered_type_arguments(args, crate::generics::describe_type)
+    }
+
+    /// Appends unresolved source arguments, retaining explicit roots until name resolution.
+    pub(crate) fn with_written_type_arguments(self, args: &[crate::parser::ast::TypeExpr]) -> Self {
+        self.with_rendered_type_arguments(args, crate::generics::describe_written_type)
+    }
+
+    /// Appends type arguments with the selected source or canonical spelling policy.
+    fn with_rendered_type_arguments(
+        self, args: &[crate::parser::ast::TypeExpr],
+        render: fn(&crate::parser::ast::TypeExpr) -> String,
+    ) -> Self {
         if args.is_empty() {
             return self;
         }
         let rendered = args
             .iter()
-            .map(crate::generics::describe_type)
+            .map(render)
             .collect::<Vec<_>>()
             .join(", ");
         let mut parts = self.parts;
@@ -1164,4 +1177,23 @@ pub(crate) fn generated_append_prefix_increment_result(
 pub(crate) fn is_append_prefix_increment_result(name: &str) -> bool {
     name.strip_suffix(GENERATED_LOCAL_MARKER)
         .is_some_and(|stem| stem.starts_with("__elephc_append_prefix_result_"))
+}
+
+#[cfg(test)]
+mod written_type_argument_tests {
+    use super::{Name, NameKind};
+    use crate::parser::ast::TypeExpr;
+
+    /// Parser-owned roots survive nesting, while resolved specialization identities stay canonical.
+    #[test]
+    fn generic_native_storage_carriers_written_roots_stay_explicit() {
+        let argument = TypeExpr::GenericClass {
+            name: Name::from_parts(NameKind::FullyQualified, vec!["Lib".into(), "Wrapper".into()]),
+            args: vec![TypeExpr::Named(Name::from_parts(NameKind::FullyQualified, vec!["Thing".into()]))],
+        };
+        let base = Name::unqualified("keep");
+        assert_eq!(base.clone().with_written_type_arguments(&[argument.clone()]).as_str(),
+            "keep<\\Lib\\Wrapper<\\Thing>>");
+        assert_eq!(base.with_type_arguments(&[argument]).as_str(), "keep<Lib\\Wrapper<Thing>>");
+    }
 }

@@ -86,6 +86,51 @@ Two rules are worth knowing before you start:
 - Everything here is an elephc extension except the docblock form. `--strict-php` rejects the
   native syntax and accepts the annotations.
 
+## Native storage widths as type arguments
+
+In AOT code, a native storage width such as `u32`, `u8`, or `f32` can specialize a
+generic container. Storage positions keep that width: `buffer<T>` and
+`buffer_new<T>()` retain the native element size. PHP value positions use the scalar
+carrier: an integer width becomes `int`, and `f32` or `f64` becomes `float` in
+parameters, returns, ordinary properties, and typed locals.
+
+```php
+<?php
+final class Cell<T>
+{
+    private buffer<T> $data;
+
+    public function __construct() { $this->data = buffer_new<T>(1); }
+    public function set(T $value): void { $this->data[0] = $value; }
+    public function get(): T { return $this->data[0]; }
+}
+
+$pixel = new Cell<u32>();
+$pixel->set(0xFFFFFFFF);    // PHP int parameter, four-byte storage
+echo $pixel->get();        // PHP int: 4294967295
+```
+
+Writes narrow only when they reach storage. Passing `257` through a method specialized
+with `u8` keeps `257` until it is stored in a byte, which then reads as `1`. An `f32`
+store rounds to single precision and returns a PHP float. Arithmetic keeps PHP's
+ordinary overflow rules. Width spellings remain invalid as direct scalar annotations
+such as `function f(u32 $value)`.
+
+Carrier mapping also applies when a generic binding is itself a PHP value shape,
+such as `Holder<array<T>>` or `Holder<?T>`. A scalar bound such as `T : int` accepts
+integer storage widths through their PHP `int` carrier. Object bounds still require
+an object, and native widths do not widen through generic variance.
+
+Written call arguments follow the caller's namespace and imports. A real class named
+`u8` is rooted in a specialization name as `\u8`, keeping it distinct from a bare
+native width in a namespace where that class is not visible.
+
+Type arguments retain their identity: `Cell<u32>` and `Cell<int>` are distinct classes,
+and returning `buffer<T>` from `Cell<u32>` returns `buffer<u32>`. The
+`examples/generic-buffers/` example provides `get`, `set`, and `fill` methods over byte,
+pixel, and single-precision buffers. See [Element widths](buffers.md#element-widths)
+for the storage conversion rules.
+
 ## Generics in Magician
 
 Dynamic `eval()`, runtime includes, and the REPL accept generic functions, classes, interfaces,

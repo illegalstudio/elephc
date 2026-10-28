@@ -37,6 +37,10 @@ pub(super) fn from_shared(ty: Type) -> TypeExpr {
             "int" => TypeExpr::Int, "float" => TypeExpr::Float, "string" => TypeExpr::Str,
             "bool" => TypeExpr::Bool, "false" => TypeExpr::False, "null" => TypeExpr::Void,
             "ptr" => TypeExpr::Ptr(None), "never" => TypeExpr::Never, "iterable" => TypeExpr::Iterable,
+            _ if name.starts_with('\\') => TypeExpr::Named(Name::from_parts(
+                crate::names::NameKind::FullyQualified,
+                name.trim_start_matches('\\').split('\\').map(str::to_string).collect(),
+            )),
             _ => TypeExpr::Named(Name::unqualified(&name)),
         },
         Type::Apply(name, mut args) => match (name.as_str(), args.len()) {

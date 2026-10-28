@@ -422,6 +422,11 @@ pub(super) fn resolve_function_reference(
     imports: &Imports,
     symbols: &Symbols,
 ) -> Name {
+    if let Some(resolved) = super::generic_calls::resolve_function_reference(
+        name, current_namespace, imports, symbols,
+    ) {
+        return resolved;
+    }
     let canonical = resolve_function_name(name, current_namespace, imports, symbols);
     let conditional = symbols.conditional_functions.contains(&php_symbol_key(&canonical));
     let resolved = resolved_name(canonical);

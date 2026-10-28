@@ -7,12 +7,13 @@
 //!
 //! Key details:
 //! - It reads the program AFTER monomorphization. A template is gone by then, and every remaining
-//!   declaration whose NAME carries `<...>` is a concrete instantiation — the ground truth the
-//!   emitted object will contain, rather than a per-round request list that can be incomplete.
+//!   declaration whose NAME carries `<...>` is a concrete instantiation.
+//! - Include dispatch groups represent public function instantiations; their private variant
+//!   bodies are hidden so one source template is counted once.
 //! - The rendering is deterministic (count descending, then kind, then template) so a test can
 //!   assert it exactly.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use crate::parser::ast::{Program, Stmt, StmtKind};
 
@@ -23,21 +24,51 @@ use crate::parser::ast::{Program, Stmt, StmtKind};
 /// instantiated templates or spread across many, which is the input the dedup work needs.
 pub fn report(program: &Program) -> String {
     let mut groups: BTreeMap<(u8, String), Vec<String>> = BTreeMap::new();
-    collect(program, &mut groups);
+    let mut private_variants = HashSet::new();
+    collect_private_variants(program, &mut private_variants);
+    collect(program, &mut groups, &private_variants);
     render(&groups)
 }
 
-/// Walks a program, recording one entry per instantiated declaration.
-fn collect(program: &Program, groups: &mut BTreeMap<(u8, String), Vec<String>>) {
+/// Finds private concrete bodies represented by public generic include dispatch groups.
+fn collect_private_variants(program: &Program, variants: &mut HashSet<String>) {
     for stmt in program {
-        collect_stmt(stmt, groups);
+        match &stmt.kind {
+            StmtKind::FunctionVariantGroup { name, variants: members } if base_of(name).is_some() => {
+                variants.extend(members.iter().cloned());
+            }
+            StmtKind::NamespaceBlock { body, .. } | StmtKind::Synthetic(body) => {
+                collect_private_variants(body, variants);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Walks a program, recording one entry per instantiated declaration.
+fn collect(
+    program: &Program,
+    groups: &mut BTreeMap<(u8, String), Vec<String>>,
+    private_variants: &HashSet<String>,
+) {
+    for stmt in program {
+        collect_stmt(stmt, groups, private_variants);
     }
 }
 
 /// Records the instantiations one statement declares, recursing into namespace blocks.
-fn collect_stmt(stmt: &Stmt, groups: &mut BTreeMap<(u8, String), Vec<String>>) {
+fn collect_stmt(
+    stmt: &Stmt,
+    groups: &mut BTreeMap<(u8, String), Vec<String>>,
+    private_variants: &HashSet<String>,
+) {
     match &stmt.kind {
-        StmtKind::FunctionDecl { name, .. } => {
+        StmtKind::FunctionDecl { name, .. } if !private_variants.contains(name) => {
+            if let Some(base) = base_of(name) {
+                add(groups, 0, base, name.clone());
+            }
+        }
+        StmtKind::FunctionVariantGroup { name, .. } => {
             if let Some(base) = base_of(name) {
                 add(groups, 0, base, name.clone());
             }
@@ -63,7 +94,9 @@ fn collect_stmt(stmt: &Stmt, groups: &mut BTreeMap<(u8, String), Vec<String>>) {
                 }
             }
         }
-        StmtKind::NamespaceBlock { body, .. } => collect(body, groups),
+        StmtKind::NamespaceBlock { body, .. } | StmtKind::Synthetic(body) => {
+            collect(body, groups, private_variants);
+        }
         _ => {}
     }
 }
@@ -126,6 +159,28 @@ fn render(groups: &BTreeMap<(u8, String), Vec<String>>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Public specializations in synthetic groups replace private bodies without hiding other functions.
+    #[test]
+    fn report_counts_public_include_specializations() {
+        let tokens = crate::lexer::tokenize("<?php function stub() {}").expect("tokens");
+        let declaration = crate::parser::parse(&tokens).expect("program").remove(0);
+        let mut program: Program = ["left<int>", "right<int>", "left<string>", "right<string>", "ordinary<int>"]
+            .into_iter().map(|name| {
+                let mut stmt = declaration.clone();
+                let StmtKind::FunctionDecl { name: target, .. } = &mut stmt.kind else { unreachable!() };
+                *target = name.to_string();
+                stmt
+            }).collect();
+        let groups = ["int", "string"].into_iter().map(|argument| Stmt::new(
+            StmtKind::FunctionVariantGroup {
+                name: format!("choose<{argument}>"),
+                variants: vec![format!("left<{argument}>"), format!("right<{argument}>")],
+            }, crate::span::Span::dummy(),
+        )).collect();
+        program.push(Stmt::new(StmtKind::Synthetic(groups), crate::span::Span::dummy()));
+        assert_eq!(report(&program), "generics: 3 instantiations across 2 templates\n  function x2   choose  [choose<int>, choose<string>]\n  function x1   ordinary  [ordinary<int>]");
+    }
 
     /// The template of an instantiated name is its part before the first `<`.
     #[test]

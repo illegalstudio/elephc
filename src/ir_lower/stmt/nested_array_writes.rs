@@ -628,6 +628,11 @@ fn lower_nested_assign_parent_with_diagnosed_key_inner(
     let receiver = lower_nested_assign_parent_with_diagnosed_key_inner(
         ctx, array, span, key_already_diagnosed, convert_false,
     );
+    if convert_false && ctx.builder.value_php_type(receiver.value).codegen_repr() == PhpType::Str {
+        crate::ir_lower::ownership::release_if_owned(ctx, receiver, Some(span));
+        lower_throw_access_error(ctx, "Cannot use string offset as an array", span);
+        return receiver;
+    }
     if ctx.builder.value_php_type(receiver.value).codegen_repr() == PhpType::Mixed {
         if convert_false {
             return super::nested_plain_writes::fetch_parent(ctx, receiver, index, expr.span);

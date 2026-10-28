@@ -633,7 +633,7 @@ impl Instantiate<'_> {
                         _ => "class",
                     },
                     parameter: super::parameter_name(&param.name).to_string(),
-                    bound: bound.substitute_type_params(&bindings),
+                    bound: super::substitute_value_type(bound, &bindings),
                     argument: argument.clone(),
                     span,
                 });

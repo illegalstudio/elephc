@@ -144,6 +144,7 @@ impl Checker {
                 );
             }
         }
+        self.collect_generic_function_variant_templates(errors);
     }
 
     /// Returns true if `name` resolves to any declared function: user declaration, variant group, or
@@ -295,6 +296,10 @@ impl Checker {
     fn resolve_function_variant_groups(&mut self, errors: &mut Vec<CompileError>) {
         let names: Vec<String> = self.function_variant_groups.keys().cloned().collect();
         for name in names {
+            // A generic group has no runtime signature until a call binds its parameters.
+            if self.fn_decls.get(&name).is_some_and(|decl| !decl.type_params.is_empty()) {
+                continue;
+            }
             if let Err(error) =
                 self.ensure_function_variant_group_signature(&name, crate::span::Span::dummy())
             {
