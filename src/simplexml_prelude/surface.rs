@@ -760,8 +760,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         if ($kind === 4) {
             $node = new DOMText();
             $node->__elephc_raw_text = true;
-            $name = elephc_xml_sx_int($handle, 13) !== 0 ? '#text' : '#cdata-section';
-            return $this->__elephc_dom_bind_node($node, $document, $parent, $name);
+            return $this->__elephc_dom_bind_node($node, $document, $parent, '#cdata-section');
         }
         if ($kind === 3) {
             $node = new DOMText();

@@ -54,9 +54,9 @@ fn simplexml_dom_attribute_selection_keeps_qualified_names_and_identity() {
     abi::elephc_xml_sx_free(root);
 }
 
-/// Native HTML metadata preserves script/style CDATA formatting independently of DOM wrapper lifetime.
+/// CDATA stays raw while ordinary text written under script/style remains escaped XML text.
 #[test]
-fn simplexml_dom_html_raw_text_policy_uses_native_parent_names() {
+fn simplexml_dom_raw_text_policy_distinguishes_cdata_from_script_text() {
     let empty = cstring("");
     let root_name = cstring("html");
     let script_name = cstring("SCRIPT");
@@ -66,14 +66,17 @@ fn simplexml_dom_html_raw_text_policy_uses_native_parent_names() {
     unsafe {
         let root = abi::elephc_xml_sx_html_append(document, 1, root_name.as_ptr(), empty.as_ptr());
         let script = abi::elephc_xml_sx_html_append(root, 1, script_name.as_ptr(), empty.as_ptr());
-        let raw = abi::elephc_xml_sx_html_append(script, 3, empty.as_ptr(), text.as_ptr());
+        let script_text = abi::elephc_xml_sx_html_append(script, 3, empty.as_ptr(), text.as_ptr());
+        let cdata = abi::elephc_xml_sx_html_append(script, 4, empty.as_ptr(), text.as_ptr());
         let plain = abi::elephc_xml_sx_html_append(root, 3, empty.as_ptr(), text.as_ptr());
-        assert_ne!(raw, 0);
+        assert_ne!(script_text, 0);
+        assert_ne!(cdata, 0);
         assert_ne!(plain, 0);
         assert_eq!(abi::elephc_xml_sx_int(document, 13), 1);
-        assert_eq!(abi::elephc_xml_sx_int(raw, 14), 1);
+        assert_eq!(abi::elephc_xml_sx_int(script_text, 14), 0);
+        assert_eq!(abi::elephc_xml_sx_int(cdata, 14), 1);
         assert_eq!(abi::elephc_xml_sx_int(plain, 14), 0);
-        for handle in [root, script, raw, plain] { abi::elephc_xml_sx_free(handle); }
+        for handle in [root, script, script_text, cdata, plain] { abi::elephc_xml_sx_free(handle); }
     }
     abi::elephc_xml_sx_free(document);
 }

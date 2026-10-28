@@ -171,14 +171,7 @@ pub extern "C" fn elephc_xml_sx_int(handle: i64, operation: i64) -> i64 {
         }).unwrap_or(0),
         12 => v.first().map(|node| node as usize as i64).unwrap_or(0),
         13 => unsafe { i64::from(ffi::node_type(v.doc.raw) == 13) },
-        14 => v.first().map(|node| unsafe {
-            if ffi::node_type(node) == 4 { return 1; }
-            if ffi::node_type(v.doc.raw) != 13 || ffi::node_type(node) != 3 { return 0; }
-            let parent = ffi::parent(node);
-            if parent.is_null() || ffi::node_type(parent) != 1 { return 0; }
-            let name = bytes(ffi::name(parent));
-            i64::from(name.eq_ignore_ascii_case(b"script") || name.eq_ignore_ascii_case(b"style"))
-        }).unwrap_or(0),
+        14 => v.first().map(|node| unsafe { i64::from(ffi::node_type(node) == 4) }).unwrap_or(0),
         _ => 0,
     }).unwrap_or(0))
 }
