@@ -558,7 +558,7 @@ mod tests {
         let asm = emit_for(Target::new(Platform::Linux, Arch::X86_64));
         assert!(
             asm.contains(
-                "__elephc_eval_value_hash_context:\n\
+                "__elephc_eval_value_hash_context_sysv_body:\n\
                  \x20   mov eax, 9\n\
                  \x20   mov esi, 5\n\
                  \x20   jmp __rt_mixed_from_value\n"

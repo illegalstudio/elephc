@@ -217,7 +217,7 @@ impl Emitter {
     /// stack-passed arguments so the body sees the standard layout, and calls the body,
     /// which follows the export label.
     fn emit_sysv_callee_saved_shim(&mut self, name: &str, stack_words: usize) {
-        let body = format!(".L{}_sysv_body", name);
+        let body = format!("{}_sysv_body", name);
         for reg in ["rbx", "r12", "r13", "r14", "r15"] {
             self.instruction(&format!("push {}", reg));                     // save a register Rust may keep a value in across this call
         }
@@ -690,8 +690,8 @@ mod tests {
         let restores = "    pop r15\n    pop r14\n    pop r13\n    pop r12\n    pop rbx\n    ret\n";
 
         let plain = shim("__elephc_eval_value_add");
-        assert!(plain.contains(&format!("__elephc_eval_value_add:\n{saves}    call .L__elephc_eval_value_add_sysv_body\n{restores}")), "{plain}");
-        assert!(plain.ends_with(".L__elephc_eval_value_add_sysv_body:\n"), "{plain}");
+        assert!(plain.contains(&format!("__elephc_eval_value_add:\n{saves}    call __elephc_eval_value_add_sysv_body\n{restores}")), "{plain}");
+        assert!(plain.ends_with("__elephc_eval_value_add_sysv_body:\n"), "{plain}");
 
         // One stack word: pad to keep alignment, then copy the caller's [rsp + 8] from above the
         // return address, five saves and the padding.
