@@ -51,13 +51,19 @@ pub(super) fn ordinary(
     retire_property_write_roots(ctx, roots, span);
 }
 
-/// Preserves float arithmetic and keeps heap-bearing updates in an unwind-visible local slot.
+/// Preserves stable operator result types and roots heap-bearing working slots through the store.
 fn step(
     ctx: &mut LoweringContext<'_, '_>, selected: LoweredValue, increment: bool, span: Span,
     finish: impl FnOnce(&mut LoweringContext<'_, '_>, LoweredValue),
 ) {
     let selected_type = ctx.builder.value_php_type(selected.value);
-    let temp_type = if selected_type.codegen_repr() == PhpType::Float { PhpType::Float } else { PhpType::Mixed };
+    let op = if increment { BinOp::Add } else { BinOp::Sub };
+    let stable_object_result = crate::types::object_operators::binary_plan_with_classes(
+        &op, &selected_type, &PhpType::Int, ctx.classes,
+    ).is_some_and(|plan| !plan.result_type(&op).is_int_float_union());
+    let temp_type = if stable_object_result { selected_type }
+        else if selected_type.codegen_repr() == PhpType::Float { PhpType::Float }
+        else { PhpType::Mixed };
     let rooted = Ownership::php_type_needs_lifetime_tracking(&temp_type);
     let name = ctx.declare_owned_hidden_temp(temp_type.clone());
     let slot = ctx.local_slots[&name];

@@ -336,11 +336,32 @@ echo json_encode($ordinary->values), "\n";
 $ordinary->stepFloats();
 $ordinary->weights[0]++; --$ordinary->weights[1];
 echo json_encode($ordinary->weights), "\n";
-unset($doc, $ordinary);
+class XmlIndexedIncdecLedger {
+    public $totals = [];
+    public $named = [];
+    public function __construct() {
+        $this->totals[] = new BcMath\Number('1.50');
+        $this->named['n'] = new BcMath\Number('5.25');
+    }
+    public function bump(): void {
+        $this->totals[0]++; ++$this->totals[0];
+        $this->totals[0]--; --$this->totals[0];
+        $this->named['n']--; --$this->named['n'];
+        $this->named['n']++; ++$this->named['n'];
+    }
+}
+$ledger = new XmlIndexedIncdecLedger();
+$original = $ledger->totals[0];
+$ledger->bump();
+echo $ledger->totals[0]->value, ':', $ledger->named['n']->value, ':', $original->value, ':';
+var_dump($original === $ledger->totals[0]);
+$ledger->totals[0]++; --$ledger->named['n'];
+echo $ledger->totals[0]->value, ':', $ledger->named['n']->value, "\n";
+unset($doc, $ordinary, $ledger, $original);
 "###;
     let out = compile_and_run_with_heap_debug(source);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
     assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
-    assert_eq!(out.stdout, "<?xml version=\"1.0\"?>\n<r/>\n<r><mark/></r>\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark/></r>\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark/></r>\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark/></r>\n<?xml version=\"1.0\"?>\n<r><a><mark>7</mark><mark>A</mark></a></r>\nordinary|ordinary|[10,3]\n[2.5,1.5]:[1,-1]\n[3.5,0.5]\n");
+    assert_eq!(out.stdout, "<?xml version=\"1.0\"?>\n<r/>\n<r><mark/></r>\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark/></r>\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark/></r>\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark/></r>\n<?xml version=\"1.0\"?>\n<r><a><mark>7</mark><mark>A</mark></a></r>\nordinary|ordinary|[10,3]\n[2.5,1.5]:[1,-1]\n[3.5,0.5]\n1.50:5.25:1.50:bool(false)\n2.50:4.25\n");
 }
