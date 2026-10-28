@@ -130,6 +130,7 @@ pub extern "C" fn elephc_xml_sx_free(handle: i64) {
 pub extern "C" fn elephc_xml_sx_clone(handle: i64) -> i64 { guard(|| view(handle).and_then(|v| v.deep_clone()).map(insert).unwrap_or(0)) }
 /// Selects children (0), attributes (1), a property (2), an attribute (3), or offset (4).
 /// Internal modes 7/8 preserve filters; 9/10 project children or a sibling tail, 11 reads document children.
+/// DOM modes 12/13/14 select parent/previous/next; 15 includes attributes from every namespace.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_xml_sx_select(handle: i64, kind: i64, name: *const c_char, ns: *const c_char, prefix: i64, index: i64) -> i64 {
     guard(|| view(handle).map(|v| {
@@ -142,6 +143,7 @@ pub unsafe extern "C" fn elephc_xml_sx_select(handle: i64, kind: i64, name: *con
     }).unwrap_or(0))
 }
 /// Reads count (0), presence (1), iteration count (2), truthiness (3), or node kind (4).
+/// DOM modes 12/13/14 read stable node identity, HTML document kind, and raw-text policy.
 #[no_mangle]
 pub extern "C" fn elephc_xml_sx_int(handle: i64, operation: i64) -> i64 {
     guard(|| view(handle).map(|v| match operation {
@@ -166,6 +168,16 @@ pub extern "C" fn elephc_xml_sx_int(handle: i64, operation: i64) -> i64 {
         10 => v.first().map(|n| i64::from(projection_uses_items(n))).unwrap_or(0),
         11 => v.first().map(|n| unsafe {
             i64::from(projection_is_string(n) && ffi::next(ffi::child(n)).is_null())
+        }).unwrap_or(0),
+        12 => v.first().map(|node| node as usize as i64).unwrap_or(0),
+        13 => unsafe { i64::from(ffi::node_type(v.doc.raw) == 13) },
+        14 => v.first().map(|node| unsafe {
+            if ffi::node_type(node) == 4 { return 1; }
+            if ffi::node_type(v.doc.raw) != 13 || ffi::node_type(node) != 3 { return 0; }
+            let parent = ffi::parent(node);
+            if parent.is_null() || ffi::node_type(parent) != 1 { return 0; }
+            let name = bytes(ffi::name(parent));
+            i64::from(name.eq_ignore_ascii_case(b"script") || name.eq_ignore_ascii_case(b"style"))
         }).unwrap_or(0),
         _ => 0,
     }).unwrap_or(0))

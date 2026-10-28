@@ -201,6 +201,16 @@ impl View {
         let parent = Rc::new(self.first().map(|node| self.with_scope(Scope::Node(node)))
             .unwrap_or_else(|| self.clone()));
         let scope = match kind {
+            12..=14 => Scope::Node(self.first().map(|node| unsafe {
+                match kind { 12 => ffi::parent(node), 13 => ffi::previous(node), _ => ffi::next(node) }
+            }).unwrap_or(std::ptr::null_mut())),
+            15 => {
+                let mut nodes = Vec::new();
+                let mut node = self.first().filter(|node| unsafe { ffi::node_type(*node) == 1 })
+                    .map(|node| unsafe { ffi::attrs(node) }).unwrap_or(std::ptr::null_mut());
+                while !node.is_null() { nodes.push(node); node = unsafe { ffi::next(node) }; }
+                Scope::Nodes(Rc::new(nodes))
+            }
             0 | 7 => Scope::Children(parent, None),
             1 | 8 => Scope::Attributes(parent, None),
             2 => if matches!(self.scope, Scope::Attributes(..)) {
@@ -353,3 +363,6 @@ mod tests_add_and_text;
 
 #[cfg(all(test, elephc_xml_native))]
 mod tests_xpath_context;
+
+#[cfg(all(test, elephc_xml_native))]
+mod tests_dom_views;

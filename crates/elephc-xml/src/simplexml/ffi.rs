@@ -78,6 +78,9 @@ extern "C" {
     /// Calls the opaque shim next operation.
     #[link_name = "elephc_libxml2_v1_sx_next"]
     pub(super) fn next(node: Node) -> Node;
+    /// Reads the previous sibling without exposing libxml2 node layouts to Rust.
+    #[link_name = "elephc_libxml2_v1_sx_prev"]
+    pub(super) fn previous(node: Node) -> Node;
     /// Calls the opaque shim parent operation.
     #[link_name = "elephc_libxml2_v1_sx_parent"]
     pub(super) fn parent(node: Node) -> Node;

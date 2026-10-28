@@ -132,6 +132,7 @@ void elephc_libxml2_v1_sx_doc_free(void *doc) { xmlFreeDoc(doc); }
 void *elephc_libxml2_v1_sx_root(void *doc) { return xmlDocGetRootElement(doc); }
 void *elephc_libxml2_v1_sx_child(void *node) { return ((xmlNodePtr)node)->children; }
 void *elephc_libxml2_v1_sx_next(void *node) { return ((xmlNodePtr)node)->next; }
+void *elephc_libxml2_v1_sx_prev(void *node) { return ((xmlNodePtr)node)->prev; }
 void *elephc_libxml2_v1_sx_parent(void *node) { return ((xmlNodePtr)node)->parent; }
 void *elephc_libxml2_v1_sx_attrs(void *node) { return ((xmlNodePtr)node)->properties; }
 int elephc_libxml2_v1_sx_type(void *node) { return ((xmlNodePtr)node)->type; }

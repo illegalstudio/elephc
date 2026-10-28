@@ -23,6 +23,7 @@
 mod detect;
 mod attributes;
 mod entities;
+mod node_cache;
 mod surface;
 mod text;
 
@@ -44,7 +45,7 @@ pub(crate) fn program_uses_dom_html(program: &[crate::parser::ast::Stmt]) -> boo
 fn parsed_prelude() -> Program {
     PARSED_PRELUDE
         .get_or_init(|| {
-            let source = format!("<?php\n{}\n{}\n{}\n{}", entities::SRC, attributes::SRC, text::SRC, surface::SRC);
+            let source = format!("<?php\n{}\n{}\n{}\n{}\n{}", entities::SRC, attributes::SRC, node_cache::SRC, text::SRC, surface::SRC);
             let tokens = crate::lexer::tokenize(&source).expect("dom html prelude must tokenize");
             crate::parser::parse_internal(&tokens).expect("dom html prelude must parse")
         })
@@ -77,7 +78,7 @@ fn inject_if_used_on_compiler_stack(
     let mut combined = parsed_prelude();
     inventory.record_program("dom-html", &combined);
     combined.extend(program);
-    combined
+    crate::core_prelude::ensure_weak_reference(combined, inventory)
 }
 
 /// Discovers DOM references loaded by autoload without reinjecting an existing prelude.
@@ -95,7 +96,7 @@ pub fn inject_after_autoload(
         let mut combined = crate::name_resolver::resolve(parsed_prelude())?;
         inventory.record_program("dom-html", &combined);
         combined.extend(program);
-        Ok(combined)
+        Ok(crate::core_prelude::ensure_weak_reference(combined, inventory))
     })
 }
 
@@ -142,6 +143,8 @@ mod tests {
         let program = parse_resolved("<?php namespace App; use DOMDocument as Doc; new Doc();");
         let program = inject_after_autoload(program, &mut inventory).unwrap();
         assert!(inventory.groups.contains_key("dom-html"));
+        assert!(inventory.groups.contains_key("core"));
+        assert_eq!(program.iter().filter(|stmt| matches!(&stmt.kind, StmtKind::ClassDecl { name, .. } if name == "WeakReference")).count(), 1);
         let len = program.len();
         assert_eq!(inject_after_autoload(program, &mut inventory).unwrap().len(), len);
 
@@ -149,6 +152,17 @@ mod tests {
         let program = parse_resolved("<?php class DOMDocument {} new DOMDocument();");
         assert_eq!(inject_after_autoload(program, &mut inventory).unwrap().len(), 2);
         assert!(inventory.groups.is_empty());
+    }
+
+    /// DOM injection supplies its weak-cache dependency even without a user WeakReference mention.
+    #[test]
+    fn dom_injection_declares_weak_cache_dependency_once() {
+        let tokens = crate::lexer::tokenize("<?php new DOMDocument();").unwrap();
+        let program = crate::parser::parse(&tokens).unwrap();
+        let mut inventory = crate::optimize::reachability::PreludeInventory::new();
+        let program = inject_if_used(program, false, &mut inventory);
+        assert!(inventory.groups.contains_key("core"));
+        assert_eq!(program.iter().filter(|stmt| matches!(&stmt.kind, StmtKind::ClassDecl { name, .. } if name == "WeakReference")).count(), 1);
     }
 
     /// The prelude must declare the Termwind node types and its private traversal helper.

@@ -697,6 +697,35 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $handle = $this->__elephc_handle;
         return elephc_xml_sx_string($handle, 1);
     }
+    public function __elephc_dom_identity(): int {
+        $handle = $this->__elephc_handle;
+        return elephc_xml_sx_int($handle, 12);
+    }
+    public function __elephc_dom_is_html(): bool {
+        $handle = $this->__elephc_handle;
+        return elephc_xml_sx_int($handle, 13) !== 0;
+    }
+    public function __elephc_dom_relation(mixed $document, int $kind): ?DOMNode {
+        $handle = $this->__elephc_handle;
+        $relative = elephc_xml_sx_select($handle, $kind, '', '', 0, 0);
+        if (elephc_xml_sx_int($relative, 1) === 0) { elephc_xml_sx_free($relative); return null; }
+        $view = __elephc_simplexml_wrap($relative, 'SimpleXMLElement');
+        return $view->__elephc_dom_node($document, null);
+    }
+    public function __elephc_dom_attributes(): array {
+        $handle = $this->__elephc_handle;
+        $all = elephc_xml_sx_select($handle, 15, '', '', 0, 0);
+        $attributes = [];
+        try {
+            $length = elephc_xml_sx_int($all, 2);
+            for ($i = 0; $i < $length; $i++) {
+                $attribute = elephc_xml_sx_item($all, $i);
+                try { $attributes[] = [elephc_xml_sx_string($attribute, 6), elephc_xml_sx_string($attribute, 3)]; }
+                finally { elephc_xml_sx_free($attribute); }
+            }
+        } finally { elephc_xml_sx_free($all); }
+        return $attributes;
+    }
     public function __elephc_dom_set_attribute(string $name, string $value): bool {
         $handle = $this->__elephc_handle;
         return elephc_xml_sx_mutate($handle, 25, $name, $value, "", 0, 0) !== 0;
@@ -725,13 +754,19 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     public function __elephc_dom_node(mixed $document, mixed $parent): DOMNode {
         $handle = $this->__elephc_handle;
         $kind = elephc_xml_sx_int($handle, 4);
+        if (($kind === 9 || $kind === 13) && $document instanceof DOMDocument) { return $document; }
+        $cached = __elephc_dom_cached_node($document, elephc_xml_sx_int($handle, 12));
+        if ($cached instanceof DOMNode) { return $cached; }
         if ($kind === 4) {
             $node = new DOMText();
             $node->__elephc_raw_text = true;
-            return $this->__elephc_dom_bind_node($node, $document, $parent, "#cdata-section");
+            $name = elephc_xml_sx_int($handle, 13) !== 0 ? '#text' : '#cdata-section';
+            return $this->__elephc_dom_bind_node($node, $document, $parent, $name);
         }
         if ($kind === 3) {
-            return $this->__elephc_dom_bind_node(new DOMText(), $document, $parent, "#text");
+            $node = new DOMText();
+            $node->__elephc_raw_text = elephc_xml_sx_int($handle, 14) !== 0;
+            return $this->__elephc_dom_bind_node($node, $document, $parent, "#text");
         }
         if ($kind === 8) {
             return $this->__elephc_dom_bind_node(new DOMComment(), $document, $parent, "#comment");
@@ -743,10 +778,11 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         return $this->__elephc_dom_bind_node(new DOMNode(), $document, $parent, $this->getName());
     }
     private function __elephc_dom_bind_node(DOMNode $node, mixed $document, mixed $parent, string $name): DOMNode {
+        $node->__elephc_simplexml = $this;
         $node->nodeName = $name;
         $node->ownerDocument = $document;
         $node->parentNode = $parent;
-        $node->__elephc_simplexml = $this;
+        __elephc_dom_remember_node($document, $this->__elephc_dom_identity(), $node);
         return $node;
     }
     public function rewind(): void {
@@ -827,7 +863,7 @@ function __elephc_simplexml_load_dom(DOMDocument $document, string $data, int $o
     if ($handle !== 0) {
         $object = __elephc_simplexml_wrap($handle, 'SimpleXMLElement');
         $document->__elephc_simplexml = $object;
-        $document->childNodes = $object->__elephc_dom_children($document, $document, true);
+        $document->childNodes = null;
     }
     __elephc_simplexml_report_text($diagnostics, 'DOMDocument::loadXML()', true);
     return $handle !== 0;
@@ -847,10 +883,12 @@ function __elephc_simplexml_bind_dom(DOMNode $node, SimpleXMLElement $view): voi
                 $i++;
             }
         }
+        __elephc_dom_drop_snapshot($node);
         return;
     }
     $selections = $view->__elephc_dom_selections();
     $node->__elephc_simplexml = $view;
+    __elephc_dom_remember_node($node->ownerDocument, $view->__elephc_dom_identity(), $node);
     $i = 0;
     if ($children instanceof DOMNodeList) {
         foreach ($children as $child) {
@@ -863,6 +901,7 @@ function __elephc_simplexml_bind_dom(DOMNode $node, SimpleXMLElement $view): voi
             $i++;
         }
     }
+    __elephc_dom_drop_snapshot($node);
 }
 
 function simplexml_import_dom(object $node, ?string $class_name = "SimpleXMLElement"): ?SimpleXMLElement {

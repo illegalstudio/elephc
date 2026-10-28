@@ -12,6 +12,16 @@ fn verify_simplexml_target(target: &str) {
     let module = super::lower_source_at_for_target(r###"<?php
 debug_backtrace();
 $counterXml = new SimpleXMLElement('<r>2</r>');
+$targetLiveDocument = new DOMDocument();
+$targetLiveDocument->loadXML('<r><a/><b/></r>');
+$targetLiveRoot = $targetLiveDocument->documentElement;
+$targetLiveA = $targetLiveRoot->childNodes->item(0);
+$targetLiveXml = simplexml_import_dom($targetLiveDocument);
+unset($targetLiveXml->b);
+var_dump($targetLiveA->nextSibling);
+$targetLiveXml->addChild('c', 'new');
+echo $targetLiveA->nextSibling->nodeName;
+var_dump($targetLiveRoot === $targetLiveDocument->documentElement, $targetLiveA === $targetLiveRoot->childNodes->item(0));
 $targetXPathXml = new SimpleXMLElement('<r xmlns:p="urn:p" a="1"><p:c>yes</p:c><!--r--></r>');
 echo count($targetXPathXml['a']->xpath('../p:c'));
 echo count($targetXPathXml->xpath('//comment()')[0]->xpath('../p:c'));
@@ -26,8 +36,11 @@ $saveDocument = new TargetXmlSaveDocument();
 $saveDocument->loadHTML('<html><body>target</body></html>');
 echo $saveDocument->saveXML();
 $targetHtmlBody = $saveDocument->getElementsByTagName('body')->item(0);
+$targetHtmlBody->setAttribute('title', 'é');
+$targetHtmlBefore = $saveDocument->saveXML();
 var_dump($targetHtmlBody->setAttribute('xmlns', 'urn:target'), $targetHtmlBody->setAttribute('xmlns', 'ignored'));
 $targetHtmlXml = simplexml_import_dom($saveDocument);
+var_dump($targetHtmlBefore === $saveDocument->saveXML(), $targetHtmlBody === $saveDocument->getElementsByTagName('body')->item(0));
 echo $targetHtmlBody->getAttribute('xmlns');
 echo count($targetHtmlXml->xpath('//body'));
 $targetXmlChildren = $saveDocument->documentElement->childNodes;

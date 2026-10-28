@@ -832,11 +832,17 @@ function __elephc_dom_escape_attr_non_ascii(string $s): string {
 }
 
 function __elephc_dom_serialize_node(mixed $node): string {
+    $bound = null;
     if ($node instanceof DOMNode) {
         $bound = $node->__elephc_simplexml;
         if (is_object($bound)) {
-            if ($node instanceof DOMDocument) { return $bound->__elephc_dom_document_xml(true); }
-            return $bound->__elephc_dom_xml();
+            if (!$bound->__elephc_dom_is_html()
+                || (!($node instanceof DOMDocument) && !($node instanceof DOMElement)
+                    && !($node instanceof DOMText) && !($node instanceof DOMComment)
+                    && !($node instanceof DOMProcessingInstruction))) {
+                if ($node instanceof DOMDocument) { return $bound->__elephc_dom_document_xml(true); }
+                return $bound->__elephc_dom_xml();
+            }
         }
     }
     if ($node instanceof DOMText) {
@@ -865,9 +871,17 @@ function __elephc_dom_serialize_node(mixed $node): string {
         return $_out;
     }
     $_out = "<" . $node->nodeName;
-    $_xmlns = $node->__elephc_dom_xmlns;
-    if ($_xmlns !== null) { $_out = $_out . ' xmlns="' . __elephc_dom_escape_namespace((string)$_xmlns) . '"'; }
     $_attrs = $node->__attrs;
+    if (is_object($bound)) {
+        foreach ($bound->getDocNamespaces(false, false) as $_prefix => $_uri) {
+            $_name = $_prefix === '' ? 'xmlns' : 'xmlns:' . $_prefix;
+            $_out = $_out . ' ' . $_name . '="' . __elephc_dom_escape_namespace((string)$_uri) . '"';
+        }
+        $_attrs = $bound->__elephc_dom_attributes();
+    } else {
+        $_xmlns = $node->__elephc_dom_xmlns;
+        if ($_xmlns !== null) { $_out = $_out . ' xmlns="' . __elephc_dom_escape_namespace((string)$_xmlns) . '"'; }
+    }
     if (is_array($_attrs)) {
         foreach ($_attrs as $_pair) {
             if (is_array($_pair)) {
@@ -1063,11 +1077,35 @@ class DOMNode {
             }
             return $this->childNodes;
         }
-        set { $this->childNodes = $value; }
+        set { $this->childNodes = is_object($this->__elephc_simplexml) ? null : $value; }
     }
-    public mixed $previousSibling = null;
-    public mixed $nextSibling = null;
-    public mixed $parentNode = null;
+    public mixed $previousSibling = null {
+        get {
+            if ($this instanceof DOMDocument) { return null; }
+            $bound = $this->__elephc_simplexml;
+            if (is_object($bound)) { return $bound->__elephc_dom_relation($this->ownerDocument, 13); }
+            return $this->previousSibling;
+        }
+        set { $this->previousSibling = is_object($this->__elephc_simplexml) ? null : $value; }
+    }
+    public mixed $nextSibling = null {
+        get {
+            if ($this instanceof DOMDocument) { return null; }
+            $bound = $this->__elephc_simplexml;
+            if (is_object($bound)) { return $bound->__elephc_dom_relation($this->ownerDocument, 14); }
+            return $this->nextSibling;
+        }
+        set { $this->nextSibling = is_object($this->__elephc_simplexml) ? null : $value; }
+    }
+    public mixed $parentNode = null {
+        get {
+            if ($this instanceof DOMDocument) { return null; }
+            $bound = $this->__elephc_simplexml;
+            if (is_object($bound)) { return $bound->__elephc_dom_relation($this->ownerDocument, 12); }
+            return $this->parentNode;
+        }
+        set { $this->parentNode = is_object($this->__elephc_simplexml) ? null : $value; }
+    }
     public mixed $ownerDocument = null;
     public mixed $__attrs = [];
     public ?string $__elephc_dom_xmlns = null;
@@ -1177,6 +1215,8 @@ class DOMNodeList implements IteratorAggregate, Countable {
 
 class DOMDocument extends DOMNode {
     public int $__elephc_flags = 0;
+    public array $__elephc_dom_nodes = [];
+    public int $__elephc_dom_sweep = 64;
     public mixed $documentElement {
         get {
             $children = $this->childNodes;
@@ -1219,7 +1259,7 @@ class DOMDocument extends DOMNode {
         $_unused_flags = $this->__elephc_flags;
         if ($node === null) {
             $bound = $this->__elephc_simplexml;
-            if (is_object($bound)) { return $bound->__elephc_dom_document_xml(); }
+            if (is_object($bound) && !$bound->__elephc_dom_is_html()) { return $bound->__elephc_dom_document_xml(); }
             return __elephc_dom_serialize_node($this);
         }
         return __elephc_dom_serialize_node($node);

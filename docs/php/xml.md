@@ -57,6 +57,9 @@ and the `RecursiveIterator` methods. Integer and float casts read the selected
 node text. Array casts, `get_object_vars()`, `__debugInfo()`, and JSON encoding expose XML
 properties, including `@attributes` and repeated children. DOM imports share
 their document, so edits through either API remain visible through the other.
+DOM node objects keep their identity across child and sibling queries; their parent
+and sibling links follow SimpleXML edits. HTML DOM output keeps the documented
+[legacy subset format](dom-html.md) after import.
 Importing a DOM node created by `ReflectionClass::newInstanceWithoutConstructor()`
 raises `TypeError`, matching PHP's rejection of uninitialized native nodes.
 

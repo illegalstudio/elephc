@@ -124151,7 +124151,7 @@
       "checker_line": null,
       "codegen_file": "src/simplexml_prelude/surface.rs",
       "codegen_function": "simplexml_import_dom",
-      "codegen_line": 868,
+      "codegen_line": 907,
       "notes": [
         "Implemented by the compiler-injected xml prelude."
       ],
@@ -124298,7 +124298,7 @@
       "checker_line": null,
       "codegen_file": "src/simplexml_prelude/surface.rs",
       "codegen_function": "simplexml_load_file",
-      "codegen_line": 812,
+      "codegen_line": 848,
       "notes": [
         "Implemented by the compiler-injected xml prelude."
       ],
@@ -124466,7 +124466,7 @@
       "checker_line": null,
       "codegen_file": "src/simplexml_prelude/surface.rs",
       "codegen_function": "simplexml_load_string",
-      "codegen_line": 801,
+      "codegen_line": 837,
       "notes": [
         "Implemented by the compiler-injected xml prelude."
       ],

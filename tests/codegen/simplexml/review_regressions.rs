@@ -501,6 +501,72 @@ echo get_class($projectionImported), '|'; unset($projectionImported);
 echo 'nodes|'; unset($projectionDocument); echo 'done|';
 "####;
     let dom_probes = r####"
+foreach ([false, true] as $liveHtml) {
+    $liveDocument = new DOMDocument();
+    if ($liveHtml) { $liveDocument->loadHTML('<div><a></a><b></b></div>'); }
+    else { $liveDocument->loadXML('<r><a/><b/></r>'); }
+    $documentRootBefore = $liveDocument->documentElement;
+    $liveRoot = $liveHtml ? $liveDocument->getElementsByTagName('div')->item(0) : $liveDocument->documentElement;
+    if ($liveRoot instanceof DOMElement) {
+        $liveA = $liveRoot->childNodes->item(0);
+        $liveB = $liveRoot->childNodes->item(1);
+        $liveXml = simplexml_import_dom($liveRoot);
+        if ($liveXml instanceof SimpleXMLElement && $liveA instanceof DOMElement && $liveB instanceof DOMElement) {
+            var_dump($documentRootBefore === $liveDocument->documentElement, $liveRoot === $liveA->parentNode);
+            var_dump($liveA === $liveDocument->getElementsByTagName('a')->item(0), $liveA->nextSibling === $liveB);
+            unset($liveXml->b);
+            var_dump($liveA->nextSibling, $liveB->parentNode, $liveB->previousSibling, $liveB->nextSibling);
+            $liveXml->addChild('c', 'new');
+            $liveC = $liveA->nextSibling;
+            if ($liveC instanceof DOMElement) {
+                echo $liveC->nodeName, '|';
+                var_dump($liveC === $liveRoot->childNodes->item(1), $liveC->previousSibling === $liveA);
+            }
+            unset($liveXml->a);
+            var_dump($liveA->parentNode, $liveA->previousSibling, $liveA->nextSibling);
+        }
+    }
+}
+$serialDocument = new DOMDocument();
+$serialDocument->loadHTML('<div title="&#xE9;" data-x="&#x1F600;">&#xE9;<script>a &lt; b</script></div>');
+$serialElement = $serialDocument->getElementsByTagName('div')->item(0);
+$serialWholeBefore = $serialDocument->saveXML();
+$serialNodeBefore = $serialDocument->saveXML($serialElement);
+$serialXml = simplexml_import_dom($serialDocument);
+var_dump($serialWholeBefore === $serialDocument->saveXML(), $serialNodeBefore === $serialDocument->saveXML($serialElement));
+echo $serialDocument->getElementsByTagName('script')->item(0)->childNodes->item(0)->nodeName, '|';
+if ($serialXml instanceof SimpleXMLElement && $serialElement instanceof DOMElement) {
+    $serialElement->setAttribute('new', 'é');
+    $serialXml->body->div['title'] = 'native';
+    echo $serialElement->getAttribute('title'), ':', (string)$serialXml->body->div['new'], '|';
+    var_dump($serialNodeBefore !== $serialDocument->saveXML($serialElement));
+    $serialElement->nodeValue = 'A&unknown;B';
+    var_dump(str_contains($serialDocument->saveXML($serialElement), 'A&unknown;B'), $serialElement->textContent === 'AB');
+}
+$cacheDocument = new DOMDocument();
+$cacheDocument->loadXML('<r/>');
+$cacheRoot = $cacheDocument->documentElement;
+$cacheXml = simplexml_import_dom($cacheDocument);
+$cacheRetained = [];
+$cacheReleased = true;
+if ($cacheXml instanceof SimpleXMLElement && $cacheRoot instanceof DOMElement) {
+    for ($cacheIndex = 0; $cacheIndex < 256; $cacheIndex++) {
+        $cacheXml->a = 'value';
+        $cacheRetained[] = $cacheXml->a[0];
+        $cacheNode = $cacheRoot->childNodes->item(0);
+        if ($cacheNode instanceof DOMNode) {
+            $cacheWeak = WeakReference::create($cacheNode);
+            unset($cacheNode);
+            if ($cacheWeak->get() !== null) { $cacheReleased = false; }
+        } else { $cacheReleased = false; }
+        unset($cacheXml->a);
+    }
+}
+var_dump($cacheReleased);
+$cacheBounded = true;
+if (property_exists($cacheDocument, '__elephc_dom_nodes')) { $cacheBounded = count($cacheDocument->__elephc_dom_nodes) < 128; }
+var_dump($cacheBounded);
+unset($cacheRetained, $cacheWeak, $cacheXml, $cacheRoot, $cacheDocument);
 $literalDocument = new DOMDocument();
 $literalDocument->loadHTML('<html xmlns="http://www.w3.org/1999/xhtml"><body><!-- ---- --><p xlink:href="#a" x-on:click="go" :class="active">A &amp; B</p><i>I</i></body></html>', LIBXML_NOERROR | LIBXML_NOWARNING);
 $literalBody = $literalDocument->getElementsByTagName('body')->item(0);
@@ -908,7 +974,7 @@ stream_filter_register('xml.review.throw', 'XmlReviewThrowFilter');
     let eval_updates_expected = "<?xml version=\"1.0\"?>\n<r><a><b><c/></b></a><d><e><f/></e></d><text/></r>\n|<?xml version=\"1.0\"?>\n<r><c>1</c></r>\n|<?xml version=\"1.0\"?>\n<r a=\"5\" b=\"\"/>\n|0|8|<?xml version=\"1.0\"?>\n<r><a><b>1</b></a><a><b>2</b></a></r>\n|get|get|set|count|int(11)\nget|get|direct|count|count|1110|gf|<?xml version=\"1.0\"?>\n<r><a><c>1</c></a></r>\nkf|<?xml version=\"1.0\"?>\n<r><a><c>1</c></a></r>\ngf|<?xml version=\"1.0\"?>\n<r><a><list>1</list></a></r>\nkf|<?xml version=\"1.0\"?>\n<r><a><c/></a></r>\nk|<?xml version=\"1.0\"?>\n<r><a><c/></a></r>\ng|<?xml version=\"1.0\"?>\n<r><a><b><c/></b></a></r>\nkf|1|kDreleased|kDreleased|kkNULL\nstring(2) \"aa\"\nIt's not possible to assign a complex type to properties, resource given|It's not possible to assign a complex type to attributes, resource given|It's not possible to assign a complex type to properties, resource given|It's not possible to assign a complex type to attributes, resource given|<?xml version=\"1.0\"?>\n<r id=\"old\"><a>old</a></r>\n|rhs|<?xml version=\"1.0\"?>\n<r><new/></r>\n|rhs|<?xml version=\"1.0\"?>\n<r><new><leaf>1</leaf></new></r>\n|rhs|name|<?xml version=\"1.0\"?>\n<r><new><leaf>1</leaf></new><converted>1</converted></r>\n|g|f|str|~name|after-plain|g|str|~name|after-compound|g|str|~name|after-incdec|g|f|str|~name|~text|after-name-text|kkf|~text|after-text|g|~name|capture-rhs|g|f|str|~name|capture-name|g|str|~name|after-keep|g|str|f|str|~name|after-fallback|g|str|~name|after-loop|g|str|~name|after-loop|~key|after-key|end-captures|string(1) \"6\"\nstring(1) \"6\"\n2:Unknown: Cannot add element a number 1 when only 0 such elements exist|8:Indirect modification of overloaded element of SimpleXMLElement has no effect|Attempt to assign property \"b\" on null|<?xml version=\"1.0\"?>\n<r><a/></r>\n|2:Unknown: Cannot add element a number 3 when only 1 such elements exist|<?xml version=\"1.0\"?>\n<r><a/><a><b>3</b></a></r>\n|8:Indirect modification of overloaded element of ReviewNumericZeroXml has no effect|Attempt to assign property \"b\" on null|<?xml version=\"1.0\"?>\n<r><a>1</a></r>\n|";
     let quiet_expected = "s|bool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(false)\nbool(false)\nNULL\nm|bool(true)\nbool(true)\nbool(true)\nbool(true)\nfb|c|xD||e|bool(false)\nbool(false)\nbool(false)\nu|D|D|end|fallback|v|self-fb|nullable-fb|nullable-fb|";
     let projection_expected = "J|{\"@attributes\":{\"id\":\"1\"},\"a\":\"x\",\"b\":{\"c\":{}}}|P|D:c|D:b|1:0|V|1:1|A|D:b|D:c|ReviewProjectionXml|O|D:b|ReviewProjectionXml|B|ReviewProjectionXml|D:b|R|D:r|D:b|end|ReviewProjectionXml|D:html|nodes|done|";
-    let dom_expected = "i:p|1:0:http://www.w3.org/1999/xhtml|#a:go:active|A & B|<html xmlns=\"http://www.w3.org/1999/xhtml\"><body><!-- ---- --><p xlink:href=\"#a\" x-on:click=\"go\" :class=\"active\">A &amp; B</p><i>I</i></body></html>|p:#comment:i:p|#changed|b:a|bool(true)\n1:1:1:1:1|#cdata-section:raw|work:data|changed|again:<?work again?>|#cdata-section|#cdata-section|5:#comment,first,r,last,#comment,|first:last|bool(false)\n<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!--before-->\n<?first one?>\n<r><a/></r>\n<?last two?>\n<!--after-->\n|3c3f786d6c2076657273696f6e3d22312e302220656e636f64696e673d2249534f2d383835392d31223f3e0a3c723e636166e93c2f723e0a:3c3f786d6c2076657273696f6e3d22312e302220656e636f64696e673d2249534f2d383835392d31223f3e0a3c723e636166c3a93c2f723e0a|<p:c p:k=\"v\"/>:{\"p\":\"urn:p\"}|<p:i><p:v>two</p:v></p:i>:{\"p\":\"urn:p\"}|<p:c p:k=\"v\"/>:{\"p\":\"urn:p\"}|r:2|p:r:p:c|1:1:0|1:1:it:urn:p|3&:3&:added:en:3&|bool(false)\n<?xml version=\"1.0\"?>\n<p:r xmlns:p=\"urn:p\" xmlns:q=\"urn:p\" q:a=\"3&amp;\" xml:lang=\"en\" p:new=\"added\"><p:c/></p:r>\n|ValueError:DOMElement::setAttribute(): Argument #1 ($qualifiedName) must not be empty|DOMException:5:Invalid Character Error|DOMException:5:Invalid Character Error|DOMException:5:Invalid Character Error|DOMException:5:Invalid Character Error|DOMException:5:Invalid Character Error|DOMException:5:Invalid Character Error|DOMException:5:Invalid Character Error|valid|valid|valid|valid|truncated|bool(true)\nbool(false)\n<p xmlns=\"urn:q\" class=\"c\">x</p>|string(5) \"urn:q\"\nbool(false)\n{\"\":\"urn:q\"}:|[]:[]|bool(true)\n<p xmlns=\"urn:é&amp;amp;&quot;\" xmlns=\"urn:raw\" xmlns:p=\"urn:raw:p\" class=\"c\">x</p>|urn:é&amp;\":urn:raw|urn:changed:|bool(true)\nbool(false)\n<p xmlns=\"\"/>|ac|Tom & Jerry é <:<r>Tom &amp; Jerry é &lt;</r>:c|AB:<r>A&unknown;B</r>|RD|Tom &amp; Jerry &#233; &lt;:<r>Tom &amp;amp; Jerry &amp;#233; &amp;lt;</r>|cast|cast|NULL\nTom &amp; Jerry &#233; &lt;|ac|ac|A & B:A & B|A &amp; B:A &amp; B:<p>A &amp;amp; B</p>|a::<a:>v</a:>|a::<a:a:>v</a:a:>|2:SimpleXMLElement::addAttribute(): Attribute requires prefix for namespace|<?xml version=\"1.0\"?>\n<r xmlns:a=\"urn:a\" b:=\"1\"><a:>v</a:><a:a:>v</a:a:></r>\n|<?xml version=\"1.0\"?>\n<r><e xmlns:p=\"\">w</e><c xmlns=\"\">v</c></r>\n:1:w:1|";
+    let dom_expected = "bool(true)\nbool(true)\nbool(true)\nbool(true)\nNULL\nNULL\nNULL\nNULL\nc|bool(true)\nbool(true)\nNULL\nNULL\nNULL\nbool(true)\nbool(true)\nbool(true)\nbool(true)\nNULL\nNULL\nNULL\nNULL\nc|bool(true)\nbool(true)\nNULL\nNULL\nNULL\nbool(true)\nbool(true)\n#cdata-section|native:é|bool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(true)\ni:p|1:0:http://www.w3.org/1999/xhtml|#a:go:active|A & B|<html xmlns=\"http://www.w3.org/1999/xhtml\"><body><!-- ---- --><p xlink:href=\"#a\" x-on:click=\"go\" :class=\"active\">A &amp; B</p><i>I</i></body></html>|p:#comment:i:p|#changed|b:a|bool(true)\n1:1:1:1:1|#cdata-section:raw|work:data|changed|again:<?work again?>|#cdata-section|#cdata-section|5:#comment,first,r,last,#comment,|first:last|bool(false)\n<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!--before-->\n<?first one?>\n<r><a/></r>\n<?last two?>\n<!--after-->\n|3c3f786d6c2076657273696f6e3d22312e302220656e636f64696e673d2249534f2d383835392d31223f3e0a3c723e636166e93c2f723e0a:3c3f786d6c2076657273696f6e3d22312e302220656e636f64696e673d2249534f2d383835392d31223f3e0a3c723e636166c3a93c2f723e0a|<p:c p:k=\"v\"/>:{\"p\":\"urn:p\"}|<p:i><p:v>two</p:v></p:i>:{\"p\":\"urn:p\"}|<p:c p:k=\"v\"/>:{\"p\":\"urn:p\"}|r:2|p:r:p:c|1:1:0|1:1:it:urn:p|3&:3&:added:en:3&|bool(false)\n<?xml version=\"1.0\"?>\n<p:r xmlns:p=\"urn:p\" xmlns:q=\"urn:p\" q:a=\"3&amp;\" xml:lang=\"en\" p:new=\"added\"><p:c/></p:r>\n|ValueError:DOMElement::setAttribute(): Argument #1 ($qualifiedName) must not be empty|DOMException:5:Invalid Character Error|DOMException:5:Invalid Character Error|DOMException:5:Invalid Character Error|DOMException:5:Invalid Character Error|DOMException:5:Invalid Character Error|DOMException:5:Invalid Character Error|DOMException:5:Invalid Character Error|valid|valid|valid|valid|truncated|bool(true)\nbool(false)\n<p xmlns=\"urn:q\" class=\"c\">x</p>|string(5) \"urn:q\"\nbool(false)\n{\"\":\"urn:q\"}:|[]:[]|bool(true)\n<p xmlns=\"urn:é&amp;amp;&quot;\" xmlns=\"urn:raw\" xmlns:p=\"urn:raw:p\" class=\"c\">x</p>|urn:é&amp;\":urn:raw|urn:changed:|bool(true)\nbool(false)\n<p xmlns=\"\"/>|ac|Tom & Jerry é <:<r>Tom &amp; Jerry é &lt;</r>:c|AB:<r>A&unknown;B</r>|RD|Tom &amp; Jerry &#233; &lt;:<r>Tom &amp;amp; Jerry &amp;#233; &amp;lt;</r>|cast|cast|NULL\nTom &amp; Jerry &#233; &lt;|ac|ac|A & B:A & B|A &amp; B:A &amp; B:<p>A &amp;amp; B</p>|a::<a:>v</a:>|a::<a:a:>v</a:a:>|2:SimpleXMLElement::addAttribute(): Attribute requires prefix for namespace|<?xml version=\"1.0\"?>\n<r xmlns:a=\"urn:a\" b:=\"1\"><a:>v</a:><a:a:>v</a:a:></r>\n|<?xml version=\"1.0\"?>\n<r><e xmlns:p=\"\">w</e><c xmlns=\"\">v</c></r>\n:1:w:1|";
     let contract_expected = "1:outer|1:outer|1:outer|1:inner|1:inner|1:inner|bool(true)\nbool(false)\nbool(true)\nbool(true)\nbool(true)\nbool(false)\nbool(true)\nbool(true)\n1:yes|7:3:6:8:24|int(6)\nint(7)\nint(16)\nint(14)\nint(2)\nint(7)\nint(3)\n7|int(7)\nint(3)\nint(7)\nint(4)\n636166e9:fffe:78e9:62e9|75726e3ae9|SimpleXMLElement::asXML(): Argument #1 ($filename) must not contain any null bytes|SimpleXMLElement::saveXML(): Argument #1 ($filename) must not contain any null bytes|Path must not be empty|Path must not be empty|bool(false)\n2:SimpleXMLElement::asXML(/__simplexml_review_absent_2060__/out.xml): Failed to open stream: No such file or directory|bool(false)\n2:SimpleXMLElement::saveXML(/__simplexml_review_absent_2060__/out.xml): Failed to open stream: No such file or directory|bool(false)\n2:SimpleXMLElement::asXML(.): Failed to open stream: Is a directory|bool(false)\n2:SimpleXMLElement::saveXML(.): Failed to open stream: Is a directory|bool(false)\n2:SimpleXMLElement::asXML(/__simplexml_review_absent_2060__/out.xml): Failed to open stream: No such file or directory|bool(false)\n1|dynamic|bool(false)\nchanged|0|";
     let expected = [names_expected, names_expected, factory, constructor, factory, constructor, semantics_expected, semantics_expected, updates_expected, eval_updates_expected, quiet_expected, quiet_expected, projection_expected, projection_expected, dom_expected, dom_expected, contract_expected, contract_expected];
     assert_eq!(runs.len(), expected.len());
