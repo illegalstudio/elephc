@@ -18901,7 +18901,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 706,
+      "codegen_line": 708,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.array_first` through `BuiltinLoweringContext`.",
@@ -20103,7 +20103,7 @@
       "checker_line": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
-      "codegen_line": 706,
+      "codegen_line": 708,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
         "Emits the typed EIR target `runtime.array_last` through `BuiltinLoweringContext`.",

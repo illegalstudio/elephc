@@ -9,6 +9,33 @@
 
 use crate::support::*;
 
+/// Owns one production CLI fixture so failed emission assertions also remove its artifacts.
+struct XmlPreludeCliFixture(std::path::PathBuf);
+
+impl Drop for XmlPreludeCliFixture {
+    /// Removes only the isolated directory created for this fixture.
+    fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
+}
+
+/// Production emission must lower DOMText-only storage through the fully injected XML prelude.
+#[test]
+fn test_simplexml_production_cli_emits_full_prelude() {
+    if skip_without_xml_native("test_simplexml_production_cli_emits_full_prelude") { return; }
+    let fixture = XmlPreludeCliFixture(make_cli_test_dir("elephc_xml_prelude_emit"));
+    let path = fixture.0.join("main.php");
+    fs::write(&path, r#"<?php
+$document = new DOMDocument();
+$document->loadHTML('<body><script>a<b</script></body>');
+echo simplexml_import_dom($document)->asXML();
+"#).unwrap();
+    let output = elephc_cli_command(&fixture.0)
+        .args(["--emit-asm", "--with-xml", "--target", target().as_str()])
+        .arg(&path).output().expect("emit production XML prelude");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let assembly = fs::read_to_string(path.with_extension("s")).expect("emitted XML assembly");
+    assert!(assembly.contains("elephc_xml_sx_html_append"), "DOM import must reach native emission");
+}
+
 /// Production CLI injection type-checks the whole XML surface without forced harness preludes.
 #[test]
 fn test_simplexml_production_cli_prelude_typechecks() {

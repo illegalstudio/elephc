@@ -965,10 +965,13 @@ function __elephc_simplexml_import_document(DOMDocument $document, string $class
         return __elephc_simplexml_wrap($root, $class);
     } finally { elephc_xml_sx_free($builder); }
 }
+function __elephc_simplexml_import_text_kind(DOMText $node): int {
+    return $node->__elephc_raw_text ? 4 : 3;
+}
 function __elephc_simplexml_import_child(int $parent, DOMNode $node): void {
     $kind = 0;
     if ($node instanceof DOMElement) { $kind = 1; }
-    elseif ($node instanceof DOMText) { $kind = $node->__elephc_raw_text ? 4 : 3; }
+    elseif ($node instanceof DOMText) { $kind = __elephc_simplexml_import_text_kind($node); }
     elseif ($node instanceof DOMComment) { $kind = 5; }
     elseif ($node instanceof DOMProcessingInstruction) { $kind = 6; }
     if ($kind === 0) { return; }

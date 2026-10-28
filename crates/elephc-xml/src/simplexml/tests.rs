@@ -327,7 +327,8 @@ fn simplexml_derived_xpath_registrations_are_isolated() {
     let added = root.with_scope(Scope::Node(root.add("d", None, None, false).unwrap()));
     for derived in [xpath, iterated, added] {
         assert_eq!(derived.xpath("//q:v"), Err(query::XPathError::Invalid));
-        assert!(diagnostics::take().contains("Undefined namespace prefix"));
+        assert!(String::from_utf8(diagnostics::take()).expect("UTF-8 namespace diagnostic")
+            .contains("Undefined namespace prefix"));
         derived.xpath_ns.borrow_mut().insert(b"q".to_vec(), b"urn:other".to_vec());
         assert_eq!(root.xpath("//q:v").unwrap().len(), 1);
     }
@@ -340,7 +341,7 @@ fn simplexml_derived_xpath_registrations_are_isolated() {
 #[test]
 fn simplexml_parse_diagnostics_preserve_php_lines() {
     assert!(parse(b"<r>", 0, "", false).is_none());
-    let messages = diagnostics::take();
+    let messages = String::from_utf8(diagnostics::take()).expect("UTF-8 parser diagnostic");
     let lines = messages.lines().collect::<Vec<_>>();
     assert_eq!(lines.len(), 3);
     assert!(lines[0].contains("Premature end of data in tag r line 1"));
@@ -348,7 +349,8 @@ fn simplexml_parse_diagnostics_preserve_php_lines() {
     assert_eq!(lines[2], "   ^");
     assert!(diagnostics::take().is_empty());
     assert!(parse(b"", 0, "", false).is_none());
-    assert!(diagnostics::take().contains("Document is empty"));
+    assert!(String::from_utf8(diagnostics::take()).expect("UTF-8 empty document diagnostic")
+        .contains("Document is empty"));
     assert!(parse(b"<r>", 32, "", false).is_none());
     assert!(diagnostics::take().is_empty());
     assert!(parse(b"<r/>", 0, "", false).is_some());
@@ -359,9 +361,9 @@ fn simplexml_parse_diagnostics_preserve_php_lines() {
 #[test]
 fn simplexml_dom_parser_diagnostics_use_structured_lines() {
     assert!(parse_with_diagnostics(b"<r>", 0, "", false, "", 2).is_none());
-    assert_eq!(diagnostics::take(), "Warning: Premature end of data in tag r line 1 in Entity, line: 1\n");
+    assert_eq!(diagnostics::take().as_slice(), b"Warning: Premature end of data in tag r line 1 in Entity, line: 1\n".as_slice());
     assert!(parse_with_diagnostics(b"<?xml version='1.1'?><r/>", 0, "", false, "", 2).is_some());
-    assert_eq!(diagnostics::take(), "Notice: Unsupported version '1.1' in Entity, line: 1\n");
+    assert_eq!(diagnostics::take().as_slice(), b"Notice: Unsupported version '1.1' in Entity, line: 1\n".as_slice());
 }
 
 /// A selected attribute reports its namespace; an empty filtered attribute list reports none.
