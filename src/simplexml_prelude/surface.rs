@@ -748,13 +748,21 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
             if ($view instanceof SimpleXMLElement) { $children[] = $view->__elephc_dom_node($document, $parent); }
         }
         $length = count($children);
-        for ($i = 1; $i < $length; $i++) { __elephc_dom_link_siblings($children[$i - 1], $children[$i]); }
+        for ($i = 1; $i < $length; $i++) {
+            $left = $children[$i - 1];
+            $right = $children[$i];
+            if ($left instanceof DOMNode) {
+                if ($right instanceof DOMNode) { __elephc_dom_link_siblings($left, $right); }
+            }
+        }
         return new DOMNodeList($children);
     }
     public function __elephc_dom_node(mixed $document, mixed $parent): DOMNode {
         $handle = $this->__elephc_handle;
         $kind = elephc_xml_sx_int($handle, 4);
-        if (($kind === 9 || $kind === 13) && $document instanceof DOMDocument) { return $document; }
+        if ($kind === 9 || $kind === 13) {
+            if ($document instanceof DOMDocument) { return $document; }
+        }
         $cached = __elephc_dom_cached_node($document, elephc_xml_sx_int($handle, 12));
         if ($cached instanceof DOMNode) { return $cached; }
         if ($kind === 4) {
@@ -875,9 +883,11 @@ function __elephc_simplexml_bind_dom(DOMNode $node, SimpleXMLElement $view): voi
         $i = 0;
         if ($children instanceof DOMNodeList) {
             foreach ($children as $child) {
-                if ($child instanceof DOMNode && isset($selections[$i])) {
-                    $selected = $selections[$i];
-                    if ($selected instanceof SimpleXMLElement) { __elephc_simplexml_bind_dom($child, $selected); }
+                if ($child instanceof DOMNode) {
+                    if (isset($selections[$i])) {
+                        $selected = $selections[$i];
+                        if ($selected instanceof SimpleXMLElement) { __elephc_simplexml_bind_dom($child, $selected); }
+                    }
                 }
                 $i++;
             }

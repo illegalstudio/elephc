@@ -9,6 +9,29 @@
 
 use crate::support::*;
 
+/// Production CLI injection type-checks the whole XML surface without forced harness preludes.
+#[test]
+fn test_simplexml_production_cli_prelude_typechecks() {
+    let dir = make_cli_test_dir("elephc_xml_prelude_check");
+    for (name, source, force) in [
+        ("parser", "<?php $parser = xml_parser_create();", false),
+        ("writer", "<?php $writer = new XMLWriter();", false),
+        ("simplexml", "<?php $xml = simplexml_load_string('<r/>');", false),
+        ("dom", "<?php $doc = new DOMDocument(); $doc->loadXML('<r/>');", false),
+        ("forced", "<?php echo 1;", true),
+    ] {
+        let path = dir.join(format!("{name}.php"));
+        fs::write(&path, source).unwrap();
+        let mut command = elephc_cli_command(&dir);
+        command.arg("--check");
+        if force { command.arg("--with-xml"); }
+        let output = command.arg(&path).output().expect("run production CLI frontend");
+        assert!(output.status.success(), "{name}: {}", String::from_utf8_lossy(&output.stderr));
+        assert!(!path.with_extension("s").exists(), "--check must stop before codegen");
+    }
+    fs::remove_dir_all(dir).unwrap();
+}
+
 /// List assignment invalidates a previous unrelated receiver before the DOM loader call.
 #[test]
 fn test_simplexml_dom_loader_after_list_rebinding() {
