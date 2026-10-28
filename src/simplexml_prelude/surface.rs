@@ -673,6 +673,10 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $handle = $this->__elephc_handle;
         return elephc_xml_sx_string($handle, 3);
     }
+    public function __elephc_dom_document_text(): string {
+        $handle = $this->__elephc_handle;
+        return elephc_xml_sx_string($handle, 7);
+    }
     public function __elephc_dom_xml(): string {
         $handle = $this->__elephc_handle;
         return (string)hex2bin(elephc_xml_sx_xml_hex($handle, 0));
@@ -681,9 +685,9 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $handle = $this->__elephc_handle;
         return (string)hex2bin(elephc_xml_sx_xml_hex($handle, $nodeArgument ? 3 : 2));
     }
-    public function __elephc_dom_set_text(string $text): void {
+    public function __elephc_dom_set_text(string $text, bool $entities = false): void {
         $handle = $this->__elephc_handle;
-        elephc_xml_sx_mutate($handle, 22, "", $text, "", 0, 0);
+        elephc_xml_sx_mutate($handle, $entities ? 26 : 22, "", $text, "", 0, 0);
     }
     public function __elephc_dom_attribute(string $name): string {
         $handle = $this->__elephc_handle;

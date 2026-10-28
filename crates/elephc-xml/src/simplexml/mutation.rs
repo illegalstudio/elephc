@@ -74,7 +74,7 @@ impl View {
         if name.is_empty() { return Err(AddError::InvalidName); }
         if attribute {
             let uri = namespace.unwrap_or(b"");
-            let qualified = name.iter().position(|byte| *byte == b':').map(|index| (&name[..index], &name[index + 1..])).filter(|(prefix, _)| !prefix.is_empty());
+            let qualified = name.iter().position(|byte| *byte == b':').map(|index| (&name[..index], &name[index + 1..])).filter(|(prefix, local)| !prefix.is_empty() && !local.is_empty());
             if !uri.is_empty() && qualified.is_none() { return Err(AddError::AttributePrefix); }
             let local = if literal { name } else { qualified.map(|(_, local)| local).unwrap_or(name) };
             let mut current = unsafe { ffi::attrs(parent) };
@@ -105,6 +105,14 @@ impl View {
     }
     /// Replaces direct content without freeing child wrappers that remain in user storage.
     pub(super) fn assign_node(&self, node: Node, value: impl AsRef<[u8]>) {
+        self.assign_node_content(node, value, false);
+    }
+    /// Gives DOM nodeValue its entity-aware element/attribute rules without releasing live children.
+    pub(super) fn assign_dom_node_value(&self, node: Node, value: impl AsRef<[u8]>) {
+        self.assign_node_content(node, value, true);
+    }
+    /// Retires exposed child storage before either literal or entity-parsing replacement.
+    fn assign_node_content(&self, node: Node, value: impl AsRef<[u8]>, entities: bool) {
         unsafe {
             if !matches!(ffi::node_type(node), 1 | 2) {
                 ffi::content(node, cstring(value).as_ptr());
@@ -117,7 +125,8 @@ impl View {
                 cursor = next;
             }
             let text = cstring(value);
-            ffi::assign(node, text.as_ptr());
+            if entities { ffi::content(node, text.as_ptr()); }
+            else { ffi::assign(node, text.as_ptr()); }
         }
     }
     /// Writes a named property/attribute or numeric offset, returning a PHP status code.

@@ -1024,19 +1024,35 @@ class DOMNode {
     public mixed $__elephc_simplexml = null;
     public mixed $nodeValue = null {
         get {
+            if ($this instanceof DOMDocument) { return null; }
             $bound = $this->__elephc_simplexml;
-            if (is_object($bound) && !($this instanceof DOMDocument)) { return $bound->__elephc_dom_text(); }
+            if (is_object($bound)) { return $bound->__elephc_dom_text(); }
             return $this->nodeValue;
         }
         set {
-            $this->nodeValue = $value;
+            $text = (string)$value;
+            if ($this instanceof DOMDocument) { return; }
             $bound = $this->__elephc_simplexml;
-            if (is_object($bound) && !($this instanceof DOMDocument)) { $bound->__elephc_dom_set_text((string)$value); }
+            if (is_object($bound)) { $bound->__elephc_dom_set_text($text, true); }
+            else { $this->nodeValue = $text; }
         }
     }
     public $textContent {
-        get { return $this->nodeValue; }
-        set { $this->nodeValue = $value; }
+        get {
+            if ($this instanceof DOMDocument) {
+                $bound = $this->__elephc_simplexml;
+                if (is_object($bound)) { return $bound->__elephc_dom_document_text(); }
+                return __elephc_dom_descendant_text($this);
+            }
+            return $this->nodeValue;
+        }
+        set {
+            $text = (string)$value;
+            if ($this instanceof DOMDocument) { return; }
+            $bound = $this->__elephc_simplexml;
+            if (is_object($bound)) { $bound->__elephc_dom_set_text($text); }
+            else { $this->nodeValue = $text; }
+        }
     }
     public mixed $childNodes = null {
         get {

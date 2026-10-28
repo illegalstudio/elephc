@@ -24,6 +24,7 @@ mod detect;
 mod attributes;
 mod entities;
 mod surface;
+mod text;
 
 use std::sync::OnceLock;
 
@@ -43,7 +44,7 @@ pub(crate) fn program_uses_dom_html(program: &[crate::parser::ast::Stmt]) -> boo
 fn parsed_prelude() -> Program {
     PARSED_PRELUDE
         .get_or_init(|| {
-            let source = format!("<?php\n{}\n{}\n{}", entities::SRC, attributes::SRC, surface::SRC);
+            let source = format!("<?php\n{}\n{}\n{}\n{}", entities::SRC, attributes::SRC, text::SRC, surface::SRC);
             let tokens = crate::lexer::tokenize(&source).expect("dom html prelude must tokenize");
             crate::parser::parse_internal(&tokens).expect("dom html prelude must parse")
         })

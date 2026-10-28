@@ -239,7 +239,7 @@ void *elephc_libxml2_v1_sx_add(void *raw, const char *qualified, const char *val
         const char *uri, int has_uri, int attribute, int has_value) {
     xmlNodePtr parent = raw;
     const char *colon = strchr(qualified, ':');
-    if (colon == qualified) colon = NULL;
+    if (colon == qualified || (colon && !colon[1])) colon = NULL;
     const xmlChar *name = (const xmlChar *)(colon ? colon + 1 : qualified);
     xmlChar *prefix = colon ? xmlStrndup((const xmlChar *)qualified, (int)(colon - qualified)) : NULL;
     xmlNsPtr ns = NULL;
@@ -254,7 +254,10 @@ void *elephc_libxml2_v1_sx_add(void *raw, const char *qualified, const char *val
         result = (xmlNodePtr)xmlNewNsProp(parent, ns, name, (const xmlChar *)value);
     } else {
         result = xmlNewChild(parent, ns, name, has_value ? (const xmlChar *)value : NULL);
-        if (result && has_uri && !ns) {
+        if (result && has_uri && !*uri) {
+            xmlSetNs(result, NULL);
+            xmlNewNs(result, (const xmlChar *)uri, prefix);
+        } else if (result && has_uri && !ns) {
             ns = xmlNewNs(result, (const xmlChar *)uri, prefix);
             xmlSetNs(result, ns);
         }

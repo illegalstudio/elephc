@@ -220,10 +220,11 @@ fn projection_uses_items(node: Node) -> bool {
             && !first.is_null() && !ffi::next(first).is_null()
     }
 }
-/// Copies text (0), local name (1), XML (2), DOM content (3/4), identity name (5), or qualified name (6).
+/// Copies text/name/XML (0-6), or all document text (7) for the DOM document property.
 #[no_mangle]
 pub extern "C" fn elephc_xml_sx_string(handle: i64, operation: i64) -> *const c_char {
     guard(|| output(view(handle).and_then(|v| {
+        if operation == 7 { return Some(unsafe { owned_bytes(ffi::full_text(v.doc.raw)) }); }
         let node = if operation == 5 { (!v.identity.is_null()).then_some(v.identity) } else { v.first() };
         node.map(|n| unsafe { match operation {
         0 => owned_bytes(ffi::text(n)), 1 => bytes(ffi::name(n)),
@@ -303,6 +304,7 @@ pub unsafe extern "C" fn elephc_xml_sx_mutate(handle: i64, operation: i64, key: 
                 if !attr.is_null() { v.assign_node(attr, &text); }
                 i64::from(status)
             }).unwrap_or(0),
+            26 => v.first().map(|node| { v.assign_dom_node_value(node, &text); 1 }).unwrap_or(0),
             _ => 0,
         }
     })

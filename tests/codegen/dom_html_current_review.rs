@@ -9,6 +9,25 @@
 
 use crate::support::*;
 
+/// HTML-only documents expose descendant text while document writes coerce and then do nothing.
+#[test]
+fn dom_html_document_text_content_is_text_and_ignores_writes() {
+    let out = compile_and_run(r#"<?php
+class IgnoredDocumentText {
+    public function __toString(): string { echo 'cast|'; return 'ignored'; }
+}
+$document = new DOMDocument();
+var_dump($document->nodeValue, $document->textContent);
+$document->loadHTML('<p>a<b>c</b><!--note--><?work data?></p>');
+echo $document->textContent, '|';
+$document->nodeValue = new IgnoredDocumentText();
+$document->textContent = new IgnoredDocumentText();
+var_dump($document->nodeValue);
+echo $document->textContent;
+"#);
+    assert_eq!(out, "NULL\nstring(0) \"\"\nac|cast|cast|NULL\nac");
+}
+
 /// Default declarations are immutable and serialize before literal HTML attributes.
 #[test]
 fn dom_html_default_namespace_declaration_survives_repeated_writes() {
