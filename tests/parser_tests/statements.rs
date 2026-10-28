@@ -234,6 +234,45 @@ fn test_computed_plain_property_statements_keep_inline_rhs() {
     }
 }
 
+/// Call roots run once before the RHS while property and dimension fetches remain writable.
+#[test]
+fn test_call_rooted_property_statements_capture_only_the_root() {
+    for source in [
+        "<?php make()->children()[key()]->mark = rhs();",
+        "<?php make()->children()[key()]->item[0] = rhs();",
+        "<?php make()->children()[key()]->item[] = rhs();",
+    ] {
+        let statements = parse_source(source);
+        let StmtKind::Synthetic(body) = &statements[0].kind else { panic!("expected root capture: {source}"); };
+        let StmtKind::Assign { name, value } = &body[0].kind else { panic!("expected root value: {source}"); };
+        assert!(name.starts_with(elephc::parser::ast::SCOPED_WRITE_TEMP_PREFIX), "{source}");
+        assert!(matches!(value.kind, ExprKind::MethodCall { .. }), "{source}");
+        let (object, value) = match &body.last().unwrap().kind {
+            StmtKind::PropertyAssign { object, value, .. }
+            | StmtKind::PropertyArrayAssign { object, value, .. }
+            | StmtKind::PropertyArrayPush { object, value, .. } => (object, value),
+            other => panic!("expected property write, got {other:?}: {source}"),
+        };
+        assert!(matches!(value.kind, ExprKind::FunctionCall { .. }), "{source}");
+        assert!(matches!(&object.kind, ExprKind::ArrayAccess { array, .. }
+            if matches!(&array.kind, ExprKind::Variable(root) if root == name)), "{source}");
+    }
+}
+
+/// Compound statement captures preserve the call root without fetching its indexed receiver.
+#[test]
+fn test_call_rooted_property_updates_keep_delayed_traversal() {
+    let statements = parse_source("<?php make()->children()[key()]->mark .= rhs();");
+    let StmtKind::ExprStmt(expression) = &statements[0].kind else { panic!("expected update expression"); };
+    let ExprKind::Assignment { target, prelude, .. } = &expression.kind else { panic!("expected assignment"); };
+    let StmtKind::Assign { name, value } = &prelude[0].kind else { panic!("expected root capture"); };
+    assert!(name.starts_with(elephc::parser::ast::SCOPED_WRITE_TEMP_PREFIX));
+    assert!(matches!(value.kind, ExprKind::MethodCall { .. }));
+    assert!(matches!(&target.kind, ExprKind::PropertyAccess { object, .. }
+        if matches!(&object.kind, ExprKind::ArrayAccess { array, .. }
+            if matches!(&array.kind, ExprKind::Variable(root) if root == name))));
+}
+
 /// Computed element increments keep the PHP incdec kernel instead of numeric arithmetic.
 #[test]
 fn test_computed_property_element_increment_retains_php_incdec() {

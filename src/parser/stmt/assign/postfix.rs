@@ -70,7 +70,8 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     // Runtime-name writes need the expression lowerer's captured RHS and lazy ??= plan.
     // A handcrafted assignment without its result target evaluated the value twice.
     if !is_append && (matches!(lhs_expr.kind, ExprKind::DynamicPropertyAccess { .. })
-        || (op != AssignmentOperator::Assign && computed_storage_property_target(&lhs_expr))) {
+        || (op != AssignmentOperator::Assign && (computed_storage_property_target(&lhs_expr)
+            || computed_receiver_property_target(&lhs_expr)))) {
         let value = if matches!(lhs_expr.kind, ExprKind::DynamicPropertyAccess { .. }) {
             parse_expr(tokens, pos)?
         } else {
@@ -111,8 +112,9 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
         // afterwards. A child-property append must not retain the old static object chain.
         let target = hoisted.stabilize_array_base(lhs_expr);
         (target, hoisted.stabilize_unconditionally(rhs))
-    } else if op == AssignmentOperator::Assign && computed_storage_property_target(&lhs_expr) {
-        // Settle computed names and keys before the RHS, retaining writable traversal.
+    } else if op == AssignmentOperator::Assign && (computed_storage_property_target(&lhs_expr)
+        || computed_receiver_property_target(&lhs_expr)) {
+        // Settle computed roots, names and keys before the RHS, retaining writable traversal.
         hoisted.scoped = true;
         (hoisted.stabilize_array_base(lhs_expr), rhs)
     } else {
@@ -555,7 +557,20 @@ fn computed_storage_property_target(target: &Expr) -> bool {
         && storage_receiver_root(target) && !can_replay_assignment_target(target)
 }
 
-/// Excludes computed object roots whose statement lowering already owns their lifetime.
+/// Recognizes computed receiver values that must be captured separately from writable hops.
+fn computed_receiver_property_target(target: &Expr) -> bool {
+    if !is_instance_property_assignment_target(target) { return false; }
+    let mut root = target;
+    loop {
+        root = match &root.kind {
+            ExprKind::PropertyAccess { object, .. } | ExprKind::DynamicPropertyAccess { object, .. } => object,
+            ExprKind::ArrayAccess { array, .. } => array,
+            _ => return !can_replay_assignment_target(root),
+        };
+    }
+}
+
+/// Distinguishes live storage roots from computed values captured once before assignment operands.
 fn storage_receiver_root(target: &Expr) -> bool {
     match &target.kind {
         ExprKind::PropertyAccess { object, .. } | ExprKind::DynamicPropertyAccess { object, .. } => storage_receiver_root(object),

@@ -209,3 +209,67 @@ elseif ($argc === 2) {
         elephc::names::function_symbol(&format!("__eir_closure_main_{index}"))));
     assert!(failures.is_empty(), "{}\nDimension owner assembly:\n{}", failures.join("\n"), selected_function_assembly(&assembly, &symbols));
 }
+
+/// Computed roots run before the RHS while native write fetches and errors wait until afterward.
+#[test]
+fn test_simplexml_computed_receiver_write_timing_bundle() {
+    if skip_without_xml_native("test_simplexml_computed_receiver_write_timing_bundle") { return; }
+    let source = r###"<?php
+function XmlWriteTimingBoom(): string { echo 'rhs|'; throw new RuntimeException('rhs'); }
+function XmlWriteTimingRoot(SimpleXMLElement $xml): SimpleXMLElement { echo 'root|'; return $xml; }
+function XmlWriteTimingKey(): int { echo 'key|'; return 0; }
+function XmlWriteTimingFresh(): SimpleXMLElement { echo 'fresh|'; return new SimpleXMLElement('<r/>'); }
+function XmlWriteTimingValue(): string { echo 'value|'; return 'ok'; }
+class XmlWriteTimingHolder {
+    public string $mark = '';
+    public function receiver(): self { echo 'call|'; return $this; }
+}
+function XmlWriteTimingOrdinary(XmlWriteTimingHolder $object): XmlWriteTimingHolder { echo 'ordinary|'; return $object; }
+$doc = new SimpleXMLElement('<r/>');
+try { $doc->children()[0]->mark = XmlWriteTimingBoom(); }
+catch (RuntimeException $error) { echo $error->getMessage(), "\n"; }
+echo $doc->asXML();
+$parent = new SimpleXMLElement('<r><b><child/></b></r>');
+$removed = $parent->b[0];
+unset($parent->b[0]);
+try { $removed->children()[1]->z = XmlWriteTimingBoom(); }
+catch (RuntimeException $error) { echo $error->getMessage(), "\n"; }
+echo $removed->asXML(), "\n";
+$doc = new SimpleXMLElement('<r/>');
+$doc->children()[0]->mark = strlen($doc->asXML());
+echo $doc->asXML();
+$doc = new SimpleXMLElement('<r/>');
+try { $doc->children()[0]->mark .= XmlWriteTimingBoom(); }
+catch (RuntimeException $error) { echo $error->getMessage(), "\n"; }
+echo $doc->asXML();
+try { XmlWriteTimingRoot($doc)->children()[XmlWriteTimingKey()]->mark = XmlWriteTimingBoom(); }
+catch (RuntimeException $error) { echo $error->getMessage(), "\n"; }
+echo $doc->asXML();
+try { $doc->children()[0]->item[0] = XmlWriteTimingBoom(); }
+catch (RuntimeException $error) { echo $error->getMessage(), "\n"; }
+echo $doc->asXML();
+try { $doc->children()[0]->item[] = XmlWriteTimingBoom(); }
+catch (RuntimeException $error) { echo $error->getMessage(), "\n"; }
+echo $doc->asXML();
+try { XmlWriteTimingFresh()->children()[0]->mark = XmlWriteTimingBoom(); }
+catch (RuntimeException $error) { echo $error->getMessage(), "\n"; }
+$ordinary = new XmlWriteTimingHolder();
+XmlWriteTimingOrdinary($ordinary)->receiver()->mark = XmlWriteTimingValue();
+echo $ordinary->mark, "\n";
+unset($doc, $parent, $removed, $ordinary, $error);
+"###;
+    let renamed = source.replace("XmlWriteTiming", "EvalXmlWriteTiming");
+    let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
+    let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
+    let expected = "rhs|rhs\n<?xml version=\"1.0\"?>\n<r/>\nrhs|rhs\n<b><child/></b>\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark>27</mark></r>\nrhs|rhs\n<?xml version=\"1.0\"?>\n<r/>\nroot|key|rhs|rhs\n<?xml version=\"1.0\"?>\n<r/>\nrhs|rhs\n<?xml version=\"1.0\"?>\n<r/>\nrhs|rhs\n<?xml version=\"1.0\"?>\n<r/>\nfresh|rhs|rhs\nordinary|call|value|ok\n";
+    assert_bundle_with(&[
+        BundleCase { name: "computed_write_aot", source, expected },
+        BundleCase { name: "computed_write_eval", source: &eval, expected },
+    ], |source| {
+        let out = compile_and_run_with_heap_debug(source);
+        assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+        assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
+        out.stdout
+    });
+}
