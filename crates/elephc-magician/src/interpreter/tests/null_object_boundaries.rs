@@ -11,6 +11,31 @@
 use super::super::*;
 use super::support::*;
 
+/// Typed named tails bind without the positional hash scans that make a collector pass quadratic.
+#[test]
+fn typed_named_variadic_binding_avoids_positional_hash_scans() {
+    let mut context = ElephcEvalContext::new();
+    let mut values = FakeOps::default();
+    let object = values.new_object("stdClass").expect("caller object");
+    let args = (0..64).map(|index| EvaluatedCallArg {
+        name: Some(format!("arg{index}")), value: object, ref_target: None,
+    }).collect();
+    let bound = bind_evaluated_method_args_with_ref_mode(
+        "typedNamedTail", &["nodes".into()],
+        &[Some(EvalParameterType::new(vec![EvalParameterTypeVariant::Object], false))],
+        &[None], &[false], &[true], args, EvalByRefBindingMode::RequireTarget,
+        &mut context, &mut values,
+    ).expect("bind named typed variadic arguments");
+    assert_eq!(values.array_len(bound[0].value).unwrap(), 64);
+    assert_eq!(values.array_iter_key_calls, 0, "binding must not repeatedly walk the hash by position");
+    release_native_bound_args(&bound, &mut context, &mut values).expect("release collector");
+    values.release(object).expect("release caller owner");
+    let keys = values.values.iter().filter(|(_, value)|
+        matches!(value, FakeValue::String(name) if name.starts_with("arg"))).collect::<Vec<_>>();
+    assert_eq!(keys.len(), 64);
+    for (id, _) in keys { assert_eq!(values.cell_owners.get(id).copied(), Some(0)); }
+}
+
 /// Executes a boundary fixture and verifies that execution continues after every caught error.
 fn assert_null_boundary_output(source: &[u8], expected: &str) {
     let program = parse_fragment(source).expect("parse boundary fixture");
@@ -198,6 +223,34 @@ return true;
         "Cannot assign null to property NullPropertyBox::$plainShared of type NullPropertyNode\n",
         "NullPropertyBox::$hooked::set(): Argument #1 ($value) must be of type NullPropertyNode, null given\n",
         "preserved|",
+    ));
+}
+
+/// Failed direct and dynamic reference binds leave initialization, old values, and aliases intact.
+#[test]
+fn eval_null_object_property_reference_binds_preserve_storage() {
+    assert_null_boundary_output(br#"
+class NullRefBox { public object $node; }
+$box = new NullRefBox();
+$missing = null;
+try { $box->node =& $missing; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+$name = 'node';
+try { $box->{$name} =& $missing; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+$property = new ReflectionProperty(NullRefBox::class, 'node');
+echo $property->isInitialized($box) ? 'bad' : 'uninitialized|';
+$good = new stdClass();
+$box->node = $good;
+try { $box->node =& $missing; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { $box->{$name} =& $missing; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+echo $box->node === $good ? 'preserved|' : 'bad';
+$missing = new stdClass();
+echo $box->node === $good ? 'detached|' : 'bad';
+return true;
+"#, concat!(
+        "Cannot assign null to property NullRefBox::$node of type object\n",
+        "Cannot assign null to property NullRefBox::$node of type object\nuninitialized|",
+        "Cannot assign null to property NullRefBox::$node of type object\n",
+        "Cannot assign null to property NullRefBox::$node of type object\npreserved|detached|",
     ));
 }
 

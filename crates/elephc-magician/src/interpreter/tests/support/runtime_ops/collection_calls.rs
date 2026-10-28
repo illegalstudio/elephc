@@ -60,6 +60,7 @@ macro_rules! impl_fake_collection_call_ops {
         array: RuntimeCellHandle,
         position: usize,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.array_iter_key_calls += 1;
         self.runtime_array_iter_key(array, position)
     }
     /// Writes one fake indexed or associative array element.
