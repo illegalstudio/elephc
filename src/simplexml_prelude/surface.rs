@@ -358,7 +358,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         elephc_xml_sx_free($selected);
         return $present;
     }
-    final public function __elephc_dimension_select(mixed $offset): mixed {
+    final public function __elephc_dimension_select(mixed $offset, bool $throwOnFailure = true): mixed {
         $selected = $this->__elephc_dimension_get($offset);
         if ($selected !== null) { return $selected; }
         if (!is_int($offset)) {
@@ -369,10 +369,8 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $mode = elephc_xml_sx_int($handle, 5);
         $length = elephc_xml_sx_int($handle, 0);
         if ($mode === 2 && $length === 0) {
-            $created = elephc_xml_sx_mutate($handle, 23, '', '', '', 0, 0);
-            if ($offset === 0 && $created > 0) { return __elephc_simplexml_wrap($created, get_class($this)); }
-            elephc_xml_sx_free($created);
-            $mode = 0;
+            __elephc_simplexml_warning("Notice: Indirect modification of overloaded element of " . get_class($this) . " has no effect\n");
+            return null;
         }
         if ($mode < 3) {
             $length = $mode === 0 ? 0 : $length;
@@ -383,7 +381,8 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
             if ($offset >= 0 && $mode !== 0) {
                 $added = elephc_xml_sx_mutate($handle, 24, '', '', '', 0, 0);
                 if ($added > 0) { return __elephc_simplexml_wrap($added, get_class($this)); }
-                throw new Error('SimpleXMLElement is not properly initialized');
+                if ($throwOnFailure) { throw new Error('SimpleXMLElement is not properly initialized'); }
+                return null;
             }
         }
         __elephc_simplexml_warning("Notice: Indirect modification of overloaded element of " . get_class($this) . " has no effect\n");

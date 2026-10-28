@@ -194,7 +194,7 @@ use property_access::*;
 pub(crate) use property_access::lower_property_write_receiver;
 pub(crate) use property_access::defer_native_property_write_receiver;
 pub(crate) use property_access::lower_native_dimension_write_select;
-pub(crate) use property_access::lower_native_dimension_write_select_from_values;
+pub(crate) use property_access::lower_native_dimension_incdec_select_from_values;
 use property_probes::*;
 use method_calls::*;
 use member_receivers::{checked_member_receiver_type, lower_member_receiver, refine_member_receiver};

@@ -13,6 +13,7 @@ use crate::parser::ast::BinOp;
 mod native_xml;
 mod compound;
 mod incdec;
+pub(super) use incdec::native as lower_native_incdec;
 use compound::{compound_source, with_compound_value, write_ordinary_compound};
 
 /// Defers storage-only receiver chains while preserving early evaluation of computed receivers.

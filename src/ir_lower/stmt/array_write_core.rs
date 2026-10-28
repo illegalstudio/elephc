@@ -148,6 +148,7 @@ pub(super) fn lower_array_assign(
 /// `$place[$k] op= $v` is written as `$place[$k] op $v` and `$place[$k] ??= $v` as
 /// `$place[$k] ?? $v`, both built with the statement's own span. A right-hand side the user
 /// wrote never carries that span, so `$a[$k] = $a[$k] + 1` stays two separate PHP accesses.
+#[derive(Clone, Copy)]
 pub(crate) enum ElementUpdate<'a> {
     /// A compound operator. The value already read the element, so the write reuses the key
     /// that read converted instead of diagnosing a float key a second time.
@@ -240,6 +241,19 @@ fn lower_array_assign_with_update(
         return;
     }
     let array_value = load_array_local_for_write(ctx, array, span);
+    if let Some(increment) = incdec {
+        if super::native_dimension_incdec::lower(ctx, array_value, index, increment, span,
+            |ctx, array_value| lower_array_assign_from_value(ctx, array, array_value, index, value, span, key_already_diagnosed, incdec))
+        { return; }
+    }
+    lower_array_assign_from_value(ctx, array, array_value, index, value, span, key_already_diagnosed, incdec);
+}
+
+/// Preserves the established typed and boxed writer after a native incdec guard.
+fn lower_array_assign_from_value(
+    ctx: &mut LoweringContext<'_, '_>, array: &str, array_value: LoweredValue,
+    index: &Expr, value: &Expr, span: Span, key_already_diagnosed: bool, incdec: Option<bool>,
+) {
     if let Some(update) = incdec.and_then(|increment| {
         super::buffer_element_updates::statement_update(ctx, array_value, value, increment)
     }) {

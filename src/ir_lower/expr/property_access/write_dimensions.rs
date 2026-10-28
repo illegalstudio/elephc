@@ -14,6 +14,14 @@ use super::*;
 pub(crate) fn lower_native_dimension_write_select(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, index: &Expr, expr: &Expr,
 ) -> LoweredValue {
+    lower_dimension_select(ctx, object, index, expr, true)
+}
+
+/// Distinguishes a dereferencing write from incdec's non-throwing native scalar conversion.
+fn lower_dimension_select(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, index: &Expr, expr: &Expr,
+    throw_on_failure: bool,
+) -> LoweredValue {
     let ty = ctx.builder.value_php_type(object.value);
     let may_be_native = matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
         || is_opaque_property_object(ctx, &ty)
@@ -35,7 +43,7 @@ pub(crate) fn lower_native_dimension_write_select(
     let result = native_xml_reads::dispatch(
         ctx, borrowed, expr, PhpType::Mixed, false,
         |ctx, receiver| lower_method_call_with_receiver(ctx, receiver,
-            "__elephc_dimension_select", &[key.clone()], Op::MethodCall, expr),
+            "__elephc_dimension_select", &[key.clone(), Expr::new(ExprKind::BoolLiteral(throw_on_failure), expr.span)], Op::MethodCall, expr),
         |ctx, receiver| lower_array_access_from_lowered_receiver(ctx, receiver, &key, expr),
     );
     stage_call_result(ctx, staging.as_ref(), result, expr.span);
@@ -45,8 +53,8 @@ pub(crate) fn lower_native_dimension_write_select(
     take_prepublished_call_result(ctx, staging, result, expr.span)
 }
 
-/// Selects a writable offset using a captured key without replaying its source expression.
-pub(crate) fn lower_native_dimension_write_select_from_values(
+/// Selects an incdec offset with a captured key and non-throwing native conversion semantics.
+pub(crate) fn lower_native_dimension_incdec_select_from_values(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, index: LoweredValue, expr: &Expr,
 ) -> LoweredValue {
     let staging = prepublish_call_result(ctx, &PhpType::Mixed, expr.span);
@@ -57,7 +65,7 @@ pub(crate) fn lower_native_dimension_write_select_from_values(
     if rooted { register_owned_call_operand(ctx, slot, expr.span); }
     store_value_into_temp(ctx, &name, ty, index, expr.span);
     let key = Expr::new(ExprKind::Variable(name), expr.span);
-    let result = lower_native_dimension_write_select(ctx, object, &key, expr);
+    let result = lower_dimension_select(ctx, object, &key, expr, false);
     stage_call_result(ctx, staging.as_ref(), result, expr.span);
     if rooted { unregister_owned_call_operand(ctx, slot, expr.span); }
     ctx.emit_void(Op::ReleaseLocalSlot, vec![], Some(Immediate::LocalSlot(slot)),

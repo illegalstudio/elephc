@@ -291,6 +291,17 @@ pub(super) fn lower_static_property_array_assign(
         crate::ir_lower::expr::lower_null_coalesce_update_stmt(ctx, read, default, span);
         return;
     }
+    if let Some(ElementUpdate::IncDec { increment }) = &update {
+        if let Some(ty) = static_property_type(ctx, receiver, property)
+            .filter(|ty| super::native_dimension_incdec::may_contain_xml(ctx, ty))
+        {
+            let array = load_static_property_as(ctx, receiver, property, ty, span);
+            let handled = super::native_dimension_incdec::lower(ctx, array, index, *increment, span,
+                |ctx, _| lower_static_property_array_assign_with_diagnosed_key(ctx, receiver, property, index, value, span, true));
+            assert!(handled, "native XML static type remains eligible after loading");
+            return;
+        }
+    }
     if matches!(update, Some(ElementUpdate::Compound)) {
         let ExprKind::BinaryOp { left, op, right } = &value.kind else { unreachable!() };
         let rhs = lower_expr(ctx, right);

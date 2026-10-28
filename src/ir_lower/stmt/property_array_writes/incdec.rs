@@ -11,12 +11,12 @@
 use super::*;
 
 /// Selects the native node in write context and discards the PHP scalar update.
-pub(super) fn native(
+pub(in crate::ir_lower::stmt) fn native(
     ctx: &mut LoweringContext<'_, '_>, child: LoweredValue, index: LoweredValue,
     increment: bool, span: Span,
 ) {
     let expression = Expr::new(ExprKind::Null, span);
-    let selected = crate::ir_lower::expr::lower_native_dimension_write_select_from_values(
+    let selected = crate::ir_lower::expr::lower_native_dimension_incdec_select_from_values(
         ctx, child, index, &expression,
     );
     step(ctx, selected, increment, span, |_, _| {});

@@ -204,10 +204,29 @@ fn lower_boxed_static_nested_update(
     span: Span,
 ) {
     let ExprKind::ArrayAccess { array: read_array, index: read_key } = &read.kind else { unreachable!() };
-    let ExprKind::ArrayAccess { array: write_array, index: write_key } = &write.kind else { unreachable!() };
-    let incdec = matches!(update, ElementUpdate::IncDec { .. });
+    let ExprKind::ArrayAccess { array: write_array, .. } = &write.kind else { unreachable!() };
     let parent = lower_static_update_parent(ctx, read_array, write_array, span);
     let (pinned, owner) = root_static_update_receiver(ctx, parent, span);
+    if let ElementUpdate::IncDec { increment } = &update {
+        if super::native_dimension_incdec::lower(ctx, pinned, read_key, *increment, span,
+            |ctx, parent| lower_boxed_nested_update_from_parent(ctx, parent, read, write, update, source_value, span))
+        {
+            if let Some(owner) = owner { crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span); }
+            return;
+        }
+    }
+    lower_boxed_nested_update_from_parent(ctx, pinned, read, write, update, source_value, span);
+    if let Some(owner) = owner { crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span); }
+}
+
+/// Computes and stores an ordinary nested update through its already retained parent.
+fn lower_boxed_nested_update_from_parent(
+    ctx: &mut LoweringContext<'_, '_>, pinned: LoweredValue, read: &Expr, write: &Expr,
+    update: ElementUpdate<'_>, source_value: &Expr, span: Span,
+) {
+    let ExprKind::ArrayAccess { index: read_key, .. } = &read.kind else { unreachable!() };
+    let ExprKind::ArrayAccess { index: write_key, .. } = &write.kind else { unreachable!() };
+    let incdec = matches!(update, ElementUpdate::IncDec { .. });
     let string_error = if incdec { "Cannot increment/decrement string offsets" }
         else { "Cannot use assign-op operators with string offsets" };
     let attached = lower_static_update_key_and_guard(ctx, pinned, read_key, string_error, span);
@@ -269,9 +288,6 @@ fn lower_boxed_static_nested_update(
     }
     if ctx.value_is_owning_temporary(value) {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
-    }
-    if let Some(owner) = owner {
-        crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span);
     }
     let null = LoweredValue { value: ctx.builder.emit_const_null(), ir_type: IrType::I64 };
     ctx.unset_local(&temp, null, Some(span));

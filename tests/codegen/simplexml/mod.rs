@@ -17,6 +17,7 @@ mod typed_empty;
 mod opaque_writes;
 mod dimension_writes;
 mod dimension_owners;
+mod dimension_updates;
 mod diagnostics;
 mod dom_and_iterator;
 mod dom_activation;
