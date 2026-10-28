@@ -27,6 +27,7 @@ extern "elephc_xml" {
     function elephc_xml_sx_int(int $handle, int $operation): int;
     function elephc_xml_sx_projection_base(int $handle): int;
     function elephc_xml_sx_string(int $handle, int $operation): string;
+    function elephc_xml_sx_dom_attribute(int $handle, string $name): string;
     function elephc_xml_sx_xml_hex(int $handle, int $whole): string;
     function elephc_xml_sx_item(int $handle, int $index): int;
     function elephc_xml_sx_iterator(int $handle, int $operation): int;
@@ -684,6 +685,18 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $handle = $this->__elephc_handle;
         elephc_xml_sx_mutate($handle, 22, "", $text, "", 0, 0);
     }
+    public function __elephc_dom_attribute(string $name): string {
+        $handle = $this->__elephc_handle;
+        return elephc_xml_sx_dom_attribute($handle, $name);
+    }
+    public function __elephc_dom_local_name(): string {
+        $handle = $this->__elephc_handle;
+        return elephc_xml_sx_string($handle, 1);
+    }
+    public function __elephc_dom_set_attribute(string $name, string $value): bool {
+        $handle = $this->__elephc_handle;
+        return elephc_xml_sx_mutate($handle, 25, $name, $value, "", 0, 0) !== 0;
+    }
     public function __elephc_dom_selections(bool $wholeDocument = false): array {
         $handle = $this->__elephc_handle;
         $all = elephc_xml_sx_select($handle, $wholeDocument ? 11 : 6, "", "", 0, 0);
@@ -722,7 +735,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         if ($kind === 7) {
             return $this->__elephc_dom_bind_node(new DOMProcessingInstruction($this->getName(), $this->__elephc_dom_text()), $document, $parent, $this->getName());
         }
-        if ($kind === 1) { return $this->__elephc_dom_bind_node(new DOMElement(), $document, $parent, $this->getName()); }
+        if ($kind === 1) { return $this->__elephc_dom_bind_node(new DOMElement(), $document, $parent, elephc_xml_sx_string($handle, 6)); }
         return $this->__elephc_dom_bind_node(new DOMNode(), $document, $parent, $this->getName());
     }
     private function __elephc_dom_bind_node(DOMNode $node, mixed $document, mixed $parent, string $name): DOMNode {

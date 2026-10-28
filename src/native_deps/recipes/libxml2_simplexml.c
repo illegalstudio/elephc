@@ -8,6 +8,7 @@
 #include <libxml/xpath.h>
 #include <libxml/xpathInternals.h>
 #include <libxml/xmlerror.h>
+#include <libxml/xmlIO.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -334,6 +335,11 @@ char *elephc_libxml2_v1_sx_dump_node(void *rawdoc, void *rawnode) {
     return (char *)result;
 }
 
+/* Collect raw node bytes without installing an encoding converter, as PHP does. */
+static int sx_dump_write(void *raw, const char *bytes, int length) {
+    return xmlBufferAdd(raw, (const xmlChar *)bytes, length) == 0 ? length : -1;
+}
+
 /* Length-bearing serialization preserves legacy encodings and embedded NUL bytes. */
 char *elephc_libxml2_v1_sx_dump_bytes(void *rawdoc, void *rawnode, int whole, int *length) {
     xmlDocPtr doc = rawdoc;
@@ -342,7 +348,10 @@ char *elephc_libxml2_v1_sx_dump_bytes(void *rawdoc, void *rawnode, int whole, in
     if (doc->type == XML_DOCUMENT_NODE && whole == 3) {
         xmlBufferPtr out = xmlBufferCreate();
         if (!out) return NULL;
-        if (xmlNodeDump(out, doc, (xmlNodePtr)doc, 0, 0) < 0) { xmlBufferFree(out); return NULL; }
+        xmlOutputBufferPtr writer = xmlOutputBufferCreateIO(sx_dump_write, NULL, out, NULL);
+        if (!writer) { xmlBufferFree(out); return NULL; }
+        xmlNodeDumpOutput(writer, doc, (xmlNodePtr)doc, 0, 0, (const char *)doc->encoding);
+        if (xmlOutputBufferClose(writer) < 0) { xmlBufferFree(out); return NULL; }
         *length = xmlBufferLength(out);
         xmlChar *result = xmlStrndup(xmlBufferContent(out), *length);
         xmlBufferFree(out);

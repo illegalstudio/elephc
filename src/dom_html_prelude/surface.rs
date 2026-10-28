@@ -1003,7 +1003,9 @@ function __elephc_dom_collect(DOMNode $node, string $name): array {
     }
     foreach ($_children as $_child) {
         if ($_child instanceof DOMElement) {
-            if ($name === "*" || $_child->nodeName === $name) {
+            $_bound = $_child->__elephc_simplexml;
+            $_localName = is_object($_bound) ? $_bound->__elephc_dom_local_name() : $_child->nodeName;
+            if ($name === "*" || $_localName === $name) {
                 $_found[] = $_child;
             }
             $_more = __elephc_dom_collect($_child, $name);
@@ -1053,13 +1055,13 @@ class DOMNode {
 
     public function getAttribute(string $name): string {
         $bound = $this->__elephc_simplexml;
-        if (is_object($bound)) { return (string)$bound[$name]; }
+        if (is_object($bound)) { return $bound->__elephc_dom_attribute($name); }
         return __elephc_dom_attr_get($this->__attrs, $name);
     }
 
     public function setAttribute(string $qualifiedName, string $value): bool {
         $bound = $this->__elephc_simplexml;
-        if (is_object($bound)) { $bound[$qualifiedName] = $value; return true; }
+        if (is_object($bound)) { return $bound->__elephc_dom_set_attribute($qualifiedName, $value); }
         $attrs = $this->__attrs;
         $updated = [];
         $found = false;

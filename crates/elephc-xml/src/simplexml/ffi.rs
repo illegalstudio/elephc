@@ -10,6 +10,12 @@
 use std::ffi::{c_char, c_int, c_void};
 pub(super) type Node = *mut c_void;
 extern "C" {
+    /// Copies an attribute value using legacy DOM qualified-name and declaration rules.
+    #[link_name = "elephc_libxml2_v1_sx_dom_attribute_text"]
+    pub(super) fn dom_attribute_text(node: Node, name: *const c_char) -> *mut c_char;
+    /// Prepares an attribute for ownership-aware content replacement without freeing its children.
+    #[link_name = "elephc_libxml2_v1_sx_dom_attribute_target"]
+    pub(super) fn dom_attribute_target(node: Node, name: *const c_char, value: *const c_char, status: *mut c_int) -> Node;
     /// Borrows the platform's diagnostic text for one captured errno code.
     #[link_name = "strerror"]
     pub(super) fn strerror(code: c_int) -> *const c_char;

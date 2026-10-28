@@ -344,3 +344,6 @@ mod tests_bytes;
 
 #[cfg(all(test, elephc_xml_native))]
 mod tests_dom_encoding;
+
+#[cfg(all(test, elephc_xml_native))]
+mod tests_dom_attributes;

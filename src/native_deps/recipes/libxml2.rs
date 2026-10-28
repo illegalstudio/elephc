@@ -50,7 +50,7 @@ use super::util::{copy_regular, require_regular};
 
 /// Embedded shim source used by installed Elephc binaries without repository access.
 pub const SHIM_SOURCE: &str = concat!(include_str!("libxml2_shim.c"), "\n", include_str!("libxml2_simplexml.c"),
-    "\n", include_str!("libxml2_simplexml_tree.c"));
+    "\n", include_str!("libxml2_simplexml_tree.c"), "\n", include_str!("libxml2_simplexml_dom.c"));
 
 /// The exact configure switches revision 1 passes, in order, before the `CFLAGS=` operand and
 /// any cross `--host=`.

@@ -166,18 +166,19 @@ pub fn emit_file_put_contents(emitter: &mut Emitter) {
 /// Publishes a raw ARM64 syscall error through the target's thread-local libc errno.
 fn emit_raw_file_error_errno(emitter: &mut Emitter) {
     use crate::codegen_support::platform::Platform;
+    // -- preserve the syscall error while resolving thread-local errno --
     if emitter.platform.needs_cmp_before_error_branch() {
-        emitter.instruction("neg x0, x0");                                     // Linux returns -errno, while Darwin already returns positive errno
+        emitter.instruction("neg x0, x0");                                      // Linux returns -errno, while Darwin already returns positive errno
     }
-    emitter.instruction("str w0, [sp, #32]");                                  // preserve the error code in the unused byte-count slot across the libc call
+    emitter.instruction("str w0, [sp, #32]");                                   // preserve the error code in the unused byte-count slot across the libc call
     let accessor = match emitter.platform {
         Platform::MacOS => "__error",
         Platform::Linux => "__errno_location",
         Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
     };
-    emitter.bl_c(accessor);                                                    // obtain this thread's errno pointer without relying on a syscall side effect
-    emitter.instruction("ldr w9, [sp, #32]");                                  // restore the captured positive error after the accessor clobbered caller registers
-    emitter.instruction("str w9, [x0]");                                       // make the original open/write failure visible to native error-message adapters
+    emitter.bl_c(accessor);                                                     // obtain this thread's errno pointer without relying on a syscall side effect
+    emitter.instruction("ldr w9, [sp, #32]");                                   // restore the captured positive error after the accessor clobbered caller registers
+    emitter.instruction("str w9, [x0]");                                        // make the original open/write failure visible to native error-message adapters
 }
 
 /// Emits the x86_64 Linux implementation of `__rt_file_put_contents`.

@@ -220,7 +220,7 @@ fn projection_uses_items(node: Node) -> bool {
             && !first.is_null() && !ffi::next(first).is_null()
     }
 }
-/// Copies string conversion (0), local name (1), or XML serialization (2).
+/// Copies text (0), local name (1), XML (2), DOM content (3/4), identity name (5), or qualified name (6).
 #[no_mangle]
 pub extern "C" fn elephc_xml_sx_string(handle: i64, operation: i64) -> *const c_char {
     guard(|| output(view(handle).and_then(|v| {
@@ -230,8 +230,19 @@ pub extern "C" fn elephc_xml_sx_string(handle: i64, operation: i64) -> *const c_
         2 => owned_bytes(ffi::dump(v.doc.raw, n)),
         3 => owned_bytes(ffi::full_text(n)), 4 => owned_bytes(ffi::dump_node(v.doc.raw, n)),
         5 => bytes(ffi::name(n)),
+        6 => {
+            let local = bytes(ffi::name(n));
+            let mut name = bytes(ffi::ns(n, 1));
+            if name.is_empty() { local } else { name.push(b':'); name.extend(local); name }
+        }
         _ => Vec::new(),
     } }) }).unwrap_or_default()))
+}
+/// Reads a DOM attribute by its in-scope qualified name, including namespace declarations.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_xml_sx_dom_attribute(handle: i64, name: *const c_char) -> *const c_char {
+    guard(|| output(view(handle).and_then(|v| v.first()
+        .map(|node| owned_bytes(ffi::dom_attribute_text(node, cstring(bytes(name)).as_ptr())))).unwrap_or_default()))
 }
 /// Returns the indexed child visited by foreach and explicit iterator methods.
 #[no_mangle]
@@ -286,6 +297,12 @@ pub unsafe extern "C" fn elephc_xml_sx_mutate(handle: i64, operation: i64, key: 
             22 => v.first().map(|n| { v.assign_node(n, &text); 1 }).unwrap_or(0),
             23 => v.ensure_first().map(|node| insert(v.with_scope(Scope::Node(node)))).unwrap_or(0),
             24 => v.append_sibling().map(insert).unwrap_or(0),
+            25 => v.first().map(|node| {
+                let mut status = 0;
+                let attr = ffi::dom_attribute_target(node, cstring(&key).as_ptr(), cstring(&text).as_ptr(), &mut status);
+                if !attr.is_null() { v.assign_node(attr, &text); }
+                i64::from(status)
+            }).unwrap_or(0),
             _ => 0,
         }
     })

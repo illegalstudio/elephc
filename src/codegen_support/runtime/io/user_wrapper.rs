@@ -182,7 +182,7 @@ pub fn emit_user_wrapper_fread(emitter: &mut Emitter) {
 
     // -- call stream_read($this, $count); the result shape follows the method's return type --
     emitter.instruction("ldr x1, [sp, #24]");                                   // reload the requested byte count
-    emitter.instruction(&format!("tbnz x13, #{}, __rt_uwfread_boxed", VTABLE_SLOT_READ));// a `string|false` return arrives boxed instead
+    emitter.instruction(&format!("tbnz x13, #{}, __rt_uwfread_boxed", VTABLE_SLOT_READ)); // a `string|false` return arrives boxed instead
     emitter.instruction("blr x11");                                             // invoke stream_read on the wrapper object
     abi::emit_branch_if_php_return_owned(emitter, "__rt_uwfread_owned");
     abi::emit_call_label(emitter, "__rt_str_persist");
@@ -730,7 +730,7 @@ pub fn emit_box_wrapper_stat_result(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #16]");                                   // restore the original array or Mixed pointer
     emitter.instruction("and x9, x9, #0xff");                                   // isolate the low heap-kind byte
     emitter.instruction("cmp x9, #5");                                          // already a boxed Mixed cell (e.g. array|false return)?
-    emitter.instruction("b.eq __rt_bwsr_ret");                                  // return it verbatim , ownership transfers to the caller
+    emitter.instruction("b.eq __rt_bwsr_ret");                                  // return it verbatim, ownership transfers to the caller
     emitter.instruction("mov x1, x0");                                          // raw array/hash pointer → mixed payload low word
     emitter.instruction("cmp x9, #3");                                          // associative hash (the usual string-keyed stat array)?
     emitter.instruction("mov x0, #5");                                          // runtime tag 5 = associative array
@@ -784,7 +784,7 @@ fn emit_box_wrapper_stat_result_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // restore the original array or Mixed pointer
     emitter.instruction("and r9, 0xff");                                        // isolate the low heap-kind byte
     emitter.instruction("cmp r9, 5");                                           // already a boxed Mixed cell (e.g. array|false return)?
-    emitter.instruction("je __rt_bwsr_ret_x86");                                // return it verbatim , ownership transfers to the caller
+    emitter.instruction("je __rt_bwsr_ret_x86");                                // return it verbatim, ownership transfers to the caller
     emitter.instruction("mov rdi, rax");                                        // raw array/hash pointer → mixed payload low word (before rax is reused for the tag)
     emitter.instruction("cmp r9, 3");                                           // associative hash (the usual string-keyed stat array)?
     emitter.instruction("mov eax, 5");                                          // runtime tag 5 = associative array
@@ -884,7 +884,7 @@ fn emit_user_wrapper_fstat_linux_x86_64(emitter: &mut Emitter) {
 /// handle slot index in `dst`. The shift-and-subtract sequence keeps the
 /// constant out of an immediate field (it does not fit a 12-bit cmp/sub).
 fn emit_aarch64_slot_from_fd(emitter: &mut Emitter, src: &str, dst: &str) {
-    emitter.instruction(&format!("mov w{}, #{:#x}", dst.trim_start_matches('x'), FD_BASE_LOW16));// load the high half of USER_WRAPPER_FD_BASE
+    emitter.instruction(&format!("mov w{}, #{:#x}", dst.trim_start_matches('x'), FD_BASE_LOW16)); // load the high half of USER_WRAPPER_FD_BASE
     emitter.instruction(&format!("lsl {}, {}, #16", dst, dst));                 // shift into bits 30..16 to form 0x40000000
     emitter.instruction(&format!("sub {}, {}, {}", dst, src, dst));             // dst = fd - USER_WRAPPER_FD_BASE → handle slot index
 }
@@ -941,7 +941,7 @@ fn emit_aarch64_method_lookup(emitter: &mut Emitter, missing_label: &str, vtable
     emitter.instruction("ldr x10, [x0]");                                       // class_id stored at the head of every wrapper object
     abi::emit_symbol_address(emitter, "x11", "_user_wrapper_vtable_ptrs");
     emitter.instruction("ldr x11, [x11, x10, lsl #3]");                         // per-class user-wrapper vtable for the resolved class
-    emitter.instruction(&format!("ldr x13, [x11, #{}]", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET));// boxed-result mask, read before x11 is reused
+    emitter.instruction(&format!("ldr x13, [x11, #{}]", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET)); // boxed-result mask, read before x11 is reused
     emitter.instruction(&format!("ldr x11, [x11, #{}]", vtable_slot * 8));      // load the requested wrapper method pointer
     emitter.instruction(&format!("cbz x11, {}", missing_label));                // method absent: take the fallback path
 }
@@ -971,8 +971,8 @@ fn emit_x86_method_lookup(emitter: &mut Emitter, missing_label: &str, vtable_slo
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // class_id stored at the head of every wrapper object
     abi::emit_symbol_address(emitter, "r11", "_user_wrapper_vtable_ptrs");      // base of the per-class user-wrapper vtable pointer table
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // per-class user-wrapper vtable for the resolved class
-    emitter.instruction(&format!("mov r8, QWORD PTR [r11 + {}]", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET));// boxed-result mask, read before r11 is reused
-    emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", vtable_slot * 8));// load the requested wrapper method pointer
+    emitter.instruction(&format!("mov r8, QWORD PTR [r11 + {}]", USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET)); // boxed-result mask, read before r11 is reused
+    emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", vtable_slot * 8)); // load the requested wrapper method pointer
     emitter.instruction("test r11, r11");                                       // is the method missing?
     emitter.instruction(&format!("jz {}", missing_label));                      // method absent: take the fallback
 }
