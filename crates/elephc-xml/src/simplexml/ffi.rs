@@ -102,6 +102,9 @@ extern "C" {
     /// Calls the opaque shim node_free operation.
     #[link_name = "elephc_libxml2_v1_sx_node_free"]
     pub(super) fn node_free(node: Node) -> ();
+    /// Preserves borrowed namespace declarations in their document before freeing a retired tree.
+    #[link_name = "elephc_libxml2_v1_sx_retired_free"]
+    pub(super) fn retired_free(node: Node) -> ();
     /// Calls the opaque shim assign operation.
     #[link_name = "elephc_libxml2_v1_sx_assign"]
     pub(super) fn assign(node: Node, value: *const c_char) -> ();

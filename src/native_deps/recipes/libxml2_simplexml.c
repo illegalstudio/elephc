@@ -178,6 +178,37 @@ void elephc_libxml2_v1_sx_node_free(void *node) {
     if (((xmlNodePtr)node)->type == XML_ATTRIBUTE_NODE) xmlFreeProp(node);
     else xmlFreeNode(node);
 }
+/* PHP keeps namespace declarations in the document after their element is freed.
+ * Other detached or attached nodes can still borrow the same xmlNs pointers.
+ * The predefined xml binding must remain the first oldNs entry. */
+void elephc_libxml2_v1_sx_retired_free(void *raw) {
+    xmlNodePtr root = raw;
+    xmlNodePtr node = root;
+    if (!root) return;
+    for (;;) {
+        if (node->type == XML_ELEMENT_NODE && node->nsDef && node->doc) {
+            xmlDocPtr doc = node->doc;
+            xmlNsPtr first = node->nsDef;
+            xmlNsPtr last = first;
+            while (last->next) last = last->next;
+            if (!doc->oldNs) doc->oldNs = xmlNewNs(NULL, XML_XML_NAMESPACE, BAD_CAST "xml");
+            if (doc->oldNs) {
+                last->next = doc->oldNs->next;
+                doc->oldNs->next = first;
+            }
+            /* On allocation failure keep borrowed declarations alive, as PHP does. */
+            node->nsDef = NULL;
+        }
+        if ((node->type == XML_ELEMENT_NODE || node->type == XML_DOCUMENT_FRAG_NODE) && node->children) {
+            node = node->children;
+            continue;
+        }
+        while (node != root && !node->next) node = node->parent;
+        if (node == root) break;
+        node = node->next;
+    }
+    elephc_libxml2_v1_sx_node_free(root);
+}
 void elephc_libxml2_v1_sx_content(void *node, const char *value) {
     xmlNodeSetContent(node, (const xmlChar *)value);
 }
@@ -308,7 +339,16 @@ char *elephc_libxml2_v1_sx_dump_bytes(void *rawdoc, void *rawnode, int whole, in
     xmlDocPtr doc = rawdoc;
     xmlNodePtr node = rawnode;
     *length = 0;
-    if (doc->type == XML_DOCUMENT_NODE && (whole == 2 || (whole && node == xmlDocGetRootElement(doc)))) {
+    if (doc->type == XML_DOCUMENT_NODE && whole == 3) {
+        xmlBufferPtr out = xmlBufferCreate();
+        if (!out) return NULL;
+        if (xmlNodeDump(out, doc, (xmlNodePtr)doc, 0, 0) < 0) { xmlBufferFree(out); return NULL; }
+        *length = xmlBufferLength(out);
+        xmlChar *result = xmlStrndup(xmlBufferContent(out), *length);
+        xmlBufferFree(out);
+        return (char *)result;
+    }
+    if (doc->type == XML_DOCUMENT_NODE && (whole == 2 || (whole == 1 && node == xmlDocGetRootElement(doc)))) {
         xmlChar *out = NULL;
         xmlDocDumpMemory(doc, &out, length);
         return (char *)out;
@@ -317,7 +357,7 @@ char *elephc_libxml2_v1_sx_dump_bytes(void *rawdoc, void *rawnode, int whole, in
     if (!out) return NULL;
     /* DOM documents include every sibling; SimpleXML's HTML root remains node-only.
      * Keep the built-in HTML DOM's declaration-free serialization contract. */
-    if (whole == 2) {
+    if (whole == 2 || whole == 3) {
         for (xmlNodePtr child = doc->children; child; child = child->next) {
             if (xmlNodeDump(out, doc, child, 0, 0) < 0) { xmlBufferFree(out); return NULL; }
         }

@@ -7,6 +7,7 @@
 //! Key details:
 //! - Documents hold weak indexes, so dead views and retired trees leave no growing lists.
 //! - Retired subtrees retain their namespace owners until their final node pin drops.
+//! - Freed elements transfer namespace declarations to the document, matching PHP.
 
 use super::*;
 use std::collections::HashSet;
@@ -35,7 +36,7 @@ impl Drop for RetiredSubtree {
     /// Frees children before their document, clone, and ancestor namespace owners can die.
     fn drop(&mut self) {
         self.doc.detached.borrow_mut().remove(&self.node);
-        unsafe { ffi::node_free(self.node); }
+        unsafe { ffi::retired_free(self.node); }
     }
 }
 
@@ -93,7 +94,7 @@ impl Document {
                 while !child.is_null() { pending.push(child); child = ffi::next(child); }
             }
         }
-        if exposed.is_empty() { unsafe { ffi::node_free(node); } return; }
+        if exposed.is_empty() { unsafe { ffi::retired_free(node); } return; }
         let mut parents = Vec::new();
         let mut seen = HashSet::new();
         for pin in &exposed {

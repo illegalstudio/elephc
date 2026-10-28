@@ -9,6 +9,51 @@
 
 use super::*;
 
+/// A retained child and its attribute survive when a namespace-declaring ancestor dies later.
+#[test]
+fn simplexml_descendant_first_retirement_preserves_namespace_declarations() {
+    let root = parse(b"<r><a><b xmlns:p='urn:p'><p:c p:k='v'/></b></a></r>", 0, "", false).unwrap();
+    let b = root.select(2, "a", "", false, 0).select(2, "b", "", false, 0);
+    let c = b.select(0, "", "urn:p", false, 0).select(4, "", "", false, 0);
+    drop(b);
+    assert_eq!(root.select(2, "a", "", false, 0).write(2, "b", 0, "t"), 1);
+    assert_eq!(root.write(2, "a", 0, "t2"), 1);
+    assert_eq!(root.doc.detached.borrow().len(), 1);
+    assert_eq!(unsafe { bytes(ffi::ns(c.first().unwrap(), 0)) }.as_slice(), b"urn:p");
+    assert_eq!(unsafe { owned_string(ffi::dump_node(root.doc.raw, c.first().unwrap())) }, "<p:c p:k=\"v\"/>");
+    assert_eq!(c.namespaces(false, true, false), vec![(b"p".to_vec(), b"urn:p".to_vec())]);
+    drop(c);
+    assert!(root.doc.detached.borrow().is_empty());
+}
+
+/// An attached appended sibling keeps its source sibling's namespace after that source dies.
+#[test]
+fn simplexml_sibling_namespace_borrow_survives_provider_removal() {
+    let root = parse(b"<r><p:i xmlns:p='urn:p'>one</p:i></r>", 0, "", false).unwrap();
+    let first = root.select(0, "", "urn:p", false, 0).select(4, "", "", false, 0);
+    let second = first.append_sibling().unwrap();
+    drop(first);
+    root.select(0, "", "urn:p", false, 0).remove(4, "", 0);
+    assert!(root.doc.detached.borrow().is_empty());
+    assert_eq!(unsafe { bytes(ffi::ns(second.first().unwrap(), 0)) }.as_slice(), b"urn:p");
+    assert_eq!(unsafe { owned_string(ffi::dump_node(root.doc.raw, second.first().unwrap())) }, "<p:i/>");
+}
+
+/// Transferred clone roots preserve namespace storage for an already retired child.
+#[test]
+fn simplexml_clone_child_outlives_removed_clone_namespace_provider() {
+    let root = parse(b"<r><a xmlns:p='urn:p'><p:c p:k='v'/></a></r>", 0, "", false).unwrap();
+    let copied = root.select(2, "a", "", false, 0).select(4, "", "", false, 0).deep_clone().unwrap();
+    let child = copied.select(0, "", "urn:p", false, 0).select(4, "", "", false, 0);
+    copied.assign_node(copied.first().unwrap(), "replacement");
+    copied.remove(4, "", 0);
+    drop(copied);
+    assert_eq!(unsafe { owned_string(ffi::dump_node(root.doc.raw, child.first().unwrap())) }, "<p:c p:k=\"v\"/>");
+    assert_eq!(child.namespaces(false, true, false), vec![(b"p".to_vec(), b"urn:p".to_vec())]);
+    drop(child);
+    assert!(root.doc.detached.borrow().is_empty());
+}
+
 /// Replacing unobserved text and attribute payloads does not retain one tree per write.
 #[test]
 fn simplexml_repeated_writes_keep_native_retirement_bounded() {

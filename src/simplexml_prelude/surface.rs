@@ -676,9 +676,9 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $handle = $this->__elephc_handle;
         return (string)hex2bin(elephc_xml_sx_xml_hex($handle, 0));
     }
-    public function __elephc_dom_document_xml(): string {
+    public function __elephc_dom_document_xml(bool $nodeArgument = false): string {
         $handle = $this->__elephc_handle;
-        return (string)hex2bin(elephc_xml_sx_xml_hex($handle, 2));
+        return (string)hex2bin(elephc_xml_sx_xml_hex($handle, $nodeArgument ? 3 : 2));
     }
     public function __elephc_dom_set_text(string $text): void {
         $handle = $this->__elephc_handle;

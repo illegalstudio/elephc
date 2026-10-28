@@ -835,7 +835,7 @@ function __elephc_dom_serialize_node(mixed $node): string {
     if ($node instanceof DOMNode) {
         $bound = $node->__elephc_simplexml;
         if (is_object($bound)) {
-            if ($node instanceof DOMDocument) { return $bound->__elephc_dom_document_xml(); }
+            if ($node instanceof DOMDocument) { return $bound->__elephc_dom_document_xml(true); }
             return $bound->__elephc_dom_xml();
         }
     }

@@ -341,3 +341,6 @@ mod tests_retirement;
 
 #[cfg(all(test, elephc_xml_native))]
 mod tests_bytes;
+
+#[cfg(all(test, elephc_xml_native))]
+mod tests_dom_encoding;
