@@ -189,6 +189,7 @@ fn lower_reference_return(
                 );
                 return;
             }
+            crate::ir_lower::object_boundaries::guard_return(ctx, value, Some(span));
             acquire_and_return_reference_cell(ctx, value, span);
         }
         Some(ExprKind::PropertyAccess { object, property }) => {

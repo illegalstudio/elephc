@@ -9,7 +9,7 @@
 
 /// Compiles the same complete SimpleXML fixture through one supported target's emitter.
 fn verify_simplexml_target(target: &str) {
-    let module = super::lower_source_at_for_target(r###"<?php
+    let source = [r###"<?php
 debug_backtrace();
 $counterXml = new SimpleXMLElement('<r>2</r>');
 $targetLiveDocument = new DOMDocument();
@@ -248,7 +248,11 @@ $doc = new DOMDocument(); $doc->loadXML('<r><v>shared</v></r>');
 $imported = simplexml_import_dom($doc);
 if ($imported instanceof SimpleXMLElement) { $imported->v = 'changed'; }
 echo $doc->saveXML();
-"###, std::path::Path::new("main.php"), std::path::Path::new("."),
+"###,
+        include_str!("../../../tests/fixtures/simplexml/iterator_arithmetic.php").trim_start_matches("<?php"),
+        include_str!("../../../tests/fixtures/simplexml/typed_object_boundaries.php").trim_start_matches("<?php"),
+    ].concat();
+    let module = super::lower_source_at_for_target(&source, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen::platform::Target::parse(target).unwrap());
     let arithmetic = module.functions.iter().find(|function| function.name == "xmlMixedArithmetic")
         .expect("mixed arithmetic fixture must remain reachable");
@@ -296,6 +300,13 @@ echo $doc->saveXML();
         }
     }
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    for message in [
+        "acceptBoundaryXml(): Argument #1 ($node) must be of type SimpleXMLElement, null given",
+        "returnBoundaryXml(): Return value must be of type SimpleXMLElement, null returned",
+        "Cannot assign null to property BoundaryXmlBox::$node of type SimpleXMLElement",
+    ] {
+        assert!(assembly.contains(message), "{target}: missing native object boundary: {message}");
+    }
     assert!(assembly.contains("__rt_gc_collect_cycles_explicit"), "{target}: shutdown retires native document cycles");
     assert!(assembly.contains("__rt_sprintf_mixed_to_string"), "{target}: erased object string-context ABI");
     assert!(assembly.contains("elephc_xml_sx_load"), "{target}: document parsing boundary");

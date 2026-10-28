@@ -239,7 +239,7 @@ fn guard_boxed_object_reference_argument(
     if ctx.local_type(name).codegen_repr() != PhpType::Mixed {
         return;
     }
-    let condition = if class_name.is_empty() || class_name.eq_ignore_ascii_case("object") {
+    let mut condition = if class_name.is_empty() || class_name.eq_ignore_ascii_case("object") {
         let value = lower_expr(ctx, arg);
         let condition = ctx.emit_value(
             Op::TypePredicate,
@@ -261,6 +261,21 @@ fn guard_boxed_object_reference_argument(
             arg,
         )
     };
+    // Native reads retain a useful object hint even when a missing continuation is null.
+    // Let the shared callee entry report that null with its exact PHP callable label;
+    // all other invalid reference payloads still take the existing class refusal here.
+    if crate::types::builtin_classes::native_object_sink_needs_null_guard(
+        &PhpType::Object(class_name.to_string()), ctx.classes, ctx.interfaces,
+    ) {
+        let value = lower_expr(ctx, arg);
+        let null = ctx.emit_value(Op::IsNull, vec![value.value], None, PhpType::Bool,
+            Op::IsNull.default_effects(), Some(arg.span));
+        if ctx.value_needs_release_after_use(value) {
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(arg.span));
+        }
+        condition = ctx.emit_value(Op::IBitOr, vec![condition.value, null.value], None,
+            PhpType::Bool, Op::IBitOr.default_effects(), Some(arg.span));
+    }
     let accepted = ctx.builder.create_named_block("object.ref.accepted", Vec::new());
     let rejected = ctx.builder.create_named_block("object.ref.rejected", Vec::new());
     ctx.builder.terminate(Terminator::CondBr {

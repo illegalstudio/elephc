@@ -1850,6 +1850,7 @@ fn lower_body_into_function(
     }
     seed_recursive_closure_binding(&mut ctx, recursive_closure_binding);
     ctx.lower_with_final_string_storage(|ctx| {
+        super::object_boundaries::guard_parameters(ctx);
         if let Some(class) = property_initializers {
             super::property_initializers::lower(ctx, class);
         } else if !super::throwable_constructors::lower(ctx) && !super::core_methods::lower(ctx, body) {

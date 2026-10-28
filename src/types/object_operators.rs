@@ -87,7 +87,10 @@ fn binary_plan_for_class(class: &'static ClassContract, op: &BinOp, left: &PhpTy
     let accepts = |ty: &PhpType| comparison
         || matches!(ty, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str | PhpType::Mixed | PhpType::TaggedScalar)
         || (*ty == PhpType::Void && operators.arithmetic_result == elephc_builtin_contract::ObjectArithmeticResult::Number)
-        || matches!(ty, PhpType::Object(name) if name.eq_ignore_ascii_case(class.name));
+        || matches!(ty, PhpType::Object(name) if name.eq_ignore_ascii_case(class.name)
+            || (operators.arithmetic_result == elephc_builtin_contract::ObjectArithmeticResult::Number
+                && operator_class(ty).and_then(|other| other.operators)
+                .is_some_and(|other| std::ptr::eq(other, operators))));
     let accepted = |ty: &PhpType| match ty {
         PhpType::Union(members) if comparison
             || operators.arithmetic_result == elephc_builtin_contract::ObjectArithmeticResult::Number => members.iter().all(accepts),
@@ -161,6 +164,19 @@ mod tests {
         }
         let comparison = binary_plan(&BinOp::Lt, &possible_number, &PhpType::Int).unwrap();
         assert_eq!(comparison.result_type(&BinOp::Lt), PhpType::Bool);
+    }
+
+    /// Native classes sharing one operator contract accept each other's values and unions.
+    #[test]
+    fn simplexml_lineages_share_numeric_operator_plans() {
+        let element = PhpType::Object("SimpleXMLElement".into());
+        let iterator = PhpType::Object("SimpleXMLIterator".into());
+        let either = PhpType::Union(vec![element.clone(), iterator.clone()]);
+        for op in [BinOp::Add, BinOp::Sub, BinOp::Mul, BinOp::Div, BinOp::Mod, BinOp::Pow] {
+            for (left, right) in [(&element, &iterator), (&iterator, &element), (&either, &PhpType::Int)] {
+                assert!(binary_plan(&op, left, right).unwrap().result_type(&op).is_int_float_union());
+            }
+        }
     }
 }
 

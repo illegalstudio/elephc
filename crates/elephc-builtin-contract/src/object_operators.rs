@@ -119,7 +119,8 @@ pub const BCMATH_NUMBER_OPERATORS: ClassOperators = ClassOperators {
 };
 
 /// SimpleXML uses native document truthiness rather than ordinary object truthiness.
-pub const SIMPLEXML_OPERATORS: ClassOperators = ClassOperators {
+/// A shared static gives both public class entries the same stable contract identity.
+pub static SIMPLEXML_OPERATORS: ClassOperators = ClassOperators {
     dimensions: &[(ObjectDimension::Get, "__elephc_dimension_get"),
         (ObjectDimension::Set, "__elephc_dimension_set"),
         (ObjectDimension::Isset, "__elephc_dimension_isset"),

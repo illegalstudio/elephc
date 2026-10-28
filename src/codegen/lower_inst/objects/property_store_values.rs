@@ -21,6 +21,15 @@ pub(super) fn load_property_store_value_to_result(
 ) -> Result<()> {
     let slot_ty = &slot.php_type;
     let value_ty = ctx.value_php_type(value)?;
+    if slot.is_declared {
+        let message = if let Some(prefix) = &slot.abstract_setter_type_error_prefix {
+            format!("{prefix}null given")
+        } else {
+            format!("Cannot assign null to property {}::${} of type {}", slot.class_name, slot.property,
+                crate::types::diagnostic_names::php_type_name(slot_ty))
+        };
+        property_values::emit_nonnull_object_store_guard(ctx, value, slot_ty, &message)?;
+    }
     // A `false`-declared slot accepts ONLY the exact false bool: route a boxed mixed/union
     // source through the false-slot guard instead of the bool truthiness cast, which would
     // coerce `0`, `""` and `[]` into `false` where php throws. The nullable `?false` shape is

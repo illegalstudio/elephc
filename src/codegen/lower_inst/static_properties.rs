@@ -152,6 +152,7 @@ pub(super) fn lower_store_static_property(
     let release_previous = !value_is_same_static_property_load(ctx, value, &slot)?;
     let eval_done_label =
         emit_eval_native_frame_static_property_set_if_needed(ctx, inst, value, &slot)?;
+    guard_static_object_store(ctx, value, &slot)?;
     load_static_property_store_value_to_result(ctx, value, &slot.php_type)?;
     if slot.late_bound && !slot.branches.is_empty() {
         let class_id_reg = class_id_work_reg(ctx.emitter);
@@ -217,10 +218,54 @@ pub(super) fn lower_store_reflection_static_property(
     ensure_static_property_type_supported(&slot.php_type, inst)?;
     let value_ty = ctx.value_php_type(value)?;
     ensure_static_property_value_supported(&slot, &value_ty, inst)?;
+    guard_static_object_store(ctx, value, &slot)?;
     load_static_property_store_value_to_result(ctx, value, &slot.php_type)?;
     let release_previous = !value_is_same_static_property_load(ctx, value, &slot)?;
     emit_direct_store_static_property_result(ctx, &slot, release_previous);
     Ok(())
+}
+
+/// Checks a declared static object slot before materializing or replacing its old value.
+fn guard_static_object_store(
+    ctx: &mut FunctionContext<'_>, value: ValueId, slot: &StaticPropertySlot,
+) -> Result<()> {
+    if !slot.is_declared || !crate::types::builtin_classes::native_object_sink_needs_null_guard(
+        &slot.php_type, &ctx.module.class_infos, &ctx.module.interface_infos,
+    ) { return Ok(()); }
+    if !slot.late_bound || slot.branches.is_empty() {
+        return property_values::emit_nonnull_object_store_guard(ctx, value, &slot.php_type,
+            &static_object_null_message(slot));
+    }
+    super::predicates::emit_is_null_result(ctx, value)?;
+    let accepted = ctx.next_label("static_object_property_nonnull");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &accepted);
+    let class_id_reg = class_id_work_reg(ctx.emitter);
+    let mut labels = Vec::new();
+    if emit_called_class_id_to_reg(ctx, class_id_reg)? {
+        for branch in &slot.branches {
+            let label = ctx.next_label("static_object_property_null_branch");
+            emit_branch_if_class_id_matches(ctx, class_id_reg, branch.class_id, &label);
+            labels.push((label, branch));
+        }
+    }
+    super::exceptions::emit_type_error(ctx, &static_object_null_message(slot));
+    for (label, branch) in labels {
+        ctx.emitter.label(&label);
+        if branch.private_inaccessible {
+            emit_private_static_property_access_fatal(ctx);
+        } else {
+            let branch_slot = branch_static_property_slot(ctx, slot, branch);
+            super::exceptions::emit_type_error(ctx, &static_object_null_message(&branch_slot));
+        }
+    }
+    ctx.emitter.label(&accepted);
+    Ok(())
+}
+
+/// Names the property owner selected for a rejected null static-property write.
+fn static_object_null_message(slot: &StaticPropertySlot) -> String {
+    format!("Cannot assign null to property {}::${} of type {}", slot.declaring_class, slot.property,
+        crate::types::diagnostic_names::php_type_name(&slot.php_type))
 }
 
 /// Returns true when a store writes back the same static slot it just loaded.

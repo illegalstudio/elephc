@@ -77,6 +77,30 @@ pub(crate) fn has_native_dimensions(name: &str, classes: &HashMap<String, super:
     false
 }
 
+/// Recognizes non-null object sinks which can receive a nullable native XML property read.
+pub(crate) fn native_object_sink_needs_null_guard(
+    ty: &super::PhpType, classes: &HashMap<String, super::ClassInfo>,
+    interfaces: &HashMap<String, super::InterfaceInfo>,
+) -> bool {
+    if let super::PhpType::Union(members) = ty {
+        return !members.iter().any(native_boundary_accepts_null)
+            && members.iter().any(|member| native_object_sink_needs_null_guard(member, classes, interfaces));
+    }
+    let super::PhpType::Object(name) = ty.codegen_repr() else { return false; };
+    if has_native_dimensions(&name, classes) { return true; }
+    (name.is_empty() || name.eq_ignore_ascii_case("object") || interfaces.contains_key(&name))
+        && classes.keys().any(|candidate| has_native_dimensions(candidate, classes))
+}
+
+/// Nullable and mixed union arms accept PHP null without narrowing it to an object.
+fn native_boundary_accepts_null(ty: &super::PhpType) -> bool {
+    match ty {
+        super::PhpType::Void | super::PhpType::Mixed | super::PhpType::TaggedScalar => true,
+        super::PhpType::Union(members) => members.iter().any(native_boundary_accepts_null),
+        _ => false,
+    }
+}
+
 /// Resolves a native dimension adapter through the declaring internal ancestor.
 pub(crate) fn native_dimension_method(
     name: &str, operation: elephc_builtin_contract::ObjectDimension,
