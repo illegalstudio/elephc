@@ -1701,6 +1701,9 @@ fn is_integer_operand_type(checker: &Checker, ty: &PhpType) -> bool {
         // here rather than admitted there, where it would widen ordering too.
         || ty.is_int_float_union()
         || checker.is_union_with_mixed_int_dispatch(ty)
+        || crate::types::object_operators::supports_cast_with_classes(ty,
+            elephc_builtin_contract::ObjectCast::Int, &checker.classes)
+        || matches!(ty, PhpType::Union(members) if members.iter().all(|member| is_integer_operand_type(checker, member)))
 }
 
 /// Returns `true` if `ty` uses mixed numeric dispatch — i.e., the result type

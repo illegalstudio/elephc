@@ -10,6 +10,9 @@
 use std::ffi::{c_char, c_int, c_void};
 pub(super) type Node = *mut c_void;
 extern "C" {
+    /// Borrows the platform's diagnostic text for one captured errno code.
+    #[link_name = "strerror"]
+    pub(super) fn strerror(code: c_int) -> *const c_char;
     /// Creates the document owner for a literal HTML tree import.
     #[link_name = "elephc_libxml2_v1_sx_html_document"]
     pub(super) fn html_document() -> Node;

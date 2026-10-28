@@ -235,8 +235,7 @@ fn lower_numeric_binary_values(
         op,
         BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::ShiftLeft | BinOp::ShiftRight
     ) {
-        let lhs = coerce_to_int(ctx, lhs, left);
-        let rhs = coerce_to_int(ctx, rhs, right);
+        let (lhs, rhs) = coerce_bitwise_operands(ctx, lhs, rhs, left, right, expr);
         let iop = match op {
             BinOp::BitAnd => Op::IBitAnd,
             BinOp::BitOr => Op::IBitOr,
@@ -349,6 +348,24 @@ fn lower_numeric_binary_values(
         effects_lookup::runtime_effects(),
         Some(expr.span),
     )
+}
+
+/// Keeps both operands rooted until native integer adapters have finished borrowing them.
+fn coerce_bitwise_operands(
+    ctx: &mut LoweringContext<'_, '_>, lhs: LoweredValue, rhs: LoweredValue,
+    left: &Expr, right: &Expr, expr: &Expr,
+) -> (LoweredValue, LoweredValue) {
+    let pins = pin_in_flight_owners(ctx, &[lhs.value, rhs.value], expr.span);
+    let left_cast = object_operators::lower_object_numeric_cast(ctx, lhs, &CastType::Int, Some(left.span));
+    let right_cast = object_operators::lower_object_numeric_cast(ctx, rhs, &CastType::Int, Some(right.span));
+    unpin_in_flight_owners(ctx, pins, expr.span);
+    let left_result = left_cast.unwrap_or_else(|| coerce_to_int(ctx, lhs, left));
+    let right_result = right_cast.unwrap_or_else(|| coerce_to_int(ctx, rhs, right));
+    if left_cast.is_some() { release_binary_operand_temporary(ctx, lhs, expr.span); }
+    if right_cast.is_some() && (left_cast.is_none() || rhs.value != lhs.value) {
+        release_binary_operand_temporary(ctx, rhs, expr.span);
+    }
+    (left_result, right_result)
 }
 
 /// Returns the EIR opcode and result type for PHP array union operands.

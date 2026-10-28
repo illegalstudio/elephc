@@ -542,8 +542,62 @@ $scriptDocument->loadHTML('<html><body><script>if (a < b) go()</script></body></
 echo $scriptDocument->getElementsByTagName('script')->item(0)->childNodes->item(0)->nodeName, '|';
 $scriptXml = simplexml_import_dom($scriptDocument);
 echo $scriptDocument->getElementsByTagName('script')->item(0)->childNodes->item(0)->nodeName, '|';
+$allDocument = new DOMDocument();
+$allDocument->loadXML('<!--before--><?first one?><r><a/></r><?last two?><!--after-->');
+$allChildren = $allDocument->childNodes;
+echo $allChildren->length, ':';
+foreach ($allChildren as $node) { echo $node->nodeName, ','; }
+echo '|', $allDocument->documentElement->previousSibling->nodeName, ':', $allDocument->documentElement->nextSibling->nodeName, '|';
+var_dump($allDocument->saveXML($allDocument) === $allDocument->saveXML());
+$doctypeDocument = new DOMDocument();
+$doctypeDocument->loadXML('<!DOCTYPE r><r/>');
+echo $doctypeDocument->documentElement->nodeName, ':', $doctypeDocument->childNodes->length, '|';
+"####;
+    let contract_probes = r####"
+$bitwiseXml = new ReviewBitwiseXml('<r><a>3</a><b>12</b><c>15</c><d>1</d><e>31</e></r>');
+$bitwiseXml->a |= 4;
+$bitwiseXml->b >>= 2;
+$bitwiseXml->c &= 6;
+$bitwiseXml->d <<= 3;
+$bitwiseXml->e ^= 7;
+echo $bitwiseXml->a, ':', $bitwiseXml->b, ':', $bitwiseXml->c, ':', $bitwiseXml->d, ':', $bitwiseXml->e, '|';
+var_dump($bitwiseXml->a & 6, 4 | $bitwiseXml->b, $bitwiseXml->d ^ $bitwiseXml->e, $bitwiseXml->a << 1, $bitwiseXml->d >> 2);
+reviewBitwiseArguments($bitwiseXml->a, $bitwiseXml->b);
+$bitwiseXml['mask'] = '3';
+$bitwiseXml['mask'] |= 4;
+echo $bitwiseXml['mask'], '|';
+$rootBits = new ReviewBitwiseXml('<r>3</r>');
+var_dump($rootBits | 4, (new SimpleXMLIterator('<r>12</r>')) >> 2, reviewBitwiseNullable($rootBits), reviewBitwiseNullable(null));
+$latinByte = chr($argc > 0 ? 233 : 234);
+$binaryXml = new SimpleXMLElement('<r/>');
+$binaryXml->a = 'caf' . $latinByte;
+$binaryKey = 'k' . chr($argc > 0 ? 255 : 254);
+$binaryXml[$binaryKey] = chr($argc > 0 ? 255 : 254) . chr($argc > 0 ? 254 : 253);
+$binaryChild = $binaryXml->addChild('b' . $latinByte, 'x' . $latinByte);
+$binaryNsChild = $binaryXml->addChild('p:child', 'ns', 'urn:' . $latinByte);
+echo bin2hex((string)$binaryXml->a), ':', bin2hex((string)$binaryXml[$binaryKey]), ':', bin2hex((string)$binaryChild), ':', bin2hex($binaryChild->getName()), '|';
+$binaryNamespaces = $binaryXml->getDocNamespaces(true);
+echo bin2hex($binaryNamespaces['p']), '|';
+$saveXml = new SimpleXMLElement('<r/>');
+try { $saveXml->asXML("simplexml-review-nul-2060.xml\0.txt"); } catch (ValueError $error) { echo $error->getMessage(), '|'; }
+try { $saveXml->saveXML("simplexml-review-nul-2060.xml\0.txt"); } catch (ValueError $error) { echo $error->getMessage(), '|'; }
+try { $saveXml->asXML(''); } catch (ValueError $error) { echo $error->getMessage(), '|'; }
+try { $saveXml->saveXML(''); } catch (ValueError $error) { echo $error->getMessage(), '|'; }
+var_dump(file_exists('simplexml-review-nul-2060.xml'));
+set_error_handler(function(int $level, string $message): bool { echo $level, ':', $message, '|'; return true; });
+var_dump($saveXml->asXML('/__simplexml_review_absent_2060__/out.xml'));
+var_dump($saveXml->saveXML('/__simplexml_review_absent_2060__/out.xml'));
+restore_error_handler();
+$saveAliasXml = new ReviewSaveXmlAlias('<r/>');
+echo (int)str_contains((string)$saveAliasXml->saveXML(), '<r/>'), '|';
 "####;
     let declarations = r####"<?php
+class ReviewBitwiseXml extends SimpleXMLElement {}
+function reviewBitwiseArguments(mixed $left, mixed $right): void { var_dump($left | $right, $left & $right); }
+function reviewBitwiseNullable(?ReviewBitwiseXml $value): int { return $value | 4; }
+class ReviewSaveXmlAlias extends SimpleXMLElement {
+    public function asXML(?string $filename = null): string|bool { echo 'wrong-alias|'; return 'wrong'; }
+}
 class ReviewProjectionDocument extends DOMDocument {
     public function saveXML(mixed $node = null, int $options = 0): string { echo 'wrong-save|'; return '<wrong/>'; }
 }
@@ -665,6 +719,7 @@ stream_filter_register('xml.review.throw', 'XmlReviewThrowFilter');
     let eval_quiet_probes = quiet_probes.replace('\\', "\\\\").replace('\'', "\\'");
     let eval_projection_probes = projection_probes.replace('\\', "\\\\").replace('\'', "\\'");
     let eval_dom_probes = dom_probes.replace('\\', "\\\\").replace('\'', "\\'");
+    let eval_contract_probes = contract_probes.replace('\\', "\\\\").replace('\'', "\\'");
     let source = format!("{declarations}
         if ($argc === 1) {{ {names} }}
         elseif ($argc === 2) {{ $source = $argc > 0 ? '{eval_names}' : ''; eval($source); }}
@@ -678,6 +733,8 @@ stream_filter_register('xml.review.throw', 'XmlReviewThrowFilter');
         elseif ($argc === 14) {{ $source = $argc > 0 ? '{eval_projection_probes}' : ''; eval($source); }}
         elseif ($argc === 15) {{ {dom_probes} }}
         elseif ($argc === 16) {{ $source = $argc > 0 ? '{eval_dom_probes}' : ''; eval($source); }}
+        elseif ($argc === 17) {{ {contract_probes} }}
+        elseif ($argc === 18) {{ $source = $argc > 0 ? '{eval_contract_probes}' : ''; eval($source); }}
         else {{
             set_error_handler(function(int $level, string $message): bool {{ return true; }});
             $constructor = $argc === 4 || $argc === 6;
@@ -685,7 +742,7 @@ stream_filter_register('xml.review.throw', 'XmlReviewThrowFilter');
             else {{ $source = $argc > 0 ? '{eval_filters}' : ''; eval($source); }}
             restore_error_handler();
         }}");
-    let args: Vec<_> = (0..16).map(|count| vec!["x"; count]).collect();
+    let args: Vec<_> = (0..18).map(|count| vec!["x"; count]).collect();
     let argvs: Vec<_> = args.iter().map(Vec::as_slice).collect();
     let runs = compile_and_run_with_heap_debug_per_argv(&source, &argvs);
     let names_expected = "<?xml version=\"1.0\"?>\n<r xmlns:p=\"urn:p\" at=\"base\" p:at=\"literal\"><p:q>value</p:q><a:b><c>nested</c></a:b><p:q>second</p:q></r>\n1:value:second:0|base:literal:a:b|method:qualified|:a|SimpleXMLElement::addAttribute(): Attribute requires prefix for namespace|SimpleXMLElement::addAttribute(): Attribute already exists|<?xml version=\"1.0\"?>\n<r xmlns:p=\"urn:p\" at=\"base\" p:at=\"literal\" :c=\"1\"><p:q>value</p:q><a:b><c>nested</c></a:b><p:q>second</p:q><p:method>qualified</p:method><:a>leading</:a></r>\n";
@@ -696,8 +753,9 @@ stream_filter_register('xml.review.throw', 'XmlReviewThrowFilter');
     let eval_updates_expected = "<?xml version=\"1.0\"?>\n<r><a><b><c/></b></a><d><e><f/></e></d><text/></r>\n|<?xml version=\"1.0\"?>\n<r><c>1</c></r>\n|<?xml version=\"1.0\"?>\n<r a=\"5\" b=\"\"/>\n|0|8|<?xml version=\"1.0\"?>\n<r><a><b>1</b></a><a><b>2</b></a></r>\n|get|get|set|count|int(11)\nget|get|direct|count|count|1110|gf|<?xml version=\"1.0\"?>\n<r><a><c>1</c></a></r>\nkf|<?xml version=\"1.0\"?>\n<r><a><c>1</c></a></r>\ngf|<?xml version=\"1.0\"?>\n<r><a><list>1</list></a></r>\nkf|<?xml version=\"1.0\"?>\n<r><a><c/></a></r>\nk|<?xml version=\"1.0\"?>\n<r><a><c/></a></r>\ng|<?xml version=\"1.0\"?>\n<r><a><b><c/></b></a></r>\nkf|1|kDreleased|kDreleased|kkNULL\nstring(2) \"aa\"\nIt's not possible to assign a complex type to properties, resource given|It's not possible to assign a complex type to attributes, resource given|It's not possible to assign a complex type to properties, resource given|It's not possible to assign a complex type to attributes, resource given|<?xml version=\"1.0\"?>\n<r id=\"old\"><a>old</a></r>\n|rhs|<?xml version=\"1.0\"?>\n<r><new/></r>\n|rhs|<?xml version=\"1.0\"?>\n<r><new><leaf>1</leaf></new></r>\n|rhs|name|<?xml version=\"1.0\"?>\n<r><new><leaf>1</leaf></new><converted>1</converted></r>\n|g|f|str|~name|after-plain|g|str|~name|after-compound|g|str|~name|after-incdec|g|f|str|~name|~text|after-name-text|kkf|~text|after-text|g|~name|capture-rhs|g|f|str|~name|capture-name|g|str|~name|after-keep|g|str|f|str|~name|after-fallback|g|str|~name|after-loop|g|str|~name|after-loop|~key|after-key|end-captures|string(1) \"6\"\nstring(1) \"6\"\n2:Unknown: Cannot add element a number 1 when only 0 such elements exist|8:Indirect modification of overloaded element of SimpleXMLElement has no effect|Attempt to assign property \"b\" on null|<?xml version=\"1.0\"?>\n<r><a/></r>\n|2:Unknown: Cannot add element a number 3 when only 1 such elements exist|<?xml version=\"1.0\"?>\n<r><a/><a><b>3</b></a></r>\n|8:Indirect modification of overloaded element of ReviewNumericZeroXml has no effect|Attempt to assign property \"b\" on null|<?xml version=\"1.0\"?>\n<r><a>1</a></r>\n|";
     let quiet_expected = "s|bool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(false)\nbool(false)\nNULL\nm|bool(true)\nbool(true)\nbool(true)\nbool(true)\nfb|c|xD||e|bool(false)\nbool(false)\nbool(false)\nu|D|D|end|fallback|v|self-fb|nullable-fb|nullable-fb|";
     let projection_expected = "J|{\"@attributes\":{\"id\":\"1\"},\"a\":\"x\",\"b\":{\"c\":{}}}|P|D:c|D:b|1:0|V|1:1|A|D:b|D:c|ReviewProjectionXml|O|D:b|ReviewProjectionXml|B|ReviewProjectionXml|D:b|R|D:r|D:b|end|ReviewProjectionXml|D:html|nodes|done|";
-    let dom_expected = "i:p|1:0:http://www.w3.org/1999/xhtml|#a:go:active|A & B|<html xmlns=\"http://www.w3.org/1999/xhtml\"><body><!-- ---- --><p xlink:href=\"#a\" x-on:click=\"go\" :class=\"active\">A &amp; B</p><i>I</i></body></html>|p:#comment:i:p|#changed|b:a|bool(true)\n1:1:1:1:1|#cdata-section:raw|work:data|changed|again:<?work again?>|#cdata-section|#cdata-section|";
-    let expected = [names_expected, names_expected, factory, constructor, factory, constructor, semantics_expected, semantics_expected, updates_expected, eval_updates_expected, quiet_expected, quiet_expected, projection_expected, projection_expected, dom_expected, dom_expected];
+    let dom_expected = "i:p|1:0:http://www.w3.org/1999/xhtml|#a:go:active|A & B|<html xmlns=\"http://www.w3.org/1999/xhtml\"><body><!-- ---- --><p xlink:href=\"#a\" x-on:click=\"go\" :class=\"active\">A &amp; B</p><i>I</i></body></html>|p:#comment:i:p|#changed|b:a|bool(true)\n1:1:1:1:1|#cdata-section:raw|work:data|changed|again:<?work again?>|#cdata-section|#cdata-section|5:#comment,first,r,last,#comment,|first:last|bool(false)\nr:2|";
+    let contract_expected = "7:3:6:8:24|int(6)\nint(7)\nint(16)\nint(14)\nint(2)\nint(7)\nint(3)\n7|int(7)\nint(3)\nint(7)\nint(4)\n636166e9:fffe:78e9:62e9|75726e3ae9|SimpleXMLElement::asXML(): Argument #1 ($filename) must not contain any null bytes|SimpleXMLElement::saveXML(): Argument #1 ($filename) must not contain any null bytes|Path must not be empty|Path must not be empty|bool(false)\n2:SimpleXMLElement::asXML(/__simplexml_review_absent_2060__/out.xml): Failed to open stream: No such file or directory|bool(false)\n2:SimpleXMLElement::saveXML(/__simplexml_review_absent_2060__/out.xml): Failed to open stream: No such file or directory|bool(false)\n1|";
+    let expected = [names_expected, names_expected, factory, constructor, factory, constructor, semantics_expected, semantics_expected, updates_expected, eval_updates_expected, quiet_expected, quiet_expected, projection_expected, projection_expected, dom_expected, dom_expected, contract_expected, contract_expected];
     assert_eq!(runs.len(), expected.len());
     for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {
         assert!(out.success, "mode={mode} stdout={:?} stderr={}", out.stdout, out.stderr);

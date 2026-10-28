@@ -15,7 +15,7 @@ pub(super) enum XPathError { Invalid, Scalar(i32) }
 
 impl View {
     /// Evaluates XPath with in-scope prefixes taking precedence over registered aliases.
-    pub(super) fn xpath(&self, expression: &str) -> Result<Vec<Node>, XPathError> {
+    pub(super) fn xpath(&self, expression: impl AsRef<[u8]>) -> Result<Vec<Node>, XPathError> {
         diagnostics::reset();
         let node = self.first().ok_or(XPathError::Invalid)?;
         unsafe {
@@ -50,7 +50,7 @@ impl View {
         }
     }
     /// Enumerates namespace declarations or namespace uses in PHP traversal order.
-    pub(super) fn namespaces(&self, declared: bool, recursive: bool, from_root: bool) -> Vec<(String, String)> {
+    pub(super) fn namespaces(&self, declared: bool, recursive: bool, from_root: bool) -> Vec<(Vec<u8>, Vec<u8>)> {
         let start = if from_root { Some(unsafe { ffi::root(self.doc.raw) }) }
             else if declared { (!self.identity.is_null()).then_some(self.identity) }
             else { self.first() };
@@ -60,21 +60,21 @@ impl View {
         while let Some(node) = pending.pop() {
             unsafe {
                 if !declared && ffi::node_type(node) == 2 {
-                    insert_namespace(&mut entries, string(ffi::ns(node, 1)), string(ffi::ns(node, 0)), false);
+                    insert_namespace(&mut entries, bytes(ffi::ns(node, 1)), bytes(ffi::ns(node, 0)), false);
                     continue;
                 }
                 if ffi::node_type(node) != 1 { continue; }
                 if declared {
                     let mut ns = ffi::ns_defs(node);
                     while !ns.is_null() {
-                        insert_namespace(&mut entries, string(ffi::ns_value(ns, 1)), string(ffi::ns_value(ns, 0)), true);
+                        insert_namespace(&mut entries, bytes(ffi::ns_value(ns, 1)), bytes(ffi::ns_value(ns, 0)), true);
                         ns = ffi::ns_next(ns);
                     }
                 } else {
-                    insert_namespace(&mut entries, string(ffi::ns(node, 1)), string(ffi::ns(node, 0)), false);
+                    insert_namespace(&mut entries, bytes(ffi::ns(node, 1)), bytes(ffi::ns(node, 0)), false);
                     let mut attr = ffi::attrs(node);
                     while !attr.is_null() {
-                        insert_namespace(&mut entries, string(ffi::ns(attr, 1)), string(ffi::ns(attr, 0)), false);
+                        insert_namespace(&mut entries, bytes(ffi::ns(attr, 1)), bytes(ffi::ns(attr, 0)), false);
                         attr = ffi::next(attr);
                     }
                 }
@@ -91,6 +91,6 @@ impl View {
 }
 
 /// Preserves the first binding, including empty declarations but omitting unused no-namespace markers.
-fn insert_namespace(entries: &mut Vec<(String, String)>, prefix: String, uri: String, declared: bool) {
+fn insert_namespace(entries: &mut Vec<(Vec<u8>, Vec<u8>)>, prefix: Vec<u8>, uri: Vec<u8>, declared: bool) {
     if (declared || !uri.is_empty()) && !entries.iter().any(|(name, _)| *name == prefix) { entries.push((prefix, uri)); }
 }

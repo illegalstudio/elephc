@@ -30,6 +30,18 @@ echo $targetMetadataChildren->item(0)->nodeName;
 $targetMetadataPi = $targetMetadataChildren->item(1);
 $targetMetadataPi->data = 'changed';
 echo $targetMetadataPi->data;
+$targetMetadataDocument->loadXML('<!--before--><?work data?><r/><!---->');
+echo $targetMetadataDocument->childNodes->length, $targetMetadataDocument->documentElement->previousSibling->nodeName;
+echo $targetMetadataDocument->saveXML($targetMetadataDocument);
+$targetBitwiseXml = new SimpleXMLElement('<r><n>3</n></r>');
+$targetBitwiseXml->n |= 4;
+$targetBitwiseXml->n >>= 1;
+echo $targetBitwiseXml->n & 6, 8 | $targetBitwiseXml->n, $targetBitwiseXml->n << 1;
+echo (new SimpleXMLElement('<r>3</r>')) | 4;
+$targetBinaryName = 'k' . chr($argc > 0 ? 233 : 234);
+$targetBitwiseXml[$targetBinaryName] = chr($argc > 0 ? 255 : 254);
+echo bin2hex((string)$targetBitwiseXml[$targetBinaryName]);
+try { $targetBitwiseXml->saveXML("out.xml\0.txt"); } catch (ValueError $error) { echo $error->getMessage(); }
 class TargetHookedCoalesceXml extends SimpleXMLElement {
     public function __isset(string $name): bool { return true; }
     public function __get(string $name): mixed { return 'wrong'; }

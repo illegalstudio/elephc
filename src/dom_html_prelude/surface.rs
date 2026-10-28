@@ -834,7 +834,10 @@ function __elephc_dom_escape_attr_non_ascii(string $s): string {
 function __elephc_dom_serialize_node(mixed $node): string {
     if ($node instanceof DOMNode) {
         $bound = $node->__elephc_simplexml;
-        if (is_object($bound) && !($node instanceof DOMDocument)) { return $bound->__elephc_dom_xml(); }
+        if (is_object($bound)) {
+            if ($node instanceof DOMDocument) { return $bound->__elephc_dom_document_xml(); }
+            return $bound->__elephc_dom_xml();
+        }
     }
     if ($node instanceof DOMText) {
         if ($node->__elephc_raw_text) {
@@ -1034,7 +1037,8 @@ class DOMNode {
     public mixed $childNodes = null {
         get {
             $bound = $this->__elephc_simplexml;
-            if (is_object($bound) && !($this instanceof DOMDocument)) {
+            if (is_object($bound)) {
+                if ($this instanceof DOMDocument) { return $bound->__elephc_dom_children($this, $this, true); }
                 return $bound->__elephc_dom_children($this->ownerDocument, $this);
             }
             return $this->childNodes;

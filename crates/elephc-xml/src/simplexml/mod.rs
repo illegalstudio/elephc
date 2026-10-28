@@ -6,8 +6,8 @@
 //!
 //! Key details:
 //! - Every view owns its document through Rc. Selectors are evaluated on access.
-//! - Unlinked nodes stay owned until all views die, preventing stale-view UAF.
-//! - Independent clone subtrees release with their views; explicit removal transfers to the document.
+//! - Unlinked subtrees live until their last exposed node is released.
+//! - Independent clones release with their views; removal transfers storage to live node pins.
 //! - State stays on its originating thread; no native pointer crosses threads.
 
 mod abi;
@@ -17,33 +17,32 @@ mod ffi;
 mod iteration;
 mod mutation;
 mod query;
+mod retirement;
+use retirement::{NodePin, RetiredSubtree};
 
-use std::cell::RefCell;
-use std::collections::{BTreeMap, HashSet};
+use std::cell::{Cell, RefCell};
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::{c_char, CStr, CString};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use ffi::Node;
 
-/// Owns a libxml2 document and nodes removed while wrappers still reference them.
-struct Document { raw: Node, detached: RefCell<Vec<Node>>, detached_set: RefCell<HashSet<Node>> }
+/// Owns a libxml2 document; weak indexes never keep retired native storage alive.
+struct Document {
+    raw: Node,
+    detached: RefCell<HashMap<Node, Weak<RetiredSubtree>>>,
+    pins: RefCell<HashMap<Node, Weak<NodePin>>>,
+}
 impl Drop for Document {
-    /// Releases detached subtrees before the document's namespace and dictionary storage.
-    fn drop(&mut self) {
-        unsafe {
-            for node in self.detached.get_mut().drain(..) { ffi::node_free(node); }
-            ffi::doc_free(self.raw);
-        }
-    }
+    /// Releases the attached document after all independently retired owners have died.
+    fn drop(&mut self) { unsafe { ffi::doc_free(self.raw); } }
 }
 
-/// Owns one parentless clone until its last derived view dies or the document adopts it.
-struct CloneOwner { node: Node, doc: Rc<Document> }
+/// Owns one parentless clone until exposed pins take responsibility for its storage.
+struct CloneOwner { node: Node, _doc: Rc<Document>, transferred: Cell<bool> }
 impl Drop for CloneOwner {
-    /// Frees an independent subtree while preserving nodes transferred to document ownership.
+    /// A transferred owner can outlive the native node without dereferencing its old pointer.
     fn drop(&mut self) {
-        if unsafe { ffi::parent(self.node).is_null() }
-            && !self.doc.detached_set.borrow().contains(&self.node)
-        {
+        if !self.transferred.get() && unsafe { ffi::parent(self.node).is_null() } {
             unsafe { ffi::node_free(self.node); }
         }
     }
@@ -51,7 +50,7 @@ impl Drop for CloneOwner {
 
 /// An empty selector matches unprefixed nodes, including nodes in a default namespace.
 #[derive(Clone, Default)]
-struct Namespace { value: String, prefix: bool }
+struct Namespace { value: Vec<u8>, prefix: bool }
 impl Namespace {
     /// Tests a node's namespace using PHP's unqualified/default namespace rules.
     fn matches(&self, node: Node) -> bool {
@@ -68,8 +67,8 @@ impl Namespace {
 #[derive(Clone)]
 enum Scope {
     Node(Node),
-    Children(Rc<View>, Option<String>),
-    Attributes(Rc<View>, Option<String>),
+    Children(Rc<View>, Option<Vec<u8>>),
+    Attributes(Rc<View>, Option<Vec<u8>>),
     Index(Rc<View>, usize),
     Nodes(Rc<Vec<Node>>),
     XPath(Rc<Vec<Node>>),
@@ -81,9 +80,29 @@ struct View {
     _clone_owner: Option<Rc<CloneOwner>>,
     doc: Rc<Document>, scope: Scope, ns: Namespace,
     identity: Node,
-    xpath_ns: Rc<RefCell<BTreeMap<String, String>>>,
+    _pins: Rc<Vec<Rc<NodePin>>>,
+    xpath_ns: Rc<RefCell<BTreeMap<Vec<u8>, Vec<u8>>>>,
 }
 impl View {
+    /// Constructs a view with explicit pins for its stable identity and raw node lists.
+    fn new(doc: Rc<Document>, scope: Scope, identity: Node, ns: Namespace,
+        clone_owner: Option<Rc<CloneOwner>>, xpath_ns: Rc<RefCell<BTreeMap<Vec<u8>, Vec<u8>>>>) -> Self {
+        let mut view = Self { _clone_owner: clone_owner, doc, scope, identity, _pins: Rc::new(vec![]), xpath_ns, ns };
+        view.refresh_pins();
+        view
+    }
+    /// Acquires replacement pins before old selectors or retired owners can be released.
+    fn refresh_pins(&mut self) {
+        let mut nodes = vec![self.identity];
+        match &self.scope {
+            Scope::Node(node) => nodes.push(*node),
+            Scope::Nodes(list) | Scope::XPath(list) => nodes.extend(list.iter().copied()),
+            _ => (),
+        }
+        nodes.retain(|node| !node.is_null());
+        nodes.sort_unstable(); nodes.dedup();
+        self._pins = Rc::new(nodes.into_iter().map(|node| self.doc.pin(node)).collect());
+    }
     /// Resolves this selector against the current tree without caching removed children.
     fn nodes(&self) -> Vec<Node> {
         match &self.scope {
@@ -156,9 +175,9 @@ impl View {
     fn item_view(&self, node: Node) -> Self {
         if matches!(self.scope, Scope::XPath(_)) && unsafe { ffi::node_type(node) } == 2 {
             let parent = self.with_scope(Scope::Node(unsafe { ffi::parent(node) }));
-            let name = unsafe { string(ffi::name(node)) };
+            let name = unsafe { bytes(ffi::name(node)) };
             let mut selected = self.with_scope(Scope::Attributes(Rc::new(parent), Some(name)));
-            selected.ns = Namespace { value: unsafe { string(ffi::ns(node, 0)) }, prefix: false };
+            selected.ns = Namespace { value: unsafe { bytes(ffi::ns(node, 0)) }, prefix: false };
             return selected;
         }
         let mut selected = self.with_scope(Scope::Node(node));
@@ -168,10 +187,14 @@ impl View {
     /// Builds a new wrapper with its own empty XPath context, sharing only native storage.
     fn with_scope(&self, scope: Scope) -> Self {
         let identity = scope_identity(&scope);
-        Self { scope, identity, xpath_ns: Rc::new(RefCell::new(BTreeMap::new())), ..self.clone() }
+        let mut selected = Self { scope, identity, xpath_ns: Rc::new(RefCell::new(BTreeMap::new())), ..self.clone() };
+        selected.refresh_pins();
+        selected
     }
     /// Builds children, attributes, named properties, or a numeric offset selection.
-    fn select(&self, kind: i64, name: &str, ns: &str, prefix: bool, index: usize) -> Self {
+    fn select(&self, kind: i64, name: impl AsRef<[u8]>, ns: impl AsRef<[u8]>, prefix: bool, index: usize) -> Self {
+        let name = name.as_ref();
+        let ns = ns.as_ref();
         // The child group stays live within its original element. Resolve an
         // existing parent now so removing its ancestor cannot rebind this group.
         // Missing ancestors retain their lazy path for chained writes.
@@ -186,16 +209,17 @@ impl View {
                 let owner = if let Scope::Children(owner, None) = &self.scope { owner.clone() } else { parent };
                 Scope::Children(owner, Some(name.into()))
             },
-            6 | 9 | 10 => {
+            6 | 9 | 10 | 11 => {
                 let mut nodes = Vec::new();
-                let mut next = self.first().map(|n| if kind == 10 { n } else { unsafe { ffi::child(n) } })
-                    .unwrap_or(std::ptr::null_mut());
+                let mut next = if kind == 11 { unsafe { ffi::child(self.doc.raw) } } else { self.first().map(|n| if kind == 10 { n } else { unsafe { ffi::child(n) } })
+                    .unwrap_or(std::ptr::null_mut())
+                };
                 while !next.is_null() {
                     let node_type = unsafe { ffi::node_type(next) };
-                    if kind == 6 || (!matches!(node_type, 3 | 4) && (node_type != 1 || self.ns.matches(next))) {
+                    if kind == 6 || kind == 11 || (!matches!(node_type, 3 | 4) && (node_type != 1 || self.ns.matches(next))) {
                         nodes.push(next);
                     }
-                    if kind != 6 && node_type == 17 { break; }
+                    if kind != 6 && kind != 11 && node_type == 17 { break; }
                     next = unsafe { ffi::next(next) };
                 }
                 Scope::Nodes(Rc::new(nodes))
@@ -208,20 +232,21 @@ impl View {
         };
         let filter = if kind <= 1 { Namespace { value: ns.into(), prefix } } else { self.ns.clone() };
         let identity = scope_identity(&scope);
-        Self { scope, identity, ns: filter, xpath_ns: Rc::new(RefCell::new(BTreeMap::new())), ..self.clone() }
+        let mut selected = Self { scope, identity, ns: filter, xpath_ns: Rc::new(RefCell::new(BTreeMap::new())), ..self.clone() };
+        selected.refresh_pins();
+        selected
     }
     /// Detaches a node without freeing memory still visible to another wrapper.
     fn detach(&self, node: Node) {
-        if !self.doc.detached_set.borrow_mut().insert(node) { return; }
-        unsafe { ffi::unlink(node); }
-        self.doc.detached.borrow_mut().push(node);
+        self.doc.retire(node, self._clone_owner.clone());
     }
 }
 
 /// Compares libxml's borrowed UTF-8 bytes without allocating per visited sibling.
-unsafe fn borrowed_string_matches(raw: *const c_char, value: &str) -> bool {
+unsafe fn borrowed_string_matches(raw: *const c_char, value: impl AsRef<[u8]>) -> bool {
+    let value = value.as_ref();
     if raw.is_null() { value.is_empty() }
-    else { CStr::from_ptr(raw).to_bytes() == value.as_bytes() }
+    else { CStr::from_ptr(raw).to_bytes() == value }
 }
 
 /// Captures the native base node retained by PHP wrappers, separate from their live selection.
@@ -240,31 +265,40 @@ fn parent_for_attributes(view: &View) -> Rc<View> {
 }
 
 /// Copies a borrowed C string; null pointers represent an empty string.
-unsafe fn string(raw: *const c_char) -> String {
-    if raw.is_null() { String::new() } else { CStr::from_ptr(raw).to_string_lossy().into_owned() }
+unsafe fn bytes(raw: *const c_char) -> Vec<u8> {
+    if raw.is_null() { Vec::new() } else { CStr::from_ptr(raw).to_bytes().to_vec() }
 }
 /// Copies and frees an xmlChar buffer allocated by the shim.
-unsafe fn owned_string(raw: *mut c_char) -> String {
-    let result = string(raw);
+unsafe fn owned_bytes(raw: *mut c_char) -> Vec<u8> {
+    let result = bytes(raw);
     if !raw.is_null() { ffi::string_free(raw.cast()); }
     result
 }
+/// Decodes known UTF-8 native test fixtures without allowing lossy production conversions.
+#[cfg(all(test, elephc_xml_native))]
+unsafe fn string(raw: *const c_char) -> String { String::from_utf8(bytes(raw)).expect("UTF-8 test fixture") }
+/// Releases an owned libxml buffer after decoding a known UTF-8 test fixture.
+#[cfg(all(test, elephc_xml_native))]
+unsafe fn owned_string(raw: *mut c_char) -> String { String::from_utf8(owned_bytes(raw)).expect("UTF-8 test fixture") }
+
 /// Converts PHP's C-string input to a safe CString without embedded NUL bytes.
-fn cstring(value: &str) -> CString { CString::new(value.split('\0').next().unwrap_or("")).unwrap_or_default() }
+fn cstring(value: impl AsRef<[u8]>) -> CString {
+    CString::new(value.as_ref().split(|byte| *byte == 0).next().unwrap_or(b"")).unwrap_or_default()
+}
 
 /// Parses exactly the supplied byte length and returns the document root wrapper.
 #[cfg(all(test, elephc_xml_native))]
-fn parse(data: &[u8], options: i64, namespace: &str, prefix: bool) -> Option<View> {
+fn parse(data: &[u8], options: i64, namespace: impl AsRef<[u8]>, prefix: bool) -> Option<View> {
     parse_with_url(data, options, namespace, prefix, "")
 }
 
 /// Retains a file's base URI while libxml2 resolves relative external subsets and entities.
-fn parse_with_url(data: &[u8], options: i64, namespace: &str, prefix: bool, url: &str) -> Option<View> {
+fn parse_with_url(data: &[u8], options: i64, namespace: impl AsRef<[u8]>, prefix: bool, url: impl AsRef<[u8]>) -> Option<View> {
     parse_with_diagnostics(data, options, namespace, prefix, url, 1)
 }
 
 /// Keeps DOM's structured diagnostics separate from SimpleXML's generic formatter lines.
-fn parse_with_diagnostics(data: &[u8], options: i64, namespace: &str, prefix: bool, url: &str, style: i32) -> Option<View> {
+fn parse_with_diagnostics(data: &[u8], options: i64, namespace: impl AsRef<[u8]>, prefix: bool, url: impl AsRef<[u8]>, style: i32) -> Option<View> {
     diagnostics::reset();
     crate::ffi::init_library();
     let length = i32::try_from(data.len()).ok()?;
@@ -276,7 +310,7 @@ fn parse_with_diagnostics(data: &[u8], options: i64, namespace: &str, prefix: bo
 }
 
 /// Preserves filename bytes and libxml's base URI and I/O diagnostics for file factories.
-unsafe fn parse_file(filename: *const c_char, options: i64, namespace: &str, prefix: bool) -> Option<View> {
+unsafe fn parse_file(filename: *const c_char, options: i64, namespace: impl AsRef<[u8]>, prefix: bool) -> Option<View> {
     diagnostics::reset();
     crate::ffi::init_library();
     if filename.is_null() { return None; }
@@ -287,13 +321,13 @@ unsafe fn parse_file(filename: *const c_char, options: i64, namespace: &str, pre
 }
 
 /// Adopts a parsed document once and releases rootless results on the failure path.
-fn from_document(raw: Node, namespace: &str, prefix: bool) -> Option<View> {
+fn from_document(raw: Node, namespace: impl AsRef<[u8]>, prefix: bool) -> Option<View> {
     if raw.is_null() { return None; }
     let root = unsafe { ffi::root(raw) };
-    let doc = Rc::new(Document { raw, detached: RefCell::new(vec![]), detached_set: RefCell::new(HashSet::new()) });
+    let doc = Document::new(raw);
     if root.is_null() { return None; }
-    Some(View { _clone_owner: None, doc, scope: Scope::Node(root), identity: root, ns: Namespace { value: namespace.into(), prefix },
-        xpath_ns: Rc::new(RefCell::new(BTreeMap::new())) })
+    Some(View::new(doc, Scope::Node(root), root, Namespace { value: namespace.as_ref().to_vec(), prefix },
+        None, Rc::new(RefCell::new(BTreeMap::new()))))
 }
 
 #[cfg(all(test, elephc_xml_native))]
@@ -301,3 +335,9 @@ mod tests;
 
 #[cfg(all(test, elephc_xml_native))]
 mod tests_html_import;
+
+#[cfg(all(test, elephc_xml_native))]
+mod tests_retirement;
+
+#[cfg(all(test, elephc_xml_native))]
+mod tests_bytes;

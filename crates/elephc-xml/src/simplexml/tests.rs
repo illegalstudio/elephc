@@ -235,9 +235,9 @@ fn simplexml_clone_preserves_detached_nodes_and_attributes() {
 fn simplexml_xpath_namespace_and_text_nodes() {
     let root = parse(b"<r xmlns:p='urn:p'><p:a>one</p:a><a>two</a></r>", 0, "", false).unwrap();
     assert_eq!(root.xpath("//p:a").unwrap().len(), 1);
-    root.xpath_ns.borrow_mut().insert("q".into(), "urn:p".into());
+    root.xpath_ns.borrow_mut().insert(b"q".to_vec(), b"urn:p".to_vec());
     assert_eq!(root.xpath("//q:a/text()").unwrap().len(), 1);
-    assert_eq!(root.namespaces(true, true, true), vec![("p".into(), "urn:p".into())]);
+    assert_eq!(root.namespaces(true, true, true), vec![(b"p".to_vec(), b"urn:p".to_vec())]);
     assert_eq!(root.xpath("count(//a)"), Err(query::XPathError::Scalar(3)));
 }
 
@@ -245,20 +245,20 @@ fn simplexml_xpath_namespace_and_text_nodes() {
 #[test]
 fn simplexml_namespace_precedence_empty_declarations_and_base_nodes() {
     let root = parse(b"<r xmlns:p='urn:a' xmlns:q='urn:b'><p:c>A</p:c><q:c>B</q:c></r>", 0, "", false).unwrap();
-    root.xpath_ns.borrow_mut().insert("p".into(), "urn:b".into());
-    root.xpath_ns.borrow_mut().insert("alias".into(), "urn:b".into());
+    root.xpath_ns.borrow_mut().insert(b"p".to_vec(), b"urn:b".to_vec());
+    root.xpath_ns.borrow_mut().insert(b"alias".to_vec(), b"urn:b".to_vec());
     for (expression, text) in [("//p:c", "A"), ("//alias:c", "B")] {
         let nodes = root.xpath(expression).unwrap();
         assert_eq!(nodes.len(), 1);
         assert_eq!(unsafe { owned_string(ffi::text(nodes[0])) }, text);
     }
     let root = parse(b"<r xmlns:a='urn:a'><c xmlns:b='urn:b'/><empty xmlns=''/></r>", 0, "", false).unwrap();
-    assert_eq!(root.namespaces(true, true, true), vec![("a".into(), "urn:a".into()), ("b".into(), "urn:b".into()), ("".into(), "".into())]);
+    assert_eq!(root.namespaces(true, true, true), vec![(b"a".to_vec(), b"urn:a".to_vec()), (b"b".to_vec(), b"urn:b".to_vec()), (b"".to_vec(), b"".to_vec())]);
     for selected in [root.select(2, "c", "", false, 0), root.select(0, "", "", false, 0), root.select(2, "missing", "", false, 0)] {
-        assert_eq!(selected.namespaces(true, false, false), vec![("a".into(), "urn:a".into())]);
+        assert_eq!(selected.namespaces(true, false, false), vec![(b"a".to_vec(), b"urn:a".to_vec())]);
     }
     let child = root.select(2, "c", "", false, 0).select(4, "", "", false, 0);
-    assert_eq!(child.namespaces(true, false, false), vec![("b".into(), "urn:b".into())]);
+    assert_eq!(child.namespaces(true, false, false), vec![(b"b".to_vec(), b"urn:b".to_vec())]);
     assert!(root.namespaces(false, true, false).is_empty());
 }
 
@@ -308,7 +308,7 @@ fn simplexml_removed_clone_subtree_transfers_to_document_ownership() {
     let copied = selected.deep_clone().unwrap();
     let node = copied.first().unwrap();
     copied.remove(4, "", 0);
-    assert!(root.doc.detached_set.borrow().contains(&node));
+    assert!(root.doc.detached.borrow().get(&node).and_then(Weak::upgrade).is_some());
     let document_alias = root.with_scope(Scope::Node(node));
     drop(copied);
     assert_eq!(unsafe { owned_string(ffi::text(document_alias.first().unwrap())) }, "kept");
@@ -318,7 +318,7 @@ fn simplexml_removed_clone_subtree_transfers_to_document_ownership() {
 #[test]
 fn simplexml_derived_xpath_registrations_are_isolated() {
     let root = parse(b"<r xmlns:p='urn:p'><p:v>one</p:v><c/></r>", 0, "", false).unwrap();
-    root.xpath_ns.borrow_mut().insert("q".into(), "urn:p".into());
+    root.xpath_ns.borrow_mut().insert(b"q".to_vec(), b"urn:p".to_vec());
     let alias = root.clone();
     let copied = root.deep_clone().unwrap();
     let results = root.with_scope(Scope::XPath(Rc::new(root.xpath("//c").unwrap())));
@@ -328,10 +328,10 @@ fn simplexml_derived_xpath_registrations_are_isolated() {
     for derived in [xpath, iterated, added] {
         assert_eq!(derived.xpath("//q:v"), Err(query::XPathError::Invalid));
         assert!(diagnostics::take().contains("Undefined namespace prefix"));
-        derived.xpath_ns.borrow_mut().insert("q".into(), "urn:other".into());
+        derived.xpath_ns.borrow_mut().insert(b"q".to_vec(), b"urn:other".to_vec());
         assert_eq!(root.xpath("//q:v").unwrap().len(), 1);
     }
-    alias.xpath_ns.borrow_mut().insert("q".into(), "urn:other".into());
+    alias.xpath_ns.borrow_mut().insert(b"q".to_vec(), b"urn:other".to_vec());
     assert!(root.xpath("//q:v").unwrap().is_empty());
     assert_eq!(copied.xpath("//q:v").unwrap().len(), 1);
 }
@@ -369,8 +369,8 @@ fn simplexml_dom_parser_diagnostics_use_structured_lines() {
 fn simplexml_attribute_used_namespace_matches_selected_node() {
     let root = parse(b"<r xmlns:p='urn:p' p:id='8'/>", 0, "", false).unwrap();
     let attribute = root.select(1, "", "p", true, 0).select(2, "id", "", false, 0);
-    assert_eq!(attribute.namespaces(false, false, false), vec![("p".into(), "urn:p".into())]);
-    assert_eq!(attribute.namespaces(false, true, false), vec![("p".into(), "urn:p".into())]);
+    assert_eq!(attribute.namespaces(false, false, false), vec![(b"p".to_vec(), b"urn:p".to_vec())]);
+    assert_eq!(attribute.namespaces(false, true, false), vec![(b"p".to_vec(), b"urn:p".to_vec())]);
     assert!(root.select(1, "", "", false, 0).namespaces(false, false, false).is_empty());
 }
 
@@ -490,13 +490,13 @@ fn simplexml_checked_add_resolves_parent_and_reports_failures() {
     let root = parse(b"<r xmlns:p='urn:p' id='1'/>", 0, "", false).unwrap();
     let attribute = root.select(3, "id", "", false, 0);
     let attribute = attribute.with_scope(Scope::Node(attribute.first().unwrap()));
-    assert!(attribute.add_checked("extra", Some("2"), None, true).is_ok());
+    assert!(attribute.add_checked(b"extra", Some(b"2"), None, true).is_ok());
     let attrs = root.select(1, "", "", false, 0);
-    assert!(attrs.add_checked("listed", Some("3"), None, true).is_ok());
-    assert_eq!(attrs.add_checked("child", None, None, false), Err(mutation::AddError::ElementToAttributes));
-    assert_eq!(root.add_checked("id", Some("2"), None, true), Err(mutation::AddError::DuplicateAttribute));
-    assert_eq!(root.add_checked("bare", Some("2"), Some("urn:p"), true), Err(mutation::AddError::AttributePrefix));
-    assert!(root.add_checked("q:child", Some("v"), Some("urn:p"), false).is_ok());
+    assert!(attrs.add_checked(b"listed", Some(b"3"), None, true).is_ok());
+    assert_eq!(attrs.add_checked(b"child", None, None, false), Err(mutation::AddError::ElementToAttributes));
+    assert_eq!(root.add_checked(b"id", Some(b"2"), None, true), Err(mutation::AddError::DuplicateAttribute));
+    assert_eq!(root.add_checked(b"bare", Some(b"2"), Some(b"urn:p"), true), Err(mutation::AddError::AttributePrefix));
+    assert!(root.add_checked(b"q:child", Some(b"v"), Some(b"urn:p"), false).is_ok());
     let child = root.select(0, "", "urn:p", false, 0).select(2, "child", "", false, 0);
     assert_eq!(unsafe { string(ffi::ns(child.first().unwrap(), 1)) }, "p");
 }
@@ -518,11 +518,11 @@ fn simplexml_literal_writes_and_leading_colon_additions() {
     let missing = root.select(2, "a:b", "", false, 0);
     assert!(missing.ensure_first().is_some());
     assert_eq!(missing.write(2, "c", 0, "nested"), 1);
-    let leading = root.add_checked(":a", Some("method"), None, false).unwrap();
+    let leading = root.add_checked(b":a", Some(b"method"), None, false).unwrap();
     assert_eq!(unsafe { string(ffi::name(leading)) }, ":a");
-    assert_eq!(root.add_checked(":b", Some("1"), Some("urn:q"), true), Err(mutation::AddError::AttributePrefix));
-    assert!(root.add_checked(":c", Some("1"), None, true).is_ok());
-    assert_eq!(root.add_checked(":c", Some("2"), None, true), Err(mutation::AddError::DuplicateAttribute));
+    assert_eq!(root.add_checked(b":b", Some(b"1"), Some(b"urn:q"), true), Err(mutation::AddError::AttributePrefix));
+    assert!(root.add_checked(b":c", Some(b"1"), None, true).is_ok());
+    assert_eq!(root.add_checked(b":c", Some(b"2"), None, true), Err(mutation::AddError::DuplicateAttribute));
 }
 
 /// Write-fetch creates a stable empty node, while ordinary absent selections stay lazy.
@@ -539,8 +539,8 @@ fn simplexml_write_fetch_and_absent_read_views() {
     assert_eq!(unsafe { owned_string(ffi::text(created)) }, "");
     assert_eq!(node.write(5, "", 0, "stored"), 1);
     assert_eq!(unsafe { owned_string(ffi::text(created)) }, "stored");
-    assert!(root.add_checked("1abc", Some("v"), None, false).is_ok());
-    assert!(root.add_checked("1abc", Some("a"), None, true).is_ok());
+    assert!(root.add_checked(b"1abc", Some(b"v"), None, false).is_ok());
+    assert!(root.add_checked(b"1abc", Some(b"a"), None, true).is_ok());
 }
 
 /// Stream parsing keeps source URLs and diagnostics inside one parser context.

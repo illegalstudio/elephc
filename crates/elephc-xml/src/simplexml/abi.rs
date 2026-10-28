@@ -31,8 +31,8 @@ fn insert(value: View) -> i64 {
     })
 }
 /// Stashes an owned string until the next string-returning call on this thread.
-fn output(value: String) -> *const c_char {
-    OUTPUT.with(|cell| { let mut out = cell.borrow_mut(); *out = cstring(&value); out.as_ptr() })
+fn output(value: impl AsRef<[u8]>) -> *const c_char {
+    OUTPUT.with(|cell| { let mut out = cell.borrow_mut(); *out = cstring(value.as_ref()); out.as_ptr() })
 }
 /// Parses the full byte length, including embedded NULs, into a document-owned root.
 #[no_mangle]
@@ -41,7 +41,7 @@ pub unsafe extern "C" fn elephc_xml_sx_load(data: *const c_char, length: i64, op
         diagnostics::reset();
         if data.is_null() || length < 0 || length > i32::MAX as i64 { return 0; }
         parse_with_url(std::slice::from_raw_parts(data.cast(), length as usize), options,
-            &string(ns), prefix != 0, &string(url)).map(insert).unwrap_or(0)
+            &bytes(ns), prefix != 0, &bytes(url)).map(insert).unwrap_or(0)
     })
 }
 /// Parses DOM loadXML bytes while retaining its single structured warning or notice.
@@ -61,10 +61,9 @@ pub extern "C" fn elephc_xml_sx_html_document() -> i64 {
         crate::ffi::init_library();
         let raw = unsafe { ffi::html_document() };
         if raw.is_null() { return 0; }
-        let doc = Rc::new(Document { raw, detached: RefCell::new(vec![]), detached_set: RefCell::new(HashSet::new()) });
-        insert(View { _clone_owner: None, doc, scope: Scope::Node(std::ptr::null_mut()),
-            identity: std::ptr::null_mut(), ns: Namespace::default(),
-            xpath_ns: Rc::new(RefCell::new(BTreeMap::new())) })
+        let doc = Document::new(raw);
+        insert(View::new(doc, Scope::Node(std::ptr::null_mut()), std::ptr::null_mut(), Namespace::default(),
+            None, Rc::new(RefCell::new(BTreeMap::new()))))
     })
 }
 /// Retains each appended literal HTML node independently of its temporary parent handle.
@@ -91,7 +90,7 @@ pub extern "C" fn elephc_xml_sx_html_root(handle: i64) -> i64 {
 /// Opens a file or URL through libxml so read failures retain the SimpleXML caller's warnings.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_xml_sx_load_file(filename: *const c_char, options: i64, ns: *const c_char, prefix: i64) -> i64 {
-    guard(|| parse_file(filename, options, &string(ns), prefix != 0).map(insert).unwrap_or(0))
+    guard(|| parse_file(filename, options, &bytes(ns), prefix != 0).map(insert).unwrap_or(0))
 }
 /// Adopts PHP stream bytes without losing the original URL or native I/O diagnostics.
 #[no_mangle]
@@ -105,8 +104,14 @@ pub unsafe extern "C" fn elephc_xml_sx_load_stream(filename: *const c_char, data
         let mut messages = std::ptr::null_mut();
         let raw = ffi::parse_stream(filename, data, length as i32, options, &mut messages);
         diagnostics::capture(messages);
-        from_document(raw, &string(ns), prefix != 0).map(insert).unwrap_or(0)
+        from_document(raw, &bytes(ns), prefix != 0).map(insert).unwrap_or(0)
     })
+}
+/// Captures errno before allocating or invoking the PHP-labelled write-failure dispatcher.
+#[no_mangle]
+pub extern "C" fn elephc_xml_sx_file_error() -> *const c_char {
+    let code = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+    guard(|| output(if code == 0 { b"operation failed".to_vec() } else { unsafe { bytes(ffi::strerror(code)) } }))
 }
 /// Consumes formatted diagnostics before user warning handlers can run nested native operations.
 #[no_mangle]
@@ -124,14 +129,14 @@ pub extern "C" fn elephc_xml_sx_free(handle: i64) {
 #[no_mangle]
 pub extern "C" fn elephc_xml_sx_clone(handle: i64) -> i64 { guard(|| view(handle).and_then(|v| v.deep_clone()).map(insert).unwrap_or(0)) }
 /// Selects children (0), attributes (1), a property (2), an attribute (3), or offset (4).
-/// Internal modes 7/8 preserve filters; modes 9/10 project child nodes or a selected sibling tail.
+/// Internal modes 7/8 preserve filters; 9/10 project children or a sibling tail, 11 reads document children.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_xml_sx_select(handle: i64, kind: i64, name: *const c_char, ns: *const c_char, prefix: i64, index: i64) -> i64 {
     guard(|| view(handle).map(|v| {
         if kind == 4 && index < 0 { return insert(v.with_scope(Scope::Nodes(Rc::new(vec![])))); }
-        let mut selected = v.select(kind, &string(name), &string(ns), prefix != 0, index.max(0) as usize);
+        let mut selected = v.select(kind, &bytes(name), &bytes(ns), prefix != 0, index.max(0) as usize);
         if kind == 3 || (kind == 2 && matches!(v.scope, Scope::Attributes(..))) {
-            if let Some(node) = selected.first() { selected.scope = Scope::Node(node); selected.identity = node; }
+            if let Some(node) = selected.first() { selected.scope = Scope::Node(node); selected.identity = node; selected.refresh_pins(); }
         }
         insert(selected)
     }).unwrap_or(0))
@@ -175,7 +180,7 @@ fn node_is_truthy(view: &View, node: Node) -> bool {
         while !child.is_null() {
             let kind = ffi::node_type(child);
             if kind == 3 && child == first && ffi::next(child).is_null() {
-                return !owned_string(ffi::full_text(child)).is_empty();
+                return !owned_bytes(ffi::full_text(child)).is_empty();
             }
             if !matches!(kind, 3 | 4) && (kind != 1 || view.ns.matches(child))
                 && !ffi::name(child).is_null() { return true; }
@@ -221,11 +226,11 @@ pub extern "C" fn elephc_xml_sx_string(handle: i64, operation: i64) -> *const c_
     guard(|| output(view(handle).and_then(|v| {
         let node = if operation == 5 { (!v.identity.is_null()).then_some(v.identity) } else { v.first() };
         node.map(|n| unsafe { match operation {
-        0 => owned_string(ffi::text(n)), 1 => string(ffi::name(n)),
-        2 => owned_string(ffi::dump(v.doc.raw, n)),
-        3 => owned_string(ffi::full_text(n)), 4 => owned_string(ffi::dump_node(v.doc.raw, n)),
-        5 => string(ffi::name(n)),
-        _ => String::new(),
+        0 => owned_bytes(ffi::text(n)), 1 => bytes(ffi::name(n)),
+        2 => owned_bytes(ffi::dump(v.doc.raw, n)),
+        3 => owned_bytes(ffi::full_text(n)), 4 => owned_bytes(ffi::dump_node(v.doc.raw, n)),
+        5 => bytes(ffi::name(n)),
+        _ => Vec::new(),
     } }) }).unwrap_or_default()))
 }
 /// Returns the indexed child visited by foreach and explicit iterator methods.
@@ -265,16 +270,16 @@ pub extern "C" fn elephc_xml_sx_iterator(handle: i64, operation: i64) -> i64 {
 pub unsafe extern "C" fn elephc_xml_sx_mutate(handle: i64, operation: i64, key: *const c_char, value: *const c_char, ns: *const c_char, flags: i64, index: i64) -> i64 {
     guard(|| {
         let Some(v) = view(handle) else { return 0; };
-        let key = string(key); let text = string(value); let uri = string(ns);
+        let key = bytes(key); let text = bytes(value); let uri = bytes(ns);
         match operation {
             2..=5 => v.write(operation, &key, index, &text),
             12..=14 => { v.remove(operation - 10, &key, index); 1 }
-            20 | 21 => v.add_checked(&key, (flags & 1 != 0).then_some(text.as_str()),
-                (flags & 2 != 0).then_some(uri.as_str()), operation == 21)
+            20 | 21 => v.add_checked(&key, (flags & 1 != 0).then_some(text.as_slice()),
+                (flags & 2 != 0).then_some(uri.as_slice()), operation == 21)
                 .map(|n| {
                     let mut child = v.with_scope(Scope::Node(n));
-                    if operation == 20 && (flags & 2 != 0 || key.contains(':')) {
-                        child.ns = Namespace { value: string(ffi::ns(n, 1)), prefix: true };
+                    if operation == 20 && (flags & 2 != 0 || key.contains(&b':')) {
+                        child.ns = Namespace { value: bytes(ffi::ns(n, 1)), prefix: true };
                     }
                     insert(child)
                 }).unwrap_or_else(|error| error as i64),
@@ -296,7 +301,7 @@ pub unsafe extern "C" fn elephc_xml_sx_register(handle: i64, prefix: *const c_ch
         let status = ffi::xpath_register(context, prefix, uri);
         ffi::xpath_context_free(context);
         if status != 0 { return 0; }
-        v.xpath_ns.borrow_mut().insert(string(prefix), string(uri));
+        v.xpath_ns.borrow_mut().insert(bytes(prefix), bytes(uri));
         1
     })
 }
@@ -305,7 +310,7 @@ pub unsafe extern "C" fn elephc_xml_sx_register(handle: i64, prefix: *const c_ch
 pub unsafe extern "C" fn elephc_xml_sx_xpath(handle: i64, expression: *const c_char) -> i64 {
     guard(|| { diagnostics::reset(); view(handle).map(|v| {
         if v.first().is_none() || matches!(v.scope, Scope::Attributes(..)) { return 0; }
-        match v.xpath(&string(expression)) {
+        match v.xpath(&bytes(expression)) {
             Ok(nodes) => insert(v.with_scope(Scope::XPath(Rc::new(nodes)))),
             Err(query::XPathError::Invalid) => -1,
             Err(query::XPathError::Scalar(kind)) => -i64::from(kind) - 1,
@@ -317,7 +322,7 @@ pub unsafe extern "C" fn elephc_xml_sx_xpath(handle: i64, expression: *const c_c
 pub extern "C" fn elephc_xml_sx_namespace(handle: i64, declared: i64, recursive: i64, root: i64, index: i64, field: i64) -> *const c_char {
     guard(|| output(view(handle).map(|v| {
         let entries = v.namespaces(declared != 0, recursive != 0, root != 0);
-        if index < 0 { return entries.len().to_string(); }
+        if index < 0 { return entries.len().to_string().into_bytes(); }
         entries.get(index as usize).map(|(prefix, uri)| if field == 0 { prefix.clone() } else { uri.clone() }).unwrap_or_default()
     }).unwrap_or_default()))
 }
@@ -328,6 +333,7 @@ pub extern "C" fn elephc_xml_sx_alias(handle: i64) -> i64 {
     guard(|| view(handle).map(|v| {
         let mut alias = v.with_scope(v.scope.clone());
         alias.identity = v.identity;
+        alias.refresh_pins();
         insert(alias)
     }).unwrap_or(0))
 }

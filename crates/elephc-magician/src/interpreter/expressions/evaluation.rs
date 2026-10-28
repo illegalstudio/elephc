@@ -29,7 +29,7 @@ pub(in crate::interpreter) fn eval_binary_result(
         | EvalBinOp::BitOr
         | EvalBinOp::BitXor
         | EvalBinOp::ShiftLeft
-        | EvalBinOp::ShiftRight => values.bitwise(op, left, right),
+        | EvalBinOp::ShiftRight => eval_bitwise_result(op, left, right, values),
         EvalBinOp::Concat => eval_concat_result(left, right, context, values),
         EvalBinOp::LogicalXor => {
             let left_truthy = values.truthy(left)?;
@@ -47,6 +47,27 @@ pub(in crate::interpreter) fn eval_binary_result(
         EvalBinOp::Spaceship => values.spaceship(left, right),
         EvalBinOp::LogicalAnd | EvalBinOp::LogicalOr => Err(EvalStatus::UnsupportedConstruct),
     }
+}
+
+/// Borrows native integer adapters for bitwise operands and releases their independent cells.
+fn eval_bitwise_result(
+    op: EvalBinOp, left: RuntimeCellHandle, right: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    use elephc_builtin_contract::ObjectCast;
+    use super::super::runtime_ops::object_operators::numeric_cast;
+    let left_cast = numeric_cast(values, left, ObjectCast::Int)?;
+    let right_cast = match numeric_cast(values, right, ObjectCast::Int) {
+        Ok(value) => value,
+        Err(status) => {
+            if let Some(value) = left_cast { let _ = values.release(value); }
+            return Err(status);
+        }
+    };
+    let result = values.bitwise(op, left_cast.unwrap_or(left), right_cast.unwrap_or(right));
+    let left_release = left_cast.map(|value| values.release(value)).transpose();
+    let right_release = right_cast.map(|value| values.release(value)).transpose();
+    result.and_then(|result| left_release.and(right_release).map(|_| result))
 }
 
 /// Concatenates borrowed operands and releases any separate cells returned by object string hooks.

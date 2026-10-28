@@ -16,26 +16,22 @@ impl View {
         if !self.identity.is_null() && self.identity != unsafe { ffi::root(self.doc.raw) } {
             let copy = unsafe { ffi::copy_node(self.identity, self.doc.raw, 1) };
             if copy.is_null() { return None; }
-            let owner = Rc::new(CloneOwner { node: copy, doc: self.doc.clone() });
+            let owner = Rc::new(CloneOwner { node: copy, _doc: self.doc.clone(), transferred: Cell::new(false) });
             return Some(self.remap_with(self.doc.clone(), Some(owner), &|node| {
                 corresponding_node(self.identity, copy, node)
             }));
         }
         let raw = unsafe { ffi::copy(self.doc.raw) };
         if raw.is_null() { return None; }
-        let doc = Rc::new(Document { raw, detached: RefCell::new(vec![]), detached_set: RefCell::new(HashSet::new()) });
-        for node in self.doc.detached.borrow().iter() {
-            let copy = unsafe { ffi::copy_node(*node, raw, 1) };
+        let doc = Document::new(raw);
+        let mut copies = Vec::new();
+        for source in self.doc.retired_snapshot() {
+            let copy = unsafe { ffi::copy_node(source.node, raw, 1) };
             if copy.is_null() { return None; }
-            doc.detached.borrow_mut().push(copy);
-            doc.detached_set.borrow_mut().insert(copy);
+            let destination = doc.adopt_retired(copy, None, vec![]);
+            copies.push((source, destination));
         }
-        Some(self.remap(doc))
-    }
-
-    /// Preserves lazy selectors while binding concrete aliases to the copied tree or detached list.
-    fn remap(&self, doc: Rc<Document>) -> Self {
-        self.remap_with(doc.clone(), None, &|node| self.map_node(&doc, node))
+        Some(self.remap_with(doc.clone(), None, &|node| self.map_node(&doc, node, &copies)))
     }
 
     /// Rebuilds selectors using the root-document or bounded-subtree correspondence map.
@@ -49,16 +45,16 @@ impl View {
             Scope::Index(parent, index) => Scope::Index(Rc::new(parent.remap_with(doc.clone(), clone_owner.clone(), map)), *index),
         };
         let identity = map(self.identity);
-        Self { _clone_owner: clone_owner, doc, scope, identity, ns: self.ns.clone(), xpath_ns: Rc::new(RefCell::new(self.xpath_ns.borrow().clone())) }
+        Self::new(doc, scope, identity, self.ns.clone(), clone_owner, Rc::new(RefCell::new(self.xpath_ns.borrow().clone())))
     }
 
     /// Finds one node in the live copy before searching independently copied detached subtrees.
-    fn map_node(&self, doc: &Document, node: Node) -> Node {
+    fn map_node(&self, doc: &Document, node: Node, copies: &[(Rc<RetiredSubtree>, Rc<RetiredSubtree>)]) -> Node {
         if node.is_null() { return node; }
         let mapped = unsafe { ffi::correspond(self.doc.raw, doc.raw, node) };
         if !mapped.is_null() { return mapped; }
-        for (source, destination) in self.doc.detached.borrow().iter().zip(doc.detached.borrow().iter()) {
-            let mapped = corresponding_node(*source, *destination, node);
+        for (source, destination) in copies {
+            let mapped = corresponding_node(source.node, destination.node, node);
             if !mapped.is_null() { return mapped; }
         }
         std::ptr::null_mut()

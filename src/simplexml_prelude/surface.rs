@@ -18,6 +18,7 @@ extern "elephc_xml" {
     function elephc_xml_sx_load_file(string $filename, int $options, string $ns, int $prefix): int;
     function elephc_xml_sx_load_stream(string $filename, string $data, int $length, int $options, string $ns, int $prefix): int;
     function elephc_xml_sx_diagnostics(): string;
+    function elephc_xml_sx_file_error(): string;
     function elephc_xml_sx_free(int $handle): void;
     function elephc_xml_sx_clone(int $handle): int;
     function elephc_xml_sx_alias(int $handle): int;
@@ -466,13 +467,27 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         if ($attribute > 0) { elephc_xml_sx_free($attribute); }
     }
     public function asXML(?string $filename = null): string|bool {
+        return $this->__elephc_save_xml($filename, 'asXML');
+    }
+    public function saveXML(?string $filename = null): string|bool {
+        return $this->__elephc_save_xml($filename, 'saveXML');
+    }
+    private function __elephc_save_xml(?string $filename, string $method): string|bool {
+        if ($filename !== null && strpos($filename, "\0") !== false) {
+            throw new ValueError('SimpleXMLElement::' . $method . '(): Argument #1 ($filename) must not contain any null bytes');
+        }
         $handle = $this->__elephc_handle;
         if (elephc_xml_sx_int($handle, 1) === 0) { return false; }
         $xml = (string)hex2bin(elephc_xml_sx_xml_hex($handle, 1));
         if ($filename === null) { return $xml; }
-        return file_put_contents($filename, $xml) !== false;
+        if ($filename === '') { throw new ValueError('Path must not be empty'); }
+        if (file_put_contents($filename, $xml) === false) {
+            $reason = elephc_xml_sx_file_error();
+            __elephc_simplexml_warning('Warning: SimpleXMLElement::' . $method . '(' . $filename . '): Failed to open stream: ' . $reason . "\n");
+            return false;
+        }
+        return true;
     }
-    public function saveXML(?string $filename = null): string|bool { return $this->asXML($filename); }
     public function attributes(?string $namespaceOrPrefix = null, bool $isPrefix = false): ?SimpleXMLElement {
         $handle = $this->__elephc_handle;
         if (elephc_xml_sx_int($handle, 1) === 0 || elephc_xml_sx_int($handle, 4) === 2) { return null; }
@@ -669,9 +684,9 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $handle = $this->__elephc_handle;
         elephc_xml_sx_mutate($handle, 22, "", $text, "", 0, 0);
     }
-    public function __elephc_dom_selections(): array {
+    public function __elephc_dom_selections(bool $wholeDocument = false): array {
         $handle = $this->__elephc_handle;
-        $all = elephc_xml_sx_select($handle, 6, "", "", 0, 0);
+        $all = elephc_xml_sx_select($handle, $wholeDocument ? 11 : 6, "", "", 0, 0);
         $length = elephc_xml_sx_int($all, 2);
         $nodes = [];
         for ($i = 0; $i < $length; $i++) {
@@ -681,9 +696,9 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         elephc_xml_sx_free($all);
         return $nodes;
     }
-    public function __elephc_dom_children(mixed $document, mixed $parent): DOMNodeList {
+    public function __elephc_dom_children(mixed $document, mixed $parent, bool $wholeDocument = false): DOMNodeList {
         $children = [];
-        foreach ($this->__elephc_dom_selections() as $view) {
+        foreach ($this->__elephc_dom_selections($wholeDocument) as $view) {
             if ($view instanceof SimpleXMLElement) { $children[] = $view->__elephc_dom_node($document, $parent); }
         }
         $length = count($children);
@@ -707,7 +722,8 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         if ($kind === 7) {
             return $this->__elephc_dom_bind_node(new DOMProcessingInstruction($this->getName(), $this->__elephc_dom_text()), $document, $parent, $this->getName());
         }
-        return $this->__elephc_dom_bind_node(new DOMElement(), $document, $parent, $this->getName());
+        if ($kind === 1) { return $this->__elephc_dom_bind_node(new DOMElement(), $document, $parent, $this->getName()); }
+        return $this->__elephc_dom_bind_node(new DOMNode(), $document, $parent, $this->getName());
     }
     private function __elephc_dom_bind_node(DOMNode $node, mixed $document, mixed $parent, string $name): DOMNode {
         $node->nodeName = $name;
@@ -794,8 +810,7 @@ function __elephc_simplexml_load_dom(DOMDocument $document, string $data, int $o
     if ($handle !== 0) {
         $object = __elephc_simplexml_wrap($handle, 'SimpleXMLElement');
         $document->__elephc_simplexml = $object;
-        $root = $object->__elephc_dom_node($document, $document);
-        $document->childNodes = new DOMNodeList([$root]);
+        $document->childNodes = $object->__elephc_dom_children($document, $document, true);
     }
     __elephc_simplexml_report_text($diagnostics, 'DOMDocument::loadXML()', true);
     return $handle !== 0;
@@ -804,9 +819,15 @@ function __elephc_simplexml_bind_dom(DOMNode $node, SimpleXMLElement $view): voi
     $children = $node->childNodes;
     if ($node instanceof DOMDocument) {
         $node->__elephc_simplexml = $view;
+        $selections = $view->__elephc_dom_selections(true);
+        $i = 0;
         if ($children instanceof DOMNodeList) {
             foreach ($children as $child) {
-                if ($child instanceof DOMElement) { __elephc_simplexml_bind_dom($child, $view); break; }
+                if ($child instanceof DOMNode && isset($selections[$i])) {
+                    $selected = $selections[$i];
+                    if ($selected instanceof SimpleXMLElement) { __elephc_simplexml_bind_dom($child, $selected); }
+                }
+                $i++;
             }
         }
         return;

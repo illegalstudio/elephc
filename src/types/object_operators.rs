@@ -37,6 +37,15 @@ pub(crate) fn binary_plan_with_classes(
     binary_plan(op, &normalize(left), &normalize(right))
 }
 
+/// Finds a declared native cast on the checked class or its internal ancestor.
+pub(crate) fn supports_cast_with_classes(
+    ty: &PhpType, cast: elephc_builtin_contract::ObjectCast,
+    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+) -> bool {
+    operator_class(&normalize_operator_type(ty, classes))
+        .and_then(|class| class.operators).and_then(|operators| operators.cast_method(cast)).is_some()
+}
+
 /// Replaces a native subclass by its declaring ancestor without erasing nullable branches.
 fn normalize_operator_type(ty: &PhpType, classes: &std::collections::HashMap<String, crate::types::ClassInfo>) -> PhpType {
     match ty {
