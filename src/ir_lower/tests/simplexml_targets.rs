@@ -229,15 +229,15 @@ function xmlNullablePropertyReads(SimpleXMLElement $node): void {
 }
 xmlNullablePropertyReads($xml);
 interface TargetXmlReceiver {}
-class TargetGuardedXml extends SimpleXMLElement implements TargetXmlReceiver {}
+class TargetGuardedReadXml extends SimpleXMLElement implements TargetXmlReceiver {}
 function xmlGuardedInterfaceReads(TargetXmlReceiver $node, string $name): void {
-    if ($node instanceof TargetGuardedXml) {
+    if ($node instanceof TargetGuardedReadXml) {
         echo $node->item, $node?->item, $node->$name ?? 'dynamic';
         var_dump(isset($node->item), empty($node->missing));
         echo $node->missing ?? 'fallback', $node?->missing ?? 'safe';
     }
 }
-xmlGuardedInterfaceReads(new TargetGuardedXml('<r><item>guarded</item></r>'), 'item');
+xmlGuardedInterfaceReads(new TargetGuardedReadXml('<r><item>guarded</item></r>'), 'item');
 echo (int)($xml->item[0] > 1), (int)($xml->item[0] == '7'), $xml <=> $xml->item;
 $xml->item[0] += 1;
 try { $xml->item[0][null] = 'invalid'; } catch (ValueError $error) { echo $error->getMessage(); }
