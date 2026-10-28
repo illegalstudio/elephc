@@ -104,8 +104,8 @@ fn wait_until_ready(addr: &str) {
 /// master does). Under load that accumulation exhausts memory and triggers the
 /// OS OOM killer. Wrapping the child in this guard makes `Drop` reap it
 /// unconditionally, even while unwinding, so a failing test can never leak a
-/// server. Killing the master reaps its workers (verified: they exit on parent
-/// death), so the guard only needs to kill the master.
+/// server. Stopping the master is enough: it reaps its workers on `SIGTERM`, and a
+/// worker whose master is gone exits on its own (`web_workers_exit_when_their_master_is_killed`).
 struct ServerGuard {
     child: std::process::Child,
 }
@@ -140,12 +140,11 @@ impl ServerGuard {
     /// Terminates the server gracefully so its prefork workers are reaped too.
     ///
     /// `std::process::Child::kill` sends `SIGKILL`, which the master cannot
-    /// trap — so its worker children are reparented to `launchd`/`init` and
-    /// survive as orphans (verified: `SIGKILL` on the master leaves the workers
-    /// running). Across a suite that spawns dozens of servers those orphans
-    /// accumulate and exhaust memory. Sending `SIGTERM` first lets the master
-    /// run its shutdown path and reap its own workers; a `SIGKILL` fallback
-    /// covers a wedged master after a short grace period. This inherent method
+    /// trap — so its worker children are reparented and only exit once they
+    /// notice their master is gone (polled every 500 ms). Sending `SIGTERM`
+    /// first lets the master run its shutdown path and reap its own workers at
+    /// once; a `SIGKILL` fallback covers a wedged master after a short grace
+    /// period. This inherent method
     /// shadows `Child::kill` through the `Deref`, so every existing
     /// `child.kill()` call site becomes graceful with no change. Idempotent: an
     /// already-reaped child returns `Ok` immediately.
@@ -1766,6 +1765,85 @@ fn web_body_size_limit_returns_413() {
     let _ = child.wait();
     assert!(small.ends_with("10"), "under-limit body should serve: {:?}", small);
     assert!(big.starts_with("HTTP/1.1 413"), "over-limit body should be 413: {:?}", big);
+}
+
+/// Returns every live descendant PID of `root` (workers, brokers, handlers), via `pgrep -P`.
+fn descendant_pids(root: u32) -> Vec<u32> {
+    let mut found = Vec::new();
+    let mut frontier = vec![root];
+    while let Some(parent) = frontier.pop() {
+        let Ok(output) = Command::new("pgrep").arg("-P").arg(parent.to_string()).output() else {
+            continue;
+        };
+        for pid in String::from_utf8_lossy(&output.stdout)
+            .split_whitespace()
+            .filter_map(|pid| pid.parse::<u32>().ok())
+        {
+            found.push(pid);
+            frontier.push(pid);
+        }
+    }
+    found
+}
+
+/// Returns whether `pid` still names a running process. A zombie counts as exited: an
+/// orphan is reparented to PID 1, and in a CI job container PID 1 is `tail -f /dev/null`,
+/// which never reaps it, so `kill -0` would keep succeeding on a worker that is gone.
+fn process_is_alive(pid: u32) -> bool {
+    let Ok(output) = Command::new("ps")
+        .args(["-o", "stat=", "-p"])
+        .arg(pid.to_string())
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return false;
+    };
+    let state = String::from_utf8_lossy(&output.stdout);
+    let state = state.trim();
+    output.status.success() && !state.is_empty() && !state.starts_with('Z')
+}
+
+/// Verifies a master killed with `SIGKILL` (which it cannot trap to stop its children)
+/// takes its workers down with it: each worker notices its master is gone, stops
+/// accepting and exits, and the broker of an isolated worker follows. Before, the workers
+/// were reparented and kept serving on the port indefinitely.
+#[test]
+fn web_workers_exit_when_their_master_is_killed() {
+    for mode in ["worker", "request"] {
+        let dir = make_test_dir(&format!("web_master_killed_{mode}"));
+        let src = "<?php echo 'ok';";
+        let bin = if mode == "worker" {
+            compile_web(&dir, src, "app")
+        } else {
+            compile_isolated_web(&dir, src, "app", mode)
+        };
+        let addr = format!("127.0.0.1:{}", free_port());
+        let mut master = Command::new(&bin)
+            .args(["--listen", &addr, "--workers", "2"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn master");
+        wait_until_ready(&addr);
+        let descendants = descendant_pids(master.id());
+        assert!(!descendants.is_empty(), "{mode}: the master must have forked workers");
+
+        let _ = master.kill();
+        let _ = master.wait();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut alive: Vec<u32> = descendants.clone();
+        while !alive.is_empty() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(100));
+            alive.retain(|pid| process_is_alive(*pid));
+        }
+        for pid in &alive {
+            let _ = Command::new("kill").arg("-9").arg(pid.to_string()).status();
+        }
+        assert!(
+            alive.is_empty(),
+            "{mode}: processes {alive:?} of {descendants:?} outlived their killed master"
+        );
+    }
 }
 
 /// Verifies a client that advertises a body and then trickles no remaining

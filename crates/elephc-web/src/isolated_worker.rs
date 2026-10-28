@@ -251,6 +251,7 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
             }
         };
         let (recycle, mut recycle_requested) = watch::channel(false);
+        crate::master_watch::spawn(recycle.clone());
         let mut connections = Vec::new();
         loop {
             connections.retain(|connection: &tokio::task::JoinHandle<_>| {

@@ -108,6 +108,8 @@ fn spawn_worker(
     args: &ServerArgs,
     isolation: IsolationMode,
 ) -> libc::pid_t {
+    // Read before fork(): in the child, getppid() could already name a subreaper.
+    let master = unsafe { libc::getpid() };
     match unsafe { libc::fork() } {
         -1 => {
             eprintln!("error: fork failed");
@@ -115,15 +117,17 @@ fn spawn_worker(
         }
         0 => {
             reset_signal_handlers_to_default();
+            crate::master_watch::set_master_pid(master);
             match isolation.broker_mode() {
                 None => worker::serve(listen, handler, args.worker_config()),
                 Some(mode) => {
                     isolated_worker::serve(listen, handler, args.isolated_worker_config(mode))
                 }
             }
-            // serve() only returns when the worker stopped accepting on purpose
-            // after serving its --max-requests quota; exit with the recycle code
-            // so the reaper skips the crash-loop accounting for this death.
+            // serve() only returns when the worker stopped accepting on purpose:
+            // after serving its --max-requests quota, or once its master is gone;
+            // exit with the recycle code so the reaper skips the crash-loop
+            // accounting for this death.
             std::process::exit(worker::RECYCLE_EXIT_CODE);
         }
         pid => pid,
