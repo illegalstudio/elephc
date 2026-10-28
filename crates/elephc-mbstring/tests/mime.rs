@@ -2,7 +2,7 @@
 //! Compares MIME header operations with lossless fixtures from the pinned PHP baseline.
 //!
 //! Called from:
-//! - `cargo test -p elephc-mbstring --test mime`.
+//! - `cargo test -p elephc-mbstring --test engine mime::`.
 //!
 //! Key details:
 //! - Covers all internal encodings, permissive transfer syntax, and inter-word codec state.

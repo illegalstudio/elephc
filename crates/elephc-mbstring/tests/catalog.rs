@@ -2,7 +2,7 @@
 //! Verifies canonical encodings, aliases, MIME names, and the complete PHP scope fixture.
 //!
 //! Called from:
-//! - `cargo test -p elephc-mbstring --test catalog`.
+//! - `cargo test -p elephc-mbstring --test engine catalog::`.
 //!
 //! Key details:
 //! - Codec behavior is checked separately from metadata and public surface completeness.

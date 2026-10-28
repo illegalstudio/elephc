@@ -2,7 +2,7 @@
 //! Compares deprecated transfer encodings with PHP's complete conversion and text results.
 //!
 //! Called from:
-//! - `cargo test -p elephc-mbstring --test transfer`.
+//! - `cargo test -p elephc-mbstring --test engine transfer::`.
 //!
 //! Key details:
 //! - Fixtures distinguish raw fast conversion from character-oriented transformations.
