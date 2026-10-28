@@ -184,14 +184,15 @@ struct Detector {
 }
 
 impl Detector {
-    /// Visits a function-like body with its lexical parameter and capture provenance.
+    /// Visits a function-like body with capture facts and its closure binding policy.
     fn nested_body_refs_xml(
         &self,
         params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
         body: &[Stmt],
         capture: bool,
+        is_static: bool,
     ) -> bool {
-        let detector = Self { dom: self.dom.nested(params, capture), frames: Vec::new(), finalizers: Vec::new() };
+        let detector = Self { dom: self.dom.nested(params, capture, is_static), frames: Vec::new(), finalizers: Vec::new() };
         body.iter().any(|stmt| detector.stmt_refs_xml(stmt))
     }
 
@@ -241,7 +242,7 @@ impl Detector {
         self.params_ref_xml(&method.params)
             || method.variadic_type.as_ref().is_some_and(type_refs_xml)
             || method.return_type.as_ref().is_some_and(type_refs_xml)
-            || self.nested_body_refs_xml(&method.params, &method.body, false)
+            || self.nested_body_refs_xml(&method.params, &method.body, false, method.is_static)
     }
 
     /// Returns whether a class constant's initializer references the xml surface.
@@ -344,6 +345,7 @@ impl Detector {
             } => self.expr_refs_xml(condition) || self.expression_alternatives_refs_xml(&[Some(then_expr), Some(else_expr)]),
             ExprKind::Cast { expr, .. } | ExprKind::PtrCast { expr, .. } => self.expr_refs_xml(expr),
             ExprKind::Closure {
+                is_static,
                 params,
                 variadic_type,
                 return_type,
@@ -353,7 +355,7 @@ impl Detector {
                 self.params_ref_xml(params)
                     || variadic_type.as_ref().is_some_and(type_refs_xml)
                     || return_type.as_ref().is_some_and(type_refs_xml)
-                    || self.nested_body_refs_xml(params, body, true)
+                    || self.nested_body_refs_xml(params, body, true, *is_static)
             }
             ExprKind::NamedArg { value, .. } => self.expr_refs_xml(value),
             ExprKind::ExprCall { callee, args } => {
@@ -537,7 +539,7 @@ impl Detector {
                 self.params_ref_xml(params)
                     || variadic_type.as_ref().is_some_and(type_refs_xml)
                     || return_type.as_ref().is_some_and(type_refs_xml)
-                    || self.nested_body_refs_xml(params, body, false)
+                    || self.nested_body_refs_xml(params, body, false, false)
             }
             StmtKind::Return(value) => value.as_ref().is_some_and(|value| self.expr_refs_xml(value)),
             StmtKind::ConstDecl { value, .. } => self.expr_refs_xml(value),
@@ -837,6 +839,10 @@ mod tests {
             "namespace App; class Countable { function loadXML(): void {} } $doc = new \\DOMDocument(); (new Countable())->loadXML();",
             "class Config { public static function loadXML(): void {} } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); Config::loadXML();",
             "class Config { public static function loadXML(): void {} public function run(): void { self::loadXML(); } } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); (new Config())->run();",
+            "class Config { public static function loadXML(): void {} function loader(): Closure { return function () { Config::loadXML(); }; } } new DOMDocument(); (new Config())->loader()();",
+            "class Config { function loadXML(): void {} function loader(): Closure { $cfg = new Config(); return function () use ($cfg) { $cfg->loadXML(); }; } } new DOMDocument(); (new Config())->loader()();",
+            "class Config { public static function loadXML(): void {} function loader(): Closure { return static function () { self::loadXML(); }; } } new DOMDocument(); (new Config())->loader()();",
+            "class Config { public static function loadXML(): void {} function loader(): Closure { return static fn () => self::loadXML(); } } new DOMDocument(); (new Config())->loader()();",
             "$doc = new DOMDocument(); $doc->loadHTML('<p/>'); $size = [80, 24]; echo count($size);",
             "$doc = new DOMDocument(); $doc->loadHTML('<p/>'); $size = [$argc, 24]; $pairs = ['loadXML', false];",
             "class Config { public static function loadXML(): void {} } $doc = new DOMDocument(); $doc->loadHTML('<p/>'); $load = [Config::class, 'loadXML']; call_user_func($load);",
@@ -900,6 +906,10 @@ mod tests {
             "class CountedDoc extends DOMDocument implements Countable { public function count(): int { return 0; } } function loadCounted(Countable $doc): void { if ($doc instanceof DOMDocument) { $doc->loadXML('<r/>'); } } loadCounted(new CountedDoc());",
             "class TextDoc extends DOMDocument { public function __toString(): string { return ''; } } function loadText(Stringable $doc): void { if ($doc instanceof DOMDocument) { $doc->loadXML('<r/>'); } } loadText(new TextDoc());",
             "class Document extends DOMDocument { function parse(): void { $this->loadXML('<r/>'); } }",
+            "class Config { function loadXML(string $source): bool { return false; } function loader(): Closure { return function (string $source): bool { return $this->loadXML($source); }; } } $doc = new DOMDocument(); (new Config())->loader()->bindTo($doc)('<r/>');",
+            "class Config { function loadXML(string $source): bool { return false; } function loader(): Closure { return fn (string $source): bool => $this->loadXML($source); } } $doc = new DOMDocument(); (new Config())->loader()->bindTo($doc)('<r/>');",
+            "class Config { function loadXML(string $source): bool { return false; } function loader(): Closure { return function (string $source): bool { return static::loadXML($source); }; } } $doc = new DOMDocument(); (new Config())->loader()->bindTo($doc)('<r/>');",
+            "class ReboundDom extends DOMDocument {} class Config { function loadXML(string $source): bool { return false; } function loader(): Closure { return function (string $source): bool { return self::loadXML($source); }; } } (new Config())->loader()->bindTo(new ReboundDom(), ReboundDom::class)('<r/>');",
             "class Holder { public DOMDocument $doc; function parse(): void { $this->doc->loadXML('<r/>'); } }",
             "$doc = new DOMDocument(); $parse = $doc->loadXML(...); $parse('<r/>');",
             "$doc = new DOMDocument(); $parse = function () use ($doc) { $doc->loadXML('<r/>'); };",

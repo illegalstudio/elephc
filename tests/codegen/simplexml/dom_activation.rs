@@ -104,3 +104,21 @@ loadStaticDocument(false);
 "#);
     assert_eq!(out, "bool(true)\n");
 }
+
+/// Rebound method closures activate XML independently of their unrelated declaring class.
+#[test]
+fn test_simplexml_dom_loader_from_rebound_method_closures() {
+    if skip_without_xml_native("test_simplexml_dom_loader_from_rebound_method_closures") { return; }
+    let out = compile_and_run(r#"<?php
+class Config {
+    public function loadXML(string $source): bool { return false; }
+    public function loader(): Closure { return function (string $source): bool { return $this->loadXML($source); }; }
+    public function arrow(): Closure { return fn (string $source): bool => $this->loadXML($source); }
+}
+$document = new DOMDocument();
+var_dump((new Config())->loader()->bindTo($document)('<r/>'));
+var_dump((new Config())->arrow()->bindTo($document)('<s/>'));
+echo $document->documentElement->nodeName, "\n";
+"#);
+    assert_eq!(out, "bool(true)\nbool(true)\ns\n");
+}

@@ -8,6 +8,7 @@
 //! - Known unrelated receivers never opt into libxml2 just by naming loadXML.
 //! - Boxed receivers remain conservative only in programs that reference the DOM surface.
 //! - Assignments replace facts; explicit branch and loop joins preserve alternative receivers.
+//! - Non-static closures can rebind their receiver and class scope without changing ordinary captures.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -88,8 +89,8 @@ impl DomReceiver {
         }
     }
 
-    /// Starts a function or method scope; closures retain outer capture provenance.
-    pub(super) fn nested(&self, params: &[Parameter], capture: bool) -> Self {
+    /// Retains ordinary captures while non-static closures may rebind their receiver and class scope.
+    pub(super) fn nested(&self, params: &[Parameter], capture: bool, is_static: bool) -> Self {
         let result = Self {
             declarations: self.declarations.clone(),
             variables: RefCell::new(if capture { self.variables.borrow().clone() } else { HashMap::new() }),
@@ -98,7 +99,7 @@ impl DomReceiver {
             aliases: RefCell::new(if capture { self.aliases.borrow().clone() } else { HashMap::new() }),
             uncertain_aliases: RefCell::new(if capture { self.uncertain_aliases.borrow().clone() } else { HashSet::new() }),
             global_scope: false, observers: Vec::new(),
-            class: self.class.clone(), dom_available: self.dom_available,
+            class: if capture && !is_static { None } else { self.class.clone() }, dom_available: self.dom_available,
         };
         for (name, ty, _, _) in params.iter().filter(|_| self.dom_available) {
             result.variables.borrow_mut().insert(name.clone(), ty.as_ref().and_then(type_classes));
@@ -108,7 +109,7 @@ impl DomReceiver {
 
     /// Supplies the class for `$this` in a member body.
     pub(super) fn in_class(&self, name: &str) -> Self {
-        let mut result = self.nested(&[], false);
+        let mut result = self.nested(&[], false, false);
         result.class = Some(php_symbol_key(name));
         result
     }
