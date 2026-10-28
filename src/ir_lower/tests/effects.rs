@@ -11,6 +11,23 @@
 use super::*;
 use crate::ir::{Effects, Immediate, Op};
 
+/// A generator's eager parameter validation remains a throwing barrier for catch liveness.
+#[test]
+fn generator_calls_include_eager_validator_effects() {
+    let module = lower_source(r#"<?php
+function guardedXmlGenerator(SimpleXMLElement $node): Generator { yield 1; }
+function guardXmlProbe(SimpleXMLElement $root): void {
+    $missing = $root->missing->child;
+    $state = 0;
+    try { $state = 1; guardedXmlGenerator($missing); $state = 2; }
+    catch (TypeError $error) { echo $state; }
+}
+guardXmlProbe(new SimpleXMLElement('<r/>'));
+"#);
+    let probe = module.functions.iter().find(|function| function.name == "guardXmlProbe").unwrap();
+    assert!(named_call(probe, &module, "guardedXmlGenerator").effects.contains(Effects::MAY_THROW));
+}
+
 /// Static calls use the inherited implementation's summary and keep visible side effects.
 #[test]
 fn static_calls_receive_inherited_effect_summaries() {

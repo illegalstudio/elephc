@@ -133,6 +133,13 @@ fn all_functions(module: &Module) -> impl Iterator<Item = &Function> {
 /// Computes the caller-visible union of instruction and terminator effects for one body.
 fn summarize_function(function: &Function, context: &RefinementContext<'_>) -> Effects {
     let mut effects = Effects::PURE;
+    // A generator constructor runs its EIR validator eagerly before the lazy body starts.
+    if function.flags.is_generator {
+        let validator = crate::names::generator_parameter_guard_name(&function.name);
+        if let Some(summary) = context.summaries.get(&callable_key(&validator)) {
+            effects |= *summary;
+        }
+    }
     let borrowed_roots = if context.has_dynamic_class_barrier {
         // Dynamic scope operations may write a parameter by name instead of a visible slot op.
         std::collections::HashSet::new()
