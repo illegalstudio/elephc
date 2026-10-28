@@ -29,6 +29,20 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 filter = 'binary(embedder_stack_tests) or binary(compiler_security_limits_tests)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
+# These probes compile a program carrying the whole runtime callable table (a `--web` build with
+# `function_exists($name)`, or closures and first-class callables reached through variables), so
+# `as` alone takes about 20s. They run side by side in the linux-x86_64 non-codegen shards and
+# crossed 60s on their first try in every CI run of PR #2119, passing on retry in 19s to 58s.
+# The filter matches test names only, so it holds whether the suites build as their own binaries
+# or as modules of one integration binary.
+[[profile.default.overrides]]
+filter = 'test(/web_prelude_functions_visible_through_variable|dynamic_lookup_is_case_insensitive_and_accepts_one_leading_separator|ir_backend_calls_assigned_closure_literals|ir_backend_handles_(closure_alias_by_ref_mixed_params|direct_function_fcc_is_callable_checks|first_class_callable_alias_by_ref_params)/)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'test(/web_prelude_functions_visible_through_variable|dynamic_lookup_is_case_insensitive_and_accepts_one_leading_separator|ir_backend_calls_assigned_closure_literals|ir_backend_handles_(closure_alias_by_ref_mixed_params|direct_function_fcc_is_callable_checks|first_class_callable_alias_by_ref_params)/)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
 # These BCMath probes compile dynamic-eval hosts and exceeded 60s under local load.
 # Keep their assertions and use the same bounded budget as REPL eval hosts.
 [[profile.default.overrides]]
