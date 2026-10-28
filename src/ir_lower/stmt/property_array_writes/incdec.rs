@@ -39,6 +39,19 @@ pub(super) fn ordinary(
     let expression = Expr::new(ExprKind::StringLiteral(property.into()), span);
     let array = crate::ir_lower::expr::lower_property_get_from_value(ctx, object, property, Op::PropGet, &expression);
     let array = root_property_write_value(ctx, array, span, &mut roots);
+    if !super::super::native_dimension_incdec::lower_from_values(ctx, array, index, increment, span,
+        |ctx, array| ordinary_from_array(ctx, object, property, array, index, key, increment, span))
+    {
+        ordinary_from_array(ctx, object, property, array, index, key, increment, span);
+    }
+    retire_property_write_roots(ctx, roots, span);
+}
+
+/// Completes an ordinary property-array update through its already retained container.
+fn ordinary_from_array(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str,
+    array: LoweredValue, index: LoweredValue, key: &Expr, increment: bool, span: Span,
+) {
     let expression = Expr::new(ExprKind::ArrayAccess {
         array: Box::new(Expr::new(ExprKind::Null, span)), index: Box::new(key.clone()),
     }, span);
@@ -48,7 +61,6 @@ pub(super) fn ordinary(
     step(ctx, selected, increment, span, |ctx, stored| {
         lower_property_array_assign_value(ctx, object, property, index, stored, span, true);
     });
-    retire_property_write_roots(ctx, roots, span);
 }
 
 /// Preserves stable operator result types and roots heap-bearing working slots through the store.

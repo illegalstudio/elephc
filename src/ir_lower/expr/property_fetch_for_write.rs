@@ -198,6 +198,19 @@ fn lower_property_write_source(
     mixed_root: bool,
 ) -> ByRefForeachPropertySource {
     let object_value = lower_expr(ctx, object);
+    let object_type = ctx.builder.value_php_type(object_value.value);
+    let native = native_property_method_for_value(ctx, object_value.value, property,
+        elephc_builtin_contract::ObjectProperty::WriteFetch).is_some();
+    let opaque = matches!(object_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        || property_access::is_opaque_property_object(ctx, &object_type);
+    if mixed_root && !property.starts_with("__elephc_") && ctx.classes.contains_key("SimpleXMLElement")
+        && (native || opaque)
+    {
+        return ByRefForeachPropertySource {
+            value: property_access::write_select::select_named(ctx, object_value, property, expr),
+            receiver: None,
+        };
+    }
     if !property_fetch_for_write_applies(ctx, &object_value, property, expr, mixed_root) {
         return ByRefForeachPropertySource {
             value: lower_property_get_from_value(ctx, object_value, property, Op::PropGet, expr),

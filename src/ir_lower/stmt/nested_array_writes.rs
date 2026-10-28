@@ -80,6 +80,34 @@ pub(super) fn lower_nested_array_assign(
         super::nested_write_sources::retire(ctx, sources, span);
         return;
     }
+    if ctx.classes.contains_key("SimpleXMLElement") && matches!(update, Some(ElementUpdate::IncDec { .. })) {
+        let mut sources = Vec::new();
+        let target = super::nested_write_sources::capture_target(ctx, target, &mut sources);
+        let mut snapshots = Vec::new();
+        let (read, write) = snapshot_nested_update_keys(ctx, &target, &mut snapshots, true);
+        let ExprKind::ArrayAccess { array, index } = &read.kind else { unreachable!() };
+        let parent = lower_nested_assign_parent_with_diagnosed_key(ctx, array, span, true);
+        let parent = if ctx.builder.value_php_type(parent.value).codegen_repr() == PhpType::Mixed {
+            let resolved = ctx.emit_owned_value(Op::RuntimeCall, vec![parent.value],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::MixedCellResolveForWrite)),
+                PhpType::Mixed, effects_lookup::runtime_effects(), Some(span));
+            crate::ir_lower::ownership::release_if_owned(ctx, parent, Some(span));
+            resolved
+        } else { parent };
+        let (parent, owner) = root_static_update_receiver(ctx, parent, span);
+        let Some(ElementUpdate::IncDec { increment }) = update else { unreachable!() };
+        let handled = super::native_dimension_incdec::lower(ctx, parent, index, increment, span,
+            |ctx, parent| lower_boxed_nested_update_from_parent(ctx, parent, &read, &write,
+                ElementUpdate::IncDec { increment }, value, span));
+        if !handled {
+            lower_boxed_nested_update_from_parent(ctx, parent, &read, &write,
+                ElementUpdate::IncDec { increment }, value, span);
+        }
+        if let Some(owner) = owner { crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span); }
+        retire_update_keys(ctx, snapshots, span);
+        super::nested_write_sources::retire(ctx, sources, span);
+        return;
+    }
     if let Some((_, write)) = bind_concrete_static_update_root(ctx, target, target) {
         lower_nested_array_assign_inner(ctx, &write, value, span, static_update);
     } else { lower_nested_array_assign_inner(ctx, target, value, span, static_update); }
@@ -644,6 +672,18 @@ fn lower_nested_assign_parent_with_diagnosed_key_inner(
     let receiver = lower_nested_assign_parent_with_diagnosed_key_inner(
         ctx, array, span, key_already_diagnosed, convert_false,
     );
+    if let Some(parent) = super::native_dimension_incdec::select_parent(ctx, receiver, index, expr,
+        |ctx, receiver| lower_nested_parent_from_receiver(ctx, receiver, array, index, expr,
+            span, key_already_diagnosed, convert_false))
+    { return parent; }
+    lower_nested_parent_from_receiver(ctx, receiver, array, index, expr, span, key_already_diagnosed, convert_false)
+}
+
+/// Retains the existing ordinary autovivification and key behavior after native parent dispatch.
+fn lower_nested_parent_from_receiver(
+    ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, array: &Expr, index: &Expr,
+    expr: &Expr, span: Span, key_already_diagnosed: bool, convert_false: bool,
+) -> LoweredValue {
     if convert_false && ctx.builder.value_php_type(receiver.value).codegen_repr() == PhpType::Str {
         crate::ir_lower::ownership::release_if_owned(ctx, receiver, Some(span));
         lower_throw_access_error(ctx, "Cannot use string offset as an array", span);

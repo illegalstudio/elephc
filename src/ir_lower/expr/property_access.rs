@@ -50,7 +50,7 @@ pub(super) fn needs_native_xml_property_dispatch(
 }
 
 /// Recognizes raw object storage whose class and properties are resolved at runtime.
-fn is_opaque_property_object(ctx: &LoweringContext<'_, '_>, ty: &PhpType) -> bool {
+pub(super) fn is_opaque_property_object(ctx: &LoweringContext<'_, '_>, ty: &PhpType) -> bool {
     matches!(ty.codegen_repr(), PhpType::Object(class)
         if class.is_empty() || ctx.interfaces.contains_key(&class))
 }

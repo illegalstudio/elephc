@@ -147,7 +147,7 @@ fn emit_intrinsic_method_wrapper(emitter: &mut Emitter, wrapper: &IntrinsicMetho
     for _ in &wrapper.consumed_mixed_parameters { abi::emit_pop_call_operand_owner(emitter); }
     // Forward through the ordinary argument planner, including overflow
     // words. The wrapper frame must not shift a native helper's arguments.
-    let first_native_argument = usize::from(wrapper.is_static);
+    let first_native_argument = usize::from(wrapper.is_static && wrapper.omits_called_class_id);
     for (index, ty) in wrapper.arg_types.iter().enumerate().skip(first_native_argument) {
         abi::emit_load(emitter, ty, (index + 1) * 16);
         abi::emit_push_result_value(emitter, ty);
@@ -177,6 +177,7 @@ pub(in crate::codegen) struct IntrinsicMethodWrapper {
     arg_types: Vec<PhpType>,
     returns_owned: bool,
     consumed_mixed_parameters: Vec<usize>,
+    omits_called_class_id: bool,
 }
 
 /// Describes the physical words forwarded by an intrinsic wrapper without coercing them.
@@ -215,6 +216,7 @@ pub(in crate::codegen) fn intrinsic_method_wrapper_specs(module: &Module) -> Vec
                     returns_owned: signature.return_type.codegen_repr().is_refcounted()
                         || signature.return_type.codegen_repr() == PhpType::Callable,
                     consumed_mixed_parameters: intrinsic.consumed_mixed_parameters().to_vec(),
+                    omits_called_class_id: intrinsic.omits_called_class_id(),
                 });
             }
         }
@@ -239,6 +241,7 @@ pub(in crate::codegen) fn intrinsic_method_wrapper_specs(module: &Module) -> Vec
                     returns_owned: signature.return_type.codegen_repr().is_refcounted()
                         || signature.return_type.codegen_repr() == PhpType::Callable,
                     consumed_mixed_parameters: intrinsic.consumed_mixed_parameters().to_vec(),
+                    omits_called_class_id: intrinsic.omits_called_class_id(),
                 });
             }
         }
@@ -272,7 +275,7 @@ mod tests {
                 let wrapper = IntrinsicMethodWrapper {
                     class_name: "NativeOwnerProbe".into(), method_key: "probe".into(),
                     helper: "_native_owner_probe", is_static: false,
-                    arg_types: args, returns_owned: owned, consumed_mixed_parameters: Vec::new(),
+                    arg_types: args, returns_owned: owned, consumed_mixed_parameters: Vec::new(), omits_called_class_id: false,
                 };
                 let mut emitter = Emitter::new(crate::codegen_support::platform::Target::parse(target).unwrap());
                 emit_intrinsic_method_wrapper(&mut emitter, &wrapper);
@@ -302,6 +305,7 @@ mod tests {
                     helper: intrinsic.runtime_helper().unwrap(), is_static,
                     arg_types: vec![if is_static { PhpType::Int } else { PhpType::Object("Fiber".into()) }, PhpType::Mixed],
                     returns_owned: true, consumed_mixed_parameters: intrinsic.consumed_mixed_parameters().to_vec(),
+                    omits_called_class_id: intrinsic.omits_called_class_id(),
                 };
                 let mut emitter = Emitter::new(target);
                 emit_intrinsic_method_wrapper(&mut emitter, &wrapper);
@@ -318,6 +322,30 @@ mod tests {
                     assert!(!transfer.contains(class_word.output().trim()), "{name}: class id is not a native value argument");
                 }
             }
+        }
+    }
+
+
+    /// Static factories retain the called-class word required by their native construction ABI.
+    #[test]
+    fn fixed_array_factory_wrapper_forwards_called_class_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = crate::codegen_support::platform::Target::parse(name).unwrap();
+            let intrinsic = IntrinsicCall::static_method("SplFixedArray", "fromArray").unwrap();
+            let wrapper = IntrinsicMethodWrapper {
+                class_name: "SplFixedArray".into(), method_key: "fromarray".into(),
+                helper: intrinsic.runtime_helper().unwrap(), is_static: true,
+                arg_types: vec![PhpType::Int, PhpType::Array(Box::new(PhpType::Mixed)), PhpType::Bool],
+                returns_owned: true, consumed_mixed_parameters: intrinsic.consumed_mixed_parameters().to_vec(),
+                omits_called_class_id: intrinsic.omits_called_class_id(),
+            };
+            let mut emitter = Emitter::new(target);
+            emit_intrinsic_method_wrapper(&mut emitter, &wrapper);
+            let assembly = emitter.output();
+            let (arguments, _) = assembly.split_once(wrapper.helper).unwrap();
+            let mut class_word = Emitter::new(target);
+            abi::emit_load(&mut class_word, &PhpType::Int, 16);
+            assert!(arguments.contains(class_word.output().trim()), "{name}: factory needs the called-class id");
         }
     }
 

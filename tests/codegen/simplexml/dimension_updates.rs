@@ -110,3 +110,74 @@ restore_error_handler();
         out.stdout
     });
 }
+
+/// Every nested or opaque holder selects XML nodes without scalar writeback in all four forms.
+#[test]
+fn test_simplexml_nested_holder_dimension_incdec() {
+    if skip_without_xml_native("test_simplexml_nested_holder_dimension_incdec") { return; }
+    let source = r###"<?php
+function NestedDimensionOpaque(mixed $value): mixed { return $value; }
+function NestedDimensionKey(): int { echo 'key|'; return 0; }
+class NestedDimensionHolder {
+    public array $bag = [];
+    public $untyped;
+    public mixed $boxed;
+}
+$doc = new SimpleXMLElement('<r><mark>7</mark></r>');
+$view = $doc->mark;
+$view[0][0]++; echo (string)$doc->mark, '|';
+++$view[0][0]; echo (string)$doc->mark, '|';
+$view[0][0]--; echo (string)$doc->mark, '|';
+--$view[0][0]; echo (string)$doc->mark, '|';
+$doc->mark[0][0]++; echo (string)$doc->mark, '|';
+++$doc->mark[0][0]; echo (string)$doc->mark, '|';
+$doc->mark[0][0]--; echo (string)$doc->mark, '|';
+--$doc->mark[0][0]; echo (string)$doc->mark, '|';
+$holder = new NestedDimensionHolder();
+$holder->bag['x'] = $doc->mark;
+$holder->bag['x'][0]++; echo (string)$doc->mark, '|';
+++$holder->bag['x'][0]; echo (string)$doc->mark, '|';
+$holder->bag['x'][0]--; echo (string)$doc->mark, '|';
+--$holder->bag['x'][0]; echo (string)$doc->mark, '|';
+$holder->untyped = $doc->mark;
+$holder->untyped[0]++; echo (string)$doc->mark, '|';
+++$holder->untyped[0]; echo (string)$doc->mark, '|';
+$holder->untyped[0]--; echo (string)$doc->mark, '|';
+--$holder->untyped[0]; echo (string)$doc->mark, '|';
+$holder->boxed = NestedDimensionOpaque($doc->mark);
+$holder->boxed[0]++; echo (string)$doc->mark, '|';
+++$holder->boxed[0]; echo (string)$doc->mark, '|';
+$holder->boxed[0]--; echo (string)$doc->mark, '|';
+--$holder->boxed[0]; echo (string)$doc->mark, '|';
+$opaque = NestedDimensionOpaque($holder);
+$opaque->untyped[0]++; echo (string)$doc->mark, '|';
+++$opaque->untyped[0]; echo (string)$doc->mark, '|';
+$opaque->untyped[0]--; echo (string)$doc->mark, '|';
+--$opaque->untyped[0]; echo (string)$doc->mark, '|';
+$view[NestedDimensionKey()][NestedDimensionKey()]++;
+$holder->untyped[NestedDimensionKey()]++;
+echo $doc->asXML();
+$holder->bag['n'] = [4];
+$holder->bag['n'][0]++; echo $holder->bag['n'][0], '|';
+++$holder->bag['n'][0]; echo $holder->bag['n'][0], '|';
+$holder->bag['n'][0]--; echo $holder->bag['n'][0], '|';
+--$holder->bag['n'][0]; echo $holder->bag['n'][0], '|';
+$holder->untyped = [4];
+$holder->untyped[0]++; echo $holder->untyped[0], '|';
+++$holder->untyped[0]; echo $holder->untyped[0], '|';
+$holder->untyped[0]--; echo $holder->untyped[0], '|';
+--$holder->untyped[0]; echo $holder->untyped[0], '|';
+$holder->boxed = [[4]];
+$holder->boxed[0][0]++; echo $holder->boxed[0][0], '|';
+++$holder->boxed[0][0]; echo $holder->boxed[0][0], '|';
+$holder->boxed[0][0]--; echo $holder->boxed[0][0], '|';
+--$holder->boxed[0][0]; echo $holder->boxed[0][0], '|';
+unset($doc, $view, $holder, $opaque);
+"###;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert!(!out.stderr.contains("Warning:") && !out.stderr.contains("Notice:"), "{}", out.stderr);
+    let expected = format!("{}key|key|key|<?xml version=\"1.0\"?>\n<r><mark>7</mark></r>\n{}", "7|".repeat(24), "5|6|5|4|".repeat(3));
+    assert_eq!(out.stdout, expected);
+}
