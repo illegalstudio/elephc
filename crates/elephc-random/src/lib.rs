@@ -18,6 +18,7 @@
 
 mod csprng;
 mod engine;
+mod float_repr;
 mod hex;
 mod mt;
 mod pcg;
@@ -28,6 +29,7 @@ use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 
 use engine::Engine;
+use float_repr::php_float_repr;
 use mt::{Mt19937, MODE_MT19937};
 
 use crate::mt::MODE_PHP;
@@ -279,6 +281,22 @@ pub extern "C" fn elephc_random_mt_rand_range(min: i64, max: i64) -> i64 {
     with_global_mt(|generator| generator.rand_common(min, max))
 }
 
+/// Applies php-src's legacy `RAND_RANGE_BADSCALING` for one already-drawn 31-bit value.
+///
+/// The Randomizer prelude draws the value through the PHP-visible engine, so it shares the
+/// exact order of operations with the procedural path instead of re-deriving it in PHP
+/// integer arithmetic, where the wrapped sum cannot be represented.
+#[no_mangle]
+pub extern "C" fn elephc_random_mt_legacy_scale(min: i64, max: i64, draw: i64) -> i64 {
+    Mt19937::legacy_scale(min, max, draw)
+}
+
+/// Formats one double the way php-src's `%.*H` diagnostics print it.
+#[no_mangle]
+pub extern "C" fn elephc_random_float_repr(value: f64) -> *const c_char {
+    return_text(php_float_repr(value))
+}
+
 /// Draws `[0, bound)` from the global Mt19937 state for `array_rand()`/`shuffle()`.
 #[no_mangle]
 pub extern "C" fn elephc_random_mt_uniform(bound: u64) -> u64 {
@@ -422,6 +440,22 @@ mod tests {
         let mut generator = Mt19937::seeded(0, MODE_PHP);
         assert_eq!(generator.rand_common(0, 999_999_999), 448_865_905);
         assert_eq!(generator.rand_common(0, 999), 592);
+    }
+
+    /// The PHP variant converts the offset before adding the bound, keeping 64-bit precision.
+    #[test]
+    fn mt19937_php_mode_legacy_scale_keeps_integer_bounds() {
+        let singleton = 9_007_199_254_740_993i64;
+        for draw in [0i64, 1, 1_234_567, 2_147_483_646] {
+            assert_eq!(Mt19937::legacy_scale(singleton, singleton, draw), singleton);
+            assert_eq!(Mt19937::legacy_scale(-singleton, -singleton, draw), -singleton);
+            assert_eq!(Mt19937::legacy_scale(i64::MAX, i64::MAX, draw), i64::MAX);
+            assert_eq!(Mt19937::legacy_scale(i64::MIN, i64::MIN, draw), i64::MIN);
+        }
+        // The offset is truncated toward zero before the wrapping addition.
+        assert_eq!(Mt19937::legacy_scale(0, 999, 0), 0);
+        let mut generator = Mt19937::seeded(0, MODE_PHP);
+        assert_eq!(generator.rand_common(i64::MIN, i64::MIN + 10), i64::MIN);
     }
 
     /// PCG seed 1234 serializes php-src's state and matches its post-jump draw.

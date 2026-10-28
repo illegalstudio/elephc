@@ -398,6 +398,10 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// Function-like scope key paired with loop spans for storage-contract lookup.
     pub loop_storage_scope: String,
     pub constants: HashMap<String, (ExprKind, PhpType)>,
+    /// Span a `MT_RAND_PHP` constant-expression deprecation reports instead of the stored
+    /// value's own span. A class-constant access reports the access site, like php-src; the
+    /// once-per-declaration key still comes from the stored value's span.
+    pub(crate) const_deprecation_report_span: Option<Span>,
     pub top_level_env: TypeEnv,
     pub current_class: Option<String>,
     pub loop_stack: Vec<LoopFrame>,
@@ -629,6 +633,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             mixed_storage_store_sites,
             loop_storage_scope,
             constants: constants.clone(),
+            const_deprecation_report_span: None,
             top_level_env,
             current_class,
             loop_stack: Vec::new(),
@@ -5396,13 +5401,16 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
         span: Option<Span>,
     ) -> crate::builtins::semantics::LoweredBuiltinValue {
         let mut operands = operands;
+        let mut collector = None;
         if let Some(signature) = self.functions.get(name) {
+            // The count is the number of PHP-visible arguments, before either hidden slot.
+            let actual_count = operands.len();
             if crate::func_args::sig_has_hidden_argc_param(signature) {
                 let argc = LoweringContext::emit_value(
                     self,
                     Op::ConstI64,
                     Vec::new(),
-                    Some(Immediate::I64(operands.len() as i64)),
+                    Some(Immediate::I64(actual_count as i64)),
                     PhpType::Int,
                     Op::ConstI64.default_effects(),
                     span,
@@ -5410,16 +5418,28 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
                 operands.push(argc.value);
             }
             if crate::func_args::sig_collects_surplus_args(signature) {
-                let collector = LoweringContext::emit_value(
+                let array_ty = PhpType::Array(Box::new(PhpType::Mixed));
+                let empty = LoweringContext::emit_value(
                     self,
                     Op::ArrayNew,
                     Vec::new(),
                     Some(Immediate::Capacity(0)),
-                    PhpType::Array(Box::new(PhpType::Mixed)),
+                    array_ty.clone(),
                     Op::ArrayNew.default_effects(),
                     span,
                 );
-                operands.push(collector.value);
+                if crate::func_args::sig_collects_optional_arg_count(signature) {
+                    crate::ir_lower::expr::push_func_args_count(
+                        self,
+                        empty.value,
+                        &array_ty,
+                        &Some(PhpType::Mixed),
+                        actual_count,
+                        span.unwrap_or_else(Span::dummy),
+                    );
+                }
+                collector = Some(empty.value);
+                operands.push(empty.value);
             }
         }
         let data = self.intern_function_name(name);
@@ -5455,6 +5475,15 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
             pins,
             span.unwrap_or_else(crate::span::Span::dummy),
         );
+        if let Some(collector) = collector {
+            self.emit_void(
+                Op::Release,
+                vec![collector],
+                None,
+                Op::Release.default_effects(),
+                span,
+            );
+        }
         crate::builtins::semantics::LoweredBuiltinValue {
             value: lowered.value,
         }

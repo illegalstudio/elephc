@@ -86,10 +86,31 @@ pub(super) fn prepare_call_site(
     let compiler_generated = inst.span.is_some_and(|span| !span.is_from_source());
     if (instruction_may_enter_php_frame(inst) || warns_at_call_site) && !compiler_generated {
         let scratch = abi::int_result_reg(ctx.emitter);
-        abi::emit_symbol_address(ctx.emitter, scratch, "_script_source_file");
-        abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file", 0);
-        abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_script_source_file_len", 0);
-        abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file_len", 0);
+        // The span knows which physical file its coordinates belong to, including a file
+        // reached through `include`/`require`; publishing that path lets a prelude-raised
+        // notice name the user's included file instead of the program entry file.
+        let span_file = inst.span.and_then(|span| {
+            ctx.module
+                .source_paths
+                .get(&span.source_id())
+                .cloned()
+        });
+        // The entry file already has a canonical data symbol; reuse it instead of adding a
+        // second copy of the same path (and keep it out of the per-site data block).
+        if let Some(file) = span_file.filter(|file| {
+            ctx.module.source_path.as_deref() != Some(file.as_str())
+        }) {
+            let (label, len) = ctx.data.add_string(file.as_bytes());
+            abi::emit_symbol_address(ctx.emitter, scratch, &label);
+            abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file", 0);
+            abi::emit_load_int_immediate(ctx.emitter, scratch, len as i64);
+            abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file_len", 0);
+        } else {
+            abi::emit_symbol_address(ctx.emitter, scratch, "_script_source_file");
+            abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file", 0);
+            abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_script_source_file_len", 0);
+            abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file_len", 0);
+        }
         abi::emit_load_int_immediate(ctx.emitter, scratch, i64::from(inst.span.map_or(0, |span| span.line)));
         abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_line", 0);
     }
@@ -107,8 +128,36 @@ pub(super) fn prepare_call_site(
     Ok(())
 }
 
+/// Reads the file published by the nearest real PHP call site into the string result registers.
+///
+/// The zero-initialized slot means "no call site published yet"; the program entry file is the
+/// same fallback a span-less diagnostic uses.
+pub(super) fn lower_diagnostic_caller_file(ctx: &mut FunctionContext<'_>) {
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    let fallback = ctx.next_label("diagnostic_caller_file_fallback");
+    let done = ctx.next_label("diagnostic_caller_file_done");
+    abi::emit_load_symbol_to_reg(ctx.emitter, ptr_reg, "_php_diagnostic_file", 0);
+    emit_branch_if_zero(ctx, ptr_reg, &fallback);
+    abi::emit_load_symbol_to_reg(ctx.emitter, len_reg, "_php_diagnostic_file_len", 0);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&fallback);
+    abi::emit_symbol_address(ctx.emitter, ptr_reg, "_script_source_file");
+    abi::emit_load_symbol_to_reg(ctx.emitter, len_reg, "_script_source_file_len", 0);
+    ctx.emitter.label(&done);
+}
+
 /// Returns whether an instruction can synchronously enter another PHP-visible frame.
 fn instruction_may_enter_php_frame(inst: &Instruction) -> bool {
+    // The once-flag read/store touches only module-private storage; treating it as a frame
+    // entry would publish the declaration location over the user's live call site.
+    if inst.op == Op::CoreBuiltin
+        && inst.immediate
+            == Some(crate::ir::Immediate::I64(
+                crate::ir::CoreBuiltinOp::DeprecatedOnceBegin.as_i64(),
+            ))
+    {
+        return false;
+    }
     matches!(
         inst.op,
         Op::Call

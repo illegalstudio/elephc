@@ -318,9 +318,13 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
 ) {
     elephc::codegen::set_null_repr(null_repr);
     elephc::codegen::set_compile_profile(php_version, false);
+    let synthetic_main = dir.join("test.php");
+    // Mirrors `pipeline::compile`: the entry file uses source ID 0. Registering it makes the
+    // harness cover published diagnostic files (and their canonicalization) for main-file call
+    // sites, which otherwise fall back to `_script_source_file`.
+    elephc::span::Span::register_source_path(0, synthetic_main.display().to_string());
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
-    let synthetic_main = dir.join("test.php");
     // `__FILE__` must name a readable file: some fixtures (the GMP division tests)
     // open it with fopen() to obtain a real resource handle. The CLI pipeline always
     // has the source on disk; the in-process fixture pipeline must mirror that.

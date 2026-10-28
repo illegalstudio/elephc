@@ -309,16 +309,32 @@ fn lower_trigger_operands(
     call: &NormalizedBuiltinCall<'_>,
     default_level: i64,
 ) -> Result<Vec<crate::ir::ValueId>, BuiltinLoweringError> {
-    let file = ctx.source_path().unwrap_or("unknown").to_string();
-    let file_data = ctx.intern_string(&file);
-    let file = ctx.emit_value(
-        Op::ConstStr,
-        Vec::new(),
-        Some(Immediate::Data(file_data)),
-        PhpType::Str,
-        Op::ConstStr.default_effects(),
-        Some(call.span),
-    );
+    // A source-written call carries its own file, which may be an included file. An injected
+    // prelude call has a synthetic span, so it reads the file the entering call site published
+    // instead of baking the module's entry path.
+    let file = if call.span.is_from_source() {
+        let path = crate::source::canonical_span_source_path(call.span)
+            .or_else(|| ctx.source_path().map(str::to_string))
+            .unwrap_or_else(|| "unknown".to_string());
+        let file_data = ctx.intern_string(&path);
+        ctx.emit_value(
+            Op::ConstStr,
+            Vec::new(),
+            Some(Immediate::Data(file_data)),
+            PhpType::Str,
+            Op::ConstStr.default_effects(),
+            Some(call.span),
+        )
+    } else {
+        ctx.emit_value(
+            Op::CoreBuiltin,
+            Vec::new(),
+            Some(Immediate::I64(CoreBuiltinOp::DiagnosticCallerFile.as_i64())),
+            PhpType::Str,
+            CoreBuiltinOp::DiagnosticCallerFile.effects(),
+            Some(call.span),
+        )
+    };
     let line = if !call.span.is_from_source() && default_level != 1_024 {
         ctx.emit_value(
             Op::CoreBuiltin,

@@ -11,11 +11,97 @@
 //! - Literal `defined("NAME")` folds using global constants plus scope-aware
 //!   `Class::CONST` existence from class/interface/enum metadata.
 
-use crate::ir::{Immediate, Op, Ownership};
+use crate::ir::{CoreBuiltinOp, Immediate, Op, Ownership, Terminator};
+use crate::span::Span;
 use crate::ir_lower::context::{value_ir_type, LoweredValue, LoweringContext};
 use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
+
+/// Emits php-src's `E_DEPRECATED` for a `MT_RAND_PHP` constant-expression read.
+///
+/// `report_span` supplies the file and line (a class-constant access reports the access
+/// site); `declaration_span` identifies the declaration whose value is evaluated, so a
+/// lazily-evaluated class constant notices only once no matter how many sites read it.
+pub(super) fn emit_mt_rand_php_deprecation(
+    ctx: &mut LoweringContext<'_, '_>,
+    report_span: Span,
+    declaration_span: Span,
+) {
+    // The flag is keyed by the DECLARATION span, not the reported one: every access site of a
+    // class constant shares one notice even though each reports its own line.
+    let first = ctx.emit_value(
+        Op::CoreBuiltin,
+        Vec::new(),
+        Some(Immediate::I64(CoreBuiltinOp::DeprecatedOnceBegin.as_i64())),
+        PhpType::Bool,
+        CoreBuiltinOp::DeprecatedOnceBegin.effects(),
+        Some(declaration_span),
+    );
+    let deprecate = ctx.builder.create_named_block("mt_rand_php_deprecation", Vec::new());
+    let done = ctx
+        .builder
+        .create_named_block("mt_rand_php_deprecation_done", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: first.value,
+        then_target: deprecate,
+        then_args: Vec::new(),
+        else_target: done,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(deprecate);
+    let message_data = ctx.intern_string(
+        "Constant MT_RAND_PHP is deprecated since 8.3, as it uses a biased non-standard variant of Mt19937",
+    );
+    let message = ctx.emit_value(
+        Op::ConstStr,
+        Vec::new(),
+        Some(Immediate::Data(message_data)),
+        PhpType::Str,
+        Op::ConstStr.default_effects(),
+        Some(report_span),
+    );
+    let level = ctx.emit_value(
+        Op::ConstI64,
+        Vec::new(),
+        Some(Immediate::I64(8_192)),
+        PhpType::Int,
+        Op::ConstI64.default_effects(),
+        Some(report_span),
+    );
+    let file_text = crate::source::canonical_span_source_path(report_span)
+        .or_else(|| ctx.source_path().map(str::to_string))
+        .unwrap_or_else(|| "unknown".to_string());
+    let file_data = ctx.intern_string(&file_text);
+    let file = ctx.emit_value(
+        Op::ConstStr,
+        Vec::new(),
+        Some(Immediate::Data(file_data)),
+        PhpType::Str,
+        Op::ConstStr.default_effects(),
+        Some(report_span),
+    );
+    let line = ctx.emit_value(
+        Op::ConstI64,
+        Vec::new(),
+        Some(Immediate::I64(i64::from(report_span.line))),
+        PhpType::Int,
+        Op::ConstI64.default_effects(),
+        Some(report_span),
+    );
+    ctx.emit_void(
+        Op::CoreBuiltin,
+        vec![message.value, level.value, file.value, line.value],
+        Some(Immediate::I64(CoreBuiltinOp::BuiltinDeprecated.as_i64())),
+        CoreBuiltinOp::BuiltinDeprecated.effects(),
+        Some(report_span),
+    );
+    ctx.builder.terminate(Terminator::Br {
+        target: done,
+        args: Vec::new(),
+    });
+    ctx.builder.position_at_end(done);
+}
 
 /// Records `define("NAME", value)` constants for later source-order references.
 pub(super) fn register_static_define_call(
@@ -164,6 +250,13 @@ pub(super) fn lower_const_ref(
     name: &Name,
     expr: &Expr,
 ) -> LoweredValue {
+    if elephc_builtin_contract::canonical_constant_name(name.as_str()) == "MT_RAND_PHP" {
+        // The resolver rewrites an ordinary read into a call, so a surviving `ConstRef` is a
+        // constant-expression read: php-src evaluates those lazily at runtime, once per
+        // declaration site. Emit that deprecation here instead of at compile time.
+        let report_span = ctx.const_deprecation_report_span.unwrap_or(expr.span);
+        emit_mt_rand_php_deprecation(ctx, report_span, expr.span);
+    }
     if elephc_builtin_contract::canonical_constant_name(name.as_str()) == "PHP_BINARY" {
         return ctx.emit_value(
             Op::RuntimeCall,

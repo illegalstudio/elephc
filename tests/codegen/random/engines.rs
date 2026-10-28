@@ -280,6 +280,233 @@ var_dump($engine->generate() === $clone->generate());
     assert_eq!(out, "bool(true)\nbool(false)\n");
 }
 
+/// `Mt19937` coerces convertible seeds in weak mode, like `Z_PARAM_LONG_OR_NULL`.
+#[test]
+fn test_random_mt19937_weak_seed_coercion() {
+    let output = compile_and_run_capture(
+        r#"<?php
+foreach ([[1.0, 1], ["1", 1], [true, 1], [1.5, 1], ["1.5", 1], [false, 0], ["0", 0], [0.0, 0]] as [$seed, $expected]) {
+    $actual = new Random\Engine\Mt19937($seed);
+    $reference = new Random\Engine\Mt19937($expected);
+    echo $actual->generate() === $reference->generate() ? "same\n" : "diff\n";
+}
+foreach (["abc", []] as $seed) {
+    try {
+        new Random\Engine\Mt19937($seed);
+        echo "no error\n";
+    } catch (TypeError $e) {
+        echo $e->getMessage(), "\n";
+    }
+}
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(
+        output.stdout,
+        "same\nsame\nsame\nsame\nsame\nsame\nsame\nsame\n\
+Random\\Engine\\Mt19937::__construct(): Argument #1 ($seed) must be of type ?int, string given\n\
+Random\\Engine\\Mt19937::__construct(): Argument #1 ($seed) must be of type ?int, array given\n"
+    );
+    // Coercion is observable: the two lossy seeds must keep PHP's deprecations.
+    assert_eq!(
+        output
+            .stderr
+            .matches("loses precision")
+            .count(),
+        2,
+        "{}",
+        output.stderr
+    );
+    assert!(
+        output
+            .stderr
+            .contains("Implicit conversion from float 1.5 to int loses precision"),
+        "{}",
+        output.stderr
+    );
+    assert!(
+        output
+            .stderr
+            .contains("Implicit conversion from float-string \"1.5\" to int loses precision"),
+        "{}",
+        output.stderr
+    );
+}
+
+/// Seed values outside PHP's integer binding rules raise the constructor's `TypeError`.
+#[test]
+fn test_random_mt19937_seed_out_of_range_values() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (["9223372036854775808", "999999999999999999999999", 1e20, NAN, INF] as $seed) {
+    try {
+        new Random\Engine\Mt19937($seed);
+        echo "no error\n";
+    } catch (TypeError $e) {
+        echo $e->getMessage(), "\n";
+    }
+}
+try {
+    new Random\Engine\Mt19937(new stdClass());
+} catch (TypeError $e) {
+    echo $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "Random\\Engine\\Mt19937::__construct(): Argument #1 ($seed) must be of type ?int, string given\n\
+Random\\Engine\\Mt19937::__construct(): Argument #1 ($seed) must be of type ?int, string given\n\
+Random\\Engine\\Mt19937::__construct(): Argument #1 ($seed) must be of type ?int, float given\n\
+Random\\Engine\\Mt19937::__construct(): Argument #1 ($seed) must be of type ?int, float given\n\
+Random\\Engine\\Mt19937::__construct(): Argument #1 ($seed) must be of type ?int, float given\n\
+Random\\Engine\\Mt19937::__construct(): Argument #1 ($seed) must be of type ?int, stdClass given\n"
+    );
+}
+
+/// Integer strings bind through `zend_strtol`, saturating at `PHP_INT_MIN` on negative overflow.
+#[test]
+fn test_random_mt19937_seed_integer_string_forms() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (["-9223372036854775809", "-9223372036854775808", "0009223372036854775807", "+1", " 1 "] as $seed) {
+    $engine = new Random\Engine\Mt19937($seed);
+    $expected = $seed === "0009223372036854775807"
+        ? new Random\Engine\Mt19937(PHP_INT_MAX)
+        : ($seed === "+1" || $seed === " 1 " ? new Random\Engine\Mt19937(1) : new Random\Engine\Mt19937(PHP_INT_MIN));
+    echo $engine->generate() === $expected->generate() ? "same\n" : "diff\n";
+}
+"#,
+    );
+    assert_eq!(out, "same\nsame\nsame\nsame\nsame\n");
+}
+
+/// The seed binds by position or by name, including after the mode argument.
+#[test]
+fn test_random_mt19937_seed_argument_forms() {
+    let out = compile_and_run(
+        r#"<?php
+$positional = new Random\Engine\Mt19937(1);
+$named = new Random\Engine\Mt19937(mode: 0, seed: 1);
+$spread = new Random\Engine\Mt19937(...[1]);
+$expected = $positional->generate();
+echo $named->generate() === $expected ? "named\n" : "diff\n";
+echo $spread->generate() === $expected ? "spread\n" : "diff\n";
+"#,
+    );
+    assert_eq!(out, "named\nspread\n");
+}
+
+/// A nested weak-file construction during argument evaluation cannot leak its strictness.
+#[test]
+fn test_random_mt19937_cross_file_seed_strictness() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php\ndeclare(strict_types=1);\nrequire __DIR__ . '/weak.php';\ntry {\n    new Random\\Engine\\Mt19937(weakSeedHelper());\n    echo \"coerced\\n\";\n} catch (TypeError $e) {\n    echo $e->getMessage(), \"\\n\";\n}\n$weak = weakConstruct();\nvar_dump($weak->generate() === (new Random\\Engine\\Mt19937(1))->generate());\n$rc = new ReflectionClass(Random\\Engine\\Mt19937::class);\ntry {\n    $reflected = $rc->newInstance(1.5);\n    var_dump($reflected->generate() === (new Random\\Engine\\Mt19937(1))->generate());\n} catch (TypeError $e) {\n    echo $e->getMessage(), \"\\n\";\n}\n",
+            ),
+            (
+                "weak.php",
+                "<?php\nfunction weakSeedHelper(): float {\n    $class = \"stdClass\";\n    new $class();\n    return 1.5;\n}\nfunction weakConstruct(): Random\\Engine\\Mt19937 {\n    return new Random\\Engine\\Mt19937(1.5);\n}\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        "Random\\Engine\\Mt19937::__construct(): Argument #1 ($seed) must be of type ?int, float given\nbool(true)\nbool(true)\n"
+    );
+}
+
+/// Dynamically constructed and spread seeds bind exactly like direct arguments.
+#[test]
+fn test_random_mt19937_dynamic_and_spread_seed_binding() {
+    let out = compile_and_run(
+        r#"<?php
+$class = "Random\\Engine\\Mt19937";
+$a = new $class(1.5);
+$b = new Random\Engine\Mt19937(1);
+echo $a->generate() === $b->generate() ? "dynamic\n" : "diff\n";
+$c = new Random\Engine\Mt19937(...[1.5]);
+echo $c->generate() === (new Random\Engine\Mt19937(1))->generate() ? "spread\n" : "diff\n";
+$d = new $class(...["1"]);
+echo $d->generate() === (new Random\Engine\Mt19937(1))->generate() ? "dynamic spread\n" : "diff\n";
+"#,
+    );
+    assert_eq!(out, "dynamic\nspread\ndynamic spread\n");
+}
+
+/// A strict file rejects coercible seeds on dynamic and spread construction too.
+#[test]
+fn test_random_mt19937_dynamic_and_spread_seed_strict_rejection() {
+    let out = compile_and_run(
+        r#"<?php
+declare(strict_types=1);
+$class = "Random\\Engine\\Mt19937";
+foreach ([fn() => new $class(1.5), fn() => new Random\Engine\Mt19937(...[1.5])] as $case) {
+    try {
+        $case();
+        echo "no error\n";
+    } catch (TypeError $e) {
+        echo $e->getMessage(), "\n";
+    }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "Random\\Engine\\Mt19937::__construct(): Argument #1 ($seed) must be of type ?int, float given\n\
+Random\\Engine\\Mt19937::__construct(): Argument #1 ($seed) must be of type ?int, float given\n"
+    );
+}
+
+/// Lossy seed deprecations use php-src's shortest float text at E_DEPRECATED.
+#[test]
+fn test_random_mt19937_seed_deprecation_text_and_level() {
+    let output = compile_and_run_capture(
+        r#"<?php
+set_error_handler(function (int $level, string $message): bool {
+    echo $level, " ", $message, "\n";
+    return true;
+});
+new Random\Engine\Mt19937(0.1 + 0.2);
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(
+        output.stdout,
+        "8192 Implicit conversion from float 0.30000000000000004 to int loses precision\n"
+    );
+    assert_eq!(output.stderr, "");
+}
+
+/// Strict types keep `Mt19937`'s seed at `?int`, with `null` still random-seeding.
+#[test]
+fn test_random_mt19937_strict_seed_rejection() {
+    let out = compile_and_run(
+        r#"<?php
+declare(strict_types=1);
+foreach ([1.0, "1", true] as $seed) {
+    try {
+        new Random\Engine\Mt19937($seed);
+        echo "no error\n";
+    } catch (TypeError $e) {
+        echo $e->getMessage(), "\n";
+    }
+}
+var_dump((new Random\Engine\Mt19937(1))->generate() === (new Random\Engine\Mt19937(1))->generate());
+"#,
+    );
+    assert_eq!(
+        out,
+        "Random\\Engine\\Mt19937::__construct(): Argument #1 ($seed) must be of type ?int, float given\n\
+Random\\Engine\\Mt19937::__construct(): Argument #1 ($seed) must be of type ?int, string given\n\
+Random\\Engine\\Mt19937::__construct(): Argument #1 ($seed) must be of type ?int, true given\n\
+bool(true)\n"
+    );
+}
+
 /// `Secure::generate()` returns eight CSPRNG bytes and refuses serialization.
 #[test]
 fn test_random_engine_secure_generate_and_serialize() {
@@ -318,7 +545,7 @@ try {
     echo $e->getMessage(), "\n";
 }
 try {
-    new Random\Engine\Mt19937(1.0);
+    new Random\Engine\Mt19937([]);
 } catch (TypeError $e) {
     echo $e->getMessage(), "\n";
 }
@@ -328,6 +555,6 @@ try {
         out,
         "Random\\Engine\\PcgOneseq128XslRr64::__construct(): Argument #1 ($seed) must be of type string|int|null, float given\n\
 Random\\Engine\\Xoshiro256StarStar::__construct(): Argument #1 ($seed) must be of type string|int|null, float given\n\
-Random\\Engine\\Mt19937::__construct(): Argument #1 ($seed) must be of type ?int, float given\n"
+Random\\Engine\\Mt19937::__construct(): Argument #1 ($seed) must be of type ?int, array given\n"
     );
 }

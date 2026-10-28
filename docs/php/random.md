@@ -38,6 +38,12 @@ echo bin2hex($xoshiro->generate()), "\n";
 `Random\Engine` is a real interface, so a user class can implement it and be consumed by
 `Random\Randomizer` exactly like a native engine. `Random\CryptoSafeEngine` extends it.
 
+`Mt19937` takes its seed through php-src's nullable-integer parameter binding: a coercive file
+accepts int-convertible scalars (`1.0`, `"1"`, `true`, and lossy values with PHP's
+`Deprecated:` notice) exactly like the equivalent integer seed, `declare(strict_types=1)`
+rejects everything but `int` and `null`, and `null` asks for a random seed. The binding also
+applies to a dynamically constructed class name (`new $class($seed)`) and to spread arguments.
+
 ## Exceptions
 
 `Random\RandomError` extends `Error` and `Random\BrokenRandomEngineError` extends it.
@@ -92,7 +98,10 @@ var_dump(random_int(1, 6));
 - `array_rand()` accepts indexed and associative arrays, the single-key form
   (`array_rand($array)` / `array_rand($array, 1)`) and the multi-key form
   (`array_rand($array, $num)`), and draws from the same seeded global Mt19937 stream as
-  `Randomizer::pickArrayKeys()`.
+  `Randomizer::pickArrayKeys()`. Direct calls, first-class `array_rand(...)` callables,
+  `call_user_func()` / `call_user_func_array()` strings, and a variable holding the *literal*
+  function name all reach the same implementation and return PHP's `int|string|array` values.
+  A name assembled at run time is refused, as for every builtin in compiled code.
 - `srand()` is an alias of `mt_srand()`. An unknown mode is clamped to
   `MT_RAND_MT19937`; `Mt19937::__construct()` rejects it instead.
 - `random_int()` and `random_bytes()` use the operating-system CSPRNG, not the seeded
@@ -108,14 +117,28 @@ little-endian 8-character hex words plus `count` and `mode`; PCG emits its high 
 and `unserialize()` of malformed or all-zero Xoshiro state raises the same
 `Invalid serialization data` exception.
 
+## Deprecations
+
+`MT_RAND_PHP` and `lcg_value()` raise PHP 8.3/8.4's `E_DEPRECATED` at run time, through the
+active error handler, with the level, message, file and line php-src uses. The variant
+notices inside `mt_srand()` and `Mt19937::__construct()` report the user's call site, even
+when that call is in an included file.
+
+Reads inside constant expressions follow php-src's lazy evaluation: a top-level `const`
+deprecates while its declaration runs, a class constant when it is first fetched (reporting
+the fetch site), an enum case when it is first fetched or when `cases()`/`from()`/`tryFrom()`
+materializes the case table, a default parameter on the first call, and an attribute
+argument on every `newInstance()` — with `getArguments()` reporting at its own call site.
+Ordinary reads, including `switch` cases and `match` arms, deprecate where they are written.
+
 ## Known differences
 
-- The `MT_RAND_PHP` and `lcg_value()` deprecations go through `trigger_error()`, so a
-  custom error handler sees `E_USER_DEPRECATED` where php-src raises `E_DEPRECATED`. The
-  message text, file, and line match php-src, including for the variant notices raised
-  inside `mt_srand()` and `Mt19937::__construct()`, which report the user's call site.
-- A `MT_RAND_PHP` read inside a constant expression (a `const`, a class constant, an enum
-  case value, an attribute argument, or a default parameter) is reported as elephc's
-  compile-time deprecation diagnostic, because those sites cannot contain a function call.
-  Ordinary reads, including `switch` cases and `match` arms, emit the deprecation at run
-  time, on stderr, exactly where the constant is fetched.
+- A callable name composed only at run time from computed strings
+  (`call_user_func("array_" . $suffix, ...)`) is not visible to prelude detection, so
+  `array_rand` reached that way is refused like any other undetected prelude symbol.
+  Literal names, variables holding a literal, folded literal concatenations, first-class
+  callables and runtime-selected values whose name appears as a literal in the program all
+  work.
+- A deprecated constant read in a property default is raised once at the first object
+  construction, like php-src, but reports the property declaration line instead of the
+  construction site.
