@@ -187,5 +187,12 @@ curl = ["elephc-magician/curl", "elephc-builtin-contract/curl"]
 [profile.dev]
 debug = "line-tables-only"
 
+# build.rs runs before the crate compiles after every src/ edit: it hashes all of src/ into the
+# runtime build identity and parses crates/elephc-zend with syn to generate the extension ABI
+# header. Unoptimized, that script and syn spend most of their time in debug code; optimizing
+# build scripts and their dependencies (a one-time rebuild) shortens that serial step.
+[profile.dev.build-override]
+opt-level = 3
+
 [workspace.dependencies]
 elephc-fileinfo = { path = "crates/elephc-fileinfo" }
