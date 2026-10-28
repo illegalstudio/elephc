@@ -42,7 +42,7 @@ pub(super) fn guard_parameters(ctx: &mut LoweringContext<'_, '_>) {
         let message = format!(
             "{callable}(): Argument #{} (${name}) must be of type {expected}, null given", index + 1,
         );
-        reject_null(ctx, value, &message, Span::dummy(), true);
+        reject_null(ctx, value, Expr::string_lit(message), Span::dummy(), true);
     }
 }
 
@@ -125,10 +125,42 @@ pub(super) fn guard_return(
     {
         return;
     }
-    let expected = crate::types::diagnostic_names::php_type_name(&ctx.return_php_type);
     let callable = callable_label(ctx);
-    let message = format!("{callable}(): Return value must be of type {expected}, null returned");
-    reject_null(ctx, value, &message, span.unwrap_or_else(Span::dummy), false);
+    let message = if let Some(expected) = return_type_label(ctx) {
+        Expr::binop(Expr::binop(Expr::string_lit(format!("{callable}(): Return value must be of type ")),
+            BinOp::Concat, expected), BinOp::Concat, Expr::string_lit(", null returned"))
+    } else {
+        Expr::string_lit(format!("{callable}(): Return value must be of type {}, null returned",
+            crate::types::diagnostic_names::php_type_name(&ctx.return_php_type)))
+    };
+    reject_null(ctx, value, message, span.unwrap_or_else(Span::dummy), false);
+}
+
+/// Builds a late-static expected type from the called class only on the rejected branch.
+fn return_type_label(ctx: &LoweringContext<'_, '_>) -> Option<Expr> {
+    let hint = ctx.owner_name().split_once("::").and_then(|(class, method)|
+        ctx.classes.get(class)?.late_static_method_returns.get(&crate::names::php_symbol_key(method)));
+    let hint = hint?;
+    let ty = return_hint_type(ctx, crate::ir_lower::context::type_expr_to_php_type(hint));
+    let label = crate::types::diagnostic_names::php_type_name(&ty);
+    let mut result = Expr::string_lit("");
+    for (index, part) in label.split('|').enumerate() {
+        if index > 0 { result = Expr::binop(result, BinOp::Concat, Expr::string_lit("|")); }
+        let part = if part.eq_ignore_ascii_case("static") {
+            Expr::new(ExprKind::ClassConstant { receiver: crate::parser::ast::StaticReceiver::Static }, Span::dummy())
+        } else { Expr::string_lit(part) };
+        result = Expr::binop(result, BinOp::Concat, part);
+    }
+    Some(result)
+}
+
+/// Resolves lexical hints while retaining the runtime static token for return diagnostics.
+fn return_hint_type(ctx: &LoweringContext<'_, '_>, ty: PhpType) -> PhpType {
+    match ty {
+        PhpType::Object(class) if class.eq_ignore_ascii_case("static") => PhpType::Object("static".into()),
+        PhpType::Union(members) => PhpType::Union(members.into_iter().map(|member| return_hint_type(ctx, member)).collect()),
+        other => resolve_context_type(ctx, other),
+    }
 }
 
 /// Gives property accessors the PHP label rather than their synthetic method symbol.
@@ -149,7 +181,7 @@ fn callable_label(ctx: &LoweringContext<'_, '_>) -> String {
 
 /// Branches on the shared null representation and balances a temporary on both outcomes.
 fn reject_null(
-    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, message: &str,
+    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, message: Expr,
     span: Span, consume_read: bool,
 ) {
     let condition = ctx.emit_value(Op::IsNull, vec![value.value], None, PhpType::Bool,
@@ -167,7 +199,10 @@ fn reject_null(
     if !consume_read && owned {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     }
-    crate::ir_lower::stmt::lower_throw_access_exception(ctx, "TypeError", message, span);
+    let error = Expr::new(ExprKind::NewObject {
+        class_name: crate::names::Name::unqualified("TypeError"), args: vec![message],
+    }, span);
+    crate::ir_lower::stmt::lower_stmt(ctx, &Stmt::new(StmtKind::Throw(error), span));
     ctx.builder.position_at_end(accepted);
     ctx.restore_initialized_slots(initialized);
 }

@@ -134,6 +134,7 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     let return_result = match (persist_result, writeback_result, result) {
         (Err(status), _, _) | (_, Err(status), _) | (_, _, Err(status)) => Err(status),
         (Ok(()), Ok(()), Ok(control)) => eval_declared_return_control_value(
+            function.name(),
             function.return_type(),
             None,
             None,
@@ -497,6 +498,7 @@ fn eval_closure_with_optional_binding(
         | (_, _, Err(status), _)
         | (_, _, _, Err(status)) => Err(status),
         (Ok(()), Ok(()), Ok(()), Ok(control)) => eval_declared_return_control_value(
+            &eval_closure_display_name(function, context),
             function.return_type(),
             None,
             None,

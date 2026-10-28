@@ -217,7 +217,7 @@ fn pending_throwables_own_their_cells_after_function_return_control() {
         let source = values.new_object("Exception").unwrap();
         let operand = if borrowed { source.borrowed() } else { source };
         let result = eval_declared_return_control_value(
-            None, None, None, EvalControl::Throw(operand), &mut context, &mut values,
+            "thrower", None, None, None, EvalControl::Throw(operand), &mut context, &mut values,
         );
         assert_eq!(result, Err(EvalStatus::UncaughtThrowable));
         let thrown = context.take_pending_throw().unwrap();

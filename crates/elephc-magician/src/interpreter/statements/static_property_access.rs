@@ -30,6 +30,7 @@ pub(in crate::interpreter) fn store_borrowed_static_property(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    eval_reject_null_object_static_property(class_name, property_name, value, context, values)?;
     let value = match context.static_property_alias(class_name, property_name) {
         Some(EvalReferenceTarget::Cell { cell }) if values.is_reference(*cell)? => *cell,
         _ => value,
@@ -585,6 +586,7 @@ pub(super) fn eval_static_property_reference_bind_result(
             values,
         )?;
         let value = eval_reference_target_value(&target, context, values)?;
+        eval_reject_null_object_property(&declaring_class, &property, value, context, values)?;
         context.bind_static_property_alias(&declaring_class, property.name(), target);
         return store_borrowed_static_property(&declaring_class, property.name(), value, context, values);
     }
@@ -786,6 +788,7 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
             );
         }
         validate_native_static_class_defaults(&class_name, &declaring_class, context, values)?;
+        eval_reject_null_object_property(&declaring_class, &property, value, context, values)?;
         if let Some(target) = context
             .static_property_alias(&declaring_class, property.name())
             .cloned()

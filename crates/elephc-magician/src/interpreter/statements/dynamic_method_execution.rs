@@ -141,6 +141,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     let return_result = match (persist_result, writeback_result, result) {
         (Err(status), _, _) | (_, Err(status), _) | (_, _, Err(status)) => Err(status),
         (Ok(()), Ok(()), Ok(control)) => eval_declared_return_control_value(
+            &qualified_method_name,
             method.return_type(),
             Some(class_name),
             Some(called_class_name),
@@ -291,6 +292,7 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
     let return_result = match (persist_result, writeback_result, result) {
         (Err(status), _, _) | (_, Err(status), _) | (_, _, Err(status)) => Err(status),
         (Ok(()), Ok(()), Ok(control)) => eval_declared_return_control_value(
+            &qualified_method_name,
             method.return_type(),
             Some(class_name),
             Some(called_class_name),

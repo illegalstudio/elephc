@@ -423,6 +423,7 @@ pub(crate) fn eval_property_set_result(
                 values,
             );
         }
+        eval_reject_null_object_property(&declaring_class, &property, value, context, values)?;
     }
     if !declared_property_found {
         if let Some((declaring_class, visibility, write_visibility, is_static)) =

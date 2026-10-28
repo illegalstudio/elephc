@@ -204,10 +204,12 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
         for arg in evaluated_args {
             if let Some(name) = arg.name {
                 bind_dynamic_named_method_arg(
+                    callee,
                     params,
                     parameter_types,
                     parameter_is_by_ref,
                     variadic_index,
+                    next_variadic_index,
                     &mut bound_args,
                     &name,
                     arg.value,
@@ -219,6 +221,7 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
                 )?;
             } else {
                 bind_dynamic_positional_method_arg(
+                    callee,
                     params,
                     &mut bound_args,
                     parameter_types,
@@ -262,6 +265,8 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
             if let Some(param_type) = parameter_types.get(position).and_then(Option::as_ref) {
                 let bound = value.as_mut().ok_or(EvalStatus::RuntimeFatal)?;
                 let previous = bound.value;
+                eval_reject_null_object_argument(callee, position + 1, Some(&params[position]),
+                    param_type, previous, context, values)?;
                 bound.value = eval_method_parameter_value(param_type, previous, context, values)?;
                 if bound.value != previous { release_expr_result(previous, context, values)?; }
             }
@@ -331,6 +336,7 @@ fn evaluated_args_contain_named_variadic_values(
 
 /// Binds one positional method argument to a fixed parameter or variadic array.
 fn bind_dynamic_positional_method_arg(
+    callee: &str,
     params: &[String],
     bound_args: &mut [Option<BoundMethodArg>],
     parameter_types: &[Option<EvalParameterType>],
@@ -353,6 +359,9 @@ fn bind_dynamic_positional_method_arg(
             })
             .and_then(|index| index.checked_add(1))
             .ok_or(EvalStatus::RuntimeFatal)?;
+        if let Some(ty) = variadic_index.and_then(|index| parameter_types.get(index).and_then(Option::as_ref)) {
+            eval_reject_null_object_argument(callee, argument_number, None, ty, value, context, values)?;
+        }
         let key = values.int(*next_variadic_index)?;
         *next_variadic_index = next_variadic_index
             .checked_add(1)
@@ -412,10 +421,12 @@ fn bind_dynamic_positional_method_arg(
 
 /// Binds one named method argument to a fixed parameter or variadic array.
 fn bind_dynamic_named_method_arg(
+    callee: &str,
     params: &[String],
     parameter_types: &[Option<EvalParameterType>],
     parameter_is_by_ref: &[bool],
     variadic_index: Option<usize>,
+    next_variadic_index: i64,
     bound_args: &mut [Option<BoundMethodArg>],
     name: &str,
     value: RuntimeCellHandle,
@@ -448,6 +459,12 @@ fn bind_dynamic_named_method_arg(
     if variadic_index.is_none() || !variadic_named_args.insert(name.to_string()) {
         return Err(EvalStatus::RuntimeFatal);
     }
+    let argument_number = variadic_index
+        .and_then(|index| usize::try_from(next_variadic_index).ok().and_then(|tail| index.checked_add(tail)))
+        .and_then(|index| index.checked_add(1)).ok_or(EvalStatus::RuntimeFatal)?;
+    if let Some(ty) = variadic_index.and_then(|index| parameter_types.get(index).and_then(Option::as_ref)) {
+        eval_reject_null_object_argument(callee, argument_number, None, ty, value, context, values)?;
+    }
     let key = values.string(name)?;
     let value = eval_variadic_method_parameter_value(
         parameter_types,
@@ -456,9 +473,6 @@ fn bind_dynamic_named_method_arg(
         context,
         values,
     )?;
-    let argument_number = variadic_index
-        .and_then(|index| index.checked_add(1))
-        .ok_or(EvalStatus::RuntimeFatal)?;
     let ref_target = method_parameter_ref_target(
         params,
         parameter_is_by_ref,
@@ -696,7 +710,7 @@ fn eval_method_parameter_class_accepts(
 }
 
 /// Resolves late-bound class keywords inside eval method parameter type checks.
-fn eval_method_parameter_runtime_class_name(
+pub(in crate::interpreter) fn eval_method_parameter_runtime_class_name(
     class_name: &str,
     context: &ElephcEvalContext,
 ) -> Result<String, EvalStatus> {
