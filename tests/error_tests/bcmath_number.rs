@@ -30,3 +30,17 @@ fn test_error_bcmath_number_types_and_finality() {
 fn test_error_bcmath_number_operator_contract_is_internal() {
     expect_error("<?php class Other { public static function __elephc_add(mixed $a, mixed $b): int { return 1; } } $n = new Other(); echo $n + 1;", "numeric operands");
 }
+
+/// A scalar union cannot use Number's object result at an unchecked typed return boundary.
+#[test]
+fn test_error_bcmath_number_union_arithmetic_has_no_definite_object_result() {
+    for op in ["+", "-", "*", "/", "%", "**"] {
+        for expression in [format!("$value {op} 1"), format!("1 {op} $value")] {
+            expect_error(&format!("<?php function unionNumber(BcMath\\Number|int $value): BcMath\\Number {{ return {expression}; }} unionNumber(5);"), "numeric operands");
+        }
+    }
+    expect_error("<?php function unionNumber(BcMath\\Number|int $value): BcMath\\Number { return -$value; } unionNumber(5);", "Cannot negate a non-numeric value");
+    for expression in ["++$value", "--$value", "$value++", "$value--"] {
+        expect_error(&format!("<?php function unionNumber(BcMath\\Number|int $value) {{ return {expression}; }} unionNumber(5);"), "Cannot increment/decrement");
+    }
+}

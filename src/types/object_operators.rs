@@ -89,7 +89,8 @@ fn binary_plan_for_class(class: &'static ClassContract, op: &BinOp, left: &PhpTy
         || (*ty == PhpType::Void && operators.arithmetic_result == elephc_builtin_contract::ObjectArithmeticResult::Number)
         || matches!(ty, PhpType::Object(name) if name.eq_ignore_ascii_case(class.name));
     let accepted = |ty: &PhpType| match ty {
-        PhpType::Union(members) => members.iter().all(accepts),
+        PhpType::Union(members) if comparison
+            || operators.arithmetic_result == elephc_builtin_contract::ObjectArithmeticResult::Number => members.iter().all(accepts),
         _ => accepts(ty),
     };
     if !accepted(left) || !accepted(right) { return None; }
@@ -145,6 +146,21 @@ mod tests {
         assert!(binary_plan_for_class(&SYNTHETIC, &BinOp::Mul, &object, &PhpType::Int).is_none());
         assert!(binary_plan_for_class(&SYNTHETIC, &BinOp::StrictEq, &object, &object).is_none());
         assert!(binary_plan_for_class(&SYNTHETIC, &BinOp::Add, &object, &PhpType::Object("Other".into())).is_none());
+    }
+
+    /// Possible object-result operands cannot promise an object when the scalar branch runs.
+    #[test]
+    fn union_arithmetic_preserves_native_result_representation() {
+        let number = PhpType::Object("BcMath\\Number".into());
+        let possible_number = PhpType::Union(vec![number, PhpType::Int]);
+        let possible_xml = PhpType::Union(vec![PhpType::Object("SimpleXMLElement".into()), PhpType::Void]);
+        for op in [BinOp::Add, BinOp::Sub, BinOp::Mul, BinOp::Div, BinOp::Mod, BinOp::Pow] {
+            assert!(binary_plan(&op, &possible_number, &PhpType::Int).is_none());
+            assert!(binary_plan(&op, &PhpType::Int, &possible_number).is_none());
+            assert!(binary_plan(&op, &possible_xml, &PhpType::Int).unwrap().result_type(&op).is_int_float_union());
+        }
+        let comparison = binary_plan(&BinOp::Lt, &possible_number, &PhpType::Int).unwrap();
+        assert_eq!(comparison.result_type(&BinOp::Lt), PhpType::Bool);
     }
 }
 

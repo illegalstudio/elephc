@@ -42,6 +42,8 @@ impl Checker {
         if matches!(op, BinOp::Div | BinOp::Mod)
             && (matches!(lt.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
                 || matches!(rt.codegen_repr(), PhpType::Mixed | PhpType::Union(_)))
+            && is_arithmetic_operand_type(self, &lt)
+            && is_arithmetic_operand_type(self, &rt)
             && self.classes.keys().any(|name| elephc_builtin_contract::lookup_class(name).is_some_and(|class| class.operators.is_some()))
         {
             return Ok(PhpType::Mixed);
